@@ -146,7 +146,7 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
     gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
     gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
     token = os.getenv("BETA9_TOKEN", None)
-    tls = is_tls_enabled(gateway_host)
+    tls = is_tls_enabled(gateway_host, gateway_port)
 
     if gateway_host and gateway_port and token:
         return ConfigContext(
@@ -180,7 +180,6 @@ def prompt_for_config_context(
     prompt_gateway_port = functools.partial(
         terminal.prompt, text="Gateway Port", default=gateway_port or settings.gateway_port
     )
-    prompt_tls = functools.partial(terminal.prompt, text="TLS", default=False)
 
     try:
         while not name and not (name := prompt_name()):
@@ -198,9 +197,13 @@ def prompt_for_config_context(
             while not (gateway_port := prompt_gateway_port()) or not validate_port(gateway_port):
                 terminal.warn("Gateway port is invalid.")
 
-        if gateway_port not in [443, "443"]:
-            tls = prompt_tls(text="TLS", default=False)
-        else:
+        # if gateway_port not in [443, "443"]:
+        #     tls = prompt_tls(text="TLS", default=False)
+        # else:
+        #     tls = True
+
+        tls = False
+        if is_tls_enabled(gateway_host, gateway_port):
             tls = True
 
         if require_token:
@@ -246,16 +249,14 @@ def validate_port(value: Any) -> bool:
     return False
 
 
-def is_tls_enabled(url: str) -> bool:
+def is_tls_enabled(host: str, port: int) -> bool:
     try:
         # Extract hostname and default to port 443 for HTTPS
-        hostname = url.split("//")[-1].split("/")[0]
-        port = 443
 
         # Create SSL context and test the connection
         context = ssl.create_default_context()
-        with socket.create_connection((hostname, port), timeout=5) as sock:
-            with context.wrap_socket(sock, server_hostname=hostname):
+        with socket.create_connection((host, port), timeout=5) as sock:
+            with context.wrap_socket(sock, server_hostname=host):
                 return True
     except (ssl.SSLError, socket.error):
         return False
