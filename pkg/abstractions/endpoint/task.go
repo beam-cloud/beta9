@@ -54,6 +54,11 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		return err
 	}
 
+	// Don't update tasks that are already in a terminal state
+	if task.Status.IsCompleted() {
+		return nil
+	}
+
 	switch reason {
 	case types.TaskExpired:
 		task.Status = types.TaskStatusExpired
