@@ -17,7 +17,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -178,8 +177,6 @@ func (rb *RequestBuffer) processRequests() {
 				rb.cancelInFlightTask(req.task)
 				continue
 			}
-
-			log.Info().Str("task_id", req.task.msg.TaskId).Msg("processing request")
 
 			go rb.handleRequest(req)
 		}
