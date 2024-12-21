@@ -534,6 +534,7 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 	defer func() {
 		req.done <- true
+		req.task = nil
 	}()
 
 	defer rb.releaseRequestToken(containerId, req.task.msg.TaskId)
