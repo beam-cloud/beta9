@@ -17,6 +17,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -141,11 +142,6 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask, pa
 	}
 	rb.buffer.Push(req, false)
 
-	defer func() {
-		req.task = nil
-		req.payload = nil
-	}()
-
 	for {
 		select {
 		case <-rb.ctx.Done():
@@ -177,6 +173,13 @@ func (rb *RequestBuffer) processRequests() {
 				time.Sleep(requestProcessingInterval)
 				continue
 			}
+
+			if req.ctx.Request().Context().Err() != nil {
+				rb.cancelInFlightTask(req.task)
+				continue
+			}
+
+			log.Info().Str("task_id", req.task.msg.TaskId).Msg("processing request")
 
 			go rb.handleRequest(req)
 		}
