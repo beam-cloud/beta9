@@ -16,6 +16,8 @@ type EndpointTask struct {
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
 	var err error = nil
 	echoCtx := options[0].(echo.Context)
+	payload := options[1].(*types.TaskPayload)
+
 	instance, err := t.es.getOrCreateEndpointInstance(ctx, t.msg.StubId)
 	if err != nil {
 		return err
@@ -30,7 +32,7 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
-	return instance.buffer.ForwardRequest(echoCtx, t)
+	return instance.buffer.ForwardRequest(echoCtx, t, payload)
 }
 
 func (t *EndpointTask) Retry(ctx context.Context) error {

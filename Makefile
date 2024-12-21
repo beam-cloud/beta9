@@ -72,4 +72,7 @@ build-test:
 	poetry config virtualenvs.in-project true
 	poetry install -C sdk
 	poetry shell -C sdk
-	cd build_tests && python app.py $(MODE)
+	cd e2e/build_tests && python app.py $(MODE)
+
+load-test:
+	cd e2e/load_tests && k6 run --env URL=$(URL) --env TOKEN=$(TOKEN) throughput.js
