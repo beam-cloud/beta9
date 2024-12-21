@@ -200,7 +200,7 @@ func (es *HttpEndpointService) forwardRequest(
 		ttl = DefaultEndpointRequestTTL
 	}
 
-	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, payload, types.TaskPolicy{
+	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, &types.TaskPayload{}, types.TaskPolicy{
 		MaxRetries: 0,
 		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
 		Expires:    time.Now().Add(time.Duration(ttl) * time.Second),
@@ -209,7 +209,7 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
-	return task.Execute(ctx.Request().Context(), ctx)
+	return task.Execute(ctx.Request().Context(), ctx, payload)
 }
 
 func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {

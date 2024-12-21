@@ -131,18 +131,20 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 	}
 }
 
-func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
+func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask, payload *types.TaskPayload) error {
 	done := make(chan bool)
 	req := &request{
-		ctx:  ctx,
-		done: done,
-		payload: &types.TaskPayload{
-			Args:   task.msg.Args,
-			Kwargs: task.msg.Kwargs,
-		},
-		task: task,
+		ctx:     ctx,
+		done:    done,
+		payload: payload,
+		task:    task,
 	}
 	rb.buffer.Push(req, false)
+
+	defer func() {
+		req.task = nil
+		req.payload = nil
+	}()
 
 	for {
 		select {
@@ -534,7 +536,6 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 	defer func() {
 		req.done <- true
-		req.task = nil
 	}()
 
 	defer rb.releaseRequestToken(containerId, req.task.msg.TaskId)
