@@ -1,0 +1,47 @@
+app = 'data-stage-beam-cloud'
+primary_region = 'iad'
+kill_signal = 'SIGTERM'
+
+[build]
+
+[deploy]
+  strategy = 'immediate'
+
+[env]
+  JFS_ADDRESS = '0.0.0.0:9000'
+
+[http_service]
+  internal_port = 9000
+  force_https = true
+  auto_start_machines = true
+  auto_stop_machines = 'off'
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 30000
+    soft_limit = 30000
+
+  [http_service.tls_options]
+    versions = ['TLSv1.2', 'TLSv1.3']
+    default_self_signed = false
+
+  [http_service.http_options]
+    idle_timeout = 900
+
+    [http_service.http_options.response]
+      pristine = true
+
+[checks]
+  [checks.app]
+    port = 9000
+    type = 'http'
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '30s'
+    method = 'get'
+    path = '/minio/health/live'
+
+[[vm]]
+  cpus = 2
+  cpu_kind = 'shared'
+  memory = '2gb'
