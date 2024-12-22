@@ -33,6 +33,7 @@ type VolumeService interface {
 
 type GlobalVolumeService struct {
 	pb.UnimplementedVolumeServiceServer
+	config      types.FileServiceConfig
 	backendRepo repository.BackendRepository
 	rdb         *common.RedisClient
 }
@@ -51,8 +52,9 @@ type VolumePathTokenData struct {
 
 var volumeRoutePrefix string = "/volume"
 
-func NewGlobalVolumeService(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, rdb *common.RedisClient, routeGroup *echo.Group) (VolumeService, error) {
+func NewGlobalVolumeService(config types.FileServiceConfig, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, rdb *common.RedisClient, routeGroup *echo.Group) (VolumeService, error) {
 	gvs := &GlobalVolumeService{
+		config:      config,
 		backendRepo: backendRepo,
 		rdb:         rdb,
 	}

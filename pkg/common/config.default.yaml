@@ -56,6 +56,11 @@ gateway:
     memory: 32768
     maxReplicas: 10
     maxGpuCount: 2
+fileService:
+  endpointUrl: https://data-stage-beam-cloud.fly.dev
+  bucketName: beta9-fs
+  accessKey:
+  secretKey:
 imageService:
   localCacheEnabled: true
   registryStore: local

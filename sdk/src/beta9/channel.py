@@ -3,7 +3,7 @@ import sys
 import traceback
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from typing import Any, Callable, Generator, List, NewType, Optional, Tuple, cast
+from typing import Any, Callable, Generator, List, NewType, Optional, Sequence, Tuple, cast
 
 import grpc
 from grpc import ChannelCredentials, RpcError
@@ -18,11 +18,29 @@ from .config import (
     ConfigContext,
     SDKSettings,
     get_config_context,
+    get_settings,
     load_config,
     prompt_for_config_context,
     save_config,
 )
 from .exceptions import RunnerException
+
+
+def channel_reconnect_event(connect_status: grpc.ChannelConnectivity) -> None:
+    if connect_status not in (
+        grpc.ChannelConnectivity.CONNECTING,
+        grpc.ChannelConnectivity.IDLE,
+        grpc.ChannelConnectivity.READY,
+        grpc.ChannelConnectivity.SHUTDOWN,
+    ):
+        terminal.warn("Connection lost, reconnecting...")
+
+
+def get_user_agent() -> str:
+    from importlib import metadata
+
+    package_name = get_settings().name.lower()
+    return f"{package_name}/{metadata.version(package_name)}"
 
 
 class Channel(InterceptorChannel):
@@ -31,13 +49,26 @@ class Channel(InterceptorChannel):
         addr: str,
         token: Optional[str] = None,
         credentials: Optional[ChannelCredentials] = None,
+        options: Optional[Sequence[Tuple[str, Any]]] = None,
+        retry: Tuple[Callable[[grpc.ChannelConnectivity], None], bool] = (
+            channel_reconnect_event,
+            True,
+        ),
     ):
+        if options is None:
+            options = []
+
+        options = [opt for opt in options if "grpc.secondary_user_agent" not in opt[0]]
+        options.append(("grpc.secondary_user_agent", get_user_agent()))
+
         if credentials is not None:
             channel = grpc.secure_channel(addr, credentials)
         elif addr.endswith("443"):
             channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials())
         else:
             channel = grpc.insecure_channel(addr)
+
+        channel.subscribe(*retry)
 
         interceptor = AuthTokenInterceptor(token)
         super().__init__(channel=channel, interceptor=interceptor)
