@@ -83,9 +83,15 @@ class Beta9Command(click.Command):
 class ClickCommonGroup(click.Group):
     command_class = Beta9Command
 
+    def list_commands(self, ctx) -> List[str]:
+        return list(self.commands)
+
 
 class ClickManagementGroup(click.Group):
     command_class = Beta9Command
+
+    def list_commands(self, ctx) -> List[str]:
+        return list(self.commands)
 
 
 class CommandGroupCollection(click.CommandCollection):
@@ -146,6 +152,9 @@ class CommandGroupCollection(click.CommandCollection):
             else:
                 commands["common"].append((subcommand, cmd))
 
+        # sort the management commands
+        commands["management"].sort(key=lambda x: x[0])
+
         for cmdtype, cmds in commands.items():
             if not len(cmds):
                 continue
@@ -160,6 +169,12 @@ class CommandGroupCollection(click.CommandCollection):
             if rows:
                 with formatter.section(gettext(cmdtype.title() + " Commands")):
                     formatter.write_dl(rows)
+
+    def list_commands(self, ctx):
+        sources = []
+        for source in self.sources:
+            sources.extend(source.list_commands(ctx))
+        return sources
 
 
 def pass_service_client(func: Callable):
