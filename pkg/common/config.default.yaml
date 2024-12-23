@@ -61,6 +61,7 @@ fileService:
   bucketName: beta9-fs
   accessKey:
   secretKey:
+  region:
 imageService:
   localCacheEnabled: true
   registryStore: local

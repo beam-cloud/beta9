@@ -40,6 +40,15 @@ from .clients.volume import (
     VolumeServiceStub,
 )
 from .env import try_env
+from .exceptions import (
+    CompleteMultipartUploadError,
+    CreateMultipartUploadError,
+    CreatePresignedUrlError,
+    DownloadChunkError,
+    GetFileSizeError,
+    RetryableError,
+    UploadPartError,
+)
 
 __all__ = ["upload", "download"]
 
@@ -62,6 +71,24 @@ R = TypeVar("R")
 def retry(
     times: int, delay: float = 0.1, max_delay: float = 10.0
 ) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """
+    Retry a function multiple times with exponential backoff.
+
+    The exponential backoff starts with the initial delay and
+    doubles with each retry.
+
+    Args:
+        times: The number of times to retry the function.
+        delay: The initial delay between retries. Defaults to 0.1.
+        max_delay: The maximum delay between retries. Defaults to 10.0.
+
+    Raises:
+        RetryableError: If the function fails after all retries.
+
+    Returns:
+        A decorator that wraps the function.
+    """
+
     def decorator(func: Callable[P, R]) -> Callable[P, R]:
         @wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
@@ -77,7 +104,7 @@ def retry(
                         time.sleep(min(current_delay, max_delay))
                         current_delay *= 2
 
-            raise Exception(f"Failed after {times} retries: {last_exception}")
+            raise RetryableError(times, str(last_exception))
 
         return wrapper
 
@@ -86,8 +113,22 @@ def retry(
 
 @contextmanager
 def _progress_updater(
-    file_size: int, queue: Queue, callback: Optional[ProgressCallback] = None
+    file_size: int, queue: Queue, callback: Optional[ProgressCallback] = None, timeout: float = 1.0
 ) -> Generator[Thread, None, None]:
+    """
+    Calls a callback with the progress of a multipart upload or download.
+
+    Args:
+        file_size: The total size of the file.
+        queue: A queue that receives the number of bytes processed.
+        callback: A callback that receives the total size and the number of bytes processed.
+            Defaults to None.
+        timeout: The time to wait for the thread to finish. Defaults to 1.0.
+
+    Yields:
+        A thread that updates the progress.
+    """
+
     def target():
         finished = 0
         while finished < file_size:
@@ -106,21 +147,41 @@ def _progress_updater(
 
     yield thread
 
-    thread.join(timeout=1.0)
+    thread.join(timeout=timeout)
 
 
 def _get_session() -> Session:
+    """
+    Get a requests session from the process's local storage.
+    """
     if not hasattr(_PROCESS_LOCAL, "session"):
         _PROCESS_LOCAL.session = requests.Session()
     return _PROCESS_LOCAL.session
 
 
 def _init():
+    """
+    Initialize the process by setting a signal handler.
+    """
     signal.signal(signal.SIGINT, lambda *_: os.kill(os.getpid(), signal.SIGTERM))
 
 
 @retry(times=10)
 def _upload_part(file_path: Path, file_part: FileUploadPart, queue: Queue) -> CompletedPart:
+    """
+    Read a chunk of a file and upload it to a URL.
+
+    Args:
+        file_path: Path to the file.
+        file_part: Information about the part to upload.
+        queue: A queue to send the number of bytes processed.
+
+    Raises:
+        UploadPartError: If the upload fails.
+
+    Returns:
+        Information about the completed part.
+    """
     session = _get_session()
 
     chunk = _get_file_chunk(file_path, file_part.start, file_part.end)
@@ -142,7 +203,7 @@ def _upload_part(file_path: Path, file_part: FileUploadPart, queue: Queue) -> Co
         )
         response.raise_for_status()
     except Exception as e:
-        raise RuntimeError(f"Failed to upload part {file_part.number}: {e}")
+        raise UploadPartError(file_part.number, str(e))
 
     return CompletedPart(number=file_part.number, etag=response.headers["ETag"])
 
@@ -163,6 +224,21 @@ def upload(
 ):
     """
     Upload a file to a volume using multipart upload.
+
+    Args:
+        service: The volume service stub.
+        file_path: Path to the file to upload.
+        volume_name: Name of the volume.
+        volume_path: Path to the file on the volume.
+        callback: A callback that receives the total size and the number of bytes processed.
+            Defaults to None.
+        chunk_size: Size of each chunk in bytes. Defaults to 4 MiB.
+
+    Raises:
+        CreateMultipartUploadError: If initializing the upload fails.
+        CompleteMultipartUploadError: If completing the upload fails.
+        KeyboardInterrupt: If the upload is interrupted by the user.
+        Exception: If any other error occurs.
     """
     # Initialize multipart upload
     file_size = file_path.stat().st_size
@@ -175,7 +251,7 @@ def upload(
         )
     )
     if not initial.ok:
-        raise RuntimeError(f"Failed to initialize upload: {initial.err_msg}")
+        raise CreateMultipartUploadError(initial.err_msg)
 
     # Start multipart upload
     try:
@@ -204,7 +280,7 @@ def upload(
             )
         )
         if not completed.ok:
-            raise RuntimeError(f"Failed to complete upload: {completed.err_msg}")
+            raise CompleteMultipartUploadError(completed.err_msg)
 
     except (Exception, KeyboardInterrupt):
         service.abort_multipart_upload(
@@ -232,7 +308,7 @@ def _get_file_size(url: str) -> int:
 
     response = session.head(url)
     if response.status_code != 200:
-        raise RuntimeError(f"Failed to get file size: {response.status_code} {response.text}")
+        raise GetFileSizeError(response.status_code, response.text)
 
     return int(response.headers["Content-Length"])
 
@@ -267,7 +343,19 @@ def _download_chunk(
     queue: Queue,
 ) -> FileChunk:
     """
-    Download a byte range of a file from a URL.
+    Download a byte range of a file to a temporary directory.
+
+    Args:
+        url: URL of the file.
+        file_range: Byte range to download.
+        output_dir: Directory to save the file.
+        queue: A queue to send the number of bytes processed.
+
+    Raises:
+        DownloadChunkError: If the download fails.
+
+    Returns:
+        Information about the downloaded chunk.
     """
     session = _get_session()
     headers = {"Range": f"bytes={file_range.start}-{file_range.end}"}
@@ -281,9 +369,7 @@ def _download_chunk(
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 queue.put(file.write(chunk), block=False)
     except Exception as e:
-        raise RuntimeError(
-            f"Failed to download {file_range.number}, range {file_range.start}-{file_range.end}: {e}"
-        )
+        raise DownloadChunkError(file_range.number, file_range.start, file_range.end, str(e))
 
     return FileChunk(number=file_range.number, path=path)
 
@@ -308,7 +394,19 @@ def download(
     chunk_size: int = DOWNLOAD_CHUNK_SIZE,
 ) -> None:
     """
-    Download a file from a volume to the local filesystem.
+    Download a file from a volume using multipart download.
+
+    Args:
+        service: The volume service stub.
+        volume_name: Name of the volume.
+        volume_path: Path to the file on the volume.
+        file_path: Path to save the file.
+        callback: A callback that receives the total size and the number of bytes processed.
+            Defaults to None.
+        chunk_size: Size of each chunk in bytes. Defaults to 32 MiB.
+
+    Raises:
+        CreatePresignedUrlError: If a presigned URL cannot be created.
     """
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -322,7 +420,7 @@ def download(
         )
     )
     if not presigned.ok:
-        raise RuntimeError(presigned.err_msg)
+        raise CreatePresignedUrlError(presigned.err_msg)
 
     file_size = _get_file_size(presigned.url)
     file_ranges = _calculate_file_ranges(file_size, chunk_size)
@@ -337,7 +435,7 @@ def download(
         )
     )
     if not presigned.ok:
-        raise RuntimeError(presigned.err_msg)
+        raise CreatePresignedUrlError(presigned.err_msg)
 
     with ExitStack() as stack:
         manager = stack.enter_context(Manager())

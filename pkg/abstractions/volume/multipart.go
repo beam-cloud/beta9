@@ -23,15 +23,20 @@ const (
 )
 
 func (s *GlobalVolumeService) getS3Client() *s3.Client {
+	region := s.config.Region
+	if region == "" {
+		region = "-"
+	}
+
 	return s3.New(s3.Options{
 		Credentials: credentials.NewStaticCredentialsProvider(
 			s.config.AccessKey,
 			s.config.SecretKey,
-			"",
+			s.config.Region,
 		),
 		BaseEndpoint: aws.String(s.config.EndpointURL),
 		UsePathStyle: true,
-		Region:       "-",
+		Region:       region,
 	})
 }
 

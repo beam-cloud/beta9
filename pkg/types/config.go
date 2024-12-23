@@ -128,6 +128,7 @@ type FileServiceConfig struct {
 	BucketName  string `key:"bucketName" json:"bucket_name"`
 	AccessKey   string `key:"accessKey" json:"access_key"`
 	SecretKey   string `key:"secretKey" json:"secret_key"`
+	Region      string `key:"region" json:"region"`
 }
 
 type ImageServiceConfig struct {
