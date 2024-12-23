@@ -15,6 +15,7 @@ from queue import Queue
 from threading import Thread, local
 from typing import (
     Callable,
+    ContextManager,
     Final,
     Generator,
     List,
@@ -62,6 +63,10 @@ DOWNLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_DOWNLOAD_CHUNK_SIZE", 32 * 
 
 class ProgressCallback(Protocol):
     def __call__(self, total: int, advance: int) -> None: ...
+
+
+class CompletionCallback(Protocol):
+    def __call__(self) -> ContextManager: ...
 
 
 P = ParamSpec("P")
@@ -219,7 +224,8 @@ def upload(
     file_path: Path,
     volume_name: str,
     volume_path: str,
-    callback: Optional[ProgressCallback] = None,
+    progress_callback: Optional[ProgressCallback] = None,
+    completion_callback: Optional[CompletionCallback] = None,
     chunk_size: int = UPLOAD_CHUNK_SIZE,
 ):
     """
@@ -230,7 +236,9 @@ def upload(
         file_path: Path to the file to upload.
         volume_name: Name of the volume.
         volume_path: Path to the file on the volume.
-        callback: A callback that receives the total size and the number of bytes processed.
+        progress_callback: A callback that receives the total size and the number of
+            bytes processed. Defaults to None.
+        completion_callback: A context manager that wraps the completion of the upload.
             Defaults to None.
         chunk_size: Size of each chunk in bytes. Defaults to 4 MiB.
 
@@ -260,7 +268,7 @@ def upload(
             executor = stack.enter_context(ProcessPoolExecutor(_MAX_WORKERS, initializer=_init))
 
             queue = manager.Queue()
-            stack.enter_context(_progress_updater(file_size, queue, callback))
+            stack.enter_context(_progress_updater(file_size, queue, progress_callback))
 
             futures = (
                 executor.submit(_upload_part, file_path, part, queue)
@@ -271,16 +279,23 @@ def upload(
             parts.sort(key=lambda part: part.number)
 
         # Complete multipart upload
-        completed = retry(times=3, delay=1.0)(service.complete_multipart_upload)(
-            CompleteMultipartUploadRequest(
-                upload_id=initial.upload_id,
-                volume_name=volume_name,
-                volume_path=volume_path,
-                completed_parts=parts,
+        def complete_upload():
+            completed = retry(times=3, delay=1.0)(service.complete_multipart_upload)(
+                CompleteMultipartUploadRequest(
+                    upload_id=initial.upload_id,
+                    volume_name=volume_name,
+                    volume_path=volume_path,
+                    completed_parts=parts,
+                )
             )
-        )
-        if not completed.ok:
-            raise CompleteMultipartUploadError(completed.err_msg)
+            if not completed.ok:
+                raise CompleteMultipartUploadError(completed.err_msg)
+
+        if completion_callback is not None:
+            with completion_callback():
+                complete_upload()
+        else:
+            complete_upload()
 
     except (Exception, KeyboardInterrupt):
         service.abort_multipart_upload(
