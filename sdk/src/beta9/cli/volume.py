@@ -1,5 +1,6 @@
 import functools
 import glob
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, List, Union, cast
 
@@ -296,9 +297,30 @@ def upload(service: ServiceClient, local_path: Path, volume_name: str, remote_pa
     try:
         with StyledProgress() as p:
             task_id = p.add_task(local_path)
-            callback = cast(ProgressCallback, functools.partial(p.update, task_id=task_id))
+            progress_callback = cast(ProgressCallback, functools.partial(p.update, task_id=task_id))
 
-            multipart.upload(service.volume, local_path, volume_name, remote_path, callback)
+            @contextmanager
+            def completion_callback():
+                """
+                Shows progress status while the upload is being completed.
+                """
+                p.stop()
+
+                with terminal.progress("Completing...") as s:
+                    yield s
+
+                # Move cursor up 2x, clear line, and redraw the progress bar
+                terminal.print("\033[A\033[A\r", highlight=False)
+                p.start()
+
+            multipart.upload(
+                service.volume,
+                local_path,
+                volume_name,
+                remote_path,
+                progress_callback,
+                completion_callback,
+            )
 
     except KeyboardInterrupt:
         terminal.warn("\rUpload cancelled")
