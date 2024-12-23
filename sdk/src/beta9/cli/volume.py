@@ -98,74 +98,6 @@ def ls(service: ServiceClient, remote_path: str):
 
 
 @common.command(
-    help="Download contents from a volume.",
-)
-@click.argument(
-    "volume_name",
-    type=click.STRING,
-    required=True,
-)
-@click.argument(
-    "remote_path",
-    type=click.STRING,
-    required=True,
-)
-@click.argument(
-    "local_path",
-    type=click.Path(path_type=Path),
-    required=True,
-)
-@extraclick.pass_service_client
-def download(service: ServiceClient, volume_name: str, remote_path: str, local_path: Path):
-    try:
-        with StyledProgress() as p:
-            task_id = p.add_task(local_path)
-            callback = cast(ProgressCallback, functools.partial(p.update, task_id=task_id))
-
-            multipart.download(service.volume, volume_name, remote_path, local_path, callback)
-
-    except KeyboardInterrupt:
-        terminal.warn("\rDownload cancelled")
-
-    except Exception as e:
-        terminal.error(f"\rDownload failed: {e}")
-
-
-@common.command(
-    help="Upload contents from a volume.",
-)
-@click.argument(
-    "local_path",
-    type=click.Path(path_type=Path),
-    required=True,
-)
-@click.argument(
-    "volume_name",
-    type=click.STRING,
-    required=True,
-)
-@click.argument(
-    "remote_path",
-    type=click.STRING,
-    required=True,
-)
-@extraclick.pass_service_client
-def upload(service: ServiceClient, local_path: Path, volume_name: str, remote_path: str):
-    try:
-        with StyledProgress() as p:
-            task_id = p.add_task(local_path)
-            callback = cast(ProgressCallback, functools.partial(p.update, task_id=task_id))
-
-            multipart.upload(service.volume, local_path, volume_name, remote_path, callback)
-
-    except KeyboardInterrupt:
-        terminal.warn("\rUpload cancelled")
-
-    except Exception as e:
-        terminal.error(f"\rUpload failed: {e}")
-
-
-@common.command(
     help="Copy contents to a volume.",
     epilog="""
     Match Syntax:
@@ -339,6 +271,74 @@ def mv(service: ServiceClient, original_path: str, new_path: str):
         terminal.error(f"Failed to move {original_path} to {new_path} ({res.err_msg})")
     else:
         terminal.success(f"Moved {original_path} to {res.new_path}")
+
+
+@common.command(
+    help="[Experimental] Upload contents from a volume.",
+)
+@click.argument(
+    "local_path",
+    type=click.Path(path_type=Path),
+    required=True,
+)
+@click.argument(
+    "volume_name",
+    type=click.STRING,
+    required=True,
+)
+@click.argument(
+    "remote_path",
+    type=click.STRING,
+    required=True,
+)
+@extraclick.pass_service_client
+def upload(service: ServiceClient, local_path: Path, volume_name: str, remote_path: str):
+    try:
+        with StyledProgress() as p:
+            task_id = p.add_task(local_path)
+            callback = cast(ProgressCallback, functools.partial(p.update, task_id=task_id))
+
+            multipart.upload(service.volume, local_path, volume_name, remote_path, callback)
+
+    except KeyboardInterrupt:
+        terminal.warn("\rUpload cancelled")
+
+    except Exception as e:
+        terminal.error(f"\rUpload failed: {e}")
+
+
+@common.command(
+    help="[Experimental] Download contents from a volume.",
+)
+@click.argument(
+    "volume_name",
+    type=click.STRING,
+    required=True,
+)
+@click.argument(
+    "remote_path",
+    type=click.STRING,
+    required=True,
+)
+@click.argument(
+    "local_path",
+    type=click.Path(path_type=Path),
+    required=True,
+)
+@extraclick.pass_service_client
+def download(service: ServiceClient, volume_name: str, remote_path: str, local_path: Path):
+    try:
+        with StyledProgress() as p:
+            task_id = p.add_task(local_path)
+            callback = cast(ProgressCallback, functools.partial(p.update, task_id=task_id))
+
+            multipart.download(service.volume, volume_name, remote_path, local_path, callback)
+
+    except KeyboardInterrupt:
+        terminal.warn("\rDownload cancelled")
+
+    except Exception as e:
+        terminal.error(f"\rDownload failed: {e}")
 
 
 @click.group(
