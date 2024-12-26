@@ -299,12 +299,20 @@ func (r *ProviderRedisRepository) RemoveMachine(providerName, poolName, machineI
 	return nil
 }
 
-func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machineId string, newMachineInfo *types.ProviderMachineState) error {
+func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machineId string, newMachineInfo *types.ProviderMachineState, poolConfig *types.WorkerPoolConfig) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 
 	machineInfo, err := r.getMachineStateFromKey(stateKey)
 	if err != nil {
-		return fmt.Errorf("failed to get machine state <%v>: %w", stateKey, err)
+		// TODO: This is a temporary fix to allow the machine to be registered
+		// without having to update the machine state, in the future we should tie
+		// registration token to machine ID and store that somewhere else persistently
+		machineInfo = &types.ProviderMachineState{}
+		machineInfo.Gpu = poolConfig.GPUType
+		machineInfo.Created = fmt.Sprintf("%d", time.Now().UTC().Unix())
+		machineInfo.LastKeepalive = fmt.Sprintf("%d", time.Now().UTC().Unix())
+		machineInfo.PoolName = newMachineInfo.PoolName
+		machineInfo.MachineId = newMachineInfo.MachineId
 	}
 
 	machineInfo.HostName = newMachineInfo.HostName

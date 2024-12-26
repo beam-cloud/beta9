@@ -158,7 +158,7 @@ type ProviderRepository interface {
 	RemoveMachine(providerName, poolName, machineId string) error
 	SetMachineKeepAlive(providerName, poolName, machineId, agentVersion string, metrics *types.ProviderMachineMetrics) error
 	SetLastWorkerSeen(providerName, poolName, machineId string) error
-	RegisterMachine(providerName, poolName, machineId string, newMachineInfo *types.ProviderMachineState) error
+	RegisterMachine(providerName, poolName, machineId string, newMachineInfo *types.ProviderMachineState, poolConfig *types.WorkerPoolConfig) error
 	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
 	ListAllMachines(providerName, poolName string, useLock bool) ([]*types.ProviderMachine, error)
 	SetMachineLock(providerName, poolName, machineId string) error

@@ -83,6 +83,11 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		hostName = fmt.Sprintf("%s.%s.%s", request.HostName, g.config.Tailscale.User, g.config.Tailscale.HostName)
 	}
 
+	poolConfig, ok := g.config.Worker.Pools[request.PoolName]
+	if !ok {
+		return HTTPInternalServerError("Invalid pool name")
+	}
+
 	err = g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{
 		MachineId: request.MachineID,
 		Token:     request.Token,
@@ -90,7 +95,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		Cpu:       cpu,
 		Memory:    memory,
 		GpuCount:  uint32(gpuCount),
-	})
+	}, &poolConfig)
 	if err != nil {
 		return HTTPInternalServerError("Failed to register machine")
 	}
