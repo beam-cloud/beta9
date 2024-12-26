@@ -57,11 +57,12 @@ var (
 
 // Schema versions should be in ISO 8601 format
 
-var EventContainerLifecycleSchemaVersion = "1.0"
+var EventContainerLifecycleSchemaVersion = "1.1"
 
 type EventContainerLifecycleSchema struct {
 	ContainerID string           `json:"container_id"`
 	WorkerID    string           `json:"worker_id"`
+	StubID      string           `json:"stub_id"`
 	Status      string           `json:"status"`
 	Request     ContainerRequest `json:"request"`
 }
@@ -95,11 +96,12 @@ type EventContainerMetricsData struct {
 	GPUType            string  `json:"gpu_type"`
 }
 
-var EventContainerStatusRequestedSchemaVersion = "1.0"
+var EventContainerStatusRequestedSchemaVersion = "1.1"
 
 type EventContainerStatusRequestedSchema struct {
 	ContainerID string           `json:"container_id"`
 	Request     ContainerRequest `json:"request"`
+	StubID      string           `json:"stub_id"`
 	Status      string           `json:"status"`
 }
 
