@@ -311,9 +311,14 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
+	requiresAnyGPU := false
 
 	for index, gpu := range request.GpuRequest {
 		gpuRequestsMap[gpu] = index
+		if gpu == types.ANY_GPU.String() {
+			requiresAnyGPU = true
+			break
+		}
 	}
 
 	for _, worker := range workers {
@@ -335,7 +340,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			continue
 		}
 
-		if requiresGPU {
+		if requiresGPU && !requiresAnyGPU {
 			// Validate GPU resource availability
 			priorityModifier, validGpu := gpuRequestsMap[worker.Gpu]
 			if !validGpu || worker.FreeGpuCount < request.GpuCount {

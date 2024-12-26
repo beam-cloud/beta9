@@ -396,6 +396,7 @@ func TestSelectGPUWorker(t *testing.T) {
 	assert.NotNil(t, wb)
 
 	newWorker := &types.Worker{
+		Id:         uuid.New().String(),
 		Status:     types.WorkerStatusPending,
 		FreeCpu:    1000,
 		FreeMemory: 1000,
@@ -423,6 +424,12 @@ func TestSelectGPUWorker(t *testing.T) {
 		GpuRequest: []string{"T4"},
 	}
 
+	thirdRequest := &types.ContainerRequest{
+		Cpu:        1000,
+		Memory:     1000,
+		GpuRequest: []string{"any"},
+	}
+
 	// CPU request should not be able to select a GPU worker
 	_, err = wb.selectWorker(cpuRequest)
 	assert.Error(t, err)
@@ -448,6 +455,29 @@ func TestSelectGPUWorker(t *testing.T) {
 
 	_, ok = err.(*types.ErrNoSuitableWorkerFound)
 	assert.True(t, ok)
+
+	newWorkerAnyGpu := &types.Worker{
+		Id:         uuid.New().String(),
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+		Gpu:        "T4",
+	}
+
+	err = wb.workerRepo.AddWorker(newWorkerAnyGpu)
+	assert.Nil(t, err)
+
+	// Select a worker for the request
+	worker, err = wb.selectWorker(thirdRequest)
+	assert.Nil(t, err)
+
+	// Check if the worker selected has the "T4" GPU
+	assert.Equal(t, newWorkerAnyGpu.Gpu, worker.Gpu)
+	assert.Equal(t, newWorkerAnyGpu.Id, worker.Id)
+
+	// Actually schedule the request
+	err = wb.scheduleRequest(worker, thirdRequest)
+	assert.Nil(t, err)
 }
 
 func TestSelectCPUWorker(t *testing.T) {
