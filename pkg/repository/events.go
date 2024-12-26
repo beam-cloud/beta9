@@ -300,13 +300,21 @@ func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId s
 	)
 }
 
-func sanitizeContainerRequest(request *types.ContainerRequest) types.ContainerRequest {
-	requestCopy := *request
-	requestCopy.Env = nil
-	requestCopy.EntryPoint = nil
-	requestCopy.Stub = types.StubWithRelated{}
-	requestCopy.Mounts = nil
-	requestCopy.PoolSelector = ""
-	requestCopy.Workspace = types.Workspace{}
-	return requestCopy
+func sanitizeContainerRequest(request *types.ContainerRequest) types.SanitizedContainerRequest {
+	return types.SanitizedContainerRequest{
+		ContainerId:       request.ContainerId,
+		Cpu:               request.Cpu,
+		Memory:            request.Memory,
+		Gpu:               request.Gpu,
+		GpuRequest:        request.GpuRequest,
+		GpuCount:          request.GpuCount,
+		ImageId:           request.ImageId,
+		StubId:            request.StubId,
+		WorkspaceId:       request.WorkspaceId,
+		RetryCount:        request.RetryCount,
+		PoolSelector:      request.PoolSelector,
+		Preemptable:       request.Preemptable,
+		CheckpointEnabled: request.CheckpointEnabled,
+		BuildOptions:      request.BuildOptions,
+	}
 }
