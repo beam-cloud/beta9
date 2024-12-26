@@ -311,8 +311,8 @@ func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machin
 		machineInfo.Gpu = poolConfig.GPUType
 		machineInfo.Created = fmt.Sprintf("%d", time.Now().UTC().Unix())
 		machineInfo.LastKeepalive = fmt.Sprintf("%d", time.Now().UTC().Unix())
-		machineInfo.PoolName = newMachineInfo.PoolName
-		machineInfo.MachineId = newMachineInfo.MachineId
+		machineInfo.PoolName = poolName
+		machineInfo.MachineId = machineId
 
 		// Add machine to index
 		machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
