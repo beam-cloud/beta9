@@ -29,6 +29,11 @@ func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGro
 	g.GET("/:deploymentName/v:version", auth.WithAuth(group.endpointRequest))
 	g.GET("/public/:stubId", auth.WithAssumedStubAuth(group.endpointRequest, group.es.isPublic))
 
+	g.POST("/id/:stubId/warmup", auth.WithAuth(group.warmUpEndpoint))
+	g.POST("/:deploymentName/warmup", auth.WithAuth(group.warmUpEndpoint))
+	g.POST("/:deploymentName/latest/warmup", auth.WithAuth(group.warmUpEndpoint))
+	g.POST("/:deploymentName/v:version/warmup", auth.WithAuth(group.warmUpEndpoint))
+
 	return group
 }
 
@@ -88,7 +93,7 @@ func (g *endpointGroup) endpointRequest(ctx echo.Context) error {
 		stubId = deployment.Stub.ExternalId
 	}
 
-	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId)
+	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId, false)
 }
 
 func (g *endpointGroup) ASGIRequest(ctx echo.Context) error {
@@ -130,5 +135,47 @@ func (g *endpointGroup) ASGIRequest(ctx echo.Context) error {
 		stubId = deployment.Stub.ExternalId
 	}
 
-	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId)
+	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId, false)
+}
+
+func (g *endpointGroup) warmUpEndpoint(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	stubId := ctx.Param("stubId")
+	deploymentName := ctx.Param("deploymentName")
+	version := ctx.Param("version")
+
+	if deploymentName != "" {
+		var deployment *types.DeploymentWithRelated
+
+		if version == "" {
+			var err error
+			deployment, err = g.es.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeEndpointDeployment, true)
+			if err != nil {
+				return apiv1.HTTPBadRequest("Invalid deployment")
+			}
+		} else {
+			version, err := strconv.Atoi(version)
+			if err != nil {
+				return apiv1.HTTPBadRequest("Invalid deployment version")
+			}
+
+			deployment, err = g.es.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), types.StubTypeEndpointDeployment)
+			if err != nil {
+				return apiv1.HTTPBadRequest("Invalid deployment")
+			}
+		}
+
+		if deployment == nil {
+			return apiv1.HTTPBadRequest("Invalid deployment")
+		}
+
+		if !deployment.Active {
+			return apiv1.HTTPBadRequest("Deployment is not active")
+		}
+
+		stubId = deployment.Stub.ExternalId
+	}
+
+	return g.es.forwardRequest(ctx, cc.AuthInfo, stubId, true)
 }

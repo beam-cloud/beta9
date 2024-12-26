@@ -434,6 +434,9 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 
 	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
+	if req.task.msg.NoOp {
+		containerUrl = fmt.Sprintf("http://%s/beta9/warmup", c.address)
+	}
 
 	// Forward query params to the container if ASGI
 	if rb.isASGI {

@@ -184,7 +184,7 @@ func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, err
 	return config, nil
 }
 
-func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (string, error) {
+func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload, noOp bool) (string, error) {
 	stubConfig, err := tq.getStubConfig(stubId)
 	if err != nil {
 		return "", err
@@ -206,6 +206,10 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 	}
 	policy.Expires = time.Now().Add(time.Duration(policy.TTL) * time.Second)
 
+	if noOp {
+		policy.NoOp = true
+	}
+
 	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), authInfo, stubId, payload, policy)
 	if err != nil {
 		return "", err
@@ -226,7 +230,7 @@ func (tq *RedisTaskQueue) TaskQueuePut(ctx context.Context, in *pb.TaskQueuePutR
 		}, nil
 	}
 
-	taskId, err := tq.put(ctx, authInfo, in.StubId, &payload)
+	taskId, err := tq.put(ctx, authInfo, in.StubId, &payload, false)
 	return &pb.TaskQueuePutResponse{
 		Ok:     err == nil,
 		TaskId: taskId,
@@ -259,6 +263,21 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 			var tm types.TaskMessage
 			err = tm.Decode(msg)
 			if err != nil {
+				continue
+			}
+
+			if tm.NoOp {
+				tq.TaskQueueComplete(
+					ctx,
+					&pb.TaskQueueCompleteRequest{
+						TaskId:          tm.TaskId,
+						StubId:          tm.StubId,
+						ContainerId:     in.ContainerId,
+						TaskStatus:      string(types.TaskStatusComplete),
+						KeepWarmSeconds: float32(instance.StubConfig.KeepWarmSeconds),
+						TaskDuration:    0,
+					},
+				)
 				continue
 			}
 

@@ -61,6 +61,7 @@ type TaskMessage struct {
 	Policy        TaskPolicy             `json:"policy" redis:"policy"`
 	Retries       uint                   `json:"retries" redis:"retries"`
 	Timestamp     int64                  `json:"timestamp" redis:"timestamp"`
+	NoOp          bool                   `json:"no_op" redis:"no_op"`
 }
 
 func (tm *TaskMessage) Reset() {
@@ -119,6 +120,7 @@ type TaskPolicy struct {
 	Timeout    int       `json:"timeout" redis:"timeout"`
 	Expires    time.Time `json:"expires" redis:"expires"`
 	TTL        uint32    `json:"ttl" redis:"ttl"`
+	NoOp       bool      `json:"no_op" redis:"no_op"`
 }
 
 type ErrExceededTaskLimit struct {

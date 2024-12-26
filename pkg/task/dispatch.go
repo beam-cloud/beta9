@@ -81,6 +81,7 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.A
 	taskMessage.Kwargs = payload.Kwargs
 	taskMessage.Policy = policy
 	taskMessage.Timestamp = time.Now().Unix()
+	taskMessage.NoOp = policy.NoOp
 
 	taskFactory, exists := d.executors.Get(executor)
 	if !exists {

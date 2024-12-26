@@ -164,6 +164,7 @@ func (es *HttpEndpointService) forwardRequest(
 	ctx echo.Context,
 	authInfo *auth.AuthInfo,
 	stubId string,
+	noOp bool,
 ) error {
 	instance, err := es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
 	if err != nil {
@@ -204,6 +205,7 @@ func (es *HttpEndpointService) forwardRequest(
 		MaxRetries: 0,
 		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
 		Expires:    time.Now().Add(time.Duration(ttl) * time.Second),
+		NoOp:       noOp,
 	})
 	if err != nil {
 		return err

@@ -212,6 +212,14 @@ class EndpointManager:
 
             return self._create_response(body=task_lifecycle_data.result, status_code=status_code)
 
+        @self.app.post("/beta9/warmup")
+        async def warmup(
+            request: Request,
+        ):
+            payload = await request.json()
+            task_id = payload.get("task_id")
+            return self._create_response(body=task_id, status_code=HTTPStatus.OK)
+
     def _create_response(self, *, body: Any, status_code: int = HTTPStatus.OK) -> Response:
         if isinstance(body, Response):
             return body
