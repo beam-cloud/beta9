@@ -313,6 +313,13 @@ func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machin
 		machineInfo.LastKeepalive = fmt.Sprintf("%d", time.Now().UTC().Unix())
 		machineInfo.PoolName = newMachineInfo.PoolName
 		machineInfo.MachineId = newMachineInfo.MachineId
+
+		// Add machine to index
+		machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
+		err = r.rdb.SAdd(context.TODO(), machineIndexKey, stateKey).Err()
+		if err != nil {
+			return fmt.Errorf("failed to add machine state key to index <%v>: %w", machineIndexKey, err)
+		}
 	}
 
 	machineInfo.HostName = newMachineInfo.HostName
