@@ -212,6 +212,18 @@ func (es *HttpEndpointService) forwardRequest(
 	return task.Execute(ctx.Request().Context(), ctx, payload)
 }
 
+func (es *HttpEndpointService) warmup(
+	ctx echo.Context,
+	stubId string,
+) error {
+	instance, err := es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
+	if err != nil {
+		return err
+	}
+
+	return instance.HandleScalingEvent(1)
+}
+
 func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
 	return es.getOrCreateEndpointInstance(es.ctx, stubId)
 }

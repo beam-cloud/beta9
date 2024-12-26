@@ -26,6 +26,11 @@ func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup 
 	g.POST("/:deploymentName/v:version", auth.WithAuth(group.TaskQueuePut))
 	g.POST("/public/:stubId", auth.WithAssumedStubAuth(group.TaskQueuePut, group.tq.isPublic))
 
+	g.POST("/id/:stubId/warmup", auth.WithAuth(group.TaskQueueWarmUp))
+	g.POST("/:deploymentName/warmup", auth.WithAuth(group.TaskQueueWarmUp))
+	g.POST("/:deploymentName/latest/warmup", auth.WithAuth(group.TaskQueueWarmUp))
+	g.POST("/:deploymentName/v:version/warmup", auth.WithAuth(group.TaskQueueWarmUp))
+
 	return group
 }
 
@@ -91,4 +96,55 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"task_id": taskId,
 	})
+}
+
+func (g *taskQueueGroup) TaskQueueWarmUp(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	stubId := ctx.Param("stubId")
+	deploymentName := ctx.Param("deploymentName")
+	version := ctx.Param("version")
+
+	if deploymentName != "" {
+		var deployment *types.DeploymentWithRelated
+
+		if version == "" {
+			var err error
+			deployment, err = g.tq.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeTaskQueueDeployment, true)
+			if err != nil {
+				return apiv1.HTTPBadRequest("Invalid deployment")
+			}
+		} else {
+			version, err := strconv.Atoi(version)
+			if err != nil {
+				return apiv1.HTTPBadRequest("Invalid deployment version")
+			}
+
+			deployment, err = g.tq.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), types.StubTypeTaskQueueDeployment)
+			if err != nil {
+				return apiv1.HTTPBadRequest("Invalid deployment")
+			}
+		}
+
+		if deployment == nil {
+			return apiv1.HTTPBadRequest("Invalid deployment")
+		}
+
+		if !deployment.Active {
+			return apiv1.HTTPBadRequest("Deployment is not active")
+		}
+
+		stubId = deployment.Stub.ExternalId
+	}
+
+	err := g.tq.warmup(
+		stubId,
+	)
+	if err != nil {
+		return ctx.JSON(http.StatusInternalServerError, map[string]string{
+			"error": err.Error(),
+		})
+	}
+
+	return ctx.NoContent(http.StatusOK)
 }
