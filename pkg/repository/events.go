@@ -307,6 +307,6 @@ func sanitizeContainerRequest(request *types.ContainerRequest) types.ContainerRe
 	requestCopy.Stub = types.StubWithRelated{}
 	requestCopy.Mounts = nil
 	requestCopy.PoolSelector = ""
-	requestCopy.Workspace.SigningKey = nil
+	requestCopy.Workspace = types.Workspace{}
 	return requestCopy
 }
