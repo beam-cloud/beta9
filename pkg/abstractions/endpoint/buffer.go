@@ -3,7 +3,6 @@ package endpoint
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +21,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -32,7 +32,6 @@ const (
 
 type request struct {
 	ctx       echo.Context
-	payload   *types.TaskPayload
 	task      *EndpointTask
 	done      chan bool
 	processed bool
@@ -131,13 +130,12 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 	}
 }
 
-func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask, payload *types.TaskPayload) error {
+func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
 	done := make(chan bool)
 	req := &request{
-		ctx:     ctx,
-		done:    done,
-		payload: payload,
-		task:    task,
+		ctx:  ctx,
+		done: done,
+		task: task,
 	}
 	rb.buffer.Push(req, false)
 
@@ -175,7 +173,6 @@ func (rb *RequestBuffer) processRequests() {
 
 			if req.ctx.Request().Context().Err() != nil {
 				rb.cancelInFlightTask(req.task)
-				req.payload = nil
 				continue
 			}
 
@@ -419,20 +416,39 @@ func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
 func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	request := req.ctx.Request()
 
-	requestBody := request.Body
+	var requestBody io.ReadCloser = request.Body
 	if !rb.isASGI {
-		b, err := json.Marshal(req.payload)
+		payload, err := task.SerializeHttpPayload(req.ctx)
 		if err != nil {
+			if req.ctx.Request().Context().Err() == context.Canceled {
+				rb.cancelInFlightTask(req.task)
+				return
+			}
+
+			req.ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": err.Error(),
+			})
 			return
 		}
-		requestBody = io.NopCloser(bytes.NewReader(b))
+
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			req.ctx.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		requestBody = io.NopCloser(bytes.NewReader(payloadBytes))
 	}
 
 	httpClient, err := rb.getHttpClient(c.address)
 	if err != nil {
+		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "Internal server error",
+		})
 		return
 	}
-
 	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
 
 	// Forward query params to the container if ASGI
@@ -463,23 +479,20 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
-		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error",
-		})
+		if req.ctx.Request().Context().Err() == context.Canceled {
+			rb.cancelInFlightTask(req.task)
+		}
 		return
 	}
-
 	defer resp.Body.Close()
 
-	// Write response headers
+	// Set response headers and status code before writing the body
 	for key, values := range resp.Header {
 		for _, value := range values {
-			req.ctx.Response().Writer.Header().Add(key, value)
+			req.ctx.Response().Header().Add(key, value)
 		}
 	}
-
-	// Write status code header
-	req.ctx.Response().Writer.WriteHeader(resp.StatusCode)
+	req.ctx.Response().WriteHeader(resp.StatusCode)
 
 	// Check if we can stream the response
 	streamingSupported := true
@@ -501,7 +514,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		}
 
 		if err != nil {
-			if err != io.EOF {
+			if err != io.EOF && err != context.Canceled {
 				req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 					"error": "Internal server error",
 				})
@@ -537,7 +550,6 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 	defer func() {
 		req.done <- true
-		req.payload = nil
 	}()
 
 	defer rb.releaseRequestToken(containerId, req.task.msg.TaskId)
