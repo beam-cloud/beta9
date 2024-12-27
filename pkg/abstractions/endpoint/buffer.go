@@ -494,11 +494,34 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 	req.ctx.Response().WriteHeader(resp.StatusCode)
 
-	_, err = io.Copy(req.ctx.Response().Writer, resp.Body)
-	if err != nil {
-		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error": "Internal server error",
-		})
+	// Check if we can stream the response
+	streamingSupported := true
+	flusher, ok := req.ctx.Response().Writer.(http.Flusher)
+	if !ok {
+		streamingSupported = false
+	}
+
+	// Send response to client in chunks
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			req.ctx.Response().Writer.Write(buf[:n])
+
+			if streamingSupported {
+				flusher.Flush()
+			}
+		}
+
+		if err != nil {
+			if err != io.EOF {
+				req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+					"error": "Internal server error",
+				})
+			}
+
+			break
+		}
 	}
 }
 
