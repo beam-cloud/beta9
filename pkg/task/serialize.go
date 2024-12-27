@@ -11,10 +11,12 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+var json = jsoniter.ConfigCompatibleWithStandardLibrary
+
 func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 	defer ctx.Request().Body.Close()
 
-	decoder := jsoniter.NewDecoder(ctx.Request().Body)
+	decoder := json.NewDecoder(ctx.Request().Body)
 
 	payload := map[string]interface{}{}
 	if err := decoder.Decode(&payload); err != nil {
