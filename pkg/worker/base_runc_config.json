@@ -412,6 +412,12 @@
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+		},
+		{
+			"destination": "/usr/sbin/sshd",
+			"type": "bind",
+			"source": "/usr/sbin/sshd",
+			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
 		}
 	],
 	"hooks": {
