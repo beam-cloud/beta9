@@ -414,10 +414,14 @@
 			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
 		},
 		{
-			"destination": "/usr/sbin/sshd",
-			"type": "bind",
-			"source": "/usr/sbin/sshd",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"destination": "/run/sshd",
+			"type": "tmpfs",
+			"source": "tmpfs",
+			"options": [
+			  "nosuid",
+			  "nodev",
+			  "mode=0755"
+			]
 		}
 	],
 	"hooks": {
