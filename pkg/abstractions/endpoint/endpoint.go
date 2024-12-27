@@ -2,11 +2,12 @@ package endpoint
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"time"
+
+	jsoniter "github.com/json-iterator/go"
 
 	"github.com/labstack/echo/v4"
 
@@ -20,6 +21,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
+
+var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type EndpointService interface {
 	pb.EndpointServiceServer
@@ -184,16 +187,6 @@ func (es *HttpEndpointService) forwardRequest(
 		})
 	}
 
-	payload := &types.TaskPayload{}
-	if !instance.isASGI {
-		payload, err = task.SerializeHttpPayload(ctx)
-		if err != nil {
-			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-				"error": err.Error(),
-			})
-		}
-	}
-
 	// Needed for backwards compatibility
 	ttl := instance.StubConfig.TaskPolicy.TTL
 	if ttl == 0 {
@@ -209,7 +202,7 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
-	return task.Execute(ctx.Request().Context(), ctx, payload)
+	return task.Execute(ctx.Request().Context(), ctx)
 }
 
 func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
