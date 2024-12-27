@@ -424,6 +424,11 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	if !rb.isASGI {
 		payload, err := task.SerializeHttpPayload(req.ctx)
 		if err != nil {
+			if req.ctx.Request().Context().Err() == context.Canceled {
+				rb.cancelInFlightTask(req.task)
+				return
+			}
+
 			req.ctx.JSON(http.StatusBadRequest, map[string]interface{}{
 				"error": err.Error(),
 			})
@@ -448,7 +453,6 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		})
 		return
 	}
-
 	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
 
 	// Forward query params to the container if ASGI
