@@ -514,7 +514,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		}
 
 		if err != nil {
-			if err != io.EOF {
+			if err != io.EOF && err != context.Canceled {
 				req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 					"error": "Internal server error",
 				})
