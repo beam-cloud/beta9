@@ -60,7 +60,6 @@ type RequestBuffer struct {
 	isASGI                  bool
 	keyEventManager         *common.KeyEventManager
 	keyEventChan            chan common.KeyEvent
-	httpClientCache         sync.Map
 }
 
 func NewRequestBuffer(
@@ -343,10 +342,6 @@ func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
 }
 
 func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
-	if client, exists := rb.httpClientCache.Load(address); exists {
-		return client.(*http.Client), nil
-	}
-
 	// If it isn't an tailnet address, just return the standard http client
 	if !rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName) {
 		return rb.httpClient, nil
@@ -357,6 +352,8 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 		return nil, err
 	}
 
+	// Create a custom transport that uses the established connection
+	// Either using tailscale or not
 	transport := &http.Transport{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 			return conn, nil
@@ -367,7 +364,6 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 		Transport: transport,
 	}
 
-	rb.httpClientCache.Store(address, client)
 	return client, nil
 }
 
