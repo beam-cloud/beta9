@@ -481,7 +481,6 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	if err != nil {
 		if req.ctx.Request().Context().Err() == context.Canceled {
 			rb.cancelInFlightTask(req.task)
-			return
 		}
 		return
 	}
