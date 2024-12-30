@@ -2,9 +2,8 @@ package taskqueue
 
 import (
 	"net/http"
-	"strconv"
 
-	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -37,40 +36,17 @@ func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup 
 func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
-	stubId := ctx.Param("stubId")
-	deploymentName := ctx.Param("deploymentName")
-	version := ctx.Param("version")
-
-	if deploymentName != "" {
-		var deployment *types.DeploymentWithRelated
-
-		if version == "" {
-			var err error
-			deployment, err = g.tq.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeTaskQueueDeployment, true)
-			if err != nil {
-				return apiv1.HTTPBadRequest("Invalid deployment")
-			}
-		} else {
-			version, err := strconv.Atoi(version)
-			if err != nil {
-				return apiv1.HTTPBadRequest("Invalid deployment version")
-			}
-
-			deployment, err = g.tq.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), types.StubTypeTaskQueueDeployment)
-			if err != nil {
-				return apiv1.HTTPBadRequest("Invalid deployment")
-			}
-		}
-
-		if deployment == nil {
-			return apiv1.HTTPBadRequest("Invalid deployment")
-		}
-
-		if !deployment.Active {
-			return apiv1.HTTPBadRequest("Deployment is not active")
-		}
-
-		stubId = deployment.Stub.ExternalId
+	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
+		ctx.Request().Context(),
+		cc.AuthInfo,
+		ctx.Param("stubId"),
+		ctx.Param("deploymentName"),
+		ctx.Param("version"),
+		types.StubTypeTaskQueueDeployment,
+		g.tq.backendRepo,
+	)
+	if err != nil {
+		return err
 	}
 
 	payload, err := task.SerializeHttpPayload(ctx)
@@ -101,43 +77,20 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 func (g *taskQueueGroup) TaskQueueWarmUp(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
-	stubId := ctx.Param("stubId")
-	deploymentName := ctx.Param("deploymentName")
-	version := ctx.Param("version")
-
-	if deploymentName != "" {
-		var deployment *types.DeploymentWithRelated
-
-		if version == "" {
-			var err error
-			deployment, err = g.tq.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, types.StubTypeTaskQueueDeployment, true)
-			if err != nil {
-				return apiv1.HTTPBadRequest("Invalid deployment")
-			}
-		} else {
-			version, err := strconv.Atoi(version)
-			if err != nil {
-				return apiv1.HTTPBadRequest("Invalid deployment version")
-			}
-
-			deployment, err = g.tq.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentName, uint(version), types.StubTypeTaskQueueDeployment)
-			if err != nil {
-				return apiv1.HTTPBadRequest("Invalid deployment")
-			}
-		}
-
-		if deployment == nil {
-			return apiv1.HTTPBadRequest("Invalid deployment")
-		}
-
-		if !deployment.Active {
-			return apiv1.HTTPBadRequest("Deployment is not active")
-		}
-
-		stubId = deployment.Stub.ExternalId
+	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
+		ctx.Request().Context(),
+		cc.AuthInfo,
+		ctx.Param("stubId"),
+		ctx.Param("deploymentName"),
+		ctx.Param("version"),
+		types.StubTypeTaskQueueDeployment,
+		g.tq.backendRepo,
+	)
+	if err != nil {
+		return err
 	}
 
-	err := g.tq.warmup(
+	err = g.tq.warmup(
 		stubId,
 	)
 	if err != nil {

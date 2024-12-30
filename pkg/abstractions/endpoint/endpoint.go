@@ -146,7 +146,7 @@ func (es *HttpEndpointService) endpointTaskFactory(ctx context.Context, msg type
 	}, nil
 }
 
-func (es *HttpEndpointService) isPublic(stubId string) (*types.Workspace, error) {
+func (es *HttpEndpointService) IsPublic(stubId string) (*types.Workspace, error) {
 	instance, err := es.getOrCreateEndpointInstance(es.ctx, stubId)
 	if err != nil {
 		return nil, err
