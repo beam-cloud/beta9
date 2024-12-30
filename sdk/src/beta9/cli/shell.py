@@ -44,6 +44,11 @@ def common(**_):
     default=0,
     help="The inactivity timeout for the shell instance in seconds. Set to -1 for no timeout. Set to 0 to use default timeout (10 minutes)",
 )
+@click.option(
+    "--url-type",
+    help="The type of URL to get back. [default is determined by the server] ",
+    type=click.Choice(["host", "path"]),
+)
 @extraclick.pass_service_client
 @click.pass_context
 def shell(
@@ -51,6 +56,7 @@ def shell(
     service: ServiceClient,
     entrypoint: str,
     timeout: Optional[int] = None,
+    url_type: str = "path",
 ):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
@@ -78,4 +84,4 @@ def shell(
     if hasattr(user_obj, "set_handler"):
         user_obj.set_handler(f"{module_name}:{obj_name}")
 
-    user_obj.shell(timeout=int(timeout))  # type:ignore
+    user_obj.shell(timeout=int(timeout), url_type=url_type)  # type:ignore

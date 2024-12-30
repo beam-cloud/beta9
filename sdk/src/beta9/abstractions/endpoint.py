@@ -27,6 +27,7 @@ from ..clients.endpoint import (
     StartEndpointServeResponse,
     StopEndpointServeRequest,
 )
+from ..clients.gateway import GetUrlRequest, GetUrlResponse
 from ..clients.shell import CreateShellRequest, ShellServiceStub
 from ..env import is_local
 from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
@@ -609,7 +610,7 @@ class _CallableWrapper(DeployableMixin):
         terminal.warn("Endpoint serve timed out. Container has been stopped.")
 
     @with_grpc_error_handling
-    def shell(self, timeout: int = 0):
+    def shell(self, timeout: int = 0, url_type: str = ""):
         stub_type = ENDPOINT_SHELL_STUB_TYPE
 
         if not self.parent.prepare_runtime(
@@ -625,6 +626,18 @@ class _CallableWrapper(DeployableMixin):
             )
         )
         print(r)
+
+        res: GetUrlResponse = self.parent.gateway_stub.get_url(
+            GetUrlRequest(
+                stub_id=self.parent.stub_id,
+                deployment_id=getattr(self, "deployment_id", ""),
+                url_type=url_type,
+            )
+        )
+        if not res.ok:
+            return terminal.error("Failed to get shell connection URL", exit=False)
+
+        print(res.url)
 
         # # Then, issue connection request to the container using CONNECT http method
         # import http.client
