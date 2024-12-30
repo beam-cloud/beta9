@@ -13,6 +13,7 @@ from ..abstractions.base.runner import (
     ASGI_STUB_TYPE,
     ENDPOINT_DEPLOYMENT_STUB_TYPE,
     ENDPOINT_SERVE_STUB_TYPE,
+    ENDPOINT_SHELL_STUB_TYPE,
     ENDPOINT_STUB_TYPE,
     RunnerAbstraction,
 )
@@ -26,6 +27,7 @@ from ..clients.endpoint import (
     StartEndpointServeResponse,
     StopEndpointServeRequest,
 )
+from ..clients.shell import CreateShellRequest, ShellServiceStub
 from ..env import is_local
 from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
 from .mixins import DeployableMixin
@@ -159,12 +161,19 @@ class Endpoint(RunnerAbstraction):
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
+        self._shell_stub: Optional[ShellServiceStub] = None
 
     @property
     def endpoint_stub(self) -> EndpointServiceStub:
         if not self._endpoint_stub:
             self._endpoint_stub = EndpointServiceStub(self.channel)
         return self._endpoint_stub
+
+    @property
+    def shell_stub(self) -> ShellServiceStub:
+        if not self._shell_stub:
+            self._shell_stub = ShellServiceStub(self.channel)
+        return self._shell_stub
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
@@ -598,3 +607,48 @@ class _CallableWrapper(DeployableMixin):
             terminal.error("Serve container failed ❌")
 
         terminal.warn("Endpoint serve timed out. Container has been stopped.")
+
+    @with_grpc_error_handling
+    def shell(self, timeout: int = 0):
+        stub_type = ENDPOINT_SHELL_STUB_TYPE
+
+        if not self.parent.prepare_runtime(
+            func=self.func, stub_type=stub_type, force_create_stub=True
+        ):
+            return False
+
+        # First, spin up the container
+        r = self.parent.shell_stub.create_shell(
+            CreateShellRequest(
+                stub_id=self.parent.stub_id,
+                timeout=timeout,
+            )
+        )
+        print(r)
+
+        # # Then, issue connection request to the container using CONNECT http method
+        # import http.client
+
+        # conn = http.client.HTTPConnection("container_address", port)
+        # conn.request("CONNECT", "/")
+        # response = conn.getresponse()
+        # if response.status != 200:
+        #     raise Exception("Failed to establish connection")
+
+        # # Then use paramiko to connect using the same socket
+        # import paramiko
+
+        # transport = paramiko.Transport(conn.sock)
+        # transport.start_client()
+
+        # # Authenticate with the container
+        # transport.auth_password(username="user", password="password")
+
+        # # Open a session and execute commands
+        # session = transport.open_session()
+        # session.exec_command("ls -l")
+        # print(session.recv(1024).decode())
+
+        # # Close the session and transport
+        # session.close()
+        # transport.close()

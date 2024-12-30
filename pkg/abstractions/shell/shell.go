@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	shellContainerPrefix   string = "shell-"
+	shellContainerPrefix   string = "shell"
 	defaultContainerCpu    int64  = 100
 	defaultContainerMemory int64  = 128
 )
@@ -111,7 +111,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		}, nil
 	}
 
-	containerId := fmt.Sprintf("%s%s", shellContainerPrefix, uuid.New().String())
+	containerId := ss.genContainerId(stub.ExternalId)
 
 	go ss.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
@@ -175,7 +175,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		StubId:      stub.ExternalId,
 		WorkspaceId: authInfo.Workspace.ExternalId,
 		Workspace:   *authInfo.Workspace,
-		EntryPoint:  []string{"/usr/sbin/sshd", "-D"},
+		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 		Mounts:      mounts,
 		Stub:        *stub,
 	})
@@ -202,6 +202,11 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 	log.Println("Connected to shell: ", conn)
 
 	return &pb.CreateShellResponse{
-		Ok: true,
+		Ok:          true,
+		ContainerId: containerId,
 	}, nil
+}
+
+func (ss *SSHShellService) genContainerId(stubId string) string {
+	return fmt.Sprintf("%s-%s-%s", shellContainerPrefix, stubId, uuid.New().String()[:8])
 }

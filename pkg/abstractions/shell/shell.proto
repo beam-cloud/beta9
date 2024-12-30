@@ -13,4 +13,7 @@ message CreateShellRequest {
   int32 timeout = 2;
 }
 
-message CreateShellResponse { bool ok = 1; }
+message CreateShellResponse {
+  bool ok = 1;
+  string container_id = 2;
+}

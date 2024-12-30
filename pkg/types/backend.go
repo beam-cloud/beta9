@@ -207,24 +207,33 @@ const (
 	StubTypeFunction               string = "function"
 	StubTypeFunctionDeployment     string = "function/deployment"
 	StubTypeFunctionServe          string = "function/serve"
+	StubTypeFunctionShell          string = "function/shell"
 	StubTypeContainer              string = "container"
 	StubTypeTaskQueue              string = "taskqueue"
 	StubTypeTaskQueueDeployment    string = "taskqueue/deployment"
 	StubTypeTaskQueueServe         string = "taskqueue/serve"
+	StubTypeTaskQueueShell         string = "taskqueue/shell"
 	StubTypeEndpoint               string = "endpoint"
 	StubTypeEndpointDeployment     string = "endpoint/deployment"
 	StubTypeEndpointServe          string = "endpoint/serve"
+	StubTypeEndpointShell          string = "endpoint/shell"
 	StubTypeASGI                   string = "asgi"
 	StubTypeASGIDeployment         string = "asgi/deployment"
 	StubTypeASGIServe              string = "asgi/serve"
+	StubTypeASGIShell              string = "asgi/shell"
 	StubTypeScheduledJob           string = "schedule"
 	StubTypeScheduledJobDeployment string = "schedule/deployment"
+	StubTypeScheduledJobShell      string = "schedule/shell"
 	StubTypeBot                    string = "bot"
 	StubTypeBotDeployment          string = "bot/deployment"
 	StubTypeBotServe               string = "bot/serve"
 )
 
 type StubType string
+
+func (t StubType) IsShell() bool {
+	return strings.HasSuffix(string(t), "/shell")
+}
 
 func (t StubType) IsServe() bool {
 	return strings.HasSuffix(string(t), "/serve")
