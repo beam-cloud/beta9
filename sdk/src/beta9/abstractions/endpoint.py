@@ -618,15 +618,17 @@ class _CallableWrapper(DeployableMixin):
         ):
             return False
 
-        # First, spin up the container
+        # First, spin up the shell container
         r = self.parent.shell_stub.create_shell(
             CreateShellRequest(
                 stub_id=self.parent.stub_id,
                 timeout=timeout,
             )
         )
-        print(r)
+        if not r.ok:
+            return terminal.error("Failed to create shell ❌")
 
+        # Then, we can retrieve the URL and issue a CONNECT request / establish a tunnel
         res: GetUrlResponse = self.parent.gateway_stub.get_url(
             GetUrlRequest(
                 stub_id=self.parent.stub_id,
@@ -635,7 +637,7 @@ class _CallableWrapper(DeployableMixin):
             )
         )
         if not res.ok:
-            return terminal.error("Failed to get shell connection URL", exit=False)
+            return terminal.error("Failed to get shell connection URL")
 
         print(res.url)
 
