@@ -287,7 +287,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	err = b.rdb.HSetNX(ctx, imageBuildContainersCreatedAtKey, containerId, time.Now().Unix()).Err()
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Unknown error occurred.\n %s", err.Error())}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Unknown error occurred.\n")}
 	}
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
