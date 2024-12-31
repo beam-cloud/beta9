@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
 
@@ -25,8 +27,20 @@ func registerShellRoutes(g *echo.Group, ss *SSHShellService) *shellGroup {
 }
 
 func (g *shellGroup) ShellConnect(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	containerId := ctx.Param("containerId")
 	stubId := ctx.Param("stubId")
+
+	stub, err := g.ss.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubId, types.QueryFilter{
+		Field: "workspace_id",
+		Value: cc.AuthInfo.Token.Workspace.ExternalId,
+	})
+	if err != nil {
+		return apiv1.HTTPInternalServerError("Failed to retrieve stub")
+	} else if stub == nil {
+		return apiv1.HTTPNotFound()
+	}
 
 	log.Println("stubId", stubId)
 
@@ -37,7 +51,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	defer cancel()
 
 	// Use the new method to wait for the container to be running
-	err := g.ss.waitForContainerRunning(timeoutCtx, containerId, 5*time.Second)
+	err = g.ss.waitForContainerRunning(timeoutCtx, containerId, 5*time.Second)
 	if err != nil {
 		return ctx.String(http.StatusBadGateway, err.Error())
 	}
