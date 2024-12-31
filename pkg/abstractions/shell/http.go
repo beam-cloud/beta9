@@ -30,6 +30,8 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 
 	log.Println("stubId", stubId)
 
+	// TODO: auth by stub ID
+
 	// Create a context with a 5-minute timeout
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()

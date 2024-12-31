@@ -3,10 +3,50 @@ import socket
 import sys
 from dataclasses import dataclass
 
-from .env import is_local
+from ..env import is_local
 
 if is_local():
     import paramiko
+
+
+def create_connect_tunnel(
+    proxy_host: str, proxy_port: int, stub_id: str, container_id: str, auth_token: str
+) -> socket.socket:
+    """
+    1. Connect to the proxy_host:proxy_port over TCP.
+    2. Send an HTTP CONNECT request for the correct path.
+    3. If we get a 200 response, return the socket as a raw tunnel.
+    """
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((proxy_host, proxy_port))
+
+    # Construct the correct CONNECT request path
+    connect_path = f"/shell/{stub_id}/{container_id}"
+
+    connect_req = (
+        f"CONNECT {connect_path} HTTP/1.1\r\n"
+        f"Host: {proxy_host}:{proxy_port}\r\n"
+        f"Proxy-Connection: Keep-Alive\r\n"
+        f"Authorization: Bearer {auth_token}\r\n"
+        f"\r\n"
+    )
+    s.sendall(connect_req.encode("ascii"))
+
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        response += chunk
+
+    response_str = response.decode("ascii", errors="replace")
+    if "200 OK" not in response_str:
+        s.close()
+        raise Exception(f"CONNECT failed. Response:\n{response_str}")
+
+    # If we reach here, we have a raw TCP tunnel to "container_id"
+    return s
 
 
 # https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Bracketed-Paste-Mode
