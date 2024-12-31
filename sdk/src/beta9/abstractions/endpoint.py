@@ -526,35 +526,6 @@ class RealtimeASGI(ASGI):
         return _CallableWrapper(func, self)
 
 
-***REMOVED*** = ***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-***REMOVED***
-
-
 class _CallableWrapper(DeployableMixin):
     deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
 
