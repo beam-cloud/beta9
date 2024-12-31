@@ -4,13 +4,13 @@ import (
 	"context"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
@@ -72,7 +72,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	defer conn.Close()
 
 	// Dial ssh server in the container
-	containerConn, err := net.Dial("tcp", containerAddress)
+	containerConn, err := network.ConnectToHost(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale)
 	if err != nil {
 		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
 	}

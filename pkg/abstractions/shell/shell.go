@@ -23,10 +23,11 @@ import (
 )
 
 const (
-	shellRoutePrefix       string = "/shell"
-	shellContainerPrefix   string = "shell"
-	defaultContainerCpu    int64  = 100
-	defaultContainerMemory int64  = 128
+	shellRoutePrefix              string        = "/shell"
+	shellContainerPrefix          string        = "shell"
+	defaultContainerCpu           int64         = 100
+	defaultContainerMemory        int64         = 128
+	containerDialTimeoutDurationS time.Duration = 300 * time.Second
 )
 
 type ShellService interface {
