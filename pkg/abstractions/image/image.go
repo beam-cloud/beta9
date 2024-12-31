@@ -3,6 +3,8 @@ package image
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -26,6 +28,7 @@ type RuncImageService struct {
 	builder     *Builder
 	config      types.AppConfig
 	backendRepo repository.BackendRepository
+	rdb         *common.RedisClient
 }
 
 type ImageServiceOpts struct {
@@ -34,6 +37,11 @@ type ImageServiceOpts struct {
 	BackendRepo   repository.BackendRepository
 	Scheduler     *scheduler.Scheduler
 	Tailscale     *network.Tailscale
+	RedisClient   *common.RedisClient
+}
+
+type ImageBuildContainerState struct {
+	CreatedAt int64 `redis:"created_at"`
 }
 
 func NewRuncImageService(
@@ -45,16 +53,21 @@ func NewRuncImageService(
 		return nil, err
 	}
 
-	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo)
+	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo, opts.RedisClient)
 	if err != nil {
 		return nil, err
 	}
 
-	return &RuncImageService{
+	is := RuncImageService{
 		builder:     builder,
 		config:      opts.Config,
 		backendRepo: opts.BackendRepo,
-	}, nil
+		rdb:         opts.RedisClient,
+	}
+
+	go is.monitorImageContainers(ctx)
+
+	return &is, nil
 }
 
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
@@ -184,6 +197,59 @@ func (is *RuncImageService) retrieveBuildSecrets(ctx context.Context, secrets []
 	return buildSecrets, nil
 }
 
+func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Second)
+
+	for {
+		select {
+		case <-ticker.C:
+			containerKeys, err := is.rdb.HKeys(ctx, imageBuildContainersCreatedAtKey).Result()
+			if err != nil {
+				log.Error().Err(err).Msg("failed to get active image build containers")
+				return
+			}
+
+			for _, key := range containerKeys {
+				createdAt := is.rdb.HGet(ctx, imageBuildContainersCreatedAtKey, key).Val()
+				if createdAt == "" {
+					log.Error().Msg("failed to get created at time for container")
+					continue
+				}
+
+				createdAtInt, err := strconv.ParseInt(createdAt, 10, 64)
+				if err != nil {
+					log.Error().Err(err).Msg("failed to parse container created at time")
+					continue
+				}
+
+				// See if the container still exists
+				_, err = is.builder.containerRepo.GetContainerState(key)
+				if err != nil {
+					if errors.Is(err, &types.ErrCheckpointNotFound{}) {
+						is.rdb.HDel(ctx, imageBuildContainersCreatedAtKey, key)
+					}
+
+					log.Error().Err(err).Msg("failed to get container state")
+					continue
+				}
+
+				if createdAtInt < time.Now().Unix()-is.config.ImageService.ImageBuildTimeoutS {
+					is.builder.scheduler.Stop(
+						&types.StopContainerArgs{
+							ContainerId: key,
+							Force:       true,
+						},
+					)
+
+					is.rdb.HDel(ctx, imageBuildContainersCreatedAtKey, key)
+				}
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 	steps := make([]BuildStep, len(buildSteps))
 	for i, s := range buildSteps {
@@ -194,3 +260,5 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 	}
 	return steps
 }
+
+var imageBuildContainersCreatedAtKey = "image:containers:created_at"

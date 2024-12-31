@@ -43,6 +43,7 @@ type Builder struct {
 	registry      *common.ImageRegistry
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
+	rdb           *common.RedisClient
 }
 
 type BuildStep struct {
@@ -130,13 +131,14 @@ func (o *BuildOpts) addPythonRequirements() {
 	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 }
 
-func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository) (*Builder, error) {
+func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
 	return &Builder{
 		config:        config,
 		scheduler:     scheduler,
 		tailscale:     tailscale,
 		registry:      registry,
 		containerRepo: containerRepo,
+		rdb:           rdb,
 	}, nil
 }
 
@@ -281,6 +283,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
+	}
+
+	err = b.rdb.HSetNX(ctx, imageBuildContainersCreatedAtKey, containerId, time.Now().Unix()).Err()
+	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Unknown error occurred.\n %s", err.Error())}
 	}
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)

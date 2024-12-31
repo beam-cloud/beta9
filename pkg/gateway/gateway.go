@@ -250,6 +250,7 @@ func (g *Gateway) registerServices() error {
 		Scheduler:     g.Scheduler,
 		Tailscale:     g.Tailscale,
 		BackendRepo:   g.BackendRepo,
+		RedisClient:   g.RedisClient,
 	})
 	if err != nil {
 		return err
