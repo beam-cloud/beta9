@@ -16,7 +16,6 @@ class DeployableMixin:
     func: Callable
     parent: RunnerAbstraction
     deployment_id: Optional[str] = None
-
     deployment_stub_type: ClassVar[str]
 
     def _validate(self):

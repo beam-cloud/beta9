@@ -26,7 +26,6 @@ from ..clients.endpoint import (
     StartEndpointServeResponse,
     StopEndpointServeRequest,
 )
-from ..clients.shell import ShellServiceStub
 from ..env import is_local
 from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
 from .mixins import DeployableMixin
@@ -160,19 +159,12 @@ class Endpoint(RunnerAbstraction):
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
-        self._shell_stub: Optional[ShellServiceStub] = None
 
     @property
     def endpoint_stub(self) -> EndpointServiceStub:
         if not self._endpoint_stub:
             self._endpoint_stub = EndpointServiceStub(self.channel)
         return self._endpoint_stub
-
-    @property
-    def shell_stub(self) -> ShellServiceStub:
-        if not self._shell_stub:
-            self._shell_stub = ShellServiceStub(self.channel)
-        return self._shell_stub
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
