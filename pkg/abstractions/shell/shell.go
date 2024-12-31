@@ -178,12 +178,6 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
     sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config;
     sed -i 's/^#PubkeyAuthentication.*/PubkeyAuthentication no/' /etc/ssh/sshd_config;
     echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config;
-    echo "========================================";
-    echo "SSH Credentials:";
-    echo "Username: $USERNAME";
-    echo "Password: $TOKEN";
-    echo "Port: 8001";
-    echo "========================================";
     exec /usr/sbin/sshd -D -p 8001
     `, token)
 
