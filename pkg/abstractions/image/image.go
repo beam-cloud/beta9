@@ -40,10 +40,6 @@ type ImageServiceOpts struct {
 	RedisClient   *common.RedisClient
 }
 
-type ImageBuildContainerState struct {
-	CreatedAt int64 `redis:"created_at"`
-}
-
 func NewRuncImageService(
 	ctx context.Context,
 	opts ImageServiceOpts,
