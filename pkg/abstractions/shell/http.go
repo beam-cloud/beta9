@@ -81,21 +81,37 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	// TODO: confirm disconnects happen when python client exits
 	defer log.Println("disconnected")
 
+	// Create a context that will be canceled when the client disconnects
+	clientCtx, clientCancel := context.WithCancel(ctx.Request().Context())
+	defer clientCancel()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
 	// Copy from client -> container
 	go func() {
 		defer wg.Done()
-		buf := make([]byte, 32*1024) // 32KB buffer
-		io.CopyBuffer(containerConn, conn, buf)
+		buf := make([]byte, shellProxyBufferSizeKb)
+		select {
+		case <-clientCtx.Done():
+			log.Println("client disconnected")
+			return
+		default:
+			io.CopyBuffer(containerConn, conn, buf)
+		}
 	}()
 
 	// Copy from container -> client
 	go func() {
 		defer wg.Done()
-		buf := make([]byte, 32*1024) // 32KB buffer
-		io.CopyBuffer(conn, containerConn, buf)
+		buf := make([]byte, shellProxyBufferSizeKb)
+		select {
+		case <-clientCtx.Done():
+			log.Println("client disconnected")
+			return
+		default:
+			io.CopyBuffer(conn, containerConn, buf)
+		}
 	}()
 
 	wg.Wait()

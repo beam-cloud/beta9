@@ -25,6 +25,7 @@ import (
 const (
 	shellRoutePrefix              string        = "/shell"
 	shellContainerPrefix          string        = "shell"
+	shellProxyBufferSizeKb        int           = 32 * 1024
 	defaultContainerCpu           int64         = 100
 	defaultContainerMemory        int64         = 128
 	containerDialTimeoutDurationS time.Duration = 300 * time.Second
