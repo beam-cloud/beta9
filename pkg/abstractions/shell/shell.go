@@ -1,10 +1,11 @@
-package endpoint
+package shell
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +24,7 @@ import (
 )
 
 const (
+	shellRoutePrefix       string = "/shell"
 	shellContainerPrefix   string = "shell"
 	defaultContainerCpu    int64  = 100
 	defaultContainerMemory int64  = 128
@@ -86,6 +88,9 @@ func NewSSHShellService(
 		taskDispatcher:  opts.TaskDispatcher,
 		eventRepo:       opts.EventRepo,
 	}
+
+	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
+	registerShellRoutes(opts.RouteGroup.Group(shellRoutePrefix, authMiddleware), ss)
 
 	return ss, nil
 }
@@ -164,6 +169,37 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		gpuCount = 1
 	}
 
+	token, err := generateToken(16)
+	if err != nil {
+		return &pb.CreateShellResponse{
+			Ok: false,
+		}, nil
+	}
+
+	startupCommand := fmt.Sprintf(`
+    set -e;
+    USERNAME='runc';
+    TOKEN='%s';
+    useradd -m -s /bin/bash "$USERNAME";
+    echo "$USERNAME:$TOKEN" | chpasswd;
+    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config;
+    sed -i 's/^#PubkeyAuthentication.*/PubkeyAuthentication no/' /etc/ssh/sshd_config;
+    echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config;
+    echo "========================================";
+    echo "SSH Credentials:";
+    echo "Username: $USERNAME";
+    echo "Password: $TOKEN";
+    echo "Port: 8001";
+    echo "========================================";
+    exec /usr/sbin/sshd -D -d -p 8001
+    `, token)
+
+	entryPoint := []string{
+		"/bin/bash",
+		"-c",
+		startupCommand,
+	}
+
 	err = ss.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env:         env,
@@ -175,7 +211,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		StubId:      stub.ExternalId,
 		WorkspaceId: authInfo.Workspace.ExternalId,
 		Workspace:   *authInfo.Workspace,
-		EntryPoint:  []string{"tail", "-f", "/dev/null"},
+		EntryPoint:  entryPoint,
 		Mounts:      mounts,
 		Stub:        *stub,
 	})
@@ -185,28 +221,46 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		}, nil
 	}
 
-	hostname, err := ss.containerRepo.GetWorkerAddress(ctx, containerId)
-	if err != nil {
-		return &pb.CreateShellResponse{
-			Ok: false,
-		}, nil
-	}
-
-	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, ss.tailscale, ss.config.Tailscale)
-	if err != nil {
-		return &pb.CreateShellResponse{
-			Ok: false,
-		}, nil
-	}
-
-	log.Println("Connected to shell: ", conn)
-
 	return &pb.CreateShellResponse{
 		Ok:          true,
 		ContainerId: containerId,
+		Token:       token,
 	}, nil
 }
 
 func (ss *SSHShellService) genContainerId(stubId string) string {
 	return fmt.Sprintf("%s-%s-%s", shellContainerPrefix, stubId, uuid.New().String()[:8])
+}
+
+func (ss *SSHShellService) waitForContainerRunning(ctx context.Context, containerId string, delay time.Duration) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout reached while waiting for container to be running")
+		default:
+			containerState, err := ss.containerRepo.GetContainerState(containerId)
+			if err != nil {
+				return err
+			}
+
+			if containerState.Status == types.ContainerStatusRunning {
+				return nil
+			}
+
+			time.Sleep(delay)
+		}
+	}
+}
+
+func generateToken(length int) (string, error) {
+	byteLength := (length*6 + 7) / 8 // Calculate the number of bytes needed
+
+	randomBytes := make([]byte, byteLength)
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		return "", err
+	}
+
+	token := base64.URLEncoding.EncodeToString(randomBytes)
+	return token[:length], nil
 }

@@ -32,6 +32,7 @@ class CreateShellRequest(betterproto.Message):
 class CreateShellResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     container_id: str = betterproto.string_field(2)
+    token: str = betterproto.string_field(3)
 
 
 class ShellServiceStub(SyncServiceStub):

@@ -1,7 +1,9 @@
 import os
+import socket
 import threading
 import traceback
 import types
+import urllib.parse
 from typing import Any, Callable, List, Optional, Union
 
 from uvicorn.protocols.utils import ClientDisconnected
@@ -30,6 +32,7 @@ from ..clients.endpoint import (
 from ..clients.gateway import GetUrlRequest, GetUrlResponse
 from ..clients.shell import CreateShellRequest, ShellServiceStub
 from ..env import is_local
+from ..ssh import SSHShell
 from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
 from .mixins import DeployableMixin
 
@@ -523,6 +526,35 @@ class RealtimeASGI(ASGI):
         return _CallableWrapper(func, self)
 
 
+***REMOVED*** = ***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+***REMOVED***
+
+
 class _CallableWrapper(DeployableMixin):
     deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
 
@@ -619,13 +651,13 @@ class _CallableWrapper(DeployableMixin):
             return False
 
         # First, spin up the shell container
-        r = self.parent.shell_stub.create_shell(
+        create_shell_response = self.parent.shell_stub.create_shell(
             CreateShellRequest(
                 stub_id=self.parent.stub_id,
                 timeout=timeout,
             )
         )
-        if not r.ok:
+        if not create_shell_response.ok:
             return terminal.error("Failed to create shell ❌")
 
         # Then, we can retrieve the URL and issue a CONNECT request / establish a tunnel
@@ -639,31 +671,99 @@ class _CallableWrapper(DeployableMixin):
         if not res.ok:
             return terminal.error("Failed to get shell connection URL")
 
-        print(res.url)
+        # Parse the URL to extract the container_id
+        parsed_url = urllib.parse.urlparse(res.url)
+        path_segments = parsed_url.path.split("/")
+        if len(path_segments) < 3:
+            return terminal.error("Invalid URL path")
 
-        # # Then, issue connection request to the container using CONNECT http method
-        # import http.client
+        container_id = create_shell_response.container_id
+        ssh_token = create_shell_response.token
 
-        # conn = http.client.HTTPConnection("container_address", port)
-        # conn.request("CONNECT", "/")
-        # response = conn.getresponse()
-        # if response.status != 200:
-        #     raise Exception("Failed to establish connection")
+        # Use the container_id to establish a connection
+        tunnel_socket = None
+        proxy_host, proxy_port = parsed_url.hostname, parsed_url.port
+        try:
+            tunnel_socket = create_connect_tunnel(
+                proxy_host,
+                proxy_port,
+                self.parent.stub_id,
+                container_id,
+                self.parent.config_context.token,
+            )
+            print(
+                "Tunnel established! You can now speak SSH (or any protocol) over `tunnel_socket`."
+            )
+        except Exception as e:
+            terminal.error(f"Failed to establish CONNECT tunnel: {e}")
 
-        # # Then use paramiko to connect using the same socket
-        # import paramiko
+        import paramiko
 
-        # transport = paramiko.Transport(conn.sock)
-        # transport.start_client()
+        try:
+            # Initialize the transport with the cleaned socket
+            transport = paramiko.Transport(tunnel_socket)
+            print("Starting client")
+            transport.start_client()
 
-        # # Authenticate with the container
-        # transport.auth_password(username="user", password="password")
+            # Authenticate with the server
+            transport.auth_password("runc", ssh_token)
 
-        # # Open a session and execute commands
-        # session = transport.open_session()
-        # session.exec_command("ls -l")
-        # print(session.recv(1024).decode())
+            # Open a session and start an interactive shell
+            session = transport.open_session()
 
-        # # Close the session and transport
-        # session.close()
-        # transport.close()
+            with SSHShell(
+                channel=session,
+            ) as _:
+                pass
+
+        except paramiko.SSHException as e:
+            print(f"SSH error: {e}")
+        except EOFError:
+            print("Connection closed by the server.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+        finally:
+            if session:
+                session.close()
+
+            transport.close()
+
+
+def create_connect_tunnel(
+    proxy_host: str, proxy_port: int, stub_id: str, container_id: str, auth_token: str
+) -> socket.socket:
+    """
+    1. Connect to the proxy_host:proxy_port over TCP.
+    2. Send an HTTP CONNECT request for the correct path.
+    3. If we get a 200 response, return the socket as a raw tunnel.
+    """
+
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((proxy_host, proxy_port))
+
+    # Construct the correct CONNECT request path
+    connect_path = f"/shell/{stub_id}/{container_id}"
+
+    connect_req = (
+        f"CONNECT {connect_path} HTTP/1.1\r\n"
+        f"Host: {proxy_host}:{proxy_port}\r\n"
+        f"Proxy-Connection: Keep-Alive\r\n"
+        f"Authorization: Bearer {auth_token}\r\n"
+        f"\r\n"
+    )
+    s.sendall(connect_req.encode("ascii"))
+
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        response += chunk
+
+    response_str = response.decode("ascii", errors="replace")
+    if "200 OK" not in response_str:
+        s.close()
+        raise Exception(f"CONNECT failed. Response:\n{response_str}")
+
+    # If we reach here, we have a raw TCP tunnel to container_id
+    return s

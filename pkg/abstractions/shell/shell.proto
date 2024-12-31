@@ -16,4 +16,5 @@ message CreateShellRequest {
 message CreateShellResponse {
   bool ok = 1;
   string container_id = 2;
+  string token = 3;
 }

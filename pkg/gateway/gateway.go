@@ -389,6 +389,7 @@ func (g *Gateway) registerServices() error {
 		Tailscale:      g.Tailscale,
 		TaskDispatcher: g.TaskDispatcher,
 		EventRepo:      g.EventRepo,
+		RouteGroup:     g.rootRouteGroup,
 	})
 	if err != nil {
 		return err
