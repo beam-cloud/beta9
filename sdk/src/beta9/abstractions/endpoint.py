@@ -662,24 +662,15 @@ class _CallableWrapper(DeployableMixin):
                 container_id,
                 self.parent.config_context.token,
             )
-            print(
-                "Tunnel established! You can now speak SSH (or any protocol) over `tunnel_socket`."
-            )
-        except Exception as e:
-            terminal.error(f"Failed to establish CONNECT tunnel: {e}")
+        except BaseException:
+            terminal.error(f"Failed to establish ssh tunnel: {traceback.format_exc()}")
 
         import paramiko
 
         try:
-            # Initialize the transport with the cleaned socket
             transport = paramiko.Transport(tunnel_socket)
-            print("Starting client")
             transport.start_client()
-
-            # Authenticate with the server
             transport.auth_password("runc", ssh_token)
-
-            # Open a session and start an interactive shell
             session = transport.open_session()
 
             with SSHShell(
@@ -736,5 +727,5 @@ def create_connect_tunnel(
         s.close()
         raise Exception(f"CONNECT failed. Response:\n{response_str}")
 
-    # If we reach here, we have a raw TCP tunnel to container_id
+    # If we reach here, we have a raw TCP tunnel to "container_id"
     return s

@@ -198,7 +198,6 @@ class SSHShell:
 
         self._channel = self.channel
 
-        print("self._channel", self._channel)
         return self._channel
 
     def _launch(self):
