@@ -13,7 +13,7 @@ func init() {
 }
 
 func upAddShellStubType(ctx context.Context, tx *sql.Tx) error {
-	newStubTypes := []string{"schedule/shell", "asgi/shell", "endpoint/shell", "taskqueue/shell", "function/shell"}
+	newStubTypes := []string{"shell"}
 
 	for _, stubType := range newStubTypes {
 		addEnumSQL := fmt.Sprintf(`

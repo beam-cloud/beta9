@@ -379,17 +379,15 @@ func (g *Gateway) registerServices() error {
 
 	// Register shell service
 	ss, err := _shell.NewSSHShellService(g.ctx, _shell.ShellServiceOpts{
-		Config:         g.Config,
-		RedisClient:    g.RedisClient,
-		Scheduler:      g.Scheduler,
-		BackendRepo:    g.BackendRepo,
-		WorkspaceRepo:  g.WorkspaceRepo,
-		ContainerRepo:  g.ContainerRepo,
-		TaskRepo:       g.TaskRepo,
-		Tailscale:      g.Tailscale,
-		TaskDispatcher: g.TaskDispatcher,
-		EventRepo:      g.EventRepo,
-		RouteGroup:     g.rootRouteGroup,
+		Config:        g.Config,
+		RedisClient:   g.RedisClient,
+		Scheduler:     g.Scheduler,
+		BackendRepo:   g.BackendRepo,
+		WorkspaceRepo: g.WorkspaceRepo,
+		ContainerRepo: g.ContainerRepo,
+		Tailscale:     g.Tailscale,
+		EventRepo:     g.EventRepo,
+		RouteGroup:    g.rootRouteGroup,
 	})
 	if err != nil {
 		return err

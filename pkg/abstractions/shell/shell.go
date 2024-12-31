@@ -12,7 +12,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
-	"github.com/beam-cloud/beta9/pkg/task"
 	pb "github.com/beam-cloud/beta9/proto"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -46,23 +45,19 @@ type SSHShellService struct {
 	workspaceRepo   repository.WorkspaceRepository
 	containerRepo   repository.ContainerRepository
 	eventRepo       repository.EventRepository
-	taskRepo        repository.TaskRepository
 	tailscale       *network.Tailscale
-	taskDispatcher  *task.Dispatcher
 }
 
 type ShellServiceOpts struct {
-	Config         types.AppConfig
-	RedisClient    *common.RedisClient
-	BackendRepo    repository.BackendRepository
-	WorkspaceRepo  repository.WorkspaceRepository
-	TaskRepo       repository.TaskRepository
-	ContainerRepo  repository.ContainerRepository
-	Scheduler      *scheduler.Scheduler
-	RouteGroup     *echo.Group
-	Tailscale      *network.Tailscale
-	TaskDispatcher *task.Dispatcher
-	EventRepo      repository.EventRepository
+	Config        types.AppConfig
+	RedisClient   *common.RedisClient
+	BackendRepo   repository.BackendRepository
+	WorkspaceRepo repository.WorkspaceRepository
+	ContainerRepo repository.ContainerRepository
+	Scheduler     *scheduler.Scheduler
+	RouteGroup    *echo.Group
+	Tailscale     *network.Tailscale
+	EventRepo     repository.EventRepository
 }
 
 func NewSSHShellService(
@@ -83,9 +78,7 @@ func NewSSHShellService(
 		backendRepo:     opts.BackendRepo,
 		workspaceRepo:   opts.WorkspaceRepo,
 		containerRepo:   opts.ContainerRepo,
-		taskRepo:        opts.TaskRepo,
 		tailscale:       opts.Tailscale,
-		taskDispatcher:  opts.TaskDispatcher,
 		eventRepo:       opts.EventRepo,
 	}
 

@@ -15,8 +15,8 @@ from ..abstractions.base.runner import (
     ASGI_STUB_TYPE,
     ENDPOINT_DEPLOYMENT_STUB_TYPE,
     ENDPOINT_SERVE_STUB_TYPE,
-    ENDPOINT_SHELL_STUB_TYPE,
     ENDPOINT_STUB_TYPE,
+    SHELL_STUB_TYPE,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -614,7 +614,7 @@ class _CallableWrapper(DeployableMixin):
 
     @with_grpc_error_handling
     def shell(self, timeout: int = 0, url_type: str = ""):
-        stub_type = ENDPOINT_SHELL_STUB_TYPE
+        stub_type = SHELL_STUB_TYPE
 
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=stub_type, force_create_stub=True

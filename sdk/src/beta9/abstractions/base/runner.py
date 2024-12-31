@@ -46,12 +46,7 @@ ENDPOINT_STUB_TYPE = "endpoint"
 ASGI_STUB_TYPE = "asgi"
 SCHEDULE_STUB_TYPE = "schedule"
 BOT_STUB_TYPE = "bot"
-
-TASKQUEUE_SHELL_STUB_TYPE = "taskqueue/shell"
-FUNCTION_SHELL_STUB_TYPE = "function/shell"
-ENDPOINT_SHELL_STUB_TYPE = "endpoint/shell"
-ASGI_SHELL_STUB_TYPE = "asgi/shell"
-SCHEDULE_SHELL_STUB_TYPE = "schedule/shell"
+SHELL_STUB_TYPE = "shell"
 
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
