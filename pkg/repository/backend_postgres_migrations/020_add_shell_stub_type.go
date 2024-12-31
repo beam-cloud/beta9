@@ -40,6 +40,5 @@ $$;`, stubType, stubType)
 
 func downRemoveShellStubType(ctx context.Context, tx *sql.Tx) error {
 	// PostgreSQL doesn't support removing values from an ENUM directly
-	// hi
 	return nil
 }

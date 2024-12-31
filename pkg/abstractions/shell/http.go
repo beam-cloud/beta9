@@ -78,6 +78,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	}
 	defer containerConn.Close()
 
+	// TODO: confirm disconnects happen when python client exits
 	defer log.Println("disconnected")
 
 	var wg sync.WaitGroup
