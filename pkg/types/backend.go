@@ -220,7 +220,6 @@ const (
 	StubTypeASGIServe              string = "asgi/serve"
 	StubTypeScheduledJob           string = "schedule"
 	StubTypeScheduledJobDeployment string = "schedule/deployment"
-	StubTypeScheduledJobShell      string = "schedule/shell"
 	StubTypeBot                    string = "bot"
 	StubTypeBotDeployment          string = "bot/deployment"
 	StubTypeBotServe               string = "bot/serve"

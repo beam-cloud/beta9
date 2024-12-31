@@ -139,8 +139,6 @@ def posix_shell(chan: "paramiko.Channel"):  # noqa: C901
 
     oldtty = termios.tcgetattr(sys.stdin)
 
-    # input_history = []
-
     try:
         tty.setraw(sys.stdin.fileno())
         tty.setcbreak(sys.stdin.fileno())
@@ -169,7 +167,6 @@ def posix_shell(chan: "paramiko.Channel"):  # noqa: C901
                     # Until we reach the end of the pasted text
                     while key != END_PASTE:
                         chan.send(key)
-                        # input_history.append(key)
                         key = posix_readkey()
                     # We've exhausted the paste event, wait for next event
                     continue
@@ -177,13 +174,9 @@ def posix_shell(chan: "paramiko.Channel"):  # noqa: C901
                 if len(key) == 0:
                     break
                 chan.send(key)
-                # input_history.append(key)
 
     finally:
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldtty)
-
-    # Useful in debugging how control characters were send
-    # print(input_history)
 
 
 # thanks to Mike Looijmans for this code
