@@ -42,15 +42,9 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return apiv1.HTTPNotFound()
 	}
 
-	log.Println("stubId", stubId)
-
-	// TODO: auth by stub ID
-
-	// Create a context with a 5-minute timeout
 	timeoutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	// Use the new method to wait for the container to be running
 	err = g.ss.waitForContainerRunning(timeoutCtx, containerId, 5*time.Second)
 	if err != nil {
 		return ctx.String(http.StatusBadGateway, err.Error())
@@ -68,12 +62,12 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	// Hijack the connection
 	hijacker, ok := ctx.Response().Writer.(http.Hijacker)
 	if !ok {
-		return ctx.String(http.StatusInternalServerError, "Webserver doesn't support hijacking")
+		return ctx.String(http.StatusInternalServerError, "Failed to create tunnel")
 	}
 
 	conn, _, err := hijacker.Hijack()
 	if err != nil {
-		return ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
+		return ctx.String(http.StatusInternalServerError, "Failed to create tunnel")
 	}
 	defer conn.Close()
 
