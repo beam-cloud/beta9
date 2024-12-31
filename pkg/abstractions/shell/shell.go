@@ -191,7 +191,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
     echo "Password: $TOKEN";
     echo "Port: 8001";
     echo "========================================";
-    exec /usr/sbin/sshd -D -d -p 8001
+    exec /usr/sbin/sshd -D -p 8001
     `, token)
 
 	entryPoint := []string{
