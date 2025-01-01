@@ -29,6 +29,8 @@ const (
 	defaultContainerCpu           int64         = 100
 	defaultContainerMemory        int64         = 128
 	containerDialTimeoutDurationS time.Duration = 300 * time.Second
+	containerWaitTimeoutDurationS time.Duration = 5 * time.Minute
+	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 )
 
 type ShellService interface {
@@ -210,6 +212,19 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		}, nil
 	}
 
+	err = ss.waitForContainer(ctx, containerId, containerWaitTimeoutDurationS)
+	if err != nil {
+
+		ss.scheduler.Stop(&types.StopContainerArgs{
+			ContainerId: containerId,
+			Force:       true,
+		})
+
+		return &pb.CreateShellResponse{
+			Ok: false,
+		}, nil
+	}
+
 	return &pb.CreateShellResponse{
 		Ok:          true,
 		ContainerId: containerId,
@@ -221,11 +236,14 @@ func (ss *SSHShellService) genContainerId(stubId string) string {
 	return fmt.Sprintf("%s-%s-%s", shellContainerPrefix, stubId, uuid.New().String()[:8])
 }
 
-func (ss *SSHShellService) waitForContainerRunning(ctx context.Context, containerId string, delay time.Duration) error {
+func (ss *SSHShellService) waitForContainer(ctx context.Context, containerId string, timeout time.Duration) error {
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	for {
 		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timeout reached while waiting for container to be running")
+		case <-timeoutCtx.Done():
+			return fmt.Errorf("timed out waiting for container to be available")
 		default:
 			containerState, err := ss.containerRepo.GetContainerState(containerId)
 			if err != nil {
@@ -236,7 +254,7 @@ func (ss *SSHShellService) waitForContainerRunning(ctx context.Context, containe
 				return nil
 			}
 
-			time.Sleep(delay)
+			time.Sleep(containerWaitPollIntervalS)
 		}
 	}
 }

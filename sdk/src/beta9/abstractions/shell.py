@@ -1,8 +1,10 @@
 import os
 import socket
 import sys
+import traceback
 from dataclasses import dataclass
 
+from .. import terminal
 from ..env import is_local
 
 if is_local():
@@ -209,18 +211,34 @@ def windows_shell(chan: "paramiko.Channel"):
         pass
 
 
+"""
+            transport = paramiko.Transport(tunnel_socket)
+            transport.start_client()
+            transport.auth_password("runc", ssh_token)
+            session = transport.open_session()
+            
+"""
+
+
 @dataclass
 class SSHShell:
-    """Interactive SSHShell that can be used as a contextmanager"""
+    """Interactive shell that can be used as a context manager - for use with 'shell' command"""
 
-    channel: "paramiko.Channel"
-
-    def connect(self):
-        self._open()
-        self._launch()
-        self._close()
+    socket: socket.socket
+    username: str
+    password: str
 
     def _open(self):
+        # Initialize the transport with the provided socket
+        transport = paramiko.Transport(self.socket)
+        transport.start_client()
+
+        # Authenticate using the provided username and password
+        transport.auth_password(self.username, self.password)
+
+        # Open a session channel
+        self.channel = transport.open_session()
+
         # Get terminal size - https://stackoverflow.com/a/943921
         rows, columns = os.popen("stty size", "r").read().split()
 
@@ -229,21 +247,31 @@ class SSHShell:
         )
         self.channel.invoke_shell()
 
-        self._channel = self.channel
-
-        return self._channel
-
-    def _launch(self):
-        interactive_shell(self._channel)
-
     def _close(self):
-        pass
+        if self.channel:
+            self.channel.close()
 
-    def __enter__(
-        self,
-    ):
-        return self._open()
+        if self.socket:
+            self.socket.close()
+
+    def __enter__(self):
+        try:
+            self._open()
+            interactive_shell(self.channel)
+        except paramiko.SSHException:
+            terminal.error(f"Unexpected SSH error occured: {traceback.format_exc()}")
+            self._close()
+            raise
+        except BaseException:
+            terminal.error(f"Unexpected error occured: {traceback.format_exc()}")
+            self._close()
+            raise
+
+        return self
 
     def __exit__(self, exception_type, exception_value, traceback):
-        self._launch()
-        self._close()
+        try:
+            if exception_type:
+                terminal.error(f"Unexpected exception occured: {exception_value}")
+        finally:
+            self._close()

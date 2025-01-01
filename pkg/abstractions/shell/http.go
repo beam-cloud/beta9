@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"sync"
-	"time"
 
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -40,14 +39,6 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return apiv1.HTTPInternalServerError("Failed to retrieve stub")
 	} else if stub == nil {
 		return apiv1.HTTPNotFound()
-	}
-
-	timeoutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	err = g.ss.waitForContainerRunning(timeoutCtx, containerId, 5*time.Second)
-	if err != nil {
-		return ctx.String(http.StatusBadGateway, err.Error())
 	}
 
 	containerAddress, err := g.ss.containerRepo.GetContainerAddress(containerId)

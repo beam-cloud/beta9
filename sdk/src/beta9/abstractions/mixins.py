@@ -76,14 +76,15 @@ class DeployableMixin:
             return False
 
         # First, spin up the shell container
-        create_shell_response = self.parent.shell_stub.create_shell(
-            CreateShellRequest(
-                stub_id=self.parent.stub_id,
-                timeout=timeout,
+        with terminal.progress("Connecting to shell"):
+            create_shell_response = self.parent.shell_stub.create_shell(
+                CreateShellRequest(
+                    stub_id=self.parent.stub_id,
+                    timeout=timeout,
+                )
             )
-        )
-        if not create_shell_response.ok:
-            return terminal.error("Failed to create shell ❌")
+            if not create_shell_response.ok:
+                return terminal.error("Failed to create shell ❌")
 
         # Then, we can retrieve the URL and issue a CONNECT request / establish a tunnel
         res: GetUrlResponse = self.parent.gateway_stub.get_url(
@@ -119,27 +120,12 @@ class DeployableMixin:
         except BaseException:
             terminal.error(f"Failed to establish ssh tunnel: {traceback.format_exc()}")
 
-        import paramiko
-
         try:
-            transport = paramiko.Transport(tunnel_socket)
-            transport.start_client()
-            transport.auth_password("runc", ssh_token)
-            session = transport.open_session()
-
             with SSHShell(
-                channel=session,
+                socket=tunnel_socket,
+                username="runc",
+                password=ssh_token,
             ) as _:
                 pass
-
-        except paramiko.SSHException as e:
-            print(f"SSH error: {e}")
-        except EOFError:
-            print("Connection closed by the server.")
-        except Exception as e:
-            print(f"An error occurred: {e}")
-        finally:
-            if session:
-                session.close()
-
-            transport.close()
+        except BaseException:
+            terminal.error(f"An unexpected error occurred: {traceback.format_exc()}")
