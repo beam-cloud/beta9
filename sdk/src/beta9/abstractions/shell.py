@@ -117,7 +117,8 @@ class SSHShell:
 
     def __enter__(self):
         try:
-            self._open()
+            with terminal.progress("Connecting..."):
+                self._open()
         except paramiko.SSHException:
             self._close()
             terminal.error(f"SSH error occurred: {traceback.format_exc()}")
@@ -138,9 +139,12 @@ class SSHShell:
             # Check the exit status after the shell session ends
             exit_status = self.channel.recv_exit_status()
             if exit_status != 0:
-                terminal.warn("Lost connection to session, trying to reconnect in 5 seconds...")
+                terminal.warn("Lost connection to session, attempting to reconnect in 5 seconds...")
                 time.sleep(5)
-                self._open()
+
+                with terminal.progress("Connecting..."):
+                    self._open()
+
                 self.start()
 
         except paramiko.SSHException:

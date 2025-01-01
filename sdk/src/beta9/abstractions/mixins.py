@@ -75,7 +75,7 @@ class DeployableMixin:
             return False
 
         # First, spin up the shell container
-        with terminal.progress("Connecting to shell"):
+        with terminal.progress("Creating shell..."):
             create_shell_response = self.parent.shell_stub.create_shell(
                 CreateShellRequest(
                     stub_id=self.parent.stub_id,
