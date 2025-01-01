@@ -175,7 +175,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 
 	startupCommand := fmt.Sprintf(`
     set -e;
-    USERNAME='runc';
+    USERNAME='beam';
     TOKEN='%s';
     useradd -m -s /bin/bash "$USERNAME";
     echo "$USERNAME:$TOKEN" | chpasswd;

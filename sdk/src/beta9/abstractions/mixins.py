@@ -123,7 +123,7 @@ class DeployableMixin:
         try:
             with SSHShell(
                 socket=tunnel_socket,
-                username="runc",
+                username="beam",
                 password=ssh_token,
             ) as _:
                 pass
