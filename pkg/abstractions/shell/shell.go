@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,12 +26,14 @@ import (
 const (
 	shellRoutePrefix              string        = "/shell"
 	shellContainerPrefix          string        = "shell"
+	shellContainerTtlS            int           = 30 // 30 seconds
 	shellProxyBufferSizeKb        int           = 32 * 1024
 	defaultContainerCpu           int64         = 100
 	defaultContainerMemory        int64         = 128
 	containerDialTimeoutDurationS time.Duration = 300 * time.Second
 	containerWaitTimeoutDurationS time.Duration = 5 * time.Minute
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
+	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
 )
 
 type ShellService interface {
@@ -50,6 +53,7 @@ type SSHShellService struct {
 	containerRepo   repository.ContainerRepository
 	eventRepo       repository.EventRepository
 	tailscale       *network.Tailscale
+	keyEventChan    chan common.KeyEvent
 }
 
 type ShellServiceOpts struct {
@@ -84,12 +88,52 @@ func NewSSHShellService(
 		containerRepo:   opts.ContainerRepo,
 		tailscale:       opts.Tailscale,
 		eventRepo:       opts.EventRepo,
+		keyEventChan:    make(chan common.KeyEvent),
 	}
 
 	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
 	registerShellRoutes(opts.RouteGroup.Group(shellRoutePrefix, authMiddleware), ss)
 
+	// Listen for shell container ttl events
+	go ss.keyEventManager.ListenForPattern(ss.ctx, Keys.shellContainerTTL("*"), ss.keyEventChan)
+	go ss.keyEventManager.ListenForPattern(ss.ctx, common.RedisKeys.SchedulerContainerState(shellContainerPrefix), ss.keyEventChan)
+	go ss.handleTTLEvents()
+
 	return ss, nil
+}
+
+func (ss *SSHShellService) handleTTLEvents() {
+	for {
+		select {
+		case event := <-ss.keyEventChan:
+			operation := event.Operation
+			switch operation {
+			case common.KeyOperationSet:
+				// Clean up shell containers that have expired, but a gateway wasn't around to handle the ttl event
+				if !strings.Contains(event.Key, Keys.shellContainerTTL("")) {
+					containerId := shellContainerPrefix + event.Key
+
+					if ss.rdb.Exists(ss.ctx, Keys.shellContainerTTL(containerId)).Val() == 0 {
+						ss.scheduler.Stop(&types.StopContainerArgs{
+							ContainerId: containerId,
+							Force:       true,
+						})
+					}
+				}
+			case common.KeyOperationHSet, common.KeyOperationDel, common.KeyOperationExpire:
+				// Do nothing
+			case common.KeyOperationExpired:
+				// Clean up shell containers that have been expired
+				containerId := strings.TrimPrefix(ss.keyEventManager.TrimKeyspacePrefix(event.Key), Keys.shellContainerTTL(""))
+				ss.scheduler.Stop(&types.StopContainerArgs{
+					ContainerId: containerId,
+					Force:       true,
+				})
+			}
+		case <-ss.ctx.Done():
+			return
+		}
+	}
 }
 
 func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRequest) (*pb.CreateShellResponse, error) {
@@ -208,20 +252,29 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 	})
 	if err != nil {
 		return &pb.CreateShellResponse{
-			Ok: false,
+			Ok:     false,
+			ErrMsg: "Failed to run shell container",
+		}, nil
+	}
+
+	err = ss.rdb.Set(ctx, Keys.shellContainerTTL(containerId), "1", time.Duration(shellContainerTtlS)*time.Second).Err()
+	if err != nil {
+		return &pb.CreateShellResponse{
+			Ok:     false,
+			ErrMsg: "Failed to set shell container ttl",
 		}, nil
 	}
 
 	err = ss.waitForContainer(ctx, containerId, containerWaitTimeoutDurationS)
 	if err != nil {
-
 		ss.scheduler.Stop(&types.StopContainerArgs{
 			ContainerId: containerId,
 			Force:       true,
 		})
 
 		return &pb.CreateShellResponse{
-			Ok: false,
+			Ok:     false,
+			ErrMsg: "Failed to wait for shell container",
 		}, nil
 	}
 
@@ -234,6 +287,22 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 
 func (ss *SSHShellService) genContainerId(stubId string) string {
 	return fmt.Sprintf("%s-%s-%s", shellContainerPrefix, stubId, uuid.New().String()[:8])
+}
+
+func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
+	ticker := time.NewTicker(containerKeepAliveIntervalS)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			ss.rdb.Set(ctx, Keys.shellContainerTTL(containerId), "1", time.Duration(shellContainerTtlS)*time.Second).Err()
+		}
+	}
 }
 
 func (ss *SSHShellService) waitForContainer(ctx context.Context, containerId string, timeout time.Duration) error {
@@ -270,4 +339,17 @@ func generateToken(length int) (string, error) {
 
 	token := base64.URLEncoding.EncodeToString(randomBytes)
 	return token[:length], nil
+}
+
+// Redis keys
+var (
+	shellContainerTTL string = "shell:container_ttl:%s"
+)
+
+var Keys = &keys{}
+
+type keys struct{}
+
+func (k *keys) shellContainerTTL(containerId string) string {
+	return fmt.Sprintf(shellContainerTTL, containerId)
 }

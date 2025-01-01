@@ -2,6 +2,7 @@ import os
 import socket
 import struct
 import sys
+import time
 import traceback
 from dataclasses import dataclass
 from typing import Optional
@@ -57,12 +58,30 @@ def create_connect_tunnel(
 class SSHShell:
     """Interactive ssh shell that can be used as a context manager - for use with 'shell' command"""
 
-    socket: socket.socket
+    host: str
+    port: int
+    container_id: str
+    stub_id: str
+    auth_token: str
     username: str
     password: str
     transport: Optional["paramiko.Transport"] = None
 
     def _open(self):
+        self.socket: Optional[socket.socket] = None
+        self.channel: Optional["paramiko.Channel"] = None
+
+        try:
+            self.socket = create_connect_tunnel(
+                self.host,
+                self.port,
+                self.stub_id,
+                self.container_id,
+                self.auth_token,
+            )
+        except BaseException:
+            terminal.error("Failed to establish ssh tunnel")
+
         self.transport = paramiko.Transport(
             self.socket
         )  # Initialize a transport with the tunnel socket
@@ -99,13 +118,12 @@ class SSHShell:
     def __enter__(self):
         try:
             self._open()
-            interactive_shell(self.channel)
         except paramiko.SSHException:
-            terminal.error(f"SSH error occured: {traceback.format_exc()}")
+            terminal.error(f"SSH error occurred: {traceback.format_exc()}")
             self._close()
             raise
         except BaseException:
-            terminal.error(f"Unexpected error occured: {traceback.format_exc()}")
+            terminal.error(f"Unexpected error occurred: {traceback.format_exc()}")
             self._close()
             raise
 
@@ -113,6 +131,29 @@ class SSHShell:
 
     def __exit__(self, exception_type, exception_value, traceback):
         self._close()
+
+    def start(self):
+        """Start the interactive shell session."""
+        try:
+            interactive_shell(self.channel)
+
+            # Check the exit status after the shell session ends
+            exit_status = self.channel.recv_exit_status()
+            if exit_status != 0:
+                terminal.warn("Lost connection to session, trying to reconnect in 5 seconds...")
+                time.sleep(5)
+                self._open()
+                self.start()
+
+        except paramiko.SSHException:
+            terminal.error(f"SSH error occurred during shell interaction: {traceback.format_exc()}")
+            self._close()
+            raise
+        except BaseException:
+            terminal.error(
+                f"Unexpected error occurred during shell interaction: {traceback.format_exc()}"
+            )
+            self._close()
 
 
 """

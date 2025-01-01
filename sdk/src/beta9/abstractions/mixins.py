@@ -1,4 +1,3 @@
-import traceback
 import urllib.parse
 from typing import Any, Callable, ClassVar, Optional
 
@@ -9,7 +8,7 @@ from ..clients.gateway import DeployStubRequest, DeployStubResponse, GetUrlReque
 from ..clients.shell import CreateShellRequest
 from ..config import ConfigContext
 from .base.runner import RunnerAbstraction
-from .shell import SSHShell, create_connect_tunnel
+from .shell import SSHShell
 
 
 class DeployableMixin:
@@ -67,7 +66,7 @@ class DeployableMixin:
         return deploy_response.ok
 
     @with_grpc_error_handling
-    def shell(self, timeout: int = 0, url_type: str = ""):
+    def shell(self, url_type: str = ""):
         stub_type = SHELL_STUB_TYPE
 
         if not self.parent.prepare_runtime(
@@ -80,11 +79,10 @@ class DeployableMixin:
             create_shell_response = self.parent.shell_stub.create_shell(
                 CreateShellRequest(
                     stub_id=self.parent.stub_id,
-                    timeout=timeout,
                 )
             )
             if not create_shell_response.ok:
-                return terminal.error("Failed to create shell ❌")
+                return terminal.error(f"Failed to create shell: {create_shell_response.err_msg} ❌")
 
         # Then, we can retrieve the URL and issue a CONNECT request / establish a tunnel
         res: GetUrlResponse = self.parent.gateway_stub.get_url(
@@ -95,7 +93,7 @@ class DeployableMixin:
             )
         )
         if not res.ok:
-            return terminal.error("Failed to get shell connection URL")
+            return terminal.error(f"Failed to get shell connection URL: {res.err_msg} ❌")
 
         # Parse the URL to extract the container_id
         parsed_url = urllib.parse.urlparse(res.url)
@@ -103,29 +101,17 @@ class DeployableMixin:
         if len(path_segments) < 3:
             return terminal.error("Invalid URL path")
 
+        proxy_host, proxy_port = parsed_url.hostname, parsed_url.port
         container_id = create_shell_response.container_id
         ssh_token = create_shell_response.token
 
-        # Use the container_id to establish a connection
-        tunnel_socket = None
-        proxy_host, proxy_port = parsed_url.hostname, parsed_url.port
-        try:
-            tunnel_socket = create_connect_tunnel(
-                proxy_host,
-                proxy_port,
-                self.parent.stub_id,
-                container_id,
-                self.parent.config_context.token,
-            )
-        except BaseException:
-            terminal.error(f"Failed to establish ssh tunnel: {traceback.format_exc()}")
-
-        try:
-            with SSHShell(
-                socket=tunnel_socket,
-                username="beam",
-                password=ssh_token,
-            ) as _:
-                pass
-        except BaseException:
-            terminal.error(f"An unexpected error occurred: {traceback.format_exc()}")
+        with SSHShell(
+            host=proxy_host,
+            port=proxy_port,
+            container_id=container_id,
+            stub_id=self.parent.stub_id,
+            auth_token=self.parent.config_context.token,
+            username="beam",
+            password=ssh_token,
+        ) as shell:
+            shell.start()

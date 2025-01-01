@@ -45,6 +45,12 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
 	}
 
+	// Channel to signal when either connection is closed
+	done := make(chan struct{})
+	var once sync.Once
+
+	go g.ss.keepAlive(ctx.Request().Context(), containerId, done)
+
 	// Send a 200 OK before hijacking
 	ctx.Response().WriteHeader(http.StatusOK)
 	ctx.Response().Flush()
@@ -71,10 +77,6 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	// Create a context that will be canceled when the client disconnects
 	clientCtx, clientCancel := context.WithCancel(ctx.Request().Context())
 	defer clientCancel()
-
-	// Channel to signal when either connection is closed
-	done := make(chan struct{})
-	var once sync.Once
 
 	go func() {
 		buf := make([]byte, shellProxyBufferSizeKb)

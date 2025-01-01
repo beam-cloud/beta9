@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 @dataclass(eq=False, repr=False)
 class CreateShellRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
-    timeout: int = betterproto.int32_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -33,6 +32,7 @@ class CreateShellResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     container_id: str = betterproto.string_field(2)
     token: str = betterproto.string_field(3)
+    err_msg: str = betterproto.string_field(4)
 
 
 class ShellServiceStub(SyncServiceStub):
