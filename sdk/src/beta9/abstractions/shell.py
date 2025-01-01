@@ -139,7 +139,7 @@ class SSHShell:
             # Check the exit status after the shell session ends
             exit_status = self.channel.recv_exit_status()
             if exit_status != 0:
-                terminal.warn("Lost connection to session, attempting to reconnect in 5 seconds...")
+                terminal.warn("Lost connection to shell, attempting to reconnect in 5 seconds...")
                 time.sleep(5)
 
                 with terminal.progress("Connecting..."):
