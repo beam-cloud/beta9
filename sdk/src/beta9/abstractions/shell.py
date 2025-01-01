@@ -3,6 +3,7 @@ import socket
 import sys
 import traceback
 from dataclasses import dataclass
+from typing import Optional
 
 from .. import terminal
 from ..env import is_local
@@ -222,22 +223,23 @@ def windows_shell(chan: "paramiko.Channel"):
 
 @dataclass
 class SSHShell:
-    """Interactive shell that can be used as a context manager - for use with 'shell' command"""
+    """Interactive SSHShell that can be used as a context manager"""
 
     socket: socket.socket
     username: str
     password: str
+    transport: Optional["paramiko.Transport"] = None
 
     def _open(self):
         # Initialize the transport with the provided socket
-        transport = paramiko.Transport(self.socket)
-        transport.start_client()
+        self.transport = paramiko.Transport(self.socket)
+        self.transport.start_client()
 
         # Authenticate using the provided username and password
-        transport.auth_password(self.username, self.password)
+        self.transport.auth_password(self.username, self.password)
 
         # Open a session channel
-        self.channel = transport.open_session()
+        self.channel = self.transport.open_session()
 
         # Get terminal size - https://stackoverflow.com/a/943921
         rows, columns = os.popen("stty size", "r").read().split()
@@ -251,7 +253,14 @@ class SSHShell:
         if self.channel:
             self.channel.close()
 
+        if self.transport:
+            self.transport.close()
+
         if self.socket:
+            try:
+                self.socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # Ignore errors if the socket is already closed
             self.socket.close()
 
     def __enter__(self):
@@ -259,7 +268,7 @@ class SSHShell:
             self._open()
             interactive_shell(self.channel)
         except paramiko.SSHException:
-            terminal.error(f"Unexpected SSH error occured: {traceback.format_exc()}")
+            terminal.error(f"SSH error occured: {traceback.format_exc()}")
             self._close()
             raise
         except BaseException:
@@ -272,6 +281,6 @@ class SSHShell:
     def __exit__(self, exception_type, exception_value, traceback):
         try:
             if exception_type:
-                terminal.error(f"Unexpected exception occured: {exception_value}")
+                terminal.error(f"Exception in SSHShell: {exception_value}")
         finally:
             self._close()
