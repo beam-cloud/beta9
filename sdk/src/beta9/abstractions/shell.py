@@ -223,7 +223,7 @@ def windows_shell(chan: "paramiko.Channel"):
 
 @dataclass
 class SSHShell:
-    """Interactive SSHShell that can be used as a context manager"""
+    """Interactive ssh shell that can be used as a context manager - for use with 'shell' command"""
 
     socket: socket.socket
     username: str
@@ -231,14 +231,12 @@ class SSHShell:
     transport: Optional["paramiko.Transport"] = None
 
     def _open(self):
-        # Initialize the transport with the provided socket
-        self.transport = paramiko.Transport(self.socket)
+        self.transport = paramiko.Transport(
+            self.socket
+        )  # Initialize a transport with the tunnel socket
+
         self.transport.start_client()
-
-        # Authenticate using the provided username and password
         self.transport.auth_password(self.username, self.password)
-
-        # Open a session channel
         self.channel = self.transport.open_session()
 
         # Get terminal size - https://stackoverflow.com/a/943921
@@ -260,8 +258,9 @@ class SSHShell:
             try:
                 self.socket.shutdown(socket.SHUT_RDWR)
             except OSError:
-                pass  # Ignore errors if the socket is already closed
-            self.socket.close()
+                pass  # Ignore any errors that occur after the socket is already closed
+            finally:
+                self.socket.close()
 
     def __enter__(self):
         try:
@@ -279,8 +278,4 @@ class SSHShell:
         return self
 
     def __exit__(self, exception_type, exception_value, traceback):
-        try:
-            if exception_type:
-                terminal.error(f"Exception in SSHShell: {exception_value}")
-        finally:
-            self._close()
+        self._close()
