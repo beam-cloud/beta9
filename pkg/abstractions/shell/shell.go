@@ -223,6 +223,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
     TOKEN='%s';
     useradd -m -s /bin/bash "$USERNAME";
     echo "$USERNAME:$TOKEN" | chpasswd;
+    echo "cd /mnt/code" >> "/home/$USERNAME/.bashrc";
     sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config;
     sed -i 's/^#PubkeyAuthentication.*/PubkeyAuthentication no/' /etc/ssh/sshd_config;
     echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config;
