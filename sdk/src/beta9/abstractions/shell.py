@@ -52,6 +52,90 @@ def create_connect_tunnel(
     return s
 
 
+@dataclass
+class SSHShell:
+    """Interactive ssh shell that can be used as a context manager - for use with 'shell' command"""
+
+    socket: socket.socket
+    username: str
+    password: str
+    transport: Optional["paramiko.Transport"] = None
+
+    def _open(self):
+        self.transport = paramiko.Transport(
+            self.socket
+        )  # Initialize a transport with the tunnel socket
+
+        self.transport.start_client()
+        self.transport.auth_password(self.username, self.password)
+        self.channel = self.transport.open_session()
+
+        # Get terminal size - https://stackoverflow.com/a/943921
+        rows, columns = os.popen("stty size", "r").read().split()
+
+        self.channel.get_pty(
+            term=os.getenv("TERM", "xterm-256color"), width=int(columns), height=int(rows)
+        )
+        self.channel.invoke_shell()
+
+    def _close(self):
+        if self.channel:
+            self.channel.close()
+
+        if self.transport:
+            self.transport.close()
+
+        if self.socket:
+            try:
+                self.socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # Ignore any errors that occur after the socket is already closed
+            finally:
+                self.socket.close()
+
+    def __enter__(self):
+        try:
+            self._open()
+            interactive_shell(self.channel)
+        except paramiko.SSHException:
+            terminal.error(f"SSH error occured: {traceback.format_exc()}")
+            self._close()
+            raise
+        except BaseException:
+            terminal.error(f"Unexpected error occured: {traceback.format_exc()}")
+            self._close()
+            raise
+
+        return self
+
+    def __exit__(self, exception_type, exception_value, traceback):
+        self._close()
+
+
+"""Note: much of this interactive shell code is pulled from paramiko's examples, with a few slight modifications for use here.
+   Original license / source information is preserved below.
+"""
+# Source: https://github.com/paramiko/paramiko/blob/main/demos/interactive.py
+
+# Copyright (C) 2003-2007  Robey Pointer <robeypointer@gmail.com>
+#
+# This file is part of paramiko.
+#
+# Paramiko is free software; you can redistribute it and/or modify it under the
+# terms of the GNU Lesser General Public License as published by the Free
+# Software Foundation; either version 2.1 of the License, or (at your option)
+# any later version.
+#
+# Paramiko is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+# A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
+# details.
+#
+# You should have received a copy of the GNU Lesser General Public License
+# along with Paramiko; if not, write to the Free Software Foundation, Inc.,
+# 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
+
+
 # https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Bracketed-Paste-Mode
 START_PASTE = "\x1b\x5b\x32\x30\x30\x7e"  # ESC[200~
 END_PASTE = "\x1b\x5b\x32\x30\x31\x7e"  # ESC[201~
@@ -210,72 +294,3 @@ def windows_shell(chan: "paramiko.Channel"):
     except EOFError:
         # user hit ^Z or F6
         pass
-
-
-"""
-            transport = paramiko.Transport(tunnel_socket)
-            transport.start_client()
-            transport.auth_password("runc", ssh_token)
-            session = transport.open_session()
-            
-"""
-
-
-@dataclass
-class SSHShell:
-    """Interactive ssh shell that can be used as a context manager - for use with 'shell' command"""
-
-    socket: socket.socket
-    username: str
-    password: str
-    transport: Optional["paramiko.Transport"] = None
-
-    def _open(self):
-        self.transport = paramiko.Transport(
-            self.socket
-        )  # Initialize a transport with the tunnel socket
-
-        self.transport.start_client()
-        self.transport.auth_password(self.username, self.password)
-        self.channel = self.transport.open_session()
-
-        # Get terminal size - https://stackoverflow.com/a/943921
-        rows, columns = os.popen("stty size", "r").read().split()
-
-        self.channel.get_pty(
-            term=os.getenv("TERM", "xterm-256color"), width=int(columns), height=int(rows)
-        )
-        self.channel.invoke_shell()
-
-    def _close(self):
-        if self.channel:
-            self.channel.close()
-
-        if self.transport:
-            self.transport.close()
-
-        if self.socket:
-            try:
-                self.socket.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass  # Ignore any errors that occur after the socket is already closed
-            finally:
-                self.socket.close()
-
-    def __enter__(self):
-        try:
-            self._open()
-            interactive_shell(self.channel)
-        except paramiko.SSHException:
-            terminal.error(f"SSH error occured: {traceback.format_exc()}")
-            self._close()
-            raise
-        except BaseException:
-            terminal.error(f"Unexpected error occured: {traceback.format_exc()}")
-            self._close()
-            raise
-
-        return self
-
-    def __exit__(self, exception_type, exception_value, traceback):
-        self._close()
