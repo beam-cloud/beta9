@@ -24,8 +24,6 @@
 				"CAP_AUDIT_WRITE",
 				"CAP_KILL",
 				"CAP_NET_RAW",
-				"CAP_NET_BIND_SERVICE",
-				"CAP_SYS_ADMIN",
 				"CAP_CHOWN",
 				"CAP_DAC_OVERRIDE",
 				"CAP_FSETID",
@@ -33,15 +31,12 @@
 				"CAP_SETGID",
 				"CAP_SETUID",
 				"CAP_SETFCAP",
-				"CAP_MKNOD",
 				"CAP_SYS_CHROOT"
 			],
 			"effective": [
 				"CAP_AUDIT_WRITE",
 				"CAP_KILL",
 				"CAP_NET_RAW",
-				"CAP_NET_BIND_SERVICE",
-				"CAP_SYS_ADMIN",
 				"CAP_CHOWN",
 				"CAP_DAC_OVERRIDE",
 				"CAP_FSETID",
@@ -49,15 +44,12 @@
 				"CAP_SETGID",
 				"CAP_SETUID",
 				"CAP_SETFCAP",
-				"CAP_MKNOD",
 				"CAP_SYS_CHROOT"
 			],
 			"permitted": [
 				"CAP_AUDIT_WRITE",
 				"CAP_KILL",
 				"CAP_NET_RAW",
-				"CAP_NET_BIND_SERVICE",
-				"CAP_SYS_ADMIN",
 				"CAP_CHOWN",
 				"CAP_DAC_OVERRIDE",
 				"CAP_FSETID",
@@ -65,7 +57,6 @@
 				"CAP_SETGID",
 				"CAP_SETUID",
 				"CAP_SETFCAP",
-				"CAP_MKNOD",
 				"CAP_SYS_CHROOT"
 			],
 			"ambient": [
@@ -73,15 +64,12 @@
 				"CAP_KILL",
 				"CAP_NET_RAW",
 				"CAP_CHOWN",
-				"CAP_NET_BIND_SERVICE",
-				"CAP_SYS_ADMIN",
 				"CAP_DAC_OVERRIDE",
 				"CAP_FSETID",
 				"CAP_FOWNER",
 				"CAP_SETGID",
 				"CAP_SETUID",
 				"CAP_SETFCAP",
-				"CAP_MKNOD",
 				"CAP_SYS_CHROOT"
 			]
 		},
