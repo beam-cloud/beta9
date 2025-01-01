@@ -112,8 +112,9 @@ class SSHShell:
         self._close()
 
 
-"""Note: much of this interactive shell code is pulled from paramiko's examples, with a few slight modifications for use here.
-   Original license / source information is preserved below.
+"""
+   NOTE: much of the interactive shell code below is pulled from paramiko's examples, with a few slight modifications for use here.
+   Original license / source information is as follows:
 """
 # Source: https://github.com/paramiko/paramiko/blob/main/demos/interactive.py
 
