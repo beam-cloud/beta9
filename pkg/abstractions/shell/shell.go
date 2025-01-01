@@ -235,6 +235,14 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		startupCommand,
 	}
 
+	err = ss.rdb.Set(ctx, Keys.shellContainerTTL(containerId), "1", time.Duration(shellContainerTtlS)*time.Second).Err()
+	if err != nil {
+		return &pb.CreateShellResponse{
+			Ok:     false,
+			ErrMsg: "Failed to set shell container ttl",
+		}, nil
+	}
+
 	err = ss.scheduler.Run(&types.ContainerRequest{
 		ContainerId: containerId,
 		Env:         env,
@@ -254,14 +262,6 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		return &pb.CreateShellResponse{
 			Ok:     false,
 			ErrMsg: "Failed to run shell container",
-		}, nil
-	}
-
-	err = ss.rdb.Set(ctx, Keys.shellContainerTTL(containerId), "1", time.Duration(shellContainerTtlS)*time.Second).Err()
-	if err != nil {
-		return &pb.CreateShellResponse{
-			Ok:     false,
-			ErrMsg: "Failed to set shell container ttl",
 		}, nil
 	}
 
