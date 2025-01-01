@@ -48,7 +48,7 @@ def create_connect_tunnel(
     response_str = response.decode("ascii", errors="replace")
     if "200 OK" not in response_str:
         s.close()
-        raise Exception(f"CONNECT failed. Response:\n{response_str}")
+        raise ConnectionError(f"CONNECT failed. Response:\n{response_str}")
 
     # If we reach here, we have a raw TCP tunnel to "container_id"
     return s
@@ -119,13 +119,11 @@ class SSHShell:
         try:
             self._open()
         except paramiko.SSHException:
+            self._close()
             terminal.error(f"SSH error occurred: {traceback.format_exc()}")
-            self._close()
-            raise
         except BaseException:
-            terminal.error(f"Unexpected error occurred: {traceback.format_exc()}")
             self._close()
-            raise
+            terminal.error(f"Unexpected error occurred: {traceback.format_exc()}")
 
         return self
 
@@ -146,14 +144,11 @@ class SSHShell:
                 self.start()
 
         except paramiko.SSHException:
-            terminal.error(f"SSH error occurred during shell interaction: {traceback.format_exc()}")
             self._close()
-            raise
+            terminal.error(f"SSH error occurred in shell: {traceback.format_exc()}")
         except BaseException:
-            terminal.error(
-                f"Unexpected error occurred during shell interaction: {traceback.format_exc()}"
-            )
             self._close()
+            terminal.error(f"Unexpected error occurred in shell: {traceback.format_exc()}")
 
 
 """
