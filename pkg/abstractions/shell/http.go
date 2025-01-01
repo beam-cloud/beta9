@@ -3,7 +3,6 @@ package shell
 import (
 	"context"
 	"io"
-	"log"
 	"net/http"
 	"sync"
 
@@ -69,42 +68,32 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	}
 	defer containerConn.Close()
 
-	// TODO: confirm disconnects happen when python client exits
-	defer log.Println("disconnected")
-
 	// Create a context that will be canceled when the client disconnects
 	clientCtx, clientCancel := context.WithCancel(ctx.Request().Context())
 	defer clientCancel()
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	// Channel to signal when either connection is closed
+	done := make(chan struct{})
+	var once sync.Once
 
-	// Copy from client -> container
 	go func() {
-		defer wg.Done()
 		buf := make([]byte, shellProxyBufferSizeKb)
-		select {
-		case <-clientCtx.Done():
-			log.Println("client disconnected")
-			return
-		default:
-			io.CopyBuffer(containerConn, conn, buf)
-		}
+		_, _ = io.CopyBuffer(containerConn, conn, buf)
+		once.Do(func() { close(done) })
 	}()
 
-	// Copy from container -> client
 	go func() {
-		defer wg.Done()
 		buf := make([]byte, shellProxyBufferSizeKb)
-		select {
-		case <-clientCtx.Done():
-			log.Println("client disconnected")
-			return
-		default:
-			io.CopyBuffer(conn, containerConn, buf)
-		}
+		_, _ = io.CopyBuffer(conn, containerConn, buf)
+		once.Do(func() { close(done) })
 	}()
 
-	wg.Wait()
+	// Wait for either connection to close
+	select {
+	case <-done:
+		clientCancel()
+	case <-clientCtx.Done():
+	}
+
 	return nil
 }

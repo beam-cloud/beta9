@@ -1,5 +1,6 @@
 import os
 import socket
+import struct
 import sys
 import traceback
 from dataclasses import dataclass
@@ -87,6 +88,8 @@ class SSHShell:
 
         if self.socket:
             try:
+                # Set SO_LINGER to zero to forcefully close the socket
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
                 self.socket.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass  # Ignore any errors that occur after the socket is already closed
