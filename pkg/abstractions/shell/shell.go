@@ -219,12 +219,16 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 
 	startupCommand := fmt.Sprintf(`
     set -e;
-    USERNAME='beam';
+    USERNAME='root';
     TOKEN='%s';
-    useradd -m -s /bin/bash "$USERNAME";
     echo "$USERNAME:$TOKEN" | chpasswd;
-    echo "cd /mnt/code" >> "/home/$USERNAME/.bashrc";
+    echo "if [ -f /root/.bashrc ]; then . /root/.bashrc; fi" >> "/root/.profile";
+    echo "cd /mnt/code" >> "/root/.profile";
+    echo "export TERM=xterm-256color" >> "/root/.bashrc";
+    echo "alias ls='ls --color=auto'" >> "/root/.bashrc";
+	echo "alias ll='ls -lart --color=auto'" >> "/root/.bashrc";
     sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config;
+    sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config;
     sed -i 's/^#PubkeyAuthentication.*/PubkeyAuthentication no/' /etc/ssh/sshd_config;
     echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config;
     exec /usr/sbin/sshd -D -p 8001

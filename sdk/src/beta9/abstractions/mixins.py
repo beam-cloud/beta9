@@ -111,7 +111,7 @@ class DeployableMixin:
             container_id=container_id,
             stub_id=self.parent.stub_id,
             auth_token=self.parent.config_context.token,
-            username="beam",
+            username="root",
             password=ssh_token,
         ) as shell:
             shell.start()
