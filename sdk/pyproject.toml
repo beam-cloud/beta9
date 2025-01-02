@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "beta9"
-version = "0.1.142"
+version = "0.1.143"
 description = ""
 authors = ["beam.cloud <support@beam.cloud>"]
 packages = [
@@ -22,7 +22,7 @@ protobuf = "^4.25.1"
 fastapi = "^0.110.2"
 uvicorn = "^0.29.0"
 watchdog = "^4.0.0"
-betterproto-beta9 = {version = "2.0.0b7", extras = ["compiler"]}
+betterproto-beta9 = { version = "2.0.0b7", extras = ["compiler"] }
 croniter = "^3.0.3"
 websocket-client = "^1.8.0"
 prompt-toolkit = "^3.0.48"
@@ -62,7 +62,7 @@ exclude_also = [
 
     # Don't complain about abstract methods, they aren't run:
     "@(abc\\.)?abstractmethod",
-    ]
+]
 
 [tool.ruff]
 line-length = 100
