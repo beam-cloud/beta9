@@ -78,6 +78,11 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	clientCtx, clientCancel := context.WithCancel(ctx.Request().Context())
 	defer clientCancel()
 
+	defer func() {
+		containerConn.Close()
+		conn.Close()
+	}()
+
 	go func() {
 		buf := make([]byte, shellProxyBufferSizeKb)
 		_, _ = io.CopyBuffer(containerConn, conn, buf)
