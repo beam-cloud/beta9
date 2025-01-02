@@ -110,7 +110,9 @@ func (ss *SSHShellService) handleTTLEvents() {
 			switch operation {
 			case common.KeyOperationSet:
 				// Clean up shell containers that have expired, but a gateway wasn't around to handle the ttl event
-				if strings.Contains(event.Key, common.RedisKeys.SchedulerContainerState("")) {
+				// NOTE: the reason this checks for the shellContainerTTL is the prefixed is stripped in the key event manager
+				// when fetching pre-existing keys.
+				if !strings.Contains(event.Key, Keys.shellContainerTTL("")) {
 					containerId := shellContainerPrefix + event.Key
 
 					if ss.rdb.Exists(ss.ctx, Keys.shellContainerTTL(containerId)).Val() == 0 {
