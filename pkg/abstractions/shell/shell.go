@@ -138,7 +138,6 @@ func (ss *SSHShellService) handleTTLEvents() {
 
 func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRequest) (*pb.CreateShellResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	keyEventChan := make(chan common.KeyEvent)
 
 	stub, err := ss.backendRepo.GetStubByExternalId(ctx, in.StubId)
 	if err != nil {
@@ -158,8 +157,6 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 	}
 
 	containerId := ss.genContainerId(stub.ExternalId)
-
-	go ss.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerExitCode(containerId), keyEventChan)
 
 	// Don't allow negative and 0-valued compute requests
 	if stubConfig.Runtime.Cpu <= 0 {
