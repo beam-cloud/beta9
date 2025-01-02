@@ -31,7 +31,7 @@ func BuildDeploymentURL(externalUrl, urlType string, stub *types.StubWithRelated
 	return fmt.Sprintf("%s://%s/%s/%s/v%d", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), deployment.Name, deployment.Version)
 }
 
-func BuildServeURL(externalUrl, urlType string, stub *types.StubWithRelated) string {
+func BuildStubURL(externalUrl, urlType string, stub *types.StubWithRelated) string {
 	parsedUrl, err := url.Parse(externalUrl)
 	if err != nil {
 		return ""
@@ -41,17 +41,4 @@ func BuildServeURL(externalUrl, urlType string, stub *types.StubWithRelated) str
 		return fmt.Sprintf("%s://%s.%s", parsedUrl.Scheme, stub.ExternalId, parsedUrl.Host)
 	}
 	return fmt.Sprintf("%s://%s/%s/id/%s", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), stub.ExternalId)
-}
-
-func BuildShellURL(externalUrl, urlType string, stub *types.StubWithRelated) string {
-	parsedUrl, err := url.Parse(externalUrl)
-	if err != nil {
-		return ""
-	}
-
-	if urlType == InvokeUrlTypeHost {
-		return fmt.Sprintf("%s://%s.%s", parsedUrl.Scheme, stub.ExternalId, parsedUrl.Host)
-	}
-
-	return fmt.Sprintf("%s://%s/%s/%s", parsedUrl.Scheme, parsedUrl.Host, "shell", stub.ExternalId)
 }

@@ -15,7 +15,7 @@ if is_local():
 
 
 def create_connect_tunnel(
-    proxy_host: str, proxy_port: int, stub_id: str, container_id: str, auth_token: str
+    proxy_host: str, proxy_port: int, path: str, stub_id: str, container_id: str, auth_token: str
 ) -> socket.socket:
     """
     1. Connect to the proxy_host:proxy_port over TCP.
@@ -27,7 +27,7 @@ def create_connect_tunnel(
     s.connect((proxy_host, proxy_port))
 
     # Construct the correct CONNECT request path
-    connect_path = f"/shell/{stub_id}/{container_id}"
+    connect_path = f"{path}/{container_id}"
 
     connect_req = (
         f"CONNECT {connect_path} HTTP/1.1\r\n"
@@ -60,6 +60,7 @@ class SSHShell:
 
     host: str
     port: int
+    path: str
     container_id: str
     stub_id: str
     auth_token: str
@@ -75,6 +76,7 @@ class SSHShell:
             self.socket = create_connect_tunnel(
                 self.host,
                 self.port,
+                self.path,
                 self.stub_id,
                 self.container_id,
                 self.auth_token,

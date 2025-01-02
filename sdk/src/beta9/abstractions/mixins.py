@@ -97,10 +97,6 @@ class DeployableMixin:
 
         # Parse the URL to extract the container_id
         parsed_url = urllib.parse.urlparse(res.url)
-        path_segments = parsed_url.path.split("/")
-        if len(path_segments) < 3:
-            return terminal.error("Invalid URL path")
-
         proxy_host, proxy_port = parsed_url.hostname, parsed_url.port
         container_id = create_shell_response.container_id
         ssh_token = create_shell_response.token
@@ -108,6 +104,7 @@ class DeployableMixin:
         with SSHShell(
             host=proxy_host,
             port=proxy_port,
+            path=parsed_url.path,
             container_id=container_id,
             stub_id=self.parent.stub_id,
             auth_token=self.parent.config_context.token,

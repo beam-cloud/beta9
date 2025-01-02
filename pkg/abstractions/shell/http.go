@@ -20,7 +20,7 @@ type shellGroup struct {
 
 func registerShellRoutes(g *echo.Group, ss *SSHShellService) *shellGroup {
 	group := &shellGroup{routerGroup: g, ss: ss}
-	g.CONNECT("/:stubId/:containerId", auth.WithAuth(group.ShellConnect))
+	g.CONNECT("/id/:stubId/:containerId", auth.WithAuth(group.ShellConnect))
 	return group
 }
 

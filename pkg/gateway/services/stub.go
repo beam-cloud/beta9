@@ -256,14 +256,8 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 	}
 
 	// Get URL for Serves or Shells
-	if stub.Type.IsServe() {
-		invokeUrl := common.BuildServeURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub)
-		return &pb.GetURLResponse{
-			Ok:  true,
-			Url: invokeUrl,
-		}, nil
-	} else if stub.Type.Kind() == types.StubTypeShell {
-		invokeUrl := common.BuildShellURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub)
+	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell {
+		invokeUrl := common.BuildStubURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub)
 		return &pb.GetURLResponse{
 			Ok:  true,
 			Url: invokeUrl,
