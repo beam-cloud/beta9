@@ -110,7 +110,7 @@ func (ss *SSHShellService) handleTTLEvents() {
 			switch operation {
 			case common.KeyOperationSet:
 				// Clean up shell containers that have expired, but a gateway wasn't around to handle the ttl event
-				if !strings.Contains(event.Key, Keys.shellContainerTTL("")) {
+				if strings.Contains(event.Key, common.RedisKeys.SchedulerContainerState("")) {
 					containerId := shellContainerPrefix + event.Key
 
 					if ss.rdb.Exists(ss.ctx, Keys.shellContainerTTL(containerId)).Val() == 0 {
