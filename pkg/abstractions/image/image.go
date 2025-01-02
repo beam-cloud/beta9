@@ -3,8 +3,7 @@ package image
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"time"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -25,10 +24,12 @@ type ImageService interface {
 
 type RuncImageService struct {
 	pb.UnimplementedImageServiceServer
-	builder     *Builder
-	config      types.AppConfig
-	backendRepo repository.BackendRepository
-	rdb         *common.RedisClient
+	builder         *Builder
+	config          types.AppConfig
+	backendRepo     repository.BackendRepository
+	rdb             *common.RedisClient
+	keyEventChan    chan common.KeyEvent
+	keyEventManager *common.KeyEventManager
 }
 
 type ImageServiceOpts struct {
@@ -39,6 +40,9 @@ type ImageServiceOpts struct {
 	Tailscale     *network.Tailscale
 	RedisClient   *common.RedisClient
 }
+
+const containerKeepAliveIntervalS int = 30
+const imageContainerTtlS int = 30
 
 func NewRuncImageService(
 	ctx context.Context,
@@ -54,14 +58,23 @@ func NewRuncImageService(
 		return nil, err
 	}
 
+	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
+	if err != nil {
+		return nil, err
+	}
+
 	is := RuncImageService{
-		builder:     builder,
-		config:      opts.Config,
-		backendRepo: opts.BackendRepo,
-		rdb:         opts.RedisClient,
+		builder:         builder,
+		config:          opts.Config,
+		backendRepo:     opts.BackendRepo,
+		keyEventChan:    make(chan common.KeyEvent),
+		keyEventManager: keyEventManager,
+		rdb:             opts.RedisClient,
 	}
 
 	go is.monitorImageContainers(ctx)
+	go is.keyEventManager.ListenForPattern(ctx, Keys.imageContainerTTL("*"), is.keyEventChan)
+	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState("*"), is.keyEventChan)
 
 	return &is, nil
 }
@@ -194,51 +207,27 @@ func (is *RuncImageService) retrieveBuildSecrets(ctx context.Context, secrets []
 }
 
 func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
-
 	for {
 		select {
-		case <-ticker.C:
-			containerKeys, err := is.rdb.HKeys(ctx, imageBuildContainersCreatedAtKey).Result()
-			if err != nil {
-				log.Error().Err(err).Msg("failed to get active image build containers")
-				return
-			}
+		case event := <-is.keyEventChan:
+			switch event.Operation {
+			case common.KeyOperationSet:
+				if strings.Contains(event.Key, common.RedisKeys.SchedulerContainerState("")) {
+					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), common.RedisKeys.SchedulerContainerState(""))
 
-			for _, key := range containerKeys {
-				createdAt := is.rdb.HGet(ctx, imageBuildContainersCreatedAtKey, key).Val()
-				if createdAt == "" {
-					log.Error().Msg("failed to get created at time for container")
-					continue
-				}
-
-				createdAtInt, err := strconv.ParseInt(createdAt, 10, 64)
-				if err != nil {
-					log.Error().Err(err).Msg("failed to parse container created at time")
-					continue
-				}
-
-				// See if the container still exists
-				_, err = is.builder.containerRepo.GetContainerState(key)
-				if err != nil {
-					if errors.Is(err, &types.ErrCheckpointNotFound{}) {
-						is.rdb.HDel(ctx, imageBuildContainersCreatedAtKey, key)
-					}
-
-					log.Error().Err(err).Msg("failed to get container state")
-					continue
-				}
-
-				if createdAtInt < time.Now().Unix()-is.config.ImageService.ImageBuildTimeoutS {
-					is.builder.scheduler.Stop(
-						&types.StopContainerArgs{
-							ContainerId: key,
+					if is.rdb.Exists(ctx, Keys.imageContainerTTL(containerId)).Val() == 0 {
+						is.builder.scheduler.Stop(&types.StopContainerArgs{
+							ContainerId: containerId,
 							Force:       true,
-						},
-					)
-
-					is.rdb.HDel(ctx, imageBuildContainersCreatedAtKey, key)
+						})
+					}
 				}
+			case common.KeyOperationExpired:
+				containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), Keys.imageContainerTTL(""))
+				is.builder.scheduler.Stop(&types.StopContainerArgs{
+					ContainerId: containerId,
+					Force:       true,
+				})
 			}
 		case <-ctx.Done():
 			return
@@ -257,4 +246,14 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 	return steps
 }
 
-var imageBuildContainersCreatedAtKey = "image:containers:created_at"
+var (
+	imageContainerTTL string = "image:container_ttl:%s"
+)
+
+var Keys = &keys{}
+
+type keys struct{}
+
+func (k *keys) imageContainerTTL(containerId string) string {
+	return fmt.Sprintf(imageContainerTTL, containerId)
+}

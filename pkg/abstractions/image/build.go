@@ -285,10 +285,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	err = b.rdb.HSetNX(ctx, imageBuildContainersCreatedAtKey, containerId, time.Now().Unix()).Err()
+	err = b.rdb.Set(ctx, Keys.imageContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Unknown error occurred.\n")}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		return err
 	}
+
+	go b.keepAlive(ctx, containerId, ctx.Done())
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
@@ -442,6 +445,22 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 // Check if an image already exists in the registry
 func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
+}
+
+func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
+	ticker := time.NewTicker(time.Duration(containerKeepAliveIntervalS) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			b.rdb.Set(ctx, Keys.imageContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
+		}
+	}
 }
 
 var imageNamePattern = regexp.MustCompile(
