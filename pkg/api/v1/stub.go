@@ -115,7 +115,7 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 
 	// Get URL for Serves
 	if stub.Type.IsServe() {
-		invokeUrl := common.BuildServeURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub)
+		invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub)
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
 
