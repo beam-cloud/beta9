@@ -228,6 +228,8 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
     sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config;
     sed -i 's/^#PubkeyAuthentication.*/PubkeyAuthentication no/' /etc/ssh/sshd_config;
     echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config;
+    echo "PermitUserEnvironment yes" >> /etc/ssh/sshd_config;
+    printenv > /etc/environment;
     exec /usr/sbin/sshd -D -p 8001
     `, token)
 
