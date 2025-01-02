@@ -420,6 +420,18 @@
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+		},
+		{
+			"destination": "/run/sshd",
+			"type": "tmpfs",
+			"source": "tmpfs",
+			"options": [
+				"nosuid",
+				"nodev",
+				"noexec",
+				"mode=0755",
+				"size=65536k"
+			]
 		}
 	],
 	"hooks": {
