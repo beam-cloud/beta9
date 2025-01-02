@@ -132,7 +132,6 @@ type ImageServiceConfig struct {
 	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
 	BuildContainerPoolSelector     string                `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
 	Runner                         RunnerConfig          `key:"runner" json:"runner"`
-	ImageBuildTimeoutS             int64                 `key:"imageBuildTimeoutS" json:"image_build_timeout_s"`
 }
 
 type ImageRegistriesConfig struct {

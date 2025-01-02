@@ -42,7 +42,7 @@ type ImageServiceOpts struct {
 }
 
 const containerKeepAliveIntervalS int = 30
-const imageContainerTtlS int = 30
+const imageContainerTtlS int = 60
 
 func NewRuncImageService(
 	ctx context.Context,

@@ -61,7 +61,6 @@ imageService:
   registryStore: local
   registryCredentialProvider: docker
   buildContainerPoolSelector: build
-  imageBuildTimeoutS: 3600
   registries:
     docker:
       username: beamcloud
