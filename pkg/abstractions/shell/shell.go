@@ -301,6 +301,8 @@ func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, do
 
 	for {
 		select {
+		case <-ss.ctx.Done():
+			return
 		case <-ctx.Done():
 			return
 		case <-done:
@@ -317,6 +319,8 @@ func (ss *SSHShellService) waitForContainer(ctx context.Context, containerId str
 
 	for {
 		select {
+		case <-ss.ctx.Done():
+			return nil
 		case <-timeoutCtx.Done():
 			return fmt.Errorf("timed out waiting for container to be available")
 		default:

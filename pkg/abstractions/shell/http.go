@@ -101,5 +101,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return nil
 	case <-clientCtx.Done():
 		return nil
+	case <-g.ss.ctx.Done():
+		return nil
 	}
 }
