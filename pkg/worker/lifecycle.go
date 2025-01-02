@@ -574,11 +574,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	exitCode = s.wait(ctx, containerId, startedChan, outputLogger, request, spec)
+	gpuDeviceIds, _ := s.containerCudaManager.GetContainerGPUDevices(containerId)
+
+	exitCode = s.wait(ctx, containerId, startedChan, outputLogger, request, spec, gpuDeviceIds)
 }
 
 // Wait for a container to exit and return the exit code
-func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
+func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec, gpuDeviceIds []int) int {
 	<-startedChan
 
 	// Clean up runc container state and send final output message
@@ -603,8 +605,8 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	pid := state.Pid
 
 	// Start monitoring the container
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, containerId, outputLogger)          // Watch for OOM events
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid, gpuDeviceIds) // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, containerId, outputLogger)                        // Watch for OOM events
 
 	process, err := os.FindProcess(pid)
 	if err != nil {

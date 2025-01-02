@@ -12,11 +12,11 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, containerPid int) {
+func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, containerPid int, gpuDeviceIds []int) {
 	ticker := time.NewTicker(w.config.Monitoring.ContainerMetricsInterval)
 	defer ticker.Stop()
 
-	monitor := NewProcessMonitor(containerPid, spec.Linux.Resources.Devices)
+	monitor := NewProcessMonitor(containerPid, spec.Linux.Resources.Devices, gpuDeviceIds)
 
 	for {
 		select {
@@ -74,10 +74,11 @@ type ProcessMonitor struct {
 	lastIO        process.IOCountersStat
 	lastNetIO     net.IOCountersStat
 	gpuInfoClient GPUInfoClient
+	gpuDeviceIds  []int
 }
 
-func NewProcessMonitor(pid int, devices []specs.LinuxDeviceCgroup) *ProcessMonitor {
-	return &ProcessMonitor{pid: int32(pid), devices: devices, gpuInfoClient: &NvidiaInfoClient{}}
+func NewProcessMonitor(pid int, devices []specs.LinuxDeviceCgroup, gpuDeviceIds []int) *ProcessMonitor {
+	return &ProcessMonitor{pid: int32(pid), devices: devices, gpuInfoClient: &NvidiaInfoClient{}, gpuDeviceIds: gpuDeviceIds}
 }
 
 func (m *ProcessMonitor) GetStatistics() (*ProcessStats, error) {
@@ -112,12 +113,8 @@ func (m *ProcessMonitor) GetStatistics() (*ProcessStats, error) {
 
 func (m *ProcessMonitor) fetchGPUMemory() *GPUInfoStat {
 	stat := &GPUInfoStat{}
-	availableDevices, err := m.gpuInfoClient.AvailableGPUDevices()
-	if err != nil {
-		return stat
-	}
 
-	for _, device := range availableDevices {
+	for _, device := range m.gpuDeviceIds {
 		stats, err := m.gpuInfoClient.GetGPUMemoryUsage(device)
 		if err == nil {
 			stat.MemoryUsed += uint64(stats.UsedCapacity)
