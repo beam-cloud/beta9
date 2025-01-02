@@ -93,9 +93,8 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	// Wait for either connection to close
 	select {
 	case <-done:
-		clientCancel()
+		return nil
 	case <-clientCtx.Done():
+		return nil
 	}
-
-	return nil
 }
