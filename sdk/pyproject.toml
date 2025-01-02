@@ -27,6 +27,7 @@ croniter = "^3.0.3"
 websocket-client = "^1.8.0"
 prompt-toolkit = "^3.0.48"
 requests = "^2.32.3"
+paramiko = "^3.5.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

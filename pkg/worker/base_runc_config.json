@@ -30,7 +30,8 @@
 				"CAP_FOWNER",
 				"CAP_SETGID",
 				"CAP_SETUID",
-				"CAP_SETFCAP"
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT"
 			],
 			"effective": [
 				"CAP_AUDIT_WRITE",
@@ -42,7 +43,8 @@
 				"CAP_FOWNER",
 				"CAP_SETGID",
 				"CAP_SETUID",
-				"CAP_SETFCAP"
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT"
 			],
 			"permitted": [
 				"CAP_AUDIT_WRITE",
@@ -54,7 +56,8 @@
 				"CAP_FOWNER",
 				"CAP_SETGID",
 				"CAP_SETUID",
-				"CAP_SETFCAP"
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT"
 			],
 			"ambient": [
 				"CAP_AUDIT_WRITE",
@@ -66,7 +69,8 @@
 				"CAP_FOWNER",
 				"CAP_SETGID",
 				"CAP_SETUID",
-				"CAP_SETFCAP"
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT"
 			]
 		},
 		"rlimits": [],

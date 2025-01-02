@@ -208,6 +208,7 @@ const (
 	StubTypeFunctionDeployment     string = "function/deployment"
 	StubTypeFunctionServe          string = "function/serve"
 	StubTypeContainer              string = "container"
+	StubTypeShell                  string = "shell"
 	StubTypeTaskQueue              string = "taskqueue"
 	StubTypeTaskQueueDeployment    string = "taskqueue/deployment"
 	StubTypeTaskQueueServe         string = "taskqueue/serve"
