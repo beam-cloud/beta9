@@ -55,16 +55,33 @@ var (
 	EventWorkerLifecycleStopped = "stopped"
 )
 
+type SanitizedContainerRequest struct {
+	ContainerId       string       `json:"container_id"`
+	Cpu               int64        `json:"cpu"`
+	Memory            int64        `json:"memory"`
+	Gpu               string       `json:"gpu"`
+	GpuRequest        []string     `json:"gpu_request"`
+	GpuCount          uint32       `json:"gpu_count"`
+	ImageId           string       `json:"image_id"`
+	StubId            string       `json:"stub_id"`
+	WorkspaceId       string       `json:"workspace_id"`
+	RetryCount        int          `json:"retry_count"`
+	PoolSelector      string       `json:"pool_selector"`
+	Preemptable       bool         `json:"preemptable"`
+	CheckpointEnabled bool         `json:"checkpoint_enabled"`
+	BuildOptions      BuildOptions `json:"build_options"`
+}
+
 // Schema versions should be in ISO 8601 format
 
 var EventContainerLifecycleSchemaVersion = "1.1"
 
 type EventContainerLifecycleSchema struct {
-	ContainerID string           `json:"container_id"`
-	WorkerID    string           `json:"worker_id"`
-	StubID      string           `json:"stub_id"`
-	Status      string           `json:"status"`
-	Request     ContainerRequest `json:"request"`
+	ContainerID string                    `json:"container_id"`
+	WorkerID    string                    `json:"worker_id"`
+	StubID      string                    `json:"stub_id"`
+	Status      string                    `json:"status"`
+	Request     SanitizedContainerRequest `json:"request"`
 }
 
 var EventContainerMetricsSchemaVersion = "1.0"
@@ -99,10 +116,10 @@ type EventContainerMetricsData struct {
 var EventContainerStatusRequestedSchemaVersion = "1.1"
 
 type EventContainerStatusRequestedSchema struct {
-	ContainerID string           `json:"container_id"`
-	Request     ContainerRequest `json:"request"`
-	StubID      string           `json:"stub_id"`
-	Status      string           `json:"status"`
+	ContainerID string                    `json:"container_id"`
+	Request     SanitizedContainerRequest `json:"request"`
+	StubID      string                    `json:"stub_id"`
+	Status      string                    `json:"status"`
 }
 
 var EventWorkerLifecycleSchemaVersion = "1.0"
