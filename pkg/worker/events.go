@@ -16,8 +16,7 @@ func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *ty
 	ticker := time.NewTicker(w.config.Monitoring.ContainerMetricsInterval)
 	defer ticker.Stop()
 
-	gpuDeviceIds, _ := w.containerCudaManager.GetContainerGPUDevices(request.ContainerId)
-	monitor := NewProcessMonitor(containerPid, spec.Linux.Resources.Devices, gpuDeviceIds)
+	monitor := NewProcessMonitor(containerPid, spec.Linux.Resources.Devices, w.containerCudaManager.GetContainerGPUDevices(request.ContainerId))
 
 	for {
 		select {

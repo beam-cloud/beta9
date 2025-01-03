@@ -21,7 +21,7 @@ var (
 
 type GPUManager interface {
 	AssignGPUDevices(containerId string, gpuCount uint32) (*AssignedGpuDevices, error)
-	GetContainerGPUDevices(containerId string) ([]int, bool)
+	GetContainerGPUDevices(containerId string) []int
 	UnassignGPUDevices(containerId string)
 	InjectEnvVars(env []string, options *ContainerOptions) ([]string, bool)
 	InjectMounts(mounts []specs.Mount) []specs.Mount
@@ -121,13 +121,13 @@ func (c *ContainerNvidiaManager) AssignGPUDevices(containerId string, gpuCount u
 	}, nil
 }
 
-func (c *ContainerNvidiaManager) GetContainerGPUDevices(containerId string) ([]int, bool) {
+func (c *ContainerNvidiaManager) GetContainerGPUDevices(containerId string) []int {
 	gpuDevices, ok := c.gpuAllocationMap.Get(containerId)
 	if !ok {
-		return []int{}, false
+		return []int{}
 	}
 
-	return gpuDevices, true
+	return gpuDevices
 }
 
 func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuCount uint32) ([]int, error) {
