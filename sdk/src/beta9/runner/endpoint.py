@@ -5,7 +5,7 @@ import signal
 import traceback
 from contextlib import asynccontextmanager
 from http import HTTPStatus
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Union
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -197,13 +197,10 @@ class EndpointManager:
             payload = await request.json()
 
             status_code = HTTPStatus.OK
-            task_lifecycle_data.result, err = await self._call_function(
-                task_id=task_id, payload=payload
-            )
-            if err:
-                task_lifecycle_data.status = TaskStatus.Error
+            task_lifecycle_data.result = await self._call_function(task_id=task_id, payload=payload)
 
-            if task_lifecycle_data.status == TaskStatus.Error:
+            if task_lifecycle_data.result.get("error"):
+                task_lifecycle_data.status = TaskStatus.Error
                 status_code = HTTPStatus.INTERNAL_SERVER_ERROR
 
             kwargs = payload.get("kwargs", {})
@@ -225,8 +222,7 @@ class EndpointManager:
                 status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
-    async def _call_function(self, task_id: str, payload: dict) -> Tuple[Response, Any]:
-        error = None
+    async def _call_function(self, task_id: str, payload: dict) -> Response:
         response_body = {}
 
         args = payload.get("args", [])
@@ -261,7 +257,7 @@ class EndpointManager:
             print(exception)
             response_body = {"error": exception}
 
-        return response_body, error
+        return response_body
 
     def shutdown(self, signum=None, frame=None):
         os._exit(self.exit_code)
