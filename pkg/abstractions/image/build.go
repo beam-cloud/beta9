@@ -329,7 +329,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
 		}
 
-		if time.Since(start) > defaultContainerSpinupTimeout && opts.Dockerfile != "" {
+		if time.Since(start) > defaultContainerSpinupTimeout && opts.Dockerfile == "" {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Timeout: container not running after 180 seconds.\n"}
 			return errors.New("timeout: container not running after 180 seconds")
 		}
