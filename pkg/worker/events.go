@@ -12,10 +12,11 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 )
 
-func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, containerPid int, gpuDeviceIds []int) {
+func (w *Worker) collectAndSendContainerMetrics(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, containerPid int) {
 	ticker := time.NewTicker(w.config.Monitoring.ContainerMetricsInterval)
 	defer ticker.Stop()
 
+	gpuDeviceIds, _ := w.containerCudaManager.GetContainerGPUDevices(request.ContainerId)
 	monitor := NewProcessMonitor(containerPid, spec.Linux.Resources.Devices, gpuDeviceIds)
 
 	for {
