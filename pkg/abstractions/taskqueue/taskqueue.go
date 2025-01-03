@@ -184,6 +184,15 @@ func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, err
 	return config, nil
 }
 
+func (tq *RedisTaskQueue) warmup(stubId string) error {
+	instance, err := tq.getOrCreateQueueInstance(stubId)
+	if err != nil {
+		return err
+	}
+
+	return instance.HandleScalingEvent(1)
+}
+
 func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (string, error) {
 	stubConfig, err := tq.getStubConfig(stubId)
 	if err != nil {

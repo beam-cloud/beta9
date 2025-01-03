@@ -97,6 +97,14 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			CheckpointEnabled: checkpointEnabled,
 		}
 
+		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
+		i.Rdb.SetEx(
+			context.Background(),
+			Keys.taskQueueKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, runRequest.ContainerId),
+			1,
+			time.Duration(i.StubConfig.KeepWarmSeconds)*time.Second,
+		)
+
 		err := i.Scheduler.Run(runRequest)
 		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to run container")
