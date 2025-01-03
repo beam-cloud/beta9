@@ -187,8 +187,10 @@ func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId strin
 		return exitCode
 	}
 
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, containerId, outputLogger)          // Watch for OOM events
+	gpuDeviceIds, _ := s.containerCudaManager.GetContainerGPUDevices(containerId)
+
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid, gpuDeviceIds) // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, containerId, outputLogger)                        // Watch for OOM events
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
