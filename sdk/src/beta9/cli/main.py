@@ -26,6 +26,8 @@ from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCo
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
 
+os.environ["GRPC_VERBOSITY"] = os.getenv("GRPC_VERBOSITY") or "ERROR"
+
 
 class CLI:
     """
@@ -92,9 +94,9 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli = CLI(**kwargs)
     cli.register(task)
     cli.register(deployment)
+    cli.register(serve)
     cli.register(volume)
     cli.register(config)
-    cli.register(serve)
     cli.register(pool)
     cli.register(container)
     cli.register(machine)

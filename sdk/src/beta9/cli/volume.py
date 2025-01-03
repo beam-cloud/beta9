@@ -1,11 +1,13 @@
+import functools
 import glob
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, List, Union
+from typing import Iterable, List, Union, cast
 
 import click
 from rich.table import Column, Table, box
 
-from .. import terminal
+from .. import multipart, terminal
 from ..channel import ServiceClient
 from ..clients.volume import (
     CopyPathRequest,
@@ -21,7 +23,8 @@ from ..clients.volume import (
     ListVolumesResponse,
     MovePathRequest,
 )
-from ..terminal import pluralize
+from ..multipart import ProgressCallback
+from ..terminal import StyledProgress, pluralize
 from . import extraclick
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
@@ -269,6 +272,95 @@ def mv(service: ServiceClient, original_path: str, new_path: str):
         terminal.error(f"Failed to move {original_path} to {new_path} ({res.err_msg})")
     else:
         terminal.success(f"Moved {original_path} to {res.new_path}")
+
+
+@common.command(
+    help="[Experimental] Upload contents from a volume.",
+)
+@click.argument(
+    "local_path",
+    type=click.Path(path_type=Path),
+    required=True,
+)
+@click.argument(
+    "volume_name",
+    type=click.STRING,
+    required=True,
+)
+@click.argument(
+    "remote_path",
+    type=click.STRING,
+    required=True,
+)
+@extraclick.pass_service_client
+def upload(service: ServiceClient, local_path: Path, volume_name: str, remote_path: str):
+    try:
+        with StyledProgress() as p:
+            task_id = p.add_task(local_path)
+            progress_callback = cast(ProgressCallback, functools.partial(p.update, task_id=task_id))
+
+            @contextmanager
+            def completion_callback():
+                """
+                Shows progress status while the upload is being completed.
+                """
+                p.stop()
+
+                with terminal.progress("Completing...") as s:
+                    yield s
+
+                # Move cursor up 2x, clear line, and redraw the progress bar
+                terminal.print("\033[A\033[A\r", highlight=False)
+                p.start()
+
+            multipart.upload(
+                service.volume,
+                local_path,
+                volume_name,
+                remote_path,
+                progress_callback,
+                completion_callback,
+            )
+
+    except KeyboardInterrupt:
+        terminal.warn("\rUpload cancelled")
+
+    except Exception as e:
+        terminal.error(f"\rUpload failed: {e}")
+
+
+@common.command(
+    help="[Experimental] Download contents from a volume.",
+)
+@click.argument(
+    "volume_name",
+    type=click.STRING,
+    required=True,
+)
+@click.argument(
+    "remote_path",
+    type=click.STRING,
+    required=True,
+)
+@click.argument(
+    "local_path",
+    type=click.Path(path_type=Path),
+    required=True,
+)
+@extraclick.pass_service_client
+def download(service: ServiceClient, volume_name: str, remote_path: str, local_path: Path):
+    try:
+        with StyledProgress() as p:
+            task_id = p.add_task(local_path)
+            callback = cast(ProgressCallback, functools.partial(p.update, task_id=task_id))
+
+            multipart.download(service.volume, volume_name, remote_path, local_path, callback)
+
+    except KeyboardInterrupt:
+        terminal.warn("\rDownload cancelled")
+
+    except Exception as e:
+        terminal.error(f"\rDownload failed: {e}")
 
 
 @click.group(

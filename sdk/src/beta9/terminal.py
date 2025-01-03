@@ -2,7 +2,9 @@ import datetime
 import sys
 import threading
 from contextlib import contextmanager
-from typing import Any, Generator, Literal, Optional, Sequence, Tuple
+from io import BytesIO
+from os import PathLike
+from typing import Any, Generator, Literal, Optional, Sequence, Tuple, Union
 
 import rich
 import rich.columns
@@ -12,6 +14,14 @@ import rich.traceback
 from rich.console import Console
 from rich.control import STRIP_CONTROL_CODES as _STRIP_CONTROL_CODES
 from rich.markup import escape
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 from rich.progress import open as _progress_open
 from rich.text import Text
 
@@ -100,7 +110,7 @@ def progress(task_name: str) -> Generator[rich.status.Status, None, None]:
                 _current_status = None
 
 
-def progress_open(file, mode, **kwargs):
+def progress_open(file: Union[str, PathLike, bytes], mode: str, **kwargs: Any) -> BytesIO:
     options = dict(
         complete_style="green",
         finished_style="slate_blue1",
@@ -166,3 +176,39 @@ def pluralize(seq: Sequence, suffix: str = "s") -> Tuple[int, str]:
 
 def reset_terminal() -> None:
     _console.show_cursor()
+
+
+def progress_description(name: str, max_width: Optional[int] = None):
+    max_desc_width = max_width or len(name)
+    if len(name) > max_desc_width:
+        text = f"...{name[-(max_desc_width - 3):]}"
+    else:
+        text = name.ljust(max_desc_width)
+
+    return escape(f"[{text}]")
+
+
+class CustomProgress(Progress):
+    def add_task(self, description: Any, *args, **kwargs):
+        return super().add_task(progress_description(str(description)), *args, **kwargs)
+
+
+def StyledProgress() -> CustomProgress:
+    """
+    Return a styled progress bar with custom columns.
+    """
+    return CustomProgress(
+        *[
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(
+                complete_style="green",
+                finished_style="slate_blue1",
+            ),
+            DownloadColumn(binary_units=True),
+            TransferSpeedColumn(),
+            TimeRemainingColumn(elapsed_when_finished=True),
+        ],
+        auto_refresh=True,
+        refresh_per_second=60,
+        disable=False,
+    )
