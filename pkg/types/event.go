@@ -47,6 +47,7 @@ var (
 	EventContainerLifecycleScheduled = "scheduled"
 	EventContainerLifecycleStarted   = "started"
 	EventContainerLifecycleStopped   = "stopped"
+	EventContainerLifecycleOOM       = "oom"
 	EventContainerLifecycleFailed    = "failed"
 )
 
