@@ -7,6 +7,7 @@ import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 from functools import wraps
 from multiprocessing import Manager
 from os import PathLike
@@ -24,8 +25,10 @@ from typing import (
     Protocol,
     Sequence,
     TypeVar,
+    Union,
 )
 
+import click
 import requests
 from requests import Session
 from typing_extensions import ParamSpec
@@ -37,6 +40,8 @@ from .clients.volume import (
     CreateMultipartUploadRequest,
     CreatePresignedUrlRequest,
     FileUploadPart,
+    ListPathRequest,
+    ListVolumesRequest,
     PresignedUrlMethod,
     VolumeServiceStub,
 )
@@ -468,3 +473,179 @@ def download(
         chunks = [future.result() for future in concurrent.futures.as_completed(futures)]
         chunks.sort(key=lambda chunk: chunk.number)
         _merge_file_chunks(file_path, chunks)
+
+
+@dataclass
+class RemotePath:
+    scheme: str
+    volume_name: str
+    volume_key: str
+
+    def __str__(self) -> str:
+        return f"{self.scheme}://{self.volume_name}/{self.volume_key}"
+
+    def __truediv__(self, other: Union["RemotePath", str]) -> "RemotePath":
+        path = ""
+        if isinstance(other, str):
+            path = other
+        elif isinstance(other, RemotePath):
+            path = other.volume_key
+
+        return RemotePath(self.scheme, self.volume_name, os.path.join(self.volume_key, path))
+
+    @property
+    def uri(self) -> str:
+        return self.__str__()
+
+    @property
+    def path(self) -> str:
+        return os.path.join(self.volume_name, self.volume_key)
+
+    def is_dir(self) -> bool:
+        return not self.volume_key or self.volume_key.endswith("/")
+
+    def is_file(self) -> bool:
+        return not self.is_dir()
+
+
+class FileTransfer:
+    def __init__(self, service: VolumeServiceStub):
+        self.service = service
+
+    def validate_paths(
+        self, source: Union[Path, RemotePath], destination: Union[Path, RemotePath]
+    ) -> None:
+        if isinstance(source, Path) and isinstance(destination, Path):
+            raise ValueError("Source and destination cannot both be local paths.")
+
+    def get_source_files(self, source: Union[Path, RemotePath]) -> List[Path]:
+        sources = []
+
+        # Local source
+        if isinstance(source, Path):
+            if not source.exists():
+                raise ValueError(f"Local source path '{source}' does not exist.")
+
+            if source.is_file():
+                sources.append(source)
+            else:
+                sources.extend(p for p in source.rglob("*") if p.is_file())
+
+            return sources
+
+        # Remote source
+        res = self.service.list_path(ListPathRequest(path=source.path))
+        if not res.ok:
+            raise ValueError(f"{source} ({res.err_msg})")
+
+        sources.extend(
+            RemotePath(source.scheme, source.volume_name, p.path) for p in res.path_infos
+        )
+        if not sources:
+            raise ValueError("No files to copy.")
+
+        return sources
+
+    def prepare_destination(self, destination: Union[Path, RemotePath]) -> None:
+        # Local destination
+        if isinstance(destination, Path):
+            if destination.exists() and destination.is_file():
+                raise ValueError(f"Destination file '{destination}' exists.")
+
+            if not destination.parent.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+
+            return
+
+        # Remote destination
+        res = self.service.list_volumes(ListVolumesRequest())
+        if not res.ok:
+            raise ValueError(res.err_msg)
+
+        if not any(v.name == destination.volume_name for v in res.volumes):
+            raise ValueError(f"Volume '{destination.volume_name}' does not exist.")
+
+    def copy(
+        self,
+        source: Union[Path, RemotePath],
+        destination: Union[Path, RemotePath],
+        progress_callback: Optional[ProgressCallback] = None,
+        completion_callback: Optional[CompletionCallback] = None,
+    ) -> None:
+        # Local source, remote destination
+        if isinstance(source, Path) and isinstance(destination, RemotePath):
+            volume_name = destination.volume_name
+            volume_path = (destination / source.name).volume_key
+
+            upload(
+                self.service,
+                source,
+                volume_name,
+                volume_path,
+                progress_callback=progress_callback,
+                completion_callback=completion_callback,
+            )
+
+        # Remote source, local destination
+        if isinstance(source, RemotePath) and isinstance(destination, Path):
+            volume_name = source.volume_name
+            volume_path = source.volume_key
+            local_path = destination / volume_path
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            download(
+                service=self.service,
+                volume_name=volume_name,
+                volume_path=volume_path,
+                file_path=local_path,
+                callback=progress_callback,
+            )
+
+        raise ValueError("Invalid source and destination types.")
+
+
+class VolumePath(click.ParamType):
+    """
+    The VolumePath type converts a string into a Path or RemotePath object.
+    """
+
+    name = "volume_path"
+
+    def __init__(self):
+        from .config import get_settings
+
+        self.schemes = [
+            get_settings().name.lower(),
+        ]
+
+        super().__init__()
+
+    def convert(
+        self,
+        value: str,
+        param: Optional[click.Parameter] = None,
+        ctx: Optional[click.Context] = None,
+    ) -> Union[Path, RemotePath]:
+        if "://" in value:
+            return self._parse_remote_path(value)
+        return Path(value)
+
+    def _parse_remote_path(self, value: str) -> RemotePath:
+        protocol, volume_path = value.split("://", 1)
+        if not protocol:
+            raise click.BadParameter("Volume protocol is required.")
+
+        if not protocol.startswith(tuple(self.schemes)):
+            text = f"Protocol '{protocol}://' is not supported. Supported protocols are {', '.join(self.schemes)}."
+            raise click.BadParameter(text)
+
+        try:
+            volume_name, volume_key = volume_path.split("/", 1)
+        except ValueError:
+            volume_name = volume_path
+            volume_key = ""
+
+        if not volume_name:
+            raise click.BadParameter("Volume name is required.")
+
+        return RemotePath(protocol, volume_name, volume_key)

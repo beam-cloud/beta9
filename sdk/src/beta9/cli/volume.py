@@ -23,7 +23,7 @@ from ..clients.volume import (
     ListVolumesResponse,
     MovePathRequest,
 )
-from ..multipart import ProgressCallback
+from ..multipart import FileTransfer, ProgressCallback, RemotePath, VolumePath
 from ..terminal import StyledProgress, pluralize
 from . import extraclick
 from .extraclick import ClickCommonGroup, ClickManagementGroup
@@ -274,59 +274,199 @@ def mv(service: ServiceClient, original_path: str, new_path: str):
         terminal.success(f"Moved {original_path} to {res.new_path}")
 
 
+# class VolumePathType(click.ParamType):
+#     """
+#     The ClickPath type converts a string into a Path or RemotePath object.
+#     """
+
+#     name = "path"
+
+#     schemes: ClassVar[List[str]] = [
+#         get_settings().name.lower(),
+#     ]
+
+#     def convert(
+#         self,
+#         value: str,
+#         param: Optional[click.Parameter] = None,
+#         ctx: Optional[click.Context] = None,
+#     ) -> Union[Path, RemotePath]:
+#         if "://" in value:
+#             return self._parse_remote_path(value)
+#         return Path(value)
+
+#     def _parse_remote_path(self, value: str) -> RemotePath:
+#         protocol, volume_path = value.split("://", 1)
+#         if not protocol:
+#             raise click.BadParameter("Volume protocol is required.")
+
+#         if not protocol.startswith(tuple(self.schemes)):
+#             text = f"Protocol '{protocol}://' is not supported. Supported protocols are {', '.join(self.schemes)}."
+#             raise click.BadParameter(text)
+
+#         try:
+#             volume_name, volume_key = volume_path.split("/", 1)
+#         except ValueError:
+#             volume_name = volume_path
+#             volume_key = ""
+
+#         if not volume_name:
+#             raise click.BadParameter("Volume name is required.")
+
+#         return RemotePath(protocol, volume_name, volume_key)
+
+
 @common.command(
-    help="[Experimental] Upload contents from a volume.",
+    help="[Experimental] Copy contents to and from a volume.",
 )
 @click.argument(
-    "local_path",
-    type=click.Path(path_type=Path),
+    "source",
+    # nargs=-1,
+    # type=click.Path(path_type=Path, exists=True),
+    type=VolumePath(),
     required=True,
 )
 @click.argument(
-    "volume_name",
-    type=click.STRING,
-    required=True,
-)
-@click.argument(
-    "remote_path",
-    type=click.STRING,
+    "destination",
+    type=VolumePath(),
     required=True,
 )
 @extraclick.pass_service_client
-def upload(service: ServiceClient, local_path: Path, volume_name: str, remote_path: str):
+def cp2(
+    service: ServiceClient, source: Union[Path, RemotePath], destination: Union[Path, RemotePath]
+):
+    # if isinstance(source, Path) and isinstance(destination, Path):
+    #     terminal.error("Source and destination paths cannot both be local paths.")
+
+    # sources = []
+    # if isinstance(source, Path):
+    #     if not source.exists():
+    #         return terminal.error(f"Local source path '{source}' does not exist.")
+
+    #     if source.is_file():
+    #         sources.append(source)
+    #     else:
+    #         sources.extend([p for p in source.rglob("*") if p.is_file()])
+    # else:
+    #     res = service.volume.list_path(ListPathRequest(path=source.path))
+    #     if not res.ok:
+    #         return terminal.error(f"{source} ({res.err_msg})")
+
+    #     sources.extend(
+    #         [RemotePath(source.scheme, source.volume_name, p.path) for p in res.path_infos]
+    #     )
+    # if not sources:
+    #     return terminal.error("No files to copy.")
+
+    # if isinstance(destination, Path):
+    #     # Check if the destination path exists
+    #     if destination.exists() and destination.is_file():
+    #         return terminal.error(f"Destination file '{destination}' exists.")
+
+    #     if not destination.parent.exists():
+    #         destination.parent.mkdir(parents=True, exist_ok=True)
+
+    # else:
+    #     # Check if the destination volume exists
+    #     res = service.volume.list_volumes(ListVolumesRequest())
+    #     if not res.ok:
+    #         return terminal.error(res.err_msg)
+
+    #     if not any(v.name == destination.volume_name for v in res.volumes):
+    #         return terminal.error(f"Volume '{destination.volume_name}' does not exist.")
     try:
+        transfer = FileTransfer(service.volume)
+        transfer.validate_paths(source, destination)
+        sources = transfer.get_source_files(source)
+        transfer.prepare_destination(destination)
+
         with StyledProgress() as p:
-            task_id = p.add_task(local_path)
-            progress_callback = cast(ProgressCallback, functools.partial(p.update, task_id=task_id))
+            for source in sources:
+                task_id = p.add_task(source)
 
-            @contextmanager
-            def completion_callback():
-                """
-                Shows progress status while the upload is being completed.
-                """
-                p.stop()
+                progress_callback = cast(
+                    ProgressCallback, functools.partial(p.update, task_id=task_id)
+                )
 
-                with terminal.progress("Completing...") as s:
-                    yield s
+                @contextmanager
+                def completion_callback():
+                    """
+                    Shows progress status while the upload is being completed.
+                    """
+                    p.stop()
 
-                # Move cursor up 2x, clear line, and redraw the progress bar
-                terminal.print("\033[A\033[A\r", highlight=False)
-                p.start()
+                    with terminal.progress("Completing...") as s:
+                        yield s
 
-            multipart.upload(
-                service.volume,
-                local_path,
-                volume_name,
-                remote_path,
-                progress_callback,
-                completion_callback,
-            )
+                    # Move cursor up 2x, clear line, and redraw the progress bar
+                    terminal.print("\033[A\033[A\r", highlight=False)
+                    p.start()
+
+                transfer.copy(source, destination, progress_callback, completion_callback)
 
     except KeyboardInterrupt:
         terminal.warn("\rUpload cancelled")
 
     except Exception as e:
         terminal.error(f"\rUpload failed: {e}")
+
+    # try:
+    #     with StyledProgress() as p:
+    #         for source_item in sources:
+    #             task_id = p.add_task(source_item)
+    #             progress_callback = cast(
+    #                 ProgressCallback, functools.partial(p.update, task_id=task_id)
+    #             )
+
+    #             @contextmanager
+    #             def completion_callback():
+    #                 """
+    #                 Shows progress status while the upload is being completed.
+    #                 """
+    #                 p.stop()
+
+    #                 with terminal.progress("Completing...") as s:
+    #                     yield s
+
+    #                 # Move cursor up 2x, clear line, and redraw the progress bar
+    #                 terminal.print("\033[A\033[A\r", highlight=False)
+    #                 p.start()
+
+    #             if isinstance(source_item, Path) and isinstance(destination, RemotePath):
+    #                 volume_name = destination.volume_name
+    #                 volume_path = (destination / source_item.name).volume_key
+
+    #                 multipart.upload(
+    #                     service.volume,
+    #                     source_item,
+    #                     volume_name,
+    #                     volume_path,
+    #                     progress_callback,
+    #                     completion_callback,
+    #                 )
+
+    #             # download
+    #             elif isinstance(source_item, RemotePath) and isinstance(destination, Path):
+    #                 volume_name = source_item.volume_name
+    #                 volume_path = source_item.volume_key
+    #                 local_path = destination / volume_path
+    #                 local_path.parent.mkdir(parents=True, exist_ok=True)
+
+    #                 multipart.download(
+    #                     service.volume,
+    #                     volume_name,
+    #                     volume_path,
+    #                     local_path,
+    #                     progress_callback,
+    #                 )
+    #             else:
+    #                 terminal.error("Invalid source and destination paths.")
+
+    # except KeyboardInterrupt:
+    #     terminal.warn("\rUpload cancelled")
+
+    # except Exception as e:
+    #     terminal.error(f"\rUpload failed: {e}")
 
 
 @common.command(
