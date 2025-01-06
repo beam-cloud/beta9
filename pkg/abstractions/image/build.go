@@ -237,7 +237,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BuildCtxObject:    opts.BuildCtxObject,
 	})
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating image id: " + err.Error()}
 		return err
 	}
 
@@ -310,7 +310,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	for {
 		r, err := client.Status(containerId)
 		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while checking container status: " + err.Error()}
 			return err
 		}
 
@@ -341,7 +341,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	imageId, err := b.GetImageId(opts)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating image id: " + err.Error()}
 		return err
 	}
 
