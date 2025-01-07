@@ -160,6 +160,19 @@ func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, worke
 	)
 }
 
+func (t *TCPEventClientRepo) PushContainerOOMEvent(containerID string, workerID string, stubId string) {
+	t.pushEvent(
+		types.EventContainerLifecycle,
+		types.EventContainerLifecycleSchemaVersion,
+		types.EventContainerLifecycleSchema{
+			ContainerID: containerID,
+			WorkerID:    workerID,
+			StubID:      stubId,
+			Status:      types.EventContainerLifecycleOOM,
+		},
+	)
+}
+
 func (t *TCPEventClientRepo) PushWorkerStartedEvent(workerID string) {
 	t.pushEvent(
 		types.EventWorkerLifecycle,
