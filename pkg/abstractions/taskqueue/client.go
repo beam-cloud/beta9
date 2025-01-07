@@ -75,6 +75,11 @@ func (qc *taskQueueClient) Pop(ctx context.Context, workspaceName, stubId, conta
 		return nil, err
 	}
 
+	err = qc.rdb.SAdd(ctx, Keys.taskQueueTaskRunningLockIndex(workspaceName, stubId, containerId), tm.TaskId).Err()
+	if err != nil {
+		return nil, err
+	}
+
 	// Set a lock to prevent spin-down during decoding (decoding can take a long time for larger payloads)
 	err = qc.rdb.SetEx(ctx, Keys.taskQueueTaskRunningLock(workspaceName, stubId, containerId, tm.TaskId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
 	if err != nil {

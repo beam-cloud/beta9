@@ -212,14 +212,16 @@ func (i *BaseImage) String() string {
 // Build user image
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	var (
-		dockerfile  *string
-		authInfo, _ = auth.AuthInfoFromContext(ctx)
+		dockerfile             *string
+		authInfo, _            = auth.AuthInfoFromContext(ctx)
+		containerSpinupTimeout = defaultContainerSpinupTimeout
 	)
 
 	switch {
 	case opts.Dockerfile != "":
 		opts.addPythonRequirements()
 		dockerfile = &opts.Dockerfile
+		containerSpinupTimeout = 600 * time.Second
 	case opts.ExistingImageUri != "":
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
@@ -237,7 +239,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BuildCtxObject:    opts.BuildCtxObject,
 	})
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating image id: " + err.Error()}
 		return err
 	}
 
@@ -318,7 +320,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	for {
 		r, err := client.Status(containerId)
 		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while checking container status: " + err.Error()}
 			return err
 		}
 
@@ -339,7 +341,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
 		}
 
-		if time.Since(start) > defaultContainerSpinupTimeout {
+		if time.Since(start) > containerSpinupTimeout {
 			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Timeout: container not running after 180 seconds.\n"}
 			return errors.New("timeout: container not running after 180 seconds")
 		}
@@ -349,7 +351,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	imageId, err := b.GetImageId(opts)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unknown error occurred.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating image id: " + err.Error()}
 		return err
 	}
 

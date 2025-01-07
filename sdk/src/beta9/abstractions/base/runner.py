@@ -27,6 +27,7 @@ from ...clients.gateway import (
     SecretVar,
 )
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
+from ...clients.shell import ShellServiceStub
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import
 from ...sync import FileSyncer, SyncEventHandler
@@ -46,12 +47,15 @@ ENDPOINT_STUB_TYPE = "endpoint"
 ASGI_STUB_TYPE = "asgi"
 SCHEDULE_STUB_TYPE = "schedule"
 BOT_STUB_TYPE = "bot"
+SHELL_STUB_TYPE = "shell"
+
 TASKQUEUE_DEPLOYMENT_STUB_TYPE = "taskqueue/deployment"
 ENDPOINT_DEPLOYMENT_STUB_TYPE = "endpoint/deployment"
 ASGI_DEPLOYMENT_STUB_TYPE = "asgi/deployment"
 FUNCTION_DEPLOYMENT_STUB_TYPE = "function/deployment"
 SCHEDULE_DEPLOYMENT_STUB_TYPE = "schedule/deployment"
 BOT_DEPLOYMENT_STUB_TYPE = "bot/deployment"
+
 TASKQUEUE_SERVE_STUB_TYPE = "taskqueue/serve"
 ENDPOINT_SERVE_STUB_TYPE = "endpoint/serve"
 ASGI_SERVE_STUB_TYPE = "asgi/serve"
@@ -141,6 +145,7 @@ class RunnerAbstraction(BaseAbstraction):
             self._map_callable_to_attr(attr="on_start", func=on_start)
 
         self._gateway_stub: Optional[GatewayServiceStub] = None
+        self._shell_stub: Optional[ShellServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
@@ -208,6 +213,16 @@ class RunnerAbstraction(BaseAbstraction):
     @gateway_stub.setter
     def gateway_stub(self, value) -> None:
         self._gateway_stub = value
+
+    @property
+    def shell_stub(self) -> ShellServiceStub:
+        if not self._shell_stub:
+            self._shell_stub = ShellServiceStub(self.channel)
+        return self._shell_stub
+
+    @shell_stub.setter
+    def shell_stub(self, value) -> None:
+        self._shell_stub = value
 
     def _parse_cpu_to_millicores(self, cpu: Union[float, str]) -> int:
         """

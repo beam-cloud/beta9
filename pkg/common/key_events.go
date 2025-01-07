@@ -53,6 +53,10 @@ func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, e
 	return trimmedKeys, nil
 }
 
+func (kem *KeyEventManager) TrimKeyspacePrefix(key string) string {
+	return strings.TrimPrefix(key, keyspacePrefix)
+}
+
 func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
 	existingKeys, err := kem.fetchExistingKeys(patternPrefix)
 	if err != nil {

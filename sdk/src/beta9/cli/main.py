@@ -16,6 +16,7 @@ from . import (
     pool,
     secret,
     serve,
+    shell,
     task,
     token,
     volume,
@@ -100,6 +101,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(secret)
     cli.register(token)
     cli.register(worker)
+    cli.register(shell)
 
     if check_config:
         cli.check_config()

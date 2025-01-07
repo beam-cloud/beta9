@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN <<EOT
 echo 'Acquire::ForceIPv4 "true";' | tee /etc/apt/apt.conf.d/1000-force-ipv4-transport
 apt-get update
-apt-get install -y software-properties-common curl git gcc python3-dev bzip2
+apt-get install -y software-properties-common curl git gcc python3-dev bzip2 openssh-server
 add-apt-repository ppa:deadsnakes/ppa
 apt-get update
 EOT

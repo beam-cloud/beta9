@@ -22,6 +22,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	bot "github.com/beam-cloud/beta9/pkg/abstractions/experimental/bot"
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
+	_shell "github.com/beam-cloud/beta9/pkg/abstractions/shell"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
@@ -376,6 +377,23 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterBotServiceServer(g.grpcServer, botService)
+
+	// Register shell service
+	ss, err := _shell.NewSSHShellService(g.ctx, _shell.ShellServiceOpts{
+		Config:        g.Config,
+		RedisClient:   g.RedisClient,
+		Scheduler:     g.Scheduler,
+		BackendRepo:   g.BackendRepo,
+		WorkspaceRepo: g.WorkspaceRepo,
+		ContainerRepo: g.ContainerRepo,
+		Tailscale:     g.Tailscale,
+		EventRepo:     g.EventRepo,
+		RouteGroup:    g.rootRouteGroup,
+	})
+	if err != nil {
+		return err
+	}
+	pb.RegisterShellServiceServer(g.grpcServer, ss)
 
 	// Register scheduler
 	s, err := scheduler.NewSchedulerService(g.Scheduler)

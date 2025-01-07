@@ -30,7 +30,9 @@
 				"CAP_FOWNER",
 				"CAP_SETGID",
 				"CAP_SETUID",
-				"CAP_SETFCAP"
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT",
+				"CAP_MKNOD"
 			],
 			"effective": [
 				"CAP_AUDIT_WRITE",
@@ -42,7 +44,9 @@
 				"CAP_FOWNER",
 				"CAP_SETGID",
 				"CAP_SETUID",
-				"CAP_SETFCAP"
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT",
+				"CAP_MKNOD"
 			],
 			"permitted": [
 				"CAP_AUDIT_WRITE",
@@ -54,7 +58,9 @@
 				"CAP_FOWNER",
 				"CAP_SETGID",
 				"CAP_SETUID",
-				"CAP_SETFCAP"
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT",
+				"CAP_MKNOD"
 			],
 			"ambient": [
 				"CAP_AUDIT_WRITE",
@@ -66,7 +72,9 @@
 				"CAP_FOWNER",
 				"CAP_SETGID",
 				"CAP_SETUID",
-				"CAP_SETFCAP"
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT",
+				"CAP_MKNOD"
 			]
 		},
 		"rlimits": [],
@@ -412,6 +420,18 @@
 			"type": "bind",
 			"source": "/workspace/sdk",
 			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+		},
+		{
+			"destination": "/run/sshd",
+			"type": "tmpfs",
+			"source": "tmpfs",
+			"options": [
+				"nosuid",
+				"nodev",
+				"noexec",
+				"mode=0755",
+				"size=65536k"
+			]
 		}
 	],
 	"hooks": {

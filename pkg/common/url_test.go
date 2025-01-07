@@ -77,6 +77,15 @@ func TestBuildServeURL(t *testing.T) {
 			expectedUrl: "http://e9c29586-c465-4a67-9c9b-25293d1ce77b.app.example.com",
 		},
 		{
+			name: "returns host-based URL",
+			stub: &types.StubWithRelated{Stub: types.Stub{
+				ExternalId: "fbedeff-c465-4a67-9c9b-25293d1ce77b",
+				Type:       types.StubType(types.StubTypeShell),
+			}},
+			invokeType:  InvokeUrlTypeHost,
+			expectedUrl: "http://fbedeff-c465-4a67-9c9b-25293d1ce77b.app.example.com",
+		},
+		{
 			name: "returns path-based URL",
 			stub: &types.StubWithRelated{Stub: types.Stub{
 				ExternalId: "e9c29586-c465-4a67-9c9b-25293d1ce77b",
@@ -89,7 +98,7 @@ func TestBuildServeURL(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := BuildServeURL(externalUrl, test.invokeType, test.stub)
+			got := BuildStubURL(externalUrl, test.invokeType, test.stub)
 			assert.Equal(t, test.expectedUrl, got)
 		})
 	}

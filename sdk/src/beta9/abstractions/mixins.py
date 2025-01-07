@@ -1,16 +1,20 @@
+import urllib.parse
 from typing import Any, Callable, ClassVar, Optional
 
 from .. import terminal
-from ..clients.gateway import DeployStubRequest, DeployStubResponse
+from ..abstractions.base.runner import SHELL_STUB_TYPE
+from ..channel import with_grpc_error_handling
+from ..clients.gateway import DeployStubRequest, DeployStubResponse, GetUrlRequest, GetUrlResponse
+from ..clients.shell import CreateShellRequest
 from ..config import ConfigContext
 from .base.runner import RunnerAbstraction
+from .shell import SSHShell
 
 
 class DeployableMixin:
     func: Callable
     parent: RunnerAbstraction
     deployment_id: Optional[str] = None
-
     deployment_stub_type: ClassVar[str]
 
     def _validate(self):
@@ -60,3 +64,51 @@ class DeployableMixin:
                 self.parent.print_invocation_snippet(**invocation_details_options)
 
         return deploy_response.ok
+
+    @with_grpc_error_handling
+    def shell(self, url_type: str = ""):
+        stub_type = SHELL_STUB_TYPE
+
+        if not self.parent.prepare_runtime(
+            func=self.func, stub_type=stub_type, force_create_stub=True
+        ):
+            return False
+
+        # First, spin up the shell container
+        with terminal.progress("Creating shell..."):
+            create_shell_response = self.parent.shell_stub.create_shell(
+                CreateShellRequest(
+                    stub_id=self.parent.stub_id,
+                )
+            )
+            if not create_shell_response.ok:
+                return terminal.error(f"Failed to create shell: {create_shell_response.err_msg} ❌")
+
+        # Then, we can retrieve the URL and issue a CONNECT request / establish a tunnel
+        res: GetUrlResponse = self.parent.gateway_stub.get_url(
+            GetUrlRequest(
+                stub_id=self.parent.stub_id,
+                deployment_id=getattr(self, "deployment_id", ""),
+                url_type=url_type,
+            )
+        )
+        if not res.ok:
+            return terminal.error(f"Failed to get shell connection URL: {res.err_msg} ❌")
+
+        # Parse the URL to extract the container_id
+        parsed_url = urllib.parse.urlparse(res.url)
+        proxy_host, proxy_port = parsed_url.hostname, parsed_url.port
+        container_id = create_shell_response.container_id
+        ssh_token = create_shell_response.token
+
+        with SSHShell(
+            host=proxy_host,
+            port=proxy_port,
+            path=parsed_url.path,
+            container_id=container_id,
+            stub_id=self.parent.stub_id,
+            auth_token=self.parent.config_context.token,
+            username="root",
+            password=ssh_token,
+        ) as shell:
+            shell.start()
