@@ -213,6 +213,12 @@ func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) err
 		return fmt.Errorf("failed to delete container addr <%v>: %w", addrKey, err)
 	}
 
+	workerAddrKey := common.RedisKeys.SchedulerWorkerAddress(containerId)
+	err = cr.rdb.Del(context.TODO(), workerAddrKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to delete worker addr <%v>: %w", workerAddrKey, err)
+	}
+
 	return nil
 }
 

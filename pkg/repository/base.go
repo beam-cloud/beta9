@@ -50,8 +50,8 @@ type ContainerRepository interface {
 	UpdateAssignedContainerGPU(string, string) error
 	DeleteContainerState(containerId string) error
 	SetWorkerAddress(containerId string, addr string) error
-	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
+	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
