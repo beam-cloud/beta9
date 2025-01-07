@@ -1,15 +1,16 @@
 import json
 import os
+import signal
 import time
 import traceback
-from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import dataclass
+from multiprocessing import Process
 from typing import Any, Optional
 
 import cloudpickle
 import grpc
 
-from ..channel import Channel, handle_error, pass_channel
+from ..channel import Channel, get_channel, handle_error, pass_channel
 from ..clients.function import (
     FunctionGetArgsRequest,
     FunctionMonitorRequest,
@@ -23,6 +24,7 @@ from ..clients.gateway import (
     StartTaskRequest,
     StartTaskResponse,
 )
+from ..config import get_config_context
 from ..exceptions import (
     FunctionSetResultError,
     InvalidFunctionArgumentsError,
@@ -61,78 +63,97 @@ def _load_args(args: bytes) -> dict:
 
 def _monitor_task(
     *,
-    context: FunctionContext,
-    stub_id: str,
-    task_id: str,
-    container_id: str,
-    function_stub: FunctionServiceStub,
-    gateway_stub: GatewayServiceStub,
+    function_context: FunctionContext,
+    env: dict,
 ) -> None:
-    initial_backoff = 5
-    max_retries = 5
-    backoff = initial_backoff
-    retry = 0
+    os.environ.update(env)
 
-    while retry <= max_retries:
-        try:
-            for response in function_stub.function_monitor(
-                FunctionMonitorRequest(
-                    task_id=task_id,
-                    stub_id=stub_id,
-                    container_id=container_id,
-                )
-            ):
-                response: FunctionMonitorResponse
-                if response.cancelled:
-                    print(f"Task cancelled: {task_id}")
+    config = get_config_context()
+    parent_pid = os.getppid()
 
-                    send_callback(
-                        gateway_stub=gateway_stub,
-                        context=context,
-                        payload={},
-                        task_status=TaskStatus.Cancelled,
+    with get_channel(config) as channel:
+        function_stub = FunctionServiceStub(channel)
+        gateway_stub = GatewayServiceStub(channel)
+
+        initial_backoff = 5
+        max_retries = 5
+        backoff = initial_backoff
+        retry = 0
+
+        while retry <= max_retries:
+            try:
+                for response in function_stub.function_monitor(
+                    FunctionMonitorRequest(
+                        task_id=function_context.task_id,
+                        stub_id=function_context.stub_id,
+                        container_id=function_context.container_id,
                     )
-                    os._exit(TaskExitCode.Cancelled)
+                ):
+                    response: FunctionMonitorResponse
+                    if response.cancelled:
+                        print(f"Task cancelled: {function_context.task_id}")
 
-                if response.complete:
+                        send_callback(
+                            gateway_stub=gateway_stub,
+                            context=function_context,
+                            payload={},
+                            task_status=TaskStatus.Cancelled,
+                        )
+
+                        os.kill(parent_pid, signal.SIGTERM)
+                        return
+
+                    if response.complete:
+                        return
+
+                    if response.timed_out:
+                        print(f"Task timed out: {function_context.task_id}")
+
+                        send_callback(
+                            gateway_stub=gateway_stub,
+                            context=function_context,
+                            payload={},
+                            task_status=TaskStatus.Timeout,
+                        )
+
+                        os.kill(parent_pid, signal.SIGTERM)
+                        return
+
+                    retry = 0
+                    backoff = initial_backoff
+
+                # If successful, it means the stream is finished.
+                # Break out of the retry loop
+                break
+
+            except (
+                grpc.RpcError,
+                ConnectionRefusedError,
+            ):
+                if retry == max_retries:
+                    print("Lost connection to task monitor, exiting")
+
+                    os.kill(parent_pid, signal.SIGABRT)
                     return
 
-                if response.timed_out:
-                    print(f"Task timed out: {task_id}")
+                time.sleep(backoff)
+                backoff *= 2
+                retry += 1
 
-                    send_callback(
-                        gateway_stub=gateway_stub,
-                        context=context,
-                        payload={},
-                        task_status=TaskStatus.Timeout,
-                    )
-                    os._exit(TaskExitCode.Timeout)
+            except BaseException:
+                print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
+                os.kill(parent_pid, signal.SIGABRT)
+                return
 
-                retry = 0
-                backoff = initial_backoff
 
-            # If successful, it means the stream is finished.
-            # Break out of the retry loop
-            break
+def _handle_sigterm(*args: Any, **kwargs: Any) -> None:
+    print("SIGTERM received")
+    os._exit(TaskExitCode.Success)
 
-        except (
-            grpc.RpcError,
-            ConnectionRefusedError,
-        ):
-            if retry == max_retries:
-                print("Lost connection to task monitor, exiting")
-                os._exit(0)
 
-            time.sleep(backoff)
-            backoff *= 2
-            retry += 1
-
-        except (CancelledError, ValueError):
-            return
-
-        except BaseException:
-            print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
-            os._exit(0)
+def _handle_sigabort(*args: Any, **kwargs: Any) -> None:
+    print("SIGABORT received")
+    os._exit(TaskExitCode.Error)
 
 
 @json_output_interceptor(task_id=config.task_id)
@@ -157,36 +178,41 @@ def main(channel: Channel):
 
     context = FunctionContext.new(config=config, task_id=task_id)
 
-    # Start monitoring the task
-    thread_pool = ThreadPoolExecutor()
-    thread_pool.submit(
-        _monitor_task,
-        context=context,
-        stub_id=config.stub_id,
-        task_id=task_id,
-        container_id=container_id,
-        function_stub=function_stub,
-        gateway_stub=gateway_stub,
+    # Start monitor_task process to send health checks
+    env = os.environ.copy()
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+    signal.signal(signal.SIGABRT, _handle_sigabort)
+
+    monitor_process = Process(
+        target=_monitor_task,
+        kwargs={
+            "function_context": context,
+            "env": env,
+        },
+        daemon=True,
     )
+    monitor_process.start()
 
-    # Invoke the function and handle its result
-    result = invoke_function(function_stub, context, task_id)
-    if result.exception:
-        thread_pool.shutdown(wait=False)
-        handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
-        raise result.exception
+    try:
+        # Invoke the function and handle its result
+        result = invoke_function(function_stub, context, task_id)
+        if result.exception:
+            handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
+            raise result.exception
 
-    # End the task and send callback
-    complete_task(
-        gateway_stub,
-        result,
-        task_id,
-        container_id,
-        container_hostname,
-        start_time,
-    )
-
-    thread_pool.shutdown(wait=False)
+        # End the task and send callback
+        complete_task(
+            gateway_stub,
+            result,
+            task_id,
+            container_id,
+            container_hostname,
+            start_time,
+        )
+    finally:
+        monitor_process.terminate()
+        monitor_process.join(timeout=1)
 
 
 def start_task(
