@@ -174,14 +174,37 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
-		// If any tasks are currently running, skip this container
-		tasksRunning, err := i.Rdb.Keys(context.TODO(), Keys.taskQueueTaskRunningLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId, "*"))
+		containerTasks, err := i.Rdb.SMembers(context.TODO(), Keys.taskQueueTaskRunningLockIndex(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Result()
 		if err != nil && err != redis.Nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting task running locks for container")
 			continue
 		}
 
-		if len(tasksRunning) > 0 {
+		if len(containerTasks) == 0 {
+			keys = append(keys, container.ContainerId)
+			continue
+		}
+
+		tasksRunning := false
+		for _, taskId := range containerTasks {
+			_, err = i.Rdb.Get(context.TODO(), Keys.taskQueueTaskRunningLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId, taskId)).Result()
+			if err != nil && err != redis.Nil {
+				log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting task running locks for container")
+				continue
+			} else if err == redis.Nil {
+				// If the task lock key is missing (ttl'd or task completed), remove it from the index
+				// This is mostly a housekeeping step since in normal operation the task lock key will be removed
+				// when the task is completed
+				i.Rdb.SRem(context.TODO(), Keys.taskQueueTaskRunningLockIndex(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId), taskId)
+				continue
+			}
+
+			tasksRunning = true
+			break
+		}
+
+		// If any tasks are currently running, skip this container
+		if tasksRunning {
 			continue
 		}
 
