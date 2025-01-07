@@ -41,7 +41,7 @@ type ImageServiceOpts struct {
 	RedisClient   *common.RedisClient
 }
 
-const containerKeepAliveIntervalS int = 30
+const buildContainerKeepAliveIntervalS int = 30
 const imageContainerTtlS int = 60
 
 func NewRuncImageService(
@@ -73,7 +73,7 @@ func NewRuncImageService(
 	}
 
 	go is.monitorImageContainers(ctx)
-	go is.keyEventManager.ListenForPattern(ctx, Keys.imageContainerTTL("*"), is.keyEventChan)
+	go is.keyEventManager.ListenForPattern(ctx, Keys.imageBuildContainerTTL("*"), is.keyEventChan)
 	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState("*"), is.keyEventChan)
 
 	return &is, nil
@@ -215,7 +215,7 @@ func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
 				if strings.Contains(event.Key, common.RedisKeys.SchedulerContainerState("")) {
 					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), common.RedisKeys.SchedulerContainerState(""))
 
-					if is.rdb.Exists(ctx, Keys.imageContainerTTL(containerId)).Val() == 0 {
+					if is.rdb.Exists(ctx, Keys.imageBuildContainerTTL(containerId)).Val() == 0 {
 						is.builder.scheduler.Stop(&types.StopContainerArgs{
 							ContainerId: containerId,
 							Force:       true,
@@ -223,7 +223,7 @@ func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
 					}
 				}
 			case common.KeyOperationExpired:
-				containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), Keys.imageContainerTTL(""))
+				containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), Keys.imageBuildContainerTTL(""))
 				is.builder.scheduler.Stop(&types.StopContainerArgs{
 					ContainerId: containerId,
 					Force:       true,
@@ -247,13 +247,13 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 }
 
 var (
-	imageContainerTTL string = "image:container_ttl:%s"
+	imageBuildContainerTTL string = "image:build_container_ttl:%s"
 )
 
 var Keys = &keys{}
 
 type keys struct{}
 
-func (k *keys) imageContainerTTL(containerId string) string {
-	return fmt.Sprintf(imageContainerTTL, containerId)
+func (k *keys) imageBuildContainerTTL(containerId string) string {
+	return fmt.Sprintf(imageBuildContainerTTL, containerId)
 }

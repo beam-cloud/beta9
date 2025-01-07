@@ -287,7 +287,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	err = b.rdb.Set(ctx, Keys.imageContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
+	err = b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
@@ -450,7 +450,7 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 }
 
 func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
-	ticker := time.NewTicker(time.Duration(containerKeepAliveIntervalS) * time.Second)
+	ticker := time.NewTicker(time.Duration(buildContainerKeepAliveIntervalS) * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -460,7 +460,7 @@ func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan
 		case <-done:
 			return
 		case <-ticker.C:
-			b.rdb.Set(ctx, Keys.imageContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
+			b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
 		}
 	}
 }
