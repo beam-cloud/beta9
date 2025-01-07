@@ -30,7 +30,7 @@ const (
 	defaultImageBuildGracefulShutdownS               = 5 * time.Second
 	defaultBuildContainerCpu           int64         = 1000
 	defaultBuildContainerMemory        int64         = 1024
-	defaultContainerSpinupTimeout      time.Duration = 180 * time.Second
+	defaultContainerSpinupTimeout      time.Duration = 360 * time.Second
 
 	pipCommandType        string = "pip"
 	shellCommandType      string = "shell"
@@ -332,8 +332,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 
 		if time.Since(start) > containerSpinupTimeout {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Timeout: container not running after 180 seconds.\n"}
-			return errors.New("timeout: container not running after 180 seconds")
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Timeout: container not running after %d seconds.\n", containerSpinupTimeout)}
+			return errors.New(fmt.Sprintf("timeout: container not running after %d seconds", containerSpinupTimeout))
 		}
 
 		time.Sleep(100 * time.Millisecond)

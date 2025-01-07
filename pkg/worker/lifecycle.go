@@ -246,7 +246,7 @@ func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId s
 	case request.BuildOptions.SourceImage != nil:
 		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.BuildOptions.SourceImage)
 
-		if err := s.imageClient.PullAndArchiveImage(context.TODO(), *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
+		if err := s.imageClient.PullAndArchiveImage(context.TODO(), outputLogger, *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
 			return err
 		}
 	}

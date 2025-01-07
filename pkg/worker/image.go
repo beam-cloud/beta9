@@ -337,12 +337,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	return nil
 }
 
-func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage string, imageId string, creds string) error {
+func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, sourceImage string, imageId string, creds string) error {
 	baseImage, err := image.ExtractImageNameAndTag(sourceImage)
 	if err != nil {
 		return err
 	}
 
+	outputLogger.Info("Inspecting image name and verifying architecture...\n")
 	if err := c.InspectAndVerifyImage(ctx, sourceImage, creds); err != nil {
 		return err
 	}
@@ -363,6 +364,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 	cmd.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
 	cmd.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
 
+	outputLogger.Info("Copying image...\n")
 	ec, err := c.startCommand(cmd)
 	if err != nil {
 		return err
@@ -373,6 +375,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 		return fmt.Errorf("unable to copy image: %v", cmd.String())
 	}
 
+	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := filepath.Join(baseTmpBundlePath, imageId)
 	err = c.unpack(baseImage.Repo, baseImage.Tag, tmpBundlePath)
 	if err != nil {
@@ -382,6 +385,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 	defer os.RemoveAll(baseTmpBundlePath)
 	defer os.RemoveAll(copyDir)
 
+	outputLogger.Info("Archiving custom base image...\n")
 	return c.Archive(ctx, tmpBundlePath, imageId, nil)
 }
 
