@@ -350,13 +350,16 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 	baseTmpBundlePath := filepath.Join(c.imageBundlePath, baseImage.Repo)
 	os.MkdirAll(baseTmpBundlePath, 0755)
 
+	copyDir := filepath.Join("/var/tmp", baseImage.Repo)
+	os.MkdirAll(copyDir, 0755)
+
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
 	args = append(args, c.copyArgs(creds)...)
 	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
 	cmd.Env = os.Environ()
-	cmd.Dir = c.imageBundlePath
+	cmd.Dir = "/var/tmp"
 	cmd.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
 	cmd.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
 
@@ -377,6 +380,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, sourceImage strin
 	}
 
 	defer os.RemoveAll(baseTmpBundlePath)
+	defer os.RemoveAll(copyDir)
 
 	return c.Archive(ctx, tmpBundlePath, imageId, nil)
 }
@@ -440,7 +444,7 @@ func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 	unpackOptions := umociUnpackOptions()
 
 	// Get a reference to the CAS.
-	baseImagePath := fmt.Sprintf("%s/%s", c.imageBundlePath, baseImageName)
+	baseImagePath := "/var/tmp/" + baseImageName
 	engine, err := dir.Open(baseImagePath)
 	if err != nil {
 		return errors.Wrap(err, "open CAS")
