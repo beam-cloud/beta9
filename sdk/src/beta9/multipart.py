@@ -8,6 +8,7 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from enum import Enum
 from functools import wraps
 from multiprocessing import Manager
 from os import PathLike
@@ -212,10 +213,11 @@ def _upload_part(file_path: Path, file_part: FileUploadPart, queue: Queue) -> Co
             },
         )
         response.raise_for_status()
+        etag = response.headers["ETag"].replace('"', "")
     except Exception as e:
         raise UploadPartError(file_part.number, str(e))
 
-    return CompletedPart(number=file_part.number, etag=response.headers["ETag"])
+    return CompletedPart(number=file_part.number, etag=etag)
 
 
 def _get_file_chunk(file_path: Path, start: int, end: int) -> bytes:
@@ -479,52 +481,135 @@ def download(
 class RemotePath:
     scheme: str
     volume_name: str
-    volume_key: str
+    volume_path: str
+    is_dir: Optional[bool] = None
 
     def __str__(self) -> str:
-        return f"{self.scheme}://{self.volume_name}/{self.volume_key}"
+        return f"{self.scheme}://{self.volume_name}/{self.volume_path}"
 
     def __truediv__(self, other: Union["RemotePath", str]) -> "RemotePath":
         path = ""
         if isinstance(other, str):
             path = other
         elif isinstance(other, RemotePath):
-            path = other.volume_key
+            path = other.volume_path
 
-        return RemotePath(self.scheme, self.volume_name, os.path.join(self.volume_key, path))
+        return RemotePath(
+            self.scheme,
+            self.volume_name,
+            os.path.join(self.volume_path, path),
+            other.is_dir if isinstance(other, RemotePath) else self.is_dir,
+        )
 
     @property
-    def uri(self) -> str:
-        return self.__str__()
+    def name(self) -> str:
+        return os.path.basename(self.volume_path)
 
     @property
     def path(self) -> str:
-        return os.path.join(self.volume_name, self.volume_key)
+        return os.path.join(self.volume_name, self.volume_path)
 
-    def is_dir(self) -> bool:
-        return not self.volume_key or self.volume_key.endswith("/")
 
-    def is_file(self) -> bool:
-        return not self.is_dir()
+class TransferError(Exception):
+    """Base exception for transfer operations"""
+
+
+class ValidationError(TransferError):
+    """Raised when transfer validation fails"""
+
+
+class SourceError(TransferError):
+    """Raised when source path is invalid"""
+
+
+class DestinationError(TransferError):
+    """Raised when destination path is invalid"""
+
+
+class TransferType(Enum):
+    UPLOAD = "upload"
+    DOWNLOAD = "download"
 
 
 class FileTransfer:
-    def __init__(self, service: VolumeServiceStub):
+    def __init__(
+        self,
+        service: VolumeServiceStub,
+        source: Union[Path, RemotePath],
+        destination: Union[Path, RemotePath],
+    ):
         self.service = service
+        self.source = source
+        self.destination = destination
+        self._remote_volume_exists: Optional[bool] = None
 
-    def validate_paths(
-        self, source: Union[Path, RemotePath], destination: Union[Path, RemotePath]
-    ) -> None:
-        if isinstance(source, Path) and isinstance(destination, Path):
-            raise ValueError("Source and destination cannot both be local paths.")
+    def _determine_transfer_type(
+        self,
+        source: Union[Path, RemotePath],
+        destination: Union[Path, RemotePath],
+    ) -> TransferType:
+        if isinstance(source, Path) and isinstance(destination, RemotePath):
+            return TransferType.UPLOAD
+        if isinstance(source, RemotePath) and isinstance(destination, Path):
+            return TransferType.DOWNLOAD
+        raise ValidationError("Invalid source and destination types.")
 
-    def get_source_files(self, source: Union[Path, RemotePath]) -> List[Path]:
+    def _get_upload_paths(self, source: Path, destination: RemotePath) -> str:
+        volume_path = ""
+
+        if isinstance(self.source, Path):
+            if self.source.is_dir():
+                if "." in destination.name:
+                    raise SourceError(
+                        "Cannot upload a directory as a file. Remove the file extension on the destination."
+                    )
+
+                # TODO: Fix this
+                subpath = str(source.relative_to(source.parent))
+                try:
+                    # if not destination.volume_path:
+                    #     subpath = str(source)
+                    # else:
+                    subpath = str(source.relative_to(destination.volume_path))
+                except ValueError:
+                    pass
+                    # subpath = (
+                    #     os.path.join(*source.parts[1:]) if len(source.parts) > 1 else str(source)
+                    # )
+
+                volume_path = (destination / str(subpath)).volume_path
+            else:
+                if "." in destination.name:
+                    volume_path = destination.volume_path
+                else:
+                    volume_path = (destination / source.name).volume_path
+        else:
+            raise SourceError("Invalid source path.")
+
+        return volume_path
+
+    def _get_download_path(self, source: RemotePath) -> Path:
+        local_path: Optional[Path] = None
+
+        if isinstance(self.destination, Path):
+            if not self.destination.suffix:
+                local_path = self.destination / source.name
+                local_path.parent.mkdir(parents=True, exist_ok=True)
+            else:
+                local_path = self.destination
+        else:
+            raise DestinationError("Invalid destination path.")
+
+        return local_path
+
+    def get_source_files(self) -> List[Union[Path, RemotePath]]:
+        source = self.source
         sources = []
 
         # Local source
         if isinstance(source, Path):
             if not source.exists():
-                raise ValueError(f"Local source path '{source}' does not exist.")
+                raise SourceError(f"Local source path '{source}' does not exist.")
 
             if source.is_file():
                 sources.append(source)
@@ -536,13 +621,13 @@ class FileTransfer:
         # Remote source
         res = self.service.list_path(ListPathRequest(path=source.path))
         if not res.ok:
-            raise ValueError(f"{source} ({res.err_msg})")
+            raise SourceError(f"{source} ({res.err_msg})")
 
         sources.extend(
-            RemotePath(source.scheme, source.volume_name, p.path) for p in res.path_infos
+            RemotePath(source.scheme, source.volume_name, p.path, is_dir=p.is_dir)
+            for p in res.path_infos
+            if not p.is_dir
         )
-        if not sources:
-            raise ValueError("No files to copy.")
 
         return sources
 
@@ -550,20 +635,23 @@ class FileTransfer:
         # Local destination
         if isinstance(destination, Path):
             if destination.exists() and destination.is_file():
-                raise ValueError(f"Destination file '{destination}' exists.")
-
+                pass
+                # raise DestinationError(f"Destination file '{destination}' exists.")
             if not destination.parent.exists():
                 destination.parent.mkdir(parents=True, exist_ok=True)
-
             return
 
         # Remote destination
+        if self._remote_volume_exists is not None:
+            return
+
         res = self.service.list_volumes(ListVolumesRequest())
         if not res.ok:
-            raise ValueError(res.err_msg)
-
+            raise DestinationError(res.err_msg)
         if not any(v.name == destination.volume_name for v in res.volumes):
-            raise ValueError(f"Volume '{destination.volume_name}' does not exist.")
+            raise DestinationError(f"Volume '{destination.volume_name}' does not exist.")
+
+        self._remote_volume_exists = True
 
     def copy(
         self,
@@ -572,60 +660,62 @@ class FileTransfer:
         progress_callback: Optional[ProgressCallback] = None,
         completion_callback: Optional[CompletionCallback] = None,
     ) -> None:
-        # Local source, remote destination
-        if isinstance(source, Path) and isinstance(destination, RemotePath):
-            volume_name = destination.volume_name
-            volume_path = (destination / source.name).volume_key
+        """
+        Copy files between local and remote volumes.
+        """
+        self.prepare_destination(destination)
 
+        transfer_type = self._determine_transfer_type(source, destination)
+
+        if transfer_type == TransferType.UPLOAD:
+            volume_path = self._get_upload_paths(source, destination)  # type: ignore
             upload(
                 self.service,
-                source,
-                volume_name,
-                volume_path,
+                file_path=source,  # type: ignore
+                volume_name=destination.volume_name,  # type: ignore
+                volume_path=volume_path,
                 progress_callback=progress_callback,
                 completion_callback=completion_callback,
             )
 
-        # Remote source, local destination
-        if isinstance(source, RemotePath) and isinstance(destination, Path):
-            volume_name = source.volume_name
-            volume_path = source.volume_key
-            local_path = destination / volume_path
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-
+        elif transfer_type == TransferType.DOWNLOAD:
+            local_path = self._get_download_path(source)  # type: ignore
             download(
                 service=self.service,
-                volume_name=volume_name,
-                volume_path=volume_path,
+                volume_name=source.volume_name,  # type: ignore
+                volume_path=source.volume_path,  # type: ignore
                 file_path=local_path,
                 callback=progress_callback,
             )
 
-        raise ValueError("Invalid source and destination types.")
-
 
 class VolumePath(click.ParamType):
     """
-    The VolumePath type converts a string into a Path or RemotePath object.
+    VolumePath Click type converts a string into a Path or RemotePath object.
     """
 
     name = "volume_path"
 
-    def __init__(self):
+    def __init__(self, version_option_name: str = "version") -> None:
         from .config import get_settings
 
         self.schemes = [
             get_settings().name.lower(),
         ]
 
-        super().__init__()
+        self.version_option_name = version_option_name
 
     def convert(
         self,
         value: str,
         param: Optional[click.Parameter] = None,
         ctx: Optional[click.Context] = None,
-    ) -> Union[Path, RemotePath]:
+    ) -> Union[str, Path, RemotePath]:
+        # maintain backward compatibility
+        if version := ctx.params.get(self.version_option_name):
+            if version == "v1":
+                return value
+
         if "://" in value:
             return self._parse_remote_path(value)
         return Path(value)

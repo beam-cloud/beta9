@@ -13,13 +13,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const (
 	presignedUrlDefaultExpires = 300    // 5 minutes
 	presignedUrlMaxExpires     = 604800 // 1 week
+	baseVolumeObjectPath       = "volumes"
 )
 
 func (s *GlobalVolumeService) getS3Client() *s3.Client {
@@ -72,7 +72,7 @@ func (s *GlobalVolumeService) CreatePresignedURL(ctx context.Context, in *pb.Cre
 
 	var (
 		req           *v4.PresignedHTTPRequest
-		key           = joinCleanPath(types.ContainerVolumePath, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)
+		key           = joinCleanPath(baseVolumeObjectPath, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)
 		presignClient = s3.NewPresignClient(s.getS3Client())
 		options       = []func(*s3.PresignOptions){
 			s3.WithPresignExpires(time.Duration(in.Expires) * time.Second),
@@ -148,7 +148,7 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 
 	response, err := s3Client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 		Bucket:  aws.String(s.config.BucketName),
-		Key:     aws.String(joinCleanPath(types.ContainerVolumePath, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)),
+		Key:     aws.String(joinCleanPath(baseVolumeObjectPath, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)),
 		Expires: aws.Time(time.Now().Add(time.Minute)),
 	})
 	if err != nil {
@@ -215,7 +215,7 @@ func (s *GlobalVolumeService) CompleteMultipartUpload(ctx context.Context, in *p
 	s3Client := s.getS3Client()
 	_, err = s3Client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(s.config.BucketName),
-		Key:      aws.String(joinCleanPath(types.ContainerVolumePath, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)),
+		Key:      aws.String(joinCleanPath(baseVolumeObjectPath, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)),
 		UploadId: aws.String(in.UploadId),
 		MultipartUpload: &s3Types.CompletedMultipartUpload{
 			Parts: func() []s3Types.CompletedPart {
@@ -258,7 +258,7 @@ func (s *GlobalVolumeService) AbortMultipartUpload(ctx context.Context, in *pb.A
 
 	_, err = s3Client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
 		Bucket:   aws.String(s.config.BucketName),
-		Key:      aws.String(joinCleanPath(types.ContainerVolumePath, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)),
+		Key:      aws.String(joinCleanPath(baseVolumeObjectPath, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)),
 		UploadId: aws.String(in.UploadId),
 	})
 	if err != nil {
