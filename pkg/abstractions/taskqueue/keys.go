@@ -4,15 +4,16 @@ import "fmt"
 
 // Redis keys
 var (
-	taskQueueList                string = "taskqueue:%s:%s"
-	taskQueueServeLock           string = "taskqueue:%s:%s:serve_lock"
-	taskQueueInstanceLock        string = "taskqueue:%s:%s:instance_lock"
-	taskQueueTaskDuration        string = "taskqueue:%s:%s:task_duration"
-	taskQueueAverageTaskDuration string = "taskqueue:%s:%s:avg_task_duration"
-	taskQueueTaskHeartbeat       string = "taskqueue:%s:%s:task:heartbeat:%s"
-	taskQueueProcessingLock      string = "taskqueue:%s:%s:processing_lock:%s"
-	taskQueueKeepWarmLock        string = "taskqueue:%s:%s:keep_warm_lock:%s"
-	taskQueueTaskRunningLock     string = "taskqueue:%s:%s:task_running:%s:%s"
+	taskQueueList                 string = "taskqueue:%s:%s"
+	taskQueueServeLock            string = "taskqueue:%s:%s:serve_lock"
+	taskQueueInstanceLock         string = "taskqueue:%s:%s:instance_lock"
+	taskQueueTaskDuration         string = "taskqueue:%s:%s:task_duration"
+	taskQueueAverageTaskDuration  string = "taskqueue:%s:%s:avg_task_duration"
+	taskQueueTaskHeartbeat        string = "taskqueue:%s:%s:task:heartbeat:%s"
+	taskQueueProcessingLock       string = "taskqueue:%s:%s:processing_lock:%s"
+	taskQueueKeepWarmLock         string = "taskqueue:%s:%s:keep_warm_lock:%s"
+	taskQueueTaskRunningLockIndex string = "taskqueue:%s:%s:task_running:%s:index"
+	taskQueueTaskRunningLock      string = "taskqueue:%s:%s:task_running:%s:%s"
 )
 
 var Keys = &keys{}
@@ -41,6 +42,10 @@ func (k *keys) taskQueueTaskDuration(workspaceName, stubId string) string {
 
 func (k *keys) taskQueueAverageTaskDuration(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskQueueAverageTaskDuration, workspaceName, stubId)
+}
+
+func (k *keys) taskQueueTaskRunningLockIndex(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(taskQueueTaskRunningLockIndex, workspaceName, stubId, containerId)
 }
 
 func (k *keys) taskQueueTaskRunningLock(workspaceName, stubId, containerId, taskId string) string {
