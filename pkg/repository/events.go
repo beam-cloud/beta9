@@ -111,7 +111,8 @@ func (t *TCPEventClientRepo) PushContainerRequestedEvent(request *types.Containe
 		types.EventContainerStatusRequestedSchemaVersion,
 		types.EventContainerStatusRequestedSchema{
 			ContainerID: request.ContainerId,
-			Request:     *request,
+			Request:     sanitizeContainerRequest(request),
+			StubID:      request.StubId,
 			Status:      types.EventContainerLifecycleRequested,
 		},
 	)
@@ -124,7 +125,8 @@ func (t *TCPEventClientRepo) PushContainerScheduledEvent(containerID string, wor
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
-			Request:     *request,
+			Request:     sanitizeContainerRequest(request),
+			StubID:      request.StubId,
 			Status:      types.EventContainerLifecycleScheduled,
 		},
 	)
@@ -137,7 +139,8 @@ func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, worke
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
-			Request:     *request,
+			Request:     sanitizeContainerRequest(request),
+			StubID:      request.StubId,
 			Status:      types.EventContainerLifecycleStarted,
 		},
 	)
@@ -150,8 +153,22 @@ func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, worke
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
-			Request:     *request,
+			Request:     sanitizeContainerRequest(request),
+			StubID:      request.StubId,
 			Status:      types.EventContainerLifecycleStopped,
+		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushContainerOOMEvent(containerID string, workerID string, stubId string) {
+	t.pushEvent(
+		types.EventContainerLifecycle,
+		types.EventContainerLifecycleSchemaVersion,
+		types.EventContainerLifecycleSchema{
+			ContainerID: containerID,
+			WorkerID:    workerID,
+			StubID:      stubId,
+			Status:      types.EventContainerLifecycleOOM,
 		},
 	)
 }
@@ -294,4 +311,14 @@ func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId s
 			FailedContainers: failedContainers,
 		},
 	)
+}
+
+func sanitizeContainerRequest(request *types.ContainerRequest) types.ContainerRequest {
+	requestCopy := *request
+	requestCopy.Env = nil
+	requestCopy.EntryPoint = nil
+	requestCopy.Stub = types.StubWithRelated{}
+	requestCopy.Mounts = nil
+	requestCopy.PoolSelector = ""
+	return requestCopy
 }

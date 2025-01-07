@@ -43,3 +43,6 @@ protoc -I ./pkg/abstractions/experimental/signal/ --python_betterproto_beta9_out
 
 protoc -I ./pkg/abstractions/experimental/bot/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/experimental/bot/bot.proto
 protoc -I ./pkg/abstractions/experimental/bot/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/experimental/bot/bot.proto
+
+protoc -I ./pkg/abstractions/shell/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/shell/shell.proto
+protoc -I ./pkg/abstractions/shell/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/shell/shell.proto

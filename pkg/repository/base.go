@@ -50,8 +50,8 @@ type ContainerRepository interface {
 	UpdateAssignedContainerGPU(string, string) error
 	DeleteContainerState(containerId string) error
 	SetWorkerAddress(containerId string, addr string) error
-	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
+	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
@@ -177,6 +177,7 @@ type EventRepository interface {
 	PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest)
+	PushContainerOOMEvent(containerID string, workerID string, stubId string)
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)

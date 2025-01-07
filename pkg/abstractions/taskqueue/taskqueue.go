@@ -278,6 +278,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 
 			if t.Status.IsCompleted() {
 				instance.client.rdb.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, t.ExternalId))
+				instance.client.rdb.SRem(ctx, Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), t.ExternalId)
 				continue
 			}
 
@@ -298,6 +299,13 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 	task.ContainerId = in.ContainerId
 	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	task.Status = types.TaskStatusRunning
+
+	err = tq.rdb.SAdd(ctx, Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), task.ExternalId).Err()
+	if err != nil {
+		return &pb.TaskQueuePopResponse{
+			Ok: false,
+		}, nil
+	}
 
 	err = tq.rdb.SetEx(context.TODO(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, task.ExternalId), 1, time.Duration(defaultTaskRunningExpiration)*time.Second).Err()
 	if err != nil {
@@ -335,6 +343,13 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 				Ok: false,
 			}, nil
 		}
+	}
+
+	err = tq.rdb.SRem(ctx, Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), in.TaskId).Err()
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}, nil
 	}
 
 	err = tq.rdb.Del(ctx, Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, in.StubId, in.ContainerId, in.TaskId)).Err()

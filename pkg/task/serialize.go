@@ -1,23 +1,23 @@
 package task
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net/url"
 	"strconv"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/labstack/echo/v4"
 )
+
+var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 func SerializeHttpPayload(ctx echo.Context) (*types.TaskPayload, error) {
 	defer ctx.Request().Body.Close()
 
-	// Create a JSON decoder
 	decoder := json.NewDecoder(ctx.Request().Body)
 
-	// Decode the JSON directly from the reader
 	payload := map[string]interface{}{}
 	if err := decoder.Decode(&payload); err != nil {
 		if err != io.EOF {

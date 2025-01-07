@@ -145,6 +145,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 func (s *Worker) deleteContainer(containerId string, err error) {
 	s.containerInstances.Delete(containerId)
+
 	err = s.containerRepo.DeleteContainerState(containerId)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
@@ -603,8 +604,8 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	pid := state.Pid
 
 	// Start monitoring the container
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, containerId, outputLogger)          // Watch for OOM events
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)        // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, containerId, request.StubId, outputLogger) // Watch for OOM events
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
@@ -636,7 +637,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
 }
 
-func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputLogger *slog.Logger) {
+func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, stubId string, outputLogger *slog.Logger) {
 	var (
 		seenEvents = make(map[string]struct{})
 		ch         <-chan *runc.Event
@@ -692,6 +693,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, outputL
 
 			if event.Type == "oom" {
 				outputLogger.Error("A process in the container was killed due to out-of-memory conditions.")
+				s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, stubId)
 			}
 		}
 	}

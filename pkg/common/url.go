@@ -31,7 +31,7 @@ func BuildDeploymentURL(externalUrl, urlType string, stub *types.StubWithRelated
 	return fmt.Sprintf("%s://%s/%s/%s/v%d", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), deployment.Name, deployment.Version)
 }
 
-func BuildServeURL(externalUrl, urlType string, stub *types.StubWithRelated) string {
+func BuildStubURL(externalUrl, urlType string, stub *types.StubWithRelated) string {
 	parsedUrl, err := url.Parse(externalUrl)
 	if err != nil {
 		return ""
