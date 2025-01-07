@@ -41,7 +41,7 @@ type ImageServiceOpts struct {
 	RedisClient   *common.RedisClient
 }
 
-const buildContainerKeepAliveIntervalS int = 30
+const buildContainerKeepAliveIntervalS int = 10
 const imageContainerTtlS int = 60
 
 func NewRuncImageService(
