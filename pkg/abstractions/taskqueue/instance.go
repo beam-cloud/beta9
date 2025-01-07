@@ -186,6 +186,9 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 		}
 
 		tasksRunning := false
+
+		// Check if any tasks are currently running on this container
+		// We do this by checking for the presence of "taskQueueTaskRunningLock" keys
 		for _, taskId := range containerTasks {
 			_, err = i.Rdb.Get(context.TODO(), Keys.taskQueueTaskRunningLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId, taskId)).Result()
 			if err != nil && err != redis.Nil {
