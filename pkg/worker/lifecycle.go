@@ -145,6 +145,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 func (s *Worker) deleteContainer(containerId string, err error) {
 	s.containerInstances.Delete(containerId)
+
 	err = s.containerRepo.DeleteContainerState(containerId)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
