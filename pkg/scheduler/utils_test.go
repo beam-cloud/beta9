@@ -5,6 +5,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/tj/assert"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func TestParseCPU(t *testing.T) {
@@ -247,6 +248,45 @@ func TestParseGPUType(t *testing.T) {
 			}
 
 			assert.Equal(t, tt.wantVal, val)
+		})
+	}
+}
+
+func TestParseTmpSizeLimit(t *testing.T) {
+	tests := []struct {
+		name        string
+		poolLimit   string
+		globalLimit string
+		wantVal     resource.Quantity
+		wantErr     bool
+	}{
+		{
+			name:        "valid pool specific tmp size limit",
+			poolLimit:   "10Gi",
+			globalLimit: "",
+			wantVal:     resource.MustParse("10Gi"),
+			wantErr:     false,
+		},
+		{
+			name:        "valid global tmp size limit",
+			poolLimit:   "",
+			globalLimit: "10Gi",
+			wantVal:     resource.MustParse("10Gi"),
+			wantErr:     false,
+		},
+		{
+			name:        "invalid tmp size limit",
+			poolLimit:   "10Qi",
+			globalLimit: "",
+			wantVal:     resource.MustParse("30Gi"),
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseTmpSizeLimit(tt.poolLimit, tt.globalLimit)
+			assert.Equal(t, tt.wantVal, got)
 		})
 	}
 }

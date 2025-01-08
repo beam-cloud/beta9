@@ -223,6 +223,7 @@ type WorkerConfig struct {
 	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
 	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
 	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
+	TmpSizeLimit               string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
 }
 
 type PoolMode string
@@ -245,6 +246,7 @@ type WorkerPoolConfig struct {
 	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
 	UserData             string                            `key:"userData" json:"user_data"`
 	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
+	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 }
 
 type WorkerPoolJobSpecConfig struct {

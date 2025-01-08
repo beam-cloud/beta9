@@ -124,6 +124,7 @@ worker:
     build:
       mode: local
       requiresPoolSelector: true
+      tmpSizeLimit: 50Gi
       jobSpec:
         nodeSelector: {}
       poolSizing:
@@ -159,6 +160,7 @@ worker:
   imagePullSecrets: []
   namespace: beta9
   serviceAccountName: default
+  tmpSizeLimit: 30Gi
   # non-standard k8s job spec
   imagePVCName: beta9-images
   jobResourcesEnforced: false
