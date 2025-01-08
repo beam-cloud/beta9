@@ -67,11 +67,11 @@ UPLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_UPLOAD_CHUNK_SIZE", 4 * 1024 
 DOWNLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_DOWNLOAD_CHUNK_SIZE", 32 * 1024 * 1024)
 
 
-class ProgressCallback(Protocol):
+class ProgressCallbackType(Protocol):
     def __call__(self, total: int, advance: int) -> None: ...
 
 
-class CompletionCallback(Protocol):
+class CompletionCallbackType(Protocol):
     def __call__(self) -> ContextManager: ...
 
 
@@ -124,7 +124,10 @@ def retry(
 
 @contextmanager
 def _progress_updater(
-    file_size: int, queue: Queue, callback: Optional[ProgressCallback] = None, timeout: float = 1.0
+    file_size: int,
+    queue: Queue,
+    callback: Optional[ProgressCallbackType] = None,
+    timeout: float = 1.0,
 ) -> Generator[Thread, None, None]:
     """
     Calls a callback with the progress of a multipart upload or download.
@@ -229,8 +232,8 @@ def beta9_upload(
     service: VolumeServiceStub,
     file_path: Path,
     remote_path: "RemotePath",
-    progress_callback: Optional[ProgressCallback] = None,
-    completion_callback: Optional[CompletionCallback] = None,
+    progress_callback: Optional[ProgressCallbackType] = None,
+    completion_callback: Optional[CompletionCallbackType] = None,
     chunk_size: int = UPLOAD_CHUNK_SIZE,
 ):
     """
@@ -410,7 +413,7 @@ def beta9_download(
     service: VolumeServiceStub,
     remote_path: "RemotePath",
     file_path: Path,
-    callback: Optional[ProgressCallback] = None,
+    callback: Optional[ProgressCallbackType] = None,
     chunk_size: int = DOWNLOAD_CHUNK_SIZE,
 ) -> None:
     """
@@ -650,7 +653,7 @@ class Beta9Handler(RemoteHandler):
     def _setup_callbacks(
         self,
         task_name: Any,
-    ) -> Tuple[Optional[ProgressCallback], Optional[CompletionCallback]]:
+    ) -> Tuple[Optional[ProgressCallbackType], Optional[CompletionCallbackType]]:
         if self.progress is None:
             return None, None
 
