@@ -252,7 +252,12 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
 
-	tmpSizeLimit := resource.MustParse("50Gi")
+	tmpSizeLimit := resource.MustParse(wpc.config.Worker.TmpSizeLimit)
+	if wpc.workerPool.TmpSizeLimit != "" {
+		log.Info().Str("tmp_size_limit", wpc.workerPool.TmpSizeLimit).Msg("using custom tmp size limit")
+		tmpSizeLimit = resource.MustParse(wpc.workerPool.TmpSizeLimit)
+	}
+
 	volumes := []corev1.Volume{
 		{
 			Name: logVolumeName,
