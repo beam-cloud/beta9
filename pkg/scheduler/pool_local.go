@@ -252,7 +252,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
 
-	tmpSizeLimit := resource.MustParse("30Gi")
+	tmpSizeLimit := resource.MustParse("50Gi")
 	volumes := []corev1.Volume{
 		{
 			Name: logVolumeName,
