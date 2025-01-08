@@ -450,9 +450,18 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
 
-	tmpSizeLimit := resource.MustParse(wpc.config.Worker.TmpSizeLimit)
-	if wpc.workerPool.TmpSizeLimit != "" {
-		tmpSizeLimit = resource.MustParse(wpc.workerPool.TmpSizeLimit)
+	defaultLimit := resource.MustParse("30Gi")
+
+	// First try worker pool specific limit, then fall back to global config
+	limitToUse := wpc.workerPool.TmpSizeLimit
+	if limitToUse == "" {
+		limitToUse = wpc.config.Worker.TmpSizeLimit
+	}
+
+	tmpSizeLimit, err := resource.ParseQuantity(limitToUse)
+	if err != nil {
+		log.Error().Err(err).Str("attempted_limit", limitToUse).Msg("failed to parse tmp size limit, using default")
+		tmpSizeLimit = defaultLimit
 	}
 
 	return []corev1.Volume{
