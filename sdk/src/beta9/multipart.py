@@ -8,7 +8,6 @@ import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import ExitStack, contextmanager
-from dataclasses import dataclass
 from functools import wraps
 from multiprocessing import Manager
 from os import PathLike
@@ -476,18 +475,34 @@ def beta9_download(
         _merge_file_chunks(file_path, chunks)
 
 
-@dataclass
 class RemotePath:
     scheme: str
     volume_name: str
-    volume_path: str
     is_dir: Optional[bool] = None
+
+    def __init__(
+        self, scheme: str, volume_name: str, volume_path: str, is_dir: Optional[bool] = None
+    ):
+        self.scheme = scheme
+        self.volume_name = volume_name
+        self.volume_path = volume_path
+        self.is_dir = is_dir
+
+    @property
+    def volume_path(self) -> str:
+        return self._volume_path
+
+    @volume_path.setter
+    def volume_path(self, value: str) -> None:
+        self._volume_path = value.replace("//", "/")
 
     @classmethod
     def parse(cls, value: str) -> "RemotePath":
         scheme, volume_path = value.split("://", 1)
         try:
             volume_name, volume_path = volume_path.split("/", 1)
+            if not volume_path:
+                volume_path = "/"
         except ValueError:
             volume_name = volume_path
             volume_path = ""
@@ -591,8 +606,12 @@ class Beta9Handler(RemoteHandler):
         # Recursively upload directories
         if local_path.is_dir():
             for item in local_path.iterdir():
-                volume_path = f"{remote_path.volume_path}/{item.name}"
-                volume_path = f"{volume_path}".replace("//", "/").lstrip("/")
+                if remote_path.volume_path.endswith("/"):
+                    volume_path = f"{remote_path.volume_path}/{local_path.name}/{item.name}"
+                else:
+                    volume_path = f"{remote_path.volume_path}/{item.name}"
+
+                volume_path = volume_path.lstrip("/")
                 remote_subpath = RemotePath(
                     scheme=remote_path.scheme,
                     volume_name=remote_path.volume_name,
@@ -603,7 +622,7 @@ class Beta9Handler(RemoteHandler):
             # Adjust remote_path for single-file upload
             if remote_path.volume_path.endswith("/"):
                 volume_path = remote_path.volume_path.rstrip("/")
-                volume_path = f"{volume_path}/{local_path.name}".replace("//", "/")
+                volume_path = f"{volume_path}/{local_path.name}"
 
                 remote_path = RemotePath(
                     scheme=remote_path.scheme,
@@ -611,8 +630,7 @@ class Beta9Handler(RemoteHandler):
                     volume_path=volume_path,
                 )
             elif self.is_dir(remote_path):
-                volume_path = f"{remote_path.volume_path}/{local_path.name}"
-                volume_path = f"{volume_path}".replace("//", "/").lstrip("/")
+                volume_path = f"{remote_path.volume_path}/{local_path.name}".lstrip("/")
 
                 remote_path = RemotePath(
                     scheme=remote_path.scheme,

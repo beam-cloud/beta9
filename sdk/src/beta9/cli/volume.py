@@ -195,14 +195,14 @@ def read_with_progress(
       Examples:
 
         # Upload a file to a volume
+        {cli_name} cp file.txt {cli_name}://myvol/
         {cli_name} cp file.txt {cli_name}://myvol/file.txt
         {cli_name} cp file.txt {cli_name}://myvol/file.new
-        {cli_name} cp file.txt {cli_name}://myvol/
 
         # Upload a directory to a volume
+        {cli_name} cp mydir {cli_name}://myvol/
         {cli_name} cp mydir {cli_name}://myvol/mydir
         {cli_name} cp mydir {cli_name}://myvol/newdir
-        {cli_name} cp mydir {cli_name}://myvol/
 
         # Copy a file from a volume to the local filesystem
         {cli_name} cp {cli_name}://myvol/file.txt .
