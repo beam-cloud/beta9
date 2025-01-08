@@ -1,3 +1,4 @@
+import abc
 import concurrent.futures
 import io
 import math
@@ -8,7 +9,6 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from enum import Enum
 from functools import wraps
 from multiprocessing import Manager
 from os import PathLike
@@ -16,6 +16,7 @@ from pathlib import Path
 from queue import Queue
 from threading import Thread, local
 from typing import (
+    Any,
     Callable,
     ContextManager,
     Final,
@@ -25,6 +26,7 @@ from typing import (
     Optional,
     Protocol,
     Sequence,
+    Tuple,
     TypeVar,
     Union,
 )
@@ -42,7 +44,6 @@ from .clients.volume import (
     CreatePresignedUrlRequest,
     FileUploadPart,
     ListPathRequest,
-    ListVolumesRequest,
     PresignedUrlMethod,
     VolumeServiceStub,
 )
@@ -56,11 +57,10 @@ from .exceptions import (
     RetryableError,
     UploadPartError,
 )
-
-__all__ = ["upload", "download"]
+from .terminal import CustomProgress
 
 _PROCESS_LOCAL: Final[local] = local()
-_MAX_WORKERS: Final[int] = try_env("MULTIPART_MAX_WORKERS", 4)
+_MAX_WORKERS: Final[int] = try_env("MULTIPART_MAX_WORKERS", 3)
 _REQUEST_TIMEOUT: Final[int] = try_env("MULTIPART_REQUEST_TIMEOUT", 3)
 
 UPLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_UPLOAD_CHUNK_SIZE", 4 * 1024 * 1024)
@@ -132,8 +132,7 @@ def _progress_updater(
     Args:
         file_size: The total size of the file.
         queue: A queue that receives the number of bytes processed.
-        callback: A callback that receives the total size and the number of bytes processed.
-            Defaults to None.
+        callback: A callback that receives the total size and the number of bytes processed. Defaults to None.
         timeout: The time to wait for the thread to finish. Defaults to 1.0.
 
     Yields:
@@ -226,11 +225,10 @@ def _get_file_chunk(file_path: Path, start: int, end: int) -> bytes:
         return f.read(end - start)
 
 
-def upload(
+def beta9_upload(
     service: VolumeServiceStub,
     file_path: Path,
-    volume_name: str,
-    volume_path: str,
+    remote_path: "RemotePath",
     progress_callback: Optional[ProgressCallback] = None,
     completion_callback: Optional[CompletionCallback] = None,
     chunk_size: int = UPLOAD_CHUNK_SIZE,
@@ -241,8 +239,7 @@ def upload(
     Args:
         service: The volume service stub.
         file_path: Path to the file to upload.
-        volume_name: Name of the volume.
-        volume_path: Path to the file on the volume.
+        remote_path: Path to save the file on the volume.
         progress_callback: A callback that receives the total size and the number of
             bytes processed. Defaults to None.
         completion_callback: A context manager that wraps the completion of the upload.
@@ -259,8 +256,8 @@ def upload(
     file_size = file_path.stat().st_size
     initial = retry(times=3, delay=1.0)(service.create_multipart_upload)(
         CreateMultipartUploadRequest(
-            volume_name=volume_name,
-            volume_path=volume_path,
+            volume_name=remote_path.volume_name,
+            volume_path=remote_path.volume_path,
             chunk_size=chunk_size,
             file_size=file_size,
         )
@@ -290,8 +287,8 @@ def upload(
             completed = retry(times=3, delay=1.0)(service.complete_multipart_upload)(
                 CompleteMultipartUploadRequest(
                     upload_id=initial.upload_id,
-                    volume_name=volume_name,
-                    volume_path=volume_path,
+                    volume_name=remote_path.volume_name,
+                    volume_path=remote_path.volume_path,
                     completed_parts=parts,
                 )
             )
@@ -307,7 +304,9 @@ def upload(
     except (Exception, KeyboardInterrupt):
         service.abort_multipart_upload(
             AbortMultipartUploadRequest(
-                upload_id=initial.upload_id, volume_name=volume_name, volume_path=volume_path
+                upload_id=initial.upload_id,
+                volume_name=remote_path.volume_name,
+                volume_path=remote_path.volume_path,
             )
         )
         raise
@@ -407,10 +406,9 @@ def _merge_file_chunks(file_path: PathLike, file_chunks: Sequence[FileChunk]) ->
             os.remove(chunk.path)
 
 
-def download(
+def beta9_download(
     service: VolumeServiceStub,
-    volume_name: str,
-    volume_path: str,
+    remote_path: "RemotePath",
     file_path: Path,
     callback: Optional[ProgressCallback] = None,
     chunk_size: int = DOWNLOAD_CHUNK_SIZE,
@@ -420,11 +418,9 @@ def download(
 
     Args:
         service: The volume service stub.
-        volume_name: Name of the volume.
-        volume_path: Path to the file on the volume.
+        remote_path: Path to the file on the volume.
         file_path: Path to save the file.
-        callback: A callback that receives the total size and the number of bytes processed.
-            Defaults to None.
+        callback: A callback that receives the total size and the number of bytes processed. Defaults to None.
         chunk_size: Size of each chunk in bytes. Defaults to 32 MiB.
 
     Raises:
@@ -435,8 +431,8 @@ def download(
     # Calculate byte ranges
     presigned = retry(times=3, delay=1.0)(service.create_presigned_url)(
         CreatePresignedUrlRequest(
-            volume_name=volume_name,
-            volume_path=volume_path,
+            volume_name=remote_path.volume_name,
+            volume_path=remote_path.volume_path,
             expires=30,
             method=PresignedUrlMethod.HeadObject,
         )
@@ -450,8 +446,8 @@ def download(
     # Download and merge file ranges
     presigned = retry(times=3, delay=1.0)(service.create_presigned_url)(
         CreatePresignedUrlRequest(
-            volume_name=volume_name,
-            volume_path=volume_path,
+            volume_name=remote_path.volume_name,
+            volume_path=remote_path.volume_path,
             expires=7200,
             method=PresignedUrlMethod.GetObject,
         )
@@ -484,6 +480,16 @@ class RemotePath:
     volume_path: str
     is_dir: Optional[bool] = None
 
+    @classmethod
+    def parse(cls, value: str) -> "RemotePath":
+        scheme, volume_path = value.split("://", 1)
+        try:
+            volume_name, volume_path = volume_path.split("/", 1)
+        except ValueError:
+            volume_name = volume_path
+            volume_path = ""
+        return cls(scheme, volume_name, volume_path)
+
     def __str__(self) -> str:
         return f"{self.scheme}://{self.volume_name}/{self.volume_path}"
 
@@ -510,199 +516,12 @@ class RemotePath:
         return os.path.join(self.volume_name, self.volume_path)
 
 
-class TransferError(Exception):
-    """Base exception for transfer operations"""
-
-
-class ValidationError(TransferError):
-    """Raised when transfer validation fails"""
-
-
-class SourceError(TransferError):
-    """Raised when source path is invalid"""
-
-
-class DestinationError(TransferError):
-    """Raised when destination path is invalid"""
-
-
-class TransferType(Enum):
-    UPLOAD = "upload"
-    DOWNLOAD = "download"
-
-
-class FileTransfer:
-    def __init__(
-        self,
-        service: VolumeServiceStub,
-        source: Union[Path, RemotePath],
-        destination: Union[Path, RemotePath],
-    ):
-        self.service = service
-        self.source = source
-        self.destination = destination
-        self._remote_volume_exists: Optional[bool] = None
-
-    def _determine_transfer_type(
-        self,
-        source: Union[Path, RemotePath],
-        destination: Union[Path, RemotePath],
-    ) -> TransferType:
-        if isinstance(source, Path) and isinstance(destination, RemotePath):
-            return TransferType.UPLOAD
-        if isinstance(source, RemotePath) and isinstance(destination, Path):
-            return TransferType.DOWNLOAD
-        raise ValidationError("Invalid source and destination types.")
-
-    def _get_upload_paths(self, source: Path, destination: RemotePath) -> str:
-        volume_path = ""
-
-        if isinstance(self.source, Path):
-            if self.source.is_dir():
-                if "." in destination.name:
-                    raise SourceError(
-                        "Cannot upload a directory as a file. Remove the file extension on the destination."
-                    )
-
-                # TODO: Fix this
-                subpath = str(source.relative_to(source.parent))
-                try:
-                    # if not destination.volume_path:
-                    #     subpath = str(source)
-                    # else:
-                    subpath = str(source.relative_to(destination.volume_path))
-                except ValueError:
-                    pass
-                    # subpath = (
-                    #     os.path.join(*source.parts[1:]) if len(source.parts) > 1 else str(source)
-                    # )
-
-                volume_path = (destination / str(subpath)).volume_path
-            else:
-                if "." in destination.name:
-                    volume_path = destination.volume_path
-                else:
-                    volume_path = (destination / source.name).volume_path
-        else:
-            raise SourceError("Invalid source path.")
-
-        return volume_path
-
-    def _get_download_path(self, source: RemotePath) -> Path:
-        local_path: Optional[Path] = None
-
-        if isinstance(self.destination, Path):
-            if not self.destination.suffix:
-                local_path = self.destination / source.name
-                local_path.parent.mkdir(parents=True, exist_ok=True)
-            else:
-                local_path = self.destination
-        else:
-            raise DestinationError("Invalid destination path.")
-
-        return local_path
-
-    def get_source_files(self) -> List[Union[Path, RemotePath]]:
-        source = self.source
-        sources = []
-
-        # Local source
-        if isinstance(source, Path):
-            if not source.exists():
-                raise SourceError(f"Local source path '{source}' does not exist.")
-
-            if source.is_file():
-                sources.append(source)
-            else:
-                sources.extend(p for p in source.rglob("*") if p.is_file())
-
-            return sources
-
-        # Remote source
-        res = self.service.list_path(ListPathRequest(path=source.path))
-        if not res.ok:
-            raise SourceError(f"{source} ({res.err_msg})")
-
-        sources.extend(
-            RemotePath(source.scheme, source.volume_name, p.path, is_dir=p.is_dir)
-            for p in res.path_infos
-            if not p.is_dir
-        )
-
-        return sources
-
-    def prepare_destination(self, destination: Union[Path, RemotePath]) -> None:
-        # Local destination
-        if isinstance(destination, Path):
-            if destination.exists() and destination.is_file():
-                pass
-                # raise DestinationError(f"Destination file '{destination}' exists.")
-            if not destination.parent.exists():
-                destination.parent.mkdir(parents=True, exist_ok=True)
-            return
-
-        # Remote destination
-        if self._remote_volume_exists is not None:
-            return
-
-        res = self.service.list_volumes(ListVolumesRequest())
-        if not res.ok:
-            raise DestinationError(res.err_msg)
-        if not any(v.name == destination.volume_name for v in res.volumes):
-            raise DestinationError(f"Volume '{destination.volume_name}' does not exist.")
-
-        self._remote_volume_exists = True
-
-    def copy(
-        self,
-        source: Union[Path, RemotePath],
-        destination: Union[Path, RemotePath],
-        progress_callback: Optional[ProgressCallback] = None,
-        completion_callback: Optional[CompletionCallback] = None,
-    ) -> None:
-        """
-        Copy files between local and remote volumes.
-        """
-        self.prepare_destination(destination)
-
-        transfer_type = self._determine_transfer_type(source, destination)
-
-        if transfer_type == TransferType.UPLOAD:
-            volume_path = self._get_upload_paths(source, destination)  # type: ignore
-            upload(
-                self.service,
-                file_path=source,  # type: ignore
-                volume_name=destination.volume_name,  # type: ignore
-                volume_path=volume_path,
-                progress_callback=progress_callback,
-                completion_callback=completion_callback,
-            )
-
-        elif transfer_type == TransferType.DOWNLOAD:
-            local_path = self._get_download_path(source)  # type: ignore
-            download(
-                service=self.service,
-                volume_name=source.volume_name,  # type: ignore
-                volume_path=source.volume_path,  # type: ignore
-                file_path=local_path,
-                callback=progress_callback,
-            )
-
-
-class VolumePath(click.ParamType):
+class PathTypeConverter(click.ParamType):
     """
-    VolumePath Click type converts a string into a Path or RemotePath object.
+    VolumePath Click type converts a string into a str, Path, or RemotePath object.
     """
-
-    name = "volume_path"
 
     def __init__(self, version_option_name: str = "version") -> None:
-        from .config import get_settings
-
-        self.schemes = [
-            get_settings().name.lower(),
-        ]
-
         self.version_option_name = version_option_name
 
     def convert(
@@ -711,31 +530,204 @@ class VolumePath(click.ParamType):
         param: Optional[click.Parameter] = None,
         ctx: Optional[click.Context] = None,
     ) -> Union[str, Path, RemotePath]:
-        # maintain backward compatibility
-        if version := ctx.params.get(self.version_option_name):
-            if version == "v1":
-                return value
+        if (
+            ctx is not None
+            and (version := ctx.params.get(self.version_option_name))
+            and version == "v1"
+        ):
+            return value
 
         if "://" in value:
-            return self._parse_remote_path(value)
+            return RemotePath.parse(value)
+
         return Path(value)
 
-    def _parse_remote_path(self, value: str) -> RemotePath:
-        protocol, volume_path = value.split("://", 1)
-        if not protocol:
-            raise click.BadParameter("Volume protocol is required.")
 
-        if not protocol.startswith(tuple(self.schemes)):
-            text = f"Protocol '{protocol}://' is not supported. Supported protocols are {', '.join(self.schemes)}."
-            raise click.BadParameter(text)
+class RemoteHandler(abc.ABC):
+    def __init__(self, **kwargs) -> None:
+        pass
 
-        try:
-            volume_name, volume_key = volume_path.split("/", 1)
-        except ValueError:
-            volume_name = volume_path
-            volume_key = ""
+    @abc.abstractmethod
+    def upload(self, local_path: Path, remote_path: RemotePath) -> None:
+        raise NotImplementedError
 
-        if not volume_name:
-            raise click.BadParameter("Volume name is required.")
+    @abc.abstractmethod
+    def download(self, remote_path: RemotePath, local_path: Path) -> None:
+        raise NotImplementedError
 
-        return RemotePath(protocol, volume_name, volume_key)
+
+class Beta9Handler(RemoteHandler):
+    def __init__(
+        self, service: VolumeServiceStub, progress: Optional[CustomProgress] = None, **kwargs
+    ) -> None:
+        self.service = service
+        self.progress = progress
+
+    def list_dir(self, remote_path: RemotePath) -> List[RemotePath]:
+        res = self.service.list_path(ListPathRequest(path=remote_path.path))
+        if not res.ok:
+            raise RuntimeError(f"{remote_path} ({res.err_msg})")
+
+        return [
+            RemotePath(remote_path.scheme, remote_path.volume_name, p.path, is_dir=p.is_dir)
+            for p in res.path_infos
+            if not p.is_dir
+        ]
+
+    def is_dir(self, remote_path: RemotePath) -> bool:
+        if remote_path.volume_path == "":
+            return True
+
+        res = self.service.list_path(ListPathRequest(path=remote_path.path))
+        if not res.ok:
+            raise RuntimeError(f"{remote_path} ({res.err_msg})")
+
+        return any(p for p in res.path_infos if p.is_dir and p.path == remote_path.volume_path)
+
+    def upload(self, local_path: Path, remote_path: RemotePath) -> None:
+        # Recursively upload directories
+        if local_path.is_dir():
+            for item in local_path.iterdir():
+                volume_path = f"{remote_path.volume_path}/{item.name}"
+                volume_path = f"{volume_path}".replace("//", "/").lstrip("/")
+                remote_subpath = RemotePath(
+                    scheme=remote_path.scheme,
+                    volume_name=remote_path.volume_name,
+                    volume_path=volume_path,
+                )
+                self.upload(item, remote_subpath)
+        else:
+            # Adjust remote_path for single-file upload
+            if remote_path.volume_path.endswith("/"):
+                volume_path = remote_path.volume_path.rstrip("/")
+                volume_path = f"{volume_path}/{local_path.name}".replace("//", "/")
+
+                remote_path = RemotePath(
+                    scheme=remote_path.scheme,
+                    volume_name=remote_path.volume_name,
+                    volume_path=volume_path,
+                )
+            elif self.is_dir(remote_path):
+                volume_path = f"{remote_path.volume_path}/{local_path.name}"
+                volume_path = f"{volume_path}".replace("//", "/").lstrip("/")
+
+                remote_path = RemotePath(
+                    scheme=remote_path.scheme,
+                    volume_name=remote_path.volume_name,
+                    volume_path=volume_path,
+                )
+
+            progress_callback, completion_callback = self._setup_callbacks(remote_path)
+            beta9_upload(
+                service=self.service,
+                file_path=local_path,
+                remote_path=remote_path,
+                progress_callback=progress_callback,
+                completion_callback=completion_callback,
+            )
+
+    def download(self, remote_path: RemotePath, local_path: Path) -> None:
+        # Recursively download directories
+        if self.is_dir(remote_path):
+            local_path.mkdir(parents=True, exist_ok=True)
+            for item in self.list_dir(remote_path):
+                rel_path = Path(item.volume_path).relative_to(remote_path.volume_path)
+                self.download(item, local_path / rel_path)
+        else:
+            # Adjust local_path for single-file download
+            if local_path.is_dir():
+                local_path = local_path / Path(remote_path.volume_path).name
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            callback, _ = self._setup_callbacks(local_path.relative_to(Path.cwd()))
+            beta9_download(
+                service=self.service,
+                remote_path=remote_path,
+                file_path=local_path,
+                callback=callback,
+            )
+
+    def _setup_callbacks(
+        self,
+        task_name: Any,
+    ) -> Tuple[Optional[ProgressCallback], Optional[CompletionCallback]]:
+        if self.progress is None:
+            return None, None
+
+        p = self.progress
+        task_id = p.add_task(task_name)
+
+        def progress_callback(total: int, advance: int):
+            """
+            Updates the progress bar with the current status of the upload.
+            """
+            p.update(task_id=task_id, total=total, advance=advance)
+
+        @contextmanager
+        def completion_callback():
+            """
+            Shows status while the upload is being processed server-side.
+            """
+            p.stop()
+
+            from . import terminal
+
+            with terminal.progress("Working...") as s:
+                yield s
+
+            # Move cursor up 2x, clear line, and redraw the progress bar
+            terminal.print("\033[A\033[A\r", highlight=False)
+            p.start()
+
+        return progress_callback, completion_callback
+
+
+class S3Handler(RemoteHandler):
+    def upload(self, local_path: Path, remote_path: RemotePath) -> None:
+        raise NotImplementedError
+
+    def download(self, remote_path: RemotePath, local_path: Path) -> None:
+        raise NotImplementedError
+
+
+class HuggingFaceHandler(RemoteHandler):
+    def upload(self, local_path: Path, remote_path: RemotePath) -> None:
+        raise NotImplementedError
+
+    def download(self, remote_path: RemotePath, local_path: Path) -> None:
+        raise NotImplementedError
+
+
+def get_remote_handler(scheme: str, **kwargs: Any) -> RemoteHandler:
+    from .config import get_settings
+
+    this = get_settings().name.lower()
+    handlers = {
+        this: Beta9Handler,
+        "hf": HuggingFaceHandler,
+        "s3": S3Handler,
+    }
+
+    if scheme not in handlers:
+        raise ValueError(
+            f"Protocol '{scheme}://' is not supported. Supported protocols are {', '.join(handlers)}."
+        )
+
+    return handlers[scheme](**kwargs)
+
+
+def copy(src, dst, **kwargs: Any):
+    # Resolve local paths
+    dst_path = Path(dst).resolve() if not isinstance(dst, RemotePath) else dst
+    if isinstance(dst_path, Path) and str(dst) == ".":
+        dst_path = Path.cwd()
+
+    # Determine handler based on source or destination type
+    if isinstance(src, RemotePath) and isinstance(dst_path, Path):
+        handler = get_remote_handler(src.scheme, **kwargs)
+        handler.download(src, dst_path)
+    elif isinstance(src, Path) and isinstance(dst_path, RemotePath):
+        handler = get_remote_handler(dst.scheme, **kwargs)
+        handler.upload(src, dst_path)
+    else:
+        raise ValueError("Invalid source and destination types.")

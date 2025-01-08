@@ -1,10 +1,11 @@
 import glob
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, List, Union
 
 import click
 from rich.table import Column, Table, box
+
+from beta9 import multipart
 
 from .. import terminal
 from ..channel import ServiceClient
@@ -22,7 +23,7 @@ from ..clients.volume import (
     ListVolumesResponse,
     MovePathRequest,
 )
-from ..multipart import FileTransfer, RemotePath, VolumePath
+from ..multipart import PathTypeConverter, RemotePath
 from ..terminal import StyledProgress, pluralize
 from . import extraclick
 from .extraclick import ClickCommonGroup, ClickManagementGroup
@@ -210,12 +211,12 @@ def read_with_progress(
 )
 @click.argument(
     "source",
-    type=VolumePath(),
+    type=PathTypeConverter(),
     required=True,
 )
 @click.argument(
     "destination",
-    type=VolumePath(),
+    type=PathTypeConverter(),
     required=True,
 )
 @click.option(
@@ -237,35 +238,10 @@ def cp(
         return cp_v1(service, source, destination)  # type: ignore
 
     try:
-        transfer = FileTransfer(service.volume, source, destination)
-        sources = transfer.get_source_files()
-
         with StyledProgress() as p:
-            for s in sources:
-                task_id = p.add_task(s)
-
-                def progress_callback(total: int, advance: int):
-                    p.update(task_id=task_id, total=total, advance=advance)
-
-                @contextmanager
-                def completion_callback():
-                    """
-                    Shows progress status while the upload is being completed.
-                    """
-                    p.stop()
-
-                    with terminal.progress("Completing...") as s:
-                        yield s
-
-                    # Move cursor up 2x, clear line, and redraw the progress bar
-                    terminal.print("\033[A\033[A\r", highlight=False)
-                    p.start()
-
-                transfer.copy(s, destination, progress_callback, completion_callback)
-
-    except KeyboardInterrupt:
+            multipart.copy(source, destination, service=service.volume, progress=p)
+    except (KeyboardInterrupt, EOFError):
         terminal.warn("\rCancelled")
-
     except Exception as e:
         terminal.error(f"\rFailed: {e}")
 
