@@ -251,20 +251,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.
 func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
-
-	defaultLimit := resource.MustParse("30Gi")
-
-	// First try worker pool specific limit, then fall back to global config
-	limitToUse := wpc.workerPool.TmpSizeLimit
-	if limitToUse == "" {
-		limitToUse = wpc.config.Worker.TmpSizeLimit
-	}
-
-	tmpSizeLimit, err := resource.ParseQuantity(limitToUse)
-	if err != nil {
-		log.Error().Err(err).Str("attempted_limit", limitToUse).Msg("failed to parse tmp size limit, using default")
-		tmpSizeLimit = defaultLimit
-	}
+	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPool.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
 
 	volumes := []corev1.Volume{
 		{
