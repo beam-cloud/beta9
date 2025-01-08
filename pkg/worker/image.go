@@ -35,6 +35,7 @@ import (
 const (
 	imagePullCommand string = "skopeo"
 	imageBundlePath  string = "/dev/shm/images"
+	imageTmpDir      string = "/tmp"
 )
 
 var (
@@ -351,7 +352,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	baseTmpBundlePath := filepath.Join(c.imageBundlePath, baseImage.Repo)
 	os.MkdirAll(baseTmpBundlePath, 0755)
 
-	copyDir := filepath.Join("/var/tmp", baseImage.Repo)
+	copyDir := filepath.Join(imageTmpDir, baseImage.Repo)
 	os.MkdirAll(copyDir, 0755)
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
@@ -360,7 +361,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	args = append(args, c.copyArgs(creds)...)
 	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
 	cmd.Env = os.Environ()
-	cmd.Dir = "/var/tmp"
+	cmd.Dir = imageTmpDir
 	cmd.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
 	cmd.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
 
@@ -448,7 +449,7 @@ func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 	unpackOptions := umociUnpackOptions()
 
 	// Get a reference to the CAS.
-	baseImagePath := "/var/tmp/" + baseImageName
+	baseImagePath := filepath.Join(imageTmpDir, baseImageName)
 	engine, err := dir.Open(baseImagePath)
 	if err != nil {
 		return errors.Wrap(err, "open CAS")
