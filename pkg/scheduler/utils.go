@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func ParseCPU(cpu interface{}) (int64, error) {
@@ -96,4 +98,21 @@ func ParseGPUType(gpu interface{}) (types.GPUType, error) {
 	default:
 		return types.GPUType(""), errors.New("invalid gpu type")
 	}
+}
+
+func parseTmpSizeLimit(workerPoolTmpSizeLimit string, globalWorkerTmpSizeLimit string) resource.Quantity {
+	defaultLimit := resource.MustParse("30Gi")
+
+	// First try worker pool specific limit, then fall back to global config
+	limitToUse := workerPoolTmpSizeLimit
+	if limitToUse == "" {
+		limitToUse = globalWorkerTmpSizeLimit
+	}
+
+	tmpSizeLimit, err := resource.ParseQuantity(limitToUse)
+	if err != nil {
+		log.Error().Err(err).Str("attempted_limit", limitToUse).Msg("failed to parse tmp size limit, using default")
+		tmpSizeLimit = defaultLimit
+	}
+	return tmpSizeLimit
 }

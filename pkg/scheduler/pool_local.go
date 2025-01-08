@@ -251,8 +251,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createJobInCluster(job *batchv1.
 func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
+	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPool.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
 
-	tmpSizeLimit := resource.MustParse("30Gi")
 	volumes := []corev1.Volume{
 		{
 			Name: logVolumeName,
