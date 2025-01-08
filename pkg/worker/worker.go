@@ -68,17 +68,19 @@ type Worker struct {
 }
 
 type ContainerInstance struct {
-	Id           string
-	StubId       string
-	BundlePath   string
-	Overlay      *common.ContainerOverlay
-	Spec         *specs.Spec
-	Err          error
-	ExitCode     int
-	Port         int
-	OutputWriter *common.OutputWriter
-	LogBuffer    *common.LogBuffer
-	Request      *types.ContainerRequest
+	Id              string
+	StubId          string
+	BundlePath      string
+	Overlay         *common.ContainerOverlay
+	Spec            *specs.Spec
+	Err             error
+	ExitCode        int
+	Port            int
+	OutputWriter    *common.OutputWriter
+	LogBuffer       *common.LogBuffer
+	Request         *types.ContainerRequest
+	InstanceContext context.Context
+	InstanceCancel  func()
 }
 
 type ContainerOptions struct {
@@ -272,7 +274,16 @@ func (s *Worker) Run() error {
 			if !exists {
 				log.Info().Str("container_id", containerId).Msg("running container")
 
-				err := s.RunContainer(request)
+				ctx, cancel := context.WithCancel(context.Background())
+				s.containerInstances.Set(containerId, &ContainerInstance{
+					Id:              containerId,
+					StubId:          request.StubId,
+					LogBuffer:       common.NewLogBuffer(),
+					Request:         request,
+					InstanceContext: ctx,
+					InstanceCancel:  cancel,
+				})
+				err := s.RunContainer(ctx, request)
 				if err != nil {
 					log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
 

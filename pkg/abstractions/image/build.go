@@ -244,6 +244,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	sourceImage := fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
 	containerId := b.genContainerId()
 
+	go func() {
+		<-ctx.Done() // If user cancels the build, send a stop-container event to the scheduler
+		b.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
+	}()
+
 	// Allow config to override default build container settings
 	cpu := defaultBuildContainerCpu
 	memory := defaultBuildContainerMemory

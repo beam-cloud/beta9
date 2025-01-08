@@ -289,7 +289,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
 
-	cmd := exec.Command("buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", buildCtxPath)
+	cmd := exec.CommandContext(ctx, "buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", buildCtxPath)
 	cmd.Stdout = &ExecWriter{outputLogger: outputLogger}
 	cmd.Stderr = &ExecWriter{outputLogger: outputLogger}
 	err = cmd.Run()
@@ -297,7 +297,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 
-	cmd = exec.Command("buildah", "--root", imagePath, "push", imageId+":latest", "oci:"+ociPath+":latest")
+	cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "push", imageId+":latest", "oci:"+ociPath+":latest")
 	cmd.Stdout = &ExecWriter{outputLogger: outputLogger}
 	cmd.Stderr = &ExecWriter{outputLogger: outputLogger}
 	err = cmd.Run()
