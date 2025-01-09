@@ -68,18 +68,17 @@ type Worker struct {
 }
 
 type ContainerInstance struct {
-	Id              string
-	StubId          string
-	BundlePath      string
-	Overlay         *common.ContainerOverlay
-	Spec            *specs.Spec
-	Err             error
-	ExitCode        int
-	Port            int
-	OutputWriter    *common.OutputWriter
-	LogBuffer       *common.LogBuffer
-	Request         *types.ContainerRequest
-	InstanceContext context.Context
+	Id           string
+	StubId       string
+	BundlePath   string
+	Overlay      *common.ContainerOverlay
+	Spec         *specs.Spec
+	Err          error
+	ExitCode     int
+	Port         int
+	OutputWriter *common.OutputWriter
+	LogBuffer    *common.LogBuffer
+	Request      *types.ContainerRequest
 }
 
 type ContainerOptions struct {
@@ -282,11 +281,10 @@ func (s *Worker) Run() error {
 				go eventbus.ReceiveEvents(ctx)
 
 				s.containerInstances.Set(containerId, &ContainerInstance{
-					Id:              containerId,
-					StubId:          request.StubId,
-					LogBuffer:       common.NewLogBuffer(),
-					Request:         request,
-					InstanceContext: ctx,
+					Id:        containerId,
+					StubId:    request.StubId,
+					LogBuffer: common.NewLogBuffer(),
+					Request:   request,
 				})
 				err := s.RunContainer(ctx, request)
 				if err != nil {
