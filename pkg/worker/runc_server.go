@@ -47,7 +47,6 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], image
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("baseConfigSpec: %v", baseConfigSpec)
 
 	return &RunCServer{
 		runcHandle:         runc.Runc{},
