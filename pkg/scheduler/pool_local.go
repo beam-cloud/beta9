@@ -152,8 +152,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
-		// wpc.config.Worker.ImageTag,
-		"devel",
+		wpc.config.Worker.ImageTag,
 	)
 
 	resources := corev1.ResourceRequirements{}
@@ -164,9 +163,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 
 	containers := []corev1.Container{
 		{
-			Name:            defaultContainerName,
-			Image:           workerImage,
-			ImagePullPolicy: "Always",
+			Name:  defaultContainerName,
+			Image: workerImage,
 			Command: []string{
 				defaultWorkerEntrypoint,
 			},

@@ -37,7 +37,6 @@ RUN apt-get install -y libseccomp-dev
 RUN <<EOT
 set -eux
 git clone https://github.com/beam-cloud/runc.git .
-git checkout jm/update-runc
 make
 make install
 /usr/local/sbin/runc --version
