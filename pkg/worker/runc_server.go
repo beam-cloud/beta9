@@ -112,6 +112,15 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 		return &pb.RunCExecResponse{Ok: false}, nil
 	}
 	if instance.Request.IsBuildRequest() {
+		/*
+			For some reason, if the process that is spun up from this (e.g. `runc exec --process /tmp/runc-process839505971 build-128a153e`)
+			is canceled by the context (or just exits), the runc container can no longer be shut down by a `runc kill` command or
+			a SIGKILL on the first process.
+
+			For example in build containers, we do a `tail -f /dev/null` to keep the container running. But if the scenario above happens,
+			the `tail` process does receive and act on a shut down signal but it is then `blocked and waiting` on some unknown channel to resolve
+			which prevents the container from being shut down.
+		*/
 		ctx = context.Background()
 		process.Env = append(process.Env, instance.Request.BuildOptions.BuildSecrets...)
 	}
