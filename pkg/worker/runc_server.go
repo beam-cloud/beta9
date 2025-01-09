@@ -118,6 +118,7 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 
 	err = s.runcHandle.Exec(ctx, in.ContainerId, *process, &runc.ExecOpts{
 		OutputWriter: instance.OutputWriter,
+		Detach:       true,
 	})
 
 	return &pb.RunCExecResponse{
