@@ -33,6 +33,10 @@ func NewKeyEventManager(rdb *RedisClient) (*KeyEventManager, error) {
 	return &KeyEventManager{rdb: rdb}, nil
 }
 
+func (kem *KeyEventManager) TrimKeyspacePrefix(key string) string {
+	return strings.TrimPrefix(key, keyspacePrefix)
+}
+
 func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, error) {
 	pattern := fmt.Sprintf("%s*", patternPrefix)
 
@@ -47,10 +51,6 @@ func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, e
 	}
 
 	return trimmedKeys, nil
-}
-
-func (kem *KeyEventManager) TrimKeyspacePrefix(key string) string {
-	return strings.TrimPrefix(key, keyspacePrefix)
 }
 
 func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
