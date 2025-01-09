@@ -47,7 +47,7 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 	}
 
 	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
-		log.Info().Str("container_id", stopArgs.ContainerId).Time("timestamp", time.Now()).Msg("received stop container event")
+		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
