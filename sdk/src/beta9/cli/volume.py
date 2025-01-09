@@ -152,9 +152,13 @@ def read_with_progress(
     epilog="""
     Version 1:
 
-      This is now deprecated. Use the v2 version of the command.
+      !!! This is deprecated. Use v2 of this command.
+      Uploads files or directories to a volume. Downloads are not supported.
 
-      This only supports copying files to a volume.
+      SOURCE and DESTINATION syntax:
+
+        SOURCE must always be a local path.
+        DESTINATION must always be a remote path. The format is volume-name/path/to/file.txt.
 
       Match Syntax:
         This command provides support for Unix shell-style wildcards, which are
@@ -191,6 +195,17 @@ def read_with_progress(
     Version 2:
 
       Upload and download files or directories between a volume and your system.
+
+      SOURCE and DESTINATION syntax:
+
+        SOURCE can be local or remote.
+        DESTINATION can be local or remote.
+
+        Local paths are files or directories on your system. For example, file.txt,
+        ./mydir, or path/to/file.txt.
+
+        Remote paths are files or directories in a volume. The format is
+        $scheme://$volume_name/path/to/file.txt.
 
       Examples:
 
