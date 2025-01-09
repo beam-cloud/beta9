@@ -245,7 +245,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go func() {
 		<-ctx.Done() // If user cancels the build, send a stop-build event to the scheduler
-		b.scheduler.StopBuild(containerId)
+		err := b.scheduler.StopBuild(containerId)
+		if err != nil {
+			log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
+		}
 	}()
 
 	// Allow config to override default build container settings
@@ -344,8 +347,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			}
 
 			if time.Since(start) > containerSpinupTimeout {
-				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Timeout: container not running after 180 seconds.\n"}
-				return errors.New("timeout: container not running after 180 seconds")
+				err := b.scheduler.StopBuild(containerId)
+				if err != nil {
+					log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
+				}
+				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout)}
+				return errors.New(fmt.Sprintf("timeout: container not running after %s seconds", containerSpinupTimeout))
 			}
 		}
 	}
