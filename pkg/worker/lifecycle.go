@@ -616,11 +616,6 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 		return cleanup(-1, err)
 	}
 
-	// Confirm that the process is healthy
-	if err := process.Signal(syscall.Signal(0)); err == nil {
-		log.Info().Str("container_id", containerId).Msg("container started and is healthy")
-	}
-
 	// Wait for the container to exit
 	processState, err := process.Wait()
 	if err != nil {
