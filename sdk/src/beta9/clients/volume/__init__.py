@@ -141,6 +141,18 @@ class MovePathResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class StatPathRequest(betterproto.Message):
+    path: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StatPathResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    path_info: "PathInfo" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class PresignedUrlParams(betterproto.Message):
     upload_id: str = betterproto.string_field(1)
     part_number: int = betterproto.uint32_field(2)
@@ -284,6 +296,13 @@ class VolumeServiceStub(SyncServiceStub):
             MovePathRequest,
             MovePathResponse,
         )(move_path_request)
+
+    def stat_path(self, stat_path_request: "StatPathRequest") -> "StatPathResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/StatPath",
+            StatPathRequest,
+            StatPathResponse,
+        )(stat_path_request)
 
     def create_presigned_url(
         self, create_presigned_url_request: "CreatePresignedUrlRequest"

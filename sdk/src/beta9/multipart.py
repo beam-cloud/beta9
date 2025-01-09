@@ -44,6 +44,7 @@ from .clients.volume import (
     FileUploadPart,
     ListPathRequest,
     PresignedUrlMethod,
+    StatPathRequest,
     VolumeServiceStub,
 )
 from .env import try_env
@@ -60,10 +61,11 @@ from .terminal import CustomProgress
 
 _PROCESS_LOCAL: Final[local] = local()
 _MAX_WORKERS: Final[int] = try_env("MULTIPART_MAX_WORKERS", 3)
-_REQUEST_TIMEOUT: Final[int] = try_env("MULTIPART_REQUEST_TIMEOUT", 3)
+_REQUEST_TIMEOUT: Final[float] = try_env("MULTIPART_REQUEST_TIMEOUT", 0.5)
 
-UPLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_UPLOAD_CHUNK_SIZE", 4 * 1024 * 1024)
-DOWNLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_DOWNLOAD_CHUNK_SIZE", 32 * 1024 * 1024)
+# Value of 0 means the chunk size is calculated based on the file size
+UPLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_UPLOAD_CHUNK_SIZE", 0)
+DOWNLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_DOWNLOAD_CHUNK_SIZE", 0)
 
 
 class ProgressCallbackType(Protocol):
@@ -195,14 +197,12 @@ def _upload_part(file_path: Path, file_part: FileUploadPart, queue: Queue) -> Co
         Information about the completed part.
     """
     session = _get_session()
-
     chunk = _get_file_chunk(file_path, file_part.start, file_part.end)
-    chunk_size = len(chunk)
 
     class QueueBuffer(io.BytesIO):
         def read(self, size: Optional[int] = -1) -> bytes:
             b = super().read(size)
-            queue.put(len(b), block=False)
+            queue.put_nowait(len(b))
             return b
 
     try:
@@ -210,8 +210,9 @@ def _upload_part(file_path: Path, file_part: FileUploadPart, queue: Queue) -> Co
             url=file_part.url,
             data=QueueBuffer(chunk),
             headers={
-                "Content-Length": str(chunk_size),
+                "Content-Length": str(len(chunk)),
             },
+            timeout=_REQUEST_TIMEOUT,
         )
         response.raise_for_status()
         etag = response.headers["ETag"].replace('"', "")
@@ -246,7 +247,7 @@ def beta9_upload(
             bytes processed. Defaults to None.
         completion_callback: A context manager that wraps the completion of the upload.
             Defaults to None.
-        chunk_size: Size of each chunk in bytes. Defaults to 4 MiB.
+        chunk_size: Size of each chunk in bytes.
 
     Raises:
         CreateMultipartUploadError: If initializing the upload fails.
@@ -256,6 +257,7 @@ def beta9_upload(
     """
     # Initialize multipart upload
     file_size = file_path.stat().st_size
+    chunk_size = chunk_size or _calculate_chunk_size(file_size)
     initial = retry(times=3, delay=1.0)(service.create_multipart_upload)(
         CreateMultipartUploadRequest(
             volume_name=remote_path.volume_name,
@@ -271,7 +273,9 @@ def beta9_upload(
     try:
         with ExitStack() as stack:
             manager = stack.enter_context(Manager())
-            executor = stack.enter_context(ProcessPoolExecutor(_MAX_WORKERS, initializer=_init))
+
+            max_workers = min(_MAX_WORKERS, len(initial.file_upload_parts))
+            executor = stack.enter_context(ProcessPoolExecutor(max_workers, initializer=_init))
 
             queue = manager.Queue()
             stack.enter_context(_progress_updater(file_size, queue, progress_callback))
@@ -358,6 +362,34 @@ def _calculate_file_ranges(file_size: int, chunk_size: int) -> List[FileRange]:
     ]
 
 
+def clamp(value: int, min_value: int, max_value: int) -> int:
+    """
+    Clamp the value between min_value and max_value.
+    """
+    return max(min_value, min(value, max_value))
+
+
+def _calculate_chunk_size(
+    file_size: int,
+    optimal_chunk_size: int = 2 * 1024 * 1024,  # 2 MB
+    min_chunks: int = 1,
+    max_chunks: int = 200,
+) -> int:
+    """
+    Calculates an optimal chunk size based on the file size.
+    """
+    # Calculate desired number of chunks based on optimal chunk size
+    desired_chunks = math.ceil(file_size / optimal_chunk_size)
+
+    # Clamp the desired_chunks within min_chunks and max_chunks
+    desired_chunks = clamp(desired_chunks, min_chunks, max_chunks)
+
+    # Calculate the chunk size based on the clamped desired_chunks
+    chunk_size = math.ceil(file_size / desired_chunks)
+
+    return chunk_size
+
+
 @retry(times=10)
 def _download_chunk(
     url: str,
@@ -390,7 +422,7 @@ def _download_chunk(
         path = output_dir / f"data_{file_range.number}"
         with open(path, "wb") as file:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
-                queue.put(file.write(chunk), block=False)
+                queue.put_nowait(file.write(chunk))
     except Exception as e:
         raise DownloadChunkError(file_range.number, file_range.start, file_range.end, str(e))
 
@@ -423,7 +455,7 @@ def beta9_download(
         remote_path: Path to the file on the volume.
         file_path: Path to save the file.
         callback: A callback that receives the total size and the number of bytes processed. Defaults to None.
-        chunk_size: Size of each chunk in bytes. Defaults to 32 MiB.
+        chunk_size: Size of each chunk in bytes.
 
     Raises:
         CreatePresignedUrlError: If a presigned URL cannot be created.
@@ -443,6 +475,7 @@ def beta9_download(
         raise CreatePresignedUrlError(presigned.err_msg)
 
     file_size = _get_file_size(presigned.url)
+    chunk_size = chunk_size or _calculate_chunk_size(file_size)
     file_ranges = _calculate_file_ranges(file_size, chunk_size)
 
     # Download and merge file ranges
@@ -460,7 +493,9 @@ def beta9_download(
     with ExitStack() as stack:
         manager = stack.enter_context(Manager())
         temp_dir = stack.enter_context(tempfile.TemporaryDirectory())
-        executor = stack.enter_context(ProcessPoolExecutor(_MAX_WORKERS, initializer=_init))
+
+        max_workers = min(_MAX_WORKERS, len(file_ranges))
+        executor = stack.enter_context(ProcessPoolExecutor(max_workers, initializer=_init))
 
         queue = manager.Queue()
         stack.enter_context(_progress_updater(file_size, queue, callback))
@@ -476,10 +511,6 @@ def beta9_download(
 
 
 class RemotePath:
-    scheme: str
-    volume_name: str
-    is_dir: Optional[bool] = None
-
     def __init__(
         self, scheme: str, volume_name: str, volume_path: str, is_dir: Optional[bool] = None
     ):
@@ -531,6 +562,8 @@ class RemotePath:
 
     @property
     def path(self) -> str:
+        if self.volume_path == "":
+            return self.volume_name + "/"
         return os.path.join(self.volume_name, self.volume_path)
 
 
@@ -596,18 +629,18 @@ class Beta9Handler(RemoteHandler):
         if remote_path.volume_path == "":
             return True
 
-        res = self.service.list_path(ListPathRequest(path=remote_path.path))
+        res = self.service.stat_path(StatPathRequest(path=remote_path.path))
         if not res.ok:
             raise RuntimeError(f"{remote_path} ({res.err_msg})")
 
-        return any(p for p in res.path_infos if p.is_dir and p.path == remote_path.volume_path)
+        return res.path_info.is_dir if not res.err_msg else False
 
     def upload(self, local_path: Path, remote_path: RemotePath) -> None:
         # Recursively upload directories
         if local_path.is_dir():
             for item in local_path.iterdir():
                 if remote_path.volume_path.endswith("/"):
-                    volume_path = f"{remote_path.volume_path}/{local_path.name}/{item.name}"
+                    volume_path = f"{remote_path.volume_path}{local_path.name}/{item.name}"
                 else:
                     volume_path = f"{remote_path.volume_path}/{item.name}"
 
@@ -621,22 +654,15 @@ class Beta9Handler(RemoteHandler):
         else:
             # Adjust remote_path for single-file upload
             if remote_path.volume_path.endswith("/"):
-                volume_path = remote_path.volume_path.rstrip("/")
-                volume_path = f"{volume_path}/{local_path.name}"
-
-                remote_path = RemotePath(
-                    scheme=remote_path.scheme,
-                    volume_name=remote_path.volume_name,
-                    volume_path=volume_path,
-                )
+                volume_path = f"{remote_path.volume_path}{local_path.name}".lstrip("/")
+                remote_path.volume_path = volume_path
             elif self.is_dir(remote_path):
                 volume_path = f"{remote_path.volume_path}/{local_path.name}".lstrip("/")
-
-                remote_path = RemotePath(
-                    scheme=remote_path.scheme,
-                    volume_name=remote_path.volume_name,
-                    volume_path=volume_path,
-                )
+                remote_path.volume_path = volume_path
+            elif local_path.suffix and "." not in remote_path.volume_path:
+                ext = ".".join(local_path.suffixes)
+                volume_path = f"{remote_path.volume_path}{ext}".lstrip("/")
+                remote_path.volume_path = volume_path
 
             progress_callback, completion_callback = self._setup_callbacks(remote_path)
             beta9_upload(
@@ -651,9 +677,13 @@ class Beta9Handler(RemoteHandler):
         # Recursively download directories
         if self.is_dir(remote_path):
             local_path.mkdir(parents=True, exist_ok=True)
-            for item in self.list_dir(remote_path):
-                rel_path = Path(item.volume_path).relative_to(remote_path.volume_path)
-                self.download(item, local_path / rel_path)
+
+            for rpath in self.list_dir(remote_path):
+                lpath = local_path / rpath.volume_path
+                if not remote_path.volume_path.endswith("/"):
+                    lpath = local_path / rpath.name
+
+                self.download(rpath, lpath)
         else:
             # Adjust local_path for single-file download
             if local_path.is_dir():

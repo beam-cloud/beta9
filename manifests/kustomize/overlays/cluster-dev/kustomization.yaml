@@ -61,3 +61,11 @@ patches:
     - op: replace
       path: /spec/replicas
       value: 0
+# Replace RollingUpdate with Recreate for all Deployments in this overlay
+- target:
+    kind: Deployment
+  patch: |
+    - op: add
+      path: /spec/strategy
+      value:
+        type: Recreate

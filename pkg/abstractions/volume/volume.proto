@@ -13,6 +13,7 @@ service VolumeService {
   rpc DeletePath(DeletePathRequest) returns (DeletePathResponse) {}
   rpc CopyPathStream(stream CopyPathRequest) returns (CopyPathResponse) {}
   rpc MovePath(MovePathRequest) returns (MovePathResponse) {}
+  rpc StatPath(StatPathRequest) returns (StatPathResponse) {}
 
   // Multipart Upload
   rpc CreatePresignedURL(CreatePresignedURLRequest) returns (CreatePresignedURLResponse) {}
@@ -107,6 +108,15 @@ message MovePathResponse {
   string new_path = 3;
 }
 
+message StatPathRequest {
+  string path = 1;
+}
+
+message StatPathResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  PathInfo path_info = 3;
+}
 
 message PresignedURLParams {
   string upload_id = 1;

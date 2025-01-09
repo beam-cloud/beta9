@@ -57,10 +57,10 @@ gateway:
     maxReplicas: 10
     maxGpuCount: 2
 fileService:
-  endpointUrl: https://data-stage-beam-cloud.fly.dev
+  endpointUrl: http://juicefs-s3-gateway.beta9.svc.cluster.local:9900
   bucketName: beta9-fs
-  accessKey:
-  secretKey:
+  accessKey: test
+  secretKey: test-test-test
   region:
 imageService:
   localCacheEnabled: true

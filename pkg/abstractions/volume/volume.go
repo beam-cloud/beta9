@@ -228,6 +228,36 @@ func (vs *GlobalVolumeService) MovePath(ctx context.Context, in *pb.MovePathRequ
 	}, nil
 }
 
+func (vs *GlobalVolumeService) StatPath(ctx context.Context, in *pb.StatPathRequest) (*pb.StatPathResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	path, err := vs.getFilePath(ctx, in.Path, authInfo.Workspace)
+	if err != nil {
+		return &pb.StatPathResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return &pb.StatPathResponse{
+			Ok:     true,
+			ErrMsg: "Path does not exist",
+		}, nil
+	}
+
+	return &pb.StatPathResponse{
+		Ok: true,
+		PathInfo: &pb.PathInfo{
+			Path:    in.Path,
+			Size:    uint64(info.Size()),
+			ModTime: timestamppb.New(info.ModTime()),
+			IsDir:   info.IsDir(),
+		},
+	}, nil
+}
+
 // Volume business logic
 func (vs *GlobalVolumeService) getOrCreateVolume(ctx context.Context, workspace *types.Workspace, volumeName string) (*types.Volume, error) {
 	volume, err := vs.backendRepo.GetOrCreateVolume(ctx, workspace.Id, volumeName)

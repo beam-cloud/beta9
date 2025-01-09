@@ -190,22 +190,35 @@ def read_with_progress(
 
     Version 2:
 
-      This version supports copying files and directories to and from a volume.
+      Upload and download files or directories between a volume and your system.
 
       Examples:
 
-        # Upload a file to a volume
-        {cli_name} cp file.txt {cli_name}://myvol/
-        {cli_name} cp file.txt {cli_name}://myvol/file.txt
-        {cli_name} cp file.txt {cli_name}://myvol/file.new
+        # Upload a file
+        {cli_name} cp file.txt {cli_name}://myvol/              # ./file.txt => {cli_name}://myvol/file.txt
+        {cli_name} cp file.txt {cli_name}://myvol/file.txt      # ./file.txt => {cli_name}://myvol/file.txt
+        {cli_name} cp file.txt {cli_name}://myvol/file.new      # ./file.txt => {cli_name}://myvol/file.new
+        {cli_name} cp file.txt {cli_name}://myvol/hello         # ./file.txt => {cli_name}://myvol/hello.txt (keeps the extension)
 
-        # Upload a directory to a volume
-        {cli_name} cp mydir {cli_name}://myvol/
-        {cli_name} cp mydir {cli_name}://myvol/mydir
-        {cli_name} cp mydir {cli_name}://myvol/newdir
+        # Upload a directory
+        {cli_name} cp mydir {cli_name}://myvol                  # ./mydir/file.txt => {cli_name}://myvol/file.txt
+        {cli_name} cp mydir {cli_name}://myvol/mydir            # ./mydir/file.txt => {cli_name}://myvol/mydir/file.txt
+        {cli_name} cp mydir {cli_name}://myvol/newdir           # ./mydir/file.txt => {cli_name}://myvol/newdir/file.txt
 
-        # Copy a file from a volume to the local filesystem
-        {cli_name} cp {cli_name}://myvol/file.txt .
+        # Upload a directory (with trailing slash)
+        {cli_name} cp mydir {cli_name}://myvol/                 # ./mydir/file.txt => {cli_name}://myvol/mydir/file.txt
+        {cli_name} cp mydir {cli_name}://myvol/newdir/          # ./mydir/file.txt => {cli_name}://myvol/newdir/mydir/file.txt
+        {cli_name} cp . {cli_name}://myvol/                     # ./file.txt => {cli_name}://myvol/file.txt
+
+        # Download a file
+        {cli_name} cp {cli_name}://myvol/file.txt .             # {cli_name}://myvol/file.txt => ./file.txt
+        {cli_name} cp {cli_name}://myvol/file.txt file.new      # {cli_name}://myvol/file.txt => ./file.new
+
+        # Download a directory
+        {cli_name} cp {cli_name}://myvol/mydir .                # {cli_name}://myvol/mydir/file.txt => ./file.txt
+
+        # Download a directory (with trailing slash)
+        {cli_name} cp {cli_name}://myvol/mydir/ .               # {cli_name}://myvol/mydir/file.txt => ./mydir/file.txt
         \b
     """,
 )
