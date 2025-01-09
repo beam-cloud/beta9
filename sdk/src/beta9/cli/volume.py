@@ -252,8 +252,9 @@ def read_with_progress(
     "--version",
     is_eager=True,
     type=click.Choice(["1", "2"]),
-    help="Version of this command.",
-    default="2",
+    help="The version of this command to run. [default is determined by the server]",
+    default=None,
+    required=False,
 )
 @extraclick.pass_service_client
 def cp(
@@ -262,13 +263,10 @@ def cp(
     destination: Union[Path, RemotePath],
     version: str,
 ):
-    if version == "1":
-        terminal.warn("v1 of the cp command is deprecated. Use v2 instead.")
-        return cp_v1(service, source, destination)  # type: ignore
-
     res = service.volume.get_file_service_info(GetFileServiceInfoRequest())
-    if not res.ok or not res.enabled:
-        terminal.warn("Multipart upload/download is not enabled. Falling back to v1.")
+    if version == "1" or (version is None and res.command_version == 1) or not res.enabled:
+        if "://" in str(source) or "://" in str(destination):
+            raise click.BadArgumentUsage("Remote path syntax ($scheme://) is not supported in v1.")
         return cp_v1(service, source, destination)  # type: ignore
 
     if isinstance(source, Path) and isinstance(destination, Path):

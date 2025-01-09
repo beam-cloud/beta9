@@ -129,6 +129,9 @@ type FileServiceConfig struct {
 	AccessKey   string `key:"accessKey" json:"access_key"`
 	SecretKey   string `key:"secretKey" json:"secret_key"`
 	Region      string `key:"region" json:"region"`
+
+	// Determines which version of the copy command to use in the CLI
+	CommandVersion uint32 `key:"commandVersion" json:"command_version"`
 }
 
 type ImageServiceConfig struct {

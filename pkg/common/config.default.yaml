@@ -62,6 +62,7 @@ fileService:
   accessKey: test
   secretKey: test-test-test
   region:
+  commandVersion: 1
 imageService:
   localCacheEnabled: true
   registryStore: local

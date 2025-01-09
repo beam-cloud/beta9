@@ -170,6 +170,7 @@ class GetFileServiceInfoResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     enabled: bool = betterproto.bool_field(3)
+    command_version: int = betterproto.uint32_field(4)
 
 
 @dataclass(eq=False, repr=False)

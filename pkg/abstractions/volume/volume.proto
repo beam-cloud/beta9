@@ -140,6 +140,7 @@ message GetFileServiceInfoResponse {
   bool ok = 1;
   string err_msg = 2;
   bool enabled = 3;
+  uint32 command_version = 4;
 }
 
 message CreatePresignedURLRequest {

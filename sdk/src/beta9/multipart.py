@@ -581,17 +581,8 @@ class PathTypeConverter(click.ParamType):
         param: Optional[click.Parameter] = None,
         ctx: Optional[click.Context] = None,
     ) -> Union[str, Path, RemotePath]:
-        if (
-            ctx is not None
-            and (version := ctx.params.get(self.version_option_name))
-            and version == "1"
-        ):
-            # Don't convert to RemotePath for v1
-            return value
-
         if "://" in value:
             return RemotePath.parse(value)
-
         return Path(value)
 
 
