@@ -48,6 +48,13 @@ func joinCleanPath(parts ...string) string {
 	return filepath.Join(parts...)
 }
 
+func (s *GlobalVolumeService) GetFileServiceInfo(ctx context.Context, in *pb.GetFileServiceInfoRequest) (*pb.GetFileServiceInfoResponse, error) {
+	return &pb.GetFileServiceInfoResponse{
+		Ok:      true,
+		Enabled: s.config.EndpointURL != "" && s.config.BucketName != "",
+	}, nil
+}
+
 func (s *GlobalVolumeService) CreatePresignedURL(ctx context.Context, in *pb.CreatePresignedURLRequest) (*pb.CreatePresignedURLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 

@@ -15,6 +15,7 @@ from ..clients.volume import (
     DeletePathRequest,
     DeleteVolumeRequest,
     DeleteVolumeResponse,
+    GetFileServiceInfoRequest,
     GetOrCreateVolumeRequest,
     GetOrCreateVolumeResponse,
     ListPathRequest,
@@ -249,11 +250,10 @@ def read_with_progress(
 )
 @click.option(
     "--version",
-    "-v",
     is_eager=True,
-    type=click.STRING,
-    help="Version of the copy API.",
-    default="v2",
+    type=click.Choice(["1", "2"]),
+    help="Version of this command.",
+    default="2",
 )
 @extraclick.pass_service_client
 def cp(
@@ -262,7 +262,13 @@ def cp(
     destination: Union[Path, RemotePath],
     version: str,
 ):
-    if version == "v1":
+    if version == "1":
+        terminal.warn("v1 of the cp command is deprecated. Use v2 instead.")
+        return cp_v1(service, source, destination)  # type: ignore
+
+    res = service.volume.get_file_service_info(GetFileServiceInfoRequest())
+    if not res.ok or not res.enabled:
+        terminal.warn("Multipart upload/download is not enabled. Falling back to v1.")
         return cp_v1(service, source, destination)  # type: ignore
 
     if isinstance(source, Path) and isinstance(destination, Path):

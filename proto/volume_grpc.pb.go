@@ -27,6 +27,7 @@ const (
 	VolumeService_CopyPathStream_FullMethodName          = "/volume.VolumeService/CopyPathStream"
 	VolumeService_MovePath_FullMethodName                = "/volume.VolumeService/MovePath"
 	VolumeService_StatPath_FullMethodName                = "/volume.VolumeService/StatPath"
+	VolumeService_GetFileServiceInfo_FullMethodName      = "/volume.VolumeService/GetFileServiceInfo"
 	VolumeService_CreatePresignedURL_FullMethodName      = "/volume.VolumeService/CreatePresignedURL"
 	VolumeService_CreateMultipartUpload_FullMethodName   = "/volume.VolumeService/CreateMultipartUpload"
 	VolumeService_CompleteMultipartUpload_FullMethodName = "/volume.VolumeService/CompleteMultipartUpload"
@@ -46,6 +47,7 @@ type VolumeServiceClient interface {
 	MovePath(ctx context.Context, in *MovePathRequest, opts ...grpc.CallOption) (*MovePathResponse, error)
 	StatPath(ctx context.Context, in *StatPathRequest, opts ...grpc.CallOption) (*StatPathResponse, error)
 	// Multipart Upload
+	GetFileServiceInfo(ctx context.Context, in *GetFileServiceInfoRequest, opts ...grpc.CallOption) (*GetFileServiceInfoResponse, error)
 	CreatePresignedURL(ctx context.Context, in *CreatePresignedURLRequest, opts ...grpc.CallOption) (*CreatePresignedURLResponse, error)
 	CreateMultipartUpload(ctx context.Context, in *CreateMultipartUploadRequest, opts ...grpc.CallOption) (*CreateMultipartUploadResponse, error)
 	CompleteMultipartUpload(ctx context.Context, in *CompleteMultipartUploadRequest, opts ...grpc.CallOption) (*CompleteMultipartUploadResponse, error)
@@ -157,6 +159,15 @@ func (c *volumeServiceClient) StatPath(ctx context.Context, in *StatPathRequest,
 	return out, nil
 }
 
+func (c *volumeServiceClient) GetFileServiceInfo(ctx context.Context, in *GetFileServiceInfoRequest, opts ...grpc.CallOption) (*GetFileServiceInfoResponse, error) {
+	out := new(GetFileServiceInfoResponse)
+	err := c.cc.Invoke(ctx, VolumeService_GetFileServiceInfo_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *volumeServiceClient) CreatePresignedURL(ctx context.Context, in *CreatePresignedURLRequest, opts ...grpc.CallOption) (*CreatePresignedURLResponse, error) {
 	out := new(CreatePresignedURLResponse)
 	err := c.cc.Invoke(ctx, VolumeService_CreatePresignedURL_FullMethodName, in, out, opts...)
@@ -206,6 +217,7 @@ type VolumeServiceServer interface {
 	MovePath(context.Context, *MovePathRequest) (*MovePathResponse, error)
 	StatPath(context.Context, *StatPathRequest) (*StatPathResponse, error)
 	// Multipart Upload
+	GetFileServiceInfo(context.Context, *GetFileServiceInfoRequest) (*GetFileServiceInfoResponse, error)
 	CreatePresignedURL(context.Context, *CreatePresignedURLRequest) (*CreatePresignedURLResponse, error)
 	CreateMultipartUpload(context.Context, *CreateMultipartUploadRequest) (*CreateMultipartUploadResponse, error)
 	CompleteMultipartUpload(context.Context, *CompleteMultipartUploadRequest) (*CompleteMultipartUploadResponse, error)
@@ -240,6 +252,9 @@ func (UnimplementedVolumeServiceServer) MovePath(context.Context, *MovePathReque
 }
 func (UnimplementedVolumeServiceServer) StatPath(context.Context, *StatPathRequest) (*StatPathResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StatPath not implemented")
+}
+func (UnimplementedVolumeServiceServer) GetFileServiceInfo(context.Context, *GetFileServiceInfoRequest) (*GetFileServiceInfoResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetFileServiceInfo not implemented")
 }
 func (UnimplementedVolumeServiceServer) CreatePresignedURL(context.Context, *CreatePresignedURLRequest) (*CreatePresignedURLResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreatePresignedURL not implemented")
@@ -418,6 +433,24 @@ func _VolumeService_StatPath_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
+func _VolumeService_GetFileServiceInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetFileServiceInfoRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(VolumeServiceServer).GetFileServiceInfo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: VolumeService_GetFileServiceInfo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(VolumeServiceServer).GetFileServiceInfo(ctx, req.(*GetFileServiceInfoRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _VolumeService_CreatePresignedURL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreatePresignedURLRequest)
 	if err := dec(in); err != nil {
@@ -524,6 +557,10 @@ var VolumeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "StatPath",
 			Handler:    _VolumeService_StatPath_Handler,
+		},
+		{
+			MethodName: "GetFileServiceInfo",
+			Handler:    _VolumeService_GetFileServiceInfo_Handler,
 		},
 		{
 			MethodName: "CreatePresignedURL",

@@ -161,6 +161,18 @@ class PresignedUrlParams(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class GetFileServiceInfoRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class GetFileServiceInfoResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    enabled: bool = betterproto.bool_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class CreatePresignedUrlRequest(betterproto.Message):
     volume_name: str = betterproto.string_field(1)
     volume_path: str = betterproto.string_field(2)
@@ -303,6 +315,15 @@ class VolumeServiceStub(SyncServiceStub):
             StatPathRequest,
             StatPathResponse,
         )(stat_path_request)
+
+    def get_file_service_info(
+        self, get_file_service_info_request: "GetFileServiceInfoRequest"
+    ) -> "GetFileServiceInfoResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/GetFileServiceInfo",
+            GetFileServiceInfoRequest,
+            GetFileServiceInfoResponse,
+        )(get_file_service_info_request)
 
     def create_presigned_url(
         self, create_presigned_url_request: "CreatePresignedUrlRequest"

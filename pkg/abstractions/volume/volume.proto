@@ -16,6 +16,7 @@ service VolumeService {
   rpc StatPath(StatPathRequest) returns (StatPathResponse) {}
 
   // Multipart Upload
+  rpc GetFileServiceInfo(GetFileServiceInfoRequest) returns (GetFileServiceInfoResponse) {}
   rpc CreatePresignedURL(CreatePresignedURLRequest) returns (CreatePresignedURLResponse) {}
   rpc CreateMultipartUpload(CreateMultipartUploadRequest) returns (CreateMultipartUploadResponse) {}
   rpc CompleteMultipartUpload(CompleteMultipartUploadRequest) returns (CompleteMultipartUploadResponse) {}
@@ -131,6 +132,14 @@ enum PresignedURLMethod {
   PutObject = 1;
   HeadObject = 2;
   UploadPart = 3;
+}
+
+message GetFileServiceInfoRequest {}
+
+message GetFileServiceInfoResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  bool enabled = 3;
 }
 
 message CreatePresignedURLRequest {
