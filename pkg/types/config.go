@@ -130,8 +130,9 @@ type FileServiceConfig struct {
 	SecretKey   string `key:"secretKey" json:"secret_key"`
 	Region      string `key:"region" json:"region"`
 
-	// Determines which version of the copy command to use in the CLI
-	CommandVersion uint32 `key:"commandVersion" json:"command_version"`
+	// Determines if the SDK should use this service
+	// Requires that EndpointURL and BucketName are set
+	Enabled bool `key:"enabled" json:"enabled"`
 }
 
 type ImageServiceConfig struct {

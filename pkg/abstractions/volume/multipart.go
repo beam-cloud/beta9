@@ -50,9 +50,8 @@ func joinCleanPath(parts ...string) string {
 
 func (s *GlobalVolumeService) GetFileServiceInfo(ctx context.Context, in *pb.GetFileServiceInfoRequest) (*pb.GetFileServiceInfoResponse, error) {
 	return &pb.GetFileServiceInfoResponse{
-		Ok:             true,
-		Enabled:        s.config.EndpointURL != "" && s.config.BucketName != "",
-		CommandVersion: s.config.CommandVersion,
+		Ok:      true,
+		Enabled: s.config.Enabled && s.config.EndpointURL != "" && s.config.BucketName != "",
 	}, nil
 }
 

@@ -1,6 +1,6 @@
 import glob
 from pathlib import Path
-from typing import Iterable, List, Union
+from typing import Iterable, List, Optional, Union
 
 import click
 from rich.table import Column, Table, box
@@ -151,9 +151,8 @@ def read_with_progress(
 @common.command(
     help="Upload or download contents to or from a volume.",
     epilog="""
-    Version 1:
+    Version 1 (Streaming uploads to the Gateway):
 
-      !!! This is deprecated. Use v2 of this command.
       Uploads files or directories to a volume. Downloads are not supported.
 
       SOURCE and DESTINATION syntax:
@@ -193,9 +192,14 @@ def read_with_progress(
         {cli_name} cp mydir/\\[a-c\\]/data[0-1].json' myvol/data
         {cli_name} cp mydir/\\?/data\\?.json myvol/sub/path
 
-    Version 2:
+    Version 2 (Multipart uploads/downloads via an external file service):
 
       Upload and download files or directories between a volume and your system.
+
+      This is available if the Gateway has a file service configured and enabled.
+      When enabled, this command will use the external file service to upload and
+      download files directly only using the Gateway for initiating, completing, or
+      cancelling the transfer.
 
       SOURCE and DESTINATION syntax:
 
@@ -249,10 +253,9 @@ def read_with_progress(
     required=True,
 )
 @click.option(
-    "--version",
-    is_eager=True,
-    type=click.Choice(["1", "2"]),
-    help="The version of this command to run. [default is determined by the server]",
+    "--multipart/--no-multipart",
+    "use_multipart",
+    help="Use multipart upload/download. [default: True if the server supports it, else False]",
     default=None,
     required=False,
 )
@@ -261,12 +264,20 @@ def cp(
     service: ServiceClient,
     source: Union[Path, RemotePath],
     destination: Union[Path, RemotePath],
-    version: str,
+    use_multipart: Optional[bool],
 ):
     res = service.volume.get_file_service_info(GetFileServiceInfoRequest())
-    if version == "1" or (version is None and res.command_version == 1) or not res.enabled:
+    if res.enabled and (use_multipart is None or use_multipart):
+        use_multipart = True
+    elif not res.enabled and use_multipart:
+        terminal.warn("Multipart upload/download is not currently supported by the server.")
+        use_multipart = False
+
+    if not use_multipart:
         if "://" in str(source) or "://" in str(destination):
-            raise click.BadArgumentUsage("Remote path syntax ($scheme://) is not supported in v1.")
+            raise click.BadArgumentUsage(
+                "Remote path syntax ($scheme://) is not supported without multipart transfers enabled."
+            )
         return cp_v1(service, source, destination)  # type: ignore
 
     if isinstance(source, Path) and isinstance(destination, Path):
