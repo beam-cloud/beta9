@@ -126,6 +126,31 @@ To use our fully automated setup, run the `setup` make target.
 make setup
 ```
 
+#### Local DNS
+
+This is required to use an external file service for mulitpart uploads and range downloads. Its optional for using the subdomain middlware (host-based URLs).
+
+```shell
+brew install dnsmasq
+echo 'address=/cluster.local/127.0.0.1' >> /opt/homebrew/etc/dnsmasq.conf
+sudo bash -c 'mkdir -p /etc/resolver'
+sudo bash -c 'echo "nameserver 127.0.0.1" > /etc/resolver/cluster.local'
+sudo brew services start dnsmasq
+```
+
+To use subdomain or host-based URLs, add this to the config and rebuild the Beta9 gateway.
+
+```yaml
+gateway:
+  invokeURLType: host
+```
+
+You should now be able to access your local k3s instance via a domain.
+
+```shell
+curl http://beta9-gateway.beta9.svc.cluster.local:1994/api/v1/health
+```
+
 ### Setting Up the SDK
 
 The SDK is written in Python. You'll need Python 3.8 or higher. Use the `setup-sdk` make target to get started.
