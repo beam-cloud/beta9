@@ -149,7 +149,7 @@ def read_with_progress(
 
 
 @common.command(
-    help="Copy contents to and from a volume.",
+    help="Upload or download contents to or from a volume.",
     epilog="""
     Version 1:
 
