@@ -43,7 +43,6 @@ type Builder struct {
 	registry      *common.ImageRegistry
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
-	rdb           *common.RedisClient
 }
 
 type BuildStep struct {
@@ -131,14 +130,13 @@ func (o *BuildOpts) addPythonRequirements() {
 	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 }
 
-func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
+func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository) (*Builder, error) {
 	return &Builder{
 		config:        config,
 		scheduler:     scheduler,
 		tailscale:     tailscale,
 		registry:      registry,
 		containerRepo: containerRepo,
-		rdb:           rdb,
 	}, nil
 }
 
@@ -285,14 +283,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
-
-	err = b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
-	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
-		return err
-	}
-
-	go b.keepAlive(ctx, containerId, ctx.Done())
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
@@ -446,22 +436,6 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 // Check if an image already exists in the registry
 func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
-}
-
-func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
-	ticker := time.NewTicker(time.Duration(buildContainerKeepAliveIntervalS) * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-done:
-			return
-		case <-ticker.C:
-			b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
-		}
-	}
 }
 
 var imageNamePattern = regexp.MustCompile(
