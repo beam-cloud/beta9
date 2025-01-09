@@ -80,7 +80,6 @@ type ContainerInstance struct {
 	LogBuffer       *common.LogBuffer
 	Request         *types.ContainerRequest
 	InstanceContext context.Context
-	InstanceCancel  func()
 }
 
 type ContainerOptions struct {
@@ -275,13 +274,19 @@ func (s *Worker) Run() error {
 				log.Info().Str("container_id", containerId).Msg("running container")
 
 				ctx, cancel := context.WithCancel(context.Background())
+				eventbus := common.NewEventBus(s.redisClient, common.EventBusSubscriber{Type: common.EventType("build" + "-" + containerId), Callback: func(e *common.Event) bool {
+					log.Info().Str("container_id", containerId).Msg("received stop build event")
+					cancel()
+					return true
+				}})
+				go eventbus.ReceiveEvents(ctx)
+
 				s.containerInstances.Set(containerId, &ContainerInstance{
 					Id:              containerId,
 					StubId:          request.StubId,
 					LogBuffer:       common.NewLogBuffer(),
 					Request:         request,
 					InstanceContext: ctx,
-					InstanceCancel:  cancel,
 				})
 				err := s.RunContainer(ctx, request)
 				if err != nil {

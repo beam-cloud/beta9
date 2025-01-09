@@ -246,7 +246,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go func() {
 		<-ctx.Done() // If user cancels the build, send a stop-container event to the scheduler
-		b.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
+		b.scheduler.StopBuild(containerId)
 	}()
 
 	// Allow config to override default build container settings
@@ -312,36 +312,43 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Waiting for build container to start...\n"}
 	start := time.Now()
 	buildContainerRunning := false
-	for {
-		r, err := client.Status(containerId)
-		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while checking container status: " + err.Error()}
-			return err
-		}
 
-		if r.Running {
-			buildContainerRunning = true
-			break
-		}
+	for !buildContainerRunning {
+		select {
+		case <-ctx.Done():
+			log.Info().Str("container_id", containerId).Msg("build was aborted")
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Build was aborted.\n"}
+			return ctx.Err()
 
-		exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
-		if err == nil && exitCode != 0 {
-			msg, ok := types.WorkerContainerExitCodes[exitCode]
-			if !ok {
-				msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+		case <-time.After(100 * time.Millisecond):
+			r, err := client.Status(containerId)
+			if err != nil {
+				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occurred while checking container status: " + err.Error()}
+				return err
 			}
-			// Wait for any final logs to get sent before returning
-			time.Sleep(200 * time.Millisecond)
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
-			return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
-		}
 
-		if time.Since(start) > containerSpinupTimeout {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Timeout: container not running after 180 seconds.\n"}
-			return errors.New("timeout: container not running after 180 seconds")
-		}
+			if r.Running {
+				buildContainerRunning = true
+				continue
+			}
 
-		time.Sleep(100 * time.Millisecond)
+			exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
+			if err == nil && exitCode != 0 {
+				msg, ok := types.WorkerContainerExitCodes[exitCode]
+				if !ok {
+					msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+				}
+				// Wait for any final logs to get sent before returning
+				time.Sleep(200 * time.Millisecond)
+				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+				return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
+			}
+
+			if time.Since(start) > containerSpinupTimeout {
+				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Timeout: container not running after 180 seconds.\n"}
+				return errors.New("timeout: container not running after 180 seconds")
+			}
+		}
 	}
 
 	imageId, err := b.GetImageId(opts)

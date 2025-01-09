@@ -164,6 +164,21 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	return nil
 }
 
+func (s *Scheduler) StopBuild(containerId string) error {
+	_, err := s.eventBus.Send(&common.Event{
+		Type:          common.EventType("build" + "-" + containerId),
+		Args:          map[string]any{"container_id": containerId},
+		LockAndDelete: false,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to send stop build event")
+		return err
+	}
+
+	log.Info().Str("container_id", containerId).Msg("sent stop build event")
+	return nil
+}
+
 func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoolController, error) {
 	controllers := []WorkerPoolController{}
 

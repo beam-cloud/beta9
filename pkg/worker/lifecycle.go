@@ -47,7 +47,7 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 	}
 
 	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
-		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
+		log.Info().Str("container_id", stopArgs.ContainerId).Time("timestamp", time.Now()).Msg("received stop container event")
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
@@ -62,11 +62,6 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	if !exists {
 		log.Info().Str("container_id", containerId).Msg("container not found")
 		return nil
-	}
-
-	if instance.Request.IsBuildRequest() {
-		log.Info().Str("container_id", containerId).Msg("cancelling build request's context")
-		instance.InstanceCancel()
 	}
 
 	signal := int(syscall.SIGTERM)
@@ -619,6 +614,11 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return cleanup(-1, err)
+	}
+
+	// Confirm that the process is healthy
+	if err := process.Signal(syscall.Signal(0)); err == nil {
+		log.Info().Str("container_id", containerId).Msg("container started and is healthy")
 	}
 
 	// Wait for the container to exit
