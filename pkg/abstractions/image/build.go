@@ -244,7 +244,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	containerId := b.genContainerId()
 
 	go func() {
-		<-ctx.Done() // If user cancels the build, send a stop-container event to the scheduler
+		<-ctx.Done() // If user cancels the build, send a stop-build event to the scheduler
 		b.scheduler.StopBuild(containerId)
 	}()
 
