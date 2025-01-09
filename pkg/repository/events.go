@@ -160,14 +160,15 @@ func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, worke
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerOOMEvent(containerID string, workerID string, stubId string) {
+func (t *TCPEventClientRepo) PushContainerOOMEvent(containerID string, workerID string, request *types.ContainerRequest) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
-			StubID:      stubId,
+			StubID:      request.StubId,
+			Request:     sanitizeContainerRequest(request),
 			Status:      types.EventContainerLifecycleOOM,
 		},
 	)

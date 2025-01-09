@@ -1,0 +1,52 @@
+# fly.toml app configuration file generated for my-deployment on 2025-01-09T10:06:05-05:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'my-deployment'
+primary_region = 'iad'
+kill_signal = 'SIGTERM'
+
+[build]
+
+[deploy]
+  strategy = 'immediate'
+
+[env]
+  JFS_ADDRESS = '0.0.0.0:9000'
+
+[http_service]
+  internal_port = 9000
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 30000
+    soft_limit = 30000
+
+  [http_service.tls_options]
+    versions = ['TLSv1.2', 'TLSv1.3']
+    default_self_signed = false
+
+  [http_service.http_options]
+    idle_timeout = 900
+
+    [http_service.http_options.response]
+      pristine = true
+
+[checks]
+  [checks.app]
+    port = 9000
+    type = 'http'
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '30s'
+    method = 'get'
+    path = '/minio/health/live'
+
+[[vm]]
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 2

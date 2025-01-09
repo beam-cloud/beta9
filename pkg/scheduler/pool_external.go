@@ -449,8 +449,8 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
+	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPool.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
 
-	tmpSizeLimit := resource.MustParse("30Gi")
 	return []corev1.Volume{
 		{
 			Name: logVolumeName,

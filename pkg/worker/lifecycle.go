@@ -251,7 +251,7 @@ func (s *Worker) buildOrPullImage(ctx context.Context, request *types.ContainerR
 	case request.BuildOptions.SourceImage != nil:
 		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.BuildOptions.SourceImage)
 
-		if err := s.imageClient.PullAndArchiveImage(ctx, *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
+		if err := s.imageClient.PullAndArchiveImage(ctx, outputLogger, *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
 			return err
 		}
 	}
@@ -608,8 +608,8 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	pid := state.Pid
 
 	// Start monitoring the container
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)        // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, containerId, request.StubId, outputLogger) // Watch for OOM events
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, request, outputLogger)              // Watch for OOM events
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
@@ -646,12 +646,13 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
 }
 
-func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, stubId string, outputLogger *slog.Logger) {
+func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) {
 	var (
-		seenEvents = make(map[string]struct{})
-		ch         <-chan *runc.Event
-		err        error
-		ticker     = time.NewTicker(time.Second)
+		seenEvents  = make(map[string]struct{})
+		ch          <-chan *runc.Event
+		err         error
+		ticker      = time.NewTicker(time.Second)
+		containerId = request.ContainerId
 	)
 
 	defer ticker.Stop()
@@ -702,7 +703,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, containerId string, stubId 
 
 			if event.Type == "oom" {
 				outputLogger.Error("A process in the container was killed due to out-of-memory conditions.")
-				s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, stubId)
+				s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			}
 		}
 	}

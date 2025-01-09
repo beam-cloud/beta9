@@ -33,6 +33,7 @@ type VolumeService interface {
 
 type GlobalVolumeService struct {
 	pb.UnimplementedVolumeServiceServer
+	config      types.FileServiceConfig
 	backendRepo repository.BackendRepository
 	rdb         *common.RedisClient
 }
@@ -51,8 +52,9 @@ type VolumePathTokenData struct {
 
 var volumeRoutePrefix string = "/volume"
 
-func NewGlobalVolumeService(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, rdb *common.RedisClient, routeGroup *echo.Group) (VolumeService, error) {
+func NewGlobalVolumeService(config types.FileServiceConfig, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, rdb *common.RedisClient, routeGroup *echo.Group) (VolumeService, error) {
 	gvs := &GlobalVolumeService{
+		config:      config,
 		backendRepo: backendRepo,
 		rdb:         rdb,
 	}
@@ -223,6 +225,36 @@ func (vs *GlobalVolumeService) MovePath(ctx context.Context, in *pb.MovePathRequ
 	return &pb.MovePathResponse{
 		Ok:      true,
 		NewPath: newPath,
+	}, nil
+}
+
+func (vs *GlobalVolumeService) StatPath(ctx context.Context, in *pb.StatPathRequest) (*pb.StatPathResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	path, err := vs.getFilePath(ctx, in.Path, authInfo.Workspace)
+	if err != nil {
+		return &pb.StatPathResponse{
+			Ok:     false,
+			ErrMsg: err.Error(),
+		}, nil
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return &pb.StatPathResponse{
+			Ok:     true,
+			ErrMsg: "Path does not exist",
+		}, nil
+	}
+
+	return &pb.StatPathResponse{
+		Ok: true,
+		PathInfo: &pb.PathInfo{
+			Path:    in.Path,
+			Size:    uint64(info.Size()),
+			ModTime: timestamppb.New(info.ModTime()),
+			IsDir:   info.IsDir(),
+		},
 	}, nil
 }
 

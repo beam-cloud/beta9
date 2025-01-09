@@ -13,6 +13,14 @@ service VolumeService {
   rpc DeletePath(DeletePathRequest) returns (DeletePathResponse) {}
   rpc CopyPathStream(stream CopyPathRequest) returns (CopyPathResponse) {}
   rpc MovePath(MovePathRequest) returns (MovePathResponse) {}
+  rpc StatPath(StatPathRequest) returns (StatPathResponse) {}
+
+  // Multipart Upload
+  rpc GetFileServiceInfo(GetFileServiceInfoRequest) returns (GetFileServiceInfoResponse) {}
+  rpc CreatePresignedURL(CreatePresignedURLRequest) returns (CreatePresignedURLResponse) {}
+  rpc CreateMultipartUpload(CreateMultipartUploadRequest) returns (CreateMultipartUploadResponse) {}
+  rpc CompleteMultipartUpload(CompleteMultipartUploadRequest) returns (CompleteMultipartUploadResponse) {}
+  rpc AbortMultipartUpload(AbortMultipartUploadRequest) returns (AbortMultipartUploadResponse) {}
 }
 
 message VolumeInstance {
@@ -99,4 +107,102 @@ message MovePathResponse {
   bool ok = 1;
   string err_msg = 2;
   string new_path = 3;
+}
+
+message StatPathRequest {
+  string path = 1;
+}
+
+message StatPathResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  PathInfo path_info = 3;
+}
+
+message PresignedURLParams {
+  string upload_id = 1;
+  uint32 part_number = 2;
+
+  uint64 content_length = 3;
+  string content_type = 4;
+}
+
+enum PresignedURLMethod {
+  GetObject = 0;
+  PutObject = 1;
+  HeadObject = 2;
+  UploadPart = 3;
+}
+
+message GetFileServiceInfoRequest {}
+
+message GetFileServiceInfoResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  bool enabled = 3;
+  uint32 command_version = 4;
+}
+
+message CreatePresignedURLRequest {
+  string volume_name = 1;
+  string volume_path = 2;
+  uint32 expires = 3;
+
+  PresignedURLMethod method = 4;
+  PresignedURLParams params = 5;
+}
+
+message CreatePresignedURLResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string url = 3;
+}
+
+message CreateMultipartUploadRequest {
+  string volume_name = 1;
+  string volume_path = 2;
+  uint64 chunk_size = 3;
+  uint64 file_size = 4;
+}
+
+message FileUploadPart {
+  uint32 number = 1;
+  uint64 start = 2;
+  uint64 end = 3;
+  string url = 4;
+}
+
+message CreateMultipartUploadResponse {
+  bool ok = 1;
+  string err_msg = 2;
+  string upload_id = 3;
+  repeated FileUploadPart file_upload_parts = 4;
+}
+
+message CompletedPart {
+  uint32 number = 1;
+  string etag = 2;
+}
+
+message CompleteMultipartUploadRequest {
+  string upload_id = 1;
+  string volume_name = 2;
+  string volume_path = 3;
+  repeated CompletedPart completed_parts = 4;
+}
+
+message CompleteMultipartUploadResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message AbortMultipartUploadRequest {
+  string upload_id = 1;
+  string volume_name = 2;
+  string volume_path = 3;
+}
+
+message AbortMultipartUploadResponse {
+  bool ok = 1;
+  string err_msg = 2;
 }

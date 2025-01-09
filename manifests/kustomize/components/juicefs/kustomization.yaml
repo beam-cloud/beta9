@@ -4,3 +4,14 @@ kind: Component
 
 generators:
 - helm-chart-generator.yaml
+
+patches:
+- target:
+    kind: Deployment
+    name: juicefs-s3-gateway
+  patch: |-
+    - op: remove
+      path: /spec/template/spec/containers/0/env/0/valueFrom
+    - op: add
+      path: /spec/template/spec/containers/0/env/0/value
+      value: 0.0.0.0

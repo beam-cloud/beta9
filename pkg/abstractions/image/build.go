@@ -30,7 +30,7 @@ const (
 	defaultImageBuildGracefulShutdownS               = 5 * time.Second
 	defaultBuildContainerCpu           int64         = 1000
 	defaultBuildContainerMemory        int64         = 1024
-	defaultContainerSpinupTimeout      time.Duration = 180 * time.Second
+	defaultContainerSpinupTimeout      time.Duration = 600 * time.Second
 
 	pipCommandType        string = "pip"
 	shellCommandType      string = "shell"
@@ -219,7 +219,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	case opts.Dockerfile != "":
 		opts.addPythonRequirements()
 		dockerfile = &opts.Dockerfile
-		containerSpinupTimeout = 600 * time.Second
 	case opts.ExistingImageUri != "":
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {

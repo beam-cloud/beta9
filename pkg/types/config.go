@@ -15,6 +15,7 @@ type AppConfig struct {
 	PrettyLogs     bool                      `key:"prettyLogs" json:"pretty_logs"`
 	Database       DatabaseConfig            `key:"database" json:"database"`
 	GatewayService GatewayServiceConfig      `key:"gateway" json:"gateway_service"`
+	FileService    FileServiceConfig         `key:"fileService" json:"file_service"`
 	ImageService   ImageServiceConfig        `key:"imageservice" json:"image_service"`
 	Storage        StorageConfig             `key:"storage" json:"storage"`
 	Worker         WorkerConfig              `key:"worker" json:"worker"`
@@ -122,6 +123,18 @@ type GatewayServiceConfig struct {
 	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
+type FileServiceConfig struct {
+	EndpointURL string `key:"endpointUrl" json:"endpoint_url"`
+	BucketName  string `key:"bucketName" json:"bucket_name"`
+	AccessKey   string `key:"accessKey" json:"access_key"`
+	SecretKey   string `key:"secretKey" json:"secret_key"`
+	Region      string `key:"region" json:"region"`
+
+	// Determines if the SDK should use this service
+	// Requires that EndpointURL and BucketName are set
+	Enabled bool `key:"enabled" json:"enabled"`
+}
+
 type ImageServiceConfig struct {
 	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
 	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
@@ -223,6 +236,7 @@ type WorkerConfig struct {
 	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
 	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
 	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
+	TmpSizeLimit               string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
 }
 
 type PoolMode string
@@ -245,6 +259,7 @@ type WorkerPoolConfig struct {
 	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
 	UserData             string                            `key:"userData" json:"user_data"`
 	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
+	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 }
 
 type WorkerPoolJobSpecConfig struct {

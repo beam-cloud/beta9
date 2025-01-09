@@ -56,6 +56,13 @@ gateway:
     memory: 32768
     maxReplicas: 10
     maxGpuCount: 2
+fileService:
+  enabled: true
+  endpointUrl: http://juicefs-s3-gateway.beta9.svc.cluster.local:9900
+  bucketName: beta9-fs
+  accessKey: test
+  secretKey: test-test-test
+  region:
 imageService:
   localCacheEnabled: true
   registryStore: local
@@ -124,6 +131,7 @@ worker:
     build:
       mode: local
       requiresPoolSelector: true
+      tmpSizeLimit: 50Gi
       jobSpec:
         nodeSelector: {}
       poolSizing:
@@ -159,6 +167,7 @@ worker:
   imagePullSecrets: []
   namespace: beta9
   serviceAccountName: default
+  tmpSizeLimit: 30Gi
   # non-standard k8s job spec
   imagePVCName: beta9-images
   jobResourcesEnforced: false
