@@ -112,6 +112,7 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 		return &pb.RunCExecResponse{Ok: false}, nil
 	}
 	if instance.Request.IsBuildRequest() {
+		ctx = context.Background()
 		process.Env = append(process.Env, instance.Request.BuildOptions.BuildSecrets...)
 	}
 

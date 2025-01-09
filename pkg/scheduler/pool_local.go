@@ -163,8 +163,9 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 
 	containers := []corev1.Container{
 		{
-			Name:  defaultContainerName,
-			Image: workerImage,
+			Name:            defaultContainerName,
+			Image:           workerImage,
+			ImagePullPolicy: "Always",
 			Command: []string{
 				defaultWorkerEntrypoint,
 			},
