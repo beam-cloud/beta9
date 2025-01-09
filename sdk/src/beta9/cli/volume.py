@@ -250,6 +250,12 @@ def cp(
     if version == "v1":
         return cp_v1(service, source, destination)  # type: ignore
 
+    if isinstance(source, Path) and isinstance(destination, Path):
+        return terminal.error("Source and destination cannot both be local paths.")
+    if isinstance(source, RemotePath) and isinstance(destination, RemotePath):
+        # TODO: Implement remote to remote copy
+        return terminal.error("Source and destination cannot both be remote paths.")
+
     try:
         with StyledProgress() as p:
             multipart.copy(source, destination, service=service.volume, progress=p)
