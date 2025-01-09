@@ -158,10 +158,10 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 		}, nil
 	}
 
-	total_parts := math.Ceil(float64(in.FileSize) / float64(in.ChunkSize))
-	upload_parts := make([]*pb.FileUploadPart, int(total_parts))
+	totalParts := math.Ceil(float64(in.FileSize) / float64(in.ChunkSize))
+	uploadParts := make([]*pb.FileUploadPart, int(totalParts))
 
-	for i := range upload_parts {
+	for i := range uploadParts {
 		res, err := s.CreatePresignedURL(ctx, &pb.CreatePresignedURLRequest{
 			VolumeName: in.VolumeName,
 			VolumePath: in.VolumePath,
@@ -186,7 +186,7 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 			}, nil
 		}
 
-		upload_parts[i] = &pb.FileUploadPart{
+		uploadParts[i] = &pb.FileUploadPart{
 			Number: uint32(i + 1),
 			Start:  uint64(i) * in.ChunkSize,
 			End:    uint64(math.Min(float64(uint64(i+1)*in.ChunkSize), float64(in.FileSize))),
@@ -197,7 +197,7 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 	return &pb.CreateMultipartUploadResponse{
 		Ok:              true,
 		UploadId:        *response.UploadId,
-		FileUploadParts: upload_parts,
+		FileUploadParts: uploadParts,
 	}, nil
 }
 
