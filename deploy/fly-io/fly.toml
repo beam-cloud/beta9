@@ -1,4 +1,9 @@
-app = 'data-stage-beam-cloud'
+# fly.toml app configuration file generated for my-deployment on 2025-01-09T10:06:05-05:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'my-deployment'
 primary_region = 'iad'
 kill_signal = 'SIGTERM'
 
@@ -13,8 +18,8 @@ kill_signal = 'SIGTERM'
 [http_service]
   internal_port = 9000
   force_https = true
-  auto_start_machines = true
   auto_stop_machines = 'off'
+  auto_start_machines = true
 
   [http_service.concurrency]
     type = 'requests'
@@ -42,6 +47,6 @@ kill_signal = 'SIGTERM'
     path = '/minio/health/live'
 
 [[vm]]
-  cpus = 2
-  cpu_kind = 'shared'
   memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 2
