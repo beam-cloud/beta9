@@ -166,7 +166,7 @@ func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 
 func (s *Scheduler) StopBuild(containerId string) error {
 	_, err := s.eventBus.Send(&common.Event{
-		Type:          common.EventType("build" + "-" + containerId),
+		Type:          common.EventType("stop-build" + "-" + containerId),
 		Args:          map[string]any{"container_id": containerId},
 		LockAndDelete: false,
 	})
