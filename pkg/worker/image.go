@@ -378,7 +378,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := filepath.Join(baseTmpBundlePath, imageId)
-	err = c.unpack(baseImage.Repo, baseImage.Tag, tmpBundlePath)
+	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
@@ -445,7 +445,11 @@ func (c *ImageClient) inspectArgs(creds string) (out []string) {
 	return out
 }
 
-func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePath string) error {
+func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImageTag string, bundlePath string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	unpackOptions := umociUnpackOptions()
 
 	// Get a reference to the CAS.
@@ -479,6 +483,10 @@ func (c *ImageClient) unpack(baseImageName string, baseImageTag string, bundlePa
 
 // Generate and upload archived version of the image for distribution
 func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string, progressChan chan int) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	startTime := time.Now()
 
 	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
@@ -491,7 +499,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	var err error = nil
 	switch c.config.ImageService.RegistryStore {
 	case common.S3ImageRegistryStore:
-		err = clip.CreateAndUploadArchive(clip.CreateOptions{
+		err = clip.CreateAndUploadArchive(ctx, clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
 			Credentials: storage.ClipStorageCredentials{

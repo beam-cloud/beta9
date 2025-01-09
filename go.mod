@@ -18,7 +18,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.51.4
 	github.com/beam-cloud/blobcache-v2 v0.0.0-20241206144620-d0ca8ede5095
-	github.com/beam-cloud/clip v0.0.0-20240826223025-899feb184e88
+	github.com/beam-cloud/clip v0.0.0-20250109221532-5d9d7744594d
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/bsm/redislock v0.9.4
 	github.com/cedana/cedana v0.9.234
@@ -152,7 +152,6 @@ require (
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466 // indirect
 	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
