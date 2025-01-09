@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "beta9"
-version = "0.1.143"
+version = "0.1.144"
 description = ""
 authors = ["beam.cloud <support@beam.cloud>"]
 packages = [
@@ -16,7 +16,7 @@ grpclib = "^0.4.7"
 grpcio = "1.67.0"
 asgiref = "^3.8.1"
 cloudpickle = "^3.0.0"
-rich = "^13.7.0"
+rich = "^13.9.4"
 click = "^8.1.7"
 protobuf = "^4.25.1"
 fastapi = "^0.110.2"

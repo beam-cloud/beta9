@@ -29,6 +29,13 @@ if TYPE_CHECKING:
     from grpclib.metadata import Deadline
 
 
+class PresignedUrlMethod(betterproto.Enum):
+    GetObject = 0
+    PutObject = 1
+    HeadObject = 2
+    UploadPart = 3
+
+
 @dataclass(eq=False, repr=False)
 class VolumeInstance(betterproto.Message):
     id: str = betterproto.string_field(1)
@@ -133,6 +140,112 @@ class MovePathResponse(betterproto.Message):
     new_path: str = betterproto.string_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class StatPathRequest(betterproto.Message):
+    path: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StatPathResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    path_info: "PathInfo" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PresignedUrlParams(betterproto.Message):
+    upload_id: str = betterproto.string_field(1)
+    part_number: int = betterproto.uint32_field(2)
+    content_length: int = betterproto.uint64_field(3)
+    content_type: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class GetFileServiceInfoRequest(betterproto.Message):
+    pass
+
+
+@dataclass(eq=False, repr=False)
+class GetFileServiceInfoResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    enabled: bool = betterproto.bool_field(3)
+    command_version: int = betterproto.uint32_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class CreatePresignedUrlRequest(betterproto.Message):
+    volume_name: str = betterproto.string_field(1)
+    volume_path: str = betterproto.string_field(2)
+    expires: int = betterproto.uint32_field(3)
+    method: "PresignedUrlMethod" = betterproto.enum_field(4)
+    params: "PresignedUrlParams" = betterproto.message_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class CreatePresignedUrlResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    url: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class CreateMultipartUploadRequest(betterproto.Message):
+    volume_name: str = betterproto.string_field(1)
+    volume_path: str = betterproto.string_field(2)
+    chunk_size: int = betterproto.uint64_field(3)
+    file_size: int = betterproto.uint64_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class FileUploadPart(betterproto.Message):
+    number: int = betterproto.uint32_field(1)
+    start: int = betterproto.uint64_field(2)
+    end: int = betterproto.uint64_field(3)
+    url: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class CreateMultipartUploadResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+    upload_id: str = betterproto.string_field(3)
+    file_upload_parts: List["FileUploadPart"] = betterproto.message_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class CompletedPart(betterproto.Message):
+    number: int = betterproto.uint32_field(1)
+    etag: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class CompleteMultipartUploadRequest(betterproto.Message):
+    upload_id: str = betterproto.string_field(1)
+    volume_name: str = betterproto.string_field(2)
+    volume_path: str = betterproto.string_field(3)
+    completed_parts: List["CompletedPart"] = betterproto.message_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class CompleteMultipartUploadResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class AbortMultipartUploadRequest(betterproto.Message):
+    upload_id: str = betterproto.string_field(1)
+    volume_name: str = betterproto.string_field(2)
+    volume_path: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class AbortMultipartUploadResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
 class VolumeServiceStub(SyncServiceStub):
     def get_or_create_volume(
         self, get_or_create_volume_request: "GetOrCreateVolumeRequest"
@@ -196,3 +309,55 @@ class VolumeServiceStub(SyncServiceStub):
             MovePathRequest,
             MovePathResponse,
         )(move_path_request)
+
+    def stat_path(self, stat_path_request: "StatPathRequest") -> "StatPathResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/StatPath",
+            StatPathRequest,
+            StatPathResponse,
+        )(stat_path_request)
+
+    def get_file_service_info(
+        self, get_file_service_info_request: "GetFileServiceInfoRequest"
+    ) -> "GetFileServiceInfoResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/GetFileServiceInfo",
+            GetFileServiceInfoRequest,
+            GetFileServiceInfoResponse,
+        )(get_file_service_info_request)
+
+    def create_presigned_url(
+        self, create_presigned_url_request: "CreatePresignedUrlRequest"
+    ) -> "CreatePresignedUrlResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/CreatePresignedURL",
+            CreatePresignedUrlRequest,
+            CreatePresignedUrlResponse,
+        )(create_presigned_url_request)
+
+    def create_multipart_upload(
+        self, create_multipart_upload_request: "CreateMultipartUploadRequest"
+    ) -> "CreateMultipartUploadResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/CreateMultipartUpload",
+            CreateMultipartUploadRequest,
+            CreateMultipartUploadResponse,
+        )(create_multipart_upload_request)
+
+    def complete_multipart_upload(
+        self, complete_multipart_upload_request: "CompleteMultipartUploadRequest"
+    ) -> "CompleteMultipartUploadResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/CompleteMultipartUpload",
+            CompleteMultipartUploadRequest,
+            CompleteMultipartUploadResponse,
+        )(complete_multipart_upload_request)
+
+    def abort_multipart_upload(
+        self, abort_multipart_upload_request: "AbortMultipartUploadRequest"
+    ) -> "AbortMultipartUploadResponse":
+        return self._unary_unary(
+            "/volume.VolumeService/AbortMultipartUpload",
+            AbortMultipartUploadRequest,
+            AbortMultipartUploadResponse,
+        )(abort_multipart_upload_request)

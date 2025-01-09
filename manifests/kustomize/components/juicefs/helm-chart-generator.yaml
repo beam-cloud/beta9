@@ -19,3 +19,39 @@ valuesInline:
   master:
     persistence:
       size: 1Gi
+---
+apiVersion: builtin
+kind: HelmChartInflationGenerator
+metadata:
+  name: &name juicefs-s3-gateway
+releaseName: *name
+name: &name juicefs-s3-gateway
+repo: https://juicedata.github.io/charts/
+version: 0.11.2
+namespace: beta9
+includeCRDs: true
+skipTests: true
+valuesInline:
+  nameOverride: *name
+  fullnameOverride: *name
+  port: 9900
+  service:
+    type: LoadBalancer
+  secret:
+    name: beta9-fs
+    metaurl: redis://juicefs-redis-master:6379/0
+    storage: s3
+    accessKey: test
+    secretKey: test-test-test
+    bucket: http://localstack:4566/juicefs
+
+  # -- JuiceFS format options. Separated by spaces
+  # Example: "--inodes=1000000 --block-size=4M"
+  # Ref: https://juicefs.com/docs/community/command_reference#format
+  formatOptions: "--block-size=4096 --no-update"
+
+  # -- Gateway Options. Separated by spaces
+  # Example: "--get-timeout=60 --put-timeout=60"
+  # CE Ref: https://juicefs.com/docs/community/command_reference#gateway
+  # EE Ref: https://juicefs.com/docs/cloud/reference/command_reference/#gateway
+  options: "--buffer-size=300 --cache-size=0 --prefetch=-1 --no-usage-report"

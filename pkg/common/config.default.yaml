@@ -56,6 +56,13 @@ gateway:
     memory: 32768
     maxReplicas: 10
     maxGpuCount: 2
+fileService:
+  enabled: true
+  endpointUrl: http://juicefs-s3-gateway.beta9.svc.cluster.local:9900
+  bucketName: beta9-fs
+  accessKey: test
+  secretKey: test-test-test
+  region:
 imageService:
   localCacheEnabled: true
   registryStore: local
