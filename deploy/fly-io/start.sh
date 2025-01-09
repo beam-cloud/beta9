@@ -4,10 +4,7 @@
 tailscaled --port=41641 --socket=/var/run/tailscale/tailscaled.sock --state=/var/lib/tailscale/tailscaled.state &
 tailscale up --authkey=${TAILSCALE_AUTHKEY} --ssh --reset --accept-routes
 
-while [ -z "$(tailscale ip 2>/dev/null)" ]; do
-  echo "Waiting for Tailscale to fully establish a connection..."
-  sleep 1
-done
+sleep 5
 
 # juicefs
 JUICEFS_ADDRESS=${JUICEFS_ADDRESS:-0.0.0.0:9000}
