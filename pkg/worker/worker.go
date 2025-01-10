@@ -272,7 +272,7 @@ func (s *Worker) Run() error {
 			if !exists {
 				log.Info().Str("container_id", containerId).Msg("running container")
 
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithCancel(s.ctx)
 				eventbus := common.NewEventBus(s.redisClient, common.EventBusSubscriber{Type: common.EventType("stop-build" + "-" + containerId), Callback: func(e *common.Event) bool {
 					log.Info().Str("container_id", containerId).Msg("received stop build event")
 					cancel()
