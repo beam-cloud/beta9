@@ -68,6 +68,7 @@ type BuildOpts struct {
 	ForceRebuild       bool
 	EnvVars            []string
 	BuildSecrets       []string
+	Gpu                string
 }
 
 func (o *BuildOpts) String() string {
@@ -87,6 +88,7 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
 	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
 	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
+	fmt.Fprintf(&b, "  \"Gpu\": %q,", o.Gpu)
 	fmt.Fprintf(&b, "}")
 	return b.String()
 }
@@ -231,61 +233,15 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 	}
 
-	baseImageId, err := b.GetImageId(&BuildOpts{
-		BaseImageRegistry: opts.BaseImageRegistry,
-		BaseImageName:     opts.BaseImageName,
-		BaseImageTag:      opts.BaseImageTag,
-		BaseImageDigest:   opts.BaseImageDigest,
-		ExistingImageUri:  opts.ExistingImageUri,
-		EnvVars:           opts.EnvVars,
-		Dockerfile:        opts.Dockerfile,
-		BuildCtxObject:    opts.BuildCtxObject,
-	})
+	containerId := b.genContainerId()
+
+	containerRequest, err := b.generateContainerRequest(opts, dockerfile, containerId, authInfo.Workspace)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating image id: " + err.Error()}
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating container request: " + err.Error()}
 		return err
 	}
 
-	var sourceImage string
-	switch {
-	case opts.BaseImageDigest != "":
-		sourceImage = fmt.Sprintf("%s/%s@%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageDigest)
-	default:
-		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
-	}
-
-	containerId := b.genContainerId()
-
-	// Allow config to override default build container settings
-	cpu := defaultBuildContainerCpu
-	memory := defaultBuildContainerMemory
-
-	if b.config.ImageService.BuildContainerCpu > 0 {
-		cpu = b.config.ImageService.BuildContainerCpu
-	}
-
-	if b.config.ImageService.BuildContainerMemory > 0 {
-		memory = b.config.ImageService.BuildContainerMemory
-	}
-
-	err = b.scheduler.Run(&types.ContainerRequest{
-		BuildOptions: types.BuildOptions{
-			SourceImage:      &sourceImage,
-			SourceImageCreds: opts.BaseImageCreds,
-			Dockerfile:       dockerfile,
-			BuildCtxObject:   &opts.BuildCtxObject,
-			BuildSecrets:     opts.BuildSecrets,
-		},
-		ContainerId:  containerId,
-		Env:          opts.EnvVars,
-		Cpu:          cpu,
-		Memory:       memory,
-		ImageId:      baseImageId,
-		WorkspaceId:  authInfo.Workspace.ExternalId,
-		Workspace:    *authInfo.Workspace,
-		EntryPoint:   []string{"tail", "-f", "/dev/null"},
-		PoolSelector: b.config.ImageService.BuildContainerPoolSelector,
-	})
+	err = b.scheduler.Run(containerRequest)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 		return err
@@ -427,6 +383,70 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: true, ImageId: imageId}
 	return nil
+}
+
+// generateContainerRequest generates a container request for the build container
+func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, containerId string, workspace *types.Workspace) (*types.ContainerRequest, error) {
+	baseImageId, err := b.GetImageId(&BuildOpts{
+		BaseImageRegistry: opts.BaseImageRegistry,
+		BaseImageName:     opts.BaseImageName,
+		BaseImageTag:      opts.BaseImageTag,
+		BaseImageDigest:   opts.BaseImageDigest,
+		ExistingImageUri:  opts.ExistingImageUri,
+		EnvVars:           opts.EnvVars,
+		Dockerfile:        opts.Dockerfile,
+		BuildCtxObject:    opts.BuildCtxObject,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var sourceImage string
+	switch {
+	case opts.BaseImageDigest != "":
+		sourceImage = fmt.Sprintf("%s/%s@%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageDigest)
+	default:
+		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
+	}
+
+	// Allow config to override default build container settings
+	cpu := defaultBuildContainerCpu
+	memory := defaultBuildContainerMemory
+
+	if b.config.ImageService.BuildContainerCpu > 0 {
+		cpu = b.config.ImageService.BuildContainerCpu
+	}
+
+	if b.config.ImageService.BuildContainerMemory > 0 {
+		memory = b.config.ImageService.BuildContainerMemory
+	}
+
+	containerRequest := &types.ContainerRequest{
+		BuildOptions: types.BuildOptions{
+			SourceImage:      &sourceImage,
+			SourceImageCreds: opts.BaseImageCreds,
+			Dockerfile:       dockerfile,
+			BuildCtxObject:   &opts.BuildCtxObject,
+			BuildSecrets:     opts.BuildSecrets,
+		},
+		ContainerId: containerId,
+		Env:         opts.EnvVars,
+		Cpu:         cpu,
+		Memory:      memory,
+		ImageId:     baseImageId,
+		WorkspaceId: workspace.ExternalId,
+		Workspace:   *workspace,
+		EntryPoint:  []string{"tail", "-f", "/dev/null"},
+	}
+
+	if opts.Gpu != "" {
+		containerRequest.GpuRequest = []string{opts.Gpu}
+		containerRequest.GpuCount = 1
+	} else {
+		containerRequest.PoolSelector = b.config.ImageService.BuildContainerPoolSelector
+	}
+
+	return containerRequest, nil
 }
 
 func (b *Builder) genContainerId() string {

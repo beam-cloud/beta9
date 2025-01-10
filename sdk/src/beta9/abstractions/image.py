@@ -15,7 +15,7 @@ from ..clients.image import (
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
 )
-from ..type import PythonVersion, PythonVersionAlias
+from ..type import GpuType, GpuTypeAlias, PythonVersion, PythonVersionAlias
 
 
 class ImageBuildResult(NamedTuple):
@@ -263,6 +263,7 @@ class Image(BaseAbstraction):
         self._stub: Optional[ImageServiceStub] = None
         self.dockerfile = ""
         self.build_ctx_object = ""
+        self.gpu = GpuType.NoGPU
 
         self.with_envs(env_vars or [])
 
@@ -365,6 +366,7 @@ class Image(BaseAbstraction):
                 dockerfile=self.dockerfile,
                 build_ctx_object=self.build_ctx_object,
                 secrets=self.secrets,
+                gpu=self.gpu,
             )
         )
 
@@ -395,6 +397,7 @@ class Image(BaseAbstraction):
                     dockerfile=self.dockerfile,
                     build_ctx_object=self.build_ctx_object,
                     secrets=self.secrets,
+                    gpu=self.gpu,
                 )
             ):
                 if r.msg != "":
@@ -565,4 +568,17 @@ class Image(BaseAbstraction):
             Image: The Image object.
         """
         self.secrets.extend(secrets)
+        return self
+
+    def build_with_gpu(self, gpu: GpuTypeAlias) -> "Image":
+        """
+        Build the image on a GPU node.
+
+        Parameters:
+            gpu: The GPU type to use.
+
+        Returns:
+            Image: The Image object.
+        """
+        self.gpu = gpu
         return self

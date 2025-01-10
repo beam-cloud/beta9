@@ -26,6 +26,7 @@ message VerifyImageBuildRequest {
   string dockerfile = 8;
   string build_ctx_object = 9;
   repeated string secrets = 10;
+  string gpu = 11;
 }
 
 message VerifyImageBuildResponse {
@@ -50,6 +51,7 @@ message BuildImageRequest {
   string dockerfile = 8;
   string build_ctx_object = 9;
   repeated string secrets = 10;
+  string gpu = 11;
 }
 
 message BuildImageResponse {
