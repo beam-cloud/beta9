@@ -9,6 +9,7 @@ setup:
 	# helm install beta9 deploy/charts/beta9 --create-namespace --values deploy/charts/beta9/values.local.yaml
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
+# Note: you may need https://github.com/python-poetry/poetry-plugin-shell as of poetry v2.0.0
 setup-sdk:
 	curl -sSL https://install.python-poetry.org | python3 -
 	export PATH="$$HOME/.local/bin:$$PATH"
