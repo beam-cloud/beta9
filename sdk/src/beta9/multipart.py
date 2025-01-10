@@ -13,7 +13,7 @@ from multiprocessing import Manager
 from os import PathLike
 from pathlib import Path
 from queue import Queue
-from threading import Thread, local
+from threading import Thread
 from typing import (
     Any,
     Callable,
@@ -59,10 +59,10 @@ from .exceptions import (
 )
 from .terminal import CustomProgress
 
-_PROCESS_LOCAL: Final[local] = local()
 # Value of 0 means the number of workers is calculated based on the file size
-_MAX_WORKERS: Final[int] = try_env("MULTIPART_MAX_WORKERS", 0)
-_REQUEST_TIMEOUT: Final[float] = try_env("MULTIPART_REQUEST_TIMEOUT", 5)
+_MAX_WORKERS: Final = try_env("MULTIPART_MAX_WORKERS", 0)
+_REQUEST_TIMEOUT: Final = try_env("MULTIPART_REQUEST_TIMEOUT", 5)
+_DEBUG_RETRY: Final = try_env("MULTIPART_DEBUG_RETRY", False)
 
 
 class ProgressCallbackType(Protocol):
@@ -108,6 +108,9 @@ def retry(
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
+                    if _DEBUG_RETRY:
+                        print(e)
+
                     last_exception = e
                     if attempt < times - 1:
                         time.sleep(min(current_delay, max_delay))
@@ -160,19 +163,28 @@ def _progress_updater(
     thread.join(timeout=timeout)
 
 
+# Global session for making HTTP requests
+_session = None
+
+
 def _get_session() -> Session:
     """
-    Get a requests session from the process's local storage.
+    Get a session for making HTTP requests.
+
+    This is not thread safe, but should be process safe.
     """
-    if not hasattr(_PROCESS_LOCAL, "session"):
-        _PROCESS_LOCAL.session = requests.Session()
-    return _PROCESS_LOCAL.session
+    global _session
+    if _session is None:
+        _session = requests.Session()
+    return _session
 
 
 def _init():
     """
     Initialize the process by setting a signal handler.
     """
+    _get_session()
+
     signal.signal(signal.SIGINT, lambda *_: os.kill(os.getpid(), signal.SIGTERM))
 
 
