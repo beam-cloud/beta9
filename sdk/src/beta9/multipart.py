@@ -60,12 +60,9 @@ from .exceptions import (
 from .terminal import CustomProgress
 
 _PROCESS_LOCAL: Final[local] = local()
-_MAX_WORKERS: Final[int] = try_env("MULTIPART_MAX_WORKERS", 3)
-_REQUEST_TIMEOUT: Final[float] = try_env("MULTIPART_REQUEST_TIMEOUT", 0.5)
-
-# Value of 0 means the chunk size is calculated based on the file size
-UPLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_UPLOAD_CHUNK_SIZE", 0)
-DOWNLOAD_CHUNK_SIZE: Final[int] = try_env("MULTIPART_DOWNLOAD_CHUNK_SIZE", 0)
+# Value of 0 means the number of workers is calculated based on the file size
+_MAX_WORKERS: Final[int] = try_env("MULTIPART_MAX_WORKERS", 0)
+_REQUEST_TIMEOUT: Final[float] = try_env("MULTIPART_REQUEST_TIMEOUT", 5)
 
 
 class ProgressCallbackType(Protocol):
@@ -147,9 +144,8 @@ def _progress_updater(
         finished = 0
         while finished < file_size:
             try:
-                processed = queue.get()
+                processed = queue.get_nowait()
             except Exception:
-                time.sleep(0.1)
                 continue
 
             finished += processed
@@ -234,7 +230,6 @@ def beta9_upload(
     remote_path: "RemotePath",
     progress_callback: Optional[ProgressCallbackType] = None,
     completion_callback: Optional[CompletionCallbackType] = None,
-    chunk_size: int = UPLOAD_CHUNK_SIZE,
 ):
     """
     Upload a file to a volume using multipart upload.
@@ -247,7 +242,6 @@ def beta9_upload(
             bytes processed. Defaults to None.
         completion_callback: A context manager that wraps the completion of the upload.
             Defaults to None.
-        chunk_size: Size of each chunk in bytes.
 
     Raises:
         CreateMultipartUploadError: If initializing the upload fails.
@@ -257,7 +251,7 @@ def beta9_upload(
     """
     # Initialize multipart upload
     file_size = file_path.stat().st_size
-    chunk_size = chunk_size or _calculate_chunk_size(file_size)
+    chunk_size, max_workers = _calculate_chunk_size(file_size)
     initial = retry(times=3, delay=1.0)(service.create_multipart_upload)(
         CreateMultipartUploadRequest(
             volume_name=remote_path.volume_name,
@@ -273,9 +267,8 @@ def beta9_upload(
     try:
         with ExitStack() as stack:
             manager = stack.enter_context(Manager())
-
-            max_workers = min(_MAX_WORKERS, len(initial.file_upload_parts))
-            executor = stack.enter_context(ProcessPoolExecutor(max_workers, initializer=_init))
+            workers = max(max_workers, _MAX_WORKERS)
+            executor = stack.enter_context(ProcessPoolExecutor(workers, initializer=_init))
 
             queue = manager.Queue()
             stack.enter_context(_progress_updater(file_size, queue, progress_callback))
@@ -362,32 +355,26 @@ def _calculate_file_ranges(file_size: int, chunk_size: int) -> List[FileRange]:
     ]
 
 
-def clamp(value: int, min_value: int, max_value: int) -> int:
-    """
-    Clamp the value between min_value and max_value.
-    """
-    return max(min_value, min(value, max_value))
-
-
 def _calculate_chunk_size(
     file_size: int,
-    optimal_chunk_size: int = 2 * 1024 * 1024,  # 2 MB
-    min_chunks: int = 1,
-    max_chunks: int = 200,
-) -> int:
+    min_chunk_size: int = 5 * 1024 * 1024,
+    max_chunk_size: int = 500 * 1024 * 1024,
+    chunk_size_divisor: int = 10,
+) -> Tuple[int, int]:
     """
-    Calculates an optimal chunk size based on the file size.
+    Calculate chunk size using log2 scaling.
     """
-    # Calculate desired number of chunks based on optimal chunk size
-    desired_chunks = math.ceil(file_size / optimal_chunk_size)
+    if file_size <= min_chunk_size:
+        return file_size, 1
 
-    # Clamp the desired_chunks within min_chunks and max_chunks
-    desired_chunks = clamp(desired_chunks, min_chunks, max_chunks)
+    # Use log2 directly for chunk size
+    chunk_size = 2 ** math.floor(math.log2(file_size / chunk_size_divisor))
+    chunk_size = min(max(chunk_size, min_chunk_size), max_chunk_size, file_size)
 
-    # Calculate the chunk size based on the clamped desired_chunks
-    chunk_size = math.ceil(file_size / desired_chunks)
+    # Workers scale with log2
+    workers = min(max(int(math.log2(file_size / min_chunk_size)), 1), 16)
 
-    return chunk_size
+    return chunk_size, workers
 
 
 @retry(times=10)
@@ -445,7 +432,6 @@ def beta9_download(
     remote_path: "RemotePath",
     file_path: Path,
     callback: Optional[ProgressCallbackType] = None,
-    chunk_size: int = DOWNLOAD_CHUNK_SIZE,
 ) -> None:
     """
     Download a file from a volume using multipart download.
@@ -455,7 +441,6 @@ def beta9_download(
         remote_path: Path to the file on the volume.
         file_path: Path to save the file.
         callback: A callback that receives the total size and the number of bytes processed. Defaults to None.
-        chunk_size: Size of each chunk in bytes.
 
     Raises:
         CreatePresignedUrlError: If a presigned URL cannot be created.
@@ -475,7 +460,7 @@ def beta9_download(
         raise CreatePresignedUrlError(presigned.err_msg)
 
     file_size = _get_file_size(presigned.url)
-    chunk_size = chunk_size or _calculate_chunk_size(file_size)
+    chunk_size, max_workers = _calculate_chunk_size(file_size)
     file_ranges = _calculate_file_ranges(file_size, chunk_size)
 
     # Download and merge file ranges
@@ -493,9 +478,8 @@ def beta9_download(
     with ExitStack() as stack:
         manager = stack.enter_context(Manager())
         temp_dir = stack.enter_context(tempfile.TemporaryDirectory())
-
-        max_workers = min(_MAX_WORKERS, len(file_ranges))
-        executor = stack.enter_context(ProcessPoolExecutor(max_workers, initializer=_init))
+        workers = max(max_workers, _MAX_WORKERS)
+        executor = stack.enter_context(ProcessPoolExecutor(workers, initializer=_init))
 
         queue = manager.Queue()
         stack.enter_context(_progress_updater(file_size, queue, callback))
