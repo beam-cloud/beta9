@@ -55,6 +55,7 @@ type BuildOpts struct {
 	BaseImageRegistry  string
 	BaseImageName      string
 	BaseImageTag       string
+	BaseImageDigest    string
 	BaseImageCreds     string
 	ExistingImageUri   string
 	ExistingImageCreds map[string]string
@@ -75,6 +76,7 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"BaseImageRegistry\": %q,", o.BaseImageRegistry)
 	fmt.Fprintf(&b, "  \"BaseImageName\": %q,", o.BaseImageName)
 	fmt.Fprintf(&b, "  \"BaseImageTag\": %q,", o.BaseImageTag)
+	fmt.Fprintf(&b, "  \"BaseImageDigest\": %q,", o.BaseImageDigest)
 	fmt.Fprintf(&b, "  \"BaseImageCreds\": %q,", o.BaseImageCreds)
 	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
 	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
@@ -106,6 +108,7 @@ func (o *BuildOpts) setCustomImageBuildOptions() error {
 	o.BaseImageRegistry = baseImage.Registry
 	o.BaseImageName = baseImage.Repo
 	o.BaseImageTag = baseImage.Tag
+	o.BaseImageDigest = baseImage.Digest
 
 	return nil
 }
@@ -180,7 +183,7 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 
 	bodyToHash := &ImageIdHash{
 		BaseImageName:   opts.BaseImageName,
-		BaseImageTag:    opts.BaseImageTag,
+		BaseImageTag:    tagOrDigest(opts.BaseImageDigest, opts.BaseImageTag),
 		PythonVersion:   opts.PythonVersion,
 		PythonPackages:  opts.PythonPackages,
 		ExitingImageUri: opts.ExistingImageUri,
@@ -232,6 +235,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BaseImageRegistry: opts.BaseImageRegistry,
 		BaseImageName:     opts.BaseImageName,
 		BaseImageTag:      opts.BaseImageTag,
+		BaseImageDigest:   opts.BaseImageDigest,
 		ExistingImageUri:  opts.ExistingImageUri,
 		EnvVars:           opts.EnvVars,
 		Dockerfile:        opts.Dockerfile,
@@ -242,7 +246,14 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	sourceImage := fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
+	var sourceImage string
+	switch {
+	case opts.BaseImageDigest != "":
+		sourceImage = fmt.Sprintf("%s/%s@%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageDigest)
+	default:
+		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
+	}
+
 	containerId := b.genContainerId()
 
 	// Allow config to override default build container settings
@@ -747,4 +758,11 @@ func extractPackageName(pkg string) string {
 
 	// Handle regular packages
 	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
+}
+
+func tagOrDigest(digest string, tag string) string {
+	if tag != "" {
+		return tag
+	}
+	return digest
 }
