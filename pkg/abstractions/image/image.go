@@ -34,6 +34,7 @@ type ImageServiceOpts struct {
 	BackendRepo   repository.BackendRepository
 	Scheduler     *scheduler.Scheduler
 	Tailscale     *network.Tailscale
+	EventBus      *common.EventBus
 }
 
 func NewRuncImageService(
@@ -45,7 +46,7 @@ func NewRuncImageService(
 		return nil, err
 	}
 
-	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo)
+	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo, opts.EventBus)
 	if err != nil {
 		return nil, err
 	}

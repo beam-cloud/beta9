@@ -43,6 +43,7 @@ type Builder struct {
 	registry      *common.ImageRegistry
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
+	eventBus      *common.EventBus
 }
 
 type BuildStep struct {
@@ -130,13 +131,14 @@ func (o *BuildOpts) addPythonRequirements() {
 	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 }
 
-func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository) (*Builder, error) {
+func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, eventBus *common.EventBus) (*Builder, error) {
 	return &Builder{
 		config:        config,
 		scheduler:     scheduler,
 		tailscale:     tailscale,
 		registry:      registry,
 		containerRepo: containerRepo,
+		eventBus:      eventBus,
 	}, nil
 }
 
@@ -245,7 +247,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go func() {
 		<-ctx.Done() // If user cancels the build, send a stop-build event to the scheduler
-		err := b.scheduler.StopBuild(containerId)
+		err := b.stopBuild(containerId)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
 		}
@@ -347,7 +349,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			}
 
 			if time.Since(start) > containerSpinupTimeout {
-				err := b.scheduler.StopBuild(containerId)
+				err := b.stopBuild(containerId)
 				if err != nil {
 					log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
 				}
@@ -740,4 +742,19 @@ func extractPackageName(pkg string) string {
 
 	// Handle regular packages
 	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
+}
+
+func (b *Builder) stopBuild(containerId string) error {
+	_, err := b.eventBus.Send(&common.Event{
+		Type:          common.EventType("stop-build" + "-" + containerId),
+		Args:          map[string]any{"container_id": containerId},
+		LockAndDelete: false,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to send stop build event")
+		return err
+	}
+
+	log.Info().Str("container_id", containerId).Msg("sent stop build event")
+	return nil
 }
