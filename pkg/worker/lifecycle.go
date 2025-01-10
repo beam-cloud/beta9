@@ -156,6 +156,13 @@ func (s *Worker) deleteContainer(containerId string, err error) {
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 
+	s.containerInstances.Set(containerId, &ContainerInstance{
+		Id:        containerId,
+		StubId:    request.StubId,
+		LogBuffer: common.NewLogBuffer(),
+		Request:   request,
+	})
+
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Set worker hostname

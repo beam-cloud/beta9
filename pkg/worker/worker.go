@@ -280,12 +280,6 @@ func (s *Worker) Run() error {
 				}})
 				go eventbus.ReceiveEvents(ctx)
 
-				s.containerInstances.Set(containerId, &ContainerInstance{
-					Id:        containerId,
-					StubId:    request.StubId,
-					LogBuffer: common.NewLogBuffer(),
-					Request:   request,
-				})
 				err := s.RunContainer(ctx, request)
 				if err != nil {
 					log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
