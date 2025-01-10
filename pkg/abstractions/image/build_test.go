@@ -89,6 +89,12 @@ func TestExtractImageNameAndTag(t *testing.T) {
 			wantRepo:     "gis-ops/docker-valhalla/valhalla",
 			wantRegistry: "ghcr.io",
 		},
+		{
+			ref:          "us-east1-docker.pkg.dev/test/ds-us-east1/test-test-test@sha256:c31c45b6fdc3d01c131a6dcae1daed008e3df4001bb43e555e49d82ac8d779e4",
+			wantDigest:   "sha256:c31c45b6fdc3d01c131a6dcae1daed008e3df4001bb43e555e49d82ac8d779e4",
+			wantRepo:     "test/ds-us-east1/test-test-test",
+			wantRegistry: "us-east1-docker.pkg.dev",
+		},
 	}
 
 	for _, test := range tests {

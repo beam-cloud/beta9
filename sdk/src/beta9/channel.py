@@ -18,7 +18,6 @@ from .config import (
     ConfigContext,
     SDKSettings,
     get_config_context,
-    get_settings,
     load_config,
     prompt_for_config_context,
     save_config,
@@ -36,13 +35,6 @@ def channel_reconnect_event(connect_status: grpc.ChannelConnectivity) -> None:
         terminal.warn("Connection lost, reconnecting...")
 
 
-def get_user_agent() -> str:
-    from importlib import metadata
-
-    package_name = get_settings().name.lower()
-    return f"{package_name}/{metadata.version(package_name)}"
-
-
 class Channel(InterceptorChannel):
     def __init__(
         self,
@@ -57,9 +49,6 @@ class Channel(InterceptorChannel):
     ):
         if options is None:
             options = []
-
-        options = [opt for opt in options if "grpc.secondary_user_agent" not in opt[0]]
-        options.append(("grpc.secondary_user_agent", get_user_agent()))
 
         if credentials is not None:
             channel = grpc.secure_channel(addr, credentials)

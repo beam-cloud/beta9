@@ -44,6 +44,7 @@ type Builder struct {
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
+	rdb           *common.RedisClient
 }
 
 type BuildStep struct {
@@ -55,6 +56,7 @@ type BuildOpts struct {
 	BaseImageRegistry  string
 	BaseImageName      string
 	BaseImageTag       string
+	BaseImageDigest    string
 	BaseImageCreds     string
 	ExistingImageUri   string
 	ExistingImageCreds map[string]string
@@ -75,6 +77,7 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"BaseImageRegistry\": %q,", o.BaseImageRegistry)
 	fmt.Fprintf(&b, "  \"BaseImageName\": %q,", o.BaseImageName)
 	fmt.Fprintf(&b, "  \"BaseImageTag\": %q,", o.BaseImageTag)
+	fmt.Fprintf(&b, "  \"BaseImageDigest\": %q,", o.BaseImageDigest)
 	fmt.Fprintf(&b, "  \"BaseImageCreds\": %q,", o.BaseImageCreds)
 	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
 	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
@@ -106,6 +109,7 @@ func (o *BuildOpts) setCustomImageBuildOptions() error {
 	o.BaseImageRegistry = baseImage.Registry
 	o.BaseImageName = baseImage.Repo
 	o.BaseImageTag = baseImage.Tag
+	o.BaseImageDigest = baseImage.Digest
 
 	return nil
 }
@@ -131,14 +135,15 @@ func (o *BuildOpts) addPythonRequirements() {
 	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 }
 
-func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, eventBus *common.EventBus) (*Builder, error) {
+func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
 	return &Builder{
 		config:        config,
 		scheduler:     scheduler,
 		tailscale:     tailscale,
 		registry:      registry,
 		containerRepo: containerRepo,
-		eventBus:      eventBus,
+		eventBus:      common.NewEventBus(rdb),
+		rdb:           rdb,
 	}, nil
 }
 
@@ -180,7 +185,7 @@ func (b *Builder) GetImageId(opts *BuildOpts) (string, error) {
 
 	bodyToHash := &ImageIdHash{
 		BaseImageName:   opts.BaseImageName,
-		BaseImageTag:    opts.BaseImageTag,
+		BaseImageTag:    tagOrDigest(opts.BaseImageDigest, opts.BaseImageTag),
 		PythonVersion:   opts.PythonVersion,
 		PythonPackages:  opts.PythonPackages,
 		ExitingImageUri: opts.ExistingImageUri,
@@ -232,6 +237,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		BaseImageRegistry: opts.BaseImageRegistry,
 		BaseImageName:     opts.BaseImageName,
 		BaseImageTag:      opts.BaseImageTag,
+		BaseImageDigest:   opts.BaseImageDigest,
 		ExistingImageUri:  opts.ExistingImageUri,
 		EnvVars:           opts.EnvVars,
 		Dockerfile:        opts.Dockerfile,
@@ -242,7 +248,14 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	sourceImage := fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
+	var sourceImage string
+	switch {
+	case opts.BaseImageDigest != "":
+		sourceImage = fmt.Sprintf("%s/%s@%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageDigest)
+	default:
+		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
+	}
+
 	containerId := b.genContainerId()
 
 	go func() {
@@ -293,6 +306,14 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
+
+	err = b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
+	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		return err
+	}
+
+	go b.keepAlive(ctx, containerId, ctx.Done())
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
@@ -457,6 +478,22 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 // Check if an image already exists in the registry
 func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
+}
+
+func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
+	ticker := time.NewTicker(time.Duration(buildContainerKeepAliveIntervalS) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
+		}
+	}
 }
 
 var imageNamePattern = regexp.MustCompile(
@@ -757,4 +794,11 @@ func (b *Builder) stopBuild(containerId string) error {
 
 	log.Info().Str("container_id", containerId).Msg("sent stop build event")
 	return nil
+}
+
+func tagOrDigest(digest string, tag string) string {
+	if tag != "" {
+		return tag
+	}
+	return digest
 }

@@ -3,6 +3,7 @@ package image
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -23,9 +24,12 @@ type ImageService interface {
 
 type RuncImageService struct {
 	pb.UnimplementedImageServiceServer
-	builder     *Builder
-	config      types.AppConfig
-	backendRepo repository.BackendRepository
+	builder         *Builder
+	config          types.AppConfig
+	backendRepo     repository.BackendRepository
+	rdb             *common.RedisClient
+	keyEventChan    chan common.KeyEvent
+	keyEventManager *common.KeyEventManager
 }
 
 type ImageServiceOpts struct {
@@ -34,8 +38,11 @@ type ImageServiceOpts struct {
 	BackendRepo   repository.BackendRepository
 	Scheduler     *scheduler.Scheduler
 	Tailscale     *network.Tailscale
-	EventBus      *common.EventBus
+	RedisClient   *common.RedisClient
 }
+
+const buildContainerKeepAliveIntervalS int = 10
+const imageContainerTtlS int = 60
 
 func NewRuncImageService(
 	ctx context.Context,
@@ -46,16 +53,30 @@ func NewRuncImageService(
 		return nil, err
 	}
 
-	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo, opts.EventBus)
+	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo, opts.RedisClient)
 	if err != nil {
 		return nil, err
 	}
 
-	return &RuncImageService{
-		builder:     builder,
-		config:      opts.Config,
-		backendRepo: opts.BackendRepo,
-	}, nil
+	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
+	if err != nil {
+		return nil, err
+	}
+
+	is := RuncImageService{
+		builder:         builder,
+		config:          opts.Config,
+		backendRepo:     opts.BackendRepo,
+		keyEventChan:    make(chan common.KeyEvent),
+		keyEventManager: keyEventManager,
+		rdb:             opts.RedisClient,
+	}
+
+	go is.monitorImageContainers(ctx)
+	go is.keyEventManager.ListenForPattern(ctx, Keys.imageBuildContainerTTL("*"), is.keyEventChan)
+	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState("*"), is.keyEventChan)
+
+	return &is, nil
 }
 
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
@@ -185,6 +206,35 @@ func (is *RuncImageService) retrieveBuildSecrets(ctx context.Context, secrets []
 	return buildSecrets, nil
 }
 
+func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
+	for {
+		select {
+		case event := <-is.keyEventChan:
+			switch event.Operation {
+			case common.KeyOperationSet:
+				if strings.Contains(event.Key, common.RedisKeys.SchedulerContainerState("")) {
+					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), common.RedisKeys.SchedulerContainerState(""))
+
+					if is.rdb.Exists(ctx, Keys.imageBuildContainerTTL(containerId)).Val() == 0 {
+						is.builder.scheduler.Stop(&types.StopContainerArgs{
+							ContainerId: containerId,
+							Force:       true,
+						})
+					}
+				}
+			case common.KeyOperationExpired:
+				containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), Keys.imageBuildContainerTTL(""))
+				is.builder.scheduler.Stop(&types.StopContainerArgs{
+					ContainerId: containerId,
+					Force:       true,
+				})
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 	steps := make([]BuildStep, len(buildSteps))
 	for i, s := range buildSteps {
@@ -194,4 +244,16 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 		}
 	}
 	return steps
+}
+
+var (
+	imageBuildContainerTTL string = "image:build_container_ttl:%s"
+)
+
+var Keys = &keys{}
+
+type keys struct{}
+
+func (k *keys) imageBuildContainerTTL(containerId string) string {
+	return fmt.Sprintf(imageBuildContainerTTL, containerId)
 }

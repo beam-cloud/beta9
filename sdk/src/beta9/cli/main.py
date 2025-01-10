@@ -26,7 +26,7 @@ from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCo
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
 
-os.environ["GRPC_VERBOSITY"] = os.getenv("GRPC_VERBOSITY") or "ERROR"
+os.environ["GRPC_VERBOSITY"] = os.getenv("GRPC_VERBOSITY") or "NONE"
 
 
 class CLI:
