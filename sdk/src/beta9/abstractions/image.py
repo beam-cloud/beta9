@@ -224,6 +224,10 @@ class Image(BaseAbstraction):
             This will build the image using your Dockerfile. You can set the docker build's
             context directory using the `context_dir` parameter.
 
+            The context directory should contain all files referenced in your Dockerfile
+            (like files being COPYed). If no context_dir is specified, the directory
+            containing the Dockerfile will be used as the context.
+
             ```python
             # Basic usage - uses Dockerfile's directory as context
             image = Image.from_dockerfile("path/to/Dockerfile")
@@ -242,9 +246,18 @@ class Image(BaseAbstraction):
                 pass
             ```
 
-            The context directory should contain all files referenced in your Dockerfile
-            (like files being COPYed). If no context_dir is specified, the directory
-            containing the Dockerfile will be used as the context.
+            Building on a GPU Node
+
+            By default, the image will be built on a CPU node. If you need to build on a GPU node,
+            you can set the `gpu` parameter to the GPU type you need. This might be necessary if you
+            are using a library or framework that will install differently depending on the availability
+            of a GPU.
+
+            ```python
+            image = Image(
+                python_version="python3.12",
+            ).build_with_gpu("A10G")
+            ```
         """
         super().__init__()
         self._gateway_stub: Optional[GatewayServiceStub] = None
