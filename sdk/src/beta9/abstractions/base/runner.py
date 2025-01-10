@@ -439,6 +439,7 @@ class RunnerAbstraction(BaseAbstraction):
                     type=autoscaler_type,
                     max_containers=self.autoscaler.max_containers,
                     tasks_per_container=self.autoscaler.tasks_per_container,
+                    min_containers=self.autoscaler.min_containers,
                 ),
                 task_policy=TaskPolicyProto(
                     max_retries=self.task_policy.max_retries,

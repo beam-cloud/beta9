@@ -139,6 +139,11 @@ func NewRedisTaskQueueService(
 	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
 	registerTaskQueueRoutes(opts.RouteGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
 
+	err = tq.loadStubsWithMinContainers()
+	if err != nil {
+		return nil, err
+	}
+
 	return tq, nil
 }
 
@@ -631,6 +636,22 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 	}(instance)
 
 	return instance, nil
+}
+
+func (tq *RedisTaskQueue) loadStubsWithMinContainers() error {
+	stubs, err := tq.backendRepo.ListKeepWarmDeploymentStubs(tq.ctx, []string{types.StubTypeTaskQueueDeployment})
+	if err != nil {
+		return err
+	}
+
+	for _, stub := range stubs {
+		_, err := tq.getOrCreateQueueInstance(stub.ExternalId)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (tq *RedisTaskQueue) retryTask(ctx context.Context, authInfo *auth.AuthInfo, in *pb.TaskQueueCompleteRequest) *pb.TaskQueueCompleteResponse {

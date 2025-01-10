@@ -139,6 +139,11 @@ func NewHTTPEndpointService(
 	registerEndpointRoutes(opts.RouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
 	registerASGIRoutes(opts.RouteGroup.Group(ASGIRoutePrefix, authMiddleware), es)
 
+	err = es.loadStubsWithMinContainers(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	return es, nil
 }
 
@@ -310,6 +315,26 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 	}(instance)
 
 	return instance, nil
+}
+
+func (es *HttpEndpointService) loadStubsWithMinContainers(ctx context.Context) error {
+	stubs, err := es.backendRepo.ListKeepWarmDeploymentStubs(ctx, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment})
+	if err != nil {
+		return err
+	}
+
+	if len(stubs) == 0 {
+		return nil
+	}
+
+	for _, stub := range stubs {
+		_, err := es.getOrCreateEndpointInstance(ctx, stub.ExternalId)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 var Keys = &keys{}

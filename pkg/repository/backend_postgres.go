@@ -1234,6 +1234,17 @@ func (c *PostgresBackendRepository) ListStubsPaginated(ctx context.Context, filt
 	return *page, nil
 }
 
+func (r *PostgresBackendRepository) ListKeepWarmDeploymentStubs(ctx context.Context, stubType []string) ([]types.Stub, error) {
+	var stubs []types.Stub
+	query := `SELECT s.* FROM stub s join deployment d on s.id = d.stub_id WHERE d.active = true and COALESCE((s.config->'autoscaler'->>'min_containers')::int, 0) > 0 and s.type = ANY($1);`
+	err := r.client.SelectContext(ctx, &stubs, query, pq.Array(stubType))
+	if err != nil {
+		return nil, err
+	}
+
+	return stubs, nil
+}
+
 func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error) {
 	query := `
 	UPDATE deployment
