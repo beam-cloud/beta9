@@ -64,6 +64,7 @@ def try_env(env: str, default: EnvValue) -> Union[EnvValue, bool]:
     try:
         if target_type is bool:
             return env_val.lower() in ["true", "1", "yes", "on"]
+
         return target_type(env_val) or default
     except (ValueError, TypeError):
         return default
