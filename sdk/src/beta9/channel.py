@@ -3,7 +3,6 @@ import sys
 import traceback
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from importlib import metadata
 from typing import Any, Callable, Generator, List, NewType, Optional, Sequence, Tuple, cast
 
 import grpc
@@ -36,11 +35,6 @@ def channel_reconnect_event(connect_status: grpc.ChannelConnectivity) -> None:
         terminal.warn("Connection lost, reconnecting...")
 
 
-def get_user_agent() -> Optional[str]:
-    if p := __package__:
-        return f"{p}/{metadata.version(p)}"
-
-
 class Channel(InterceptorChannel):
     def __init__(
         self,
@@ -55,10 +49,6 @@ class Channel(InterceptorChannel):
     ):
         if options is None:
             options = []
-
-        options = [opt for opt in options if "grpc.secondary_user_agent" not in opt[0]]
-        if ua := get_user_agent():
-            options.append(("grpc.secondary_user_agent", ua))
 
         if credentials is not None:
             channel = grpc.secure_channel(addr, credentials)
