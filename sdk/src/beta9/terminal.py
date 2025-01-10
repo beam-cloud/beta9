@@ -18,9 +18,10 @@ from rich.progress import (
     BarColumn,
     DownloadColumn,
     Progress,
+    ProgressColumn,
+    Task,
     TextColumn,
     TimeRemainingColumn,
-    TransferSpeedColumn,
 )
 from rich.progress import open as _progress_open
 from rich.text import Text
@@ -193,6 +194,33 @@ class CustomProgress(Progress):
         return super().add_task(progress_description(str(description)), *args, **kwargs)
 
 
+class AverageTransferSpeedColumn(ProgressColumn):
+    """
+    Renders the average data transfer speed over the entire lifetime of the transfer.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.average_mib_s = 0.0
+
+    def render(self, task: Task) -> Text:
+        # If the task hasn't started or there's no elapsed time yet, we can't compute an average
+        if not task.started or task.elapsed == 0:
+            return Text("?", style="progress.data.speed")
+
+        if task.completed == task.total:
+            return Text(f"{self.average_mib_s:.2f} MiB/s", style="progress.data.speed")
+
+        # Calculate average speed in bytes per second
+        average_bps = task.completed / (task.elapsed or 1)
+
+        # Convert bytes per second to MiB/s (1 MiB = 1024 * 1024 bytes)
+        self.average_mib_s = average_bps / (1024**2)
+
+        # Format to a reasonable precision (e.g., 2 decimal places)
+        return Text(f"{self.average_mib_s:.2f} MiB/s", style="progress.data.speed")
+
+
 def StyledProgress() -> CustomProgress:
     """
     Return a styled progress bar with custom columns.
@@ -205,7 +233,7 @@ def StyledProgress() -> CustomProgress:
                 finished_style="slate_blue1",
             ),
             DownloadColumn(binary_units=True),
-            TransferSpeedColumn(),
+            AverageTransferSpeedColumn(),
             TimeRemainingColumn(elapsed_when_finished=True),
         ],
         auto_refresh=True,
