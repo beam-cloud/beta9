@@ -148,7 +148,7 @@ def _progress_updater(
             except Exception:
                 continue
 
-            finished += processed
+            finished += processed or 0
             if callback is not None:
                 callback(total=file_size, advance=processed)
 
