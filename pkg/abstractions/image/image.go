@@ -223,11 +223,13 @@ func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
 					}
 				}
 			case common.KeyOperationExpired:
-				containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), Keys.imageBuildContainerTTL(""))
-				is.builder.scheduler.Stop(&types.StopContainerArgs{
-					ContainerId: containerId,
-					Force:       true,
-				})
+				if strings.Contains(event.Key, Keys.imageBuildContainerTTL("")) {
+					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), Keys.imageBuildContainerTTL(""))
+					is.builder.scheduler.Stop(&types.StopContainerArgs{
+						ContainerId: containerId,
+						Force:       true,
+					})
+				}
 			}
 		case <-ctx.Done():
 			return
