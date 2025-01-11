@@ -364,7 +364,7 @@ def _calculate_file_ranges(file_size: int, chunk_size: int) -> List[FileRange]:
     Returns:
         List of byte ranges.
     """
-    ranges = math.ceil(file_size / chunk_size)
+    ranges = math.ceil(file_size / (chunk_size or 1))
     return [
         FileRange(
             number=i + 1,
