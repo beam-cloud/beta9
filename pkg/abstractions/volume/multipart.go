@@ -166,12 +166,11 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 	}
 
 	totalParts := math.Ceil(float64(in.FileSize) / float64(in.ChunkSize))
-	uploadParts := make([]*pb.FileUploadPart, int(totalParts))
-
-	// When the file size is 0, we still need to create a part
-	if len(uploadParts) == 0 {
-		uploadParts = make([]*pb.FileUploadPart, 1)
+	if in.FileSize == 0 && in.ChunkSize == 0 {
+		// When file and chunk size are both 0, we assume that the file is empty
+		totalParts = 1
 	}
+	uploadParts := make([]*pb.FileUploadPart, int(totalParts))
 
 	for i := range uploadParts {
 		res, err := s.CreatePresignedURL(ctx, &pb.CreatePresignedURLRequest{
