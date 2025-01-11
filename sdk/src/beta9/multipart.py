@@ -12,7 +12,7 @@ from functools import wraps
 from multiprocessing import Manager
 from os import PathLike
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from threading import Thread
 from typing import (
     Any,
@@ -144,16 +144,24 @@ def _progress_updater(
     """
 
     def target():
+        def cb(total: int, advance: int):
+            if callback is not None:
+                callback(total=total, advance=advance)
+
         finished = 0
         while finished < file_size:
             try:
-                processed = queue.get_nowait()
-            except Exception:
+                processed = queue.get(timeout=1)
+            except Empty:
                 continue
+            except Exception:
+                break
 
-            finished += processed or 0
-            if callback is not None:
-                callback(total=file_size, advance=processed)
+            if processed:
+                finished += processed
+                cb(total=file_size, advance=processed)
+
+        cb(total=file_size, advance=0)
 
     thread = Thread(target=target, daemon=True)
     thread.start()
@@ -216,7 +224,7 @@ def _upload_part(file_path: Path, file_part: FileUploadPart, queue: Queue) -> Co
     try:
         response = session.put(
             url=file_part.url,
-            data=QueueBuffer(chunk),
+            data=QueueBuffer(chunk) if chunk else None,
             headers={
                 "Content-Length": str(len(chunk)),
             },
