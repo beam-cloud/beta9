@@ -610,15 +610,18 @@ class Beta9Handler(RemoteHandler):
         self.service = service
         self.progress = progress
 
-    def list_dir(self, remote_path: RemotePath) -> List[RemotePath]:
-        res = self.service.list_path(ListPathRequest(path=remote_path.path))
+    def list_dir(self, remote_path: RemotePath, recursive: bool = False) -> List[RemotePath]:
+        path = remote_path.path
+        if recursive:
+            path = f"{path}/**".replace("//", "/")
+
+        res = self.service.list_path(ListPathRequest(path=path))
         if not res.ok:
             raise RuntimeError(f"{remote_path} ({res.err_msg})")
 
         return [
             RemotePath(remote_path.scheme, remote_path.volume_name, p.path, is_dir=p.is_dir)
             for p in res.path_infos
-            if not p.is_dir
         ]
 
     def is_dir(self, remote_path: RemotePath) -> bool:
@@ -674,7 +677,7 @@ class Beta9Handler(RemoteHandler):
         if self.is_dir(remote_path):
             local_path.mkdir(parents=True, exist_ok=True)
 
-            for rpath in self.list_dir(remote_path):
+            for rpath in self.list_dir(remote_path, recursive=True):
                 lpath = local_path / rpath.volume_path
                 if not remote_path.volume_path.endswith("/"):
                     lpath = local_path / rpath.name
