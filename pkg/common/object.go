@@ -7,6 +7,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/mholt/archiver/v3"
+	"github.com/rs/zerolog/log"
 )
 
 func ExtractObjectFile(ctx context.Context, objectId string, workspaceName string) error {
@@ -29,6 +30,8 @@ func ExtractObjectFile(ctx context.Context, objectId string, workspaceName strin
 	if err := zip.Unarchive(objectFilePath, destPath); err != nil {
 		return err
 	}
+
+	log.Info().Str("extracted_object_path", destPath).Msg("Extracted object file")
 
 	return nil
 }

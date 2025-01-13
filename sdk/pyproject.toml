@@ -28,6 +28,8 @@ websocket-client = "^1.8.0"
 prompt-toolkit = "^3.0.48"
 requests = "^2.32.3"
 paramiko = "^3.5.0"
+dill = "^0.3.9"
+jupyter = "^1.1.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.0"

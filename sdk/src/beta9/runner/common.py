@@ -10,10 +10,12 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
+from importlib.abc import Loader
 from multiprocessing import Value
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
+import dill
 import requests
 from starlette.responses import Response
 
@@ -185,6 +187,39 @@ class FunctionHandler:
         yield
         del os.environ["BETA9_IMPORTING_USER_CODE"]
 
+    def _load_pickled_function(self, module_path: str, func_name: str) -> Callable:
+        """Load a pickled function and create an in-memory module with its dependencies."""
+        # Extract the pickle filename from the module path
+        pickle_name = module_path.split("/")[-1]
+
+        with open(pickle_name, "rb") as f:
+            dependencies = dill.load(f)
+
+        print(f"Dependencies: {dependencies}")
+        # Create the module source code in memory
+        module_source = []
+
+        # Add imports
+        for module_name, version in dependencies["imports"].items():
+            module_source.append(f"import {module_name}")
+        module_source.append("")
+
+        # Add the main function
+        func = dependencies["function"]
+        source = dill.source.getsource(func)
+        module_source.append(source)
+
+        # print(f"Module source: {module_source}")
+        # Create module from memory
+        module_name = os.path.splitext(pickle_name)[0]
+        spec = importlib.util.spec_from_loader(
+            module_name, InMemoryLoader("\n".join(module_source))
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        return getattr(module, func_name)
+
     def _load(self):
         if sys.path[0] != USER_CODE_DIR:
             sys.path.insert(0, USER_CODE_DIR)
@@ -199,9 +234,14 @@ class FunctionHandler:
                 module, func = config.handler.split(":")
 
             with self.importing_user_code():
-                target_module = importlib.import_module(module)
+                if "pickled_functions" in module:
+                    # Handle pickled function case
+                    self.handler = self._load_pickled_function(module, func)
+                else:
+                    # Handle normal module case
+                    target_module = importlib.import_module(module)
+                    self.handler = getattr(target_module, func)
 
-            self.handler = getattr(target_module, func)
             self.signature = inspect.signature(self.handler.func)
             self.pass_context = "context" in self.signature.parameters
             self.is_async = asyncio.iscoroutinefunction(self.handler.func)
@@ -416,3 +456,11 @@ def wait_for_checkpoint():
         time.sleep(1)
 
     return _reload_config()
+
+
+class InMemoryLoader(Loader):
+    def __init__(self, source_code: str):
+        self.source_code = source_code
+
+    def exec_module(self, module):
+        exec(self.source_code, module.__dict__)
