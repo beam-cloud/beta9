@@ -89,9 +89,10 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
 		return HTTPInternalServerError("Failed to list tasks")
 	} else {
-		if !skipDetails {
-			for i := range tasks.Data {
-				tasks.Data[i].Stub.SanitizeConfig()
+
+		for i := range tasks.Data {
+			tasks.Data[i].Stub.SanitizeConfig()
+			if !skipDetails {
 				g.addOutputsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 				g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 			}
