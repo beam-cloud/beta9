@@ -293,6 +293,8 @@ def cp(
         terminal.warn("\rCancelled")
     except Exception as e:
         terminal.error(f"\rFailed: {e}")
+    finally:
+        terminal.reset_terminal()
 
 
 @common.command(
