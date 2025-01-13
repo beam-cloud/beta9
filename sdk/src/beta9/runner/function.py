@@ -147,12 +147,10 @@ def _monitor_task(
 
 
 def _handle_sigterm(*args: Any, **kwargs: Any) -> None:
-    print("SIGTERM received")
     os._exit(TaskExitCode.Success)
 
 
 def _handle_sigabort(*args: Any, **kwargs: Any) -> None:
-    print("SIGABORT received")
     os._exit(TaskExitCode.Error)
 
 
