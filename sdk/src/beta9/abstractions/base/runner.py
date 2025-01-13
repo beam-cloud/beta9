@@ -264,7 +264,7 @@ class RunnerAbstraction(BaseAbstraction):
     def _map_callable_to_attr(self, *, attr: str, func: Callable):
         """
         Determine the module and function name of a callable function, and cache on the class.
-        For Jupyter notebooks, analyze dependencies and pickle everything needed.
+        For Jupyter notebooks, serialize everything using cloudpickle.
         """
         if getattr(self, attr):
             return
@@ -276,40 +276,13 @@ class RunnerAbstraction(BaseAbstraction):
             module_name = os.path.splitext(module_file)[0]
             setattr(self, attr, f"{module_name}:{func.__name__}")
         elif in_ipython_env():
-            import dill
-
-            print(f"module._ih: {module._ih}")
-            dependencies = {"imports": {}, "function": func}
-
-            # Get all modules from the current module's namespace
-            module = inspect.getmodule(func)
-            print(f"Module: {module.__dict__.items()}")
-            if module:
-                for name, obj in module.__dict__.items():
-                    if inspect.ismodule(obj):
-                        try:
-                            version = obj.__version__
-                        except AttributeError:
-                            version = None
-                        dependencies["imports"][obj.__name__] = version
-                    # Also check if the name itself is a module (for from X import y cases)
-                    elif name in sys.modules:
-                        mod = sys.modules[name]
-                        try:
-                            version = mod.__version__
-                        except AttributeError:
-                            version = None
-                        dependencies["imports"][mod.__name__] = version
-
-            print(f"{inspect.getsource(func)}")
-            print(f"Dependenciesss: {dependencies}")
+            import cloudpickle
 
             tmp_file = tempfile.NamedTemporaryFile(
-                prefix=func.__name__, mode="wb", dir=".", suffix=".pkl", delete=False
+                prefix=func.__name__, mode="wb", dir=".", suffix=".pkl"
             )
             try:
-                dill.dump(dependencies, tmp_file)
-                tmp_file.close()
+                cloudpickle.dump(func, tmp_file)
 
                 pickle_name = os.path.basename(tmp_file.name)
                 module_name = f"pickled_functions/{pickle_name}"
@@ -318,7 +291,7 @@ class RunnerAbstraction(BaseAbstraction):
                 setattr(self, attr, f"{module_name}:{func.__name__}")
             except Exception as e:
                 os.unlink(tmp_file.name)
-                raise ValueError(f"Failed to pickle function and dependencies: {str(e)}")
+                raise ValueError(f"Failed to pickle function: {str(e)}")
         else:
             module_name = "__main__"
             setattr(self, attr, f"{module_name}:{func.__name__}")

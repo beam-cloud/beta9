@@ -15,7 +15,7 @@ from multiprocessing import Value
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
-import dill
+import cloudpickle
 import requests
 from starlette.responses import Response
 
@@ -188,37 +188,22 @@ class FunctionHandler:
         del os.environ["BETA9_IMPORTING_USER_CODE"]
 
     def _load_pickled_function(self, module_path: str, func_name: str) -> Callable:
-        """Load a pickled function and create an in-memory module with its dependencies."""
+        """Load a pickled function using cloudpickle."""
         # Extract the pickle filename from the module path
         pickle_name = module_path.split("/")[-1]
 
-        with open(pickle_name, "rb") as f:
-            dependencies = dill.load(f)
-
-        print(f"Dependencies: {dependencies}")
-        # Create the module source code in memory
-        module_source = []
-
-        # Add imports
-        for module_name, version in dependencies["imports"].items():
-            module_source.append(f"import {module_name}")
-        module_source.append("")
-
-        # Add the main function
-        func = dependencies["function"]
-        source = dill.source.getsource(func)
-        module_source.append(source)
-
-        # print(f"Module source: {module_source}")
-        # Create module from memory
-        module_name = os.path.splitext(pickle_name)[0]
-        spec = importlib.util.spec_from_loader(
-            module_name, InMemoryLoader("\n".join(module_source))
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-
-        return getattr(module, func_name)
+        try:
+            with open(pickle_name, "rb") as f:
+                func = cloudpickle.load(f)
+                if not callable(func):
+                    raise RunnerException("Loaded object is not callable")
+                return func
+        except RunnerException:
+            raise
+        except Exception as e:
+            raise RunnerException(
+                f"Failed to load pickled function: {str(e)}\n{traceback.format_exc()}"
+            ) from e
 
     def _load(self):
         if sys.path[0] != USER_CODE_DIR:
@@ -245,8 +230,8 @@ class FunctionHandler:
             self.signature = inspect.signature(self.handler.func)
             self.pass_context = "context" in self.signature.parameters
             self.is_async = asyncio.iscoroutinefunction(self.handler.func)
-        except BaseException:
-            raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
+        except BaseException as e:
+            raise RunnerException(f"Error loading handler: {str(e)}\n{traceback.format_exc()}")
 
     def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
         if self.handler is None:
