@@ -1,7 +1,7 @@
 import os
 import sys
 from functools import wraps
-from typing import Any, Callable
+from typing import Callable, TypeVar, Union, overload
 
 
 def called_on_import() -> bool:
@@ -29,11 +29,24 @@ def local_entrypoint(func: Callable) -> None:
     wrapper()
 
 
-def try_env(env: str, default: Any) -> Any:
-    """
-    Tries to get an environment variable and returns the default value if it doesn't exist.
+EnvValue = TypeVar("EnvValue", str, int, float, bool)
 
-    Will also try to convert the value to the type of the default value.
+
+@overload
+def try_env(env: str, default: str) -> bool: ...
+
+
+@overload
+def try_env(env: str, default: EnvValue) -> EnvValue: ...
+
+
+def try_env(env: str, default: EnvValue) -> Union[EnvValue, bool]:
+    """
+    Gets an environment variable and converts it to the correct type based on
+    the default value.
+
+    The environment variable name is prefixed with the name of the project if
+    it is set in the settings.
 
     Args:
         env: The name of the environment variable.
@@ -53,7 +66,7 @@ def try_env(env: str, default: Any) -> Any:
         if target_type is bool:
             return env_val.lower() in ["true", "1", "yes", "on"]
 
-        return target_type(env_val)
+        return target_type(env_val) or default
     except (ValueError, TypeError):
         return default
 
