@@ -303,6 +303,7 @@ class RunnerAbstraction(BaseAbstraction):
             tmp_file = TempFile(name=f"{func.__name__}.pkl", mode="wb")
             try:
                 cloudpickle.dump(func, tmp_file)
+                tmp_file.flush()
                 pickle_name = os.path.basename(tmp_file.name)
                 module_name = f"pickled_functions/{pickle_name}"
                 self.tmp_files.append(tmp_file)
