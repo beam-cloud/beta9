@@ -294,6 +294,9 @@ class RunnerAbstraction(BaseAbstraction):
             return
 
         module = inspect.getmodule(func)
+
+        # We check for the special cases before the normal cases because marimo notebooks
+        # are normal python files, but don't work with the module based invocation logic.
         if is_ipython_env():
             import cloudpickle
 
