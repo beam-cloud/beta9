@@ -1,4 +1,5 @@
 import os
+import sys
 from functools import wraps
 from typing import Any, Callable
 
@@ -55,3 +56,16 @@ def try_env(env: str, default: Any) -> Any:
         return target_type(env_val)
     except (ValueError, TypeError):
         return default
+
+
+def is_ipython_env() -> bool:
+    if "google.colab" in sys.modules:
+        return True
+
+    try:
+        from IPython import get_ipython
+
+        shell = get_ipython().__class__.__name__
+        return shell == "ZMQInteractiveShell"
+    except (NameError, ImportError):
+        return False

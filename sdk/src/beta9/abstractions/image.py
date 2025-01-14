@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
 
@@ -80,6 +81,19 @@ ImageCredentials = Union[
 ]
 
 
+def detected_python_version() -> PythonVersion:
+    detected_version = PythonVersion(f"python{sys.version_info.major}.{sys.version_info.minor}")
+    if detected_version in [
+        PythonVersion.Python38,
+        PythonVersion.Python39,
+        PythonVersion.Python310,
+        PythonVersion.Python311,
+        PythonVersion.Python312,
+    ]:
+        return detected_version
+    return PythonVersion.Python310
+
+
 class Image(BaseAbstraction):
     """
     Defines a custom container image that your code will run in.
@@ -87,7 +101,7 @@ class Image(BaseAbstraction):
 
     def __init__(
         self,
-        python_version: PythonVersionAlias = PythonVersion.Python310,
+        python_version: PythonVersionAlias = detected_python_version(),
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
@@ -106,8 +120,9 @@ class Image(BaseAbstraction):
 
         Parameters:
             python_version (Union[PythonVersion, str]):
-                The Python version to be used in the image. Default is
-                [PythonVersion.Python38](#pythonversion).
+                The Python version to be used in the image. Default is set to the python version
+                detected in the current environment. If that version is not supported it will default
+                to [PythonVersion.Python310](#pythonversion).
             python_packages (Union[List[str], str]):
                 A list of Python packages to install in the container image. Alternatively, a string
                 containing a path to a requirements.txt can be provided. Default is [].

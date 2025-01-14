@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import wraps
-from importlib.abc import Loader
 from multiprocessing import Value
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
@@ -189,7 +188,6 @@ class FunctionHandler:
 
     def _load_pickled_function(self, module_path: str, func_name: str) -> Callable:
         """Load a pickled function using cloudpickle."""
-        # Extract the pickle filename from the module path
         pickle_name = module_path.split("/")[-1]
 
         try:
@@ -227,9 +225,11 @@ class FunctionHandler:
                     target_module = importlib.import_module(module)
                     self.handler = getattr(target_module, func)
 
-            self.signature = inspect.signature(self.handler.func)
+            # Check if handler is a wrapped function or direct function
+            target_func = getattr(self.handler, "func", self.handler)
+            self.signature = inspect.signature(target_func)
             self.pass_context = "context" in self.signature.parameters
-            self.is_async = asyncio.iscoroutinefunction(self.handler.func)
+            self.is_async = asyncio.iscoroutinefunction(target_func)
         except BaseException as e:
             raise RunnerException(f"Error loading handler: {str(e)}\n{traceback.format_exc()}")
 
@@ -441,11 +441,3 @@ def wait_for_checkpoint():
         time.sleep(1)
 
     return _reload_config()
-
-
-class InMemoryLoader(Loader):
-    def __init__(self, source_code: str):
-        self.source_code = source_code
-
-    def exec_module(self, module):
-        exec(self.source_code, module.__dict__)

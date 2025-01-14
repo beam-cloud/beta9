@@ -22,7 +22,7 @@ from .clients.gateway import (
     ReplaceObjectContentOperation,
 )
 from .config import get_settings
-from .env import is_local
+from .env import is_ipython_env, is_local
 
 _sync_lock = threading.Lock()
 
@@ -152,7 +152,7 @@ class FileSyncer:
 
     def sync(self) -> FileSyncResult:
         with _sync_lock:
-            if self.is_workspace_dir and get_workspace_object_id() != "":
+            if self.is_workspace_dir and get_workspace_object_id() != "" and not is_ipython_env():
                 terminal.header("Files already synced")
                 return FileSyncResult(success=True, object_id=get_workspace_object_id())
             return self._sync()

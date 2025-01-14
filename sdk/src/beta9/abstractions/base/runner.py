@@ -1,8 +1,6 @@
 import inspect
 import json
 import os
-import sys
-import tempfile
 import threading
 import time
 from queue import Empty, Queue
@@ -29,7 +27,7 @@ from ...clients.gateway import (
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
-from ...env import called_on_import
+from ...env import called_on_import, is_ipython_env
 from ...sync import FileSyncer, SyncEventHandler
 from ...type import (
     _AUTOSCALER_TYPES,
@@ -75,6 +73,32 @@ def _is_stub_created_for_workspace() -> bool:
 def _set_stub_created_for_workspace(value: bool) -> None:
     global _stub_created_for_workspace
     _stub_created_for_workspace = value
+
+
+class TempFile:
+    """
+    A temporary file that is automatically deleted when closed. This class exists
+    because the `tempfile.NamedTemporaryFile` class does not allow for the filename
+    to be explicitly set.
+    """
+
+    def __init__(self, name: str, mode: str = "wb", dir: str = "."):
+        self.name = name
+        self._file = open(os.path.join(dir, name), mode)
+
+    def __getattr__(self, attr):
+        return getattr(self._file, attr)
+
+    def close(self):
+        if not self._file.closed:
+            self._file.close()
+            os.remove(self.name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 
 class RunnerAbstraction(BaseAbstraction):
@@ -149,7 +173,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
-        self.tmp_files: List[tempfile.NamedTemporaryFile] = []
+        self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
@@ -275,15 +299,12 @@ class RunnerAbstraction(BaseAbstraction):
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
             setattr(self, attr, f"{module_name}:{func.__name__}")
-        elif in_ipython_env():
+        elif is_ipython_env():
             import cloudpickle
 
-            tmp_file = tempfile.NamedTemporaryFile(
-                prefix=func.__name__, mode="wb", dir=".", suffix=".pkl"
-            )
+            tmp_file = TempFile(name=f"{func.__name__}.pkl", mode="wb")
             try:
                 cloudpickle.dump(func, tmp_file)
-
                 pickle_name = os.path.basename(tmp_file.name)
                 module_name = f"pickled_functions/{pickle_name}"
                 self.tmp_files.append(tmp_file)
@@ -487,34 +508,3 @@ class RunnerAbstraction(BaseAbstraction):
 
         self.runtime_ready = True
         return True
-
-
-def in_ipython_env() -> bool:
-    if "google.colab" in sys.modules:
-        return True
-
-    try:
-        from IPython import get_ipython
-
-        shell = get_ipython().__class__.__name__
-        return shell == "ZMQInteractiveShell"
-    except (NameError, ImportError):
-        return False
-
-
-def create_tmp_jupyter_file(input_history: List[str]) -> tempfile.NamedTemporaryFile:
-    tmp_file = tempfile.NamedTemporaryFile(mode="w+", dir=".", suffix=".py")
-    for code in input_history:
-        if isinstance(code, list):
-            code = "".join(code)
-
-        # Skip command lines
-        for line in code.split("\n"):
-            if line.startswith("get_ipython"):
-                continue
-
-            tmp_file.write(line + "\n")
-
-    tmp_file.flush()
-
-    return tmp_file
