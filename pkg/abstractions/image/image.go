@@ -43,6 +43,7 @@ type ImageServiceOpts struct {
 
 const buildContainerKeepAliveIntervalS int = 10
 const imageContainerTtlS int = 60
+const BuildContainerPrefix string = "build-"
 
 func NewRuncImageService(
 	ctx context.Context,
@@ -74,7 +75,7 @@ func NewRuncImageService(
 
 	go is.monitorImageContainers(ctx)
 	go is.keyEventManager.ListenForPattern(ctx, Keys.imageBuildContainerTTL("*"), is.keyEventChan)
-	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState("build-*"), is.keyEventChan)
+	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(BuildContainerPrefix), is.keyEventChan)
 
 	return &is, nil
 }
