@@ -75,7 +75,7 @@ func NewRuncImageService(
 
 	go is.monitorImageContainers(ctx)
 	go is.keyEventManager.ListenForPattern(ctx, Keys.imageBuildContainerTTL("*"), is.keyEventChan)
-	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(BuildContainerPrefix), is.keyEventChan)
+	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(BuildContainerPrefix+"*"), is.keyEventChan)
 
 	return &is, nil
 }
