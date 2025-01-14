@@ -294,12 +294,7 @@ class RunnerAbstraction(BaseAbstraction):
             return
 
         module = inspect.getmodule(func)
-        if hasattr(module, "__file__"):
-            # Normal module case - use relative path
-            module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
-            module_name = os.path.splitext(module_file)[0]
-            setattr(self, attr, f"{module_name}:{func.__name__}")
-        elif is_ipython_env():
+        if is_ipython_env():
             import cloudpickle
 
             tmp_file = TempFile(name=f"{func.__name__}.pkl", mode="wb")
@@ -313,6 +308,11 @@ class RunnerAbstraction(BaseAbstraction):
             except Exception as e:
                 os.unlink(tmp_file.name)
                 raise ValueError(f"Failed to pickle function: {str(e)}")
+        elif hasattr(module, "__file__"):
+            # Normal module case - use relative path
+            module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
+            module_name = os.path.splitext(module_file)[0]
+            setattr(self, attr, f"{module_name}:{func.__name__}")
         else:
             module_name = "__main__"
             setattr(self, attr, f"{module_name}:{func.__name__}")

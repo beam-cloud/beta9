@@ -72,7 +72,7 @@ def try_env(env: str, default: EnvValue) -> Union[EnvValue, bool]:
 
 
 def is_ipython_env() -> bool:
-    if "google.colab" in sys.modules:
+    if "google.colab" or "marimo" in sys.modules:
         return True
 
     try:
