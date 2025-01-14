@@ -523,7 +523,7 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		EntryPoint:  []string{transitionConfig.PythonVersion, "-m", "beta9.runner.bot.transition"},
 		Mounts:      mounts,
 		Stub:        *i.stub,
-	})
+	}, "experimental.bot.instance.run")
 	if err != nil {
 		return err
 	}

@@ -264,13 +264,13 @@ func TestRunContainer(t *testing.T) {
 	// Schedule a container
 	err = wb.Run(&types.ContainerRequest{
 		ContainerId: "test-container",
-	})
+	}, "test")
 	assert.Nil(t, err)
 
 	// Make sure you can't schedule a container with the same ID twice
 	err = wb.Run(&types.ContainerRequest{
 		ContainerId: "test-container",
-	})
+	}, "test")
 
 	if err != nil {
 		_, ok := err.(*types.ContainerAlreadyScheduledError)
@@ -325,7 +325,7 @@ func TestProcessRequests(t *testing.T) {
 	}
 
 	for _, req := range requests {
-		err = wb.Run(req)
+		err = wb.Run(req, "test")
 		if err != nil {
 			t.Errorf("Unexpected error while adding request to backlog: %s", err)
 		}
@@ -1095,7 +1095,7 @@ func TestConcurrencyLimit(t *testing.T) {
 
 			var errToExpect error
 			for _, req := range test.requests {
-				errToExpect = wb.Run(req)
+				errToExpect = wb.Run(req, "test")
 				if errToExpect != nil {
 					break
 				}

@@ -285,7 +285,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		Workspace:    *authInfo.Workspace,
 		EntryPoint:   []string{"tail", "-f", "/dev/null"},
 		PoolSelector: b.config.ImageService.BuildContainerPoolSelector,
-	})
+	}, "image.build.Build")
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
 		return err

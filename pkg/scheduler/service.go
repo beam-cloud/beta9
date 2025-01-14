@@ -52,7 +52,7 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 		Gpu:         in.Gpu,
 		ImageId:     in.ImageId,
 		RetryCount:  0,
-	})
+	}, "scheduler.service.RunContainer")
 
 	if err != nil {
 		return &pb.RunContainerResponse{
@@ -66,4 +66,3 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 		Error:   "",
 	}, nil
 }
-

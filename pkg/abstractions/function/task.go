@@ -164,7 +164,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},
 		Mounts:      mounts,
 		Stub:        *stub,
-	})
+	}, "function.task.run")
 	if err != nil {
 		return err
 	}

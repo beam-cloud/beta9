@@ -263,7 +263,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		EntryPoint:  entryPoint,
 		Mounts:      mounts,
 		Stub:        *stub,
-	})
+	}, "shell.shell.CreateShell")
 	if err != nil {
 		return &pb.CreateShellResponse{
 			Ok:     false,

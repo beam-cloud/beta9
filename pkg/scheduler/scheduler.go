@@ -81,8 +81,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	}, nil
 }
 
-func (s *Scheduler) Run(request *types.ContainerRequest) error {
-	log.Info().Interface("request", request).Msg("received run request")
+func (s *Scheduler) Run(request *types.ContainerRequest, source string) error {
+	log.Info().Interface("request", request).Str("source", source).Msg("received run request")
 
 	request.Timestamp = time.Now()
 

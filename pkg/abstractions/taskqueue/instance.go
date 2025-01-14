@@ -105,7 +105,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			time.Duration(i.StubConfig.KeepWarmSeconds)*time.Second,
 		)
 
-		err := i.Scheduler.Run(runRequest)
+		err := i.Scheduler.Run(runRequest, "taskqueue.instance.startContainers")
 		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to run container")
 			return err
