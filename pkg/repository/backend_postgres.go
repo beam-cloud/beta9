@@ -1055,6 +1055,8 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 }
 
 func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.DeploymentFilter) squirrel.SelectBuilder {
+	log.Printf("filters: %+v", filters)
+
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		"d.id, d.external_id, d.name, d.active, d.subdomain, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
 		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
@@ -1066,13 +1068,15 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		OrderBy("d.created_at DESC")
 
 	// Apply filters
-	qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
+	if filters.WorkspaceID != 0 {
+		qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
+	}
 
 	if len(filters.StubIds) > 0 {
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
 	}
 
-	if filters.StubType != "" {
+	if len(filters.StubType) > 0 {
 		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
 	}
 
@@ -1114,6 +1118,10 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 
 	if filters.CreatedAtEnd != "" {
 		qb = qb.Where(squirrel.LtOrEq{"d.created_at": filters.CreatedAtEnd})
+	}
+
+	if filters.MinContainersGTE > 0 {
+		qb = qb.Where("COALESCE((s.config->'autoscaler'->>'min_containers')::int, 0) >= ?", filters.MinContainersGTE)
 	}
 
 	return qb
@@ -1234,17 +1242,6 @@ func (c *PostgresBackendRepository) ListStubsPaginated(ctx context.Context, filt
 	return *page, nil
 }
 
-func (r *PostgresBackendRepository) ListKeepWarmDeploymentStubs(ctx context.Context, stubType []string) ([]types.Stub, error) {
-	var stubs []types.Stub
-	query := `SELECT s.* FROM stub s join deployment d on s.id = d.stub_id WHERE d.active = true and COALESCE((s.config->'autoscaler'->>'min_containers')::int, 0) > 0 and s.type = ANY($1);`
-	err := r.client.SelectContext(ctx, &stubs, query, pq.Array(stubType))
-	if err != nil {
-		return nil, err
-	}
-
-	return stubs, nil
-}
-
 func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error) {
 	query := `
 	UPDATE deployment
@@ -1268,7 +1265,8 @@ func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deploy
 func (r *PostgresBackendRepository) DeleteDeployment(ctx context.Context, deployment types.Deployment) error {
 	query := `
 	UPDATE deployment
-	SET deleted_at = CURRENT_TIMESTAMP
+	SET deleted_at = CURRENT_TIMESTAMP,
+	ACTIVE = FALSE
 	WHERE id = $1;
 	`
 

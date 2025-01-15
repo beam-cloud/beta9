@@ -32,19 +32,20 @@ type EndpointService interface {
 
 type HttpEndpointService struct {
 	pb.UnimplementedEndpointServiceServer
-	ctx               context.Context
-	config            types.AppConfig
-	rdb               *common.RedisClient
-	keyEventManager   *common.KeyEventManager
-	scheduler         *scheduler.Scheduler
-	backendRepo       repository.BackendRepository
-	workspaceRepo     repository.WorkspaceRepository
-	containerRepo     repository.ContainerRepository
-	eventRepo         repository.EventRepository
-	taskRepo          repository.TaskRepository
-	endpointInstances *common.SafeMap[*endpointInstance]
-	tailscale         *network.Tailscale
-	taskDispatcher    *task.Dispatcher
+	ctx                context.Context
+	config             types.AppConfig
+	rdb                *common.RedisClient
+	keyEventManager    *common.KeyEventManager
+	scheduler          *scheduler.Scheduler
+	backendRepo        repository.BackendRepository
+	workspaceRepo      repository.WorkspaceRepository
+	containerRepo      repository.ContainerRepository
+	eventRepo          repository.EventRepository
+	taskRepo           repository.TaskRepository
+	endpointInstances  *common.SafeMap[*endpointInstance]
+	tailscale          *network.Tailscale
+	taskDispatcher     *task.Dispatcher
+	instanceController *abstractions.InstanceController
 }
 
 var (
@@ -102,34 +103,17 @@ func NewHTTPEndpointService(
 
 	// Listen for container events with a certain prefix
 	// For example if a container is created, destroyed, or updated
-	eventManager, err := abstractions.NewContainerEventManager(endpointContainerPrefix, keyEventManager, es.InstanceFactory)
+	eventManager, err := abstractions.NewContainerEventManager(ctx, endpointContainerPrefix, keyEventManager, es.InstanceFactory)
 	if err != nil {
 		return nil, err
 	}
-	eventManager.Listen(ctx)
+	eventManager.Listen()
 
-	eventBus := common.NewEventBus(
-		opts.RedisClient,
-		common.EventBusSubscriber{Type: common.EventTypeReloadInstance, Callback: func(e *common.Event) bool {
-			stubId := e.Args["stub_id"].(string)
-			stubType := e.Args["stub_type"].(string)
-
-			if stubType != types.StubTypeEndpointDeployment && stubType != types.StubTypeASGIDeployment {
-				// Assume the callback succeeded to avoid retries
-				return true
-			}
-
-			instance, err := es.getOrCreateEndpointInstance(es.ctx, stubId)
-			if err != nil {
-				return false
-			}
-
-			instance.Reload()
-
-			return true
-		}},
-	)
-	go eventBus.ReceiveEvents(ctx)
+	es.instanceController = abstractions.NewInstanceController(ctx, es.InstanceFactory, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment}, es.backendRepo, es.rdb)
+	err = es.instanceController.Init()
+	if err != nil {
+		return nil, err
+	}
 
 	// Register task dispatcher
 	es.taskDispatcher.Register(string(types.ExecutorEndpoint), es.endpointTaskFactory)
@@ -138,11 +122,6 @@ func NewHTTPEndpointService(
 	authMiddleware := auth.AuthMiddleware(es.backendRepo, es.workspaceRepo)
 	registerEndpointRoutes(opts.RouteGroup.Group(endpointRoutePrefix, authMiddleware), es)
 	registerASGIRoutes(opts.RouteGroup.Group(ASGIRoutePrefix, authMiddleware), es)
-
-	err = es.loadStubsWithMinContainers(ctx)
-	if err != nil {
-		return nil, err
-	}
 
 	return es, nil
 }
@@ -210,20 +189,8 @@ func (es *HttpEndpointService) forwardRequest(
 	return task.Execute(ctx.Request().Context(), ctx)
 }
 
-func (es *HttpEndpointService) warmup(
-	ctx echo.Context,
-	stubId string,
-) error {
-	instance, err := es.getOrCreateEndpointInstance(ctx.Request().Context(), stubId)
-	if err != nil {
-		return err
-	}
-
-	return instance.HandleScalingEvent(1)
-}
-
-func (es *HttpEndpointService) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
-	return es.getOrCreateEndpointInstance(es.ctx, stubId)
+func (es *HttpEndpointService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
+	return es.getOrCreateEndpointInstance(ctx, stubId)
 }
 
 func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
@@ -315,26 +282,6 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 	}(instance)
 
 	return instance, nil
-}
-
-func (es *HttpEndpointService) loadStubsWithMinContainers(ctx context.Context) error {
-	stubs, err := es.backendRepo.ListKeepWarmDeploymentStubs(ctx, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment})
-	if err != nil {
-		return err
-	}
-
-	if len(stubs) == 0 {
-		return nil
-	}
-
-	for _, stub := range stubs {
-		_, err := es.getOrCreateEndpointInstance(ctx, stub.ExternalId)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 var Keys = &keys{}

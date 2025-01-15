@@ -67,11 +67,12 @@ type RedisTaskQueue struct {
 	backendRepo     repository.BackendRepository
 	scheduler       *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
-	queueInstances  *common.SafeMap[*taskQueueInstance]
-	keyEventManager *common.KeyEventManager
-	queueClient     *taskQueueClient
-	tailscale       *network.Tailscale
-	eventRepo       repository.EventRepository
+	queueInstances     *common.SafeMap[*taskQueueInstance]
+	keyEventManager    *common.KeyEventManager
+	queueClient        *taskQueueClient
+	tailscale          *network.Tailscale
+	eventRepo          repository.EventRepository
+	instanceController *abstractions.InstanceController
 }
 
 func NewRedisTaskQueueService(
@@ -103,34 +104,18 @@ func NewRedisTaskQueueService(
 
 	// Listen for container events with a certain prefix
 	// For example if a container is created, destroyed, or updated
-	eventManager, err := abstractions.NewContainerEventManager(taskQueueContainerPrefix, keyEventManager, tq.InstanceFactory)
+	eventManager, err := abstractions.NewContainerEventManager(ctx, taskQueueContainerPrefix, keyEventManager, tq.InstanceFactory)
 	if err != nil {
 		return nil, err
 	}
-	eventManager.Listen(ctx)
+	eventManager.Listen()
 
-	eventBus := common.NewEventBus(
-		opts.RedisClient,
-		common.EventBusSubscriber{Type: common.EventTypeReloadInstance, Callback: func(e *common.Event) bool {
-			stubId := e.Args["stub_id"].(string)
-			stubType := e.Args["stub_type"].(string)
-
-			if stubType != types.StubTypeTaskQueueDeployment {
-				// Assume the callback succeeded to avoid retries
-				return true
-			}
-
-			instance, err := tq.getOrCreateQueueInstance(stubId)
-			if err != nil {
-				return false
-			}
-
-			instance.Reload()
-
-			return true
-		}},
-	)
-	go eventBus.ReceiveEvents(ctx)
+	// Initialize deployment manager
+	tq.instanceController = abstractions.NewInstanceController(ctx, tq.InstanceFactory, []string{types.StubTypeTaskQueueDeployment}, opts.BackendRepo, opts.RedisClient)
+	err = tq.instanceController.Init()
+	if err != nil {
+		return nil, err
+	}
 
 	// Register task dispatcher
 	tq.taskDispatcher.Register(string(types.ExecutorTaskQueue), tq.taskQueueTaskFactory)
@@ -138,11 +123,6 @@ func NewRedisTaskQueueService(
 	// Register HTTP routes
 	authMiddleware := auth.AuthMiddleware(opts.BackendRepo, opts.WorkspaceRepo)
 	registerTaskQueueRoutes(opts.RouteGroup.Group(taskQueueRoutePrefix, authMiddleware), tq)
-
-	err = tq.loadStubsWithMinContainers()
-	if err != nil {
-		return nil, err
-	}
 
 	return tq, nil
 }
@@ -187,15 +167,6 @@ func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, err
 	}
 
 	return config, nil
-}
-
-func (tq *RedisTaskQueue) warmup(stubId string) error {
-	instance, err := tq.getOrCreateQueueInstance(stubId)
-	if err != nil {
-		return err
-	}
-
-	return instance.HandleScalingEvent(1)
 }
 
 func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (string, error) {
@@ -552,7 +523,7 @@ func (tq *RedisTaskQueue) TaskQueueLength(ctx context.Context, in *pb.TaskQueueL
 	}, nil
 }
 
-func (tq *RedisTaskQueue) InstanceFactory(stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
+func (tq *RedisTaskQueue) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
 	return tq.getOrCreateQueueInstance(stubId)
 }
 
@@ -636,22 +607,6 @@ func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...fun
 	}(instance)
 
 	return instance, nil
-}
-
-func (tq *RedisTaskQueue) loadStubsWithMinContainers() error {
-	stubs, err := tq.backendRepo.ListKeepWarmDeploymentStubs(tq.ctx, []string{types.StubTypeTaskQueueDeployment})
-	if err != nil {
-		return err
-	}
-
-	for _, stub := range stubs {
-		_, err := tq.getOrCreateQueueInstance(stub.ExternalId)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (tq *RedisTaskQueue) retryTask(ctx context.Context, authInfo *auth.AuthInfo, in *pb.TaskQueueCompleteRequest) *pb.TaskQueueCompleteResponse {

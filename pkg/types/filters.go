@@ -26,18 +26,19 @@ type QueryFilter struct {
 
 type DeploymentFilter struct {
 	BaseFilter
-	StubIds        StringSlice `query:"stub_ids"`
-	WorkspaceID    uint        `query:"workspace_id"`
-	StubType       string      `query:"stub_type"`
-	Name           string      `query:"name"`
-	Active         *bool       `query:"active"`
-	Version        uint        `query:"version"`
-	Cursor         string      `query:"cursor"`
-	CreatedAtStart string      `query:"created_at_start"`
-	CreatedAtEnd   string      `query:"created_at_end"`
-	Pagination     bool        `query:"pagination"`
-	Subdomain      string      `query:"subdomain"`
-	SearchQuery    string      `query:"search_query"`
+	StubIds          StringSlice `query:"stub_ids"`
+	WorkspaceID      uint        `query:"workspace_id"`
+	StubType         StringSlice `query:"stub_type"`
+	Name             string      `query:"name"`
+	Active           *bool       `query:"active"`
+	Version          uint        `query:"version"`
+	Cursor           string      `query:"cursor"`
+	CreatedAtStart   string      `query:"created_at_start"`
+	CreatedAtEnd     string      `query:"created_at_end"`
+	Pagination       bool        `query:"pagination"`
+	Subdomain        string      `query:"subdomain"`
+	SearchQuery      string      `query:"search_query"`
+	MinContainersGTE uint        `query:"min_containers"`
 }
 
 type TaskFilter struct {
