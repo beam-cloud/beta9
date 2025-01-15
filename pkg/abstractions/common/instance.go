@@ -356,7 +356,7 @@ func (ic *InstanceController) Init() error {
 			stubId := e.Args["stub_id"].(string)
 			stubType := e.Args["stub_type"].(string)
 
-			if err := ic.reloadInstance(stubId, stubType); err != nil {
+			if err := ic.reload(stubId, stubType); err != nil {
 				return false
 			}
 
@@ -396,7 +396,6 @@ func (ic *InstanceController) loadStubInstances() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("Found %d stubs to load", len(stubs))
 
 	for _, stub := range stubs {
 		_, err := ic.getOrCreateInstance(ic.ctx, stub.Stub.ExternalId)
@@ -408,7 +407,7 @@ func (ic *InstanceController) loadStubInstances() error {
 	return nil
 }
 
-func (ic *InstanceController) reloadInstance(stubId, stubType string) error {
+func (ic *InstanceController) reload(stubId, stubType string) error {
 	if stubType != types.StubTypeEndpointDeployment && stubType != types.StubTypeASGIDeployment {
 		// Assume the callback succeeded to avoid retries
 		return nil
