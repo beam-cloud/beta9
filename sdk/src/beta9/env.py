@@ -76,9 +76,10 @@ def is_ipython_env() -> bool:
         return True
 
     try:
+        from ipykernel.zmqshell import ZMQInteractiveShell
         from IPython import get_ipython
 
         shell = get_ipython().__class__.__name__
-        return shell == "ZMQInteractiveShell"
+        return shell == ZMQInteractiveShell.__name__
     except (NameError, ImportError):
         return False
