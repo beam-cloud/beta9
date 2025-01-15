@@ -237,6 +237,7 @@ type WorkerConfig struct {
 	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
 	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
 	TmpSizeLimit               string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
+	ContainerLogLineLimit      int                         `key:"containerLogLineLimit" json:"container_log_line_limit"`
 }
 
 type PoolMode string

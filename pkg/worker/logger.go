@@ -22,7 +22,8 @@ type ContainerLogMessage struct {
 }
 
 type ContainerLogger struct {
-	containerInstances *common.SafeMap[*ContainerInstance]
+	containerInstances    *common.SafeMap[*ContainerInstance]
+	containerLogLineLimit int
 }
 
 func (r *ContainerLogger) Read(containerId string, buffer []byte) (int64, error) {
@@ -72,11 +73,21 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 		return errors.New("container not found")
 	}
 
+	lineCount := 0
 	for o := range logChan {
 		dec := json.NewDecoder(strings.NewReader(o.Message))
 		msgDecoded := false
 
 		for {
+			lineCount++
+			if lineCount > r.containerLogLineLimit {
+				if lineCount == r.containerLogLineLimit+1 {
+					log.Info().Str("container_id", containerId).Msg("Reached log line limit, stopping log capture")
+					instance.LogBuffer.Write([]byte(fmt.Sprintf("Reached log line limit of %d, stopping log capture", r.containerLogLineLimit)))
+				}
+				break
+			}
+
 			var msg ContainerLogMessage
 
 			err := dec.Decode(&msg)
@@ -91,12 +102,6 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 			}
 
 			msgDecoded = true
-
-			f.WithFields(logrus.Fields{
-				"container_id": containerId,
-				"task_id":      msg.TaskID,
-				"stub_id":      instance.StubId,
-			}).Info(msg.Message)
 
 			// Write logs to in-memory log buffer as well
 			if msg.Message != "" {
@@ -118,10 +123,6 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 
 		// Fallback in case the message was not JSON
 		if !msgDecoded && o.Message != "" {
-			f.WithFields(logrus.Fields{
-				"container_id": containerId,
-				"stub_id":      instance.StubId,
-			}).Info(o.Message)
 
 			for _, line := range strings.Split(o.Message, "\n") {
 				if line == "" {

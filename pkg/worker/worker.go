@@ -237,7 +237,8 @@ func NewWorker() (*Worker, error) {
 		containerWg:             sync.WaitGroup{},
 		containerRepo:           containerRepo,
 		containerLogger: &ContainerLogger{
-			containerInstances: containerInstances,
+			containerInstances:    containerInstances,
+			containerLogLineLimit: config.Worker.ContainerLogLineLimit,
 		},
 		workerMetrics:     workerMetrics,
 		workerRepo:        workerRepo,
