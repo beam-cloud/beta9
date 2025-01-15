@@ -60,7 +60,7 @@ class Channel(InterceptorChannel):
 
         # NOTE: we observed that in a multiprocessing context, this
         # retry mechanism did not work as expected. We're not sure why,
-        # but for not, just don't subscribe to these events in containers
+        # but for now, just don't subscribe to these events in containers
         if not is_remote():
             channel.subscribe(*retry)
 
