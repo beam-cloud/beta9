@@ -28,7 +28,7 @@ from ...clients.gateway import (
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
-from ...env import called_on_import, is_ipython_env
+from ...env import called_on_import, is_notebook_env
 from ...sync import FileSyncer, SyncEventHandler
 from ...type import (
     _AUTOSCALER_TYPES,
@@ -298,7 +298,7 @@ class RunnerAbstraction(BaseAbstraction):
 
         # We check for the special cases before the normal cases because marimo notebooks
         # are normal python files, but don't work with the module based invocation logic.
-        if is_ipython_env():
+        if is_notebook_env():
             tmp_file = TempFile(name=f"{func.__name__}.pkl", mode="wb")
             try:
                 cloudpickle.dump(func, tmp_file)

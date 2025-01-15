@@ -71,7 +71,7 @@ def try_env(env: str, default: EnvValue) -> Union[EnvValue, bool]:
         return default
 
 
-def is_ipython_env() -> bool:
+def is_notebook_env() -> bool:
     if "google.colab" or "marimo" in sys.modules:
         return True
 

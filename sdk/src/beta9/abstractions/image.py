@@ -16,6 +16,7 @@ from ..clients.image import (
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
 )
+from ..env import is_notebook_env
 from ..type import PythonVersion, PythonVersionAlias
 
 
@@ -82,6 +83,10 @@ ImageCredentials = Union[
 
 
 def detected_python_version() -> PythonVersion:
+    # Only detect python version if we are in a notebook environment
+    if not is_notebook_env():
+        return PythonVersion.Python310
+
     detected_version = PythonVersion(f"python{sys.version_info.major}.{sys.version_info.minor}")
     if detected_version in [
         PythonVersion.Python38,
