@@ -246,7 +246,7 @@ class Image(BaseAbstraction):
                 pass
             ```
 
-            Building on a GPU Node
+            Building in a GPU environment
 
             By default, the image will be built on a CPU node. If you need to build on a GPU node,
             you can set the `gpu` parameter to the GPU type you need. This might be necessary if you
