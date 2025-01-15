@@ -6,6 +6,7 @@ import time
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
 
+import cloudpickle
 from watchdog.observers import Observer
 
 from ... import terminal
@@ -298,14 +299,11 @@ class RunnerAbstraction(BaseAbstraction):
         # We check for the special cases before the normal cases because marimo notebooks
         # are normal python files, but don't work with the module based invocation logic.
         if is_ipython_env():
-            import cloudpickle
-
             tmp_file = TempFile(name=f"{func.__name__}.pkl", mode="wb")
             try:
                 cloudpickle.dump(func, tmp_file)
                 tmp_file.flush()
-                pickle_name = os.path.basename(tmp_file.name)
-                module_name = f"pickled_functions/{pickle_name}"
+                module_name = os.path.basename(tmp_file.name)
                 self.tmp_files.append(tmp_file)
 
                 setattr(self, attr, f"{module_name}:{func.__name__}")

@@ -32,6 +32,8 @@ USER_CODE_DIR = "/mnt/code"
 USER_VOLUMES_DIR = "/volumes"
 USER_CACHE_DIR = "/cache"
 
+PICKLE_SUFFIX = ".pkl"
+
 
 @dataclass
 class Config:
@@ -186,12 +188,10 @@ class FunctionHandler:
         yield
         del os.environ["BETA9_IMPORTING_USER_CODE"]
 
-    def _load_pickled_function(self, module_path: str, func_name: str) -> Callable:
+    def _load_pickled_function(self, module_path: str) -> Callable:
         """Load a pickled function using cloudpickle."""
-        pickle_name = module_path.split("/")[-1]
-
         try:
-            with open(pickle_name, "rb") as f:
+            with open(module_path, "rb") as f:
                 func = cloudpickle.load(f)
                 if not callable(func):
                     raise RunnerException("Loaded object is not callable")
@@ -217,9 +217,9 @@ class FunctionHandler:
                 module, func = config.handler.split(":")
 
             with self.importing_user_code():
-                if "pickled_functions" in module:
+                if Path(module).suffix == PICKLE_SUFFIX:
                     # Handle pickled function case
-                    self.handler = self._load_pickled_function(module, func)
+                    self.handler = self._load_pickled_function(module)
                 else:
                     # Handle normal module case
                     target_module = importlib.import_module(module)
