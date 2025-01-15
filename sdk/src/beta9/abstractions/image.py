@@ -19,6 +19,8 @@ from ..clients.image import (
 from ..env import is_notebook_env
 from ..type import PythonVersion, PythonVersionAlias
 
+LOCAL_PYTHON_VERSION = PythonVersion(f"python{sys.version_info.major}.{sys.version_info.minor}")
+
 
 class ImageBuildResult(NamedTuple):
     success: bool = False
@@ -87,15 +89,14 @@ def detected_python_version() -> PythonVersion:
     if not is_notebook_env():
         return PythonVersion.Python310
 
-    detected_version = PythonVersion(f"python{sys.version_info.major}.{sys.version_info.minor}")
-    if detected_version in [
+    if LOCAL_PYTHON_VERSION in [
         PythonVersion.Python38,
         PythonVersion.Python39,
         PythonVersion.Python310,
         PythonVersion.Python311,
         PythonVersion.Python312,
     ]:
-        return detected_version
+        return LOCAL_PYTHON_VERSION
     return PythonVersion.Python310
 
 
@@ -271,6 +272,12 @@ class Image(BaseAbstraction):
 
         if isinstance(python_packages, str):
             python_packages = self._load_requirements_file(python_packages)
+
+        if is_notebook_env():
+            if LOCAL_PYTHON_VERSION != python_version:
+                terminal.warn(
+                    f"Local version {LOCAL_PYTHON_VERSION} differs from image version {python_version}. This may cause issues in your remote environment."
+                )
 
         self.python_version = python_version
         self.python_packages = self._sanitize_python_packages(python_packages)
