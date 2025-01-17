@@ -256,3 +256,7 @@ abstractions:
     systemPrompt: ""
     stepIntervalS: 1
     sessionInactivityTimeoutS: 10
+airfold:
+  endpoint: https://api.us.airfold.co/v1
+  apiKey: ""
+  tableName: task_events

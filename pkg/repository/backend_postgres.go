@@ -57,9 +57,10 @@ type PostgresBackendRepository struct {
 	client    *sqlx.DB
 	config    types.PostgresConfig
 	eventRepo EventRepository
+	whRepo    WarehouseRepository
 }
 
-func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
+func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository, whRepo WarehouseRepository) (*PostgresBackendRepository, error) {
 	dsn := GenerateDSN(config)
 
 	db, err := sqlx.Connect("postgres", dsn)
@@ -71,6 +72,7 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 		client:    db,
 		config:    config,
 		eventRepo: eventRepo,
+		whRepo:    whRepo,
 	}, nil
 }
 
@@ -443,7 +445,7 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *type
 		return &types.Task{}, err
 	}
 
-	go r.handleTaskEvent(params.TaskId, r.eventRepo.PushTaskCreatedEvent)
+	go r.handleTaskEvent(params.TaskId, r.callbackCreateEvent)
 	return &newTask, nil
 }
 
@@ -463,7 +465,7 @@ func (r *PostgresBackendRepository) UpdateTask(ctx context.Context, externalId s
 		return &types.Task{}, err
 	}
 
-	go r.handleTaskEvent(externalId, r.eventRepo.PushTaskUpdatedEvent)
+	go r.handleTaskEvent(externalId, r.callbackUpdateEvent)
 	return &task, nil
 }
 
@@ -667,6 +669,10 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 }
 
 func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error) {
+	if c.whRepo.IsEnabled() {
+		return c.whRepo.AggregateTasksByTimeWindow(ctx, filters)
+	}
+
 	interval := strings.ToLower(filters.Interval)
 	if interval == "" {
 		interval = "hour"
@@ -1641,4 +1647,18 @@ func (r *PostgresBackendRepository) ListenToChannel(ctx context.Context, channel
 	}()
 
 	return ch, nil
+}
+
+func (r *PostgresBackendRepository) callbackCreateEvent(task *types.TaskWithRelated) {
+	r.eventRepo.PushTaskCreatedEvent(task)
+	if r.whRepo.IsEnabled() {
+		r.whRepo.PushTaskCreatedEvent(task)
+	}
+}
+
+func (r *PostgresBackendRepository) callbackUpdateEvent(task *types.TaskWithRelated) {
+	r.eventRepo.PushTaskUpdatedEvent(task)
+	if r.whRepo.IsEnabled() {
+		r.whRepo.PushTaskUpdatedEvent(task)
+	}
 }

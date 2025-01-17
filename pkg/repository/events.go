@@ -19,6 +19,8 @@ type TCPEventClientRepo struct {
 	config            types.FluentBitEventConfig
 	endpointAvailable bool
 	eventTagMap       map[string]string
+	afConfig          types.AirfoldConfig
+	airfoldEnabled    bool
 }
 
 func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
