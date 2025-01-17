@@ -198,9 +198,9 @@ class FunctionHandler:
                 return func
         except RunnerException:
             raise
-        except Exception as e:
+        except BaseException as e:
             raise RunnerException(
-                f"Failed to load pickled function: {str(e)}\n{traceback.format_exc()}"
+                f"Failed to load pickled function: {traceback.format_exc()}"
             ) from e
 
     def _load(self):
@@ -218,10 +218,10 @@ class FunctionHandler:
 
             with self.importing_user_code():
                 if Path(module).suffix == PICKLE_SUFFIX:
-                    # Handle pickled function case
+                    # Handle pickled functions
                     self.handler = self._load_pickled_function(module)
                 else:
-                    # Handle normal module case
+                    # Handle standard modules (i.e. .py files)
                     target_module = importlib.import_module(module)
                     self.handler = getattr(target_module, func)
 
@@ -230,8 +230,8 @@ class FunctionHandler:
             self.signature = inspect.signature(target_func)
             self.pass_context = "context" in self.signature.parameters
             self.is_async = asyncio.iscoroutinefunction(target_func)
-        except BaseException as e:
-            raise RunnerException(f"Error loading handler: {str(e)}\n{traceback.format_exc()}")
+        except BaseException:
+            raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
 
     def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
         if self.handler is None:
