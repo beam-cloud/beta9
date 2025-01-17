@@ -228,6 +228,7 @@ message Autoscaler {
   string type = 1;
   uint32 max_containers = 2;
   uint32 tasks_per_container = 3;
+  uint32 min_containers = 4;
 }
 
 message TaskPolicy {

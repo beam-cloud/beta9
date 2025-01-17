@@ -247,6 +247,7 @@ class Autoscaler(betterproto.Message):
     type: str = betterproto.string_field(1)
     max_containers: int = betterproto.uint32_field(2)
     tasks_per_container: int = betterproto.uint32_field(3)
+    min_containers: int = betterproto.uint32_field(4)
 
 
 @dataclass(eq=False, repr=False)

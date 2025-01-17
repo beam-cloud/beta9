@@ -123,8 +123,8 @@ func (g *endpointGroup) warmup(
 		return err
 	}
 
-	return g.es.warmup(
-		ctx,
+	return g.es.controller.Warmup(
+		ctx.Request().Context(),
 		stubId,
 	)
 }

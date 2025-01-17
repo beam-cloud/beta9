@@ -117,12 +117,14 @@ GpuTypeAlias = Union[GpuType, GpuTypeLiteral]
 QUEUE_DEPTH_AUTOSCALER_TYPE = "queue_depth"
 DEFAULT_AUTOSCALER_MAX_CONTAINERS = 1
 DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER = 1
+DEFAULT_AUTOSCALER_MIN_CONTAINERS = 0
 
 
 @dataclass
 class Autoscaler:
     max_containers: int = DEFAULT_AUTOSCALER_MAX_CONTAINERS
     tasks_per_container: int = DEFAULT_AUTOSCALER_TASKS_PER_CONTAINER
+    min_containers: int = DEFAULT_AUTOSCALER_MIN_CONTAINERS
 
 
 @dataclass
