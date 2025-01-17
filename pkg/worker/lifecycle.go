@@ -153,16 +153,17 @@ func (s *Worker) deleteContainer(containerId string, err error) {
 }
 
 // Spawn a single container and stream output to stdout/stderr
-func (s *Worker) RunContainer(request *types.ContainerRequest) error {
+func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 
-	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 	s.containerInstances.Set(containerId, &ContainerInstance{
 		Id:        containerId,
 		StubId:    request.StubId,
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
 	})
+
+	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
@@ -181,8 +182,13 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 			return err
 		}
 
-		if err := s.buildOrPullImage(request, containerId, outputLogger); err != nil {
-			return err
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+			if err := s.buildOrPullImage(ctx, request, containerId, outputLogger); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -224,14 +230,19 @@ func (s *Worker) RunContainer(request *types.ContainerRequest) error {
 
 	go s.containerWg.Add(1)
 
-	// Start the container
-	go s.spawn(request, spec, outputLogger, opts)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		// Start the container
+		go s.spawn(request, spec, outputLogger, opts)
+	}
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
 }
 
-func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
+func (s *Worker) buildOrPullImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
 	switch {
 	case request.BuildOptions.Dockerfile != nil:
 		log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
@@ -241,13 +252,13 @@ func (s *Worker) buildOrPullImage(request *types.ContainerRequest, containerId s
 			return err
 		}
 
-		if err := s.imageClient.BuildAndArchiveImage(context.TODO(), outputLogger, *request.BuildOptions.Dockerfile, request.ImageId, buildCtxPath); err != nil {
+		if err := s.imageClient.BuildAndArchiveImage(ctx, outputLogger, *request.BuildOptions.Dockerfile, request.ImageId, buildCtxPath); err != nil {
 			return err
 		}
 	case request.BuildOptions.SourceImage != nil:
 		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.BuildOptions.SourceImage)
 
-		if err := s.imageClient.PullAndArchiveImage(context.TODO(), outputLogger, *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
+		if err := s.imageClient.PullAndArchiveImage(ctx, outputLogger, *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
 			return err
 		}
 	}
