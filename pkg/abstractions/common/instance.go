@@ -365,7 +365,7 @@ func (c *InstanceController) Init() error {
 			}
 
 			if !correctStub {
-				return false
+				return true
 			}
 
 			if err := c.reload(stubId); err != nil {
