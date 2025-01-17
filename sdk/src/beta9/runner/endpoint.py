@@ -197,13 +197,12 @@ class EndpointManager:
             payload = await request.json()
 
             status_code = HTTPStatus.OK
-            task_lifecycle_data.result, err = await self._call_function(
+            task_lifecycle_data.result, error = await self._call_function(
                 task_id=task_id, payload=payload
             )
-            if err:
-                task_lifecycle_data.status = TaskStatus.Error
 
-            if task_lifecycle_data.status == TaskStatus.Error:
+            if error:
+                task_lifecycle_data.status = TaskStatus.Error
                 status_code = HTTPStatus.INTERNAL_SERVER_ERROR
 
             kwargs = payload.get("kwargs", {})
@@ -226,8 +225,8 @@ class EndpointManager:
             )
 
     async def _call_function(self, task_id: str, payload: dict) -> Tuple[Response, Any]:
-        error = None
         response_body = {}
+        error = None
 
         args = payload.get("args", [])
         if args is None:
@@ -260,6 +259,7 @@ class EndpointManager:
             exception = traceback.format_exc()
             print(exception)
             response_body = {"error": exception}
+            error = exception
 
         return response_body, error
 

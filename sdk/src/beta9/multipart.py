@@ -12,8 +12,8 @@ from functools import wraps
 from multiprocessing import Manager
 from os import PathLike
 from pathlib import Path
-from queue import Queue
-from threading import Thread, local
+from queue import Empty, Queue
+from threading import Thread
 from typing import (
     Any,
     Callable,
@@ -59,10 +59,10 @@ from .exceptions import (
 )
 from .terminal import CustomProgress
 
-_PROCESS_LOCAL: Final[local] = local()
 # Value of 0 means the number of workers is calculated based on the file size
-_MAX_WORKERS: Final[int] = try_env("MULTIPART_MAX_WORKERS", 0)
-_REQUEST_TIMEOUT: Final[float] = try_env("MULTIPART_REQUEST_TIMEOUT", 5)
+_MAX_WORKERS: Final = try_env("MULTIPART_MAX_WORKERS", 0)
+_REQUEST_TIMEOUT: Final = try_env("MULTIPART_REQUEST_TIMEOUT", 5)
+_DEBUG_RETRY: Final = try_env("MULTIPART_DEBUG_RETRY", False)
 
 
 class ProgressCallbackType(Protocol):
@@ -108,6 +108,9 @@ def retry(
                 try:
                     return func(*args, **kwargs)
                 except Exception as e:
+                    if _DEBUG_RETRY:
+                        print(e)
+
                     last_exception = e
                     if attempt < times - 1:
                         time.sleep(min(current_delay, max_delay))
@@ -141,16 +144,24 @@ def _progress_updater(
     """
 
     def target():
+        def cb(total: int, advance: int):
+            if callback is not None:
+                callback(total=total, advance=advance)
+
         finished = 0
         while finished < file_size:
             try:
-                processed = queue.get_nowait()
-            except Exception:
+                processed = queue.get(timeout=1)
+            except Empty:
                 continue
+            except Exception:
+                break
 
-            finished += processed or 0
-            if callback is not None:
-                callback(total=file_size, advance=processed)
+            if processed:
+                finished += processed
+                cb(total=file_size, advance=processed)
+
+        cb(total=file_size, advance=0)
 
     thread = Thread(target=target, daemon=True)
     thread.start()
@@ -160,19 +171,28 @@ def _progress_updater(
     thread.join(timeout=timeout)
 
 
+# Global session for making HTTP requests
+_session = None
+
+
 def _get_session() -> Session:
     """
-    Get a requests session from the process's local storage.
+    Get a session for making HTTP requests.
+
+    This is not thread safe, but should be process safe.
     """
-    if not hasattr(_PROCESS_LOCAL, "session"):
-        _PROCESS_LOCAL.session = requests.Session()
-    return _PROCESS_LOCAL.session
+    global _session
+    if _session is None:
+        _session = requests.Session()
+    return _session
 
 
 def _init():
     """
     Initialize the process by setting a signal handler.
     """
+    _get_session()
+
     signal.signal(signal.SIGINT, lambda *_: os.kill(os.getpid(), signal.SIGTERM))
 
 
@@ -204,7 +224,7 @@ def _upload_part(file_path: Path, file_part: FileUploadPart, queue: Queue) -> Co
     try:
         response = session.put(
             url=file_part.url,
-            data=QueueBuffer(chunk),
+            data=QueueBuffer(chunk) if chunk else None,
             headers={
                 "Content-Length": str(len(chunk)),
             },
@@ -344,7 +364,7 @@ def _calculate_file_ranges(file_size: int, chunk_size: int) -> List[FileRange]:
     Returns:
         List of byte ranges.
     """
-    ranges = math.ceil(file_size / chunk_size)
+    ranges = math.ceil(file_size / (chunk_size or 1))
     return [
         FileRange(
             number=i + 1,
@@ -590,15 +610,18 @@ class Beta9Handler(RemoteHandler):
         self.service = service
         self.progress = progress
 
-    def list_dir(self, remote_path: RemotePath) -> List[RemotePath]:
-        res = self.service.list_path(ListPathRequest(path=remote_path.path))
+    def list_dir(self, remote_path: RemotePath, recursive: bool = False) -> List[RemotePath]:
+        path = remote_path.path
+        if recursive:
+            path = f"{path}/**".replace("//", "/")
+
+        res = self.service.list_path(ListPathRequest(path=path))
         if not res.ok:
             raise RuntimeError(f"{remote_path} ({res.err_msg})")
 
         return [
             RemotePath(remote_path.scheme, remote_path.volume_name, p.path, is_dir=p.is_dir)
             for p in res.path_infos
-            if not p.is_dir
         ]
 
     def is_dir(self, remote_path: RemotePath) -> bool:
@@ -654,7 +677,7 @@ class Beta9Handler(RemoteHandler):
         if self.is_dir(remote_path):
             local_path.mkdir(parents=True, exist_ok=True)
 
-            for rpath in self.list_dir(remote_path):
+            for rpath in self.list_dir(remote_path, recursive=True):
                 lpath = local_path / rpath.volume_path
                 if not remote_path.volume_path.endswith("/"):
                     lpath = local_path / rpath.name

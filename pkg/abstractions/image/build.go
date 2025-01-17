@@ -43,6 +43,7 @@ type Builder struct {
 	registry      *common.ImageRegistry
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
+	eventBus      *common.EventBus
 	rdb           *common.RedisClient
 }
 
@@ -143,6 +144,7 @@ func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, schedule
 		tailscale:     tailscale,
 		registry:      registry,
 		containerRepo: containerRepo,
+		eventBus:      common.NewEventBus(rdb),
 		rdb:           rdb,
 	}, nil
 }
@@ -241,6 +243,15 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
+	// If user cancels the build, send a stop-build event to the worker
+	go func() {
+		<-ctx.Done()
+		err := b.stopBuild(containerId)
+		if err != nil {
+			log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
+		}
+	}()
+
 	err = b.scheduler.Run(containerRequest)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
@@ -283,36 +294,47 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Waiting for build container to start...\n"}
 	start := time.Now()
 	buildContainerRunning := false
-	for {
-		r, err := client.Status(containerId)
-		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while checking container status: " + err.Error()}
-			return err
-		}
 
-		if r.Running {
-			buildContainerRunning = true
-			break
-		}
+	for !buildContainerRunning {
+		select {
+		case <-ctx.Done():
+			log.Info().Str("container_id", containerId).Msg("build was aborted")
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Build was aborted.\n"}
+			return ctx.Err()
 
-		exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
-		if err == nil && exitCode != 0 {
-			msg, ok := types.WorkerContainerExitCodes[exitCode]
-			if !ok {
-				msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+		case <-time.After(100 * time.Millisecond):
+			r, err := client.Status(containerId)
+			if err != nil {
+				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occurred while checking container status: " + err.Error()}
+				return err
 			}
-			// Wait for any final logs to get sent before returning
-			time.Sleep(200 * time.Millisecond)
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
-			return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
-		}
 
-		if time.Since(start) > containerSpinupTimeout {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Timeout: container not running after %d seconds.\n", containerSpinupTimeout)}
-			return errors.New(fmt.Sprintf("timeout: container not running after %d seconds", containerSpinupTimeout))
-		}
+			if r.Running {
+				buildContainerRunning = true
+				continue
+			}
 
-		time.Sleep(100 * time.Millisecond)
+			exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
+			if err == nil && exitCode != 0 {
+				msg, ok := types.WorkerContainerExitCodes[exitCode]
+				if !ok {
+					msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+				}
+				// Wait for any final logs to get sent before returning
+				time.Sleep(200 * time.Millisecond)
+				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+				return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
+			}
+
+			if time.Since(start) > containerSpinupTimeout {
+				err := b.stopBuild(containerId)
+				if err != nil {
+					log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
+				}
+				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout)}
+				return errors.New(fmt.Sprintf("timeout: container not running after %s seconds", containerSpinupTimeout))
+			}
+		}
 	}
 
 	imageId, err := b.GetImageId(opts)
@@ -778,6 +800,21 @@ func extractPackageName(pkg string) string {
 
 	// Handle regular packages
 	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
+}
+
+func (b *Builder) stopBuild(containerId string) error {
+	_, err := b.eventBus.Send(&common.Event{
+		Type:          common.StopBuildEventType(containerId),
+		Args:          map[string]any{"container_id": containerId},
+		LockAndDelete: false,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to send stop build event")
+		return err
+	}
+
+	log.Info().Str("container_id", containerId).Msg("sent stop build event")
+	return nil
 }
 
 func tagOrDigest(digest string, tag string) string {
