@@ -10,7 +10,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
-	"k8s.io/utils/ptr"
 )
 
 const IgnoreScalingEventInterval = 10 * time.Second
@@ -323,102 +322,4 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 
 	log.Info().Str("instance_name", i.Name).Msgf("%s\n", reason)
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
-}
-
-type InstanceController struct {
-	ctx                 context.Context
-	getOrCreateInstance func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
-	StubTypes           []string
-	backendRepo         repository.BackendRepository
-	redisClient         *common.RedisClient
-}
-
-func NewInstanceController(
-	ctx context.Context,
-	getOrCreateInstance func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error),
-	stubTypes []string,
-	backendRepo repository.BackendRepository,
-	redisClient *common.RedisClient,
-) *InstanceController {
-	return &InstanceController{
-		ctx:                 ctx,
-		getOrCreateInstance: getOrCreateInstance,
-		StubTypes:           stubTypes,
-		backendRepo:         backendRepo,
-		redisClient:         redisClient,
-	}
-}
-
-func (ic *InstanceController) Init() error {
-	eventBus := common.NewEventBus(
-		ic.redisClient,
-		common.EventBusSubscriber{Type: common.EventTypeReloadInstance, Callback: func(e *common.Event) bool {
-			stubId := e.Args["stub_id"].(string)
-			stubType := e.Args["stub_type"].(string)
-
-			if err := ic.reload(stubId, stubType); err != nil {
-				return false
-			}
-
-			return true
-		}},
-	)
-	go eventBus.ReceiveEvents(ic.ctx)
-
-	if err := ic.loadStubInstances(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (ic *InstanceController) Warmup(
-	ctx context.Context,
-	stubId string,
-) error {
-	instance, err := ic.getOrCreateInstance(ctx, stubId)
-	if err != nil {
-		return err
-	}
-
-	return instance.HandleScalingEvent(1)
-}
-
-func (ic *InstanceController) loadStubInstances() error {
-	stubs, err := ic.backendRepo.ListDeploymentsWithRelated(
-		ic.ctx,
-		types.DeploymentFilter{
-			StubType:         ic.StubTypes,
-			MinContainersGTE: 1,
-			Active:           ptr.To(true),
-		},
-	)
-	if err != nil {
-		return err
-	}
-
-	for _, stub := range stubs {
-		_, err := ic.getOrCreateInstance(ic.ctx, stub.Stub.ExternalId)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (ic *InstanceController) reload(stubId, stubType string) error {
-	if stubType != types.StubTypeEndpointDeployment && stubType != types.StubTypeASGIDeployment {
-		// Assume the callback succeeded to avoid retries
-		return nil
-	}
-
-	instance, err := ic.getOrCreateInstance(ic.ctx, stubId)
-	if err != nil {
-		return err
-	}
-
-	instance.Reload()
-
-	return nil
 }

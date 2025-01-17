@@ -45,7 +45,7 @@ type HttpEndpointService struct {
 	endpointInstances  *common.SafeMap[*endpointInstance]
 	tailscale          *network.Tailscale
 	taskDispatcher     *task.Dispatcher
-	instanceController *abstractions.InstanceController
+	instanceController *abstractions.Controller
 }
 
 var (
@@ -109,7 +109,7 @@ func NewHTTPEndpointService(
 	}
 	eventManager.Listen()
 
-	es.instanceController = abstractions.NewInstanceController(ctx, es.InstanceFactory, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment}, es.backendRepo, es.rdb)
+	es.instanceController = abstractions.NewController(ctx, es.InstanceFactory, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment}, es.backendRepo, es.rdb)
 	err = es.instanceController.Init()
 	if err != nil {
 		return nil, err
