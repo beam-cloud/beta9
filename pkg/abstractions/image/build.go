@@ -222,6 +222,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		dockerfile             *string
 		authInfo, _            = auth.AuthInfoFromContext(ctx)
 		containerSpinupTimeout = defaultContainerSpinupTimeout
+		success                = false
 	)
 
 	switch {
@@ -239,13 +240,16 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	containerRequest, err := b.generateContainerRequest(opts, dockerfile, containerId, authInfo.Workspace)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating container request: " + err.Error()}
+		outputChan <- common.OutputMsg{Done: true, Success: success, Msg: "Error occured while generating container request: " + err.Error()}
 		return err
 	}
 
 	// If user cancels the build, send a stop-build event to the worker
 	go func() {
 		<-ctx.Done()
+		if success {
+			return
+		}
 		err := b.stopBuild(containerId)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
@@ -254,19 +258,19 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	err = b.scheduler.Run(containerRequest)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success, Msg: err.Error() + "\n"}
 		return err
 	}
 
 	hostname, err := b.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
 	err = b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
@@ -274,13 +278,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
 	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success, Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 	go client.StreamLogs(ctx, containerId, outputChan)
@@ -291,7 +295,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}()
 	defer client.Kill(containerId) // Kill and remove container after the build completes
 
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Waiting for build container to start...\n"}
+	outputChan <- common.OutputMsg{Done: false, Success: success, Msg: "Waiting for build container to start...\n"}
 	start := time.Now()
 	buildContainerRunning := false
 
@@ -299,13 +303,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		select {
 		case <-ctx.Done():
 			log.Info().Str("container_id", containerId).Msg("build was aborted")
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Build was aborted.\n"}
+			outputChan <- common.OutputMsg{Done: true, Success: success, Msg: "Build was aborted.\n"}
 			return ctx.Err()
 
 		case <-time.After(100 * time.Millisecond):
 			r, err := client.Status(containerId)
 			if err != nil {
-				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occurred while checking container status: " + err.Error()}
+				outputChan <- common.OutputMsg{Done: true, Success: success, Msg: "Error occurred while checking container status: " + err.Error()}
 				return err
 			}
 
@@ -322,7 +326,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				}
 				// Wait for any final logs to get sent before returning
 				time.Sleep(200 * time.Millisecond)
-				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+				outputChan <- common.OutputMsg{Done: true, Success: success, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
 				return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
 			}
 
@@ -331,7 +335,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				if err != nil {
 					log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
 				}
-				outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout)}
+				outputChan <- common.OutputMsg{Done: true, Success: success, Msg: fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout)}
 				return errors.New(fmt.Sprintf("timeout: container not running after %s seconds", containerSpinupTimeout))
 			}
 		}
@@ -339,12 +343,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	imageId, err := b.GetImageId(opts)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating image id: " + err.Error()}
+		outputChan <- common.OutputMsg{Done: true, Success: success, Msg: "Error occured while generating image id: " + err.Error()}
 		return err
 	}
 
 	if !buildContainerRunning {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success, Msg: "Unable to connect to build container.\n"}
 		return errors.New("container not running")
 	}
 
@@ -365,10 +369,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
-		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
+		outputChan <- common.OutputMsg{Done: false, Success: success, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
 		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, opts.PythonVersion)
 		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+			outputChan <- common.OutputMsg{Done: true, Success: success, Msg: err.Error() + "\n"}
 			return err
 		}
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
@@ -391,7 +395,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			}
 
 			time.Sleep(defaultImageBuildGracefulShutdownS) // Wait for logs to be passed through
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
+			outputChan <- common.OutputMsg{Done: true, Success: success, Msg: errMsg}
 			return err
 		}
 	}
@@ -403,7 +407,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: true, ImageId: imageId}
+	success = true
+	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: success, ImageId: imageId}
 	return nil
 }
 
@@ -803,6 +808,7 @@ func extractPackageName(pkg string) string {
 }
 
 func (b *Builder) stopBuild(containerId string) error {
+
 	_, err := b.eventBus.Send(&common.Event{
 		Type:          common.StopBuildEventType(containerId),
 		Args:          map[string]any{"container_id": containerId},
