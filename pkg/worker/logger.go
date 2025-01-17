@@ -81,6 +81,10 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 		if lineCount > r.containerLogLineLimit {
 			if lineCount == r.containerLogLineLimit+1 {
 				log.Info().Str("container_id", containerId).Msg("Reached log line limit, stopping log capture")
+				f.WithFields(logrus.Fields{
+					"container_id": containerId,
+					"stub_id":      instance.StubId,
+				}).Info("Reached log line limit, stopping log capture")
 				instance.LogBuffer.Write([]byte(fmt.Sprintf("Reached log line limit of %d, stopping log capture", r.containerLogLineLimit)))
 				lineCount++
 			}
