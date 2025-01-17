@@ -386,7 +386,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	defer os.RemoveAll(baseTmpBundlePath)
 	defer os.RemoveAll(copyDir)
 
-	outputLogger.Info("Archiving custom base image...\n")
+	outputLogger.Info("Archiving base image...\n")
 	return c.Archive(ctx, tmpBundlePath, imageId, nil)
 }
 
