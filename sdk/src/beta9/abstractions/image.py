@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 from typing import Dict, List, Literal, NamedTuple, Optional, Sequence, Tuple, TypedDict, Union
 
@@ -15,7 +16,10 @@ from ..clients.image import (
     VerifyImageBuildRequest,
     VerifyImageBuildResponse,
 )
+from ..env import is_notebook_env
 from ..type import GpuType, GpuTypeAlias, PythonVersion, PythonVersionAlias
+
+LOCAL_PYTHON_VERSION = PythonVersion(f"python{sys.version_info.major}.{sys.version_info.minor}")
 
 
 class ImageBuildResult(NamedTuple):
@@ -80,6 +84,22 @@ ImageCredentials = Union[
 ]
 
 
+def detected_python_version() -> PythonVersion:
+    # Only detect python version if we are in a notebook environment
+    if not is_notebook_env():
+        return PythonVersion.Python310
+
+    if LOCAL_PYTHON_VERSION in [
+        PythonVersion.Python38,
+        PythonVersion.Python39,
+        PythonVersion.Python310,
+        PythonVersion.Python311,
+        PythonVersion.Python312,
+    ]:
+        return LOCAL_PYTHON_VERSION
+    return PythonVersion.Python310
+
+
 class Image(BaseAbstraction):
     """
     Defines a custom container image that your code will run in.
@@ -87,7 +107,7 @@ class Image(BaseAbstraction):
 
     def __init__(
         self,
-        python_version: PythonVersionAlias = PythonVersion.Python310,
+        python_version: PythonVersionAlias = detected_python_version(),
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
@@ -106,8 +126,9 @@ class Image(BaseAbstraction):
 
         Parameters:
             python_version (Union[PythonVersion, str]):
-                The Python version to be used in the image. Default is
-                [PythonVersion.Python38](#pythonversion).
+                The Python version to be used in the image. Default is set to [PythonVersion.Python310](#pythonversion)
+                for normal modules (.py files) and the python version detected in the local environment for notebooks.
+                If the detected version is not supported it will default to [PythonVersion.Python310](#pythonversion).
             python_packages (Union[List[str], str]):
                 A list of Python packages to install in the container image. Alternatively, a string
                 containing a path to a requirements.txt can be provided. Default is [].
@@ -264,6 +285,12 @@ class Image(BaseAbstraction):
 
         if isinstance(python_packages, str):
             python_packages = self._load_requirements_file(python_packages)
+
+        if is_notebook_env():
+            if LOCAL_PYTHON_VERSION != python_version:
+                terminal.warn(
+                    f"Local version {LOCAL_PYTHON_VERSION} differs from image version {python_version}. This may cause issues in your remote environment."
+                )
 
         self.python_version = python_version
         self.python_packages = self._sanitize_python_packages(python_packages)
