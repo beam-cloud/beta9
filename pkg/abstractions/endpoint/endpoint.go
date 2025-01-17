@@ -32,20 +32,20 @@ type EndpointService interface {
 
 type HttpEndpointService struct {
 	pb.UnimplementedEndpointServiceServer
-	ctx                context.Context
-	config             types.AppConfig
-	rdb                *common.RedisClient
-	keyEventManager    *common.KeyEventManager
-	scheduler          *scheduler.Scheduler
-	backendRepo        repository.BackendRepository
-	workspaceRepo      repository.WorkspaceRepository
-	containerRepo      repository.ContainerRepository
-	eventRepo          repository.EventRepository
-	taskRepo           repository.TaskRepository
-	endpointInstances  *common.SafeMap[*endpointInstance]
-	tailscale          *network.Tailscale
-	taskDispatcher     *task.Dispatcher
-	instanceController *abstractions.Controller
+	ctx               context.Context
+	config            types.AppConfig
+	rdb               *common.RedisClient
+	keyEventManager   *common.KeyEventManager
+	scheduler         *scheduler.Scheduler
+	backendRepo       repository.BackendRepository
+	workspaceRepo     repository.WorkspaceRepository
+	containerRepo     repository.ContainerRepository
+	eventRepo         repository.EventRepository
+	taskRepo          repository.TaskRepository
+	endpointInstances *common.SafeMap[*endpointInstance]
+	tailscale         *network.Tailscale
+	taskDispatcher    *task.Dispatcher
+	controller        *abstractions.InstanceController
 }
 
 var (
@@ -109,8 +109,8 @@ func NewHTTPEndpointService(
 	}
 	eventManager.Listen()
 
-	es.instanceController = abstractions.NewController(ctx, es.InstanceFactory, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment}, es.backendRepo, es.rdb)
-	err = es.instanceController.Init()
+	es.controller = abstractions.NewController(ctx, es.InstanceFactory, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment}, es.backendRepo, es.rdb)
+	err = es.controller.Init()
 	if err != nil {
 		return nil, err
 	}

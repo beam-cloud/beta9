@@ -325,7 +325,7 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }
 
-type Controller struct {
+type InstanceController struct {
 	ctx                 context.Context
 	getOrCreateInstance func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
 	StubTypes           []string
@@ -339,8 +339,8 @@ func NewController(
 	stubTypes []string,
 	backendRepo repository.BackendRepository,
 	redisClient *common.RedisClient,
-) *Controller {
-	return &Controller{
+) *InstanceController {
+	return &InstanceController{
 		ctx:                 ctx,
 		getOrCreateInstance: getOrCreateInstance,
 		StubTypes:           stubTypes,
@@ -349,7 +349,7 @@ func NewController(
 	}
 }
 
-func (c *Controller) Init() error {
+func (c *InstanceController) Init() error {
 	eventBus := common.NewEventBus(
 		c.redisClient,
 		common.EventBusSubscriber{Type: common.EventTypeReloadInstance, Callback: func(e *common.Event) bool {
@@ -384,7 +384,7 @@ func (c *Controller) Init() error {
 	return nil
 }
 
-func (c *Controller) Warmup(
+func (c *InstanceController) Warmup(
 	ctx context.Context,
 	stubId string,
 ) error {
@@ -396,7 +396,7 @@ func (c *Controller) Warmup(
 	return instance.HandleScalingEvent(1)
 }
 
-func (c *Controller) load() error {
+func (c *InstanceController) load() error {
 	stubs, err := c.backendRepo.ListDeploymentsWithRelated(
 		c.ctx,
 		types.DeploymentFilter{
@@ -419,7 +419,7 @@ func (c *Controller) load() error {
 	return nil
 }
 
-func (c *Controller) reload(stubId string) error {
+func (c *InstanceController) reload(stubId string) error {
 	instance, err := c.getOrCreateInstance(c.ctx, stubId)
 	if err != nil {
 		return err

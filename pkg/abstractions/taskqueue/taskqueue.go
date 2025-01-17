@@ -67,12 +67,12 @@ type RedisTaskQueue struct {
 	backendRepo     repository.BackendRepository
 	scheduler       *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
-	queueInstances     *common.SafeMap[*taskQueueInstance]
-	keyEventManager    *common.KeyEventManager
-	queueClient        *taskQueueClient
-	tailscale          *network.Tailscale
-	eventRepo          repository.EventRepository
-	instanceController *abstractions.Controller
+	queueInstances  *common.SafeMap[*taskQueueInstance]
+	keyEventManager *common.KeyEventManager
+	queueClient     *taskQueueClient
+	tailscale       *network.Tailscale
+	eventRepo       repository.EventRepository
+	controller      *abstractions.InstanceController
 }
 
 func NewRedisTaskQueueService(
@@ -111,8 +111,8 @@ func NewRedisTaskQueueService(
 	eventManager.Listen()
 
 	// Initialize deployment manager
-	tq.instanceController = abstractions.NewController(ctx, tq.InstanceFactory, []string{types.StubTypeTaskQueueDeployment}, opts.BackendRepo, opts.RedisClient)
-	err = tq.instanceController.Init()
+	tq.controller = abstractions.NewController(ctx, tq.InstanceFactory, []string{types.StubTypeTaskQueueDeployment}, opts.BackendRepo, opts.RedisClient)
+	err = tq.controller.Init()
 	if err != nil {
 		return nil, err
 	}
