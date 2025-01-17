@@ -368,7 +368,7 @@ func (c *Controller) Init() error {
 				return false
 			}
 
-			if err := c.reload(stubId, stubType); err != nil {
+			if err := c.reload(stubId); err != nil {
 				return false
 			}
 
