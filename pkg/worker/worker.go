@@ -273,12 +273,10 @@ func (s *Worker) Run() error {
 				log.Info().Str("container_id", containerId).Msg("running container")
 
 				ctx, cancel := context.WithCancel(s.ctx)
-				eventbus := common.NewEventBus(s.redisClient, common.EventBusSubscriber{Type: common.EventType("stop-build" + "-" + containerId), Callback: func(e *common.Event) bool {
-					log.Info().Str("container_id", containerId).Msg("received stop build event")
-					cancel()
-					return true
-				}})
-				go eventbus.ReceiveEvents(ctx)
+
+				if request.IsBuildRequest() {
+					go s.listenForStopBuildEvent(ctx, cancel, containerId)
+				}
 
 				err := s.RunContainer(ctx, request)
 				if err != nil {
@@ -314,6 +312,16 @@ func (s *Worker) Run() error {
 	}
 
 	return s.shutdown()
+}
+
+// listenForStopBuildEvent listens for a stop build event and cancels the context
+func (s *Worker) listenForStopBuildEvent(ctx context.Context, cancel context.CancelFunc, containerId string) {
+	eventbus := common.NewEventBus(s.redisClient, common.EventBusSubscriber{Type: common.StopBuildEventType(containerId), Callback: func(e *common.Event) bool {
+		log.Info().Str("container_id", containerId).Msg("received stop build event")
+		cancel()
+		return true
+	}})
+	go eventbus.ReceiveEvents(ctx)
 }
 
 // listenForShutdown listens for SIGINT and SIGTERM signals and cancels the worker context

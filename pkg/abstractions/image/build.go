@@ -783,7 +783,7 @@ func extractPackageName(pkg string) string {
 
 func (b *Builder) stopBuild(containerId string) error {
 	_, err := b.eventBus.Send(&common.Event{
-		Type:          common.EventType("stop-build" + "-" + containerId),
+		Type:          common.StopBuildEventType(containerId),
 		Args:          map[string]any{"container_id": containerId},
 		LockAndDelete: false,
 	})
