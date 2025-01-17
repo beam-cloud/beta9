@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/output"
@@ -78,6 +79,7 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	if err != nil {
 		return err
 	}
+	skipDetails, _ := strconv.ParseBool(ctx.QueryParam("skip_details"))
 
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), ctx.Param("workspaceId"))
 	if err != nil {
@@ -87,10 +89,13 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), *filters); err != nil {
 		return HTTPInternalServerError("Failed to list tasks")
 	} else {
+
 		for i := range tasks.Data {
 			tasks.Data[i].Stub.SanitizeConfig()
-			g.addOutputsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
-			g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
+			if !skipDetails {
+				g.addOutputsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
+				g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
+			}
 		}
 		return ctx.JSON(http.StatusOK, tasks)
 	}
