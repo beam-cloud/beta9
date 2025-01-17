@@ -419,7 +419,7 @@ func (c *Controller) load() error {
 	return nil
 }
 
-func (c *Controller) reload(stubId, stubType string) error {
+func (c *Controller) reload(stubId string) error {
 	instance, err := c.getOrCreateInstance(c.ctx, stubId)
 	if err != nil {
 		return err
