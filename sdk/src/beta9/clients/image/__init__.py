@@ -43,6 +43,7 @@ class VerifyImageBuildRequest(betterproto.Message):
     dockerfile: str = betterproto.string_field(8)
     build_ctx_object: str = betterproto.string_field(9)
     secrets: List[str] = betterproto.string_field(10)
+    gpu: str = betterproto.string_field(11)
 
 
 @dataclass(eq=False, repr=False)
@@ -70,6 +71,7 @@ class BuildImageRequest(betterproto.Message):
     dockerfile: str = betterproto.string_field(8)
     build_ctx_object: str = betterproto.string_field(9)
     secrets: List[str] = betterproto.string_field(10)
+    gpu: str = betterproto.string_field(11)
 
 
 @dataclass(eq=False, repr=False)

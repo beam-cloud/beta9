@@ -74,7 +74,7 @@ func NewRuncImageService(
 
 	go is.monitorImageContainers(ctx)
 	go is.keyEventManager.ListenForPattern(ctx, Keys.imageBuildContainerTTL("*"), is.keyEventChan)
-	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState("*"), is.keyEventChan)
+	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(types.BuildContainerPrefix+"*"), is.keyEventChan)
 
 	return &is, nil
 }
@@ -106,6 +106,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		Dockerfile:        in.Dockerfile,
 		BuildCtxObject:    in.BuildCtxObject,
 		BuildSecrets:      buildSecrets,
+		Gpu:               in.Gpu,
 	}
 
 	if in.ExistingImageUri != "" {
@@ -152,6 +153,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		Dockerfile:         in.Dockerfile,
 		BuildCtxObject:     in.BuildCtxObject,
 		BuildSecrets:       buildSecrets,
+		Gpu:                in.Gpu,
 	}
 
 	ctx := stream.Context()

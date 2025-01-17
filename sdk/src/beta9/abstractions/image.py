@@ -17,7 +17,7 @@ from ..clients.image import (
     VerifyImageBuildResponse,
 )
 from ..env import is_notebook_env
-from ..type import PythonVersion, PythonVersionAlias
+from ..type import GpuType, GpuTypeAlias, PythonVersion, PythonVersionAlias
 
 LOCAL_PYTHON_VERSION = PythonVersion(f"python{sys.version_info.major}.{sys.version_info.minor}")
 
@@ -245,6 +245,10 @@ class Image(BaseAbstraction):
             This will build the image using your Dockerfile. You can set the docker build's
             context directory using the `context_dir` parameter.
 
+            The context directory should contain all files referenced in your Dockerfile
+            (like files being COPYed). If no context_dir is specified, the directory
+            containing the Dockerfile will be used as the context.
+
             ```python
             # Basic usage - uses Dockerfile's directory as context
             image = Image.from_dockerfile("path/to/Dockerfile")
@@ -263,9 +267,18 @@ class Image(BaseAbstraction):
                 pass
             ```
 
-            The context directory should contain all files referenced in your Dockerfile
-            (like files being COPYed). If no context_dir is specified, the directory
-            containing the Dockerfile will be used as the context.
+            Building in a GPU environment
+
+            By default, the image will be built on a CPU node. If you need to build on a GPU node,
+            you can set the `gpu` parameter to the GPU type you need. This might be necessary if you
+            are using a library or framework that will install differently depending on the availability
+            of a GPU.
+
+            ```python
+            image = Image(
+                python_version="python3.12",
+            ).build_with_gpu("A10G")
+            ```
         """
         super().__init__()
         self._gateway_stub: Optional[GatewayServiceStub] = None
@@ -290,6 +303,7 @@ class Image(BaseAbstraction):
         self._stub: Optional[ImageServiceStub] = None
         self.dockerfile = ""
         self.build_ctx_object = ""
+        self.gpu = GpuType.NoGPU
 
         self.with_envs(env_vars or [])
 
@@ -392,6 +406,7 @@ class Image(BaseAbstraction):
                 dockerfile=self.dockerfile,
                 build_ctx_object=self.build_ctx_object,
                 secrets=self.secrets,
+                gpu=self.gpu,
             )
         )
 
@@ -422,6 +437,7 @@ class Image(BaseAbstraction):
                     dockerfile=self.dockerfile,
                     build_ctx_object=self.build_ctx_object,
                     secrets=self.secrets,
+                    gpu=self.gpu,
                 )
             ):
                 if r.msg != "":
@@ -592,4 +608,17 @@ class Image(BaseAbstraction):
             Image: The Image object.
         """
         self.secrets.extend(secrets)
+        return self
+
+    def build_with_gpu(self, gpu: GpuTypeAlias) -> "Image":
+        """
+        Build the image on a GPU node.
+
+        Parameters:
+            gpu: The GPU type to use.
+
+        Returns:
+            Image: The Image object.
+        """
+        self.gpu = gpu
         return self

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"text/template"
 	"time"
 
@@ -43,6 +44,7 @@ type Builder struct {
 	registry      *common.ImageRegistry
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
+	eventBus      *common.EventBus
 	rdb           *common.RedisClient
 }
 
@@ -68,6 +70,7 @@ type BuildOpts struct {
 	ForceRebuild       bool
 	EnvVars            []string
 	BuildSecrets       []string
+	Gpu                string
 }
 
 func (o *BuildOpts) String() string {
@@ -87,6 +90,7 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
 	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
 	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
+	fmt.Fprintf(&b, "  \"Gpu\": %q,", o.Gpu)
 	fmt.Fprintf(&b, "}")
 	return b.String()
 }
@@ -141,6 +145,7 @@ func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, schedule
 		tailscale:     tailscale,
 		registry:      registry,
 		containerRepo: containerRepo,
+		eventBus:      common.NewEventBus(rdb),
 		rdb:           rdb,
 	}, nil
 }
@@ -218,6 +223,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		dockerfile             *string
 		authInfo, _            = auth.AuthInfoFromContext(ctx)
 		containerSpinupTimeout = defaultContainerSpinupTimeout
+		success                = atomic.Bool{}
 	)
 
 	switch {
@@ -231,75 +237,41 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 	}
 
-	baseImageId, err := b.GetImageId(&BuildOpts{
-		BaseImageRegistry: opts.BaseImageRegistry,
-		BaseImageName:     opts.BaseImageName,
-		BaseImageTag:      opts.BaseImageTag,
-		BaseImageDigest:   opts.BaseImageDigest,
-		ExistingImageUri:  opts.ExistingImageUri,
-		EnvVars:           opts.EnvVars,
-		Dockerfile:        opts.Dockerfile,
-		BuildCtxObject:    opts.BuildCtxObject,
-	})
+	containerId := b.genContainerId()
+
+	containerRequest, err := b.generateContainerRequest(opts, dockerfile, containerId, authInfo.Workspace)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating image id: " + err.Error()}
+		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Error occured while generating container request: " + err.Error()}
 		return err
 	}
 
-	var sourceImage string
-	switch {
-	case opts.BaseImageDigest != "":
-		sourceImage = fmt.Sprintf("%s/%s@%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageDigest)
-	default:
-		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
-	}
+	// If user cancels the build, send a stop-build event to the worker
+	go func() {
+		<-ctx.Done()
+		if success.Load() {
+			return
+		}
+		err := b.stopBuild(containerId)
+		if err != nil {
+			log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
+		}
+	}()
 
-	containerId := b.genContainerId()
-
-	// Allow config to override default build container settings
-	cpu := defaultBuildContainerCpu
-	memory := defaultBuildContainerMemory
-
-	if b.config.ImageService.BuildContainerCpu > 0 {
-		cpu = b.config.ImageService.BuildContainerCpu
-	}
-
-	if b.config.ImageService.BuildContainerMemory > 0 {
-		memory = b.config.ImageService.BuildContainerMemory
-	}
-
-	err = b.scheduler.Run(&types.ContainerRequest{
-		BuildOptions: types.BuildOptions{
-			SourceImage:      &sourceImage,
-			SourceImageCreds: opts.BaseImageCreds,
-			Dockerfile:       dockerfile,
-			BuildCtxObject:   &opts.BuildCtxObject,
-			BuildSecrets:     opts.BuildSecrets,
-		},
-		ContainerId:  containerId,
-		Env:          opts.EnvVars,
-		Cpu:          cpu,
-		Memory:       memory,
-		ImageId:      baseImageId,
-		WorkspaceId:  authInfo.Workspace.ExternalId,
-		Workspace:    *authInfo.Workspace,
-		EntryPoint:   []string{"tail", "-f", "/dev/null"},
-		PoolSelector: b.config.ImageService.BuildContainerPoolSelector,
-	})
+	err = b.scheduler.Run(containerRequest)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: err.Error() + "\n"}
 		return err
 	}
 
 	hostname, err := b.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
 	err = b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
@@ -307,13 +279,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
 	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Failed to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 	go client.StreamLogs(ctx, containerId, outputChan)
@@ -324,49 +296,60 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}()
 	defer client.Kill(containerId) // Kill and remove container after the build completes
 
-	outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Waiting for build container to start...\n"}
+	outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: "Waiting for build container to start...\n"}
 	start := time.Now()
 	buildContainerRunning := false
-	for {
-		r, err := client.Status(containerId)
-		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while checking container status: " + err.Error()}
-			return err
-		}
 
-		if r.Running {
-			buildContainerRunning = true
-			break
-		}
+	for !buildContainerRunning {
+		select {
+		case <-ctx.Done():
+			log.Info().Str("container_id", containerId).Msg("build was aborted")
+			outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Build was aborted.\n"}
+			return ctx.Err()
 
-		exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
-		if err == nil && exitCode != 0 {
-			msg, ok := types.WorkerContainerExitCodes[exitCode]
-			if !ok {
-				msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+		case <-time.After(100 * time.Millisecond):
+			r, err := client.Status(containerId)
+			if err != nil {
+				outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Error occurred while checking container status: " + err.Error()}
+				return err
 			}
-			// Wait for any final logs to get sent before returning
-			time.Sleep(200 * time.Millisecond)
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
-			return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
-		}
 
-		if time.Since(start) > containerSpinupTimeout {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: fmt.Sprintf("Timeout: container not running after %d seconds.\n", containerSpinupTimeout)}
-			return errors.New(fmt.Sprintf("timeout: container not running after %d seconds", containerSpinupTimeout))
-		}
+			if r.Running {
+				buildContainerRunning = true
+				continue
+			}
 
-		time.Sleep(100 * time.Millisecond)
+			exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
+			if err == nil && exitCode != 0 {
+				msg, ok := types.WorkerContainerExitCodes[exitCode]
+				if !ok {
+					msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+				}
+				// Wait for any final logs to get sent before returning
+				time.Sleep(200 * time.Millisecond)
+				outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
+				return errors.New(fmt.Sprintf("container exited with error: %s\n", msg))
+			}
+
+			if time.Since(start) > containerSpinupTimeout {
+				err := b.stopBuild(containerId)
+				if err != nil {
+					log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
+				}
+				outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout)}
+				return errors.New(fmt.Sprintf("timeout: container not running after %s seconds", containerSpinupTimeout))
+			}
+		}
 	}
 
 	imageId, err := b.GetImageId(opts)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Error occured while generating image id: " + err.Error()}
+		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Error occured while generating image id: " + err.Error()}
 		return err
 	}
 
 	if !buildContainerRunning {
-		outputChan <- common.OutputMsg{Done: true, Success: false, Msg: "Unable to connect to build container.\n"}
+		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Unable to connect to build container.\n"}
 		return errors.New("container not running")
 	}
 
@@ -387,10 +370,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
-		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
+		outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
 		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, opts.PythonVersion)
 		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+			outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: err.Error() + "\n"}
 			return err
 		}
 		opts.Commands = append([]string{installCmd}, opts.Commands...)
@@ -413,7 +396,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			}
 
 			time.Sleep(defaultImageBuildGracefulShutdownS) // Wait for logs to be passed through
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: errMsg}
+			outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: errMsg}
 			return err
 		}
 	}
@@ -421,12 +404,77 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	err = client.Archive(ctx, containerId, imageId, outputChan)
 	if err != nil {
-		outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: false, Msg: err.Error() + "\n"}
+		outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: success.Load(), Msg: err.Error() + "\n"}
 		return err
 	}
 
-	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: true, ImageId: imageId}
+	success.Store(true)
+	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: success.Load(), ImageId: imageId}
 	return nil
+}
+
+// generateContainerRequest generates a container request for the build container
+func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, containerId string, workspace *types.Workspace) (*types.ContainerRequest, error) {
+	baseImageId, err := b.GetImageId(&BuildOpts{
+		BaseImageRegistry: opts.BaseImageRegistry,
+		BaseImageName:     opts.BaseImageName,
+		BaseImageTag:      opts.BaseImageTag,
+		BaseImageDigest:   opts.BaseImageDigest,
+		ExistingImageUri:  opts.ExistingImageUri,
+		EnvVars:           opts.EnvVars,
+		Dockerfile:        opts.Dockerfile,
+		BuildCtxObject:    opts.BuildCtxObject,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var sourceImage string
+	switch {
+	case opts.BaseImageDigest != "":
+		sourceImage = fmt.Sprintf("%s/%s@%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageDigest)
+	default:
+		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
+	}
+
+	// Allow config to override default build container settings
+	cpu := defaultBuildContainerCpu
+	memory := defaultBuildContainerMemory
+
+	if b.config.ImageService.BuildContainerCpu > 0 {
+		cpu = b.config.ImageService.BuildContainerCpu
+	}
+
+	if b.config.ImageService.BuildContainerMemory > 0 {
+		memory = b.config.ImageService.BuildContainerMemory
+	}
+
+	containerRequest := &types.ContainerRequest{
+		BuildOptions: types.BuildOptions{
+			SourceImage:      &sourceImage,
+			SourceImageCreds: opts.BaseImageCreds,
+			Dockerfile:       dockerfile,
+			BuildCtxObject:   &opts.BuildCtxObject,
+			BuildSecrets:     opts.BuildSecrets,
+		},
+		ContainerId: containerId,
+		Env:         opts.EnvVars,
+		Cpu:         cpu,
+		Memory:      memory,
+		ImageId:     baseImageId,
+		WorkspaceId: workspace.ExternalId,
+		Workspace:   *workspace,
+		EntryPoint:  []string{"tail", "-f", "/dev/null"},
+	}
+
+	if opts.Gpu != "" {
+		containerRequest.GpuRequest = []string{opts.Gpu}
+		containerRequest.GpuCount = 1
+	} else {
+		containerRequest.PoolSelector = b.config.ImageService.BuildContainerPoolSelector
+	}
+
+	return containerRequest, nil
 }
 
 func (b *Builder) genContainerId() string {
@@ -758,6 +806,22 @@ func extractPackageName(pkg string) string {
 
 	// Handle regular packages
 	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
+}
+
+func (b *Builder) stopBuild(containerId string) error {
+
+	_, err := b.eventBus.Send(&common.Event{
+		Type:          common.StopBuildEventType(containerId),
+		Args:          map[string]any{"container_id": containerId},
+		LockAndDelete: false,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to send stop build event")
+		return err
+	}
+
+	log.Info().Str("container_id", containerId).Msg("sent stop build event")
+	return nil
 }
 
 func tagOrDigest(digest string, tag string) string {
