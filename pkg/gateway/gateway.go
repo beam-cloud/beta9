@@ -90,6 +90,8 @@ func NewGateway() (*Gateway, error) {
 
 	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
+	airfoldRepo := repository.NewAirfoldRepo(config.Airfold)
+
 	storage, err := storage.NewStorage(config.Storage)
 	if err != nil {
 		return nil, err
@@ -103,7 +105,7 @@ func NewGateway() (*Gateway, error) {
 		Storage:     storage,
 	}
 
-	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
+	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo, airfoldRepo)
 	if err != nil {
 		return nil, err
 	}

@@ -1,0 +1,59 @@
+description: |
+  Aggregate tasks by `workspace_id` and/or `stub_id` with time window support
+nodes:
+  - ordered_events:
+      description: |
+        Rollup all events by timestamp, to select the latest update later
+      sql: |-
+        SELECT *,
+          ROW_NUMBER() OVER (
+              PARTITION BY id
+              ORDER BY updated_at DESC
+          ) as rn
+        FROM task_events
+        WHERE 1 = 1
+        {% if created_at_start is defined %}
+          AND created_at >= {{ created_at_start }}
+        {% endif %}
+        {% if created_at_end is defined %}
+          AND created_at <= {{ created_at_end }}
+        {% endif %}
+        {% if workspace_id is defined %}
+          AND workspace_id = {{ workspace_id }}
+        {% endif %}
+        {% if stub_ids is defined %}
+          AND stub_id IN (splitByChar(',', {{ stub_ids }}))
+        {% endif %}
+  - result:
+      description: |
+        Create a resulting aggregation in a format expected by beta9
+      sql: |-
+        SELECT
+          formatDateTime(dateTrunc({{ interval }}, created_at), '%Y-%m-%dT%TZ') as time,
+          count()::UInt32 as count,
+          map(
+            'COMPLETE', countIf(status = 'COMPLETE'),
+            'ERROR', countIf(status = 'ERROR'),
+            'CANCELLED', countIf(status = 'CANCELLED'),
+            'TIMEOUT', countIf(status = 'TIMEOUT'),
+            'RETRY', countIf(status = 'RETRY'),
+            'PENDING', countIf(status = 'PENDING'),
+            'RUNNING', countIf(status = 'RUNNING')
+          )::Map(String, UInt32) as status_counts
+        FROM ordered_events
+        WHERE rn = 1
+        GROUP BY ALL
+        ORDER BY time DESC
+params:
+  - name: workspace_id
+    type: int
+  - name: stub_ids
+    type: string
+  - name: created_at_start
+    type: datetime
+  - name: created_at_end
+    type: datetime
+  - name: interval
+    type: string
+    default: hour
+publish: tasks_agg_by_time_window

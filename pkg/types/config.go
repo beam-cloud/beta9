@@ -25,6 +25,7 @@ type AppConfig struct {
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
 	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
+	Airfold        AirfoldConfig             `key:"airfold" json:"airfold"`
 }
 
 type DatabaseConfig struct {
@@ -477,4 +478,10 @@ type BotConfig struct {
 	SystemPrompt              string `key:"systemPrompt" json:"system_prompt"`
 	StepIntervalS             uint   `key:"stepIntervalS" json:"step_interval_s"`
 	SessionInactivityTimeoutS uint   `key:"sessionInactivityTimeoutS" json:"session_inactivity_timeout_s"`
+}
+
+type AirfoldConfig struct {
+	Endpoint  string `key:"endpoint" json:"endpoint"`
+	ApiKey    string `key:"apiKey" json:"api_key"`
+	TableName string `key:"tableName" json:"table_name"`
 }

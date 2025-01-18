@@ -145,3 +145,26 @@ type EventStubStateSchema struct {
 	Reason           string   `json:"reason"`
 	FailedContainers []string `json:"failed_containers"`
 }
+
+type WarehouseEventTaskSchema struct {
+	ID                  string     `json:"id"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+	EventType           string     `json:"type"`
+	Status              TaskStatus `json:"status"`
+	ContainerID         string     `json:"container_id"`
+	StartedAt           *time.Time `json:"started_at"`
+	EndedAt             *time.Time `json:"ended_at"`
+	WorkspaceID         uint       `json:"workspace_id"`
+	WorkspaceExternalID string     `json:"workspace_external_id"`
+	Workspace           Workspace  `json:"workspace"`
+	StubID              string     `json:"stub_id"`
+	Stub                Stub       `json:"stub"`
+}
+
+type WarehouseRespSchema struct {
+	Meta       []interface{} `json:"meta"`
+	Data       []interface{} `json:"data"`
+	Rows       uint          `json:"rows"`
+	Statistics interface{}   `json:"statistics"`
+}
