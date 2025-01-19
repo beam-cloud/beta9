@@ -136,12 +136,16 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 // Reload updates state that should be changed on the instance.
 // If a stub has a deployment associated with it, we update the IsActive field.
 func (i *AutoscaledInstance) Reload() error {
-	deployment, err := i.getDeployment()
+	deployments, err := i.BackendRepo.ListDeploymentsWithRelated(i.Ctx, types.DeploymentFilter{
+		StubIds:     []string{i.Stub.ExternalId},
+		WorkspaceID: i.Stub.Workspace.Id,
+		ShowDeleted: true,
+	})
 	if err != nil {
 		return err
 	}
 
-	if !deployment.Active {
+	if len(deployments) == 1 && !deployments[0].Active {
 		i.IsActive = false
 		i.StubConfig.Autoscaler.MinContainers = 0
 	}
@@ -301,23 +305,6 @@ func (i *AutoscaledInstance) handleStubEvents(failedContainers []string) {
 	} else if len(failedContainers) > 0 {
 		i.emitUnhealthyEvent(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)
 	}
-}
-
-func (i *AutoscaledInstance) getDeployment() (*types.DeploymentWithRelated, error) {
-	deployments, err := i.BackendRepo.ListDeploymentsWithRelated(i.Ctx, types.DeploymentFilter{
-		StubIds:     []string{i.Stub.ExternalId},
-		WorkspaceID: i.Stub.Workspace.Id,
-		ShowDeleted: true,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	if len(deployments) != 1 {
-		return nil, errors.New("deployment not found")
-	}
-
-	return &deployments[0], nil
 }
 
 func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason string, containers []string) {
