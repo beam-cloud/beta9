@@ -141,7 +141,7 @@ func (i *AutoscaledInstance) Reload() error {
 		WorkspaceID: i.Stub.Workspace.Id,
 		ShowDeleted: true,
 	})
-	if err != nil {
+	if err != nil || len(deployments) == 0 {
 		return err
 	}
 
