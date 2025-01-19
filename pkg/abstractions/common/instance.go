@@ -91,36 +91,30 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	ctx, cancelFunc := context.WithCancel(ctx)
 	lock := common.NewRedisLock(cfg.Rdb)
 
-	failedContainerThreshold := types.FailedContainerThreshold
-	if cfg.Stub.Type.IsDeployment() {
-		failedContainerThreshold = types.FailedDeploymentContainerThreshold
-	}
-
 	instance := &AutoscaledInstance{
-		Lock:                     lock,
-		InstanceLockKey:          cfg.InstanceLockKey,
-		Ctx:                      ctx,
-		CancelFunc:               cancelFunc,
-		IsActive:                 true,
-		AppConfig:                cfg.AppConfig,
-		Name:                     cfg.Name,
-		Workspace:                cfg.Workspace,
-		Stub:                     cfg.Stub,
-		StubConfig:               cfg.StubConfig,
-		Object:                   cfg.Object,
-		Token:                    cfg.Token,
-		Scheduler:                cfg.Scheduler,
-		Rdb:                      cfg.Rdb,
-		ContainerRepo:            cfg.ContainerRepo,
-		BackendRepo:              cfg.BackendRepo,
-		TaskRepo:                 cfg.TaskRepo,
-		EventRepo:                cfg.EventRepo,
-		Containers:               make(map[string]bool),
-		ContainerEventChan:       make(chan types.ContainerEvent, 1),
-		ScaleEventChan:           make(chan int, 1),
-		StartContainersFunc:      cfg.StartContainersFunc,
-		StopContainersFunc:       cfg.StopContainersFunc,
-		FailedContainerThreshold: failedContainerThreshold,
+		Lock:                lock,
+		InstanceLockKey:     cfg.InstanceLockKey,
+		Ctx:                 ctx,
+		CancelFunc:          cancelFunc,
+		IsActive:            true,
+		AppConfig:           cfg.AppConfig,
+		Name:                cfg.Name,
+		Workspace:           cfg.Workspace,
+		Stub:                cfg.Stub,
+		StubConfig:          cfg.StubConfig,
+		Object:              cfg.Object,
+		Token:               cfg.Token,
+		Scheduler:           cfg.Scheduler,
+		Rdb:                 cfg.Rdb,
+		ContainerRepo:       cfg.ContainerRepo,
+		BackendRepo:         cfg.BackendRepo,
+		TaskRepo:            cfg.TaskRepo,
+		EventRepo:           cfg.EventRepo,
+		Containers:          make(map[string]bool),
+		ContainerEventChan:  make(chan types.ContainerEvent, 1),
+		ScaleEventChan:      make(chan int, 1),
+		StartContainersFunc: cfg.StartContainersFunc,
+		StopContainersFunc:  cfg.StopContainersFunc,
 	}
 
 	if instance.StubConfig.Autoscaler == nil {
@@ -130,21 +124,31 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		instance.StubConfig.Autoscaler.TasksPerContainer = 1
 	}
 
+	instance.FailedContainerThreshold = types.FailedContainerThreshold
+	if cfg.Stub.Type.IsDeployment() {
+		instance.FailedContainerThreshold = types.FailedDeploymentContainerThreshold
+		deployment, err := instance.getDeployment()
+		if err != nil {
+			return nil, err
+		}
+
+		if !deployment.Active {
+			instance.IsActive = false
+		}
+	}
+
 	return instance, nil
 }
 
 // Reload updates state that should be changed on the instance.
 // If a stub has a deployment associated with it, we update the IsActive field.
 func (i *AutoscaledInstance) Reload() error {
-	deployments, err := i.BackendRepo.ListDeploymentsWithRelated(i.Ctx, types.DeploymentFilter{
-		StubIds:     []string{i.Stub.ExternalId},
-		WorkspaceID: i.Stub.Workspace.Id,
-	})
-	if err != nil || len(deployments) == 0 {
+	deployment, err := i.getDeployment()
+	if err != nil {
 		return err
 	}
 
-	if len(deployments) == 1 && !deployments[0].Active {
+	if !deployment.Active {
 		i.IsActive = false
 	}
 
@@ -212,7 +216,7 @@ func (i *AutoscaledInstance) Monitor() error {
 
 		case desiredContainers := <-i.ScaleEventChan:
 			// Ignore scaling events if we're in the ignore window
-			if time.Now().Before(ignoreScalingEventWindow) {
+			if time.Now().Before(ignoreScalingEventWindow) && i.IsActive {
 				continue
 			}
 
@@ -249,6 +253,8 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	if !i.IsActive {
 		desiredContainers = 0
 	}
+
+	log.Info().Str("instance_name", i.Name).Int("desired_containers", desiredContainers).Msg("scaling event")
 
 	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)
 	if desiredContainers == 0 && noContainersRunning {
@@ -305,6 +311,23 @@ func (i *AutoscaledInstance) handleStubEvents(failedContainers []string) {
 	}
 }
 
+func (i *AutoscaledInstance) getDeployment() (*types.DeploymentWithRelated, error) {
+	deployments, err := i.BackendRepo.ListDeploymentsWithRelated(i.Ctx, types.DeploymentFilter{
+		StubIds:     []string{i.Stub.ExternalId},
+		WorkspaceID: i.Stub.Workspace.Id,
+		ShowDeleted: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(deployments) != 1 {
+		return nil, errors.New("deployment not found")
+	}
+
+	return &deployments[0], nil
+}
+
 func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason string, containers []string) {
 	var state string
 	state, err := i.ContainerRepo.GetStubState(stubId)
@@ -356,6 +379,9 @@ func (c *InstanceController) Init() error {
 			stubId := e.Args["stub_id"].(string)
 			stubType := e.Args["stub_type"].(string)
 
+			log.Printf("INSTANCE STUB TYPES ARE: %v", c.StubTypes)
+			log.Printf("INSTANCE STUB TYPE IS: %v", stubType)
+
 			correctStub := false
 			for _, t := range c.StubTypes {
 				if t == stubType {
@@ -367,6 +393,8 @@ func (c *InstanceController) Init() error {
 			if !correctStub {
 				return true
 			}
+
+			log.Printf("RELOADING INSTANCE FOR STUB ID: %s with STUB TYPE %s", stubId, stubType)
 
 			if err := c.reload(stubId); err != nil {
 				return false

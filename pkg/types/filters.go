@@ -39,6 +39,7 @@ type DeploymentFilter struct {
 	Subdomain        string      `query:"subdomain"`
 	SearchQuery      string      `query:"search_query"`
 	MinContainersGTE uint        `query:"min_containers"`
+	ShowDeleted      bool        `query:"show_deleted"`
 }
 
 type TaskFilter struct {
