@@ -286,12 +286,6 @@ class Image(BaseAbstraction):
         if isinstance(python_packages, str):
             python_packages = self._load_requirements_file(python_packages)
 
-        if is_notebook_env():
-            if LOCAL_PYTHON_VERSION != python_version:
-                terminal.warn(
-                    f"Local version {LOCAL_PYTHON_VERSION} differs from image version {python_version}. This may cause issues in your remote environment."
-                )
-
         self.python_version = python_version
         self.python_packages = self._sanitize_python_packages(python_packages)
         self.commands = commands
@@ -414,6 +408,12 @@ class Image(BaseAbstraction):
 
     def build(self) -> ImageBuildResult:
         terminal.header("Building image")
+
+        if is_notebook_env():
+            if LOCAL_PYTHON_VERSION != self.python_version:
+                terminal.warn(
+                    f"Local version {LOCAL_PYTHON_VERSION.value} differs from image version {self.python_version}. This may cause issues in your remote environment."
+                )
 
         if self.base_image != "" and self.dockerfile != "":
             raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
