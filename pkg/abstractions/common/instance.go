@@ -91,30 +91,36 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	ctx, cancelFunc := context.WithCancel(ctx)
 	lock := common.NewRedisLock(cfg.Rdb)
 
+	failedContainerThreshold := types.FailedContainerThreshold
+	if cfg.Stub.Type.IsDeployment() {
+		failedContainerThreshold = types.FailedDeploymentContainerThreshold
+	}
+
 	instance := &AutoscaledInstance{
-		Lock:                lock,
-		InstanceLockKey:     cfg.InstanceLockKey,
-		Ctx:                 ctx,
-		CancelFunc:          cancelFunc,
-		IsActive:            true,
-		AppConfig:           cfg.AppConfig,
-		Name:                cfg.Name,
-		Workspace:           cfg.Workspace,
-		Stub:                cfg.Stub,
-		StubConfig:          cfg.StubConfig,
-		Object:              cfg.Object,
-		Token:               cfg.Token,
-		Scheduler:           cfg.Scheduler,
-		Rdb:                 cfg.Rdb,
-		ContainerRepo:       cfg.ContainerRepo,
-		BackendRepo:         cfg.BackendRepo,
-		TaskRepo:            cfg.TaskRepo,
-		EventRepo:           cfg.EventRepo,
-		Containers:          make(map[string]bool),
-		ContainerEventChan:  make(chan types.ContainerEvent, 1),
-		ScaleEventChan:      make(chan int, 1),
-		StartContainersFunc: cfg.StartContainersFunc,
-		StopContainersFunc:  cfg.StopContainersFunc,
+		Lock:                     lock,
+		InstanceLockKey:          cfg.InstanceLockKey,
+		Ctx:                      ctx,
+		CancelFunc:               cancelFunc,
+		IsActive:                 true,
+		AppConfig:                cfg.AppConfig,
+		Name:                     cfg.Name,
+		Workspace:                cfg.Workspace,
+		Stub:                     cfg.Stub,
+		StubConfig:               cfg.StubConfig,
+		Object:                   cfg.Object,
+		Token:                    cfg.Token,
+		Scheduler:                cfg.Scheduler,
+		Rdb:                      cfg.Rdb,
+		ContainerRepo:            cfg.ContainerRepo,
+		BackendRepo:              cfg.BackendRepo,
+		TaskRepo:                 cfg.TaskRepo,
+		EventRepo:                cfg.EventRepo,
+		Containers:               make(map[string]bool),
+		ContainerEventChan:       make(chan types.ContainerEvent, 1),
+		ScaleEventChan:           make(chan int, 1),
+		StartContainersFunc:      cfg.StartContainersFunc,
+		StopContainersFunc:       cfg.StopContainersFunc,
+		FailedContainerThreshold: failedContainerThreshold,
 	}
 
 	if instance.StubConfig.Autoscaler == nil {
@@ -122,19 +128,6 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		instance.StubConfig.Autoscaler.Type = types.QueueDepthAutoscaler
 		instance.StubConfig.Autoscaler.MaxContainers = 1
 		instance.StubConfig.Autoscaler.TasksPerContainer = 1
-	}
-
-	instance.FailedContainerThreshold = types.FailedContainerThreshold
-	if cfg.Stub.Type.IsDeployment() {
-		instance.FailedContainerThreshold = types.FailedDeploymentContainerThreshold
-		deployment, err := instance.getDeployment()
-		if err != nil {
-			return nil, err
-		}
-
-		if !deployment.Active {
-			instance.IsActive = false
-		}
 	}
 
 	return instance, nil
@@ -150,6 +143,7 @@ func (i *AutoscaledInstance) Reload() error {
 
 	if !deployment.Active {
 		i.IsActive = false
+		i.StubConfig.Autoscaler.MinContainers = 0
 	}
 
 	return nil
@@ -424,6 +418,7 @@ func (c *InstanceController) load() error {
 			StubType:         c.StubTypes,
 			MinContainersGTE: 1,
 			Active:           ptr.To(true),
+			ShowDeleted:      false,
 		},
 	)
 	if err != nil {
