@@ -1066,13 +1066,15 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		OrderBy("d.created_at DESC")
 
 	// Apply filters
-	qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
+	if filters.WorkspaceID != 0 {
+		qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
+	}
 
 	if len(filters.StubIds) > 0 {
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
 	}
 
-	if filters.StubType != "" {
+	if len(filters.StubType) > 0 {
 		qb = qb.Where(squirrel.Eq{"d.stub_type": filters.StubType})
 	}
 
@@ -1114,6 +1116,10 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 
 	if filters.CreatedAtEnd != "" {
 		qb = qb.Where(squirrel.LtOrEq{"d.created_at": filters.CreatedAtEnd})
+	}
+
+	if filters.MinContainersGTE > 0 {
+		qb = qb.Where("COALESCE((s.config->'autoscaler'->>'min_containers')::int, 0) >= ?", filters.MinContainersGTE)
 	}
 
 	return qb
@@ -1257,7 +1263,8 @@ func (r *PostgresBackendRepository) UpdateDeployment(ctx context.Context, deploy
 func (r *PostgresBackendRepository) DeleteDeployment(ctx context.Context, deployment types.Deployment) error {
 	query := `
 	UPDATE deployment
-	SET deleted_at = CURRENT_TIMESTAMP
+	SET deleted_at = CURRENT_TIMESTAMP,
+	ACTIVE = FALSE
 	WHERE id = $1;
 	`
 

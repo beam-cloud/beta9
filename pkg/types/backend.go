@@ -201,6 +201,7 @@ type Autoscaler struct {
 	Type              AutoscalerType `json:"type"`
 	MaxContainers     uint           `json:"max_containers"`
 	TasksPerContainer uint           `json:"tasks_per_container"`
+	MinContainers     uint           `json:"min_containers"`
 }
 
 const (

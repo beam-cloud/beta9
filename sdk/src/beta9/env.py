@@ -1,4 +1,5 @@
 import os
+import sys
 from functools import wraps
 from typing import Callable, TypeVar, Union, overload
 
@@ -68,3 +69,17 @@ def try_env(env: str, default: EnvValue) -> Union[EnvValue, bool]:
         return target_type(env_val) or default
     except (ValueError, TypeError):
         return default
+
+
+def is_notebook_env() -> bool:
+    if "google.colab" in sys.modules or "marimo" in sys.modules:
+        return True
+
+    try:
+        from ipykernel.zmqshell import ZMQInteractiveShell
+        from IPython import get_ipython
+
+        shell = get_ipython().__class__.__name__
+        return shell == ZMQInteractiveShell.__name__
+    except (NameError, ImportError):
+        return False

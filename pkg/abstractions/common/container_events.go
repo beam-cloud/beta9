@@ -10,16 +10,18 @@ import (
 )
 
 type ContainerEventManager struct {
+	ctx             context.Context
 	containerPrefix string
 	keyEventChan    chan common.KeyEvent
 	keyEventManager *common.KeyEventManager
-	instanceFactory func(stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
+	instanceFactory func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
 }
 
-func NewContainerEventManager(containerPrefix string, keyEventManager *common.KeyEventManager, instanceFactory func(stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)) (*ContainerEventManager, error) {
+func NewContainerEventManager(ctx context.Context, containerPrefix string, keyEventManager *common.KeyEventManager, instanceFactory func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)) (*ContainerEventManager, error) {
 	keyEventChan := make(chan common.KeyEvent)
 
 	return &ContainerEventManager{
+		ctx:             ctx,
 		containerPrefix: containerPrefix,
 		instanceFactory: instanceFactory,
 		keyEventChan:    keyEventChan,
@@ -27,9 +29,9 @@ func NewContainerEventManager(containerPrefix string, keyEventManager *common.Ke
 	}, nil
 }
 
-func (em *ContainerEventManager) Listen(ctx context.Context) {
-	go em.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(em.containerPrefix), em.keyEventChan)
-	go em.handleContainerEvents(ctx)
+func (em *ContainerEventManager) Listen() {
+	go em.keyEventManager.ListenForPattern(em.ctx, common.RedisKeys.SchedulerContainerState(em.containerPrefix), em.keyEventChan)
+	go em.handleContainerEvents(em.ctx)
 }
 
 func (em *ContainerEventManager) handleContainerEvents(ctx context.Context) {
@@ -59,7 +61,7 @@ func (em *ContainerEventManager) handleContainerEvents(ctx context.Context) {
 			containerIdParts := strings.Split(containerId, "-")
 			stubId := strings.Join(containerIdParts[1:6], "-")
 
-			instance, err := em.instanceFactory(stubId)
+			instance, err := em.instanceFactory(em.ctx, stubId)
 			if err != nil {
 				continue
 			}
