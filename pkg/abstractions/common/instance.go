@@ -254,8 +254,6 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		desiredContainers = 0
 	}
 
-	log.Info().Str("instance_name", i.Name).Int("desired_containers", desiredContainers).Msg("scaling event")
-
 	noContainersRunning := (state.PendingContainers == 0) && (state.RunningContainers == 0) && (state.StoppingContainers == 0)
 	if desiredContainers == 0 && noContainersRunning {
 		i.CancelFunc()
@@ -379,9 +377,6 @@ func (c *InstanceController) Init() error {
 			stubId := e.Args["stub_id"].(string)
 			stubType := e.Args["stub_type"].(string)
 
-			log.Printf("INSTANCE STUB TYPES ARE: %v", c.StubTypes)
-			log.Printf("INSTANCE STUB TYPE IS: %v", stubType)
-
 			correctStub := false
 			for _, t := range c.StubTypes {
 				if t == stubType {
@@ -393,8 +388,6 @@ func (c *InstanceController) Init() error {
 			if !correctStub {
 				return true
 			}
-
-			log.Printf("RELOADING INSTANCE FOR STUB ID: %s with STUB TYPE %s", stubId, stubType)
 
 			if err := c.reload(stubId); err != nil {
 				return false
