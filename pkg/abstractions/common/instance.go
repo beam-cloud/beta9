@@ -19,7 +19,7 @@ type IAutoscaledInstance interface {
 	ConsumeScaleResult(*AutoscalerResult)
 	ConsumeContainerEvent(types.ContainerEvent)
 	HandleScalingEvent(int) error
-	Reload() error
+	Sync() error
 }
 
 type AutoscaledInstanceState struct {
@@ -130,25 +130,8 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		instance.StubConfig.Autoscaler.TasksPerContainer = 1
 	}
 
+	instance.Sync()
 	return instance, nil
-}
-
-// Reload updates state that should be changed on the instance.
-// If a stub has a deployment associated with it, we update the IsActive field.
-func (i *AutoscaledInstance) Reload() error {
-	deployments, err := i.BackendRepo.ListDeploymentsWithRelated(i.Ctx, types.DeploymentFilter{
-		StubIds:     []string{i.Stub.ExternalId},
-		WorkspaceID: i.Stub.Workspace.Id,
-	})
-	if err != nil || len(deployments) == 0 {
-		return err
-	}
-
-	if len(deployments) == 1 && !deployments[0].Active {
-		i.IsActive = false
-	}
-
-	return nil
 }
 
 func (i *AutoscaledInstance) WaitForContainer(ctx context.Context, duration time.Duration) (*types.ContainerState, error) {
@@ -178,7 +161,12 @@ func (i *AutoscaledInstance) WaitForContainer(ctx context.Context, duration time
 }
 
 func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
-	i.ScaleEventChan <- max(result.DesiredContainers, int(i.StubConfig.Autoscaler.MinContainers))
+	minContainers := int(i.StubConfig.Autoscaler.MinContainers)
+	if i.Stub.Type.IsServe() {
+		minContainers = 0
+	}
+
+	i.ScaleEventChan <- max(result.DesiredContainers, minContainers)
 }
 
 func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
@@ -270,6 +258,27 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 	return err
 }
 
+// Sync updates any persistent state that can be changed on the instance.
+// If a stub has a deployment associated with it, we update the IsActive field.
+func (i *AutoscaledInstance) Sync() error {
+	if i.Stub.Type.IsDeployment() {
+		deployments, err := i.BackendRepo.ListDeploymentsWithRelated(i.Ctx, types.DeploymentFilter{
+			StubIds:     []string{i.Stub.ExternalId},
+			WorkspaceID: i.Stub.Workspace.Id,
+			ShowDeleted: true,
+		})
+		if err != nil || len(deployments) == 0 {
+			return err
+		}
+
+		if len(deployments) == 1 && !deployments[0].Active {
+			i.IsActive = false
+		}
+	}
+
+	return nil
+}
+
 func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
 	if err != nil {
@@ -328,12 +337,13 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 type InstanceController struct {
 	ctx                 context.Context
 	getOrCreateInstance func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
-	StubTypes           []string
+	stubTypes           []string
 	backendRepo         repository.BackendRepository
 	redisClient         *common.RedisClient
+	eventBus            *common.EventBus
 }
 
-func NewController(
+func NewInstanceController(
 	ctx context.Context,
 	getOrCreateInstance func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error),
 	stubTypes []string,
@@ -343,9 +353,10 @@ func NewController(
 	return &InstanceController{
 		ctx:                 ctx,
 		getOrCreateInstance: getOrCreateInstance,
-		StubTypes:           stubTypes,
+		stubTypes:           stubTypes,
 		backendRepo:         backendRepo,
 		redisClient:         redisClient,
+		eventBus:            common.NewEventBus(redisClient),
 	}
 }
 
@@ -357,7 +368,7 @@ func (c *InstanceController) Init() error {
 			stubType := e.Args["stub_type"].(string)
 
 			correctStub := false
-			for _, t := range c.StubTypes {
+			for _, t := range c.stubTypes {
 				if t == stubType {
 					correctStub = true
 					break
@@ -368,16 +379,23 @@ func (c *InstanceController) Init() error {
 				return true
 			}
 
-			if err := c.reload(stubId); err != nil {
+			if err := c.Load(&types.DeploymentFilter{
+				StubIds:     []string{stubId},
+				StubType:    c.stubTypes,
+				ShowDeleted: true,
+			}); err != nil {
 				return false
 			}
 
 			return true
 		}},
 	)
-	go eventBus.ReceiveEvents(c.ctx)
+	c.eventBus = eventBus
 
-	if err := c.load(); err != nil {
+	go c.eventBus.ReceiveEvents(c.ctx)
+
+	// Load all instances matching the defined stub types
+	if err := c.Load(nil); err != nil {
 		return err
 	}
 
@@ -396,36 +414,30 @@ func (c *InstanceController) Warmup(
 	return instance.HandleScalingEvent(1)
 }
 
-func (c *InstanceController) load() error {
-	stubs, err := c.backendRepo.ListDeploymentsWithRelated(
-		c.ctx,
-		types.DeploymentFilter{
-			StubType:         c.StubTypes,
+func (c *InstanceController) Load(filter *types.DeploymentFilter) error {
+	if filter == nil {
+		filter = &types.DeploymentFilter{
+			StubType:         c.stubTypes,
 			MinContainersGTE: 1,
 			Active:           ptr.To(true),
-		},
+		}
+	}
+
+	stubs, err := c.backendRepo.ListDeploymentsWithRelated(
+		c.ctx,
+		*filter,
 	)
 	if err != nil {
 		return err
 	}
 
 	for _, stub := range stubs {
-		_, err := c.getOrCreateInstance(c.ctx, stub.Stub.ExternalId)
+		instance, err := c.getOrCreateInstance(c.ctx, stub.Stub.ExternalId)
 		if err != nil {
 			return err
 		}
+		instance.Sync()
 	}
-
-	return nil
-}
-
-func (c *InstanceController) reload(stubId string) error {
-	instance, err := c.getOrCreateInstance(c.ctx, stubId)
-	if err != nil {
-		return err
-	}
-
-	instance.Reload()
 
 	return nil
 }
