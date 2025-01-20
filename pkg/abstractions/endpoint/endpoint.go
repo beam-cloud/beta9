@@ -109,7 +109,7 @@ func NewHTTPEndpointService(
 	}
 	eventManager.Listen()
 
-	es.controller = abstractions.NewController(ctx, es.InstanceFactory, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment}, es.backendRepo, es.rdb)
+	es.controller = abstractions.NewInstanceController(ctx, es.InstanceFactory, []string{types.StubTypeEndpointDeployment, types.StubTypeASGIDeployment}, es.backendRepo, es.rdb)
 	err = es.controller.Init()
 	if err != nil {
 		return nil, err

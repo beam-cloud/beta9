@@ -1062,10 +1062,13 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	).From("deployment d").
 		Join("workspace w ON d.workspace_id = w.id").
 		Join("stub s ON d.stub_id = s.id").
-		Where("d.deleted_at IS NULL").
 		OrderBy("d.created_at DESC")
 
 	// Apply filters
+	if !filters.ShowDeleted {
+		qb = qb.Where("d.deleted_at IS NULL")
+	}
+
 	if filters.WorkspaceID != 0 {
 		qb = qb.Where(squirrel.Eq{"d.workspace_id": filters.WorkspaceID})
 	}
