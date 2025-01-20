@@ -76,6 +76,13 @@ def is_notebook_env() -> bool:
         return True
 
     try:
+        import hex
+
+        return hex.context.is_notebook()
+    except (ImportError, NameError, AttributeError):
+        pass
+
+    try:
         from ipykernel.zmqshell import ZMQInteractiveShell
         from IPython import get_ipython
 
