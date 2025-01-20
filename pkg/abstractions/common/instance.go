@@ -91,10 +91,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	ctx, cancelFunc := context.WithCancel(ctx)
 	lock := common.NewRedisLock(cfg.Rdb)
 
-	failedContainerThreshold := types.FailedContainerThreshold
-	if cfg.Stub.Type.IsDeployment() {
-		failedContainerThreshold = types.FailedDeploymentContainerThreshold
-	}
+	log.Printf("Creating autoscaled instances %s", cfg.Name)
 
 	instance := &AutoscaledInstance{
 		Lock:                     lock,
@@ -120,7 +117,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		ScaleEventChan:           make(chan int, 1),
 		StartContainersFunc:      cfg.StartContainersFunc,
 		StopContainersFunc:       cfg.StopContainersFunc,
-		FailedContainerThreshold: failedContainerThreshold,
+		FailedContainerThreshold: types.FailedContainerThreshold,
 	}
 
 	if instance.StubConfig.Autoscaler == nil {
@@ -128,6 +125,11 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		instance.StubConfig.Autoscaler.Type = types.QueueDepthAutoscaler
 		instance.StubConfig.Autoscaler.MaxContainers = 1
 		instance.StubConfig.Autoscaler.TasksPerContainer = 1
+	}
+
+	if cfg.Stub.Type.IsDeployment() {
+		instance.FailedContainerThreshold = types.FailedDeploymentContainerThreshold
+		instance.Reload()
 	}
 
 	return instance, nil
@@ -145,9 +147,10 @@ func (i *AutoscaledInstance) Reload() error {
 		return err
 	}
 
-	if len(deployments) == 1 && !deployments[0].Active {
+	if len(deployments) == 1 && (!deployments[0].Active || deployments[0].DeletedAt.Valid) {
 		i.IsActive = false
 		i.StubConfig.Autoscaler.MinContainers = 0
+		log.Info().Str("instance_name", i.Name).Bool("active", deployments[0].Active).Bool("valid", deployments[0].DeletedAt.Valid).Msg("instance is inactive")
 	}
 
 	return nil
@@ -180,6 +183,7 @@ func (i *AutoscaledInstance) WaitForContainer(ctx context.Context, duration time
 }
 
 func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
+	log.Printf("scaling event: %d %d %s\n", result.DesiredContainers, i.StubConfig.Autoscaler.MinContainers, i.Name)
 	i.ScaleEventChan <- max(result.DesiredContainers, int(i.StubConfig.Autoscaler.MinContainers))
 }
 
@@ -323,7 +327,6 @@ func (i *AutoscaledInstance) emitUnhealthyEvent(stubId, currentState, reason str
 		return
 	}
 
-	log.Info().Str("instance_name", i.Name).Msgf("%s\n", reason)
 	go i.EventRepo.PushStubStateUnhealthy(i.Workspace.ExternalId, stubId, currentState, state, reason, containers)
 }
 
@@ -358,6 +361,8 @@ func (c *InstanceController) Init() error {
 			stubId := e.Args["stub_id"].(string)
 			stubType := e.Args["stub_type"].(string)
 
+			log.Info().Str("stub_id", stubId).Str("stub_type", stubType).Msg("received reload instance event prior to processing")
+
 			correctStub := false
 			for _, t := range c.StubTypes {
 				if t == stubType {
@@ -370,9 +375,13 @@ func (c *InstanceController) Init() error {
 				return true
 			}
 
+			log.Info().Str("stub_id", stubId).Msg("received reload instance event")
+
 			if err := c.reload(stubId); err != nil {
 				return false
 			}
+
+			log.Info().Str("stub_id", stubId).Msg("reloaded instance")
 
 			return true
 		}},
@@ -404,8 +413,8 @@ func (c *InstanceController) load() error {
 		types.DeploymentFilter{
 			StubType:         c.StubTypes,
 			MinContainersGTE: 1,
-			Active:           ptr.To(true),
 			ShowDeleted:      false,
+			Active:           ptr.To(true),
 		},
 	)
 	if err != nil {
@@ -413,9 +422,9 @@ func (c *InstanceController) load() error {
 	}
 
 	for _, stub := range stubs {
-		_, err := c.getOrCreateInstance(c.ctx, stub.Stub.ExternalId)
+		err := c.reload(stub.Stub.ExternalId)
 		if err != nil {
-			return err
+			log.Error().Err(err).Str("stub_id", stub.Stub.ExternalId).Msg("failed to reload instance")
 		}
 	}
 
@@ -428,7 +437,5 @@ func (c *InstanceController) reload(stubId string) error {
 		return err
 	}
 
-	instance.Reload()
-
-	return nil
+	return instance.Reload()
 }

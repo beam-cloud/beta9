@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"log"
 	"strconv"
 	"strings"
 
@@ -177,6 +178,7 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 
 		// Publish reload instance event
 		eventBus := common.NewEventBus(gws.redisClient)
+		log.Println("Publishing reload instance event")
 		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
 			"stub_id":   deployment.Stub.ExternalId,
 			"stub_type": deployment.StubType,
