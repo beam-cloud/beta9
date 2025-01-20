@@ -111,7 +111,7 @@ func NewRedisTaskQueueService(
 	eventManager.Listen()
 
 	// Initialize deployment manager
-	tq.controller = abstractions.NewController(ctx, tq.InstanceFactory, []string{types.StubTypeTaskQueueDeployment}, opts.BackendRepo, opts.RedisClient)
+	tq.controller = abstractions.NewInstanceController(ctx, tq.InstanceFactory, []string{types.StubTypeTaskQueueDeployment}, opts.BackendRepo, opts.RedisClient)
 	err = tq.controller.Init()
 	if err != nil {
 		return nil, err

@@ -3,6 +3,7 @@ package apiv1
 import (
 	"net/http"
 	"path"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"k8s.io/utils/ptr"
@@ -232,6 +233,7 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
 			"stub_id":   deployment.Stub.ExternalId,
 			"stub_type": deployment.StubType,
+			"timestamp": time.Now().Unix(),
 		}})
 	}
 
