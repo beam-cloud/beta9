@@ -161,7 +161,12 @@ func (i *AutoscaledInstance) WaitForContainer(ctx context.Context, duration time
 }
 
 func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
-	i.ScaleEventChan <- max(result.DesiredContainers, int(i.StubConfig.Autoscaler.MinContainers))
+	minContainers := int(i.StubConfig.Autoscaler.MinContainers)
+	if i.Stub.Type.IsServe() {
+		minContainers = 0
+	}
+
+	i.ScaleEventChan <- max(result.DesiredContainers, minContainers)
 }
 
 func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
