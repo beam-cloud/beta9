@@ -238,6 +238,7 @@ type WorkerConfig struct {
 	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
 	TmpSizeLimit               string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLineLimit      int                         `key:"containerLogLineLimit" json:"container_log_line_limit"`
+	ContainerLogResetInterval  time.Duration               `key:"containerLogResetInterval" json:"container_log_reset_interval"`
 }
 
 type PoolMode string

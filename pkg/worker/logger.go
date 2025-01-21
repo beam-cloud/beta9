@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -22,8 +24,9 @@ type ContainerLogMessage struct {
 }
 
 type ContainerLogger struct {
-	containerInstances    *common.SafeMap[*ContainerInstance]
-	containerLogLineLimit int
+	containerInstances        *common.SafeMap[*ContainerInstance]
+	containerLogLineLimit     int
+	containerLogResetInterval time.Duration
 }
 
 func (r *ContainerLogger) Read(containerId string, buffer []byte) (int64, error) {
@@ -73,24 +76,34 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 		return errors.New("container not found")
 	}
 
-	// TODO: reset after time interval
-	lineCount := 0
+	var lineCount atomic.Int64
+	resetTimer := time.NewTicker(r.containerLogResetInterval)
+	defer resetTimer.Stop()
+
+	go func() {
+		for range resetTimer.C {
+			lineCount.Store(0)
+		}
+	}()
+
 	for o := range logChan {
 		dec := json.NewDecoder(strings.NewReader(o.Message))
 		msgDecoded := false
-		if lineCount > r.containerLogLineLimit {
-			if lineCount == r.containerLogLineLimit+1 {
-				log.Info().Str("container_id", containerId).Msg("Reached log line limit, stopping log capture")
+
+		currentCount := lineCount.Load()
+		if currentCount > int64(r.containerLogLineLimit) {
+			if currentCount == int64(r.containerLogLineLimit)+1 {
+				log.Info().Str("container_id", containerId).Msg("Reached log line limit of " + strconv.Itoa(r.containerLogLineLimit) + ", stopping log capture")
 				f.WithFields(logrus.Fields{
 					"container_id": containerId,
 					"stub_id":      instance.StubId,
 				}).Info("Reached log line limit, stopping log capture")
-				instance.LogBuffer.Write([]byte(fmt.Sprintf("Reached log line limit of %d, stopping log capture", r.containerLogLineLimit)))
-				lineCount++
+				instance.LogBuffer.Write([]byte(fmt.Sprintf("Reached log line limit of %d, stopping log capture until timer resets\n", r.containerLogLineLimit)))
+				lineCount.Add(1)
 			}
 			continue
 		}
-		lineCount++
+		lineCount.Add(1)
 
 		for {
 
