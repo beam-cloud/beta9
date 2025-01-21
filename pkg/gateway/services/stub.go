@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
@@ -39,6 +40,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		autoscaler.Type = types.AutoscalerType(in.Autoscaler.Type)
 		autoscaler.MaxContainers = uint(in.Autoscaler.MaxContainers)
 		autoscaler.TasksPerContainer = uint(in.Autoscaler.TasksPerContainer)
+		autoscaler.MinContainers = uint(in.Autoscaler.MinContainers)
 	}
 
 	if in.TaskPolicy == nil {
@@ -225,6 +227,23 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	invokeUrl := common.BuildDeploymentURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), common.InvokeUrlTypePath, stub, deployment)
 
 	go gws.eventRepo.PushDeployStubEvent(authInfo.Workspace.ExternalId, &stub.Stub)
+
+	var config types.StubConfigV1
+	if err := json.Unmarshal([]byte(stub.Config), &config); err != nil {
+		return &pb.DeployStubResponse{
+			Ok: false,
+		}, nil
+	}
+
+	if config.Autoscaler.MinContainers > 0 {
+		// Publish reload instance event
+		eventBus := common.NewEventBus(gws.redisClient)
+		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+			"stub_id":   stub.ExternalId,
+			"stub_type": stub.Type,
+			"timestamp": time.Now().Unix(),
+		}})
+	}
 
 	return &pb.DeployStubResponse{
 		Ok:           true,

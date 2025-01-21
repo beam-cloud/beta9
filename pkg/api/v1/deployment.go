@@ -3,6 +3,7 @@ package apiv1
 import (
 	"net/http"
 	"path"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"k8s.io/utils/ptr"
@@ -43,7 +44,7 @@ func NewDeploymentGroup(
 	g.GET("/:workspaceId/latest", auth.WithWorkspaceAuth(group.ListLatestDeployments))
 	g.GET("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.RetrieveDeployment))
 	g.GET("/:workspaceId/download/:stubId", auth.WithWorkspaceAuth(group.DownloadDeploymentPackage))
-	g.POST("/:workspaceId/stop/:deploymentId/", auth.WithWorkspaceAuth(group.StopDeployment))
+	g.POST("/:workspaceId/stop/:deploymentId", auth.WithWorkspaceAuth(group.StopDeployment))
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
 	g.DELETE("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.DeleteDeployment))
 
@@ -100,7 +101,7 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 }
 
 func (g *DeploymentGroup) StopDeployment(ctx echo.Context) error {
-	cc, _ := ctx.(auth.HttpAuthContext)
+	cc, _ := ctx.(*auth.HttpAuthContext)
 	deploymentId := ctx.Param("deploymentId")
 
 	// Get deployment
@@ -150,14 +151,14 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 		return HTTPBadRequest("Deployment not found")
 	}
 
-	// Stop deployment first
-	if err := g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx); err != nil {
-		return HTTPInternalServerError("Failed to stop deployment")
-	}
-
 	// Delete deployment
 	if err := g.backendRepo.DeleteDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
 		return HTTPInternalServerError("Failed to delete deployment")
+	}
+
+	// Stop deployment
+	if err := g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx); err != nil {
+		return HTTPInternalServerError("Failed to stop deployment")
 	}
 
 	return ctx.NoContent(http.StatusOK)
@@ -232,6 +233,7 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
 			"stub_id":   deployment.Stub.ExternalId,
 			"stub_type": deployment.StubType,
+			"timestamp": time.Now().Unix(),
 		}})
 	}
 

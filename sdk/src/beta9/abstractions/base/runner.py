@@ -1,13 +1,12 @@
 import inspect
 import json
 import os
-import sys
-import tempfile
 import threading
 import time
 from queue import Empty, Queue
 from typing import Callable, List, Optional, Union
 
+import cloudpickle
 from watchdog.observers import Observer
 
 from ... import terminal
@@ -29,7 +28,7 @@ from ...clients.gateway import (
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
-from ...env import called_on_import
+from ...env import called_on_import, is_notebook_env
 from ...sync import FileSyncer, SyncEventHandler
 from ...type import (
     _AUTOSCALER_TYPES,
@@ -39,6 +38,7 @@ from ...type import (
     QueueDepthAutoscaler,
     TaskPolicy,
 )
+from ...utils import TempFile
 
 CONTAINER_STUB_TYPE = "container"
 FUNCTION_STUB_TYPE = "function"
@@ -149,7 +149,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
         self.settings: SDKSettings = get_settings()
         self.config_context: ConfigContext = get_config_context()
-        self.tmp_files: List[tempfile.NamedTemporaryFile] = []
+        self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
@@ -264,24 +264,35 @@ class RunnerAbstraction(BaseAbstraction):
     def _map_callable_to_attr(self, *, attr: str, func: Callable):
         """
         Determine the module and function name of a callable function, and cache on the class.
-        This is used for passing callables to stub config.
+        For Jupyter notebooks, serialize everything using cloudpickle.
         """
         if getattr(self, attr):
             return
 
-        module = inspect.getmodule(func)  # Determine module / function name
-        if hasattr(module, "__file__"):
+        module = inspect.getmodule(func)
+
+        # We check for the notebook environment before a normal module (.py file) because
+        # marimo notebooks are normal python files.
+        if is_notebook_env():
+            tmp_file = TempFile(name=f"{func.__name__}.pkl", mode="wb")
+            try:
+                cloudpickle.dump(func, tmp_file)
+                tmp_file.flush()
+                module_name = os.path.basename(tmp_file.name)
+                self.tmp_files.append(tmp_file)
+
+                setattr(self, attr, f"{module_name}:{func.__name__}")
+            except Exception as e:
+                os.unlink(tmp_file.name)
+                raise ValueError(f"Failed to pickle function: {str(e)}")
+        elif hasattr(module, "__file__"):
+            # Normal module case - use relative path
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
-        elif in_ipython_env():
-            tmp_file = create_tmp_jupyter_file(module._ih)
-            module_name = tmp_file.name.split("/")[-1].removesuffix(".py")
-            self.tmp_files.append(tmp_file)
+            setattr(self, attr, f"{module_name}:{func.__name__}")
         else:
             module_name = "__main__"
-
-        function_name = func.__name__
-        setattr(self, attr, f"{module_name}:{function_name}")
+            setattr(self, attr, f"{module_name}:{func.__name__}")
 
     def _remove_tmp_files(self) -> None:
         for tmp_file in self.tmp_files:
@@ -439,6 +450,7 @@ class RunnerAbstraction(BaseAbstraction):
                     type=autoscaler_type,
                     max_containers=self.autoscaler.max_containers,
                     tasks_per_container=self.autoscaler.tasks_per_container,
+                    min_containers=self.autoscaler.min_containers,
                 ),
                 task_policy=TaskPolicyProto(
                     max_retries=self.task_policy.max_retries,
@@ -474,34 +486,3 @@ class RunnerAbstraction(BaseAbstraction):
 
         self.runtime_ready = True
         return True
-
-
-def in_ipython_env() -> bool:
-    if "google.colab" in sys.modules:
-        return True
-
-    try:
-        from IPython import get_ipython
-
-        shell = get_ipython().__class__.__name__
-        return shell == "ZMQInteractiveShell"
-    except (NameError, ImportError):
-        return False
-
-
-def create_tmp_jupyter_file(input_history: List[str]) -> tempfile.NamedTemporaryFile:
-    tmp_file = tempfile.NamedTemporaryFile(mode="w+", dir=".", suffix=".py")
-    for code in input_history:
-        if isinstance(code, list):
-            code = "".join(code)
-
-        # Skip command lines
-        for line in code.split("\n"):
-            if line.startswith("get_ipython"):
-                continue
-
-            tmp_file.write(line + "\n")
-
-    tmp_file.flush()
-
-    return tmp_file

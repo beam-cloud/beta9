@@ -14,6 +14,7 @@ from multiprocessing import Value
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 
+import cloudpickle
 import requests
 from starlette.responses import Response
 
@@ -30,6 +31,8 @@ from ..exceptions import RunnerException
 USER_CODE_DIR = "/mnt/code"
 USER_VOLUMES_DIR = "/volumes"
 USER_CACHE_DIR = "/cache"
+
+PICKLE_SUFFIX = ".pkl"
 
 
 @dataclass
@@ -185,6 +188,21 @@ class FunctionHandler:
         yield
         del os.environ["BETA9_IMPORTING_USER_CODE"]
 
+    def _load_pickled_function(self, module_path: str) -> Callable:
+        """Load a pickled function using cloudpickle."""
+        try:
+            with open(module_path, "rb") as f:
+                func = cloudpickle.load(f)
+                if not callable(func):
+                    raise RunnerException("Loaded object is not callable")
+                return func
+        except RunnerException:
+            raise
+        except BaseException as e:
+            raise RunnerException(
+                f"Failed to load pickled function: {traceback.format_exc()}"
+            ) from e
+
     def _load(self):
         if sys.path[0] != USER_CODE_DIR:
             sys.path.insert(0, USER_CODE_DIR)
@@ -199,12 +217,19 @@ class FunctionHandler:
                 module, func = config.handler.split(":")
 
             with self.importing_user_code():
-                target_module = importlib.import_module(module)
+                if Path(module).suffix == PICKLE_SUFFIX:
+                    # Handle pickled functions
+                    self.handler = self._load_pickled_function(module)
+                else:
+                    # Handle standard modules (i.e. .py files)
+                    target_module = importlib.import_module(module)
+                    self.handler = getattr(target_module, func)
 
-            self.handler = getattr(target_module, func)
-            self.signature = inspect.signature(self.handler.func)
+            # Check if handler is a wrapped function or direct function
+            target_func = getattr(self.handler, "func", self.handler)
+            self.signature = inspect.signature(target_func)
             self.pass_context = "context" in self.signature.parameters
-            self.is_async = asyncio.iscoroutinefunction(self.handler.func)
+            self.is_async = asyncio.iscoroutinefunction(target_func)
         except BaseException:
             raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
 

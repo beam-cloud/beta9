@@ -90,7 +90,8 @@ func (g *taskQueueGroup) TaskQueueWarmUp(ctx echo.Context) error {
 		return err
 	}
 
-	err = g.tq.warmup(
+	err = g.tq.controller.Warmup(
+		ctx.Request().Context(),
 		stubId,
 	)
 	if err != nil {

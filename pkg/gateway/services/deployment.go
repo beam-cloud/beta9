@@ -4,6 +4,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	common "github.com/beam-cloud/beta9/pkg/common"
@@ -180,6 +181,7 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
 			"stub_id":   deployment.Stub.ExternalId,
 			"stub_type": deployment.StubType,
+			"timestamp": time.Now().Unix(),
 		}})
 	}
 

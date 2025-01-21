@@ -193,6 +193,10 @@ type LocalObjectStore struct {
 }
 
 func (s *LocalObjectStore) Put(ctx context.Context, localPath string, key string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	srcFile, err := os.Open(localPath)
 	if err != nil {
 		return err
