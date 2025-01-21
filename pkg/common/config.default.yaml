@@ -178,7 +178,7 @@ worker:
   addWorkerTimeout: 10m
   blobCacheEnabled: false
   containerLogLineLimit: 1000
-  containerLogResetInterval: 1hr
+  containerLogResetInterval: 1h
   criu:
     storage:
       mountPath: /data/checkpoints
