@@ -10,7 +10,7 @@ The on-prem agent is built on top of these components:
 - Tailscale (Wireguard)
 - An agent service
 
-![alt text](http://url/to/img.png)
+![beam-opa](https://github.com/beam-cloud/beta9/blob/eli/opa/docs/opa/opa.png?raw=true)
 
 ## Managing On-Premise Worker Pools
 
