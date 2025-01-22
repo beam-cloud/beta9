@@ -9,8 +9,6 @@ from ..clients.gateway import DeployStubRequest, DeployStubResponse, GetUrlReque
 from ..clients.shell import CreateShellRequest
 from ..config import ConfigContext
 from .base.runner import RunnerAbstraction
-
-# from .function import Function
 from .shell import SSHShell
 
 
@@ -61,7 +59,6 @@ class DeployableMixin:
             return False
 
         on_deploy_stub_id = None
-
         if self.parent.on_deploy and self._is_abstraction_callable_wrapper(
             self.parent.on_deploy, "Function"
         ):

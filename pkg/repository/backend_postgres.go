@@ -1180,11 +1180,11 @@ func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, params
 
 	subdomain := generateSubdomain(params.Name, params.StubType, params.WorkspaceId)
 	queryCreate := `
-		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type)
-		VALUES ($1, true, $2, $3, $4, $5, $6)
+		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type, on_deploy_stub_id)
+		VALUES ($1, true, $2, $3, $4, $5, $6, $7)
 		RETURNING id, external_id, name, active, subdomain, workspace_id, stub_id, stub_type, version, created_at, updated_at;
 	`
-	err := c.client.GetContext(ctx, &deployment, queryCreate, params.Name, subdomain, params.WorkspaceId, params.StubId, params.Version, params.StubType)
+	err := c.client.GetContext(ctx, &deployment, queryCreate, params.Name, subdomain, params.WorkspaceId, params.StubId, params.Version, params.StubType, params.OnDeployStubId)
 	if err != nil {
 		return nil, err
 	}
