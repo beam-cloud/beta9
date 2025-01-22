@@ -5,9 +5,9 @@
 
 ---
 
-### The Cloud Platform for Generative AI
+### AI Infrastructure for Developers
 
-Run serverless GPU workloads with fast cold starts on bare-metal servers, anywhere in the world
+Run AI workloads anywhere with zero complexity. One line of Python, global GPUs, full control.
 
 <p align="center">
   <a href="https://github.com/beam-cloud/beta9/stargazers">
@@ -16,7 +16,7 @@ Run serverless GPU workloads with fast cold starts on bare-metal servers, anywhe
   <a href="https://docs.beam.cloud">
     <img alt="Documentation" src="https://img.shields.io/badge/docs-quickstart-purple">
   </a>
-  <a href="https://join.slack.com/t/beam-cloud/shared_invite/zt-2f16bwiiq-oP8weCLWNrf_9lJZIDf0Fg">
+  <a href="https://join.slack.com/t/beam-cloud/shared_invite/zt-2uiks0hc6-UbBD97oZjz8_YnjQ2P7BEQ">
     <img alt="Join Slack" src="https://img.shields.io/badge/Beam-Join%20Slack-orange?logo=slack">
   </a>
     <a href="https://twitter.com/beam_cloud">
@@ -124,6 +124,31 @@ To use our fully automated setup, run the `setup` make target.
 
 ```bash
 make setup
+```
+
+#### Local DNS
+
+This is required to use an external file service for mulitpart uploads and range downloads. Its optional for using the subdomain middlware (host-based URLs).
+
+```shell
+brew install dnsmasq
+echo 'address=/cluster.local/127.0.0.1' >> /opt/homebrew/etc/dnsmasq.conf
+sudo bash -c 'mkdir -p /etc/resolver'
+sudo bash -c 'echo "nameserver 127.0.0.1" > /etc/resolver/cluster.local'
+sudo brew services start dnsmasq
+```
+
+To use subdomain or host-based URLs, add this to the config and rebuild the Beta9 gateway.
+
+```yaml
+gateway:
+  invokeURLType: host
+```
+
+You should now be able to access your local k3s instance via a domain.
+
+```shell
+curl http://beta9-gateway.beta9.svc.cluster.local:1994/api/v1/health
 ```
 
 ### Setting Up the SDK
