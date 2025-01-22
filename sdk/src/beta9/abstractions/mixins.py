@@ -1,3 +1,4 @@
+import inspect
 import urllib.parse
 from typing import Any, Callable, ClassVar, Optional
 
@@ -8,6 +9,8 @@ from ..clients.gateway import DeployStubRequest, DeployStubResponse, GetUrlReque
 from ..clients.shell import CreateShellRequest
 from ..config import ConfigContext
 from .base.runner import RunnerAbstraction
+
+# from .function import Function
 from .shell import SSHShell
 
 
@@ -26,6 +29,13 @@ class DeployableMixin:
 
         if not hasattr(self, "deployment_stub_type") or not self.deployment_stub_type:
             raise AttributeError("deployment_stub_type variable not set")
+
+    def _is_abstraction_callable_wrapper(self, func: Callable, ab_name: str) -> bool:
+        return (
+            hasattr(func, "parent")
+            and inspect.isclass(type(func.parent))
+            and func.parent.__class__.__name__ == ab_name
+        )
 
     def deploy(
         self,
@@ -50,9 +60,22 @@ class DeployableMixin:
         ):
             return False
 
+        on_deploy_stub_id = None
+
+        if self.parent.on_deploy and self._is_abstraction_callable_wrapper(
+            self.parent.on_deploy, "Function"
+        ):
+            terminal.success("Running on_deploy hook")
+            self.parent.on_deploy()
+            on_deploy_stub_id = self.parent.on_deploy.parent.stub_id
+
         terminal.header("Deploying")
         deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
-            DeployStubRequest(stub_id=self.parent.stub_id, name=self.parent.name)
+            DeployStubRequest(
+                stub_id=self.parent.stub_id,
+                name=self.parent.name,
+                on_deploy_stub_id=on_deploy_stub_id,
+            )
         )
 
         self.parent.deployment_id = deploy_response.deployment_id

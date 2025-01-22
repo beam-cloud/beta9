@@ -8,6 +8,7 @@ from ..abstractions.base.runner import (
     TASKQUEUE_DEPLOYMENT_STUB_TYPE,
     TASKQUEUE_SERVE_STUB_TYPE,
     TASKQUEUE_STUB_TYPE,
+    AbstractCallableWrapper,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -123,6 +124,7 @@ class TaskQueue(RunnerAbstraction):
         keep_warm_seconds: int = 10,
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
+        on_deploy: Optional[AbstractCallableWrapper] = None,
         callback_url: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
@@ -145,6 +147,7 @@ class TaskQueue(RunnerAbstraction):
             keep_warm_seconds=keep_warm_seconds,
             max_pending_tasks=max_pending_tasks,
             on_start=on_start,
+            on_deploy=on_deploy,
             callback_url=callback_url,
             volumes=volumes,
             secrets=secrets,

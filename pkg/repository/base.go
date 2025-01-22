@@ -112,7 +112,7 @@ type BackendRepository interface {
 	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string, filterDeleted bool) (*types.DeploymentWithRelated, error)
 	GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error)
 	GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error)
-	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
+	CreateDeployment(ctx context.Context, params CreateDeploymentParams) (*types.Deployment, error)
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
 	DeleteDeployment(ctx context.Context, deployment types.Deployment) error
 	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)

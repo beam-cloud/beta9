@@ -299,6 +299,7 @@ class GetOrCreateStubResponse(betterproto.Message):
 class DeployStubRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     name: str = betterproto.string_field(2)
+    on_deploy_stub_id: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)

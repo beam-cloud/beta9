@@ -276,6 +276,7 @@ message GetOrCreateStubResponse {
 message DeployStubRequest {
   string stub_id = 1;
   string name = 2;
+  string on_deploy_stub_id = 3;
 }
 
 message DeployStubResponse {

@@ -1166,16 +1166,25 @@ func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context
 	return *page, nil
 }
 
-func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error) {
+type CreateDeploymentParams struct {
+	WorkspaceId    uint
+	Name           string
+	Version        uint
+	StubId         uint
+	StubType       string
+	OnDeployStubId *uint
+}
+
+func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, params CreateDeploymentParams) (*types.Deployment, error) {
 	var deployment types.Deployment
 
-	subdomain := generateSubdomain(name, stubType, workspaceId)
+	subdomain := generateSubdomain(params.Name, params.StubType, params.WorkspaceId)
 	queryCreate := `
 		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type)
 		VALUES ($1, true, $2, $3, $4, $5, $6)
 		RETURNING id, external_id, name, active, subdomain, workspace_id, stub_id, stub_type, version, created_at, updated_at;
 	`
-	err := c.client.GetContext(ctx, &deployment, queryCreate, name, subdomain, workspaceId, stubId, version, stubType)
+	err := c.client.GetContext(ctx, &deployment, queryCreate, params.Name, subdomain, params.WorkspaceId, params.StubId, params.Version, params.StubType)
 	if err != nil {
 		return nil, err
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/taskqueue"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -216,7 +217,28 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		version = lastestDeployment.Version + 1
 	}
 
-	deployment, err := gws.backendRepo.CreateDeployment(ctx, authInfo.Workspace.Id, in.Name, version, stub.Id, string(stub.Type))
+	var onDeployStubId *uint
+	if in.OnDeployStubId != "" {
+		onDeployStub, err := gws.backendRepo.GetStubByExternalId(ctx, in.OnDeployStubId)
+		if err != nil || onDeployStub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+			return &pb.DeployStubResponse{
+				Ok: false,
+			}, nil
+		}
+
+		onDeployStubId = &onDeployStub.Id
+	}
+
+	deployment, err := gws.backendRepo.CreateDeployment(ctx,
+		repository.CreateDeploymentParams{
+			StubId:         stub.Id,
+			WorkspaceId:    authInfo.Workspace.Id,
+			Name:           in.Name,
+			Version:        version,
+			StubType:       string(stub.Type),
+			OnDeployStubId: onDeployStubId,
+		},
+	)
 	if err != nil {
 		return &pb.DeployStubResponse{
 			Ok: false,

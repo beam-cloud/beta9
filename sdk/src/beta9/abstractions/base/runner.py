@@ -94,6 +94,7 @@ class RunnerAbstraction(BaseAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         on_start: Optional[Callable] = None,
+        on_deploy: Optional["AbstractCallableWrapper"] = None,
         callback_url: Optional[str] = None,
         authorized: bool = True,
         name: Optional[str] = None,
@@ -118,6 +119,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.stub_id: str = ""
         self.handler: str = ""
         self.on_start: str = ""
+        self.on_deploy: "AbstractCallableWrapper" = on_deploy
         self.callback_url = callback_url or ""
         self.cpu = cpu
         self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
@@ -486,3 +488,12 @@ class RunnerAbstraction(BaseAbstraction):
 
         self.runtime_ready = True
         return True
+
+
+class AbstractCallableWrapper:
+    def __init__(self, func: Callable, parent: RunnerAbstraction):
+        self.func = func
+        self.parent = parent
+
+    def __call__(self, *args, **kwargs):
+        raise NotImplementedError

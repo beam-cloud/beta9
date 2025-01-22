@@ -12,6 +12,7 @@ from ..abstractions.base.runner import (
     FUNCTION_STUB_TYPE,
     SCHEDULE_DEPLOYMENT_STUB_TYPE,
     SCHEDULE_STUB_TYPE,
+    AbstractCallableWrapper,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -99,6 +100,7 @@ class Function(RunnerAbstraction):
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
+        on_deploy: Optional[AbstractCallableWrapper] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -113,6 +115,7 @@ class Function(RunnerAbstraction):
             secrets=secrets,
             name=name,
             task_policy=task_policy,
+            on_deploy=on_deploy,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
@@ -342,6 +345,7 @@ class Schedule(Function):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         name: Optional[str] = None,
+        on_deploy: Optional[AbstractCallableWrapper] = None,
     ) -> None:
         params = inspect.signature(Function.__init__).parameters
         kwargs = {k: v for k, v in locals().items() if k in params and k != "self"}
