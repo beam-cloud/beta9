@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,7 +9,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
@@ -21,21 +19,18 @@ import (
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
-	runc "github.com/beam-cloud/go-runc"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
 	"github.com/opencontainers/umoci/oci/casext"
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	imagePullCommand string = "skopeo"
-	imageBundlePath  string = "/dev/shm/images"
-	imageTmpDir      string = "/tmp"
+	imageBundlePath string = "/dev/shm/images"
+	imageTmpDir     string = "/tmp"
 )
 
 var (
@@ -65,18 +60,19 @@ func getImageMountPath(workerId string) string {
 	return path
 }
 
+type ImageCopier interface {
+	Inspect(ctx context.Context, sourceImage string, creds string) (common.ImageMetadata, error)
+	Copy(ctx context.Context, sourceImage string, dest string, creds string) error
+}
+
 type ImageClient struct {
 	registry           *common.ImageRegistry
 	cacheClient        *blobcache.BlobCacheClient
 	imageCachePath     string
 	imageMountPath     string
 	imageBundlePath    string
-	pullCommand        string
-	pDeathSignal       syscall.Signal
 	mountedFuseServers *common.SafeMap[*fuse.Server]
-	commandTimeout     int
-	debug              bool
-	creds              string
+	imagePuller        ImageCopier
 	config             types.AppConfig
 	workerId           string
 	workerRepo         repository.WorkerRepository
@@ -96,12 +92,9 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 		imageBundlePath:    imageBundlePath,
 		imageCachePath:     getImageCachePath(),
 		imageMountPath:     getImageMountPath(workerId),
-		pullCommand:        imagePullCommand,
-		commandTimeout:     -1,
-		debug:              false,
-		creds:              "",
 		workerId:           workerId,
 		workerRepo:         workerRepo,
+		imagePuller:        common.NewSkopeoCopier(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		logger:             &ContainerLogger{},
 	}
@@ -222,34 +215,19 @@ func (c *ImageClient) Cleanup() error {
 	return nil
 }
 
-func (c *ImageClient) InspectAndVerifyImage(ctx context.Context, sourceImage string, creds string) error {
-	args := []string{"inspect", fmt.Sprintf("docker://%s", sourceImage)}
-
-	args = append(args, c.inspectArgs(creds)...)
-	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
-	cmd.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s inspect", c.pullCommand)) }}
-	cmd.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s inspect", c.pullCommand)) }}
-
-	output, err := exec.CommandContext(ctx, c.pullCommand, args...).Output()
-	if err != nil {
-		return &types.ExitCodeError{
-			ExitCode: types.WorkerContainerExitCodeInvalidCustomImage,
-		}
-	}
-
-	var imageInfo map[string]interface{}
-	err = json.Unmarshal(output, &imageInfo)
+func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) error {
+	imageMetadata, err := c.imagePuller.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
 	if err != nil {
 		return err
 	}
 
-	if imageInfo["Architecture"] != runtime.GOARCH {
+	if imageMetadata.Architecture != runtime.GOARCH {
 		return &types.ExitCodeError{
 			ExitCode: types.WorkerContainerExitCodeIncorrectImageArch,
 		}
 	}
 
-	if imageInfo["Os"] != runtime.GOOS {
+	if imageMetadata.Os != runtime.GOOS {
 		return &types.ExitCodeError{
 			ExitCode: types.WorkerContainerExitCodeIncorrectImageOs,
 		}
@@ -268,8 +246,14 @@ func (c *ExecWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, dockerfile string, imageId string, buildCtxPath string) error {
+func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	outputLogger.Info("Building image from Dockerfile\n")
+
+	buildCtxPath, err := getBuildContext(request)
+	if err != nil {
+		return err
+	}
+
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
 		return err
@@ -280,17 +264,17 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(f, dockerfile)
+	fmt.Fprintf(f, *request.BuildOptions.Dockerfile)
 	f.Close()
 
 	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
-	tempBundlePath := filepath.Join(c.imageBundlePath, imageId)
-	defer os.RemoveAll(tempBundlePath)
+	tmpBundlePath := filepath.Join(c.imageBundlePath, request.ImageId)
+	defer os.RemoveAll(tmpBundlePath)
 	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
 
-	cmd := exec.CommandContext(ctx, "buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", imageId+":latest", buildCtxPath)
+	cmd := exec.CommandContext(ctx, "buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
 	cmd.Stdout = &ExecWriter{outputLogger: outputLogger}
 	cmd.Stderr = &ExecWriter{outputLogger: outputLogger}
 	err = cmd.Run()
@@ -298,7 +282,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 
-	cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "push", imageId+":latest", "oci:"+ociPath+":latest")
+	cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "push", request.ImageId+":latest", "oci:"+ociPath+":latest")
 	cmd.Stdout = &ExecWriter{outputLogger: outputLogger}
 	cmd.Stderr = &ExecWriter{outputLogger: outputLogger}
 	err = cmd.Run()
@@ -317,20 +301,20 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	engineExt := casext.NewEngine(engine)
 	defer engineExt.Close()
 
-	err = umoci.Unpack(engineExt, "latest", tempBundlePath, unpackOptions)
+	err = umoci.Unpack(engineExt, "latest", tmpBundlePath, unpackOptions)
 	if err != nil {
 		return err
 	}
 
 	for _, dir := range requiredContainerDirectories {
-		fullPath := filepath.Join(tempBundlePath, "rootfs", dir)
+		fullPath := filepath.Join(tmpBundlePath, "rootfs", dir)
 		err := os.MkdirAll(fullPath, 0755)
 		if err != nil {
 			return err
 		}
 	}
 
-	err = c.Archive(ctx, tempBundlePath, imageId, nil)
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
 	if err != nil {
 		return err
 	}
@@ -338,14 +322,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	return nil
 }
 
-func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, sourceImage string, imageId string, creds string) error {
-	baseImage, err := image.ExtractImageNameAndTag(sourceImage)
+func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
+	baseImage, err := image.ExtractImageNameAndTag(*request.BuildOptions.SourceImage)
 	if err != nil {
 		return err
 	}
 
 	outputLogger.Info("Inspecting image name and verifying architecture...\n")
-	if err := c.InspectAndVerifyImage(ctx, sourceImage, creds); err != nil {
+	if err := c.inspectAndVerifyImage(ctx, request); err != nil {
 		return err
 	}
 
@@ -356,28 +340,15 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	os.MkdirAll(copyDir, 0755)
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
-	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
-
-	args = append(args, c.copyArgs(creds)...)
-	cmd := exec.CommandContext(ctx, c.pullCommand, args...)
-	cmd.Env = os.Environ()
-	cmd.Dir = imageTmpDir
-	cmd.Stdout = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
-	cmd.Stderr = &common.ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", c.pullCommand)) }}
 
 	outputLogger.Info("Copying image...\n")
-	ec, err := c.startCommand(cmd)
+	err = c.imagePuller.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds)
 	if err != nil {
 		return err
 	}
 
-	status, err := runc.Monitor.Wait(cmd, ec)
-	if err == nil && status != 0 {
-		return fmt.Errorf("unable to copy image: %v", cmd.String())
-	}
-
 	outputLogger.Info("Unpacking image...\n")
-	tmpBundlePath := filepath.Join(baseTmpBundlePath, imageId)
+	tmpBundlePath := filepath.Join(baseTmpBundlePath, request.ImageId)
 	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
@@ -387,62 +358,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	defer os.RemoveAll(copyDir)
 
 	outputLogger.Info("Archiving base image...\n")
-	return c.Archive(ctx, tmpBundlePath, imageId, nil)
-}
-
-func (c *ImageClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
-	if c.pDeathSignal != 0 {
-		return runc.Monitor.StartLocked(cmd)
-	}
-	return runc.Monitor.Start(cmd)
-}
-
-func (c *ImageClient) copyArgs(creds string) (out []string) {
-	if creds != "" {
-		out = append(out, "--src-creds", creds)
-	} else if creds == "" {
-		out = append(out, "--src-no-creds")
-	} else if c.creds != "" {
-		out = append(out, "--src-creds", c.creds)
-	}
-
-	if c.commandTimeout > 0 {
-		out = append(out, "--command-timeout", fmt.Sprintf("%d", c.commandTimeout))
-	}
-
-	if !c.config.ImageService.EnableTLS {
-		out = append(out, []string{"--src-tls-verify=false", "--dest-tls-verify=false"}...)
-	}
-
-	if c.debug {
-		out = append(out, "--debug")
-	}
-
-	return out
-}
-
-func (c *ImageClient) inspectArgs(creds string) (out []string) {
-	if creds != "" {
-		out = append(out, "--creds", creds)
-	} else if creds == "" {
-		out = append(out, "--no-creds")
-	} else if c.creds != "" {
-		out = append(out, "--creds", c.creds)
-	}
-
-	if c.commandTimeout > 0 {
-		out = append(out, "--command-timeout", fmt.Sprintf("%d", c.commandTimeout))
-	}
-
-	if !c.config.ImageService.EnableTLS {
-		out = append(out, []string{"--tls-verify=false"}...)
-	}
-
-	if c.debug {
-		out = append(out, "--debug")
-	}
-
-	return out
+	return c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
 }
 
 func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImageTag string, bundlePath string) error {
@@ -547,4 +463,16 @@ func umociUnpackOptions() layer.UnpackOptions {
 	unpackOptions.KeepDirlinks = true
 	unpackOptions.MapOptions = meta.MapOptions
 	return unpackOptions
+}
+
+func getBuildContext(request *types.ContainerRequest) (string, error) {
+	buildCtxPath := "."
+	if request.BuildOptions.BuildCtxObject != nil {
+		err := common.ExtractObjectFile(context.TODO(), *request.BuildOptions.BuildCtxObject, request.Workspace.Name)
+		if err != nil {
+			return "", err
+		}
+		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
+	}
+	return buildCtxPath, nil
 }
