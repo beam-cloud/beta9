@@ -62,19 +62,18 @@ type VolumeWithRelated struct {
 }
 
 type Deployment struct {
-	Id             uint         `db:"id" json:"id"`
-	ExternalId     string       `db:"external_id" json:"external_id"`
-	Name           string       `db:"name" json:"name"`
-	Active         bool         `db:"active" json:"active"`
-	Subdomain      string       `db:"subdomain" json:"subdomain"`
-	WorkspaceId    uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
-	StubId         uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
-	StubType       string       `db:"stub_type" json:"stub_type"`
-	Version        uint         `db:"version" json:"version"`
-	CreatedAt      time.Time    `db:"created_at" json:"created_at"`
-	UpdatedAt      time.Time    `db:"updated_at" json:"updated_at"`
-	DeletedAt      sql.NullTime `db:"deleted_at" json:"deleted_at"`
-	OnDeployStubId *uint        `db:"on_deploy_stub_id" json:"on_deploy_stub_id"`
+	Id          uint         `db:"id" json:"id"`
+	ExternalId  string       `db:"external_id" json:"external_id"`
+	Name        string       `db:"name" json:"name"`
+	Active      bool         `db:"active" json:"active"`
+	Subdomain   string       `db:"subdomain" json:"subdomain"`
+	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	StubId      uint         `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
+	StubType    string       `db:"stub_type" json:"stub_type"`
+	Version     uint         `db:"version" json:"version"`
+	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at"`
+	DeletedAt   sql.NullTime `db:"deleted_at" json:"deleted_at"`
 }
 
 type DeploymentWithRelated struct {
