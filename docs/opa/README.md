@@ -15,9 +15,7 @@ The on-prem agent is built on top of these components:
 ## Managing On-Premise Worker Pools
 
 In Beam, we have a concept of a "worker pool", which is a worker with certain attributes. For example, you might create a worker pool
-for a certain set of GPUs. To get started, we can create a worker pool with a certain set of attributes. This can be done via CLI:
-
-Let's create a worker pool via CLI:
+for a certain set of GPUs. This can be done via CLI:
 
 ```sh
 beam pool create --name my-h100-pool --gpu-type A100 --default-gpu-count 1
@@ -25,11 +23,10 @@ beam pool create --name my-h100-pool --gpu-type A100 --default-gpu-count 1
 
 ## Adding Machines to a Worker Pool
 
-Now that we have a worker pool, we need to add workers to it. To do this we must add a "machine" to the pool. This is just
-a debian based system (if you want to use a GPU on this machine, the server must have Nvidia drivers installed). To create a new machine, you can use the `machine create` command:
+Now that we have a worker pool, we need to add workers to it. To do this, we must add a "machine" to the pool. This is just a debian based system (if you want to use a GPU on this machine, the server must have NVIDIA drivers installed). To create a new machine, you can use the `beam machine create` command:
 
 ```sh
-$ beta9 machine create --pool my-h100-pool
+$ beam machine create --pool my-h100-pool
 
 => Created machine with ID: 'c11d3030'. Use the following command to setup the node:
 # -- Agent setup
