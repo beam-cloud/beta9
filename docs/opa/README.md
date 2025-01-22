@@ -10,7 +10,7 @@ The on-prem agent is built on top of these components:
 - Tailscale (Wireguard)
 - An agent service
 
-![beam-opa](https://github.com/beam-cloud/beta9/blob/eli/opa/docs/opa/opa.png?raw=true)
+![beam-opa](https://github.com/beam-cloud/beta9/blob/main/docs/opa/opa.png?raw=true)
 
 ## Managing On-Premise Worker Pools
 
@@ -23,7 +23,9 @@ beam pool create --name my-h100-pool --gpu-type A100 --default-gpu-count 1
 
 ## Adding Machines to a Worker Pool
 
-Now that we have a worker pool, we need to add workers to it. To do this, we must add a "machine" to the pool. This is just a debian based system (if you want to use a GPU on this machine, the server must have NVIDIA drivers installed). To create a new machine, you can use the `beam machine create` command:
+Now that we have a worker pool, we need to add workers to it. To do this, we must add a "machine" to the pool. This is just a debian based system (if you want to use a GPU on this machine, the server must have NVIDIA drivers installed). 
+
+To create a new machine, you'll use the `beam machine create` command:
 
 ```sh
 $ beam machine create --pool my-h100-pool
@@ -42,7 +44,7 @@ sudo ./agent --token "MY_TOKEN" \
 
 This command can now be copied and pasted into the machine to setup the agent. It will automatically join the Tailscale network and register with Beam's control plane.
 
-## Using On-Premise Compute
+## Running Workloads
 
 With the hardware connected, we can validate it using the `machine list` command:
 
