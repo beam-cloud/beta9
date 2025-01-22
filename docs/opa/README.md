@@ -2,6 +2,8 @@
 
 Beam's control plane can be extended to manage external resources, with the same developer experience and performance benefits as the managed product.
 
+> **Note**: this feature is available on-request and needs to be enabled on your Beam account to use.
+
 ## How it Works
 
 The on-prem agent is built on top of these components:
