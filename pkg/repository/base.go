@@ -102,6 +102,7 @@ type BackendRepository interface {
 	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
 	GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error)
+	UpdateStubConfig(ctx context.Context, stubId uint, config types.StubConfigV1) error
 	GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	DeleteVolume(ctx context.Context, workspaceId uint, name string) error
@@ -112,7 +113,7 @@ type BackendRepository interface {
 	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string, filterDeleted bool) (*types.DeploymentWithRelated, error)
 	GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error)
 	GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error)
-	CreateDeployment(ctx context.Context, params CreateDeploymentParams) (*types.Deployment, error)
+	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
 	DeleteDeployment(ctx context.Context, deployment types.Deployment) error
 	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)

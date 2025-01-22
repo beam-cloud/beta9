@@ -832,8 +832,28 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	return &stub, nil
 }
 
-// Volume
+func (r *PostgresBackendRepository) UpdateStubConfig(ctx context.Context, stubId uint, config types.StubConfigV1) error {
+	// Serialize config to JSON
+	configJSON, err := json.Marshal(config)
+	if err != nil {
+		return err
+	}
 
+	query := `
+	UPDATE stub
+	SET config = $2
+	WHERE id = $1;
+	`
+
+	_, err = r.client.ExecContext(ctx, query, stubId, string(configJSON))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Volume
 func (c *PostgresBackendRepository) GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
 	var volume types.Volume
 
@@ -1166,25 +1186,16 @@ func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context
 	return *page, nil
 }
 
-type CreateDeploymentParams struct {
-	WorkspaceId    uint
-	Name           string
-	Version        uint
-	StubId         uint
-	StubType       string
-	OnDeployStubId *uint
-}
-
-func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, params CreateDeploymentParams) (*types.Deployment, error) {
+func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error) {
 	var deployment types.Deployment
 
-	subdomain := generateSubdomain(params.Name, params.StubType, params.WorkspaceId)
+	subdomain := generateSubdomain(name, stubType, workspaceId)
 	queryCreate := `
-		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type, on_deploy_stub_id)
-		VALUES ($1, true, $2, $3, $4, $5, $6, $7)
+		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type)
+		VALUES ($1, true, $2, $3, $4, $5, $6)
 		RETURNING id, external_id, name, active, subdomain, workspace_id, stub_id, stub_type, version, created_at, updated_at;
 	`
-	err := c.client.GetContext(ctx, &deployment, queryCreate, params.Name, subdomain, params.WorkspaceId, params.StubId, params.Version, params.StubType, params.OnDeployStubId)
+	err := c.client.GetContext(ctx, &deployment, queryCreate, name, subdomain, workspaceId, stubId, version, stubType)
 	if err != nil {
 		return nil, err
 	}
