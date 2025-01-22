@@ -1,4 +1,7 @@
 import os
+
+os.environ["GRPC_VERBOSITY"] = os.getenv("GRPC_VERBOSITY") or "NONE"
+
 import shutil
 from types import ModuleType
 from typing import Any, Optional
@@ -25,8 +28,6 @@ from . import (
 from .extraclick import CLICK_CONTEXT_SETTINGS, ClickCommonGroup, CommandGroupCollection
 
 click.formatting.FORCED_WIDTH = shutil.get_terminal_size().columns
-
-os.environ["GRPC_VERBOSITY"] = os.getenv("GRPC_VERBOSITY") or "NONE"
 
 
 class CLI:
