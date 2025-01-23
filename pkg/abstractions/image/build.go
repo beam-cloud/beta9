@@ -238,7 +238,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		if err != nil {
 			return err
 		}
-		containerSpinupTimeout = b.estimateNewBaseImageTime(opts)
+		containerSpinupTimeout = b.estimateNewBaseImageTime(ctx, opts)
 	}
 
 	containerId := b.genContainerId()
@@ -829,12 +829,12 @@ func tagOrDigest(digest string, tag string) string {
 	return digest
 }
 
-func (b *Builder) estimateNewBaseImageTime(opts *BuildOpts) time.Duration {
+func (b *Builder) estimateNewBaseImageTime(ctx context.Context, opts *BuildOpts) time.Duration {
 	sourceImage := getSourceImage(opts)
-	imageMetadata, err := b.imageCopier.Inspect(context.Background(), sourceImage, opts.BaseImageCreds)
+	imageMetadata, err := b.imageCopier.Inspect(ctx, sourceImage, opts.BaseImageCreds)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to inspect image")
-		return 2 * time.Hour
+		return defaultContainerSpinupTimeout
 	}
 
 	imageSizeBytes := 0
