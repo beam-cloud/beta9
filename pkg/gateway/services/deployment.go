@@ -131,13 +131,13 @@ func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDepl
 		}, nil
 	}
 
-	// Reenable deployment
+	// start deployment
 	deploymentWithRelated.Deployment.Active = true
 	_, err = gws.backendRepo.UpdateDeployment(ctx, deploymentWithRelated.Deployment)
 	if err != nil {
 		return &pb.StartDeploymentResponse{
 			Ok:     false,
-			ErrMsg: "Unable to reenable deployment",
+			ErrMsg: "Unable to start deployment",
 		}, nil
 	}
 

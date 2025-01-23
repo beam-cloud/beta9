@@ -132,10 +132,10 @@ func (g *DeploymentGroup) StartDeployment(ctx echo.Context) error {
 		return HTTPBadRequest("Deployment not found")
 	}
 
-	// Reenable deployment
+	// Start deployment
 	deploymentWithRelated.Deployment.Active = true
 	if _, err := g.backendRepo.UpdateDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
-		return HTTPInternalServerError("Failed to reenable deployment")
+		return HTTPInternalServerError("Failed to start deployment")
 	}
 
 	// Publish reload instance event
