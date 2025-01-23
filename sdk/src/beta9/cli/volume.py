@@ -85,8 +85,8 @@ def ls(service: ServiceClient, remote_path: str):
     for p in res.path_infos:
         total_size += p.size
         table.add_row(
-            p.path,
-            terminal.humanize_memory(p.size),
+            p.path + ("/" if p.is_dir else ""),
+            "" if p.is_dir else terminal.humanize_memory(p.size),
             terminal.humanize_date(p.mod_time),
             "Yes" if p.is_dir else "No",
         )
