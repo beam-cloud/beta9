@@ -285,6 +285,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     extra: str = betterproto.string_field(25)
     checkpoint_enabled: bool = betterproto.bool_field(26)
     gpu_count: int = betterproto.uint32_field(27)
+    on_deploy: str = betterproto.string_field(28)
 
 
 @dataclass(eq=False, repr=False)

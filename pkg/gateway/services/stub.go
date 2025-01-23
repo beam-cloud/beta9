@@ -78,6 +78,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		},
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,
+		OnDeploy:           in.OnDeploy,
 		CallbackUrl:        in.CallbackUrl,
 		PythonVersion:      in.PythonVersion,
 		TaskPolicy:         gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
@@ -224,7 +225,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 			}, nil
 		}
 
-		config.OnDeploy = in.OnDeployStubId
+		config.OnDeployId = in.OnDeployStubId
 		err = gws.backendRepo.UpdateStubConfig(ctx, stub.Id, config)
 		if err != nil {
 			return &pb.DeployStubResponse{
