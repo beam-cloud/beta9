@@ -280,7 +280,7 @@ def start_deployment(service: ServiceClient, deployment_id: str):
     if not res.ok:
         terminal.error(res.err_msg)
 
-    terminal.print(f"Started {deployment_id}")
+    terminal.print(f"Starting deployment: {deployment_id}")
 
 
 @management.command(
