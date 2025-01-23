@@ -233,7 +233,6 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 
 	var config types.StubConfigV1
 	if err := json.Unmarshal([]byte(stub.Config), &config); err != nil {
-		log.Println("Failed to unmarshal stub config")
 		return &pb.DeployStubResponse{
 			Ok: false,
 		}, nil
@@ -248,8 +247,6 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 			"timestamp": time.Now().Unix(),
 		}})
 	}
-
-	log.Printf("Deployed stub %s with deployment %s\n", stub.ExternalId, deployment.ExternalId)
 
 	return &pb.DeployStubResponse{
 		Ok:           true,

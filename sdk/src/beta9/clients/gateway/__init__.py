@@ -351,12 +351,12 @@ class StopDeploymentResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class ReenableDeploymentRequest(betterproto.Message):
+class StartDeploymentRequest(betterproto.Message):
     id: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class ReenableDeploymentResponse(betterproto.Message):
+class StartDeploymentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
@@ -769,14 +769,14 @@ class GatewayServiceStub(SyncServiceStub):
             StopDeploymentResponse,
         )(stop_deployment_request)
 
-    def reenable_deployment(
-        self, reenable_deployment_request: "ReenableDeploymentRequest"
-    ) -> "ReenableDeploymentResponse":
+    def start_deployment(
+        self, start_deployment_request: "StartDeploymentRequest"
+    ) -> "StartDeploymentResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/ReenableDeployment",
-            ReenableDeploymentRequest,
-            ReenableDeploymentResponse,
-        )(reenable_deployment_request)
+            "/gateway.GatewayService/StartDeployment",
+            StartDeploymentRequest,
+            StartDeploymentResponse,
+        )(start_deployment_request)
 
     def delete_deployment(
         self, delete_deployment_request: "DeleteDeploymentRequest"

@@ -45,7 +45,7 @@ func NewDeploymentGroup(
 	g.GET("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.RetrieveDeployment))
 	g.GET("/:workspaceId/download/:stubId", auth.WithWorkspaceAuth(group.DownloadDeploymentPackage))
 	g.POST("/:workspaceId/stop/:deploymentId", auth.WithWorkspaceAuth(group.StopDeployment))
-	g.POST("/:workspaceId/reenable/:deploymentId", auth.WithWorkspaceAuth(group.ReenableDeployment))
+	g.POST("/:workspaceId/start/:deploymentId", auth.WithWorkspaceAuth(group.StartDeployment))
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
 	g.DELETE("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.DeleteDeployment))
 
@@ -118,7 +118,7 @@ func (g *DeploymentGroup) StopDeployment(ctx echo.Context) error {
 	return g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx)
 }
 
-func (g *DeploymentGroup) ReenableDeployment(ctx echo.Context) error {
+func (g *DeploymentGroup) StartDeployment(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	deploymentId := ctx.Param("deploymentId")
 

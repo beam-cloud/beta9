@@ -112,20 +112,20 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 	}, nil
 }
 
-func (gws *GatewayService) ReenableDeployment(ctx context.Context, in *pb.ReenableDeploymentRequest) (*pb.ReenableDeploymentResponse, error) {
+func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	// Get deployment
 	deploymentWithRelated, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.Id)
 	if err != nil {
-		return &pb.ReenableDeploymentResponse{
+		return &pb.StartDeploymentResponse{
 			Ok:     false,
 			ErrMsg: "Unable to get deployment",
 		}, nil
 	}
 
 	if deploymentWithRelated == nil {
-		return &pb.ReenableDeploymentResponse{
+		return &pb.StartDeploymentResponse{
 			Ok:     false,
 			ErrMsg: "Deployment not found",
 		}, nil
@@ -135,7 +135,7 @@ func (gws *GatewayService) ReenableDeployment(ctx context.Context, in *pb.Reenab
 	deploymentWithRelated.Deployment.Active = true
 	_, err = gws.backendRepo.UpdateDeployment(ctx, deploymentWithRelated.Deployment)
 	if err != nil {
-		return &pb.ReenableDeploymentResponse{
+		return &pb.StartDeploymentResponse{
 			Ok:     false,
 			ErrMsg: "Unable to reenable deployment",
 		}, nil
@@ -149,7 +149,7 @@ func (gws *GatewayService) ReenableDeployment(ctx context.Context, in *pb.Reenab
 		"timestamp": time.Now().Unix(),
 	}})
 
-	return &pb.ReenableDeploymentResponse{
+	return &pb.StartDeploymentResponse{
 		Ok: true,
 	}, nil
 }
