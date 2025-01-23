@@ -17,8 +17,8 @@ from ..clients.gateway import (
     DeleteDeploymentResponse,
     ListDeploymentsRequest,
     ListDeploymentsResponse,
-    ReenableDeploymentRequest,
-    ReenableDeploymentResponse,
+    StartDeploymentRequest,
+    StartDeploymentResponse,
     StopDeploymentRequest,
     StopDeploymentResponse,
     StringList,
@@ -258,13 +258,13 @@ def stop_deployments(service: ServiceClient, deployment_ids: List[str]):
 
 
 @management.command(
-    name="reenable",
-    help="Re-enable an inactive deployment.",
+    name="start",
+    help="Start an inactive deployment.",
     epilog="""
     Examples:
 
-        # Re-enable a deployment
-        {cli_name} deployment reenable 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572
+        # Start a deployment
+        {cli_name} deployment start 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572
         """,
 )
 @click.argument(
@@ -273,14 +273,14 @@ def stop_deployments(service: ServiceClient, deployment_ids: List[str]):
     required=True,
 )
 @extraclick.pass_service_client
-def reenable_deployment(service: ServiceClient, deployment_id: str):
-    res: ReenableDeploymentResponse
-    res = service.gateway.reenable_deployment(ReenableDeploymentRequest(id=deployment_id))
+def start_deployment(service: ServiceClient, deployment_id: str):
+    res: StartDeploymentResponse
+    res = service.gateway.start_deployment(StartDeploymentRequest(id=deployment_id))
 
     if not res.ok:
         terminal.error(res.err_msg)
 
-    terminal.print(f"Re-enabled {deployment_id}")
+    terminal.print(f"Started {deployment_id}")
 
 
 @management.command(
