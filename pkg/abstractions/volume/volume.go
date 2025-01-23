@@ -297,17 +297,6 @@ func (vs *GlobalVolumeService) listVolumes(ctx context.Context, workspace *types
 		return nil, err
 	}
 
-	for i, v := range volumes {
-		path := JoinVolumePath(workspace.Name, v.ExternalId)
-
-		size, err := CalculateDirSize(path)
-		if err != nil {
-			size = 0
-		}
-
-		volumes[i].Size = size
-	}
-
 	return volumes, nil
 }
 
@@ -470,10 +459,6 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 	for i, p := range matches {
 		info, _ := os.Stat(p)
 		size := info.Size()
-		if info.IsDir() {
-			s, _ := CalculateDirSize(p)
-			size = int64(s)
-		}
 		files[i] = FileInfo{
 			Path:    strings.TrimPrefix(p, rootVolumePath+"/"),
 			Size:    uint64(size),
