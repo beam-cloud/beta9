@@ -104,8 +104,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 		workerRepo:         workerRepo,
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		logger: &ContainerLogger{
-			containerLogLineLimit:     config.Worker.ContainerLogLineLimit,
-			containerLogResetInterval: config.Worker.ContainerLogResetInterval,
+			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
 	}
 

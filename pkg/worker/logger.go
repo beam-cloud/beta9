@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 )
@@ -24,9 +23,8 @@ type ContainerLogMessage struct {
 }
 
 type ContainerLogger struct {
-	containerInstances        *common.SafeMap[*ContainerInstance]
-	containerLogLineLimit     int
-	containerLogResetInterval time.Duration
+	containerInstances *common.SafeMap[*ContainerInstance]
+	logLinesPerHour    int
 }
 
 func (r *ContainerLogger) Read(containerId string, buffer []byte) (int64, error) {
@@ -76,37 +74,29 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 		return errors.New("container not found")
 	}
 
-	var lineCount atomic.Int64
-	resetTimer := time.NewTicker(r.containerLogResetInterval)
-	defer resetTimer.Stop()
-
-	go func() {
-		for range resetTimer.C {
-			lineCount.Store(0)
-		}
-	}()
+	limiter := rate.NewLimiter(rate.Limit(float64(r.logLinesPerHour)/3600.0), r.logLinesPerHour)
+	rateLimitMessageLogged := false
 
 	for o := range logChan {
-		dec := json.NewDecoder(strings.NewReader(o.Message))
-		msgDecoded := false
-
-		currentCount := lineCount.Load()
-		if currentCount > int64(r.containerLogLineLimit) {
-			if currentCount == int64(r.containerLogLineLimit)+1 {
-				log.Info().Str("container_id", containerId).Msg("Reached log line limit of " + strconv.Itoa(r.containerLogLineLimit) + ", stopping log capture")
+		if !limiter.Allow() {
+			if !rateLimitMessageLogged {
+				log.Info().Str("container_id", containerId).Msg("Rate limit exceeded, logging at reduced rate, some logs will be dropped")
 				f.WithFields(logrus.Fields{
 					"container_id": containerId,
 					"stub_id":      instance.StubId,
-				}).Info("Reached log line limit, stopping log capture")
-				instance.LogBuffer.Write([]byte(fmt.Sprintf("Reached log line limit of %d, stopping log capture until timer resets\n", r.containerLogLineLimit)))
-				lineCount.Add(1)
+				}).Info("Rate limit exceeded, logging at reduced rate, some logs will be dropped")
+				instance.LogBuffer.Write([]byte("Rate limit exceeded, logging at reduced rate, some logs will be dropped\n"))
+				rateLimitMessageLogged = true
 			}
 			continue
 		}
-		lineCount.Add(1)
+
+		rateLimitMessageLogged = false
+
+		dec := json.NewDecoder(strings.NewReader(o.Message))
+		msgDecoded := false
 
 		for {
-
 			var msg ContainerLogMessage
 
 			err := dec.Decode(&msg)
