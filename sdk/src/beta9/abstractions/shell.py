@@ -1,5 +1,6 @@
 import os
 import socket
+import ssl
 import struct
 import sys
 import time
@@ -24,6 +25,10 @@ def create_connect_tunnel(
     """
 
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if proxy_port == 443:
+        context = ssl.create_default_context()
+        s = context.wrap_socket(s, server_hostname=proxy_host)
+
     s.connect((proxy_host, proxy_port))
 
     # Construct the correct CONNECT request path
