@@ -1,4 +1,7 @@
 import os
+
+os.environ["GRPC_VERBOSITY"] = os.getenv("GRPC_VERBOSITY") or "NONE"
+
 import sys
 from abc import ABC
 from dataclasses import dataclass

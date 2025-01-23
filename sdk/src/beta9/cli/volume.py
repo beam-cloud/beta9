@@ -85,8 +85,8 @@ def ls(service: ServiceClient, remote_path: str):
     for p in res.path_infos:
         total_size += p.size
         table.add_row(
-            p.path,
-            terminal.humanize_memory(p.size),
+            p.path + ("/" if p.is_dir else ""),
+            "" if p.is_dir else terminal.humanize_memory(p.size),
             terminal.humanize_date(p.mod_time),
             "Yes" if p.is_dir else "No",
         )
@@ -402,7 +402,6 @@ def list_volumes(service: ServiceClient):
 
     table = Table(
         Column("Name"),
-        Column("Size", justify="right"),
         Column("Created At"),
         Column("Updated At"),
         Column("Workspace Name"),
@@ -413,7 +412,6 @@ def list_volumes(service: ServiceClient):
     for volume in res.volumes:
         table.add_row(
             volume.name,
-            terminal.humanize_memory(volume.size),
             terminal.humanize_date(volume.created_at),
             terminal.humanize_date(volume.updated_at),
             volume.workspace_name,
@@ -421,7 +419,7 @@ def list_volumes(service: ServiceClient):
         total_size += volume.size
 
     table.add_section()
-    table.add_row(f"[bold]{len(res.volumes)} volumes | {terminal.humanize_memory(total_size)} used")
+    table.add_row(f"[bold]{len(res.volumes)} volumes")
     terminal.print(table)
 
 
