@@ -31,6 +31,12 @@ const (
 	defaultSharedMemoryPct      float32 = 0.5
 )
 
+type WorkerPoolState struct {
+	FreeCpu    int64
+	FreeMemory int64
+	FreeGpu    uint
+}
+
 type WorkerPoolController interface {
 	AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error)
 	AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error)
@@ -38,6 +44,7 @@ type WorkerPoolController interface {
 	FreeCapacity() (*WorkerPoolCapacity, error)
 	Context() context.Context
 	IsPreemptable() bool
+	State() WorkerPoolState
 }
 
 type WorkerPoolConfig struct {

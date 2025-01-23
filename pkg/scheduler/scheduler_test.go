@@ -88,6 +88,14 @@ func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
 	return wpc.preemptable
 }
 
+func (wpc *LocalWorkerPoolControllerForTest) State() WorkerPoolState {
+	return WorkerPoolState{
+		FreeCpu:    0,
+		FreeMemory: 0,
+		FreeGpu:    0,
+	}
+}
+
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
@@ -139,6 +147,14 @@ func (wpc *ExternalWorkerPoolControllerForTest) Context() context.Context {
 
 func (wpc *ExternalWorkerPoolControllerForTest) IsPreemptable() bool {
 	return false
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) State() WorkerPoolState {
+	return WorkerPoolState{
+		FreeCpu:    0,
+		FreeMemory: 0,
+		FreeGpu:    0,
+	}
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {

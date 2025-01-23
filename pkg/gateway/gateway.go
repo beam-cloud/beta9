@@ -230,6 +230,10 @@ func (g *Gateway) initGrpc() error {
 }
 
 func (g *Gateway) registerServices() error {
+	// Register repository service
+	rs := repository.NewRepositoryServiceServer(g.ContainerRepo)
+	pb.RegisterRepositoryServiceServer(g.grpcServer, rs)
+
 	// Register map service
 	rm, err := dmap.NewRedisMapService(g.RedisClient)
 	if err != nil {

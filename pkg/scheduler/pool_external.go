@@ -107,6 +107,14 @@ func (wpc *ExternalWorkerPoolController) IsPreemptable() bool {
 	return wpc.workerPool.Preemptable
 }
 
+func (wpc *ExternalWorkerPoolController) State() WorkerPoolState {
+	return WorkerPoolState{
+		FreeCpu:    0,
+		FreeMemory: 0,
+		FreeGpu:    0,
+	}
+}
+
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
