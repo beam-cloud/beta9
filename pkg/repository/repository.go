@@ -37,6 +37,7 @@ func (s *RemoteRepositoryServiceServer) Execute(ctx context.Context, req *proto.
 		"SetWorkerAddress":      s.setWorkerAddress,
 		"UpdateContainerStatus": s.updateContainerStatus,
 		"SetContainerExitCode":  s.setContainerExitCode,
+		"DeleteContainerState":  s.deleteContainerState,
 	}
 
 	if handler, exists := handlers[req.MethodName]; exists {

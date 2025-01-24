@@ -33,6 +33,10 @@ func (s *RemoteRepositoryServiceServer) setContainerExitCode(ctx context.Context
 	return nil, s.containerRepo.SetContainerExitCode(request["containerId"].(string), int(request["exitCode"].(float64)))
 }
 
+func (s *RemoteRepositoryServiceServer) deleteContainerState(ctx context.Context, request map[string]interface{}) (interface{}, error) {
+	return nil, s.containerRepo.DeleteContainerState(request["containerId"].(string))
+}
+
 func NewContainerRemoteRepository(client proto.RepositoryServiceClient) ContainerRepository {
 	return &ContainerRemoteRepository{
 		client: client,
