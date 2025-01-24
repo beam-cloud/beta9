@@ -167,7 +167,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
-	s.containerRepo.SetWorkerAddress(containerId, hostname)
+	err := s.containerRepo.SetWorkerAddress(containerId, hostname)
+	if err != nil {
+		return err
+	}
 
 	logChan := make(chan common.LogRecord)
 	outputLogger := slog.New(common.NewChannelHandler(logChan))
@@ -497,7 +500,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 
 		// Update container status to running
-		err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, types.ContainerStateTtlS)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
 		}

@@ -31,8 +31,12 @@ func NewRepositoryServiceServer(containerRepo ContainerRepository) *RemoteReposi
 }
 
 func (s *RemoteRepositoryServiceServer) Execute(ctx context.Context, req *proto.RepositoryRequest) (*proto.RepositoryResponse, error) {
-	handlers := map[string]func(context.Context, map[string]string) (interface{}, error){
-		"GetContainerState": s.getContainerState,
+	handlers := map[string]func(context.Context, map[string]interface{}) (interface{}, error){
+		"GetContainerState":     s.getContainerState,
+		"SetContainerAddress":   s.setContainerAddress,
+		"SetWorkerAddress":      s.setWorkerAddress,
+		"UpdateContainerStatus": s.updateContainerStatus,
+		"SetContainerExitCode":  s.setContainerExitCode,
 	}
 
 	if handler, exists := handlers[req.MethodName]; exists {
@@ -67,12 +71,8 @@ func (s *RemoteRepositoryServiceServer) Execute(ctx context.Context, req *proto.
 	}, nil
 }
 
-func (s *RemoteRepositoryServiceServer) getContainerState(ctx context.Context, request map[string]string) (interface{}, error) {
-	return s.containerRepo.GetContainerState(request["containerId"])
-}
-
-func deserializeRequest(payload []byte) (map[string]string, error) {
-	var request map[string]string
+func deserializeRequest(payload []byte) (map[string]interface{}, error) {
+	var request map[string]interface{}
 	err := json.Unmarshal(payload, &request)
 	return request, err
 }

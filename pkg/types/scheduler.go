@@ -125,9 +125,9 @@ const (
 	ContainerDurationEmissionInterval      time.Duration = 5 * time.Second
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
 )
-const ContainerStateTtlSWhilePending int = 600
-const ContainerStateTtlS int = 120
-const WorkspaceQuotaTtlS int = 600
+const ContainerStateTtlSWhilePending float64 = 600
+const ContainerStateTtlS float64 = 120
+const WorkspaceQuotaTtlS float64 = 600
 
 type ErrContainerStateNotFound struct {
 	ContainerId string

@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/beta9/proto"
@@ -11,6 +10,27 @@ import (
 
 type ContainerRemoteRepository struct {
 	client proto.RepositoryServiceClient
+}
+
+// Proxy methods to call the internal repository methods
+func (s *RemoteRepositoryServiceServer) getContainerState(ctx context.Context, request map[string]interface{}) (interface{}, error) {
+	return s.containerRepo.GetContainerState(request["containerId"].(string))
+}
+
+func (s *RemoteRepositoryServiceServer) setContainerAddress(ctx context.Context, request map[string]interface{}) (interface{}, error) {
+	return nil, s.containerRepo.SetContainerAddress(request["containerId"].(string), request["addr"].(string))
+}
+
+func (s *RemoteRepositoryServiceServer) updateContainerStatus(ctx context.Context, request map[string]interface{}) (interface{}, error) {
+	return s.containerRepo.UpdateContainerStatus(request["containerId"].(string), types.ContainerStatus(request["status"].(string)), request["expirySeconds"].(float64)), nil
+}
+
+func (s *RemoteRepositoryServiceServer) setWorkerAddress(ctx context.Context, request map[string]interface{}) (interface{}, error) {
+	return nil, s.containerRepo.SetWorkerAddress(request["containerId"].(string), request["addr"].(string))
+}
+
+func (s *RemoteRepositoryServiceServer) setContainerExitCode(ctx context.Context, request map[string]interface{}) (interface{}, error) {
+	return nil, s.containerRepo.SetContainerExitCode(request["containerId"].(string), int(request["exitCode"].(float64)))
 }
 
 func NewContainerRemoteRepository(client proto.RepositoryServiceClient) ContainerRepository {
@@ -77,11 +97,11 @@ func (cr *ContainerRemoteRepository) GetContainerExitCode(containerId string) (i
 	return exitCode, nil
 }
 
-func (cr *ContainerRemoteRepository) UpdateContainerStatus(containerId string, status types.ContainerStatus, expiry time.Duration) error {
+func (cr *ContainerRemoteRepository) UpdateContainerStatus(containerId string, status types.ContainerStatus, expirySeconds float64) error {
 	request := map[string]interface{}{
-		"containerId": containerId,
-		"status":      status,
-		"expiry":      expiry.Seconds(),
+		"containerId":   containerId,
+		"status":        status,
+		"expirySeconds": expirySeconds,
 	}
 
 	_, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "UpdateContainerStatus", request)

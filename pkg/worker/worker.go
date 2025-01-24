@@ -394,7 +394,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				state.Status = types.ContainerStatusRunning
 			}
 
-			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
+			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, types.ContainerStateTtlS)
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}
