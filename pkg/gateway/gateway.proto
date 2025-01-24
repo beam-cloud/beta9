@@ -265,6 +265,8 @@ message GetOrCreateStubRequest {
   string extra = 25;
   bool checkpoint_enabled = 26;
   uint32 gpu_count = 27;
+  string on_deploy = 28;
+  string on_deploy_stub_id = 29;
 }
 
 message GetOrCreateStubResponse {

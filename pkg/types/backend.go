@@ -172,6 +172,8 @@ type StubConfigV1 struct {
 	Runtime            Runtime         `json:"runtime"`
 	Handler            string          `json:"handler"`
 	OnStart            string          `json:"on_start"`
+	OnDeploy           string          `json:"on_deploy"`
+	OnDeployStubId     string          `json:"on_deploy_stub_id"`
 	PythonVersion      string          `json:"python_version"`
 	KeepWarmSeconds    uint            `json:"keep_warm_seconds"`
 	MaxPendingTasks    uint            `json:"max_pending_tasks"`

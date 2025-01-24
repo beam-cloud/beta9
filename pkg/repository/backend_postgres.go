@@ -833,7 +833,6 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 }
 
 // Volume
-
 func (c *PostgresBackendRepository) GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
 	var volume types.Volume
 
