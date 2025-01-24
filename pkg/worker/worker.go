@@ -16,7 +16,6 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 
-	cedana "github.com/cedana/cedana/pkg/client"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/storage"
@@ -42,7 +41,7 @@ type Worker struct {
 	imageMountPath          string
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
-	cedanaClient            *cedana.Client
+	cedanaClient            *CedanaClient
 	fileCacheManager        *FileCacheManager
 	containerNetworkManager *ContainerNetworkManager
 	containerCudaManager    GPUManager
@@ -159,7 +158,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	var cedanaClient *cedana.Client = nil
+	var cedanaClient *CedanaClient = nil
 	var checkpointStorage storage.Storage = nil
 	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
 		cedanaClient, err = InitializeCedana(context.Background(), config.Worker.CRIU.Cedana)

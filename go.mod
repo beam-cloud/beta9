@@ -5,6 +5,7 @@ go 1.23.0
 toolchain go1.23.5
 
 require (
+	buf.build/gen/go/cedana/cedana/protocolbuffers/go v1.36.3-20250123222419-64bf8384f939.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.30.5
@@ -87,10 +88,7 @@ require (
 )
 
 require (
-	buf.build/gen/go/cedana/cedana-gpu/grpc/go v1.5.1-00000000000000-6f030530e3d9.2 // indirect
-	buf.build/gen/go/cedana/cedana-gpu/protocolbuffers/go v1.36.3-00000000000000-6f030530e3d9.1 // indirect
 	buf.build/gen/go/cedana/cedana/grpc/go v1.5.1-20250123222419-64bf8384f939.2 // indirect
-	buf.build/gen/go/cedana/cedana/protocolbuffers/go v1.36.3-20250123222419-64bf8384f939.1 // indirect
 	buf.build/gen/go/cedana/criu/protocolbuffers/go v1.36.3-20250123222419-6ed7871347d0.1 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/AdamKorcz/go-fuzz-headers v0.0.0-20210312213058-32f4d319f0d2 // indirect
@@ -121,7 +119,6 @@ require (
 	github.com/briandowns/spinner v1.23.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/cilium/ebpf v0.16.0 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.4 // indirect
 	github.com/cyphar/filepath-securejoin v0.3.5 // indirect
@@ -132,7 +129,6 @@ require (
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e // indirect
 	github.com/djherbis/atime v1.1.0 // indirect
-	github.com/docker/docker v27.2.0+incompatible // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -192,7 +188,6 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.15 // indirect
-	github.com/mattn/go-sqlite3 v1.14.24 // indirect
 	github.com/mdlayher/genetlink v1.3.2 // indirect
 	github.com/mdlayher/netlink v1.7.2 // indirect
 	github.com/mdlayher/sdnotify v1.0.0 // indirect
@@ -226,9 +221,7 @@ require (
 	github.com/prometheus-community/pro-bing v0.4.0 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
 	github.com/prometheus/common v0.53.0 // indirect
-	github.com/rb-go/namegen v1.1.0 // indirect
 	github.com/rivo/uniseg v0.4.4 // indirect
-	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/rootless-containers/proto v0.1.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/safchain/ethtool v0.4.0 // indirect
@@ -236,7 +229,6 @@ require (
 	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
 	github.com/sethvargo/go-retry v0.2.4 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
-	github.com/shoenig/go-m1cpu v0.1.6 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.11.0 // indirect
 	github.com/spf13/cast v1.6.0 // indirect
@@ -253,7 +245,6 @@ require (
 	github.com/tailscale/peercred v0.0.0-20240214030740-b535050b2aa4 // indirect
 	github.com/tailscale/web-client-prebuilt v0.0.0-20240226180453-5db17b287bf1 // indirect
 	github.com/tailscale/wireguard-go v0.0.0-20240731203015-71393c576b98 // indirect
-	github.com/tchap/go-patricia v2.3.0+incompatible // indirect
 	github.com/tcnksm/go-httpstat v0.2.0 // indirect
 	github.com/tidwall/btree v1.6.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
@@ -265,7 +256,6 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/vbatts/go-mtree v0.5.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	github.com/xeonx/timeago v1.0.0-rc5 // indirect
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/yuin/gopher-lua v1.1.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
@@ -292,7 +282,6 @@ require (
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	gotest.tools/v3 v3.5.1 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20240228011516-70dd3763d340 // indirect
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect

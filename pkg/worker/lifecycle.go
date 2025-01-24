@@ -297,7 +297,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
-	spec.Process.Terminal = true // NOTE: This is since we are using a console writer for logging
+	spec.Process.Terminal = false
 
 	if s.config.Worker.RunCResourcesEnforced {
 		spec.Linux.Resources.CPU = getLinuxCPU(request)
@@ -326,12 +326,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	} else {
 		spec.Hooks.Prestart = nil
-	}
-
-	// We need to modify the spec to support Cedana C/R if enabled
-	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)
-		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, containerHostname, request.RequiresGPU())
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
@@ -538,11 +532,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	consoleWriter, err := NewConsoleWriter(containerInstance.OutputWriter)
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to create console writer: %v", err)
-		return
-	}
+  outputWriter := containerInstance.OutputWriter
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(ctx, request)
@@ -553,7 +543,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, startedChan, configPath)
+		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, startedChan, configPath)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("C/R failed: %v", err)
 		}
@@ -576,7 +566,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Invoke runc process (launch the container)
 	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
 		Detach:        true,
-		ConsoleSocket: consoleWriter,
+    OutputWriter:  outputWriter,
 		ConfigPath:    configPath,
 		Started:       startedChan,
 	})

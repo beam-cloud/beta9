@@ -26,13 +26,13 @@ const (
 )
 
 type CedanaClient struct {
-	*cedana.Client
+	client *cedana.Client
 }
 
 func InitializeCedana(
 	ctx context.Context,
 	c config.Config,
-) (*cedana.Client, error) {
+) (*CedanaClient, error) {
 	path, err := exec.LookPath("cedana")
 	if err != nil {
 		return nil, fmt.Errorf("cedana binary not found: %w", err)
@@ -86,7 +86,7 @@ func InitializeCedana(
 		return nil, fmt.Errorf("cedana health check failed")
 	}
 
-	return client, nil
+	return &CedanaClient{client: client}, nil
 }
 
 // Spawn a runc container using cedana, creating a 'job' in cedana
@@ -111,14 +111,14 @@ func (c *CedanaClient) Run(ctx context.Context, containerId string, bundle strin
 		},
 	}
 
-	resp, profilingData, err := c.Client.Run(ctx, args)
+	resp, profilingData, err := c.client.Run(ctx, args)
 	if err != nil {
 		return -1, fmt.Errorf("failed to run runc container: %w", err)
 	}
 
 	_ = profilingData
 
-	_, stdout, stderr, exitCode, errors, err := c.AttachIO(ctx, &cedanadaemon.AttachReq{PID: resp.PID})
+	_, stdout, stderr, exitCode, errors, err := c.client.AttachIO(ctx, &cedanadaemon.AttachReq{PID: resp.PID})
 	if err != nil {
 		return -1, fmt.Errorf("failed to attach to runc container: %w", err)
 	}
@@ -140,7 +140,7 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (stri
 		Details: &cedanadaemon.Details{JID: &containerId},
 	}
 
-	resp, profilingData, err := c.Client.Dump(ctx, args)
+	resp, profilingData, err := c.client.Dump(ctx, args)
 	if err != nil {
 		return "", fmt.Errorf("failed to dump runc container: %w", err)
 	}
@@ -156,7 +156,7 @@ type cedanaRestoreOpts struct {
 	cacheFunc      func(string, string) (string, error)
 }
 
-func (c *CedanaClient) Restore(ctx context.Context, restoreOpts *cedanaRestoreOpts, runcOpts *runc.CreateOpts) (int, error) {
+func (c *CedanaClient) Restore(ctx context.Context, restoreOpts cedanaRestoreOpts, runcOpts *runc.CreateOpts) (int, error) {
 	bundle := strings.TrimRight(runcOpts.ConfigPath, filepath.Base(runcOpts.ConfigPath))
 
 	// If a cache function is provided, attempt to cache the checkpoint nearby
@@ -184,14 +184,14 @@ func (c *CedanaClient) Restore(ctx context.Context, restoreOpts *cedanaRestoreOp
 		},
 	}
 
-	resp, profilingData, err := c.Client.Restore(ctx, args)
+	resp, profilingData, err := c.client.Restore(ctx, args)
 	if err != nil {
 		return -1, fmt.Errorf("failed to restore runc container: %w", err)
 	}
 
 	_ = profilingData
 
-	_, stdout, stderr, exitCode, errors, err := c.AttachIO(ctx, &cedanadaemon.AttachReq{PID: resp.PID})
+	_, stdout, stderr, exitCode, errors, err := c.client.AttachIO(ctx, &cedanadaemon.AttachReq{PID: resp.PID})
 	if err != nil {
 		return -1, fmt.Errorf("failed to attach to runc container: %w", err)
 	}
