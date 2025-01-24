@@ -282,6 +282,7 @@ class RunnerAbstraction(BaseAbstraction):
                 tmp_file.flush()
                 module_name = os.path.basename(tmp_file.name)
                 self.tmp_files.append(tmp_file)
+
                 setattr(self, attr, f"{module_name}:{func.__name__}")
             except Exception as e:
                 os.unlink(tmp_file.name)
