@@ -79,7 +79,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,
 		OnDeploy:           in.OnDeploy,
-		OnDeployId:         in.OnDeployId,
+		OnDeployStubId:     in.OnDeployStubId,
 		CallbackUrl:        in.CallbackUrl,
 		PythonVersion:      in.PythonVersion,
 		TaskPolicy:         gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),

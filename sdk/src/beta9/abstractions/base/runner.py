@@ -120,7 +120,6 @@ class RunnerAbstraction(BaseAbstraction):
         self.handler: str = ""
         self.on_start: str = ""
         self.on_deploy: "AbstractCallableWrapper" = on_deploy
-        self.on_deploy_id: str = ""
         self.callback_url = callback_url or ""
         self.cpu = cpu
         self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
@@ -447,7 +446,7 @@ class RunnerAbstraction(BaseAbstraction):
                 on_deploy=self._get_callable_module_func(func=self.on_deploy.func)
                 if self.on_deploy
                 else "",
-                on_deploy_id=self.on_deploy.parent.stub_id if self.on_deploy else "",
+                on_deploy_stub_id=self.on_deploy.parent.stub_id if self.on_deploy else "",
                 callback_url=self.callback_url,
                 keep_warm_seconds=self.keep_warm_seconds,
                 workers=self.workers,
