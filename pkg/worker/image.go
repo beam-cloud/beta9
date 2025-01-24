@@ -103,7 +103,9 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 		workerId:           workerId,
 		workerRepo:         workerRepo,
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
-		logger:             &ContainerLogger{},
+		logger: &ContainerLogger{
+			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
+		},
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
