@@ -205,7 +205,7 @@ worker:
         dir: /data/checkpoints
         # Can be one of: none, tar, lz4, gzip, zlib
         compression: lz4
-        # Parallelism for streaming checkpoints
+        # Number of parallel streams for streaming checkpoints
         # TODO: usable only in next release
         # stream: 4
       db:
