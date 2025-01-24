@@ -134,7 +134,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	repoClient, err := NewRepositoryClient("beta9-gateway:1993", workerToken, nil)
+	repoClient, err := NewRepositoryClient("beta9-gateway:1993", workerToken)
 	if err != nil {
 		return nil, err
 	}
