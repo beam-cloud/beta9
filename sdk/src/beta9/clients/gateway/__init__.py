@@ -286,6 +286,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     checkpoint_enabled: bool = betterproto.bool_field(26)
     gpu_count: int = betterproto.uint32_field(27)
     on_deploy: str = betterproto.string_field(28)
+    on_deploy_id: str = betterproto.string_field(29)
 
 
 @dataclass(eq=False, repr=False)
@@ -300,7 +301,6 @@ class GetOrCreateStubResponse(betterproto.Message):
 class DeployStubRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     name: str = betterproto.string_field(2)
-    on_deploy_stub_id: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)

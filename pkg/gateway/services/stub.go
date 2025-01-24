@@ -79,6 +79,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Handler:            in.Handler,
 		OnStart:            in.OnStart,
 		OnDeploy:           in.OnDeploy,
+		OnDeployId:         in.OnDeployId,
 		CallbackUrl:        in.CallbackUrl,
 		PythonVersion:      in.PythonVersion,
 		TaskPolicy:         gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
@@ -215,23 +216,6 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}
 
 		version = lastestDeployment.Version + 1
-	}
-
-	if in.OnDeployStubId != "" {
-		config := types.StubConfigV1{}
-		if err := json.Unmarshal([]byte(stub.Config), &config); err != nil {
-			return &pb.DeployStubResponse{
-				Ok: false,
-			}, nil
-		}
-
-		config.OnDeployId = in.OnDeployStubId
-		err = gws.backendRepo.UpdateStubConfig(ctx, stub.Id, config)
-		if err != nil {
-			return &pb.DeployStubResponse{
-				Ok: false,
-			}, nil
-		}
 	}
 
 	deployment, err := gws.backendRepo.CreateDeployment(ctx, authInfo.Workspace.Id, in.Name, version, stub.Id, string(stub.Type))

@@ -832,27 +832,6 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	return &stub, nil
 }
 
-func (r *PostgresBackendRepository) UpdateStubConfig(ctx context.Context, stubId uint, config types.StubConfigV1) error {
-	// Serialize config to JSON
-	configJSON, err := json.Marshal(config)
-	if err != nil {
-		return err
-	}
-
-	query := `
-	UPDATE stub
-	SET config = $2
-	WHERE id = $1;
-	`
-
-	_, err = r.client.ExecContext(ctx, query, stubId, string(configJSON))
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // Volume
 func (c *PostgresBackendRepository) GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
 	var volume types.Volume

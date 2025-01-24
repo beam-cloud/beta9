@@ -53,25 +53,22 @@ class DeployableMixin:
         if context is not None:
             self.parent.config_context = context
 
-        if not self.parent.prepare_runtime(
-            func=self.func, stub_type=self.deployment_stub_type, force_create_stub=True
-        ):
-            return False
-
-        on_deploy_stub_id = None
         if self.parent.on_deploy and self._is_abstraction_callable_wrapper(
             self.parent.on_deploy, "Function"
         ):
             terminal.success("Running on_deploy hook")
             self.parent.on_deploy()
-            on_deploy_stub_id = self.parent.on_deploy.parent.stub_id
+
+        if not self.parent.prepare_runtime(
+            func=self.func, stub_type=self.deployment_stub_type, force_create_stub=True
+        ):
+            return False
 
         terminal.header("Deploying")
         deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
             DeployStubRequest(
                 stub_id=self.parent.stub_id,
                 name=self.parent.name,
-                on_deploy_stub_id=on_deploy_stub_id,
             )
         )
 
