@@ -134,6 +134,14 @@ func (e *RepositoryServerError) Error() string {
 	return fmt.Sprintf("repository server error: %s", e.Message)
 }
 
+type RepositoryNotImplementedError struct {
+	MethodName string
+}
+
+func (e *RepositoryNotImplementedError) Error() string {
+	return fmt.Sprintf("repository method not implemented: %s", e.MethodName)
+}
+
 func withTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, defaultRPCTimeout)
 }

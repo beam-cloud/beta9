@@ -109,13 +109,7 @@ func (cr *ContainerRemoteRepository) UpdateContainerStatus(containerId string, s
 }
 
 func (cr *ContainerRemoteRepository) UpdateAssignedContainerGPU(containerId string, gpuType string) error {
-	request := map[string]string{
-		"containerId": containerId,
-		"gpuType":     gpuType,
-	}
-
-	_, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "UpdateAssignedContainerGPU", request)
-	return err
+	return &RepositoryNotImplementedError{}
 }
 
 func (cr *ContainerRemoteRepository) DeleteContainerState(containerId string) error {
@@ -186,89 +180,23 @@ func (cr *ContainerRemoteRepository) GetWorkerAddress(ctx context.Context, conta
 }
 
 func (cr *ContainerRemoteRepository) SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, containerRequest *types.ContainerRequest) error {
-	request := map[string]interface{}{
-		"quota":   quota,
-		"request": containerRequest,
-	}
-
-	_, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "SetContainerStateWithConcurrencyLimit", request)
-	return err
+	return &RepositoryNotImplementedError{}
 }
 
 func (cr *ContainerRemoteRepository) GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error) {
-	request := map[string]string{
-		"stubId": stubId,
-	}
-
-	resp, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "GetActiveContainersByStubId", request)
-	if err != nil {
-		return nil, err
-	}
-
-	var containerStates []types.ContainerState
-	err = json.Unmarshal(resp, &containerStates)
-	if err != nil {
-		return nil, &RepositorySerializationError{Err: err}
-	}
-
-	return containerStates, nil
+	return nil, &RepositoryNotImplementedError{}
 }
 
 func (cr *ContainerRemoteRepository) GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error) {
-	request := map[string]string{
-		"workspaceId": workspaceId,
-	}
-
-	resp, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "GetActiveContainersByWorkspaceId", request)
-	if err != nil {
-		return nil, err
-	}
-
-	var containerStates []types.ContainerState
-	err = json.Unmarshal(resp, &containerStates)
-	if err != nil {
-		return nil, &RepositorySerializationError{Err: err}
-	}
-
-	return containerStates, nil
+	return nil, &RepositoryNotImplementedError{}
 }
 
 func (cr *ContainerRemoteRepository) GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error) {
-	request := map[string]string{
-		"workerId": workerId,
-	}
-
-	resp, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "GetActiveContainersByWorkerId", request)
-	if err != nil {
-		return nil, err
-	}
-
-	var containerStates []types.ContainerState
-	err = json.Unmarshal(resp, &containerStates)
-	if err != nil {
-		return nil, &RepositorySerializationError{Err: err}
-	}
-
-	return containerStates, nil
+	return nil, &RepositoryNotImplementedError{}
 }
 
 func (cr *ContainerRemoteRepository) GetFailedContainersByStubId(stubId string) ([]string, error) {
-	request := map[string]string{
-		"stubId": stubId,
-	}
-
-	resp, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "GetFailedContainersByStubId", request)
-	if err != nil {
-		return nil, err
-	}
-
-	var failedContainerIds []string
-	err = json.Unmarshal(resp, &failedContainerIds)
-	if err != nil {
-		return nil, &RepositorySerializationError{Err: err}
-	}
-
-	return failedContainerIds, nil
+	return nil, &RepositoryNotImplementedError{}
 }
 
 func (cr *ContainerRemoteRepository) UpdateCheckpointState(workspaceName, checkpointId string, checkpointState *types.CheckpointState) error {
@@ -303,39 +231,13 @@ func (cr *ContainerRemoteRepository) GetCheckpointState(workspaceName, checkpoin
 }
 
 func (cr *ContainerRemoteRepository) GetStubState(stubId string) (string, error) {
-	request := map[string]string{
-		"stubId": stubId,
-	}
-
-	resp, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "GetStubState", request)
-	if err != nil {
-		return "", err
-	}
-
-	var state string
-	err = json.Unmarshal(resp, &state)
-	if err != nil {
-		return "", &RepositorySerializationError{Err: err}
-	}
-
-	return state, nil
+	return "", &RepositoryNotImplementedError{}
 }
 
 func (cr *ContainerRemoteRepository) SetStubState(stubId, state string) error {
-	request := map[string]string{
-		"stubId": stubId,
-		"state":  state,
-	}
-
-	_, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "SetStubState", request)
-	return err
+	return &RepositoryNotImplementedError{}
 }
 
 func (cr *ContainerRemoteRepository) DeleteStubState(stubId string) error {
-	request := map[string]string{
-		"stubId": stubId,
-	}
-
-	_, err := executeRequest(context.Background(), cr.client, RepoNameContainer, "DeleteStubState", request)
-	return err
+	return &RepositoryNotImplementedError{}
 }
