@@ -47,7 +47,7 @@ type Builder struct {
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
 	rdb           *common.RedisClient
-	skopeoClient  *common.SkopeoClient
+	skopeoClient  common.SkopeoClient
 }
 
 type BuildStep struct {
