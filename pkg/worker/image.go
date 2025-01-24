@@ -60,11 +60,6 @@ func getImageMountPath(workerId string) string {
 	return path
 }
 
-type ImageCopier interface {
-	Inspect(ctx context.Context, sourceImage string, creds string) (common.ImageMetadata, error)
-	Copy(ctx context.Context, sourceImage string, dest string, creds string) error
-}
-
 type ImageClient struct {
 	registry           *common.ImageRegistry
 	cacheClient        *blobcache.BlobCacheClient
@@ -72,7 +67,7 @@ type ImageClient struct {
 	imageMountPath     string
 	imageBundlePath    string
 	mountedFuseServers *common.SafeMap[*fuse.Server]
-	imagePuller        ImageCopier
+	skopeoClient       common.SkopeoClient
 	config             types.AppConfig
 	workerId           string
 	workerRepo         repository.WorkerRepository
@@ -94,7 +89,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 		imageMountPath:     getImageMountPath(workerId),
 		workerId:           workerId,
 		workerRepo:         workerRepo,
-		imagePuller:        common.NewSkopeoClient(config),
+		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		logger:             &ContainerLogger{},
 	}
@@ -216,7 +211,7 @@ func (c *ImageClient) Cleanup() error {
 }
 
 func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) error {
-	imageMetadata, err := c.imagePuller.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
+	imageMetadata, err := c.skopeoClient.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
 	if err != nil {
 		return err
 	}
@@ -342,7 +337,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
 
 	outputLogger.Info("Copying image...\n")
-	err = c.imagePuller.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds)
+	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds)
 	if err != nil {
 		return err
 	}

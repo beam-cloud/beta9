@@ -20,7 +20,12 @@ const (
 	imageTmpDir      string = "/tmp"
 )
 
-type SkopeoClient struct {
+type SkopeoClient interface {
+	Inspect(ctx context.Context, sourceImage string, creds string) (ImageMetadata, error)
+	Copy(ctx context.Context, sourceImage string, dest string, creds string) error
+}
+
+type skopeoClient struct {
 	pullCommand    string
 	commandTimeout int
 	debug          bool
@@ -48,8 +53,8 @@ type ImageMetadata struct {
 	Env []string `json:"Env"`
 }
 
-func NewSkopeoClient(config types.AppConfig) *SkopeoClient {
-	return &SkopeoClient{
+func NewSkopeoClient(config types.AppConfig) SkopeoClient {
+	return &skopeoClient{
 		pullCommand:    imagePullCommand,
 		commandTimeout: -1,
 		debug:          false,
@@ -59,7 +64,7 @@ func NewSkopeoClient(config types.AppConfig) *SkopeoClient {
 	}
 }
 
-func (p *SkopeoClient) Inspect(ctx context.Context, sourceImage string, creds string) (ImageMetadata, error) {
+func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds string) (ImageMetadata, error) {
 	var imageMetadata ImageMetadata
 	args := []string{"inspect", fmt.Sprintf("docker://%s", sourceImage)}
 
@@ -83,7 +88,7 @@ func (p *SkopeoClient) Inspect(ctx context.Context, sourceImage string, creds st
 	return imageMetadata, nil
 }
 
-func (p *SkopeoClient) Copy(ctx context.Context, sourceImage string, dest string, creds string) error {
+func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string, creds string) error {
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
 	args = append(args, p.copyArgs(creds)...)
@@ -106,7 +111,7 @@ func (p *SkopeoClient) Copy(ctx context.Context, sourceImage string, dest string
 
 }
 
-func (p *SkopeoClient) inspectArgs(creds string) (out []string) {
+func (p *skopeoClient) inspectArgs(creds string) (out []string) {
 	if creds != "" {
 		out = append(out, "--creds", creds)
 	} else if creds == "" {
@@ -130,7 +135,7 @@ func (p *SkopeoClient) inspectArgs(creds string) (out []string) {
 	return out
 }
 
-func (p *SkopeoClient) copyArgs(creds string) (out []string) {
+func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	if creds != "" {
 		out = append(out, "--src-creds", creds)
 	} else if creds == "" {
@@ -154,7 +159,7 @@ func (p *SkopeoClient) copyArgs(creds string) (out []string) {
 	return out
 }
 
-func (p *SkopeoClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
+func (p *skopeoClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
 	if p.pDeathSignal != 0 {
 		return runc.Monitor.StartLocked(cmd)
 	}
