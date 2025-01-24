@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 ARG BASE_STAGE=dev
 
-FROM golang:1.22.10-bookworm AS golang
+FROM golang:1.23.5-bookworm AS golang
 
 RUN apt-get update && apt-get install -y curl git
 
