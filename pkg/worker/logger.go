@@ -11,8 +11,13 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/time/rate"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+)
+
+const (
+	rateLimitMsg = "Rate limit exceeded, logging at reduced rate, some logs will be dropped"
 )
 
 type ContainerLogMessage struct {
@@ -23,6 +28,7 @@ type ContainerLogMessage struct {
 
 type ContainerLogger struct {
 	containerInstances *common.SafeMap[*ContainerInstance]
+	logLinesPerHour    int
 }
 
 func (r *ContainerLogger) Read(containerId string, buffer []byte) (int64, error) {
@@ -72,7 +78,25 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 		return errors.New("container not found")
 	}
 
+	limiter := rate.NewLimiter(rate.Limit(float64(r.logLinesPerHour)/3600.0), r.logLinesPerHour)
+	rateLimitMessageLogged := false
+
 	for o := range logChan {
+		if !limiter.Allow() {
+			if !rateLimitMessageLogged {
+				log.Info().Str("container_id", containerId).Msg(rateLimitMsg)
+				f.WithFields(logrus.Fields{
+					"container_id": containerId,
+					"stub_id":      instance.StubId,
+				}).Info(rateLimitMsg)
+				instance.LogBuffer.Write([]byte(rateLimitMsg + "\n"))
+				rateLimitMessageLogged = true
+			}
+			continue
+		}
+
+		rateLimitMessageLogged = false
+
 		dec := json.NewDecoder(strings.NewReader(o.Message))
 		msgDecoded := false
 

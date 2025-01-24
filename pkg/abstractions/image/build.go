@@ -32,6 +32,7 @@ const (
 	defaultBuildContainerCpu           int64         = 1000
 	defaultBuildContainerMemory        int64         = 1024
 	defaultContainerSpinupTimeout      time.Duration = 600 * time.Second
+	dockerfileContainerSpinupTimeout   time.Duration = 1 * time.Hour
 
 	pipCommandType        string = "pip"
 	shellCommandType      string = "shell"
@@ -46,6 +47,7 @@ type Builder struct {
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
 	rdb           *common.RedisClient
+	skopeoClient  common.SkopeoClient
 }
 
 type BuildStep struct {
@@ -147,6 +149,7 @@ func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, schedule
 		containerRepo: containerRepo,
 		eventBus:      common.NewEventBus(rdb),
 		rdb:           rdb,
+		skopeoClient:  common.NewSkopeoClient(config),
 	}, nil
 }
 
@@ -230,11 +233,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	case opts.Dockerfile != "":
 		opts.addPythonRequirements()
 		dockerfile = &opts.Dockerfile
+		containerSpinupTimeout = dockerfileContainerSpinupTimeout
 	case opts.ExistingImageUri != "":
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
 			return err
 		}
+		containerSpinupTimeout = b.calculateImageArchiveDuration(ctx, opts)
 	}
 
 	containerId := b.genContainerId()
@@ -429,13 +434,7 @@ func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, 
 		return nil, err
 	}
 
-	var sourceImage string
-	switch {
-	case opts.BaseImageDigest != "":
-		sourceImage = fmt.Sprintf("%s/%s@%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageDigest)
-	default:
-		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
-	}
+	sourceImage := getSourceImage(opts)
 
 	// Allow config to override default build container settings
 	cpu := defaultBuildContainerCpu
@@ -829,4 +828,34 @@ func tagOrDigest(digest string, tag string) string {
 		return tag
 	}
 	return digest
+}
+
+func (b *Builder) calculateImageArchiveDuration(ctx context.Context, opts *BuildOpts) time.Duration {
+	sourceImage := getSourceImage(opts)
+	imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to inspect image")
+		return defaultContainerSpinupTimeout
+	}
+
+	imageSizeBytes := 0
+	for _, layer := range imageMetadata.LayersData {
+		imageSizeBytes += layer.Size
+	}
+
+	timePerByte := time.Duration(b.config.ImageService.ArchiveNanosecondsPerByte) * time.Nanosecond
+	timeLimit := timePerByte * time.Duration(imageSizeBytes)
+	log.Info().Int("image_size", imageSizeBytes).Msgf("estimated time to prepare new base image: %s", timeLimit.String())
+	return timeLimit
+}
+
+func getSourceImage(opts *BuildOpts) string {
+	var sourceImage string
+	switch {
+	case opts.BaseImageDigest != "":
+		sourceImage = fmt.Sprintf("%s/%s@%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageDigest)
+	default:
+		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
+	}
+	return sourceImage
 }
