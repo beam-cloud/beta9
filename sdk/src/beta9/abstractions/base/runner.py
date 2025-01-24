@@ -264,7 +264,7 @@ class RunnerAbstraction(BaseAbstraction):
         else:
             raise TypeError("CPU must be a float or a string.")
 
-    def _map_callable_to_attr(self, attr: str, func: Callable) -> str:
+    def _map_callable_to_attr(self, *, attr: str, func: Callable):
         """
         Determine the module and function name of a callable function, and cache on the class.
         For Jupyter notebooks, serialize everything using cloudpickle.
