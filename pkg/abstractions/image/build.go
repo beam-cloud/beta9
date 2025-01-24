@@ -32,6 +32,7 @@ const (
 	defaultBuildContainerCpu           int64         = 1000
 	defaultBuildContainerMemory        int64         = 1024
 	defaultContainerSpinupTimeout      time.Duration = 600 * time.Second
+	dockerfileContainerSpinupTimeout   time.Duration = 1 * time.Hour
 
 	pipCommandType        string = "pip"
 	shellCommandType      string = "shell"
@@ -46,7 +47,7 @@ type Builder struct {
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
 	rdb           *common.RedisClient
-	imageCopier   *common.SkopeoCopier
+	skopeoClient  *common.SkopeoClient
 }
 
 type BuildStep struct {
@@ -148,7 +149,7 @@ func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, schedule
 		containerRepo: containerRepo,
 		eventBus:      common.NewEventBus(rdb),
 		rdb:           rdb,
-		imageCopier:   common.NewSkopeoCopier(config),
+		skopeoClient:  common.NewSkopeoClient(config),
 	}, nil
 }
 
@@ -232,13 +233,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	case opts.Dockerfile != "":
 		opts.addPythonRequirements()
 		dockerfile = &opts.Dockerfile
-		containerSpinupTimeout = 1 * time.Hour
+		containerSpinupTimeout = dockerfileContainerSpinupTimeout
 	case opts.ExistingImageUri != "":
 		err := b.handleCustomBaseImage(opts, outputChan)
 		if err != nil {
 			return err
 		}
-		containerSpinupTimeout = b.estimateNewBaseImageTime(ctx, opts)
+		containerSpinupTimeout = b.calculateImageArchiveDuration(ctx, opts)
 	}
 
 	containerId := b.genContainerId()
@@ -829,9 +830,9 @@ func tagOrDigest(digest string, tag string) string {
 	return digest
 }
 
-func (b *Builder) estimateNewBaseImageTime(ctx context.Context, opts *BuildOpts) time.Duration {
+func (b *Builder) calculateImageArchiveDuration(ctx context.Context, opts *BuildOpts) time.Duration {
 	sourceImage := getSourceImage(opts)
-	imageMetadata, err := b.imageCopier.Inspect(ctx, sourceImage, opts.BaseImageCreds)
+	imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to inspect image")
 		return defaultContainerSpinupTimeout
@@ -842,8 +843,8 @@ func (b *Builder) estimateNewBaseImageTime(ctx context.Context, opts *BuildOpts)
 		imageSizeBytes += layer.Size
 	}
 
-	secondsPerByte := 120 * time.Nanosecond
-	timeLimit := secondsPerByte * time.Duration(imageSizeBytes)
+	timePerByte := time.Duration(b.config.ImageService.ArchiveNanosecondsPerByte) * time.Nanosecond
+	timeLimit := timePerByte * time.Duration(imageSizeBytes)
 	log.Info().Int("image_size", imageSizeBytes).Msgf("estimated time to prepare new base image: %s", timeLimit.String())
 	return timeLimit
 }

@@ -94,7 +94,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 		imageMountPath:     getImageMountPath(workerId),
 		workerId:           workerId,
 		workerRepo:         workerRepo,
-		imagePuller:        common.NewSkopeoCopier(config),
+		imagePuller:        common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		logger:             &ContainerLogger{},
 	}
