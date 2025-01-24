@@ -271,10 +271,6 @@ class RunnerAbstraction(BaseAbstraction):
         if getattr(self, attr):
             return
 
-        module_func = self._get_callable_module_func(func=func)
-        setattr(self, attr, module_func)
-
-    def _get_callable_module_func(self, *, func: Callable):
         module = inspect.getmodule(func)
 
         # We check for the notebook environment before a normal module (.py file) because
@@ -286,7 +282,7 @@ class RunnerAbstraction(BaseAbstraction):
                 tmp_file.flush()
                 module_name = os.path.basename(tmp_file.name)
                 self.tmp_files.append(tmp_file)
-                return f"{module_name}:{func.__name__}"
+                setattr(self, attr, f"{module_name}:{func.__name__}")
             except Exception as e:
                 os.unlink(tmp_file.name)
                 raise ValueError(f"Failed to pickle function: {str(e)}")
@@ -294,10 +290,10 @@ class RunnerAbstraction(BaseAbstraction):
             # Normal module case - use relative path
             module_file = os.path.relpath(module.__file__, start=os.getcwd()).replace("/", ".")
             module_name = os.path.splitext(module_file)[0]
-            return f"{module_name}:{func.__name__}"
+            setattr(self, attr, f"{module_name}:{func.__name__}")
         else:
             module_name = "__main__"
-            return f"{module_name}:{func.__name__}"
+            setattr(self, attr, f"{module_name}:{func.__name__}")
 
     def _remove_tmp_files(self) -> None:
         for tmp_file in self.tmp_files:
@@ -443,9 +439,7 @@ class RunnerAbstraction(BaseAbstraction):
                 gpu_count=self.gpu_count,
                 handler=self.handler,
                 on_start=self.on_start,
-                on_deploy=self._get_callable_module_func(func=self.on_deploy.func)
-                if self.on_deploy
-                else "",
+                on_deploy=self.on_deploy.parent.handler if self.on_deploy else "",
                 on_deploy_stub_id=self.on_deploy.parent.stub_id if self.on_deploy else "",
                 callback_url=self.callback_url,
                 keep_warm_seconds=self.keep_warm_seconds,
