@@ -56,7 +56,7 @@ class DeployableMixin:
         if self.parent.on_deploy and self._is_abstraction_callable_wrapper(
             self.parent.on_deploy, "Function"
         ):
-            terminal.success("Running on_deploy hook")
+            terminal.header("Running on_deploy hook")
             self.parent.on_deploy()
 
         if not self.parent.prepare_runtime(
