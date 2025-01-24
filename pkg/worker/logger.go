@@ -16,6 +16,10 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 )
 
+const (
+	rateLimitMsg = "Rate limit exceeded, logging at reduced rate, some logs will be dropped"
+)
+
 type ContainerLogMessage struct {
 	Level   string  `json:"level"`
 	Message string  `json:"message"`
@@ -80,12 +84,12 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 	for o := range logChan {
 		if !limiter.Allow() {
 			if !rateLimitMessageLogged {
-				log.Info().Str("container_id", containerId).Msg("Rate limit exceeded, logging at reduced rate, some logs will be dropped")
+				log.Info().Str("container_id", containerId).Msg(rateLimitMsg)
 				f.WithFields(logrus.Fields{
 					"container_id": containerId,
 					"stub_id":      instance.StubId,
-				}).Info("Rate limit exceeded, logging at reduced rate, some logs will be dropped")
-				instance.LogBuffer.Write([]byte("Rate limit exceeded, logging at reduced rate, some logs will be dropped\n"))
+				}).Info(rateLimitMsg)
+				instance.LogBuffer.Write([]byte(rateLimitMsg + "\n"))
 				rateLimitMessageLogged = true
 			}
 			continue
