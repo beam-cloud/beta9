@@ -181,7 +181,7 @@ func TestParseBuildSteps(t *testing.T) {
 				{Type: pipCommandType, Command: "numpy"},
 				{Type: pipCommandType, Command: "pandas"},
 			},
-			want: []string{"micromamba3.10 -m pip install --root-user-action=ignore \"numpy\" \"pandas\""},
+			want: []string{"PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install \"numpy\" \"pandas\""},
 		},
 		{
 			steps: []BuildStep{
@@ -197,7 +197,7 @@ func TestParseBuildSteps(t *testing.T) {
 				{Type: micromambaCommandType, Command: "torch"},
 				{Type: shellCommandType, Command: "echo 'end'"},
 			},
-			want: []string{"echo 'start'", "micromamba3.10 -m pip install --root-user-action=ignore \"numpy\"", "micromamba install -y -n beta9 \"torch\"", "echo 'end'"},
+			want: []string{"echo 'start'", "PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install \"numpy\"", "micromamba install -y -n beta9 \"torch\"", "echo 'end'"},
 		},
 		{
 			steps: []BuildStep{
@@ -207,7 +207,7 @@ func TestParseBuildSteps(t *testing.T) {
 				{Type: micromambaCommandType, Command: "torch"},
 				{Type: micromambaCommandType, Command: "vllm"},
 			},
-			want: []string{"echo 'hello'", "micromamba3.10 -m pip install --root-user-action=ignore \"numpy\" \"pandas\"", "micromamba install -y -n beta9 \"torch\" \"vllm\""},
+			want: []string{"echo 'hello'", "PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install \"numpy\" \"pandas\"", "micromamba install -y -n beta9 \"torch\" \"vllm\""},
 		},
 		{
 			steps: []BuildStep{
@@ -219,7 +219,7 @@ func TestParseBuildSteps(t *testing.T) {
 				{Type: shellCommandType, Command: "apt install -y ffmpeg"},
 				{Type: micromambaCommandType, Command: "ffmpeg"},
 			},
-			want: []string{"echo 'hello'", "micromamba3.10 -m pip install --root-user-action=ignore \"numpy\" \"pandas\"", "micromamba install -y -n beta9 \"torch\" \"vllm\"", "apt install -y ffmpeg", "micromamba install -y -n beta9 \"ffmpeg\""},
+			want: []string{"echo 'hello'", "PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install \"numpy\" \"pandas\"", "micromamba install -y -n beta9 \"torch\" \"vllm\"", "apt install -y ffmpeg", "micromamba install -y -n beta9 \"ffmpeg\""},
 		},
 		{
 			steps: []BuildStep{
@@ -229,8 +229,8 @@ func TestParseBuildSteps(t *testing.T) {
 			},
 			want: []string{
 				"micromamba install -y -n beta9 \"torch\"",
-				"micromamba3.10 -m pip install --root-user-action=ignore \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"",
-				"micromamba3.10 -m pip install --root-user-action=ignore --no-deps trl peft accelerate bitsandbytes",
+				"PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"",
+				"PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install --no-deps trl peft accelerate bitsandbytes",
 			},
 		},
 		{
@@ -241,8 +241,8 @@ func TestParseBuildSteps(t *testing.T) {
 			},
 			want: []string{
 				"micromamba install -y -n beta9 \"torch\"",
-				"micromamba3.10 -m pip install --root-user-action=ignore --no-deps trl peft accelerate bitsandbytes",
-				"micromamba3.10 -m pip install --root-user-action=ignore \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"",
+				"PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install --no-deps trl peft accelerate bitsandbytes",
+				"PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"",
 			},
 		},
 		{
@@ -254,8 +254,8 @@ func TestParseBuildSteps(t *testing.T) {
 			},
 			want: []string{
 				"micromamba install -y -n beta9 -c pytorch \"pytorch-cuda=12.1\"",
-				"micromamba3.10 -m pip install --root-user-action=ignore --no-deps trl peft accelerate bitsandbytes",
-				"micromamba3.10 -m pip install --root-user-action=ignore \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"",
+				"PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install --no-deps trl peft accelerate bitsandbytes",
+				"PIP_ROOT_USER_ACTION=ignore micromamba3.10 -m pip install \"unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git\"",
 			},
 		},
 	}
