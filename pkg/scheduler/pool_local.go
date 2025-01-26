@@ -76,6 +76,10 @@ func (wpc *LocalKubernetesWorkerPoolController) Name() string {
 	return wpc.name
 }
 
+func (wpc *LocalKubernetesWorkerPoolController) RequiresPoolSelector() bool {
+	return wpc.workerPool.RequiresPoolSelector
+}
+
 func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
 	return freePoolCapacity(wpc.workerRepo, wpc)
 }
