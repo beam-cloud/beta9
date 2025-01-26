@@ -52,7 +52,7 @@ WORKDIR /workspace
 RUN apt-get update && apt-get install -y build-essential
 
 RUN <<EOT
-git clone -b np/update --single-branch https://github.com/beam-cloud/nvidia-container-toolkit.git .
+git clone https://github.com/beam-cloud/nvidia-container-toolkit.git .
 make build
 make binaries
 EOT
