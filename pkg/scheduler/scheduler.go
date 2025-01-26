@@ -291,7 +291,7 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 		}
 
 		if (request.PoolSelector != "" && controller.Name() != request.PoolSelector) ||
-			(request.PoolSelector == "" && !controller.RequiresPoolSelector()) {
+			(request.PoolSelector == "" && controller.RequiresPoolSelector()) {
 			continue
 		}
 
