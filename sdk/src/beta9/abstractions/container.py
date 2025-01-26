@@ -3,6 +3,7 @@ from typing import List, Optional, Union
 from .. import terminal
 from ..abstractions.base.runner import (
     CONTAINER_STUB_TYPE,
+    AbstractCallableWrapper,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -69,6 +70,7 @@ class Container(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         callback_url: Optional[str] = None,
+        on_deploy: Optional[AbstractCallableWrapper] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -79,6 +81,7 @@ class Container(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             callback_url=callback_url,
+            on_deploy=on_deploy,
         )
 
         self.task_id = ""

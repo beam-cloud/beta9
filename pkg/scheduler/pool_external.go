@@ -115,6 +115,14 @@ func (wpc *ExternalWorkerPoolController) State() WorkerPoolState {
 	}
 }
 
+func (wpc *ExternalWorkerPoolController) Name() string {
+	return wpc.name
+}
+
+func (wpc *ExternalWorkerPoolController) RequiresPoolSelector() bool {
+	return wpc.workerPool.RequiresPoolSelector
+}
+
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
@@ -544,10 +552,6 @@ func (wpc *ExternalWorkerPoolController) getProxiedClient(hostname, token string
 	}
 
 	return kubeClient, nil
-}
-
-func (wpc *ExternalWorkerPoolController) Name() string {
-	return wpc.name
 }
 
 func (wpc *ExternalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {

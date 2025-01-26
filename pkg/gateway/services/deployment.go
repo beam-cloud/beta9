@@ -112,6 +112,48 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 	}, nil
 }
 
+func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	// Get deployment
+	deploymentWithRelated, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.Id)
+	if err != nil {
+		return &pb.StartDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get deployment",
+		}, nil
+	}
+
+	if deploymentWithRelated == nil {
+		return &pb.StartDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Deployment not found",
+		}, nil
+	}
+
+	// start deployment
+	deploymentWithRelated.Deployment.Active = true
+	_, err = gws.backendRepo.UpdateDeployment(ctx, deploymentWithRelated.Deployment)
+	if err != nil {
+		return &pb.StartDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to start deployment",
+		}, nil
+	}
+
+	// Publish reload instance event
+	eventBus := common.NewEventBus(gws.redisClient)
+	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+		"stub_id":   deploymentWithRelated.Stub.ExternalId,
+		"stub_type": deploymentWithRelated.StubType,
+		"timestamp": time.Now().Unix(),
+	}})
+
+	return &pb.StartDeploymentResponse{
+		Ok: true,
+	}, nil
+}
+
 func (gws *GatewayService) DeleteDeployment(ctx context.Context, in *pb.DeleteDeploymentRequest) (*pb.DeleteDeploymentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 

@@ -285,6 +285,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     extra: str = betterproto.string_field(25)
     checkpoint_enabled: bool = betterproto.bool_field(26)
     gpu_count: int = betterproto.uint32_field(27)
+    on_deploy: str = betterproto.string_field(28)
+    on_deploy_stub_id: str = betterproto.string_field(29)
 
 
 @dataclass(eq=False, repr=False)
@@ -346,6 +348,17 @@ class StopDeploymentRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StopDeploymentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class StartDeploymentRequest(betterproto.Message):
+    id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class StartDeploymentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
@@ -757,6 +770,15 @@ class GatewayServiceStub(SyncServiceStub):
             StopDeploymentRequest,
             StopDeploymentResponse,
         )(stop_deployment_request)
+
+    def start_deployment(
+        self, start_deployment_request: "StartDeploymentRequest"
+    ) -> "StartDeploymentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/StartDeployment",
+            StartDeploymentRequest,
+            StartDeploymentResponse,
+        )(start_deployment_request)
 
     def delete_deployment(
         self, delete_deployment_request: "DeleteDeploymentRequest"

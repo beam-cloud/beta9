@@ -145,6 +145,7 @@ type ImageServiceConfig struct {
 	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
 	BuildContainerPoolSelector     string                `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
 	Runner                         RunnerConfig          `key:"runner" json:"runner"`
+	ArchiveNanosecondsPerByte      int64                 `key:"archiveNanosecondsPerByte" json:"archive_nanoseconds_per_byte"`
 }
 
 type ImageRegistriesConfig struct {
@@ -237,6 +238,7 @@ type WorkerConfig struct {
 	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
 	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
 	TmpSizeLimit               string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
+	ContainerLogLinesPerHour   int                         `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
 }
 
 type PoolMode string

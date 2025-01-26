@@ -8,7 +8,6 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/repository"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/rs/zerolog/log"
 
@@ -96,6 +95,10 @@ func (wpc *LocalWorkerPoolControllerForTest) State() WorkerPoolState {
 	}
 }
 
+func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
+	return false
+}
+
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
@@ -136,7 +139,7 @@ type ExternalWorkerPoolControllerForTest struct {
 	ctx          context.Context
 	name         string
 	workerRepo   repo.WorkerRepository
-	providerRepo repository.ProviderRepository
+	providerRepo repo.ProviderRepository
 	poolName     string
 	providerName string
 }
@@ -155,6 +158,10 @@ func (wpc *ExternalWorkerPoolControllerForTest) State() WorkerPoolState {
 		FreeMemory: 0,
 		FreeGpu:    0,
 	}
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
+	return false
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {

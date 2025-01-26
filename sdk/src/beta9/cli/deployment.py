@@ -17,6 +17,8 @@ from ..clients.gateway import (
     DeleteDeploymentResponse,
     ListDeploymentsRequest,
     ListDeploymentsResponse,
+    StartDeploymentRequest,
+    StartDeploymentResponse,
     StopDeploymentRequest,
     StopDeploymentResponse,
     StringList,
@@ -253,6 +255,32 @@ def stop_deployments(service: ServiceClient, deployment_ids: List[str]):
             continue
 
         terminal.print(f"Stopped {id}")
+
+
+@management.command(
+    name="start",
+    help="Start an inactive deployment.",
+    epilog="""
+    Examples:
+
+        # Start a deployment
+        {cli_name} deployment start 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572
+        """,
+)
+@click.argument(
+    "deployment_id",
+    type=click.STRING,
+    required=True,
+)
+@extraclick.pass_service_client
+def start_deployment(service: ServiceClient, deployment_id: str):
+    res: StartDeploymentResponse
+    res = service.gateway.start_deployment(StartDeploymentRequest(id=deployment_id))
+
+    if not res.ok:
+        terminal.error(res.err_msg)
+
+    terminal.print(f"Starting deployment: {deployment_id}")
 
 
 @management.command(

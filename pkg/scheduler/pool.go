@@ -45,6 +45,7 @@ type WorkerPoolController interface {
 	Context() context.Context
 	IsPreemptable() bool
 	State() WorkerPoolState
+	RequiresPoolSelector() bool
 }
 
 type WorkerPoolConfig struct {

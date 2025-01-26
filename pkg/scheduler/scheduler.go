@@ -290,6 +290,11 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 			continue
 		}
 
+		if (request.PoolSelector != "" && controller.Name() != request.PoolSelector) ||
+			(request.PoolSelector == "" && controller.RequiresPoolSelector()) {
+			continue
+		}
+
 		filteredControllers = append(filteredControllers, controller)
 	}
 
