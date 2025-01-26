@@ -639,7 +639,7 @@ func getPythonStandaloneInstallCommand(config types.PythonStandaloneConfig, pyth
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	command := fmt.Sprintf("%s -m pip install --root-user-action=ignore", pythonVersion)
+	command := fmt.Sprintf("PIP_ROOT_USER_ACTION=ignore %s -m pip install", pythonVersion)
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
 	}
@@ -808,7 +808,6 @@ func extractPackageName(pkg string) string {
 }
 
 func (b *Builder) stopBuild(containerId string) error {
-
 	_, err := b.eventBus.Send(&common.Event{
 		Type:          common.StopBuildEventType(containerId),
 		Args:          map[string]any{"container_id": containerId},
