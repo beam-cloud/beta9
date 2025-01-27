@@ -1,6 +1,7 @@
 package shell
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -53,12 +54,12 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	// Hijack the connection
 	hijacker, ok := ctx.Response().Writer.(http.Hijacker)
 	if !ok {
-		return ctx.String(http.StatusInternalServerError, "Failed to create tunnel")
+		return ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
 	}
 
 	conn, _, err := hijacker.Hijack()
 	if err != nil {
-		return ctx.String(http.StatusInternalServerError, "Failed to create tunnel")
+		return ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
 	}
 	defer conn.Close()
 	setConnOptions(conn)
@@ -66,14 +67,15 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	// Dial ssh server in the container
 	containerConn, err := network.ConnectToHost(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale)
 	if err != nil {
-		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
+		fmt.Fprintf(conn, "ERROR: %s", err.Error())
+		return err
 	}
 	defer containerConn.Close()
 	setConnOptions(containerConn)
 
 	// Tell the client to proceed now that everything is set up
 	if _, err = conn.Write([]byte("OK")); err != nil {
-		return ctx.String(http.StatusBadGateway, "Failed to send OK to client")
+		return err
 	}
 
 	// Start bidirectional proxy
