@@ -99,6 +99,9 @@ func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
 		},
 	})
 
+	sort.Strings(expectedEnv)
+	sort.Strings(resultEnv)
+
 	assert.Equal(t, expectedEnv, resultEnv)
 }
 
