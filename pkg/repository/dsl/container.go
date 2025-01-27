@@ -1,4 +1,4 @@
-package repository
+package repository_goa
 
 import (
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -14,9 +14,10 @@ var _ = dsl.Service("ContainerRepository", func() {
 	dsl.Method("GetContainerState", func() {
 		dsl.Payload(func() {
 			dsl.Attribute("containerId", dsl.String, "ID of the container")
+			dsl.Field(1, "containerId")
 			dsl.Required("containerId")
 		})
-		dsl.Result(ContainerStateType)
+		dsl.Result(dsl.Empty)
 		dsl.GRPC(func() {
 			dsl.Response(dsl.CodeOK)
 		})
@@ -25,9 +26,11 @@ var _ = dsl.Service("ContainerRepository", func() {
 	dsl.Method("SetContainerState", func() {
 		dsl.Payload(func() {
 			dsl.Attribute("containerId", dsl.String, "ID of the container")
-			// Attribute("info", ContainerState, "Container state information")
-			dsl.Required("containerId", "info")
+			dsl.Field(1, "containerId")
+			dsl.Attribute("state", ContainerStateType, "Container state information")
+			dsl.Field(2, "state")
 		})
+		dsl.Result(dsl.Empty)
 		dsl.GRPC(func() {
 			dsl.Response(dsl.CodeOK)
 		})

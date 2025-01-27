@@ -50,7 +50,7 @@ func (cr *ContainerRedisRepository) GetContainerState(containerId string) (*type
 	return state, nil
 }
 
-func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *types.ContainerState) error {
+func (cr *ContainerRedisRepository) SetContainerState(containerId string, state *types.ContainerState) error {
 	err := cr.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerContainerLock(containerId), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
@@ -61,14 +61,14 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *
 	err = cr.rdb.HSet(
 		context.TODO(), stateKey,
 		"container_id", containerId,
-		"status", string(info.Status),
-		"scheduled_at", info.ScheduledAt,
-		"stub_id", info.StubId,
-		"workspace_id", info.WorkspaceId,
-		"gpu", info.Gpu,
-		"gpu_count", info.GpuCount,
-		"cpu", info.Cpu,
-		"memory", info.Memory,
+		"status", string(state.Status),
+		"scheduled_at", state.ScheduledAt,
+		"stub_id", state.StubId,
+		"workspace_id", state.WorkspaceId,
+		"gpu", state.Gpu,
+		"gpu_count", state.GpuCount,
+		"cpu", state.Cpu,
+		"memory", state.Memory,
 	).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set container state <%v>: %w", stateKey, err)
@@ -80,14 +80,14 @@ func (cr *ContainerRedisRepository) SetContainerState(containerId string, info *
 	}
 
 	// Add container state key to index (by stub id)
-	indexKey := common.RedisKeys.SchedulerContainerIndex(info.StubId)
+	indexKey := common.RedisKeys.SchedulerContainerIndex(state.StubId)
 	err = cr.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to add container state key to index <%v>: %w", indexKey, err)
 	}
 
 	// Add container state key to index (by workspace id)
-	indexKey = common.RedisKeys.SchedulerContainerWorkspaceIndex(info.WorkspaceId)
+	indexKey = common.RedisKeys.SchedulerContainerWorkspaceIndex(state.WorkspaceId)
 	err = cr.rdb.SAdd(context.TODO(), indexKey, stateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to add container state key to workspace index <%v>: %w", indexKey, err)

@@ -21,6 +21,9 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	containerclient "github.com/beam-cloud/beta9/proto/goa/gen/grpc/container_repository/client"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -134,11 +137,18 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	repoClient, err := NewRepositoryClient("beta9-gateway:1993", workerToken)
+	conn, err := grpc.Dial("beta-gateway:1993", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
-	containerRepo := repo.NewContainerRemoteRepository(repoClient)
+	containerClient := containerclient.NewClient(conn)
+	log.Info().Msgf("container client: %v", containerClient)
+	// containerClient.GetContainerState(context.Background(), &containerclient.GetContainerStatePayload{
+	// 	ContainerID: "123",
+	// })
+
+	containerRepo := repo.NewContainerRedisRepository(redisClient)
+
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 

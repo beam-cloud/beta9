@@ -37,6 +37,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	gatewayMiddleware "github.com/beam-cloud/beta9/pkg/gateway/middleware"
 	gatewayservices "github.com/beam-cloud/beta9/pkg/gateway/services"
+	repository_services "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	metrics "github.com/beam-cloud/beta9/pkg/repository/metrics"
@@ -45,6 +46,9 @@ import (
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	container_svc "github.com/beam-cloud/beta9/proto/goa/gen/container_repository"
+	container_repositorypb "github.com/beam-cloud/beta9/proto/goa/gen/grpc/container_repository/pb"
+	containerserver "github.com/beam-cloud/beta9/proto/goa/gen/grpc/container_repository/server"
 )
 
 type Gateway struct {
@@ -229,10 +233,27 @@ func (g *Gateway) initGrpc() error {
 	return nil
 }
 
+// Register all repository services
+func (g *Gateway) registerRepositoryServices() error {
+	container_repositorypb.RegisterContainerRepositoryServer(
+		g.grpcServer,
+		containerserver.New(
+			container_svc.NewEndpoints(
+				repository_services.NewContainerRepositoryService(g.ContainerRepo),
+			),
+			nil,
+		),
+	)
+
+	return nil
+}
+
 func (g *Gateway) registerServices() error {
-	// Register repository service
-	rs := repository.NewRepositoryServiceServer(g.ContainerRepo)
-	pb.RegisterRepositoryServiceServer(g.grpcServer, rs)
+	// Register repository services
+	err := g.registerRepositoryServices()
+	if err != nil {
+		return err
+	}
 
 	// Register map service
 	rm, err := dmap.NewRedisMapService(g.RedisClient)
