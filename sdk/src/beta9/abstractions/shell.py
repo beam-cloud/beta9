@@ -40,18 +40,14 @@ def create_socket(
 
 
 def wait_for_ok(sock: socket.socket, max_retries: int = 10, delay: float = 0.25):
-    tries = 0
-    while tries < max_retries:
-        try:
-            data = sock.recv(4096).decode()
+    """
+    Wait until 'OK' is received from a socket.
+    """
+    for _ in range(max_retries):
+        if data := sock.recv(4096).decode():
             if "OK" in data:
                 return
-        except (socket.timeout, socket.error) as e:
-            print(e)
-            break
-
         time.sleep(delay)
-        tries += 1
 
     raise ConnectionError(f"Failed to setup socket after {max_retries} retries")
 
