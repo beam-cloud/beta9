@@ -84,12 +84,12 @@ func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
 		"NVIDIA_REQUIRE_CUDA=",
 		"CUDA_VERSION=12.4.1",
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.4/bin:$PATH",
-		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-11.8/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
+		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.4/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
 	}
 
 	resultEnv, _ := manager.InjectEnvVars(initialEnv, &ContainerOptions{
 		InitialSpec: &specs.Spec{
-			Process: &specs.Process{Env: []string{"NVIDIA_REQUIRE_CUDA=", "CUDA_VERSION=11.8.2"}},
+			Process: &specs.Process{Env: []string{"NVIDIA_REQUIRE_CUDA=", "CUDA_VERSION=12.4.1"}},
 		},
 	})
 
