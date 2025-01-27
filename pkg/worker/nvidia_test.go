@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"sort"
 	"strings"
 	"syscall"
 	"testing"
@@ -66,11 +65,6 @@ func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
 			Process: &specs.Process{},
 		},
 	})
-
-	// Sort both slices before comparison
-	sort.Strings(expectedEnv)
-	sort.Strings(resultEnv)
-
 	if !reflect.DeepEqual(expectedEnv, resultEnv) {
 		t.Errorf("Expected %v, got %v", expectedEnv, resultEnv)
 	}
