@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/tj/assert"
 )
 
 type GPUInfoClientForTest struct {
@@ -82,8 +82,8 @@ func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
 	expectedEnv := []string{
 		"INITIAL=1",
 		"NVIDIA_REQUIRE_CUDA=",
-		"CUDA_VERSION=11.8.2",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-11.8/bin:$PATH",
+		"CUDA_VERSION=12.4.1",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.4/bin:$PATH",
 		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-11.8/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
 	}
 
@@ -93,15 +93,7 @@ func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
 		},
 	})
 
-	expectedEnvStr := strings.Join(expectedEnv, "")
-	resultEnvStr := strings.Join(resultEnv, "")
-
-	expectedEnvStr = strings.ReplaceAll(expectedEnvStr, " ", "")
-	resultEnvStr = strings.ReplaceAll(resultEnvStr, " ", "")
-
-	if expectedEnvStr != resultEnvStr {
-		t.Errorf("Expected %v, got %v", expectedEnv, resultEnv)
-	}
+	assert.Equal(t, expectedEnv, resultEnv)
 }
 
 func TestInjectNvidiaMounts(t *testing.T) {
