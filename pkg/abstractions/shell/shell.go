@@ -28,6 +28,7 @@ const (
 	shellContainerPrefix          string        = "shell"
 	shellContainerTtlS            int           = 30 // 30 seconds
 	shellProxyBufferSizeKb        int           = 32 * 1024
+	shellKeepAliveIntervalS       time.Duration = 60 * time.Second
 	defaultContainerCpu           int64         = 100
 	defaultContainerMemory        int64         = 128
 	containerDialTimeoutDurationS time.Duration = 300 * time.Second

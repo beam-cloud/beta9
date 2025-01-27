@@ -103,7 +103,6 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 	}
 
 	process := s.baseConfigSpec.Process
-	process.Env = append(process.Env, "DEBIAN_FRONTEND=noninteractive")
 	process.Args = parsedCmd
 	process.Cwd = defaultWorkingDirectory
 
@@ -111,6 +110,10 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 	if !exists {
 		return &pb.RunCExecResponse{Ok: false}, nil
 	}
+
+	instanceSpec := instance.Spec.Process
+	process.Env = append(instanceSpec.Env, "DEBIAN_FRONTEND=noninteractive")
+
 	if instance.Request.IsBuildRequest() {
 		/*
 			For some reason, if the process that is spun up from this (e.g. `runc exec --process /tmp/runc-process839505971 build-128a153e`)

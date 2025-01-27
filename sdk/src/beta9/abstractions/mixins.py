@@ -118,6 +118,9 @@ class DeployableMixin:
         container_id = create_shell_response.container_id
         ssh_token = create_shell_response.token
 
+        if not proxy_port:
+            proxy_port = 443 if parsed_url.scheme == "https" else 80
+
         with SSHShell(
             host=proxy_host,
             port=proxy_port,
