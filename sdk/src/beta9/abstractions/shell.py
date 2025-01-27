@@ -47,6 +47,8 @@ def wait_for_ok(sock: socket.socket, max_retries: int = 5, delay: float = 0.25):
         if data := sock.recv(4096).decode():
             if "OK" in data:
                 return
+            elif "ERROR" in data:
+                raise ConnectionError(f"Error received from server: {data.lstrip('ERROR: ')}")
         delay *= 2
         time.sleep(delay)
 
