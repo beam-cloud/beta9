@@ -18,7 +18,7 @@ import (
 
 const defaultCheckpointDeadline = 10 * time.Minute
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, configPath string) (bool, string, error) {
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, configPath string) (chan int, string, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
@@ -34,7 +34,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 
-		_, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
+		exitCodeChan, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
 			checkpointPath: checkpointPath,
 			jobId:          state.ContainerId,
 			containerId:    request.ContainerId,
@@ -55,14 +55,14 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 				StubId:      request.StubId,
 			})
 
-			return false, "", err
+			return nil, "", err
 		} else {
 			log.Info().Str("container_id", request.ContainerId).Msg("checkpoint found and restored")
-			return true, state.ContainerId, nil
+			return exitCodeChan, request.ContainerId, nil
 		}
 	}
 
-	return false, "", nil
+	return nil, "", nil
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.

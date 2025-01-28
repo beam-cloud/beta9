@@ -191,7 +191,7 @@ worker:
         accessKey: test
         secretKey: test
         endpointURL: http://localstack:4566
-    cedana: # defaults
+    cedana:
       # Can be unix, tcp, vsock
       protocol: unix
       address: /run/cedana.sock

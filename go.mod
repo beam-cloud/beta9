@@ -20,7 +20,7 @@ require (
 	github.com/beam-cloud/clip v0.0.0-20250109221532-5d9d7744594d
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/bsm/redislock v0.9.4
-	github.com/cedana/cedana v0.9.237-pre
+	github.com/cedana/cedana v0.9.238-pre
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cloudevents/sdk-go/v2 v2.15.1
 	github.com/containerd/console v1.0.4
@@ -256,6 +256,7 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/vbatts/go-mtree v0.5.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	github.com/xeonx/timeago v1.0.0-rc5 // indirect
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/yuin/gopher-lua v1.1.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
