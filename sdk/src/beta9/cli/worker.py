@@ -178,10 +178,10 @@ def uncordon_worker(service: ServiceClient, worker_id: str):
 
         # Drain multiple workers
         {cli_name} worker drain 675a65c3 9c1b7bae 4c89436cs
-        \b
 
-        # Drain workers from stdin (useful for piping), and force the operation
-        {cli_name} worker list --format=json | jq -r '.[].id' | beta9 worker drain -
+        # Drain workers from stdin (useful for piping)
+        {cli_name} worker list --format=json | jq -r '.[].id' | {cli_name} worker drain -
+        \b
     """,
 )
 @click.argument(
