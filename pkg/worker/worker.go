@@ -238,6 +238,7 @@ func NewWorker() (*Worker, error) {
 		containerRepo:           containerRepo,
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
+			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
 		workerMetrics:     workerMetrics,
 		workerRepo:        workerRepo,

@@ -1,3 +1,4 @@
+import inspect
 import urllib.parse
 from typing import Any, Callable, ClassVar, Optional
 
@@ -27,6 +28,13 @@ class DeployableMixin:
         if not hasattr(self, "deployment_stub_type") or not self.deployment_stub_type:
             raise AttributeError("deployment_stub_type variable not set")
 
+    def _is_abstraction_callable_wrapper(self, func: Callable, ab_name: str) -> bool:
+        return (
+            hasattr(func, "parent")
+            and inspect.isclass(type(func.parent))
+            and func.parent.__class__.__name__ == ab_name
+        )
+
     def deploy(
         self,
         name: Optional[str] = None,
@@ -45,6 +53,12 @@ class DeployableMixin:
         if context is not None:
             self.parent.config_context = context
 
+        if self.parent.on_deploy and self._is_abstraction_callable_wrapper(
+            self.parent.on_deploy, "Function"
+        ):
+            terminal.header("Running on_deploy hook")
+            self.parent.on_deploy()
+
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=self.deployment_stub_type, force_create_stub=True
         ):
@@ -52,7 +66,10 @@ class DeployableMixin:
 
         terminal.header("Deploying")
         deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
-            DeployStubRequest(stub_id=self.parent.stub_id, name=self.parent.name)
+            DeployStubRequest(
+                stub_id=self.parent.stub_id,
+                name=self.parent.name,
+            )
         )
 
         self.parent.deployment_id = deploy_response.deployment_id
@@ -100,6 +117,9 @@ class DeployableMixin:
         proxy_host, proxy_port = parsed_url.hostname, parsed_url.port
         container_id = create_shell_response.container_id
         ssh_token = create_shell_response.token
+
+        if not proxy_port:
+            proxy_port = 443 if parsed_url.scheme == "https" else 80
 
         with SSHShell(
             host=proxy_host,

@@ -38,6 +38,7 @@ type WorkerPoolController interface {
 	FreeCapacity() (*WorkerPoolCapacity, error)
 	Context() context.Context
 	IsPreemptable() bool
+	RequiresPoolSelector() bool
 }
 
 type WorkerPoolConfig struct {

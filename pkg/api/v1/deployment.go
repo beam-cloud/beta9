@@ -45,6 +45,7 @@ func NewDeploymentGroup(
 	g.GET("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.RetrieveDeployment))
 	g.GET("/:workspaceId/download/:stubId", auth.WithWorkspaceAuth(group.DownloadDeploymentPackage))
 	g.POST("/:workspaceId/stop/:deploymentId", auth.WithWorkspaceAuth(group.StopDeployment))
+	g.POST("/:workspaceId/start/:deploymentId", auth.WithWorkspaceAuth(group.StartDeployment))
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
 	g.DELETE("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.DeleteDeployment))
 
@@ -115,6 +116,37 @@ func (g *DeploymentGroup) StopDeployment(ctx echo.Context) error {
 	}
 
 	return g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx)
+}
+
+func (g *DeploymentGroup) StartDeployment(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	deploymentId := ctx.Param("deploymentId")
+
+	// Get deployment
+	deploymentWithRelated, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), cc.AuthInfo.Workspace.Id, deploymentId)
+	if err != nil {
+		return HTTPBadRequest("Failed to get deployment")
+	}
+
+	if deploymentWithRelated == nil {
+		return HTTPBadRequest("Deployment not found")
+	}
+
+	// Start deployment
+	deploymentWithRelated.Deployment.Active = true
+	if _, err := g.backendRepo.UpdateDeployment(ctx.Request().Context(), deploymentWithRelated.Deployment); err != nil {
+		return HTTPInternalServerError("Failed to start deployment")
+	}
+
+	// Publish reload instance event
+	eventBus := common.NewEventBus(g.redisClient)
+	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+		"stub_id":   deploymentWithRelated.Stub.ExternalId,
+		"stub_type": deploymentWithRelated.StubType,
+		"timestamp": time.Now().Unix(),
+	}})
+
+	return ctx.NoContent(http.StatusOK)
 }
 
 func (g *DeploymentGroup) StopAllActiveDeployments(ctx echo.Context) error {

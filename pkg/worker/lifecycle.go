@@ -186,7 +186,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		case <-ctx.Done():
 			return nil
 		default:
-			if err := s.buildOrPullImage(ctx, request, containerId, outputLogger); err != nil {
+			if err := s.buildOrPullBaseImage(ctx, request, containerId, outputLogger); err != nil {
 				return err
 			}
 		}
@@ -199,7 +199,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	log.Info().Str("container_id", containerId).Msgf("acquired port: %d", bindPort)
 
 	// Read spec from bundle
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
+	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
 
 	opts := &ContainerOptions{
 		BundlePath:  bundlePath,
@@ -242,23 +242,17 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	return nil
 }
 
-func (s *Worker) buildOrPullImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
+func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
 	switch {
 	case request.BuildOptions.Dockerfile != nil:
 		log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
-
-		buildCtxPath, err := s.getBuildContext(request)
-		if err != nil {
-			return err
-		}
-
-		if err := s.imageClient.BuildAndArchiveImage(ctx, outputLogger, *request.BuildOptions.Dockerfile, request.ImageId, buildCtxPath); err != nil {
+		if err := s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request); err != nil {
 			return err
 		}
 	case request.BuildOptions.SourceImage != nil:
 		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.BuildOptions.SourceImage)
 
-		if err := s.imageClient.PullAndArchiveImage(ctx, outputLogger, *request.BuildOptions.SourceImage, request.ImageId, request.BuildOptions.SourceImageCreds); err != nil {
+		if err := s.imageClient.PullAndArchiveImage(ctx, outputLogger, request); err != nil {
 			return err
 		}
 	}
@@ -267,11 +261,15 @@ func (s *Worker) buildOrPullImage(ctx context.Context, request *types.ContainerR
 	return s.imageClient.PullLazy(request)
 }
 
-func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
+func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.Spec, error) {
 	imageConfigPath := filepath.Join(s.imageMountPath, imageId, initialSpecBaseName)
+	if isBuildRequest {
+		imageConfigPath = filepath.Join(s.imageMountPath, imageId, specBaseName)
+	}
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
+		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
 		return nil, err
 	}
 
@@ -280,6 +278,7 @@ func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
 
 	err = json.Unmarshal([]byte(specTemplate), &spec)
 	if err != nil {
+		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to unmarshal bundle config")
 		return nil, err
 	}
 
@@ -709,16 +708,4 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 			}
 		}
 	}
-}
-
-func (s *Worker) getBuildContext(request *types.ContainerRequest) (string, error) {
-	buildCtxPath := "."
-	if request.BuildOptions.BuildCtxObject != nil {
-		err := common.ExtractObjectFile(context.TODO(), *request.BuildOptions.BuildCtxObject, request.Workspace.Name)
-		if err != nil {
-			return "", err
-		}
-		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
-	}
-	return buildCtxPath, nil
 }

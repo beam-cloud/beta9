@@ -93,16 +93,6 @@
       "options": ["rw", "nosuid", "noexec", "nodev"]
 		},
 		{
-			"destination": "/root",
-			"type": "tmpfs",
-			"source": "tmpfs",
-			"options": [
-				"nosuid",
-				"strictatime",
-				"mode=755"
-			]
-		},
-		{
 			"destination": "/volumes",
 			"type": "tmpfs",
 			"source": "tmpfs",

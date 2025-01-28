@@ -34,10 +34,6 @@ func (w *OutputWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func NewChannelSlogger() *slog.Logger {
-	return slog.New(NewChannelHandler(make(chan LogRecord)))
-}
-
 type LogRecord struct {
 	Level   slog.Level
 	Message string

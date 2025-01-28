@@ -1,5 +1,6 @@
 import os
 import socket
+import ssl
 import struct
 import sys
 import time
@@ -14,44 +15,44 @@ if is_local():
     import paramiko
 
 
-def create_connect_tunnel(
-    proxy_host: str, proxy_port: int, path: str, stub_id: str, container_id: str, auth_token: str
+def create_socket(
+    proxy_host: str, proxy_port: int, path: str, container_id: str, auth_token: str
 ) -> socket.socket:
     """
-    1. Connect to the proxy_host:proxy_port over TCP.
-    2. Send an HTTP CONNECT request for the correct path.
-    3. If we get a 200 response, return the socket as a raw tunnel.
+    Create a socket connection to the server and authenticate with the given token.
     """
+    sock = socket.create_connection((proxy_host, proxy_port), timeout=60)
+    if proxy_port == 443:
+        sock = ssl.create_default_context().wrap_socket(sock=sock, server_hostname=proxy_host)
 
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect((proxy_host, proxy_port))
-
-    # Construct the correct CONNECT request path
-    connect_path = f"{path}/{container_id}"
-
-    connect_req = (
-        f"CONNECT {connect_path} HTTP/1.1\r\n"
-        f"Host: {proxy_host}:{proxy_port}\r\n"
-        f"Proxy-Connection: Keep-Alive\r\n"
+    request = (
+        f"GET {path}/{container_id} HTTP/1.1\r\n"
+        f"Host: {proxy_host}\r\n"
         f"Authorization: Bearer {auth_token}\r\n"
-        f"\r\n"
+        "\r\n"
     )
-    s.sendall(connect_req.encode("ascii"))
 
-    response = b""
-    while b"\r\n\r\n" not in response:
-        chunk = s.recv(4096)
-        if not chunk:
-            break
-        response += chunk
+    sock.sendall(request.encode())
 
-    response_str = response.decode("ascii", errors="replace")
-    if "200 OK" not in response_str:
-        s.close()
-        raise ConnectionError(f"CONNECT failed. Response:\n{response_str}")
+    wait_for_ok(sock)
 
-    # If we reach here, we have a raw TCP tunnel to "container_id"
-    return s
+    return sock
+
+
+def wait_for_ok(sock: socket.socket, max_retries: int = 5, delay: float = 0.25):
+    """
+    Wait until 'OK' is received from a socket.
+    """
+    for _ in range(max_retries):
+        if data := sock.recv(4096).decode():
+            if "OK" in data:
+                return
+            elif "ERROR" in data:
+                raise ConnectionError(f"Error received from server: {data.lstrip('ERROR: ')}")
+        delay *= 2
+        time.sleep(delay)
+
+    raise ConnectionError(f"Failed to setup socket after {max_retries} retries")
 
 
 @dataclass
@@ -73,23 +74,18 @@ class SSHShell:
         self.channel: Optional["paramiko.Channel"] = None
 
         try:
-            self.socket = create_connect_tunnel(
+            self.socket = create_socket(
                 self.host,
                 self.port,
                 self.path,
-                self.stub_id,
                 self.container_id,
                 self.auth_token,
             )
-        except BaseException:
-            terminal.error("Failed to establish ssh tunnel")
+        except BaseException as e:
+            return terminal.error(f"Failed to establish ssh tunnel: {e}")
 
-        self.transport = paramiko.Transport(
-            self.socket
-        )  # Initialize a transport with the tunnel socket
-
-        self.transport.start_client()
-        self.transport.auth_password(self.username, self.password)
+        self.transport = paramiko.Transport(self.socket)
+        self.transport.connect(username=self.username, password=self.password)
         self.channel = self.transport.open_session()
 
         # Get terminal size - https://stackoverflow.com/a/943921

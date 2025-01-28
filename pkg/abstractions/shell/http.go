@@ -1,10 +1,11 @@
 package shell
 
 import (
-	"context"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
-	"sync"
+	"time"
 
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -20,7 +21,7 @@ type shellGroup struct {
 
 func registerShellRoutes(g *echo.Group, ss *SSHShellService) *shellGroup {
 	group := &shellGroup{routerGroup: g, ss: ss}
-	g.CONNECT("/id/:stubId/:containerId", auth.WithAuth(group.ShellConnect))
+	g.GET("/id/:stubId/:containerId", auth.WithAuth(group.ShellConnect))
 	return group
 }
 
@@ -47,61 +48,60 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 
 	// Channel to signal when either connection is closed
 	done := make(chan struct{})
-	var once sync.Once
 
 	go g.ss.keepAlive(ctx.Request().Context(), containerId, done)
-
-	// Send a 200 OK before hijacking
-	ctx.Response().WriteHeader(http.StatusOK)
-	ctx.Response().Flush()
 
 	// Hijack the connection
 	hijacker, ok := ctx.Response().Writer.(http.Hijacker)
 	if !ok {
-		return ctx.String(http.StatusInternalServerError, "Failed to create tunnel")
+		return ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
 	}
 
 	conn, _, err := hijacker.Hijack()
 	if err != nil {
-		return ctx.String(http.StatusInternalServerError, "Failed to create tunnel")
+		return ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
 	}
 	defer conn.Close()
+	setConnOptions(conn)
 
 	// Dial ssh server in the container
 	containerConn, err := network.ConnectToHost(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale)
 	if err != nil {
-		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
+		fmt.Fprintf(conn, "ERROR: %s", err.Error())
+		return err
 	}
 	defer containerConn.Close()
+	setConnOptions(containerConn)
 
-	// Create a context that will be canceled when the client disconnects
-	clientCtx, clientCancel := context.WithCancel(ctx.Request().Context())
-	defer clientCancel()
+	// Tell the client to proceed now that everything is set up
+	if _, err = conn.Write([]byte("OK")); err != nil {
+		return err
+	}
 
-	defer func() {
-		containerConn.Close()
-		conn.Close()
-	}()
+	// Start bidirectional proxy
+	go proxyConn(containerConn, conn, done)
+	go proxyConn(conn, containerConn, done)
 
-	go func() {
-		buf := make([]byte, shellProxyBufferSizeKb)
-		_, _ = io.CopyBuffer(containerConn, conn, buf)
-		once.Do(func() { close(done) })
-	}()
-
-	go func() {
-		buf := make([]byte, shellProxyBufferSizeKb)
-		_, _ = io.CopyBuffer(conn, containerConn, buf)
-		once.Do(func() { close(done) })
-	}()
-
-	// Wait for either connection to close
 	select {
 	case <-done:
 		return nil
-	case <-clientCtx.Done():
+	case <-ctx.Request().Context().Done():
 		return nil
 	case <-g.ss.ctx.Done():
 		return nil
+	}
+}
+
+func proxyConn(dst io.Writer, src io.Reader, done chan<- struct{}) {
+	buf := make([]byte, shellProxyBufferSizeKb)
+	io.CopyBuffer(dst, src, buf)
+	done <- struct{}{}
+}
+
+func setConnOptions(conn net.Conn) {
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		tcpConn.SetKeepAlive(true)
+		tcpConn.SetKeepAlivePeriod(shellKeepAliveIntervalS)
+		tcpConn.SetDeadline(time.Time{})
 	}
 }
