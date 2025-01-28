@@ -21,7 +21,9 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	containerrepository "github.com/beam-cloud/beta9/proto/goa/gen/container_repository"
 	containerclient "github.com/beam-cloud/beta9/proto/goa/gen/grpc/container_repository/client"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -137,15 +139,20 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	conn, err := grpc.Dial("beta-gateway:1993", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.Dial("beta9-gateway:1993", grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
+
 	containerClient := containerclient.NewClient(conn)
-	log.Info().Msgf("container client: %v", containerClient)
-	// containerClient.GetContainerState(context.Background(), &containerclient.GetContainerStatePayload{
-	// 	ContainerID: "123",
-	// })
+	response, err := containerClient.GetContainerState()(context.Background(), &containerrepository.GetContainerStatePayload{
+		ContainerID: "123",
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get container state")
+	} else {
+		log.Info().Msgf("container state response: %v", response)
+	}
 
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 
