@@ -269,7 +269,9 @@ def machine():
     required=True,
 )
 @extraclick.pass_service_client
+@click.pass_context
 def drain_machine(
+    ctx: click.Context,
     service: ServiceClient,
     machine_id: str,
 ):
@@ -284,13 +286,7 @@ def drain_machine(
 
     terminal.info(f"Found {len(matching_workers)} workers on machine {machine_id}")
 
-    for worker_id in matching_workers:
-        res = service.gateway.drain_worker(DrainWorkerRequest(worker_id=worker_id))
-        if not res.ok:
-            text = res.err_msg.capitalize()
-            terminal.warn(text)
-        else:
-            terminal.success(f"Worker {worker_id} has been drained.")
+    ctx.invoke(drain_worker, worker_ids=matching_workers)
 
 
 @machine.command(
@@ -316,7 +312,9 @@ def drain_machine(
     required=True,
 )
 @extraclick.pass_service_client
+@click.pass_context
 def cordon_machine(
+    ctx: click.Context,
     service: ServiceClient,
     machine_id: str,
 ):
@@ -331,10 +329,4 @@ def cordon_machine(
 
     terminal.info(f"Found {len(matching_workers)} workers on machine {machine_id}")
 
-    for worker_id in matching_workers:
-        res = service.gateway.cordon_worker(CordonWorkerRequest(worker_id=worker_id))
-        if not res.ok:
-            text = res.err_msg.capitalize()
-            terminal.warn(text)
-        else:
-            terminal.success(f"Worker {worker_id} has been cordoned.")
+    ctx.invoke(cordon_worker, worker_ids=matching_workers)
