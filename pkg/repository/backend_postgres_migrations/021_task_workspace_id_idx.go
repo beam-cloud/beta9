@@ -16,11 +16,7 @@ func upAddCreateTaskWorkspaceIdIndex(ctx context.Context, db *sql.DB) error {
 		ctx,
 		`CREATE INDEX CONCURRENTLY IF NOT EXISTS task_workspace_id_idx ON task (workspace_id);`,
 	)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
 
 func downRemoveTaskWorkspaceIdIndex(ctx context.Context, db *sql.DB) error {
@@ -28,9 +24,5 @@ func downRemoveTaskWorkspaceIdIndex(ctx context.Context, db *sql.DB) error {
 		ctx,
 		`DROP INDEX CONCURRENTLY IF EXISTS task_workspace_id_idx;`,
 	)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }
