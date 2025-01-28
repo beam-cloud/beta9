@@ -1,3 +1,5 @@
+from typing import List
+
 import click
 from betterproto import Casing
 from rich.table import Column, Table, box
@@ -162,35 +164,46 @@ def uncordon_worker(service: ServiceClient, worker_id: str):
 @management.command(
     name="drain",
     help="""
-    Drain a worker. When a worker is drained, all running containers on it will be stopped.
+    Drain a worker.
+
+    When a worker is drained, all running containers on it will be stopped. The
+    worker will continue to run until it reaches its idle timeout, but only if
+    the worker was cordoned before being drained.
     """,
     epilog="""
       Examples:
 
+        # Drain a worker
         {cli_name} worker drain 675a65c3
+
+        # Drain multiple workers
+        {cli_name} worker drain 675a65c3 9c1b7bae 4c89436cs
         \b
+
+        # Drain workers from stdin (useful for piping), and force the operation
+        {cli_name} worker list --format=json | jq -r '.[].id' | beta9 worker drain -
     """,
 )
 @click.argument(
-    "worker_id",
-    nargs=1,
+    "worker_ids",
+    nargs=-1,
     required=True,
 )
 @extraclick.pass_service_client
-def drain_worker(service: ServiceClient, worker_id: str):
-    terminal.warn("Draining a worker will stop all running containers on it.")
+def drain_worker(
+    service: ServiceClient,
+    worker_ids: List[str],
+):
+    if worker_ids and worker_ids[0] == "-":
+        worker_ids = click.get_text_stream("stdin").read().strip().split()
 
-    while True:
-        answer = terminal.prompt(text="Are you sure you want to continue? (y/n)")
-        if not answer:
-            continue
-        if answer.lower() in ("yes", "y"):
-            break
-        if answer.lower() in ("no", "n"):
-            return terminal.print("Aborted.")
+    if not worker_ids:
+        return terminal.error("Must provide at least one worker ID.")
 
-    res = service.gateway.drain_worker(DrainWorkerRequest(worker_id=worker_id))
-    if not res.ok:
-        return terminal.error(res.err_msg)
-
-    terminal.success(f"Worker {worker_id} has been drained.")
+    for worker_id in worker_ids:
+        res = service.gateway.drain_worker(DrainWorkerRequest(worker_id=worker_id))
+        if not res.ok:
+            text = res.err_msg.capitalize()
+            terminal.warn(text)
+        else:
+            terminal.success(f"Worker {worker_id} has been drained.")
