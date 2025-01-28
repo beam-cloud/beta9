@@ -161,7 +161,7 @@ func NewWorker() (*Worker, error) {
 	var cedanaClient *CedanaClient = nil
 	var checkpointStorage storage.Storage = nil
 	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
-		cedanaClient, err = NewCedanaClient(context.Background(), config.Worker.CRIU.Cedana, gpuType != "")
+		cedanaClient, err = InitializeCedana(context.Background(), config.Worker.CRIU.Cedana)
 		if err != nil {
 			log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create cedana client: %v", err)
 		}

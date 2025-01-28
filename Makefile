@@ -34,7 +34,7 @@ gateway:
 	docker push localhost:5001/beta9-gateway:$(tag)
 
 worker:
-	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag) --build-arg CEDANA_BASE_URL=$(CEDANA_URL) --build-arg CEDANA_TOKEN=$(CEDANA_AUTH_TOKEN)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	bin/delete_workers.sh
 

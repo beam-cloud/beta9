@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,7 +16,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, consoleWriter *ConsoleWriter, startedChan chan int, configPath string) (bool, string, error) {
+const defaultCheckpointDeadline = 10 * time.Minute
+
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, configPath string) (chan int, string, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
@@ -31,14 +34,14 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 
-		_, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
+		exitCodeChan, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
 			checkpointPath: checkpointPath,
 			jobId:          state.ContainerId,
 			containerId:    request.ContainerId,
 			cacheFunc:      s.cacheCheckpoint,
 		}, &runc.CreateOpts{
 			Detach:        true,
-			ConsoleSocket: consoleWriter,
+			OutputWriter:  outputWriter,
 			ConfigPath:    configPath,
 			Started:       startedChan,
 		})
@@ -52,14 +55,14 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 				StubId:      request.StubId,
 			})
 
-			return false, "", err
+			return nil, "", err
 		} else {
 			log.Info().Str("container_id", request.ContainerId).Msg("checkpoint found and restored")
-			return true, state.ContainerId, nil
+			return exitCodeChan, request.ContainerId, nil
 		}
 	}
 
-	return false, "", nil
+	return nil, "", nil
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
@@ -68,8 +71,6 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 	os.MkdirAll(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, request.Workspace.Name), os.ModePerm)
 
 	timeout := defaultCheckpointDeadline
-	managing := false
-	gpuEnabled := request.RequiresGPU()
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -86,18 +87,6 @@ waitForReady:
 			instance, exists := s.containerInstances.Get(request.ContainerId)
 			if !exists {
 				log.Info().Str("container_id", request.ContainerId).Msg("container instance not found yet")
-				continue
-			}
-
-			// Start managing the container with Cedana
-			if !managing {
-				err := s.cedanaClient.Manage(ctx, instance.Id, gpuEnabled)
-				if err == nil {
-					managing = true
-				} else {
-					log.Error().Str("container_id", instance.Id).Msgf("cedana manage failed, container may not be started yet: %+v", err)
-				}
-
 				continue
 			}
 

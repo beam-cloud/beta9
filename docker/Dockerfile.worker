@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 ARG BASE_STAGE=dev
 
-FROM golang:1.22.10-bookworm AS golang
+FROM golang:1.23.5-bookworm AS golang
 
 RUN apt-get update && apt-get install -y curl git
 
@@ -120,37 +120,20 @@ RUN mkdir -p /etc/containers/registries.conf.d
 RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/main/shortnames.conf \
     -o /etc/containers/registries.conf.d/shortnames.conf
 
-# XXX: Remove once cedana starts shipping with a compatible binary
+ARG CEDANA_VERSION=0.9.238-pre
+ARG CEDANA_TOKEN
+ARG CEDANA_BASE_URL
 RUN <<EOT
 set -eux
 if [ "$(uname -m)" = "x86_64" ]; then
     apt-get install -y python3-protobuf libnet1 libnftables1 libnl-3-200 libprotobuf-c1 iptables
-    curl -L -o criu.deb https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_22.04/amd64/criu_4.0-3_amd64.deb
-    dpkg -i criu.deb
-    rm criu.deb
+    curl -L -o cedana.tar.gz https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_linux_amd64.tar.gz
+    tar -xzf cedana.tar.gz cedana
+    mv cedana /usr/local/bin/cedana
+    rm cedana.tar.gz
+    CEDANA_URL=${CEDANA_BASE_URL} CEDANA_AUTH_TOKEN=${CEDANA_TOKEN} cedana plugin install criu runc gpu
 fi
 EOT
-
-ARG CEDANA_VERSION=0.9.234
-RUN <<EOT
-set -eux
-if [ "$(uname -m)" = "x86_64" ]; then
-    apt-get install -y libgpgme11
-    curl -L -o cedana_amd64.deb https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_amd64.deb
-    dpkg -i cedana_amd64.deb
-    rm cedana_amd64.deb
-fi
-EOT
-
-ARG CEDANA_TOKEN
-ARG CEDANA_BASE_URL
-
-RUN if [ -n "${CEDANA_TOKEN}" ]; then \
-    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/gpucontroller -o /usr/local/bin/cedana-gpu-controller && \
-    chmod +x /usr/local/bin/cedana-gpu-controller && \
-    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/libcedana -o /usr/local/lib/libcedana-gpu.so && \
-    chmod +x /usr/local/lib/libcedana-gpu.so; \
-    fi
 
 ARG TARGETARCH
 

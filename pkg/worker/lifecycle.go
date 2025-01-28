@@ -209,7 +209,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	err = s.containerMountManager.SetupContainerMounts(request)
 	if err != nil {
-		s.containerLogger.Log(request.ContainerId, request.StubId, fmt.Sprintf("failed to setup container mounts: %v", err))
+		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
 	}
 
 	// Generate dynamic runc spec for this container
@@ -297,7 +297,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
-	spec.Process.Terminal = true // NOTE: This is since we are using a console writer for logging
+	spec.Process.Terminal = false
 
 	if s.config.Worker.RunCResourcesEnforced {
 		spec.Linux.Resources.CPU = getLinuxCPU(request)
@@ -328,10 +328,37 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart = nil
 	}
 
-	// We need to modify the spec to support Cedana C/R if enabled
+	// We need to include the checkpoint signal files in the container spec
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
+		err = os.MkdirAll(checkpointSignalDir(request.ContainerId), os.ModePerm) // Add a mount point for the checkpoint signal file
+		if err != nil {
+			return nil, err
+		}
+
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Type:        "bind",
+			Source:      checkpointSignalDir(request.ContainerId),
+			Destination: "/cedana",
+			Options: []string{
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev",
+			},
+		})
+
+		containerIdPath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerIdFileName)
+		err := os.WriteFile(containerIdPath, []byte(request.ContainerId), 0644)
+		if err != nil {
+			return nil, err
+		}
+
 		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)
-		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, containerHostname, request.RequiresGPU())
+		containerHostnamePath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerHostnameFileName)
+		err = os.WriteFile(containerHostnamePath, []byte(containerHostname), 0644)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	spec.Process.Env = append(spec.Process.Env, env...)
@@ -538,11 +565,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	consoleWriter, err := NewConsoleWriter(containerInstance.OutputWriter)
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to create console writer: %v", err)
-		return
-	}
+	outputWriter := containerInstance.OutputWriter
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(ctx, request)
@@ -550,46 +573,44 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
 	startedChan := make(chan int, 1)
+	var exitCodeChan chan int
 
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, startedChan, configPath)
+		restoredExitCodeChan, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, startedChan, configPath)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("C/R failed: %v", err)
 		}
 
-		if restored {
-			// HOTFIX: If we restored from a checkpoint, we need to use the container ID of the restored container
-			// instead of the original container ID
-			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
-			if exists {
-				containerInstance.Id = restoredContainerId
-				s.containerInstances.Set(containerId, containerInstance)
-				containerId = restoredContainerId
-			}
-
-			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, outputLogger, request, spec)
-			return
+		if restoredExitCodeChan != nil {
+			containerId = restoredContainerId
+			exitCodeChan = restoredExitCodeChan
+		} else {
+			exitCodeChan, err = s.cedanaClient.Run(ctx, containerId, opts.BundlePath, request.RequiresGPU(), &runc.CreateOpts{
+				Detach:       true,
+				OutputWriter: outputWriter,
+				ConfigPath:   configPath,
+				Started:      startedChan,
+			})
 		}
+	} else {
+		_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
+			Detach:       true,
+			OutputWriter: outputWriter,
+			ConfigPath:   configPath,
+			Started:      startedChan,
+		})
 	}
-
-	// Invoke runc process (launch the container)
-	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
-		Detach:        true,
-		ConsoleSocket: consoleWriter,
-		ConfigPath:    configPath,
-		Started:       startedChan,
-	})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to run container: %v", err)
 		return
 	}
 
-	exitCode = s.wait(ctx, containerId, startedChan, outputLogger, request, spec)
+	exitCode = s.wait(ctx, containerId, startedChan, exitCodeChan, outputLogger, request, spec)
 }
 
 // Wait for a container to exit and return the exit code
-func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
+func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, exitCodeChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
 	<-startedChan
 
 	// Clean up runc container state and send final output message
@@ -623,12 +644,18 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	}
 
 	// Wait for the container to exit
-	processState, err := process.Wait()
-	if err != nil {
-		return cleanup(-1, err)
+	var exitCode int
+	if exitCodeChan != nil {
+		exitCode = <-exitCodeChan
+	} else {
+		processState, err := process.Wait()
+		if err != nil {
+			return cleanup(-1, err)
+		}
+		exitCode = processState.ExitCode()
 	}
 
-	return cleanup(processState.ExitCode(), nil)
+	return cleanup(exitCode, nil)
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
