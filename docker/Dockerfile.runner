@@ -46,6 +46,8 @@ rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
 
+ENV PYTHONPATH="/usr/local/lib/python3.12/site-packages:$PYTHONPATH"
+
 VOLUME ["/volumes", "/snapshot"]
 
 
@@ -83,6 +85,8 @@ rm -rf /usr/share/doc
 rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
+
+ENV PYTHONPATH="/usr/local/lib/python3.11/site-packages:$PYTHONPATH"
 
 VOLUME ["/volumes", "/snapshot"]
 
@@ -122,6 +126,8 @@ rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
 
+ENV PYTHONPATH="/usr/local/lib/python3.10/site-packages:$PYTHONPATH"
+
 VOLUME ["/volumes", "/snapshot"]
 
 
@@ -160,6 +166,8 @@ rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
 
+ENV PYTHONPATH="/usr/local/lib/python3.9/site-packages:$PYTHONPATH"
+
 VOLUME ["/volumes", "/snapshot"]
 
 
@@ -197,6 +205,8 @@ rm -rf /usr/share/doc
 rm -rf /root/.cache/*
 rm -rf /usr/lib/python2.7 && rm -rf /usr/lib/python3.6
 EOT
+
+ENV PYTHONPATH="/usr/local/lib/python3.8/site-packages:$PYTHONPATH"
 
 VOLUME ["/volumes", "/snapshot"]
 
