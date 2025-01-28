@@ -199,7 +199,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	log.Info().Str("container_id", containerId).Msgf("acquired port: %d", bindPort)
 
 	// Read spec from bundle
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageId)
+	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
 
 	opts := &ContainerOptions{
 		BundlePath:  bundlePath,
@@ -261,11 +261,15 @@ func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.Contai
 	return s.imageClient.PullLazy(request)
 }
 
-func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
+func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.Spec, error) {
 	imageConfigPath := filepath.Join(s.imageMountPath, imageId, initialSpecBaseName)
+	if isBuildRequest {
+		imageConfigPath = filepath.Join(s.imageMountPath, imageId, specBaseName)
+	}
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
+		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
 		return nil, err
 	}
 
@@ -274,6 +278,7 @@ func (s *Worker) readBundleConfig(imageId string) (*specs.Spec, error) {
 
 	err = json.Unmarshal([]byte(specTemplate), &spec)
 	if err != nil {
+		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to unmarshal bundle config")
 		return nil, err
 	}
 
