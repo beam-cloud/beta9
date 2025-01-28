@@ -8,11 +8,11 @@ import (
 )
 
 func init() {
-	goose.AddMigrationContext(upAddCreateTaskWorkspaceIdIndex, downRemoveTaskWorkspaceIdIndex)
+	goose.AddMigrationNoTxContext(upAddCreateTaskWorkspaceIdIndex, downRemoveTaskWorkspaceIdIndex)
 }
 
-func upAddCreateTaskWorkspaceIdIndex(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(
+func upAddCreateTaskWorkspaceIdIndex(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(
 		ctx,
 		`CREATE INDEX CONCURRENTLY IF NOT EXISTS task_workspace_id_idx ON task (workspace_id);`,
 	)
@@ -23,8 +23,8 @@ func upAddCreateTaskWorkspaceIdIndex(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func downRemoveTaskWorkspaceIdIndex(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(
+func downRemoveTaskWorkspaceIdIndex(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(
 		ctx,
 		`DROP INDEX CONCURRENTLY IF EXISTS task_workspace_id_idx;`,
 	)
