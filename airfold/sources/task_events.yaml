@@ -1,0 +1,17 @@
+description: |
+  Partially un-nested source for efficient aggregations by `workspace_id` and `stub_id`
+cols:
+  id: UUID
+  workspace_id: UInt32
+  workspace_external_id: UUID
+  stub_id: UUID
+  type: String
+  status: String
+  container_id: String
+  created_at: DateTime64(9)
+  updated_at: DateTime64(9)
+  stub: JSON
+  workspace: JSON
+  started_at: Nullable(DateTime64(9))
+  ended_at: Nullable(DateTime64(9))
+settings: MergeTree() PARTITION BY toYYYYMM(updated_at) ORDER BY (workspace_id, stub_id, updated_at)

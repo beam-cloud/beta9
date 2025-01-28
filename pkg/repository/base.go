@@ -194,3 +194,10 @@ type MetricsRepository interface {
 	IncrementCounter(name string, metadata map[string]interface{}, value float64) error
 	SetGauge(name string, metadata map[string]interface{}, value float64) error
 }
+
+type WarehouseRepository interface {
+	IsEnabled() bool
+	PushTaskUpdatedEvent(task *types.TaskWithRelated)
+	PushTaskCreatedEvent(task *types.TaskWithRelated)
+	AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error)
+}
