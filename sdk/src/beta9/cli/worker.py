@@ -112,29 +112,43 @@ def list_workers(
 @management.command(
     name="cordon",
     help="""
-    Cordon a worker. When a worker is cordoned, it will not accept new container requests.
-    It will only be used to run existing containers. This is useful when you want to
-    gracefully remove a worker from the pool.
+    Cordon a worker.
+
+    When a worker is cordoned, it will not accept new container requests. However,
+    it will continue to run existing containers until they are finished. This is
+    useful when you want to gracefully remove a worker from the pool.
     """,
     epilog="""
     Examples:
 
+      # Cordon a worker
       {cli_name} worker cordon 675a65c3
+
+      # Cordon multiple workers from stdin (useful for piping)
+      {cli_name} worker list --format=json | jq -r '.[].id' | {cli_name} worker cordon -
       \b
     """,
 )
 @click.argument(
-    "worker_id",
-    nargs=1,
+    "worker_ids",
+    nargs=-1,
     required=True,
 )
 @extraclick.pass_service_client
-def cordon_worker(service: ServiceClient, worker_id: str):
-    res = service.gateway.cordon_worker(CordonWorkerRequest(worker_id=worker_id))
-    if not res.ok:
-        return terminal.error(f"Failed to cordon worker: {res.err_msg}")
+def cordon_worker(service: ServiceClient, worker_ids: List[str]):
+    if worker_ids and worker_ids[0] == "-":
+        worker_ids = click.get_text_stream("stdin").read().strip().split()
 
-    terminal.success(f"Worker {worker_id} has been cordoned.")
+    if not worker_ids:
+        return terminal.error("Must provide at least one worker ID.")
+
+    for worker_id in worker_ids:
+        res = service.gateway.cordon_worker(CordonWorkerRequest(worker_id=worker_id))
+        if not res.ok:
+            text = res.err_msg.capitalize()
+            terminal.warn(text)
+        else:
+            terminal.success(f"Worker {worker_id} has been cordoned.")
 
 
 @management.command(
