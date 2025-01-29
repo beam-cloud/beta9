@@ -9,12 +9,15 @@ from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
+    CordonWorkerRequest,
     CreateMachineRequest,
     CreateMachineResponse,
     DeleteMachineRequest,
     DeleteMachineResponse,
+    DrainWorkerRequest,
     ListMachinesRequest,
     ListMachinesResponse,
+    ListWorkersRequest,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
@@ -221,3 +224,96 @@ def delete_machine(service: ServiceClient, machine_id: str, pool: str):
         terminal.success(f"Deleted machine '{machine_id}' from pool '{pool}'")
     else:
         terminal.error(f"Error: {res.err_msg}")
+
+
+@management.command(
+    name="drain",
+    help="""
+    Drain all workers on a specific machine.
+
+    This command will find all workers running on the specified machine ID and drain them.
+    When a worker is drained, all running containers on it will be stopped. The worker will 
+    continue until its idle timeout if was cordoned before being drained. 
+    """,
+    epilog="""
+      Examples:
+
+        # Drain all workers on a specific machine
+        {cli_name} machine drain 0d123123
+    """,
+)
+@click.argument(
+    "machine_id",
+    nargs=1,
+    required=True,
+)
+@extraclick.pass_service_client
+def drain_machine(
+    service: ServiceClient,
+    machine_id: str,
+):
+    res = service.gateway.list_workers(ListWorkersRequest())
+    if not res.ok:
+        return terminal.error(f"Failed to list workers: {res.err_msg}")
+
+    matching_workers = [w.id for w in res.workers if w.machine_id == machine_id]
+
+    if not matching_workers:
+        return terminal.error(f"No workers found for machine ID: {machine_id}")
+
+    terminal.info(f"Found {len(matching_workers)} workers on machine {machine_id}")
+
+    for worker_id in matching_workers:
+        res = service.gateway.drain_worker(DrainWorkerRequest(worker_id=worker_id))
+        if not res.ok:
+            text = res.err_msg.capitalize()
+            terminal.warn(text)
+        else:
+            terminal.success(f"Worker {worker_id} has been drained.")
+
+
+@management.command(
+    name="cordon",
+    help="""
+    Cordon all workers on a specific machine.
+
+    This command will find all workers running on the specified machine ID and cordon them.
+    When workers are cordoned, they will not accept new container requests but will
+    continue running existing containers. This is useful when you want to gracefully
+    remove workers from a machine.
+    """,
+    epilog="""
+      Examples:
+
+        # Cordon all workers on a specific machine
+        {cli_name} machine cordon 0d123123
+    """,
+)
+@click.argument(
+    "machine_id",
+    nargs=1,
+    required=True,
+)
+@extraclick.pass_service_client
+def cordon_machine(
+    service: ServiceClient,
+    machine_id: str,
+):
+    res = service.gateway.list_workers(ListWorkersRequest())
+    if not res.ok:
+        return terminal.error(f"Failed to list workers: {res.err_msg}")
+
+    matching_workers = [w.id for w in res.workers if w.machine_id == machine_id]
+
+    if not matching_workers:
+        return terminal.error(f"No workers found for machine ID: {machine_id}")
+
+    terminal.info(f"Found {len(matching_workers)} workers on machine {machine_id}")
+
+    for worker_id in matching_workers:
+        res = service.gateway.cordon_worker(CordonWorkerRequest(worker_id=worker_id))
+        if not res.ok:
+            text = res.err_msg.capitalize()
+            terminal.warn(text)
+        else:
+            terminal.success(f"Worker {worker_id} has been cordoned.")
