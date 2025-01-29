@@ -37,6 +37,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	gatewayMiddleware "github.com/beam-cloud/beta9/pkg/gateway/middleware"
 	gatewayservices "github.com/beam-cloud/beta9/pkg/gateway/services"
+	repositoryservices "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	metrics "github.com/beam-cloud/beta9/pkg/repository/metrics"
@@ -229,13 +230,17 @@ func (g *Gateway) initGrpc() error {
 	return nil
 }
 
-// Register all repository services
+// Register repository services
 func (g *Gateway) registerRepositoryServices() error {
+	wr := repositoryservices.NewWorkerRepositoryService(g.workerRepo)
+	pb.RegisterWorkerRepositoryServiceServer(g.grpcServer, wr)
+
+	cr := repositoryservices.NewContainerRepositoryService(g.ContainerRepo)
+	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
 	return nil
 }
 
 func (g *Gateway) registerServices() error {
-	// Register repository services
 	err := g.registerRepositoryServices()
 	if err != nil {
 		return err
