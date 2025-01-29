@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.3.0
 // - protoc             v4.25.1
-// source: repository/container.proto
+// source: container_repo.proto
 
 package proto
 
@@ -106,5 +106,5 @@ var ContainerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "repository/container.proto",
+	Metadata: "container_repo.proto",
 }
