@@ -261,7 +261,7 @@ def drain_machine(
     if not matching_workers:
         return terminal.error(f"No workers found for machine ID: {machine_id}")
 
-    terminal.info(f"Found {len(matching_workers)} workers on machine {machine_id}")
+    terminal.detail(f"Found {len(matching_workers)} workers on machine {machine_id}")
 
     for worker_id in matching_workers:
         res = service.gateway.drain_worker(DrainWorkerRequest(worker_id=worker_id))
@@ -308,7 +308,7 @@ def cordon_machine(
     if not matching_workers:
         return terminal.error(f"No workers found for machine ID: {machine_id}")
 
-    terminal.info(f"Found {len(matching_workers)} workers on machine {machine_id}")
+    terminal.detail(f"Found {len(matching_workers)} workers on machine {machine_id}")
 
     for worker_id in matching_workers:
         res = service.gateway.cordon_worker(CordonWorkerRequest(worker_id=worker_id))
