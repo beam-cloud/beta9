@@ -85,10 +85,6 @@ ImageCredentials = Union[
 
 
 def detected_python_version() -> PythonVersion:
-    # Only detect python version if we are in a notebook environment
-    if not is_notebook_env():
-        return PythonVersion.Python310
-
     if LOCAL_PYTHON_VERSION in [
         PythonVersion.Python38,
         PythonVersion.Python39,
@@ -97,7 +93,8 @@ def detected_python_version() -> PythonVersion:
         PythonVersion.Python312,
     ]:
         return LOCAL_PYTHON_VERSION
-    return PythonVersion.Python310
+
+    return PythonVersion.PythonDefault
 
 
 class Image(BaseAbstraction):
@@ -107,7 +104,7 @@ class Image(BaseAbstraction):
 
     def __init__(
         self,
-        python_version: PythonVersionAlias = detected_python_version(),
+        python_version: PythonVersionAlias = PythonVersion.PythonDefault,
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
@@ -285,6 +282,11 @@ class Image(BaseAbstraction):
 
         if isinstance(python_packages, str):
             python_packages = self._load_requirements_file(python_packages)
+
+        # Only attempt to detect an appropriate default python version if we are in a notebook environment
+        # and there is no base image (it might provide a required python version that we will have to detect)
+        if is_notebook_env() and base_image is None:
+            python_version = detected_python_version()
 
         self.python_version = python_version
         self.python_packages = self._sanitize_python_packages(python_packages)
