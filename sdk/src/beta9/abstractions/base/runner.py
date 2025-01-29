@@ -394,7 +394,7 @@ class RunnerAbstraction(BaseAbstraction):
                 self.image_available = True
                 self.image_id = image_build_result.image_id
             else:
-                terminal.error("Image build failed", exit=False)
+                terminal.error("Image build failed ❌", exit=False)
                 return False
 
         if not self.files_synced:
