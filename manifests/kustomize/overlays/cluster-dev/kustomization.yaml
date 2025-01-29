@@ -12,14 +12,6 @@ components:
 - ../../components/localstack
 - ../../components/beta9-gateway
 patches:
-# Disable Proxy
-- target:
-    kind: Deployment
-    name: beta9-proxy
-  patch: |-
-    - op: replace
-      path: /spec/replicas
-      value: 0
 # Remove resources from monitoring components
 - target:
     kind: StatefulSet

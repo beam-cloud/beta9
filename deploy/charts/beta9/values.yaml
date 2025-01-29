@@ -20,10 +20,6 @@ images:
     repository: public.ecr.aws/n4e0e1y0/beta9-gateway
     tag:        # Defaults to chart's app version
     pullPolicy: # Defaults to IfNotPresent
-  proxy:
-    repository: public.ecr.aws/n4e0e1y0/beta9-proxy
-    tag:        # Defaults to chart's app version
-    pullPolicy: # Defaults to IfNotPresent
 
 controllers:
   gateway:
@@ -46,26 +42,6 @@ controllers:
           until nc -z postgresql 5432; do echo "Waiting on PostgreSQL..."; sleep 2; done;
           until nc -z redis-master 6379; do echo "Waiting on Redis..."; sleep 2; done;
           until nc -z juicefs-redis-master 6379; do echo "Waiting on Redis (JuiceFS)..."; sleep 2; done;
-          echo "All systems ready!"
-  proxy:
-    enabled: false
-    annotations: {}
-    labels: {}
-    replicas: 1
-    strategy: Recreate # Can be Recreate or RollingUpdate
-    rollingUpdate:
-      unavailable:
-      surge:
-    initContainers:
-      wait-on-backends:
-        image:
-          repository: busybox
-          tag: latest
-        command:
-        - sh
-        - -c
-        - |
-          until nc -z redis-master 6379; do echo "Waiting on Redis..."; sleep 2; done;
           echo "All systems ready!"
 
 persistence:
