@@ -238,7 +238,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return ctx.Err()
 	default:
 		// Start the container
-		go s.spawn(request, spec, outputLogger, opts)
+		go s.spawn(ctx, request, spec, outputLogger, opts)
 	}
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
@@ -445,8 +445,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
-	ctx, cancel := context.WithCancel(s.ctx)
+func (s *Worker) spawn(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
+	ctx, cancel := context.WithCancel(ctx)
 
 	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
 	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
@@ -577,7 +577,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Invoke runc process (launch the container)
-	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
+	_, err = s.runcHandle.Run(ctx, containerId, opts.BundlePath, &runc.CreateOpts{
 		Detach:        true,
 		ConsoleSocket: consoleWriter,
 		ConfigPath:    configPath,
