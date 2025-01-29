@@ -41,3 +41,7 @@ curl -sSfL https://get.okteto.com | sh
 
 echo "Installing k3d"
 curl -sSfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+
+echo "Installing go2proto"
+go get github.com/beam-cloud/go2proto@latest
+go install github.com/beam-cloud/go2proto
