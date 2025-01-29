@@ -19,7 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	ContainerRepositoryService_GetContainerState_FullMethodName = "/ContainerRepositoryService/GetContainerState"
+	ContainerRepositoryService_GetContainerState_FullMethodName     = "/ContainerRepositoryService/GetContainerState"
+	ContainerRepositoryService_UpdateContainerStatus_FullMethodName = "/ContainerRepositoryService/UpdateContainerStatus"
 )
 
 // ContainerRepositoryServiceClient is the client API for ContainerRepositoryService service.
@@ -27,6 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ContainerRepositoryServiceClient interface {
 	GetContainerState(ctx context.Context, in *GetContainerStateRequest, opts ...grpc.CallOption) (*GetContainerStateResponse, error)
+	UpdateContainerStatus(ctx context.Context, in *UpdateContainerStatusRequest, opts ...grpc.CallOption) (*UpdateContainerStatusResponse, error)
 }
 
 type containerRepositoryServiceClient struct {
@@ -46,11 +48,21 @@ func (c *containerRepositoryServiceClient) GetContainerState(ctx context.Context
 	return out, nil
 }
 
+func (c *containerRepositoryServiceClient) UpdateContainerStatus(ctx context.Context, in *UpdateContainerStatusRequest, opts ...grpc.CallOption) (*UpdateContainerStatusResponse, error) {
+	out := new(UpdateContainerStatusResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_UpdateContainerStatus_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ContainerRepositoryServiceServer is the server API for ContainerRepositoryService service.
 // All implementations must embed UnimplementedContainerRepositoryServiceServer
 // for forward compatibility
 type ContainerRepositoryServiceServer interface {
 	GetContainerState(context.Context, *GetContainerStateRequest) (*GetContainerStateResponse, error)
+	UpdateContainerStatus(context.Context, *UpdateContainerStatusRequest) (*UpdateContainerStatusResponse, error)
 	mustEmbedUnimplementedContainerRepositoryServiceServer()
 }
 
@@ -60,6 +72,9 @@ type UnimplementedContainerRepositoryServiceServer struct {
 
 func (UnimplementedContainerRepositoryServiceServer) GetContainerState(context.Context, *GetContainerStateRequest) (*GetContainerStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetContainerState not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) UpdateContainerStatus(context.Context, *UpdateContainerStatusRequest) (*UpdateContainerStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateContainerStatus not implemented")
 }
 func (UnimplementedContainerRepositoryServiceServer) mustEmbedUnimplementedContainerRepositoryServiceServer() {
 }
@@ -93,6 +108,24 @@ func _ContainerRepositoryService_GetContainerState_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ContainerRepositoryService_UpdateContainerStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateContainerStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).UpdateContainerStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_UpdateContainerStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).UpdateContainerStatus(ctx, req.(*UpdateContainerStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ContainerRepositoryService_ServiceDesc is the grpc.ServiceDesc for ContainerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -103,6 +136,10 @@ var ContainerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetContainerState",
 			Handler:    _ContainerRepositoryService_GetContainerState_Handler,
+		},
+		{
+			MethodName: "UpdateContainerStatus",
+			Handler:    _ContainerRepositoryService_UpdateContainerStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

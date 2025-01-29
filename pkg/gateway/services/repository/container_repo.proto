@@ -7,11 +7,26 @@ import "types.proto";
 service ContainerRepositoryService {
   rpc GetContainerState(GetContainerStateRequest)
       returns (GetContainerStateResponse);
+  rpc UpdateContainerStatus(UpdateContainerStatusRequest)
+      returns (UpdateContainerStatusResponse);
 }
 
 message GetContainerStateRequest { string container_id = 1; }
 
 message GetContainerStateResponse {
+  bool ok = 1;
+  string container_id = 2;
+  types.ContainerState state = 3;
+  string error_msg = 4;
+}
+
+message UpdateContainerStatusRequest {
   string container_id = 1;
-  types.ContainerState state = 2;
+  string status = 2;
+  int64 expiry_seconds = 3;
+}
+
+message UpdateContainerStatusResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }

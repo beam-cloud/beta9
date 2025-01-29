@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -19,7 +20,7 @@ func NewContainerRepositoryService(containerRepo repository.ContainerRepository)
 func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req *pb.GetContainerStateRequest) (*pb.GetContainerStateResponse, error) {
 	state, err := s.containerRepo.GetContainerState(req.ContainerId)
 	if err != nil {
-		return nil, err
+		return &pb.GetContainerStateResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	return &pb.GetContainerStateResponse{ContainerId: req.ContainerId, State: &pb.ContainerState{
@@ -33,4 +34,13 @@ func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req 
 		Cpu:         state.Cpu,
 		Memory:      state.Memory,
 	}}, nil
+}
+
+func (s *ContainerRepositoryService) UpdateContainerStatus(ctx context.Context, req *pb.UpdateContainerStatusRequest) (*pb.UpdateContainerStatusResponse, error) {
+	err := s.containerRepo.UpdateContainerStatus(req.ContainerId, types.ContainerStatus(req.Status), req.ExpirySeconds)
+	if err != nil {
+		return &pb.UpdateContainerStatusResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.UpdateContainerStatusResponse{Ok: true}, nil
 }
