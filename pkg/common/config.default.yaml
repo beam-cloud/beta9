@@ -35,7 +35,7 @@ gateway:
   host: beta9-gateway
   invokeURLType: path
   grpc:
-    externalHost: localhost
+    externalHost: beta9-gateway
     externalPort: 1993
     tls: false
     port: 1993

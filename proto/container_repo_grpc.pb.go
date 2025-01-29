@@ -20,7 +20,13 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	ContainerRepositoryService_GetContainerState_FullMethodName     = "/ContainerRepositoryService/GetContainerState"
+	ContainerRepositoryService_DeleteContainerState_FullMethodName  = "/ContainerRepositoryService/DeleteContainerState"
 	ContainerRepositoryService_UpdateContainerStatus_FullMethodName = "/ContainerRepositoryService/UpdateContainerStatus"
+	ContainerRepositoryService_SetContainerExitCode_FullMethodName  = "/ContainerRepositoryService/SetContainerExitCode"
+	ContainerRepositoryService_SetContainerAddress_FullMethodName   = "/ContainerRepositoryService/SetContainerAddress"
+	ContainerRepositoryService_SetWorkerAddress_FullMethodName      = "/ContainerRepositoryService/SetWorkerAddress"
+	ContainerRepositoryService_UpdateCheckpointState_FullMethodName = "/ContainerRepositoryService/UpdateCheckpointState"
+	ContainerRepositoryService_GetCheckpointState_FullMethodName    = "/ContainerRepositoryService/GetCheckpointState"
 )
 
 // ContainerRepositoryServiceClient is the client API for ContainerRepositoryService service.
@@ -28,7 +34,13 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ContainerRepositoryServiceClient interface {
 	GetContainerState(ctx context.Context, in *GetContainerStateRequest, opts ...grpc.CallOption) (*GetContainerStateResponse, error)
+	DeleteContainerState(ctx context.Context, in *DeleteContainerStateRequest, opts ...grpc.CallOption) (*DeleteContainerStateResponse, error)
 	UpdateContainerStatus(ctx context.Context, in *UpdateContainerStatusRequest, opts ...grpc.CallOption) (*UpdateContainerStatusResponse, error)
+	SetContainerExitCode(ctx context.Context, in *SetContainerExitCodeRequest, opts ...grpc.CallOption) (*SetContainerExitCodeResponse, error)
+	SetContainerAddress(ctx context.Context, in *SetContainerAddressRequest, opts ...grpc.CallOption) (*SetContainerAddressResponse, error)
+	SetWorkerAddress(ctx context.Context, in *SetWorkerAddressRequest, opts ...grpc.CallOption) (*SetWorkerAddressResponse, error)
+	UpdateCheckpointState(ctx context.Context, in *UpdateCheckpointStateRequest, opts ...grpc.CallOption) (*UpdateCheckpointStateResponse, error)
+	GetCheckpointState(ctx context.Context, in *GetCheckpointStateRequest, opts ...grpc.CallOption) (*GetCheckpointStateResponse, error)
 }
 
 type containerRepositoryServiceClient struct {
@@ -48,9 +60,63 @@ func (c *containerRepositoryServiceClient) GetContainerState(ctx context.Context
 	return out, nil
 }
 
+func (c *containerRepositoryServiceClient) DeleteContainerState(ctx context.Context, in *DeleteContainerStateRequest, opts ...grpc.CallOption) (*DeleteContainerStateResponse, error) {
+	out := new(DeleteContainerStateResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_DeleteContainerState_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *containerRepositoryServiceClient) UpdateContainerStatus(ctx context.Context, in *UpdateContainerStatusRequest, opts ...grpc.CallOption) (*UpdateContainerStatusResponse, error) {
 	out := new(UpdateContainerStatusResponse)
 	err := c.cc.Invoke(ctx, ContainerRepositoryService_UpdateContainerStatus_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *containerRepositoryServiceClient) SetContainerExitCode(ctx context.Context, in *SetContainerExitCodeRequest, opts ...grpc.CallOption) (*SetContainerExitCodeResponse, error) {
+	out := new(SetContainerExitCodeResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerExitCode_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *containerRepositoryServiceClient) SetContainerAddress(ctx context.Context, in *SetContainerAddressRequest, opts ...grpc.CallOption) (*SetContainerAddressResponse, error) {
+	out := new(SetContainerAddressResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerAddress_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *containerRepositoryServiceClient) SetWorkerAddress(ctx context.Context, in *SetWorkerAddressRequest, opts ...grpc.CallOption) (*SetWorkerAddressResponse, error) {
+	out := new(SetWorkerAddressResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetWorkerAddress_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *containerRepositoryServiceClient) UpdateCheckpointState(ctx context.Context, in *UpdateCheckpointStateRequest, opts ...grpc.CallOption) (*UpdateCheckpointStateResponse, error) {
+	out := new(UpdateCheckpointStateResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_UpdateCheckpointState_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *containerRepositoryServiceClient) GetCheckpointState(ctx context.Context, in *GetCheckpointStateRequest, opts ...grpc.CallOption) (*GetCheckpointStateResponse, error) {
+	out := new(GetCheckpointStateResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetCheckpointState_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +128,13 @@ func (c *containerRepositoryServiceClient) UpdateContainerStatus(ctx context.Con
 // for forward compatibility
 type ContainerRepositoryServiceServer interface {
 	GetContainerState(context.Context, *GetContainerStateRequest) (*GetContainerStateResponse, error)
+	DeleteContainerState(context.Context, *DeleteContainerStateRequest) (*DeleteContainerStateResponse, error)
 	UpdateContainerStatus(context.Context, *UpdateContainerStatusRequest) (*UpdateContainerStatusResponse, error)
+	SetContainerExitCode(context.Context, *SetContainerExitCodeRequest) (*SetContainerExitCodeResponse, error)
+	SetContainerAddress(context.Context, *SetContainerAddressRequest) (*SetContainerAddressResponse, error)
+	SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error)
+	UpdateCheckpointState(context.Context, *UpdateCheckpointStateRequest) (*UpdateCheckpointStateResponse, error)
+	GetCheckpointState(context.Context, *GetCheckpointStateRequest) (*GetCheckpointStateResponse, error)
 	mustEmbedUnimplementedContainerRepositoryServiceServer()
 }
 
@@ -73,8 +145,26 @@ type UnimplementedContainerRepositoryServiceServer struct {
 func (UnimplementedContainerRepositoryServiceServer) GetContainerState(context.Context, *GetContainerStateRequest) (*GetContainerStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetContainerState not implemented")
 }
+func (UnimplementedContainerRepositoryServiceServer) DeleteContainerState(context.Context, *DeleteContainerStateRequest) (*DeleteContainerStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteContainerState not implemented")
+}
 func (UnimplementedContainerRepositoryServiceServer) UpdateContainerStatus(context.Context, *UpdateContainerStatusRequest) (*UpdateContainerStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpdateContainerStatus not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) SetContainerExitCode(context.Context, *SetContainerExitCodeRequest) (*SetContainerExitCodeResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetContainerExitCode not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) SetContainerAddress(context.Context, *SetContainerAddressRequest) (*SetContainerAddressResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetContainerAddress not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetWorkerAddress not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) UpdateCheckpointState(context.Context, *UpdateCheckpointStateRequest) (*UpdateCheckpointStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateCheckpointState not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) GetCheckpointState(context.Context, *GetCheckpointStateRequest) (*GetCheckpointStateResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetCheckpointState not implemented")
 }
 func (UnimplementedContainerRepositoryServiceServer) mustEmbedUnimplementedContainerRepositoryServiceServer() {
 }
@@ -108,6 +198,24 @@ func _ContainerRepositoryService_GetContainerState_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ContainerRepositoryService_DeleteContainerState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteContainerStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).DeleteContainerState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_DeleteContainerState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).DeleteContainerState(ctx, req.(*DeleteContainerStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ContainerRepositoryService_UpdateContainerStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UpdateContainerStatusRequest)
 	if err := dec(in); err != nil {
@@ -126,6 +234,96 @@ func _ContainerRepositoryService_UpdateContainerStatus_Handler(srv interface{}, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ContainerRepositoryService_SetContainerExitCode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetContainerExitCodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).SetContainerExitCode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_SetContainerExitCode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).SetContainerExitCode(ctx, req.(*SetContainerExitCodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ContainerRepositoryService_SetContainerAddress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetContainerAddressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).SetContainerAddress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_SetContainerAddress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).SetContainerAddress(ctx, req.(*SetContainerAddressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ContainerRepositoryService_SetWorkerAddress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetWorkerAddressRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).SetWorkerAddress(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_SetWorkerAddress_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).SetWorkerAddress(ctx, req.(*SetWorkerAddressRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ContainerRepositoryService_UpdateCheckpointState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateCheckpointStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).UpdateCheckpointState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_UpdateCheckpointState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).UpdateCheckpointState(ctx, req.(*UpdateCheckpointStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ContainerRepositoryService_GetCheckpointState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCheckpointStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).GetCheckpointState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_GetCheckpointState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).GetCheckpointState(ctx, req.(*GetCheckpointStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // ContainerRepositoryService_ServiceDesc is the grpc.ServiceDesc for ContainerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -138,8 +336,32 @@ var ContainerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ContainerRepositoryService_GetContainerState_Handler,
 		},
 		{
+			MethodName: "DeleteContainerState",
+			Handler:    _ContainerRepositoryService_DeleteContainerState_Handler,
+		},
+		{
 			MethodName: "UpdateContainerStatus",
 			Handler:    _ContainerRepositoryService_UpdateContainerStatus_Handler,
+		},
+		{
+			MethodName: "SetContainerExitCode",
+			Handler:    _ContainerRepositoryService_SetContainerExitCode_Handler,
+		},
+		{
+			MethodName: "SetContainerAddress",
+			Handler:    _ContainerRepositoryService_SetContainerAddress_Handler,
+		},
+		{
+			MethodName: "SetWorkerAddress",
+			Handler:    _ContainerRepositoryService_SetWorkerAddress_Handler,
+		},
+		{
+			MethodName: "UpdateCheckpointState",
+			Handler:    _ContainerRepositoryService_UpdateCheckpointState_Handler,
+		},
+		{
+			MethodName: "GetCheckpointState",
+			Handler:    _ContainerRepositoryService_GetCheckpointState_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

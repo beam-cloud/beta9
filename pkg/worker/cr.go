@@ -10,6 +10,7 @@ import (
 	"time"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
@@ -46,10 +47,15 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to restore checkpoint: %v", err)
 
-			s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
-				Status:      types.CheckpointStatusRestoreFailed,
-				ContainerId: request.ContainerId,
-				StubId:      request.StubId,
+			s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
+				ContainerId:   request.ContainerId,
+				CheckpointId:  request.StubId,
+				WorkspaceName: request.Workspace.Name,
+				CheckpointState: &pb.CheckpointState{
+					Status:      string(types.CheckpointStatusRestoreFailed),
+					ContainerId: request.ContainerId,
+					StubId:      request.StubId,
+				},
 			})
 
 			return false, "", err
@@ -116,10 +122,15 @@ waitForReady:
 	// Proceed to create the checkpoint
 	checkpointPath, err := s.cedanaClient.Checkpoint(ctx, request.ContainerId)
 	if err != nil {
-		s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
-			Status:      types.CheckpointStatusCheckpointFailed,
-			ContainerId: request.ContainerId,
-			StubId:      request.StubId,
+		s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
+			ContainerId:   request.ContainerId,
+			CheckpointId:  request.StubId,
+			WorkspaceName: request.Workspace.Name,
+			CheckpointState: &pb.CheckpointState{
+				Status:      string(types.CheckpointStatusCheckpointFailed),
+				ContainerId: request.ContainerId,
+				StubId:      request.StubId,
+			},
 		})
 		return err
 	}
@@ -141,12 +152,22 @@ waitForReady:
 
 	log.Info().Str("container_id", request.ContainerId).Msg("checkpoint created successfully")
 
-	return s.containerRepo.UpdateCheckpointState(request.Workspace.Name, request.StubId, &types.CheckpointState{
-		Status:      types.CheckpointStatusAvailable,
-		ContainerId: request.ContainerId, // We store this as a reference to the container that we initially checkpointed
-		StubId:      request.StubId,
-		RemoteKey:   remoteKey,
+	updateCheckpointStateResponse, err := s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
+		ContainerId:   request.ContainerId,
+		CheckpointId:  request.StubId,
+		WorkspaceName: request.Workspace.Name,
+		CheckpointState: &pb.CheckpointState{
+			Status:      string(types.CheckpointStatusAvailable),
+			ContainerId: request.ContainerId, // We store this as a reference to the container that we initially checkpointed
+			StubId:      request.StubId,
+			RemoteKey:   remoteKey,
+		},
 	})
+	if err != nil || updateCheckpointStateResponse != nil && !updateCheckpointStateResponse.Ok {
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", err)
+	}
+
+	return nil
 }
 
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
@@ -156,8 +177,11 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 		return types.CheckpointState{}, false
 	}
 
-	state, err := s.containerRepo.GetCheckpointState(request.Workspace.Name, request.StubId)
-	if err != nil {
+	getCheckpointStateResponse, err := s.containerRepoClient.GetCheckpointState(context.Background(), &pb.GetCheckpointStateRequest{
+		WorkspaceName: request.Workspace.Name,
+		CheckpointId:  request.StubId,
+	})
+	if err != nil || getCheckpointStateResponse == nil || !getCheckpointStateResponse.Ok {
 		if _, ok := err.(*types.ErrCheckpointNotFound); !ok {
 			return types.CheckpointState{}, false
 		}
@@ -166,7 +190,14 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 		return types.CheckpointState{Status: types.CheckpointStatusNotFound}, true
 	}
 
-	return *state, false
+	state := types.CheckpointState{
+		Status:      types.CheckpointStatus(getCheckpointStateResponse.CheckpointState.Status),
+		ContainerId: getCheckpointStateResponse.CheckpointState.ContainerId,
+		StubId:      getCheckpointStateResponse.CheckpointState.StubId,
+		RemoteKey:   getCheckpointStateResponse.CheckpointState.RemoteKey,
+	}
+
+	return state, false
 }
 
 // Wait for a restored container to exit

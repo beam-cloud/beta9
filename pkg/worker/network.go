@@ -16,6 +16,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
@@ -39,19 +40,19 @@ const (
 )
 
 type ContainerNetworkManager struct {
-	ctx           context.Context
-	defaultLink   netlink.Link
-	ipt           *iptables.IPTables
-	ipt6          *iptables.IPTables
-	worker        *types.Worker
-	workerRepo    repository.WorkerRepository
-	containerRepo repository.ContainerRepository
-	networkPrefix string
-	mu            sync.Mutex
-	config        types.AppConfig
+	ctx                 context.Context
+	defaultLink         netlink.Link
+	ipt                 *iptables.IPTables
+	ipt6                *iptables.IPTables
+	worker              *types.Worker
+	workerRepo          repository.WorkerRepository
+	containerRepoClient pb.ContainerRepositoryServiceClient
+	networkPrefix       string
+	mu                  sync.Mutex
+	config              types.AppConfig
 }
 
-func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, config types.AppConfig) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepoClient pb.ContainerRepositoryServiceClient, config types.AppConfig) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -105,16 +106,16 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	}
 
 	m := &ContainerNetworkManager{
-		ctx:           ctx,
-		ipt:           ipt,
-		ipt6:          ipt6,
-		defaultLink:   defaultLink,
-		worker:        worker,
-		workerRepo:    workerRepo,
-		containerRepo: containerRepo,
-		networkPrefix: networkPrefix,
-		mu:            sync.Mutex{},
-		config:        config,
+		ctx:                 ctx,
+		ipt:                 ipt,
+		ipt6:                ipt6,
+		defaultLink:         defaultLink,
+		worker:              worker,
+		workerRepo:          workerRepo,
+		containerRepoClient: containerRepoClient,
+		networkPrefix:       networkPrefix,
+		mu:                  sync.Mutex{},
+		config:              config,
 	}
 
 	// Disable IPv6 if ip6tables is not supported
@@ -463,7 +464,7 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 
 					// Check if the container still exists
 					var notFoundErr *types.ErrContainerStateNotFound
-					if _, err := m.containerRepo.GetContainerState(containerId); err != nil && errors.As(err, &notFoundErr) {
+					if _, err := m.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}); err != nil && errors.As(err, &notFoundErr) {
 						// Container state not found, so tear down the namespace and associated resources
 						log.Info().Str("container_id", containerId).Msg("orphaned namespace detected")
 

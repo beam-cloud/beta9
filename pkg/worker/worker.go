@@ -18,6 +18,7 @@ import (
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
+	pb "github.com/beam-cloud/beta9/proto"
 
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -55,11 +56,11 @@ type Worker struct {
 	containerInstances      *common.SafeMap[*ContainerInstance]
 	containerLock           sync.Mutex
 	containerWg             sync.WaitGroup
-	containerRepo           repo.ContainerRepository
 	containerLogger         *ContainerLogger
 	workerMetrics           *WorkerMetrics
 	completedRequests       chan *types.ContainerRequest
 	stopContainerChan       chan stopContainerEvent
+	containerRepoClient     pb.ContainerRepositoryServiceClient
 	workerRepo              repo.WorkerRepository
 	eventRepo               repo.EventRepository
 	userDataStorage         storage.Storage
@@ -134,7 +135,10 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	containerRepo := repo.NewContainerRedisRepository(redisClient)
+	containerRepoClient, err := NewContainerRepositoryClient(context.TODO(), config, workerToken)
+	if err != nil {
+		return nil, err
+	}
 
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
@@ -202,7 +206,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo, config)
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepoClient, config)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -244,14 +248,14 @@ func NewWorker() (*Worker, error) {
 			containerInstances: containerInstances,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
-		workerMetrics:     workerMetrics,
-		containerRepo:     containerRepo,
-		workerRepo:        workerRepo,
-		eventRepo:         eventRepo,
-		completedRequests: make(chan *types.ContainerRequest, 1000),
-		stopContainerChan: make(chan stopContainerEvent, 1000),
-		userDataStorage:   userDataStorage,
-		checkpointStorage: checkpointStorage,
+		workerMetrics:       workerMetrics,
+		containerRepoClient: containerRepoClient,
+		workerRepo:          workerRepo,
+		eventRepo:           eventRepo,
+		completedRequests:   make(chan *types.ContainerRequest, 1000),
+		stopContainerChan:   make(chan stopContainerEvent, 1000),
+		userDataStorage:     userDataStorage,
+		checkpointStorage:   checkpointStorage,
 	}, nil
 }
 
@@ -296,8 +300,11 @@ func (s *Worker) Run() error {
 						exitCode = serr.ExitCode
 					}
 
-					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
-					if err != nil {
+					r, err := s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
+						ContainerId: containerId,
+						ExitCode:    int32(exitCode),
+					})
+					if err != nil || r != nil && !r.Ok {
 						log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
 					}
 
@@ -373,8 +380,10 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			}
 
 			// Stop container if it is "orphaned" - meaning it's running but has no associated state
-			state, err := s.containerRepo.GetContainerState(request.ContainerId)
-			if err != nil {
+			getStateResponse, err := s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{
+				ContainerId: request.ContainerId,
+			})
+			if err != nil || getStateResponse != nil && !getStateResponse.Ok {
 				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
 					log.Info().Str("container_id", request.ContainerId).Msg("container state not found, stopping container")
 					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
@@ -384,22 +393,29 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				continue
 			}
 
+			state := getStateResponse.State
+			status := types.ContainerStatus(state.Status)
+
 			log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
 
 			// TODO: remove this hotfix
-			if state.Status == types.ContainerStatusPending {
+			if status == types.ContainerStatusPending {
 				log.Info().Str("container_id", request.ContainerId).Msg("forcing container status to running")
-				state.Status = types.ContainerStatusRunning
+				state.Status = string(types.ContainerStatusRunning)
 			}
 
-			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, types.ContainerStateTtlS)
-			if err != nil {
+			updateStateResponse, err := s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+				ContainerId:   request.ContainerId,
+				Status:        string(state.Status),
+				ExpirySeconds: int64(types.ContainerStateTtlS),
+			})
+			if err != nil || updateStateResponse != nil && !updateStateResponse.Ok {
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}
 
 			// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
 			// ensure it is killed after that
-			if state.Status == types.ContainerStatusStopping {
+			if status == types.ContainerStatusStopping {
 				go func() {
 					time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
 
