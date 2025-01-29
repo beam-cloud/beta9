@@ -4,6 +4,16 @@ syntax = "proto3";
 option go_package = "github.com/beam-cloud/beta9/proto";
 import "google/protobuf/timestamp.proto";
 
+package types;
+
+
+message BuildOptions {
+  string source_image = 1;
+  string dockerfile = 2;
+  string build_ctx_object = 3;
+  string source_image_creds = 4;
+  repeated string build_secrets = 5;
+}
 
 message CheckpointState {
   string stub_id = 1;
@@ -21,6 +31,29 @@ message ConcurrencyLimit {
   google.protobuf.Timestamp updated_at = 6;
 }
 
+message ContainerRequest {
+  string container_id = 1;
+  repeated string entry_point = 2;
+  repeated string env = 3;
+  int64 cpu = 4;
+  int64 memory = 5;
+  string gpu = 6;
+  repeated string gpu_request = 7;
+  uint32 gpu_count = 8;
+  string image_id = 9;
+  string stub_id = 10;
+  string workspace_id = 11;
+  Workspace workspace = 12;
+  StubWithRelated stub = 13;
+  google.protobuf.Timestamp timestamp = 14;
+  repeated Mount mounts = 15;
+  int64 retry_count = 16;
+  string pool_selector = 17;
+  bool preemptable = 18;
+  bool checkpoint_enabled = 19;
+  BuildOptions build_options = 20;
+}
+
 message ContainerState {
   string container_id = 1;
   string stub_id = 2;
@@ -31,6 +64,24 @@ message ContainerState {
   uint32 gpu_count = 7;
   int64 cpu = 8;
   int64 memory = 9;
+}
+
+message Mount {
+  string local_path = 1;
+  string mount_path = 2;
+  string link_path = 3;
+  bool read_only = 4;
+  string mount_type = 5;
+  MountPointConfig mount_point_config = 6;
+}
+
+message MountPointConfig {
+  string bucket_name = 1;
+  string access_key = 2;
+  string secret_key = 3;
+  string endpoint_url = 4;
+  string region = 5;
+  bool read_only = 6;
 }
 
 message Object {

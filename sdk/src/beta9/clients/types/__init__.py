@@ -38,11 +38,6 @@ class ConcurrencyLimit(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class ContainerAlreadyScheduledError(betterproto.Message):
-    msg: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
 class ContainerRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     entry_point: List[str] = betterproto.string_field(2)
@@ -91,7 +86,7 @@ class Mount(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class MountPointConfig(betterproto.Message):
-    s_3_bucket: str = betterproto.string_field(1)
+    bucket_name: str = betterproto.string_field(1)
     access_key: str = betterproto.string_field(2)
     secret_key: str = betterproto.string_field(3)
     endpoint_url: str = betterproto.string_field(4)

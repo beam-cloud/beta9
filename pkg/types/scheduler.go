@@ -80,6 +80,7 @@ type ContainerState struct {
 	Memory      int64           `redis:"memory" json:"memory"`
 }
 
+// @go2proto
 type BuildOptions struct {
 	SourceImage      *string  `json:"source_image"`
 	Dockerfile       *string  `json:"dockerfile"`
@@ -88,6 +89,7 @@ type BuildOptions struct {
 	BuildSecrets     []string `json:"build_secrets"`
 }
 
+// @go2proto
 type ContainerRequest struct {
 	ContainerId       string          `json:"container_id"`
 	EntryPoint        []string        `json:"entry_point"`

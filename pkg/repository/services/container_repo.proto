@@ -13,5 +13,5 @@ message GetContainerStateRequest { string container_id = 1; }
 
 message GetContainerStateResponse {
   string container_id = 1;
-  ContainerState state = 2;
+  types.ContainerState state = 2;
 }

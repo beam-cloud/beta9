@@ -175,7 +175,7 @@ func NewWorker() (*Worker, error) {
 		// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
 		if config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeS3) {
 			checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
-				S3Bucket:    config.Worker.CRIU.Storage.ObjectStore.BucketName,
+				BucketName:  config.Worker.CRIU.Storage.ObjectStore.BucketName,
 				AccessKey:   config.Worker.CRIU.Storage.ObjectStore.AccessKey,
 				SecretKey:   config.Worker.CRIU.Storage.ObjectStore.SecretKey,
 				EndpointURL: config.Worker.CRIU.Storage.ObjectStore.EndpointURL,
