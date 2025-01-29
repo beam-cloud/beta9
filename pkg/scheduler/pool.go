@@ -32,9 +32,6 @@ const (
 )
 
 type WorkerPoolState struct {
-	FreeCpu    int64
-	FreeMemory int64
-	FreeGpu    uint
 }
 
 type WorkerPoolController interface {

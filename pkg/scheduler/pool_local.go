@@ -87,11 +87,7 @@ func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapac
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) State() WorkerPoolState {
-	return WorkerPoolState{
-		FreeCpu:    0,
-		FreeMemory: 0,
-		FreeGpu:    0,
-	}
+	return WorkerPoolState{}
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
@@ -104,7 +100,7 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorkerToMachine(cpu int64, me
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, false)
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, true)
 	if err != nil {
 		return nil, err
 	}

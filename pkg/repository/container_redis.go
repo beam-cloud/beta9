@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -116,7 +115,7 @@ func (cr *ContainerRedisRepository) GetContainerExitCode(containerId string) (in
 	return exitCode, nil
 }
 
-func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, status types.ContainerStatus, expirySeconds float64) error {
+func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, status types.ContainerStatus, expirySeconds int64) error {
 	expiry := time.Duration(expirySeconds) * time.Second
 
 	switch status {
@@ -226,7 +225,6 @@ func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) err
 }
 
 func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr string) error {
-	log.Println("setContainerAddress", containerId, addr)
 	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerAddress(containerId), addr, 0).Err()
 }
 

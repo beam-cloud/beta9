@@ -45,7 +45,7 @@ type ContainerRepository interface {
 	GetContainerExitCode(string) (int, error)
 	SetContainerAddress(containerId string, addr string) error
 	GetContainerAddress(containerId string) (string, error)
-	UpdateContainerStatus(string, types.ContainerStatus, float64) error
+	UpdateContainerStatus(string, types.ContainerStatus, int64) error
 	UpdateAssignedContainerGPU(string, string) error
 	DeleteContainerState(containerId string) error
 	SetWorkerAddress(containerId string, addr string) error
