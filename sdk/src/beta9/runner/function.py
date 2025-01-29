@@ -81,6 +81,8 @@ def _monitor_task(
         retry = 0
 
         while retry <= max_retries:
+            start = time.time()
+
             try:
                 for response in function_stub.function_monitor(
                     FunctionMonitorRequest(
@@ -89,6 +91,11 @@ def _monitor_task(
                         container_id=function_context.container_id,
                     )
                 ):
+                    print("Time since last response: ", time.time() - start)
+                    if time.time() - start > 60:
+                        print("No response from task monitor greater than 60 seconds")
+                    start = time.time()
+
                     response: FunctionMonitorResponse
                     if response.cancelled:
                         print(f"Task cancelled: {function_context.task_id}")
@@ -130,6 +137,7 @@ def _monitor_task(
                 grpc.RpcError,
                 ConnectionRefusedError,
             ):
+                print("Lost connection to task monitor, retrying")
                 if retry == max_retries:
                     print("Lost connection to task monitor, exiting")
 
