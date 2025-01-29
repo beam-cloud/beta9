@@ -59,7 +59,6 @@ const (
 	ContainerStatusStopping ContainerStatus = "STOPPING"
 )
 
-// @go2proto
 type ContainerAlreadyScheduledError struct {
 	Msg string
 }
