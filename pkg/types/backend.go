@@ -11,6 +11,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+// @go2proto
 type Workspace struct {
 	Id                 uint              `db:"id" json:"id,omitempty"`
 	ExternalId         string            `db:"external_id" json:"external_id"`
@@ -82,6 +83,7 @@ type DeploymentWithRelated struct {
 	Stub      Stub      `db:"stub" json:"stub"`
 }
 
+// @go2proto
 type Object struct {
 	Id          uint      `db:"id" json:"id"`
 	ExternalId  string    `db:"external_id" json:"external_id"`
@@ -228,6 +230,7 @@ const (
 	StubTypeBotServe               string = "bot/serve"
 )
 
+// @go2proto
 type StubType string
 
 func (t StubType) IsServe() bool {
@@ -242,6 +245,7 @@ func (t StubType) Kind() string {
 	return strings.Split(string(t), "/")[0]
 }
 
+// @go2proto
 type Stub struct {
 	Id            uint      `db:"id" json:"_"`
 	ExternalId    string    `db:"external_id" json:"external_id"`
@@ -285,6 +289,7 @@ func (s *Stub) SanitizeConfig() error {
 	return nil
 }
 
+// @go2proto
 type StubWithRelated struct {
 	Stub
 	Workspace Workspace `db:"workspace" json:"workspace"`
@@ -373,6 +378,7 @@ type FilterFieldMapping struct {
 	DatabaseField string
 }
 
+// @go2proto
 type ConcurrencyLimit struct {
 	Id                uint      `db:"id" json:"-" redis:"-"`
 	ExternalId        string    `db:"external_id" json:"external_id,omitempty" redis:"external_id"`

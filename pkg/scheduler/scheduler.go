@@ -50,7 +50,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 		switch pool.Mode {
 		case types.PoolModeLocal:
-			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo, providerRepo)
+			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo, providerRepo, backendRepo)
 		case types.PoolModeExternal:
 			controller, err = NewExternalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, providerRepo, tailscale, pool.Provider)
 		default:
@@ -141,7 +141,7 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	log.Info().Interface("stop_args", stopArgs).Msg("received stop request")
 
-	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
+	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
 	if err != nil {
 		return err
 	}

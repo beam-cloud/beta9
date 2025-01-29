@@ -67,6 +67,7 @@ func (e *ContainerAlreadyScheduledError) Error() string {
 	return e.Msg
 }
 
+// @go2proto
 type ContainerState struct {
 	ContainerId string          `redis:"container_id" json:"container_id"`
 	StubId      string          `redis:"stub_id" json:"stub_id"`
@@ -79,6 +80,7 @@ type ContainerState struct {
 	Memory      int64           `redis:"memory" json:"memory"`
 }
 
+// @go2proto
 type BuildOptions struct {
 	SourceImage      *string  `json:"source_image"`
 	Dockerfile       *string  `json:"dockerfile"`
@@ -87,6 +89,7 @@ type BuildOptions struct {
 	BuildSecrets     []string `json:"build_secrets"`
 }
 
+// @go2proto
 type ContainerRequest struct {
 	ContainerId       string          `json:"container_id"`
 	EntryPoint        []string        `json:"entry_point"`
@@ -125,9 +128,9 @@ const (
 	ContainerDurationEmissionInterval      time.Duration = 5 * time.Second
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
 )
-const ContainerStateTtlSWhilePending int = 600
-const ContainerStateTtlS int = 120
-const WorkspaceQuotaTtlS int = 600
+const ContainerStateTtlSWhilePending int64 = 600
+const ContainerStateTtlS int64 = 120
+const WorkspaceQuotaTtlS int64 = 600
 
 type ErrContainerStateNotFound struct {
 	ContainerId string
@@ -204,6 +207,7 @@ const (
 	CheckpointStatusNotFound         CheckpointStatus = "not_found"
 )
 
+// @go2proto
 type CheckpointState struct {
 	StubId      string           `redis:"stub_id" json:"stub_id"`
 	ContainerId string           `redis:"container_id" json:"container_id"`

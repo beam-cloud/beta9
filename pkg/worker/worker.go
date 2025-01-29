@@ -18,6 +18,7 @@ import (
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
+
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 )
@@ -32,6 +33,8 @@ const (
 )
 
 type Worker struct {
+	workerId                string
+	workerToken             string
 	cpuLimit                int64
 	memoryLimit             int64
 	gpuType                 string
@@ -48,7 +51,6 @@ type Worker struct {
 	containerMountManager   *ContainerMountManager
 	redisClient             *common.RedisClient
 	imageClient             *ImageClient
-	workerId                string
 	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
 	containerLock           sync.Mutex
@@ -97,6 +99,7 @@ func NewWorker() (*Worker, error) {
 
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
+	workerToken := os.Getenv("WORKER_TOKEN")
 	workerPoolName := os.Getenv("WORKER_POOL_NAME")
 	podHostName := os.Getenv("HOSTNAME")
 
@@ -132,6 +135,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
+
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
@@ -171,7 +175,7 @@ func NewWorker() (*Worker, error) {
 		// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
 		if config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeS3) {
 			checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
-				S3Bucket:    config.Worker.CRIU.Storage.ObjectStore.BucketName,
+				BucketName:  config.Worker.CRIU.Storage.ObjectStore.BucketName,
 				AccessKey:   config.Worker.CRIU.Storage.ObjectStore.AccessKey,
 				SecretKey:   config.Worker.CRIU.Storage.ObjectStore.SecretKey,
 				EndpointURL: config.Worker.CRIU.Storage.ObjectStore.EndpointURL,
@@ -211,6 +215,8 @@ func NewWorker() (*Worker, error) {
 	}
 
 	return &Worker{
+		workerId:                workerId,
+		workerToken:             workerToken,
 		ctx:                     ctx,
 		cancel:                  cancel,
 		config:                  config,
@@ -231,16 +237,15 @@ func NewWorker() (*Worker, error) {
 		cedanaClient:            cedanaClient,
 		podHostName:             podHostName,
 		eventBus:                nil,
-		workerId:                workerId,
 		containerInstances:      containerInstances,
 		containerLock:           sync.Mutex{},
 		containerWg:             sync.WaitGroup{},
-		containerRepo:           containerRepo,
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
 		workerMetrics:     workerMetrics,
+		containerRepo:     containerRepo,
 		workerRepo:        workerRepo,
 		eventRepo:         eventRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),
@@ -387,7 +392,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				state.Status = types.ContainerStatusRunning
 			}
 
-			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
+			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, types.ContainerStateTtlS)
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}

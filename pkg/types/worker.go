@@ -27,6 +27,7 @@ type ContainerResourceUsage struct {
 	GpuType           string `json:"GpuType"`
 }
 
+// @go2proto
 type Mount struct {
 	LocalPath        string            `json:"local_path"`
 	MountPath        string            `json:"mount_path"`

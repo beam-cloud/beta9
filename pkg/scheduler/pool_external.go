@@ -107,6 +107,10 @@ func (wpc *ExternalWorkerPoolController) IsPreemptable() bool {
 	return wpc.workerPool.Preemptable
 }
 
+func (wpc *ExternalWorkerPoolController) State() WorkerPoolState {
+	return WorkerPoolState{}
+}
+
 func (wpc *ExternalWorkerPoolController) Name() string {
 	return wpc.name
 }
@@ -242,8 +246,13 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 		return nil, err
 	}
 
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, true)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create a new worker job
-	job, worker, err := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount)
+	job, worker, err := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount, token.Key)
 	if err != nil {
 		return nil, err
 	}
@@ -267,7 +276,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 	return worker, nil
 }
 
-func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker, error) {
+func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker, error) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
@@ -296,7 +305,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		}
 	}
 
-	env, err := wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpuType, workerGpuCount)
+	env, err := wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -372,7 +381,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	}, nil
 }
 
-func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) ([]corev1.EnvVar, error) {
+func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) ([]corev1.EnvVar, error) {
 	// HOTFIX: clean up the way we pass tailscale hostname to remote worker
 	podHostname := fmt.Sprintf("machine-%s.%s", machineId, wpc.config.Tailscale.HostName)
 	if wpc.config.Tailscale.User != "" {
@@ -387,6 +396,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		{
 			Name:  "WORKER_POOL_NAME",
 			Value: wpc.name,
+		},
+		{
+			Name:  "WORKER_TOKEN",
+			Value: token,
 		},
 		{
 			Name:  "CPU_LIMIT",

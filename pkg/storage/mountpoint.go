@@ -72,7 +72,7 @@ func (s *MountPointStorage) Unmount(localPath string) error {
 }
 
 func newMountpointCmdArgs(s *MountPointStorage, localPath string) []string {
-	cmdArgs := []string{s.config.S3Bucket, localPath, "--allow-other", "--log-directory=/var/log/", "--upload-checksums=off"}
+	cmdArgs := []string{s.config.BucketName, localPath, "--allow-other", "--log-directory=/var/log/", "--upload-checksums=off"}
 	if s.config.ReadOnly {
 		cmdArgs = append(cmdArgs, "--read-only")
 	} else {

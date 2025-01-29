@@ -24,15 +24,16 @@ import (
 // A "local" k8s worker pool controller means
 // the pool is local to the control plane / in-cluster
 type LocalKubernetesWorkerPoolController struct {
-	ctx        context.Context
-	name       string
-	config     types.AppConfig
-	kubeClient *kubernetes.Clientset
-	workerPool types.WorkerPoolConfig
-	workerRepo repository.WorkerRepository
+	ctx         context.Context
+	name        string
+	config      types.AppConfig
+	kubeClient  *kubernetes.Clientset
+	workerPool  types.WorkerPoolConfig
+	workerRepo  repository.WorkerRepository
+	backendRepo repository.BackendRepository
 }
 
-func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, providerRepo repository.ProviderRepository) (WorkerPoolController, error) {
+func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, providerRepo repository.ProviderRepository, backendRepo repository.BackendRepository) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -45,12 +46,13 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 
 	workerPool := config.Worker.Pools[workerPoolName]
 	wpc := &LocalKubernetesWorkerPoolController{
-		ctx:        ctx,
-		name:       workerPoolName,
-		config:     config,
-		kubeClient: kubeClient,
-		workerPool: workerPool,
-		workerRepo: workerRepo,
+		ctx:         ctx,
+		name:        workerPoolName,
+		config:      config,
+		kubeClient:  kubeClient,
+		workerPool:  workerPool,
+		workerRepo:  workerRepo,
+		backendRepo: backendRepo,
 	}
 
 	// Start monitoring worker pool size
@@ -84,6 +86,10 @@ func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapac
 	return freePoolCapacity(wpc.workerRepo, wpc)
 }
 
+func (wpc *LocalKubernetesWorkerPoolController) State() WorkerPoolState {
+	return WorkerPoolState{}
+}
+
 func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 	return wpc.addWorkerWithId(workerId, cpu, memory, wpc.workerPool.GPUType, gpuCount)
@@ -94,8 +100,13 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorkerToMachine(cpu int64, me
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, true)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create a new worker job
-	job, worker := wpc.createWorkerJob(workerId, cpu, memory, gpuType, gpuCount)
+	job, worker := wpc.createWorkerJob(workerId, cpu, memory, gpuType, gpuCount, token.Key)
 
 	// Create the job in the cluster
 	if err := wpc.createJobInCluster(job); err != nil {
@@ -114,7 +125,7 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 	return worker, nil
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker) {
+func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":                       Beta9WorkerLabelValue,
@@ -182,7 +193,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 					ContainerPort: int32(wpc.config.Monitoring.Prometheus.Port),
 				},
 			},
-			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpuType, workerGpuCount),
+			Env:          wpc.getWorkerEnvironment(workerId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token),
 			VolumeMounts: wpc.getWorkerVolumeMounts(),
 		},
 	}
@@ -346,7 +357,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 	return volumeMounts
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) []corev1.EnvVar {
+func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) []corev1.EnvVar {
 	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -355,6 +366,10 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		{
 			Name:  "WORKER_POOL_NAME",
 			Value: wpc.name,
+		},
+		{
+			Name:  "WORKER_TOKEN",
+			Value: token,
 		},
 		{
 			Name:  "CPU_LIMIT",

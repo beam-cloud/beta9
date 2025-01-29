@@ -38,10 +38,6 @@ worker:
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	bin/delete_workers.sh
 
-proxy:
-	docker build . --target build -f ./docker/Dockerfile.proxy -t localhost:5001/beta9-proxy:$(tag)
-	docker push localhost:5001/beta9-proxy:$(tag)
-
 runner:
 	for target in py312 py311 py310 py39 py38; do \
 		docker build . --target $$target --platform=$(runnerPlatform) -f ./docker/Dockerfile.runner -t localhost:5001/beta9-runner:$$target-$(runnerTag) --progress=plain; \
