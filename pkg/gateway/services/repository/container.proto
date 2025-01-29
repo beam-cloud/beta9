@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+import "google/protobuf/timestamp.proto";
+import "types.proto";
+
+service ContainerRepositoryService {
+  rpc GetContainerState(GetContainerStateRequest)
+      returns (GetContainerStateResponse);
+}
+
+message GetContainerStateRequest { string container_id = 1; }
+
+message GetContainerStateResponse {
+  string container_id = 1;
+  ContainerState state = 2;
+}

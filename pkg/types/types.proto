@@ -21,10 +21,6 @@ message ConcurrencyLimit {
   google.protobuf.Timestamp updated_at = 6;
 }
 
-message ContainerAlreadyScheduledError {
-  string msg = 1;
-}
-
 message ContainerState {
   string container_id = 1;
   string stub_id = 2;
