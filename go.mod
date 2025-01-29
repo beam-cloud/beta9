@@ -73,7 +73,6 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.7.0
 	go.opentelemetry.io/otel/sdk/metric v1.31.0
 	go.opentelemetry.io/otel/trace v1.31.0
-	goa.design/goa/v3 v3.19.1
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56
 	golang.org/x/net v0.34.0
 	golang.org/x/sync v0.10.0
@@ -115,7 +114,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.26.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.30.1 // indirect
 	github.com/aws/smithy-go v1.20.3 // indirect
-	github.com/beam-cloud/go2proto v0.0.0-20250129020036-d9edfe060b41 // indirect
 	github.com/beam-cloud/ristretto v0.0.0-20241013204426-d1403e359aa2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.13.0 // indirect
@@ -132,7 +130,6 @@ require (
 	github.com/dgraph-io/ristretto v1.0.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
 	github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e // indirect
-	github.com/dimfeld/httppath v0.0.0-20170720192232-ee938bf73598 // indirect
 	github.com/djherbis/atime v1.1.0 // indirect
 	github.com/docker/docker v27.2.0+incompatible // indirect
 	github.com/docker/go-units v0.5.0 // indirect
@@ -168,7 +165,6 @@ require (
 	github.com/gorilla/securecookie v1.1.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.22.0 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
-	github.com/iancoleman/strcase v0.3.0 // indirect
 	github.com/illarion/gonotify v1.0.1 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20231206064809-8c70d406f6d2 // indirect
 	github.com/invopop/yaml v0.3.1 // indirect
@@ -187,7 +183,6 @@ require (
 	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
 	github.com/lufia/plan9stats v0.0.0-20230326075908-cb1d2100619a // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
-	github.com/manveru/faker v0.0.0-20171103152722-9fbc68a78c4d // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mdlayher/genetlink v1.3.2 // indirect
