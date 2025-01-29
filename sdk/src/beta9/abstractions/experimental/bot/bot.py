@@ -160,9 +160,7 @@ class BotTransition:
 
         self.config["image_id"] = self.image_id
 
-    def _build_image_for_transition(
-        self,
-    ) -> bool:
+    def _build_image_for_transition(self) -> Optional[bool]:
         if not self.image_available:
             terminal.detail(f"Building image for transition: {self.image}")
 
