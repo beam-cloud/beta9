@@ -119,7 +119,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.stub_id: str = ""
         self.handler: str = ""
         self.on_start: str = ""
-        self.on_deploy: "AbstractCallableWrapper" = on_deploy
+        self.on_deploy: "AbstractCallableWrapper" = self._validate_on_deploy(on_deploy)
         self.callback_url = callback_url or ""
         self.cpu = cpu
         self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
@@ -350,6 +350,20 @@ class RunnerAbstraction(BaseAbstraction):
             return ",".join([GpuType(g).value for g in gpu])
         else:
             return GpuType(gpu).value
+
+    def _validate_on_deploy(self, func: Callable):
+        if not func:
+            return None
+
+        if not callable(func):
+            raise terminal.error(
+                "Unable to build: on_deploy must be a callable function with a function decorator"
+            )
+
+        if not hasattr(func, "parent") or not hasattr(func, "func"):
+            raise terminal.error("Unable to build: on_deploy is missing a function decorator")
+
+        return func
 
     def sync_dir_to_workspace(
         self, *, dir: str, object_id: str, on_event: Optional[Callable] = None
