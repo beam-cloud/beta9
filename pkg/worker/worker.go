@@ -21,11 +21,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
-	containerrepository "github.com/beam-cloud/beta9/proto/goa/gen/container_repository"
-	containerclient "github.com/beam-cloud/beta9/proto/goa/gen/grpc/container_repository/client"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -139,21 +134,6 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	conn, err := grpc.Dial("beta9-gateway:1993", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, err
-	}
-
-	containerClient := containerclient.NewClient(conn)
-	response, err := containerClient.GetContainerState()(context.Background(), &containerrepository.GetContainerStatePayload{
-		ContainerID: "123",
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("failed to get container state")
-	} else {
-		log.Info().Msgf("container state response: %v", response)
-	}
-
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
@@ -260,12 +240,12 @@ func NewWorker() (*Worker, error) {
 		containerInstances:      containerInstances,
 		containerLock:           sync.Mutex{},
 		containerWg:             sync.WaitGroup{},
-		containerRepo:           containerRepo,
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
 		workerMetrics:     workerMetrics,
+		containerRepo:     containerRepo,
 		workerRepo:        workerRepo,
 		eventRepo:         eventRepo,
 		completedRequests: make(chan *types.ContainerRequest, 1000),

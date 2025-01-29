@@ -57,9 +57,6 @@ protocol:
 	poetry install --directory ./sdk
 	poetry run --no-interaction --directory ./sdk bin/gen_proto.sh
 
-dsl:
-	goa gen github.com/beam-cloud/beta9/pkg/repository/dsl -o proto/goa
-
 verify-protocol:
 	./bin/verify_proto.sh
 

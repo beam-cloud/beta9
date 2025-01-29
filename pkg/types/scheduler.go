@@ -59,6 +59,7 @@ const (
 	ContainerStatusStopping ContainerStatus = "STOPPING"
 )
 
+// @go2proto
 type ContainerAlreadyScheduledError struct {
 	Msg string
 }
@@ -67,6 +68,7 @@ func (e *ContainerAlreadyScheduledError) Error() string {
 	return e.Msg
 }
 
+// @go2proto
 type ContainerState struct {
 	ContainerId string          `redis:"container_id" json:"container_id"`
 	StubId      string          `redis:"stub_id" json:"stub_id"`
@@ -204,6 +206,7 @@ const (
 	CheckpointStatusNotFound         CheckpointStatus = "not_found"
 )
 
+// @go2proto
 type CheckpointState struct {
 	StubId      string           `redis:"stub_id" json:"stub_id"`
 	ContainerId string           `redis:"container_id" json:"container_id"`

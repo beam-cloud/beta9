@@ -1,0 +1,174 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+
+package container_repository;
+
+service ContainerRepositoryService {
+  rpc GetContainerState(GetContainerStateRequest)
+      returns (GetContainerStateResponse);
+  rpc SetContainerState(SetContainerStateRequest)
+      returns (SetContainerStateResponse);
+  rpc SetContainerExitCode(SetContainerExitCodeRequest)
+      returns (SetContainerExitCodeResponse);
+  rpc GetContainerExitCode(GetContainerExitCodeRequest)
+      returns (GetContainerExitCodeResponse);
+  rpc SetContainerAddress(SetContainerAddressRequest)
+      returns (SetContainerAddressResponse);
+  rpc GetContainerAddress(GetContainerAddressRequest)
+      returns (GetContainerAddressResponse);
+  rpc UpdateContainerStatus(UpdateContainerStatusRequest)
+      returns (UpdateContainerStatusResponse);
+  rpc UpdateAssignedContainerGPU(UpdateAssignedContainerGPURequest)
+      returns (UpdateAssignedContainerGPUResponse);
+  rpc DeleteContainerState(DeleteContainerStateRequest)
+      returns (DeleteContainerStateResponse);
+  rpc SetWorkerAddress(SetWorkerAddressRequest)
+      returns (SetWorkerAddressResponse);
+  rpc GetWorkerAddress(GetWorkerAddressRequest)
+      returns (GetWorkerAddressResponse);
+  rpc SetContainerStateWithConcurrencyLimit(
+      SetContainerStateWithConcurrencyLimitRequest)
+      returns (SetContainerStateWithConcurrencyLimitResponse);
+  rpc GetActiveContainersByStubId(GetActiveContainersByStubIdRequest)
+      returns (GetActiveContainersByStubIdResponse);
+  rpc GetActiveContainersByWorkspaceId(GetActiveContainersByWorkspaceIdRequest)
+      returns (GetActiveContainersByWorkspaceIdResponse);
+  rpc GetActiveContainersByWorkerId(GetActiveContainersByWorkerIdRequest)
+      returns (GetActiveContainersByWorkerIdResponse);
+  rpc GetFailedContainersByStubId(GetFailedContainersByStubIdRequest)
+      returns (GetFailedContainersByStubIdResponse);
+  rpc UpdateCheckpointState(UpdateCheckpointStateRequest)
+      returns (UpdateCheckpointStateResponse);
+  rpc GetCheckpointState(GetCheckpointStateRequest)
+      returns (GetCheckpointStateResponse);
+  rpc GetStubState(GetStubStateRequest) returns (GetStubStateResponse);
+  rpc SetStubState(SetStubStateRequest) returns (SetStubStateResponse);
+  rpc DeleteStubState(DeleteStubStateRequest) returns (DeleteStubStateResponse);
+}
+
+message GetContainerStateRequest { string container_id = 1; }
+
+message GetContainerStateResponse { types.ContainerState container_state = 1; }
+
+message SetContainerStateRequest {
+  string container_id = 1;
+  types.ContainerState container_state = 2;
+}
+
+message SetContainerStateResponse { bool success = 1; }
+
+message SetContainerExitCodeRequest {
+  string container_id = 1;
+  int32 exit_code = 2;
+}
+
+message SetContainerExitCodeResponse { bool success = 1; }
+
+message GetContainerExitCodeRequest { string container_id = 1; }
+
+message GetContainerExitCodeResponse { int32 exit_code = 1; }
+
+message SetContainerAddressRequest {
+  string container_id = 1;
+  string addr = 2;
+}
+
+message SetContainerAddressResponse { bool success = 1; }
+
+message GetContainerAddressRequest { string container_id = 1; }
+
+message GetContainerAddressResponse { string addr = 1; }
+
+message UpdateContainerStatusRequest {
+  string container_id = 1;
+  types.ContainerStatus status = 2;
+  float64 progress = 3;
+}
+
+message UpdateContainerStatusResponse { bool success = 1; }
+
+message UpdateAssignedContainerGPURequest {
+  string container_id = 1;
+  string gpu_id = 2;
+}
+
+message UpdateAssignedContainerGPUResponse { bool success = 1; }
+
+message DeleteContainerStateRequest { string container_id = 1; }
+
+message DeleteContainerStateResponse { bool success = 1; }
+
+message SetWorkerAddressRequest {
+  string container_id = 1;
+  string addr = 2;
+}
+
+message SetWorkerAddressResponse { bool success = 1; }
+
+message GetWorkerAddressRequest { string container_id = 1; }
+
+message GetWorkerAddressResponse { string addr = 1; }
+
+message SetContainerStateWithConcurrencyLimitRequest {
+  types.ConcurrencyLimit quota = 1;
+  types.ContainerRequest request = 2;
+}
+
+message SetContainerStateWithConcurrencyLimitResponse { bool success = 1; }
+
+message GetActiveContainersByStubIdRequest { string stub_id = 1; }
+
+message GetActiveContainersByStubIdResponse {
+  repeated types.ContainerState containers = 1;
+}
+
+message GetActiveContainersByWorkspaceIdRequest { string workspace_id = 1; }
+
+message GetActiveContainersByWorkspaceIdResponse {
+  repeated types.ContainerState containers = 1;
+}
+
+message GetActiveContainersByWorkerIdRequest { string worker_id = 1; }
+
+message GetActiveContainersByWorkerIdResponse {
+  repeated types.ContainerState containers = 1;
+}
+
+message GetFailedContainersByStubIdRequest { string stub_id = 1; }
+
+message GetFailedContainersByStubIdResponse {
+  repeated string container_ids = 1;
+}
+
+message UpdateCheckpointStateRequest {
+  string workspace_name = 1;
+  string checkpoint_id = 2;
+  types.CheckpointState checkpoint_state = 3;
+}
+
+message UpdateCheckpointStateResponse { bool success = 1; }
+
+message GetCheckpointStateRequest {
+  string workspace_name = 1;
+  string checkpoint_id = 2;
+}
+
+message GetCheckpointStateResponse {
+  types.CheckpointState checkpoint_state = 1;
+}
+
+message GetStubStateRequest { string stub_id = 1; }
+
+message GetStubStateResponse { string state = 1; }
+
+message SetStubStateRequest {
+  string stub_id = 1;
+  string state = 2;
+}
+
+message SetStubStateResponse { bool success = 1; }
+
+message DeleteStubStateRequest { string stub_id = 1; }
+
+message DeleteStubStateResponse { bool success = 1; }
