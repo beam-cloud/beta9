@@ -309,7 +309,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
 
 		existingCudaFound := false
-		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env, options)
+		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env)
 		if !existingCudaFound {
 			// If the container image does not have cuda libraries installed, mount cuda libs from the host
 			spec.Mounts = s.containerCudaManager.InjectMounts(spec.Mounts)
