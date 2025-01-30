@@ -383,7 +383,8 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			getStateResponse, err := s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{
 				ContainerId: request.ContainerId,
 			})
-			if err != nil || getStateResponse != nil && !getStateResponse.Ok {
+			log.Info().Str("container_id", request.ContainerId).Interface("getStateResponse", getStateResponse).Msg("getStateResponse")
+			if err != nil || (getStateResponse != nil && !getStateResponse.Ok) {
 				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
 					log.Info().Str("container_id", request.ContainerId).Msg("container state not found, stopping container")
 					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
@@ -409,7 +410,8 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				Status:        string(state.Status),
 				ExpirySeconds: int64(types.ContainerStateTtlS),
 			})
-			if err != nil || updateStateResponse != nil && !updateStateResponse.Ok {
+			if err != nil || (updateStateResponse != nil && !updateStateResponse.Ok) {
+				err = errors.Join(err, errors.New(updateStateResponse.GetErrorMsg()))
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}
 

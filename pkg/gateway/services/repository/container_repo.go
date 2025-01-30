@@ -23,17 +23,20 @@ func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req 
 		return &pb.GetContainerStateResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.GetContainerStateResponse{ContainerId: req.ContainerId, State: &pb.ContainerState{
-		Status:      string(state.Status),
-		ContainerId: state.ContainerId,
-		StubId:      state.StubId,
-		ScheduledAt: state.ScheduledAt,
-		WorkspaceId: state.WorkspaceId,
-		Gpu:         state.Gpu,
-		GpuCount:    state.GpuCount,
-		Cpu:         state.Cpu,
-		Memory:      state.Memory,
-	}}, nil
+	return &pb.GetContainerStateResponse{
+		Ok:          true,
+		ContainerId: req.ContainerId,
+		State: &pb.ContainerState{
+			Status:      string(state.Status),
+			ContainerId: state.ContainerId,
+			StubId:      state.StubId,
+			ScheduledAt: state.ScheduledAt,
+			WorkspaceId: state.WorkspaceId,
+			Gpu:         state.Gpu,
+			GpuCount:    state.GpuCount,
+			Cpu:         state.Cpu,
+			Memory:      state.Memory,
+		}}, nil
 }
 
 func (s *ContainerRepositoryService) DeleteContainerState(ctx context.Context, req *pb.DeleteContainerStateRequest) (*pb.DeleteContainerStateResponse, error) {

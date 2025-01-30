@@ -74,6 +74,7 @@ type BackendRepository interface {
 	CreateWorkspace(ctx context.Context) (types.Workspace, error)
 	GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error)
 	GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error)
+	GetAdminWorkspace(ctx context.Context) (*types.Workspace, error)
 	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
 	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
 	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)

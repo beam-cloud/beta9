@@ -54,9 +54,10 @@ func GenerateDSN(config types.PostgresConfig) string {
 }
 
 type PostgresBackendRepository struct {
-	client    *sqlx.DB
-	config    types.PostgresConfig
-	eventRepo EventRepository
+	client         *sqlx.DB
+	config         types.PostgresConfig
+	eventRepo      EventRepository
+	adminWorkspace *types.Workspace
 }
 
 func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRepository) (*PostgresBackendRepository, error) {
@@ -67,11 +68,13 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 		return nil, err
 	}
 
-	return &PostgresBackendRepository{
+	r := &PostgresBackendRepository{
 		client:    db,
 		config:    config,
 		eventRepo: eventRepo,
-	}, nil
+	}
+
+	return r, nil
 }
 
 type GooseLogger struct {
@@ -97,6 +100,26 @@ func (r *PostgresBackendRepository) Migrate() error {
 
 func (r *PostgresBackendRepository) Ping() error {
 	return r.client.Ping()
+}
+
+func (r *PostgresBackendRepository) GetAdminWorkspace(ctx context.Context) (*types.Workspace, error) {
+	if r.adminWorkspace != nil {
+		return r.adminWorkspace, nil
+	}
+
+	var adminWorkspace types.Workspace
+
+	query := `SELECT w.id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled
+	FROM token t
+	INNER JOIN workspace w ON t.workspace_id = w.id
+	WHERE t.token_type = 'admin';`
+	err := r.client.GetContext(ctx, &adminWorkspace, query)
+	if err != nil {
+		return nil, err
+	}
+
+	r.adminWorkspace = &adminWorkspace
+	return r.adminWorkspace, nil
 }
 
 func (r *PostgresBackendRepository) generateExternalId() (string, error) {

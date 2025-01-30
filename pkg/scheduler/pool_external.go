@@ -137,8 +137,12 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuC
 		return worker, nil
 	}
 
-	// TODO: replace hard-coded workspace ID with look up of cluster admin
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeMachine, false)
+	adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, adminWorkspace.Id, types.TokenTypeMachine, false)
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +250,12 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 		return nil, err
 	}
 
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, true)
+	adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, adminWorkspace.Id, types.TokenTypeWorker, true)
 	if err != nil {
 		return nil, err
 	}
