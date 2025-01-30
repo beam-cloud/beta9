@@ -3,6 +3,7 @@ package worker
 import (
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -23,7 +24,7 @@ type GPUManager interface {
 	AssignGPUDevices(containerId string, gpuCount uint32) (*AssignedGpuDevices, error)
 	GetContainerGPUDevices(containerId string) []int
 	UnassignGPUDevices(containerId string)
-	InjectEnvVars(env []string, options *ContainerOptions) ([]string, bool)
+	InjectEnvVars(env []string) ([]string, bool)
 	InjectMounts(mounts []specs.Mount) []specs.Mount
 }
 
@@ -203,7 +204,7 @@ func minor(dev uint64) uint64 {
 	return (dev & 0xff) | ((dev >> 12) & 0xfff00)
 }
 
-func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerOptions) ([]string, bool) {
+func (c *ContainerNvidiaManager) InjectEnvVars(env []string) ([]string, bool) {
 	existingCudaFound := false
 	cudaEnvVarNames := []string{
 		"NVIDIA_DRIVER_CAPABILITIES",
@@ -217,20 +218,18 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerO
 	}
 
 	initialEnvVars := make(map[string]string)
-	if options.InitialSpec != nil {
-		for _, m := range options.InitialSpec.Process.Env {
+	for _, m := range env {
 
-			// Only split on the first "=" in the env var
-			// incase the value has any "=" in it
-			splitVar := strings.SplitN(m, "=", 2)
-			if len(splitVar) < 2 {
-				continue
-			}
-
-			name := splitVar[0]
-			value := splitVar[1]
-			initialEnvVars[name] = value
+		// Only split on the first "=" in the env var
+		// incase the value has any "=" in it
+		splitVar := strings.SplitN(m, "=", 2)
+		if len(splitVar) < 2 {
+			continue
 		}
+
+		name := splitVar[0]
+		value := splitVar[1]
+		initialEnvVars[name] = value
 	}
 
 	cudaVersion := defaultContainerCudaVersion
@@ -238,46 +237,50 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerO
 	if existingCudaFound {
 		splitVersion := strings.Split(existingCudaVersion, ".")
 		if len(splitVersion) >= 2 {
-			major := splitVersion[0]
-			minor := splitVersion[1]
-
-			formattedVersion := major + "." + minor
-
-			log.Info().Str("cuda_version", existingCudaVersion).Str("formatted_version", formattedVersion).Msg("found existing cuda version in container image")
-
-			cudaVersion = formattedVersion
-			existingCudaFound = true
+			cudaVersion = splitVersion[0] + "." + splitVersion[1]
+			log.Info().Str("cuda_version", existingCudaVersion).Str("formatted_version", cudaVersion).Msg("found existing cuda version in container image")
 		}
 	}
 
-	var cudaEnvVars []string
+	// FIXME: if we detect that some cuda env vars are set is it safe to set any from the host?
+	// should we have a guard here that says: if !existingCudaFound {
 	for _, key := range cudaEnvVarNames {
-		cudaEnvVarValue := os.Getenv(key)
-
-		if existingCudaFound {
-			if value, exists := initialEnvVars[key]; exists {
-				cudaEnvVarValue = value
-			} else {
-				continue
+		// Get the env var from the host if its not already set in the container image
+		if _, exists := initialEnvVars[key]; !exists {
+			if value := os.Getenv(key); value != "" {
+				initialEnvVars[key] = value
 			}
 		}
-
-		cudaEnvVars = append(cudaEnvVars, fmt.Sprintf("%s=%s", key, cudaEnvVarValue))
 	}
 
-	env = append(env, cudaEnvVars...)
+	mergePaths("PATH", initialEnvVars, append(defaultContainerPath, fmt.Sprintf("/usr/local/cuda-%s/bin", cudaVersion)))
+	mergePaths("LD_LIBRARY_PATH", initialEnvVars, append(defaultContainerLibrary, fmt.Sprintf("/usr/local/cuda-%s/targets/x86_64-linux/lib", cudaVersion)))
 
-	env = append(env,
-		fmt.Sprintf("PATH=%s:/usr/local/cuda-%s/bin:$PATH",
-			strings.Join(defaultContainerPath, ":"),
-			cudaVersion))
+	modifiedEnv := make([]string, 0, len(initialEnvVars))
+	for key, value := range initialEnvVars {
+		modifiedEnv = append(modifiedEnv, fmt.Sprintf("%s=%s", key, value))
+	}
 
-	env = append(env,
-		fmt.Sprintf("LD_LIBRARY_PATH=%s:/usr/local/cuda-%s/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
-			strings.Join(defaultContainerLibrary, ":"),
-			cudaVersion))
+	return modifiedEnv, existingCudaFound
+}
 
-	return env, existingCudaFound
+func mergePaths(pathName string, initEnv map[string]string, mergeIn []string) {
+	if initEnv[pathName] == "" {
+		initEnv[pathName] = strings.Join(mergeIn, ":")
+		return
+	}
+
+	existingPath := initEnv[pathName]
+	pathMembers := strings.Split(existingPath, ":")
+
+	// Add paths to be merged in AFTER the existing paths so that the existing paths take precedence
+	for _, path := range mergeIn {
+		if !slices.Contains(pathMembers, path) {
+			pathMembers = append(pathMembers, path)
+		}
+	}
+
+	initEnv[pathName] = strings.Join(pathMembers, ":")
 }
 
 func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
