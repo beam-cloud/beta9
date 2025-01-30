@@ -300,11 +300,11 @@ func (s *Worker) Run() error {
 						exitCode = serr.ExitCode
 					}
 
-					r, err := s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
+					_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
 						ContainerId: containerId,
 						ExitCode:    int32(exitCode),
-					})
-					if err != nil || r != nil && !r.Ok {
+					}))
+					if err != nil {
 						log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
 					}
 
@@ -380,11 +380,11 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			}
 
 			// Stop container if it is "orphaned" - meaning it's running but has no associated state
-			getStateResponse, err := s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{
+			getStateResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{
 				ContainerId: request.ContainerId,
-			})
+			}))
 			log.Info().Str("container_id", request.ContainerId).Interface("getStateResponse", getStateResponse).Msg("getStateResponse")
-			if err != nil || (getStateResponse != nil && !getStateResponse.Ok) {
+			if err != nil {
 				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
 					log.Info().Str("container_id", request.ContainerId).Msg("container state not found, stopping container")
 					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
@@ -405,13 +405,12 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				state.Status = string(types.ContainerStatusRunning)
 			}
 
-			updateStateResponse, err := s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+			_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
 				ContainerId:   request.ContainerId,
 				Status:        string(state.Status),
 				ExpirySeconds: int64(types.ContainerStateTtlS),
-			})
-			if err != nil || (updateStateResponse != nil && !updateStateResponse.Ok) {
-				err = errors.Join(err, errors.New(updateStateResponse.GetErrorMsg()))
+			}))
+			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}
 

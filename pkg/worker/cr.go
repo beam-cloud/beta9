@@ -149,10 +149,9 @@ waitForReady:
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Msgf("failed to delete temporary checkpoint file: %v", err)
 	}
-
 	log.Info().Str("container_id", request.ContainerId).Msg("checkpoint created successfully")
 
-	updateCheckpointStateResponse, err := s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
+	_, err = handleGRPCResponse(s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
 		ContainerId:   request.ContainerId,
 		CheckpointId:  request.StubId,
 		WorkspaceName: request.Workspace.Name,
@@ -162,8 +161,8 @@ waitForReady:
 			StubId:      request.StubId,
 			RemoteKey:   remoteKey,
 		},
-	})
-	if err != nil || updateCheckpointStateResponse != nil && !updateCheckpointStateResponse.Ok {
+	}))
+	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", err)
 	}
 
@@ -177,11 +176,11 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 		return types.CheckpointState{}, false
 	}
 
-	getCheckpointStateResponse, err := s.containerRepoClient.GetCheckpointState(context.Background(), &pb.GetCheckpointStateRequest{
+	response, err := handleGRPCResponse(s.containerRepoClient.GetCheckpointState(context.Background(), &pb.GetCheckpointStateRequest{
 		WorkspaceName: request.Workspace.Name,
 		CheckpointId:  request.StubId,
-	})
-	if err != nil || getCheckpointStateResponse == nil || !getCheckpointStateResponse.Ok {
+	}))
+	if err != nil {
 		if _, ok := err.(*types.ErrCheckpointNotFound); !ok {
 			return types.CheckpointState{}, false
 		}
@@ -191,10 +190,10 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 	}
 
 	state := types.CheckpointState{
-		Status:      types.CheckpointStatus(getCheckpointStateResponse.CheckpointState.Status),
-		ContainerId: getCheckpointStateResponse.CheckpointState.ContainerId,
-		StubId:      getCheckpointStateResponse.CheckpointState.StubId,
-		RemoteKey:   getCheckpointStateResponse.CheckpointState.RemoteKey,
+		Status:      types.CheckpointStatus(response.CheckpointState.Status),
+		ContainerId: response.CheckpointState.ContainerId,
+		StubId:      response.CheckpointState.StubId,
+		RemoteKey:   response.CheckpointState.RemoteKey,
 	}
 
 	return state, false

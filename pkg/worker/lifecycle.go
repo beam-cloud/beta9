@@ -91,11 +91,11 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 		*exitCode = 0
 	}
 
-	setExitCodeResponse, err := s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
 		ContainerId: containerId,
 		ExitCode:    int32(*exitCode),
-	})
-	if err != nil || setExitCodeResponse != nil && !setExitCodeResponse.Ok {
+	}))
+	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to set exit code: %v", err)
 	}
 
@@ -151,8 +151,8 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 func (s *Worker) deleteContainer(containerId string, err error) {
 	s.containerInstances.Delete(containerId)
 
-	deleteContainerStateResponse, err := s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId})
-	if err != nil || deleteContainerStateResponse != nil && !deleteContainerStateResponse.Ok {
+	_, err = handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
+	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
 	}
 }
@@ -172,11 +172,11 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
-	setWorkerAddressResponse, err := s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
+	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
 		ContainerId: containerId,
 		Address:     hostname,
-	})
-	if err != nil || setWorkerAddressResponse != nil && !setWorkerAddressResponse.Ok {
+	}))
+	if err != nil {
 		return err
 	}
 
@@ -233,11 +233,11 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindPort)
-	setContainerAddressResponse, err := s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
+	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
 		ContainerId: request.ContainerId,
 		Address:     containerAddr,
-	})
-	if err != nil || setContainerAddressResponse != nil && !setContainerAddressResponse.Ok {
+	}))
+	if err != nil {
 		return err
 	}
 	log.Info().Str("container_id", containerId).Msg("set container address")
@@ -502,7 +502,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		if _, err := s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}); err != nil {
+		_, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+		if err != nil {
 			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
 				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
 				return
@@ -510,12 +511,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 
 		// Update container status to running
-		updateContainerStatusResponse, err := s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+		_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
 			ContainerId:   containerId,
 			Status:        string(types.ContainerStatusRunning),
 			ExpirySeconds: int64(types.ContainerStateTtlS),
-		})
-		if err != nil || updateContainerStatusResponse != nil && !updateContainerStatusResponse.Ok {
+		}))
+		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
 		}
 	}()

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -53,4 +54,19 @@ func newGRPCConn(host string, token string) (*grpc.ClientConn, error) {
 	}
 
 	return grpc.NewClient(host, dialOpts...)
+}
+
+func handleGRPCResponse[T interface {
+	GetOk() bool
+	GetErrorMsg() string
+}](response T, err error) (T, error) {
+	if err != nil {
+		return response, err
+	}
+
+	if !response.GetOk() {
+		return response, errors.New(response.GetErrorMsg())
+	}
+
+	return response, nil
 }
