@@ -199,7 +199,6 @@ worker:
       connection:
         cedanaUrl:
         cedanaAuthToken:
-
 providers:
   ec2:
     accessKey:
@@ -215,21 +214,6 @@ tailscale:
   enabled: false
   debug: false
   hostName: headscale.internal
-proxy:
-  httpPort: 1989
-  services:
-    - name: redis
-      localPort: 6379
-      destination: redis-master:6379
-    - name: juicefs-redis
-      localPort: 6380
-      destination: juicefs-redis-master:6379
-    - name: gateway-http
-      localPort: 1994
-      destination: beta9-gateway:1994
-    - name: gateway-grpc
-      localPort: 1993
-      destination: beta9-gateway:1993
 monitoring:
   containerMetricsInterval: 3s
   metricsCollector: prometheus

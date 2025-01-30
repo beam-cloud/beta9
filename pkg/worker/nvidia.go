@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	defaultContainerCudaVersion string   = "12.3"
+	defaultContainerCudaVersion string   = "12.4"
 	defaultContainerPath        []string = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 	defaultContainerLibrary     []string = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/worker/x86_64-linux-gnu", "/usr/local/nvidia/lib64"}
 )
@@ -206,18 +206,18 @@ func minor(dev uint64) uint64 {
 
 func (c *ContainerNvidiaManager) InjectEnvVars(env []string) ([]string, bool) {
 	existingCudaFound := false
-	cudaEnvVarNames := []string{
-		"NVIDIA_DRIVER_CAPABILITIES",
-		"NVIDIA_REQUIRE_CUDA",
-		"NVARCH",
-		"NV_CUDA_COMPAT_PACKAGE",
-		"NV_CUDA_CUDART_VERSION",
-		"CUDA_VERSION",
-		"GPU_TYPE",
-		"CUDA_HOME",
+	cudaEnvVarDefaults := map[string]string{
+		"NVIDIA_DRIVER_CAPABILITIES": "all",
+		"NVIDIA_REQUIRE_CUDA":        "",
+		"NVARCH":                     "",
+		"NV_CUDA_COMPAT_PACKAGE":     "",
+		"NV_CUDA_CUDART_VERSION":     "",
+		"CUDA_VERSION":               "",
+		"GPU_TYPE":                   "",
+		"CUDA_HOME":                  fmt.Sprintf("/usr/local/cuda-%s", defaultContainerCudaVersion),
 	}
 
-	initialEnvVars := make(map[string]string)
+	imageEnvVars := make(map[string]string)
 	for _, m := range env {
 
 		// Only split on the first "=" in the env var
@@ -229,35 +229,38 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string) ([]string, bool) {
 
 		name := splitVar[0]
 		value := splitVar[1]
-		initialEnvVars[name] = value
+		imageEnvVars[name] = value
 	}
 
 	cudaVersion := defaultContainerCudaVersion
-	existingCudaVersion, existingCudaFound := initialEnvVars["CUDA_VERSION"]
+	existingCudaVersion, existingCudaFound := imageEnvVars["CUDA_VERSION"]
 	if existingCudaFound {
 		splitVersion := strings.Split(existingCudaVersion, ".")
 		if len(splitVersion) >= 2 {
 			cudaVersion = splitVersion[0] + "." + splitVersion[1]
 			log.Info().Str("cuda_version", existingCudaVersion).Str("formatted_version", cudaVersion).Msg("found existing cuda version in container image")
 		}
+		cudaEnvVarDefaults["CUDA_HOME"] = fmt.Sprintf("/usr/local/cuda-%s", cudaVersion)
 	}
 
-	// FIXME: if we detect that some cuda env vars are set is it safe to set any from the host?
-	// should we have a guard here that says: if !existingCudaFound {
-	for _, key := range cudaEnvVarNames {
-		// Get the env var from the host if its not already set in the container image
-		if _, exists := initialEnvVars[key]; !exists {
-			if value := os.Getenv(key); value != "" {
-				initialEnvVars[key] = value
-			}
+	// Keep existing image values, otherwise use host values, fall back to defaults if neither exists
+	for key, defaultValue := range cudaEnvVarDefaults {
+		hostValue := os.Getenv(key)
+		switch {
+		case imageEnvVars[key] != "":
+			continue
+		case hostValue != "":
+			imageEnvVars[key] = hostValue
+		case defaultValue != "":
+			imageEnvVars[key] = defaultValue
 		}
 	}
 
-	mergePaths("PATH", initialEnvVars, append(defaultContainerPath, fmt.Sprintf("/usr/local/cuda-%s/bin", cudaVersion)))
-	mergePaths("LD_LIBRARY_PATH", initialEnvVars, append(defaultContainerLibrary, fmt.Sprintf("/usr/local/cuda-%s/targets/x86_64-linux/lib", cudaVersion)))
+	mergePaths("PATH", imageEnvVars, append(defaultContainerPath, fmt.Sprintf("/usr/local/cuda-%s/bin", cudaVersion)))
+	mergePaths("LD_LIBRARY_PATH", imageEnvVars, append(defaultContainerLibrary, fmt.Sprintf("/usr/local/cuda-%s/targets/x86_64-linux/lib", cudaVersion)))
 
-	modifiedEnv := make([]string, 0, len(initialEnvVars))
-	for key, value := range initialEnvVars {
+	modifiedEnv := make([]string, 0, len(imageEnvVars))
+	for key, value := range imageEnvVars {
 		modifiedEnv = append(modifiedEnv, fmt.Sprintf("%s=%s", key, value))
 	}
 

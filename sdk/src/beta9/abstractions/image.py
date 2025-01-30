@@ -497,7 +497,7 @@ class Image(BaseAbstraction):
         return self
 
     def add_micromamba_packages(
-        self, packages: Union[Sequence[str], str], channels: Optional[Sequence[str]] = []
+        self, packages: Union[Sequence[str], str], channels: Sequence[str] = []
     ) -> "Image":
         """
         Add micromamba packages that will be installed when building the image.

@@ -6,7 +6,7 @@ runnerPlatform := linux/arm64
 
 setup:
 	bash bin/setup.sh
-	make k3d-up runner worker gateway proxy
+	make k3d-up runner worker gateway
 	# helm install beta9 deploy/charts/beta9 --create-namespace --values deploy/charts/beta9/values.local.yaml
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
