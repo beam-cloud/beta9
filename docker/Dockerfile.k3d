@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.6
-FROM rancher/k3s:v1.28.5-k3s1 as k3s
+FROM rancher/k3s:v1.28.5-k3s1 AS k3s
 FROM nvidia/cuda:12.3.1-base-ubuntu20.04
 
 ENV CRI_CONFIG_FILE=/var/lib/rancher/k3s/agent/etc/crictl.yaml
