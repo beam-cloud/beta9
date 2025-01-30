@@ -3,8 +3,8 @@ import os
 import signal
 import time
 import traceback
-from concurrent import futures
 from dataclasses import dataclass
+from multiprocessing import Process
 from typing import Any, Optional
 
 import cloudpickle
@@ -36,7 +36,6 @@ from ..logging import json_output_interceptor
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
-    ThreadPoolExecutorOverride,
     config,
     end_task_and_send_callback,
     send_callback,
@@ -110,8 +109,7 @@ def _monitor_task(
                             task_status=TaskStatus.Cancelled,
                         )
 
-                        os._exit(TaskExitCode.Success)
-                        # os.kill(parent_pid, signal.SIGTERM)
+                        os.kill(parent_pid, signal.SIGTERM)
                         return
 
                     if response.complete:
@@ -127,8 +125,7 @@ def _monitor_task(
                             task_status=TaskStatus.Timeout,
                         )
 
-                        # os.kill(parent_pid, signal.SIGTERM)
-                        os._exit(TaskExitCode.Success)
+                        os.kill(parent_pid, signal.SIGTERM)
                         return
 
                     retry = 0
@@ -146,8 +143,7 @@ def _monitor_task(
                 if retry == max_retries:
                     print("Lost connection to task monitor, exiting")
 
-                    # os.kill(parent_pid, signal.SIGABRT)
-                    os._exit(TaskExitCode.Error)
+                    os.kill(parent_pid, signal.SIGABRT)
                     return
 
                 time.sleep(backoff)
@@ -156,8 +152,7 @@ def _monitor_task(
 
             except BaseException:
                 print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
-                # os.kill(parent_pid, signal.SIGABRT)
-                os._exit(TaskExitCode.Error)
+                os.kill(parent_pid, signal.SIGABRT)
                 return
 
 
@@ -185,55 +180,48 @@ def main(channel: Channel):
 
     # Start the task
     start_time = time.time()
-    with ThreadPoolExecutorOverride() as thread_pool:
-        start_task_response = start_task(gateway_stub, task_id, container_id)
-        if not start_task_response.ok:
-            raise TaskStartError
 
-        context = FunctionContext.new(config=config, task_id=task_id)
+    start_task_response = start_task(gateway_stub, task_id, container_id)
+    if not start_task_response.ok:
+        raise TaskStartError
 
-        # Start monitor_task process to send health checks
-        env = os.environ.copy()
+    context = FunctionContext.new(config=config, task_id=task_id)
 
-        signal.signal(signal.SIGTERM, _handle_sigterm)
-        signal.signal(signal.SIGABRT, _handle_sigabort)
+    # Start monitor_task process to send health checks
+    env = os.environ.copy()
 
-        # monitor_process = Process(
-        #     target=_monitor_task,
-        #     kwargs={
-        #         "function_context": context,
-        #         "env": env,
-        #     },
-        #     daemon=True,
-        # )
-        # monitor_process.start()
-        monitor_process = thread_pool.submit(
-            _monitor_task,
-            function_context=context,
-            env=env,
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+    signal.signal(signal.SIGABRT, _handle_sigabort)
+
+    monitor_process = Process(
+        target=_monitor_task,
+        kwargs={
+            "function_context": context,
+            "env": env,
+        },
+        daemon=True,
+    )
+    monitor_process.start()
+
+    try:
+        # Invoke the function and handle its result
+        result = invoke_function(function_stub, context, task_id)
+        if result.exception:
+            handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
+            raise result.exception
+
+        # End the task and send callback
+        complete_task(
+            gateway_stub,
+            result,
+            task_id,
+            container_id,
+            container_hostname,
+            start_time,
         )
-        futures.thread._threads_queues.clear()
-
-        try:
-            # Invoke the function and handle its result
-            result = invoke_function(function_stub, context, task_id)
-            if result.exception:
-                handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
-                raise result.exception
-
-            # End the task and send callback
-            complete_task(
-                gateway_stub,
-                result,
-                task_id,
-                container_id,
-                container_hostname,
-                start_time,
-            )
-        finally:
-            # monitor_process.terminate()
-            # monitor_process.join(timeout=1)
-            monitor_process.cancel()
+    finally:
+        monitor_process.terminate()
+        monitor_process.join(timeout=1)
 
 
 def start_task(
