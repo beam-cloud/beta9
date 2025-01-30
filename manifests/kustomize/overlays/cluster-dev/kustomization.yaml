@@ -12,6 +12,13 @@ components:
 - ../../components/localstack
 - ../../components/beta9-gateway
 patches:
+# Remove resources from beta9 components
+- target:
+    kind: Deployment
+    name: beta9-gateway
+  patch: |-
+    - op: remove
+      path: /spec/template/spec/containers/0/resources
 # Remove resources from monitoring components
 - target:
     kind: StatefulSet
