@@ -56,12 +56,6 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 		backendRepo: backendRepo,
 	}
 
-	adminWorkspace, err := backendRepo.GetAdminWorkspace(ctx)
-	if err != nil {
-		return nil, err
-	}
-	wpc.workspace = adminWorkspace
-
 	// Start monitoring worker pool size
 	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
@@ -108,7 +102,12 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorkerToMachine(cpu int64, me
 
 func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	if wpc.workspace == nil {
-		return nil, errors.New("workspace not configured for pool: " + wpc.name)
+		adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+		if err != nil {
+			return nil, errors.New("workspace not configured for pool: " + wpc.name)
+		}
+
+		wpc.workspace = adminWorkspace
 	}
 
 	token, err := wpc.backendRepo.CreateToken(wpc.ctx, wpc.workspace.Id, types.TokenTypeWorker, true)

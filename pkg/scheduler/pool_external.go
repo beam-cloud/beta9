@@ -88,12 +88,6 @@ func NewExternalWorkerPoolController(
 		provider:     provider,
 	}
 
-	adminWorkspace, err := backendRepo.GetAdminWorkspace(ctx)
-	if err != nil {
-		return nil, err
-	}
-	wpc.workspace = adminWorkspace
-
 	// Start monitoring worker pool size
 	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
@@ -253,7 +247,12 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 
 func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
 	if wpc.workspace == nil {
-		return nil, errors.New("workspace not configured for pool: " + wpc.name)
+		adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+		if err != nil {
+			return nil, errors.New("workspace not configured for pool: " + wpc.name)
+		}
+
+		wpc.workspace = adminWorkspace
 	}
 
 	client, err := wpc.getProxiedClient(machineState.HostName, machineState.Token)
