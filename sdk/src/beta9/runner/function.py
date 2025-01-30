@@ -7,8 +7,6 @@ from concurrent import futures
 from dataclasses import dataclass
 from typing import Any, Optional
 
-fr
-
 import cloudpickle
 import grpc
 
