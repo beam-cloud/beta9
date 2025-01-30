@@ -355,13 +355,10 @@ class RunnerAbstraction(BaseAbstraction):
         if func is None:
             return None
 
-        if not callable(func):
+        if not callable(func) or not hasattr(func, "parent") or not hasattr(func, "func"):
             raise terminal.error(
-                "Unable to build: on_deploy must be a callable function with a function decorator"
+                "Build failed: on_deploy must be a callable function with a function decorator"
             )
-
-        if not hasattr(func, "parent") or not hasattr(func, "func"):
-            raise terminal.error("Unable to build: on_deploy is missing a function decorator")
 
         return func
 
