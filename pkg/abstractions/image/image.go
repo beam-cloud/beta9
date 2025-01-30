@@ -83,8 +83,8 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 	var valid bool = true
 
 	tag := in.PythonVersion
-	if in.PythonVersion == "python3" {
-		tag = "python3.10"
+	if in.PythonVersion == is.config.ImageService.DefaultPythonVersion {
+		tag = types.Python310.String()
 	}
 
 	baseImageTag, ok := is.config.ImageService.Runner.Tags[tag]
@@ -145,8 +145,8 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	}
 
 	tag := in.PythonVersion
-	if in.PythonVersion == "python3" {
-		tag = "python3.10"
+	if in.PythonVersion == is.config.ImageService.DefaultPythonVersion {
+		tag = types.Python310.String()
 	}
 
 	buildOptions := &BuildOpts{

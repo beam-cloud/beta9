@@ -33,7 +33,9 @@ class TaskExitCode:
 
 class PythonVersion(str, Enum):
     """
-    An enum that defines versions of Python.
+    An enum that defines versions of Python. The default version is `python3`. When this version
+    is used, we will use whatever version of Python 3 exists in the image. If none exists, we will
+    install Python 3.10.
 
     Example:
         ```python
