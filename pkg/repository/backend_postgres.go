@@ -286,6 +286,7 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
     SELECT id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id
     FROM token
     WHERE workspace_id = $1
+	AND token_type != 'worker'
     ORDER BY created_at DESC;
     `
 
