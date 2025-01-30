@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -132,12 +133,27 @@ const ContainerStateTtlSWhilePending int64 = 600
 const ContainerStateTtlS int64 = 120
 const WorkspaceQuotaTtlS int64 = 600
 
+const containerStateNotFoundPrefix = "container state not found: "
+
 type ErrContainerStateNotFound struct {
 	ContainerId string
 }
 
 func (e *ErrContainerStateNotFound) Error() string {
-	return fmt.Sprintf("container state not found: %s", e.ContainerId)
+	return fmt.Sprintf("%s%s", containerStateNotFoundPrefix, e.ContainerId)
+}
+
+func (e *ErrContainerStateNotFound) From(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if strings.HasPrefix(err.Error(), containerStateNotFoundPrefix) {
+		e.ContainerId = strings.TrimPrefix(err.Error(), containerStateNotFoundPrefix)
+		return true
+	}
+
+	return false
 }
 
 type ErrInvalidWorkerStatus struct {

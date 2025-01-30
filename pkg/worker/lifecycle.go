@@ -504,7 +504,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		_, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
 		if err != nil {
-			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
+			notFoundErr := &types.ErrContainerStateNotFound{}
+
+			if notFoundErr.From(err) {
 				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}

@@ -56,6 +56,7 @@ func newGRPCConn(host string, token string) (*grpc.ClientConn, error) {
 	return grpc.NewClient(host, dialOpts...)
 }
 
+// handleGRPCResponse handles a repository gRPC response and returns the response & an error if the response is not Ok
 func handleGRPCResponse[T interface {
 	GetOk() bool
 	GetErrorMsg() string
