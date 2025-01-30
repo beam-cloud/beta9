@@ -25,6 +25,7 @@ LOCAL_PYTHON_VERSION = PythonVersion(f"python{sys.version_info.major}.{sys.versi
 class ImageBuildResult(NamedTuple):
     success: bool = False
     image_id: str = ""
+    python_version: str = ""
 
 
 class ImageCredentialValueNotFound(Exception):
@@ -94,7 +95,7 @@ def detected_python_version() -> PythonVersion:
     ]:
         return LOCAL_PYTHON_VERSION
 
-    return PythonVersion.PythonDefault
+    return PythonVersion.Python3
 
 
 class Image(BaseAbstraction):
@@ -104,7 +105,7 @@ class Image(BaseAbstraction):
 
     def __init__(
         self,
-        python_version: PythonVersionAlias = PythonVersion.PythonDefault,
+        python_version: PythonVersionAlias = PythonVersion.Python3,
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
@@ -406,7 +407,12 @@ class Image(BaseAbstraction):
             )
         )
 
-        return (r.exists, ImageBuildResult(success=r.exists, image_id=r.image_id))
+        return (
+            r.exists,
+            ImageBuildResult(
+                success=r.exists, image_id=r.image_id, python_version=self.python_version
+            ),
+        )
 
     def build(self) -> ImageBuildResult:
         terminal.header("Building image")
@@ -423,7 +429,11 @@ class Image(BaseAbstraction):
         exists, exists_response = self.exists()
         if exists:
             terminal.header("Using cached image")
-            return ImageBuildResult(success=True, image_id=exists_response.image_id)
+            return ImageBuildResult(
+                success=True,
+                image_id=exists_response.image_id,
+                python_version=exists_response.python_version,
+            )
 
         with terminal.progress("Working..."):
             last_response = BuildImageResponse(success=False)
@@ -454,7 +464,11 @@ class Image(BaseAbstraction):
             return ImageBuildResult(success=False)
 
         terminal.header("Build complete 🎉")
-        return ImageBuildResult(success=True, image_id=last_response.image_id)
+        return ImageBuildResult(
+            success=True,
+            image_id=last_response.image_id,
+            python_version=last_response.python_version,
+        )
 
     def get_credentials_from_env(self) -> Dict[str, str]:
         if env.is_remote():

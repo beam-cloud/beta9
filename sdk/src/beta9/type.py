@@ -47,7 +47,7 @@ class PythonVersion(str, Enum):
         ```
     """
 
-    PythonDefault = "pythonDefault"
+    Python3 = "python3"
     Python38 = "python3.8"
     Python39 = "python3.9"
     Python310 = "python3.10"

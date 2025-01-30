@@ -358,34 +358,42 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return errors.New("container not running")
 	}
 
-	// Generate the pip install command and prepend it to the commands list
-	if len(opts.PythonPackages) > 0 {
-		pipInstallCmd := generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
-		opts.Commands = append([]string{pipInstallCmd}, opts.Commands...)
-	}
-
-	log.Info().Str("container_id", containerId).Interface("options", opts).Msg("container building")
-	startTime := time.Now()
-
 	micromambaEnv := strings.Contains(opts.PythonVersion, "micromamba")
 	if micromambaEnv {
 		client.Exec(containerId, "micromamba config set use_lockfiles False")
 	}
 
+	var setupCommands []string
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
+
+		if opts.PythonVersion == "python3" {
+			opts.PythonVersion = "python3.10"
+		}
+
 		outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
 		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, opts.PythonVersion)
 		if err != nil {
 			outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: err.Error() + "\n"}
 			return err
 		}
-		opts.Commands = append([]string{installCmd}, opts.Commands...)
+		setupCommands = append(setupCommands, installCmd)
 	}
+
+	// Generate the pip install command and prepend it to the commands list
+	if len(opts.PythonPackages) > 0 {
+		pipInstallCmd := generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
+		setupCommands = append(setupCommands, pipInstallCmd)
+	}
+
+	opts.Commands = append(setupCommands, opts.Commands...)
 
 	// Generate the commands to run in the container
 	opts.Commands = append(opts.Commands, parseBuildSteps(opts.BuildSteps, opts.PythonVersion)...)
+
+	log.Info().Str("container_id", containerId).Interface("options", opts).Msg("container building")
+	startTime := time.Now()
 
 	for _, cmd := range opts.Commands {
 		if cmd == "" {
@@ -414,7 +422,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	success.Store(true)
-	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: success.Load(), ImageId: imageId}
+	outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: success.Load(), ImageId: imageId, PythonVersion: opts.PythonVersion}
 	return nil
 }
 
@@ -566,22 +574,6 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 		Tag:      tag,
 		Digest:   digest,
 	}, nil
-}
-
-func getPythonInstallCommand(pythonVersion string) string {
-	baseCmd := "apt-get update -q && apt-get install -q -y software-properties-common gcc curl git"
-	components := []string{
-		"python3-future",
-		pythonVersion,
-		fmt.Sprintf("%s-distutils", pythonVersion),
-		fmt.Sprintf("%s-dev", pythonVersion),
-	}
-
-	installCmd := strings.Join(components, " ")
-	installPipCmd := fmt.Sprintf("curl -sS https://bootstrap.pypa.io/get-pip.py | %s", pythonVersion)
-	postInstallCmd := fmt.Sprintf("rm -f /usr/bin/python && rm -f /usr/bin/python3 && ln -s /usr/bin/%s /usr/bin/python && ln -s /usr/bin/%s /usr/bin/python3 && %s", pythonVersion, pythonVersion, installPipCmd)
-
-	return fmt.Sprintf("%s && add-apt-repository ppa:deadsnakes/ppa && apt-get update && apt-get install -q -y %s && %s", baseCmd, installCmd, postInstallCmd)
 }
 
 // PythonStandaloneTemplate is used to render the standalone python install script
