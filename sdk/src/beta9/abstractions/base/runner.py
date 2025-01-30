@@ -352,7 +352,7 @@ class RunnerAbstraction(BaseAbstraction):
             return GpuType(gpu).value
 
     def _validate_on_deploy(self, func: Callable):
-        if not func:
+        if func is None:
             return None
 
         if not callable(func):
