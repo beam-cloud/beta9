@@ -6,10 +6,6 @@ images:
     repository: registry.localhost:5000/beta9-gateway
     tag: latest
     pullPolicy: Always
-  proxy:
-    repository: registry.localhost:5000/beta9-proxy
-    tag: latest
-    pullPolicy: Always
 
 service:
   gateway:

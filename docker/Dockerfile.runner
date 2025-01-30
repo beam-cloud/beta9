@@ -254,7 +254,7 @@ VOLUME ["/volumes", "/snapshot"]
 # Micromamba final
 # ========================
 ARG PYTHON_VERSION=3.10
-FROM micromamba-base as micromamba
+FROM micromamba-base AS micromamba
 
 WORKDIR /workspace
 

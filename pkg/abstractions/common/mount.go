@@ -45,7 +45,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 			}
 
 			mount.MountPointConfig = &types.MountPointConfig{
-				S3Bucket:    v.Config.BucketName,
+				BucketName:  v.Config.BucketName,
 				AccessKey:   decryptedSecrets[0],
 				SecretKey:   decryptedSecrets[1],
 				EndpointURL: v.Config.EndpointUrl,

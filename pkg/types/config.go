@@ -207,8 +207,9 @@ type CunoFSConfig struct {
 	S3BucketName  string `key:"s3BucketName" json:"s3_bucket_name"`
 }
 
+// @go2proto
 type MountPointConfig struct {
-	S3Bucket    string `json:"s3_bucket"`
+	BucketName  string `json:"s3_bucket"`
 	AccessKey   string `json:"access_key"`
 	SecretKey   string `json:"secret_key"`
 	EndpointURL string `json:"bucket_url"`

@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"runtime"
 	"time"
 )
 
@@ -27,6 +28,7 @@ type ContainerResourceUsage struct {
 	GpuType           string `json:"GpuType"`
 }
 
+// @go2proto
 type Mount struct {
 	LocalPath        string            `json:"local_path"`
 	MountPath        string            `json:"mount_path"`
@@ -54,10 +56,10 @@ const (
 
 var WorkerContainerExitCodes = map[int]string{
 	WorkerContainerExitCodeSuccess:            "Success",
-	WorkerContainerExitCodeUnknownError:       "UnknownError",
-	WorkerContainerExitCodeIncorrectImageArch: "InvalidArch: Image is not amd64/x86_64",
-	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Could not find custom image",
-	WorkerContainerExitCodeIncorrectImageOs:   "InvalidOs: Image is not built for linux",
+	WorkerContainerExitCodeUnknownError:       "UnknownError: An unknown error occurred.",
+	WorkerContainerExitCodeIncorrectImageArch: "InvalidArch: Image must be built for the " + runtime.GOARCH + " architecture.",
+	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Custom image not found. Check your image reference and registry credentials.",
+	WorkerContainerExitCodeIncorrectImageOs:   "InvalidOS: Image must be built for Linux.",
 }
 
 const (

@@ -2,8 +2,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..abstractions.base import BaseAbstraction
-from ..clients.gateway import MountPointConfig as VolumeConfigGateway
 from ..clients.gateway import Volume as VolumeGateway
+from ..clients.types import MountPointConfig as VolumeConfigGateway
 from ..clients.volume import GetOrCreateVolumeRequest, GetOrCreateVolumeResponse, VolumeServiceStub
 
 
