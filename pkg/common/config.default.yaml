@@ -66,8 +66,8 @@ fileService:
 imageService:
   localCacheEnabled: true
   # 120 ns per byte is a rough estimate of the time it takes per byte to pull, unpack, and archive an image.
-	# In the worst case, we have seen 10gb images take 20 minutes. That is 1e+10 bytes taking 1200 seconds.
-	# That gives 1200 / 1e+10 = 120 ns per byte.
+  # In the worst case, we have seen 10gb images take 20 minutes. That is 1e+10 bytes taking 1200 seconds.
+  # That gives 1200 / 1e+10 = 120 ns per byte.
   archiveNanosecondsPerByte: 120
   registryStore: local
   registryCredentialProvider: docker
@@ -182,6 +182,7 @@ worker:
   terminationGracePeriod: 30
   addWorkerTimeout: 10m
   blobCacheEnabled: false
+  containerLogLinesPerHour: 6000
   criu:
     storage:
       mountPath: /data/checkpoints

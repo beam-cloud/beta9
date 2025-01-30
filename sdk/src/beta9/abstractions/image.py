@@ -125,9 +125,9 @@ class Image(BaseAbstraction):
         Parameters:
             python_version (Union[PythonVersion, str]):
                 The Python version to be used in the image. Default is set to [PythonVersion.Python3](#pythonversion).
-                When using [PythonVersion.Python3](#pythonversion), we will use whatever version of Python 3 exists in the image.
-                If none exists, we will install Python 3.10. When running in a notebook environment without a custom base image,
-                we will attempt to detect the Python version in the local environment and use that.
+                When using [PythonVersion.Python3](#pythonversion), whatever version of Python 3 exists in the image will be used.
+                If none exists, Python 3.10 will be installed. When running in a notebook environment without a custom base image,
+                the Python version detected in the local environment will be used if compatible. Otherwise, Python 3.10 will be installed.
             python_packages (Union[List[str], str]):
                 A list of Python packages to install in the container image. Alternatively, a string
                 containing a path to a requirements.txt can be provided. Default is [].
