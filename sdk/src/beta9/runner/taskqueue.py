@@ -212,7 +212,9 @@ class TaskQueueWorker:
                         container_id=container_id,
                     )
                 ):
-                    print("Time since last response: ", time.time() - start)
+                    print(
+                        f"Time since last response: {time.time() - start}",
+                    )
                     if time.time() - start > 60:
                         print("No response from task monitor greater than 60 seconds")
 
