@@ -368,8 +368,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
 	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 
-		if opts.PythonVersion == b.config.ImageService.DefaultPythonVersion {
-			opts.PythonVersion = types.Python310.String()
+		if opts.PythonVersion == types.Python3.String() {
+			opts.PythonVersion = b.config.ImageService.PythonVersion
 		}
 
 		outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
