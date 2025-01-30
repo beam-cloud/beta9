@@ -383,7 +383,6 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			getStateResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{
 				ContainerId: request.ContainerId,
 			}))
-			log.Info().Str("container_id", request.ContainerId).Interface("getStateResponse", getStateResponse).Msg("getStateResponse")
 			if err != nil {
 				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
 					log.Info().Str("container_id", request.ContainerId).Msg("container state not found, stopping container")

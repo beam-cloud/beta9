@@ -68,13 +68,11 @@ func NewBackendPostgresRepository(config types.PostgresConfig, eventRepo EventRe
 		return nil, err
 	}
 
-	r := &PostgresBackendRepository{
+	return &PostgresBackendRepository{
 		client:    db,
 		config:    config,
 		eventRepo: eventRepo,
-	}
-
-	return r, nil
+	}, nil
 }
 
 type GooseLogger struct {
