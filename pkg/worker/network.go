@@ -94,15 +94,6 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		}
 	}
 
-	getWorkerResponse, err := workerRepoClient.GetWorkerById(ctx, &pb.GetWorkerByIdRequest{
-		WorkerId: workerId,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	worker := types.NewWorkerFromProto(getWorkerResponse.Worker)
-
 	networkPrefix := os.Getenv("NETWORK_PREFIX")
 	if networkPrefix == "" {
 		return nil, errors.New("invalid network prefix")
@@ -113,7 +104,6 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		ipt:                 ipt,
 		ipt6:                ipt6,
 		defaultLink:         defaultLink,
-		worker:              worker,
 		workerRepoClient:    workerRepoClient,
 		containerRepoClient: containerRepoClient,
 		networkPrefix:       networkPrefix,
