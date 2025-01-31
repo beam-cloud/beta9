@@ -2,6 +2,7 @@ package repository_services
 
 import (
 	"context"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -13,29 +14,44 @@ type WorkerRepositoryService struct {
 	pb.UnimplementedWorkerRepositoryServiceServer
 }
 
+const (
+	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
+)
+
 func NewWorkerRepositoryService(workerRepo repository.WorkerRepository) *WorkerRepositoryService {
 	return &WorkerRepositoryService{workerRepo: workerRepo}
 }
 
-func (s *WorkerRepositoryService) GetNextContainerRequest(ctx context.Context, req *pb.GetNextContainerRequestRequest) (*pb.GetNextContainerRequestResponse, error) {
-	request, err := s.workerRepo.GetNextContainerRequest(req.WorkerId)
-	if err != nil {
-		return &pb.GetNextContainerRequestResponse{
-			Ok:       false,
-			ErrorMsg: err.Error(),
-		}, nil
-	}
+func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContainerRequestRequest, stream pb.WorkerRepositoryService_GetNextContainerRequestServer) error {
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		default:
+			request, err := s.workerRepo.GetNextContainerRequest(req.WorkerId)
+			if err != nil {
+				return stream.Send(&pb.GetNextContainerRequestResponse{
+					Ok:       false,
+					ErrorMsg: err.Error(),
+				})
+			}
 
-	if request == nil {
-		return &pb.GetNextContainerRequestResponse{
-			Ok: true,
-		}, nil
-	}
+			if request == nil {
+				time.Sleep(containerRequestPollingInterval)
+				continue
+			}
 
-	return &pb.GetNextContainerRequestResponse{
-		Ok:               true,
-		ContainerRequest: request.ToProto(),
-	}, nil
+			err = stream.Send(&pb.GetNextContainerRequestResponse{
+				Ok:               true,
+				ContainerRequest: request.ToProto(),
+			})
+			if err != nil {
+				return err
+			}
+
+			time.Sleep(containerRequestPollingInterval)
+		}
+	}
 }
 
 func (s *WorkerRepositoryService) SetImagePullLock(ctx context.Context, req *pb.SetImagePullLockRequest) (*pb.SetImagePullLockResponse, error) {

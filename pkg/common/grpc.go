@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"google.golang.org/grpc"
@@ -11,11 +12,19 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// GRPCClientAuthInterceptor adds an authorization header to the outgoing context
+// GRPCClientAuthInterceptor adds an authorization header to the outgoing context for unary calls
 func GRPCClientAuthInterceptor(token string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 		return invoker(newCtx, method, req, reply, cc, opts...)
+	}
+}
+
+// GRPCClientAuthStreamInterceptor adds an authorization header to the outgoing context for streaming calls
+func GRPCClientAuthStreamInterceptor(token string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+		return streamer(newCtx, desc, cc, method, opts...)
 	}
 }
 
@@ -38,5 +47,29 @@ func GRPCClientRetryInterceptor(maxRetries int, delay time.Duration) grpc.UnaryC
 		}
 
 		return errors.New("max retries reached")
+	}
+}
+
+// GRPCClientRetryStreamInterceptor retries the stream on some gRPC errors
+func GRPCClientRetryStreamInterceptor(maxRetries int, delay time.Duration) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		var lastErr error
+		for i := 0; i < maxRetries; i++ {
+			clientStream, err := streamer(ctx, desc, cc, method, opts...)
+			if err == nil {
+				return clientStream, nil
+			}
+
+			lastErr = err
+			st, ok := status.FromError(err)
+			if !ok || (st.Code() != codes.Unavailable && st.Code() != codes.ResourceExhausted) {
+				return nil, err
+			}
+
+			time.Sleep(delay)
+			delay *= 2
+		}
+
+		return nil, fmt.Errorf("max retries reached: %w", lastErr)
 	}
 }

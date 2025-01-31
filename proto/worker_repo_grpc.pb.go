@@ -41,7 +41,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WorkerRepositoryServiceClient interface {
-	GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (*GetNextContainerRequestResponse, error)
+	GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (WorkerRepositoryService_GetNextContainerRequestClient, error)
 	SetImagePullLock(ctx context.Context, in *SetImagePullLockRequest, opts ...grpc.CallOption) (*SetImagePullLockResponse, error)
 	RemoveImagePullLock(ctx context.Context, in *RemoveImagePullLockRequest, opts ...grpc.CallOption) (*RemoveImagePullLockResponse, error)
 	AddContainerToWorker(ctx context.Context, in *AddContainerToWorkerRequest, opts ...grpc.CallOption) (*AddContainerToWorkerResponse, error)
@@ -67,13 +67,36 @@ func NewWorkerRepositoryServiceClient(cc grpc.ClientConnInterface) WorkerReposit
 	return &workerRepositoryServiceClient{cc}
 }
 
-func (c *workerRepositoryServiceClient) GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (*GetNextContainerRequestResponse, error) {
-	out := new(GetNextContainerRequestResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetNextContainerRequest_FullMethodName, in, out, opts...)
+func (c *workerRepositoryServiceClient) GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (WorkerRepositoryService_GetNextContainerRequestClient, error) {
+	stream, err := c.cc.NewStream(ctx, &WorkerRepositoryService_ServiceDesc.Streams[0], WorkerRepositoryService_GetNextContainerRequest_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &workerRepositoryServiceGetNextContainerRequestClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type WorkerRepositoryService_GetNextContainerRequestClient interface {
+	Recv() (*GetNextContainerRequestResponse, error)
+	grpc.ClientStream
+}
+
+type workerRepositoryServiceGetNextContainerRequestClient struct {
+	grpc.ClientStream
+}
+
+func (x *workerRepositoryServiceGetNextContainerRequestClient) Recv() (*GetNextContainerRequestResponse, error) {
+	m := new(GetNextContainerRequestResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (c *workerRepositoryServiceClient) SetImagePullLock(ctx context.Context, in *SetImagePullLockRequest, opts ...grpc.CallOption) (*SetImagePullLockResponse, error) {
@@ -215,7 +238,7 @@ func (c *workerRepositoryServiceClient) RemoveContainerIp(ctx context.Context, i
 // All implementations must embed UnimplementedWorkerRepositoryServiceServer
 // for forward compatibility
 type WorkerRepositoryServiceServer interface {
-	GetNextContainerRequest(context.Context, *GetNextContainerRequestRequest) (*GetNextContainerRequestResponse, error)
+	GetNextContainerRequest(*GetNextContainerRequestRequest, WorkerRepositoryService_GetNextContainerRequestServer) error
 	SetImagePullLock(context.Context, *SetImagePullLockRequest) (*SetImagePullLockResponse, error)
 	RemoveImagePullLock(context.Context, *RemoveImagePullLockRequest) (*RemoveImagePullLockResponse, error)
 	AddContainerToWorker(context.Context, *AddContainerToWorkerRequest) (*AddContainerToWorkerResponse, error)
@@ -238,8 +261,8 @@ type WorkerRepositoryServiceServer interface {
 type UnimplementedWorkerRepositoryServiceServer struct {
 }
 
-func (UnimplementedWorkerRepositoryServiceServer) GetNextContainerRequest(context.Context, *GetNextContainerRequestRequest) (*GetNextContainerRequestResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetNextContainerRequest not implemented")
+func (UnimplementedWorkerRepositoryServiceServer) GetNextContainerRequest(*GetNextContainerRequestRequest, WorkerRepositoryService_GetNextContainerRequestServer) error {
+	return status.Errorf(codes.Unimplemented, "method GetNextContainerRequest not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) SetImagePullLock(context.Context, *SetImagePullLockRequest) (*SetImagePullLockResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetImagePullLock not implemented")
@@ -300,22 +323,25 @@ func RegisterWorkerRepositoryServiceServer(s grpc.ServiceRegistrar, srv WorkerRe
 	s.RegisterService(&WorkerRepositoryService_ServiceDesc, srv)
 }
 
-func _WorkerRepositoryService_GetNextContainerRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetNextContainerRequestRequest)
-	if err := dec(in); err != nil {
-		return nil, err
+func _WorkerRepositoryService_GetNextContainerRequest_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetNextContainerRequestRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
 	}
-	if interceptor == nil {
-		return srv.(WorkerRepositoryServiceServer).GetNextContainerRequest(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WorkerRepositoryService_GetNextContainerRequest_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerRepositoryServiceServer).GetNextContainerRequest(ctx, req.(*GetNextContainerRequestRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return srv.(WorkerRepositoryServiceServer).GetNextContainerRequest(m, &workerRepositoryServiceGetNextContainerRequestServer{stream})
+}
+
+type WorkerRepositoryService_GetNextContainerRequestServer interface {
+	Send(*GetNextContainerRequestResponse) error
+	grpc.ServerStream
+}
+
+type workerRepositoryServiceGetNextContainerRequestServer struct {
+	grpc.ServerStream
+}
+
+func (x *workerRepositoryServiceGetNextContainerRequestServer) Send(m *GetNextContainerRequestResponse) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 func _WorkerRepositoryService_SetImagePullLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -596,10 +622,6 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*WorkerRepositoryServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GetNextContainerRequest",
-			Handler:    _WorkerRepositoryService_GetNextContainerRequest_Handler,
-		},
-		{
 			MethodName: "SetImagePullLock",
 			Handler:    _WorkerRepositoryService_SetImagePullLock_Handler,
 		},
@@ -660,6 +682,12 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _WorkerRepositoryService_RemoveContainerIp_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "GetNextContainerRequest",
+			Handler:       _WorkerRepositoryService_GetNextContainerRequest_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "worker_repo.proto",
 }

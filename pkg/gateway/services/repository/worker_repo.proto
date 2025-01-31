@@ -6,7 +6,7 @@ import "types.proto";
 
 service WorkerRepositoryService {
   rpc GetNextContainerRequest(GetNextContainerRequestRequest)
-      returns (GetNextContainerRequestResponse) {}
+      returns (stream GetNextContainerRequestResponse) {}
   rpc SetImagePullLock(SetImagePullLockRequest)
       returns (SetImagePullLockResponse) {}
   rpc RemoveImagePullLock(RemoveImagePullLockRequest)

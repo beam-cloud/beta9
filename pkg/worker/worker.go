@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -25,12 +26,12 @@ import (
 )
 
 const (
-	requestProcessingInterval     time.Duration = 100 * time.Millisecond
 	containerStatusUpdateInterval time.Duration = 30 * time.Second
 
-	containerLogsPath          string        = "/var/log/worker"
-	defaultWorkerSpindownTimeS float64       = 300 // 5 minutes
-	defaultCacheWaitTime       time.Duration = 30 * time.Second
+	containerLogsPath               string        = "/var/log/worker"
+	defaultWorkerSpindownTimeS      float64       = 300 // 5 minutes
+	defaultCacheWaitTime            time.Duration = 30 * time.Second
+	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
 )
 
 type Worker struct {
@@ -274,11 +275,27 @@ func (s *Worker) Run() error {
 	go s.processStopContainerEvents()
 
 	lastContainerRequest := time.Now()
+	stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
+		WorkerId: s.workerId,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("failed to start container request stream")
+		return err
+	}
+
 	for {
-		response, err := handleGRPCResponse(s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
-			WorkerId: s.workerId,
-		}))
-		if err == nil && response.ContainerRequest != nil {
+		response, err := stream.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+
+			log.Error().Err(err).Msg("error receiving container request")
+			time.Sleep(containerRequestPollingInterval)
+			continue
+		}
+
+		if response.ContainerRequest != nil {
 			request := types.NewContainerRequestFromProto(response.ContainerRequest)
 			lastContainerRequest = time.Now()
 			containerId := request.ContainerId
@@ -327,8 +344,6 @@ func (s *Worker) Run() error {
 		if exit := s.shouldShutDown(lastContainerRequest); exit {
 			break
 		}
-
-		time.Sleep(requestProcessingInterval)
 	}
 
 	return s.shutdown()

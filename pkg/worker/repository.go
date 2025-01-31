@@ -53,10 +53,12 @@ func newGRPCConn(host string, token string) (*grpc.ClientConn, error) {
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(creds),
 		grpc.WithUnaryInterceptor(common.GRPCClientRetryInterceptor(defaultGRPCMaxRetries, defaultGRPCRetryDelay)),
+		grpc.WithStreamInterceptor(common.GRPCClientRetryStreamInterceptor(defaultGRPCMaxRetries, defaultGRPCRetryDelay)),
 	}
 
 	if token != "" {
 		opts = append(opts, grpc.WithUnaryInterceptor(common.GRPCClientAuthInterceptor(token)))
+		opts = append(opts, grpc.WithStreamInterceptor(common.GRPCClientAuthStreamInterceptor(token)))
 	}
 
 	return grpc.Dial(host, opts...)
