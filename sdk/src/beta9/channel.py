@@ -53,6 +53,7 @@ class Channel(InterceptorChannel):
 
         options.append(("grpc.keepalive_time_ms", 10000))
         options.append(("grpc.keepalive_timeout_ms", 5000))
+        options.append(("grpc.http2.max_ping_strikes", 1))
         options.append(("grpc.http2.max_pings_without_data", 0))
 
         if credentials is not None:
