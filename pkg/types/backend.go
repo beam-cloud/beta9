@@ -31,8 +31,6 @@ func (w *Workspace) ToProto() *pb.Workspace {
 		Id:                 uint32(w.Id),
 		ExternalId:         w.ExternalId,
 		Name:               w.Name,
-		CreatedAt:          timestamppb.New(w.CreatedAt),
-		UpdatedAt:          timestamppb.New(w.UpdatedAt),
 		SigningKey:         *w.SigningKey,
 		VolumeCacheEnabled: w.VolumeCacheEnabled,
 		MultiGpuEnabled:    w.MultiGpuEnabled,
@@ -48,8 +46,6 @@ func NewWorkspaceFromProto(in *pb.Workspace) *Workspace {
 		Id:                 uint(in.Id),
 		ExternalId:         in.ExternalId,
 		Name:               in.Name,
-		CreatedAt:          in.CreatedAt.AsTime(),
-		UpdatedAt:          in.UpdatedAt.AsTime(),
 		SigningKey:         &in.SigningKey,
 		VolumeCacheEnabled: in.VolumeCacheEnabled,
 		MultiGpuEnabled:    in.MultiGpuEnabled,
@@ -491,8 +487,6 @@ func (c *ConcurrencyLimit) ToProto() *pb.ConcurrencyLimit {
 		ExternalId:        c.ExternalId,
 		GpuLimit:          c.GPULimit,
 		CpuMillicoreLimit: c.CPUMillicoreLimit,
-		CreatedAt:         timestamppb.New(c.CreatedAt),
-		UpdatedAt:         timestamppb.New(c.UpdatedAt),
 	}
 }
 
@@ -502,8 +496,6 @@ func NewConcurrencyLimitFromProto(in *pb.ConcurrencyLimit) *ConcurrencyLimit {
 		ExternalId:        in.ExternalId,
 		GPULimit:          in.GpuLimit,
 		CPUMillicoreLimit: in.CpuMillicoreLimit,
-		CreatedAt:         in.CreatedAt.AsTime(),
-		UpdatedAt:         in.UpdatedAt.AsTime(),
 	}
 }
 
