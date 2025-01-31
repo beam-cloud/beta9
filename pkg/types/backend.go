@@ -27,9 +27,9 @@ type Workspace struct {
 }
 
 func (w *Workspace) ToProto() *pb.Workspace {
-	concurrentLimit := w.ConcurrencyLimit
-	if concurrentLimit == nil {
-		concurrentLimit = &ConcurrencyLimit{}
+	concurrencyLimit := &pb.ConcurrencyLimit{}
+	if w.ConcurrencyLimit != nil {
+		concurrencyLimit = w.ConcurrencyLimit.ToProto()
 	}
 
 	return &pb.Workspace{
@@ -39,17 +39,14 @@ func (w *Workspace) ToProto() *pb.Workspace {
 		SigningKey:         *w.SigningKey,
 		VolumeCacheEnabled: w.VolumeCacheEnabled,
 		MultiGpuEnabled:    w.MultiGpuEnabled,
-		ConcurrencyLimitId: uint32(*w.ConcurrencyLimitId),
-		ConcurrencyLimit:   concurrentLimit.ToProto(),
+		ConcurrencyLimit:   concurrencyLimit,
 	}
 }
 
 func NewWorkspaceFromProto(in *pb.Workspace) *Workspace {
-	concurrencyLimitId := uint(in.ConcurrencyLimitId)
-
-	concurrencyLimit := NewConcurrencyLimitFromProto(in.ConcurrencyLimit)
-	if concurrencyLimit == nil {
-		concurrencyLimit = &ConcurrencyLimit{}
+	concurrencyLimit := &ConcurrencyLimit{}
+	if in.ConcurrencyLimit != nil {
+		concurrencyLimit = NewConcurrencyLimitFromProto(in.ConcurrencyLimit)
 	}
 
 	return &Workspace{
@@ -59,7 +56,6 @@ func NewWorkspaceFromProto(in *pb.Workspace) *Workspace {
 		SigningKey:         &in.SigningKey,
 		VolumeCacheEnabled: in.VolumeCacheEnabled,
 		MultiGpuEnabled:    in.MultiGpuEnabled,
-		ConcurrencyLimitId: &concurrencyLimitId,
 		ConcurrencyLimit:   concurrencyLimit,
 	}
 }
