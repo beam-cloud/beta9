@@ -171,6 +171,16 @@ func (s *WorkerRepositoryService) UpdateWorkerCapacity(ctx context.Context, req 
 
 	return &pb.UpdateWorkerCapacityResponse{Ok: true}, nil
 }
+
+func (s *WorkerRepositoryService) RemoveWorker(ctx context.Context, req *pb.RemoveWorkerRequest) (*pb.RemoveWorkerResponse, error) {
+	err := s.workerRepo.RemoveWorker(req.WorkerId)
+	if err != nil {
+		return &pb.RemoveWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.RemoveWorkerResponse{Ok: true}, nil
+}
+
 func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.SetNetworkLockRequest) (*pb.SetNetworkLockResponse, error) {
 	err := s.workerRepo.SetNetworkLock(req.NetworkPrefix, int(req.Ttl), int(req.Retries))
 	if err != nil {

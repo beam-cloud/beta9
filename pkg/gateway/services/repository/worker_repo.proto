@@ -18,6 +18,7 @@ service WorkerRepositoryService {
   rpc GetWorkerById(GetWorkerByIdRequest) returns (GetWorkerByIdResponse) {}
   rpc ToggleWorkerAvailable(ToggleWorkerAvailableRequest)
       returns (ToggleWorkerAvailableResponse) {}
+  rpc RemoveWorker(RemoveWorkerRequest) returns (RemoveWorkerResponse) {}
   rpc UpdateWorkerCapacity(UpdateWorkerCapacityRequest)
       returns (UpdateWorkerCapacityResponse) {}
   rpc SetWorkerKeepAlive(SetWorkerKeepAliveRequest)
@@ -91,6 +92,13 @@ message GetWorkerByIdResponse {
 message ToggleWorkerAvailableRequest { string worker_id = 1; }
 
 message ToggleWorkerAvailableResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RemoveWorkerRequest { string worker_id = 1; }
+
+message RemoveWorkerResponse {
   bool ok = 1;
   string error_msg = 2;
 }

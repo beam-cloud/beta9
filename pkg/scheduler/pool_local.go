@@ -510,7 +510,7 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 				if duration >= maxAge {
 					// Remove worker from repository
 					if workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]; ok {
-						if err := wpc.workerRepo.RemoveWorker(&types.Worker{Id: workerId}); err != nil {
+						if err := wpc.workerRepo.RemoveWorker(workerId); err != nil {
 							log.Error().Str("worker_id", workerId).Err(err).Msg("failed to delete pending worker")
 						}
 					}

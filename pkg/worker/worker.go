@@ -592,16 +592,10 @@ func (s *Worker) shutdown() error {
 	s.cancel()
 
 	var errs error
-	if getWorkerResponse, err := s.workerRepoClient.GetWorkerById(s.ctx, &pb.GetWorkerByIdRequest{
+	if _, err := s.workerRepoClient.RemoveWorker(s.ctx, &pb.RemoveWorkerRequest{
 		WorkerId: s.workerId,
 	}); err != nil {
 		errs = errors.Join(errs, err)
-	} else if getWorkerResponse.Ok {
-		if _, err := s.workerRepoClient.RemoveContainerFromWorker(s.ctx, &pb.RemoveContainerFromWorkerRequest{
-			ContainerId: s.workerId,
-		}); err != nil {
-			errs = errors.Join(errs, err)
-		}
 	}
 
 	err := s.userDataStorage.Unmount(s.config.Storage.FilesystemPath)
