@@ -36,14 +36,14 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 				})
 			}
 
-			if request == nil {
-				time.Sleep(containerRequestPollingInterval)
-				continue
+			var containerRequest *pb.ContainerRequest = nil
+			if request != nil {
+				containerRequest = request.ToProto()
 			}
 
 			err = stream.Send(&pb.GetNextContainerRequestResponse{
 				Ok:               true,
-				ContainerRequest: request.ToProto(),
+				ContainerRequest: containerRequest,
 			})
 			if err != nil {
 				return err
