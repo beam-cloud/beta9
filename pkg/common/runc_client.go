@@ -59,7 +59,7 @@ func (c *RunCClient) connect() error {
 
 	maxMessageSize := 1 << 30 // 1Gi
 	if c.ServiceToken != "" {
-		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(ClientAuthInterceptor(c.ServiceToken)),
+		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(GRPCClientAuthInterceptor(c.ServiceToken)),
 			grpc.WithDefaultCallOptions(
 				grpc.MaxCallRecvMsgSize(maxMessageSize),
 				grpc.MaxCallSendMsgSize(maxMessageSize),
