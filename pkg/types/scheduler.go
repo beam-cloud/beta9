@@ -225,10 +225,14 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 
 	var buildOptions *pb.BuildOptions
 	if c.IsBuildRequest() {
+		sourceImage := getStringOrDefault(c.BuildOptions.SourceImage)
+		dockerfile := getStringOrDefault(c.BuildOptions.Dockerfile)
+		buildCtxObject := getStringOrDefault(c.BuildOptions.BuildCtxObject)
+
 		buildOptions = &pb.BuildOptions{
-			SourceImage:      *c.BuildOptions.SourceImage,
-			Dockerfile:       *c.BuildOptions.Dockerfile,
-			BuildCtxObject:   *c.BuildOptions.BuildCtxObject,
+			SourceImage:      sourceImage,
+			Dockerfile:       dockerfile,
+			BuildCtxObject:   buildCtxObject,
 			SourceImageCreds: c.BuildOptions.SourceImageCreds,
 			BuildSecrets:     c.BuildOptions.BuildSecrets,
 		}
@@ -267,9 +271,9 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 	var bo BuildOptions
 	if in.BuildOptions != nil {
 		bo = BuildOptions{
-			SourceImage:      &in.BuildOptions.SourceImage,
-			Dockerfile:       &in.BuildOptions.Dockerfile,
-			BuildCtxObject:   &in.BuildOptions.BuildCtxObject,
+			SourceImage:      getPointerOrNil(in.BuildOptions.SourceImage),
+			Dockerfile:       getPointerOrNil(in.BuildOptions.Dockerfile),
+			BuildCtxObject:   getPointerOrNil(in.BuildOptions.BuildCtxObject),
 			SourceImageCreds: in.BuildOptions.SourceImageCreds,
 			BuildSecrets:     in.BuildOptions.BuildSecrets,
 		}
@@ -296,6 +300,20 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
 	}
+}
+
+func getPointerOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func getStringOrDefault(s *string) string {
+	if s != nil {
+		return *s
+	}
+	return ""
 }
 
 const ContainerExitCodeTtlS int = 300

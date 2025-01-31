@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -26,12 +25,11 @@ import (
 )
 
 const (
-	containerStatusUpdateInterval time.Duration = 30 * time.Second
-
-	containerLogsPath               string        = "/var/log/worker"
-	defaultWorkerSpindownTimeS      float64       = 300 // 5 minutes
-	defaultCacheWaitTime            time.Duration = 30 * time.Second
-	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
+	containerLogsPath              string        = "/var/log/worker"
+	defaultWorkerSpindownTimeS     float64       = 300 // 5 minutes
+	defaultCacheWaitTime           time.Duration = 30 * time.Second
+	containerStatusUpdateInterval  time.Duration = 30 * time.Second
+	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
 )
 
 type Worker struct {
@@ -275,78 +273,78 @@ func (s *Worker) Run() error {
 	go s.processStopContainerEvents()
 
 	lastContainerRequest := time.Now()
-	stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
-		WorkerId: s.workerId,
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("failed to start container request stream")
-		return err
-	}
 
 	for {
-		response, err := stream.Recv()
+		stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
+			WorkerId: s.workerId,
+		})
 		if err != nil {
-			if err == io.EOF {
-				break
+			if err == context.Canceled {
+				return nil
 			}
 
-			log.Error().Err(err).Msg("error receiving container request")
-			time.Sleep(containerRequestPollingInterval)
+			log.Error().Err(err).Msg("error starting container request stream")
+			time.Sleep(containerRequestStreamInterval)
 			continue
 		}
 
-		if response.ContainerRequest != nil {
-			request := types.NewContainerRequestFromProto(response.ContainerRequest)
-			lastContainerRequest = time.Now()
-			containerId := request.ContainerId
-
-			s.containerLock.Lock()
-
-			_, exists := s.containerInstances.Get(containerId)
-			if !exists {
-				log.Info().Str("container_id", containerId).Msg("running container")
-
-				ctx, cancel := context.WithCancel(s.ctx)
-
-				if request.IsBuildRequest() {
-					go s.listenForStopBuildEvent(ctx, cancel, containerId)
-				}
-
-				err := s.RunContainer(ctx, request)
-				if err != nil {
-					log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
-
-					// Set a non-zero exit code for the container (both in memory, and in repo)
-					exitCode := 1
-
-					serr, ok := err.(*types.ExitCodeError)
-					if ok {
-						exitCode = serr.ExitCode
-					}
-
-					_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
-						ContainerId: containerId,
-						ExitCode:    int32(exitCode),
-					}))
-					if err != nil {
-						log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
-					}
-
-					s.containerLock.Unlock()
-					s.clearContainer(containerId, request, exitCode)
-					continue
-				}
+		for {
+			response, err := stream.Recv()
+			if err != nil {
+				break
 			}
 
-			s.containerLock.Unlock()
-		}
+			if response.ContainerRequest != nil {
+				request := types.NewContainerRequestFromProto(response.ContainerRequest)
+				lastContainerRequest = time.Now()
+				containerId := request.ContainerId
 
-		if exit := s.shouldShutDown(lastContainerRequest); exit {
-			break
+				s.containerLock.Lock()
+
+				_, exists := s.containerInstances.Get(containerId)
+				if !exists {
+					log.Info().Str("container_id", containerId).Msg("running container")
+
+					ctx, cancel := context.WithCancel(s.ctx)
+
+					if request.IsBuildRequest() {
+						go s.listenForStopBuildEvent(ctx, cancel, containerId)
+					}
+
+					err := s.RunContainer(ctx, request)
+					if err != nil {
+						log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
+
+						// Set a non-zero exit code for the container (both in memory, and in repo)
+						exitCode := 1
+
+						serr, ok := err.(*types.ExitCodeError)
+						if ok {
+							exitCode = serr.ExitCode
+						}
+
+						_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
+							ContainerId: containerId,
+							ExitCode:    int32(exitCode),
+						}))
+						if err != nil {
+							log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+						}
+
+						s.containerLock.Unlock()
+						s.clearContainer(containerId, request, exitCode)
+						continue
+					}
+				}
+
+				s.containerLock.Unlock()
+			}
+
+			if exit := s.shouldShutDown(lastContainerRequest); exit {
+				return s.shutdown()
+			}
 		}
 	}
-
-	return s.shutdown()
 }
 
 // listenForStopBuildEvent listens for a stop build event and cancels the context
