@@ -115,7 +115,7 @@ func (s *WorkerRepositoryService) UpdateWorkerCapacity(ctx context.Context, req 
 		return &pb.UpdateWorkerCapacityResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	err = s.workerRepo.UpdateWorkerCapacity(worker, &types.ContainerRequest{}, types.CapacityUpdateType(req.CapacityChange))
+	err = s.workerRepo.UpdateWorkerCapacity(worker, types.NewContainerRequestFromProto(req.ContainerRequest), types.CapacityUpdateType(req.CapacityChange))
 	if err != nil {
 		return &pb.UpdateWorkerCapacityResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
