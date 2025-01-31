@@ -315,8 +315,6 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 	containerId := request.ContainerId
 
 	s.containerLock.Lock()
-	defer s.containerLock.Unlock()
-
 	_, exists := s.containerInstances.Get(containerId)
 	if !exists {
 		log.Info().Str("container_id", containerId).Msg("running container")
@@ -328,6 +326,8 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 		}
 
 		if err := s.RunContainer(ctx, request); err != nil {
+			s.containerLock.Unlock()
+
 			log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
 
 			// Set a non-zero exit code for the container (both in memory, and in repo)
@@ -349,6 +349,8 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 			s.clearContainer(containerId, request, exitCode)
 			return
 		}
+
+		s.containerLock.Unlock()
 	}
 
 }
