@@ -278,7 +278,7 @@ func (s *Worker) Run() error {
 		response, err := handleGRPCResponse(s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
 			WorkerId: s.workerId,
 		}))
-		if err == nil && response.ReceivedRequest {
+		if err == nil && response.ContainerRequest != nil {
 			request := types.NewContainerRequestFromProto(response.ContainerRequest)
 			lastContainerRequest = time.Now()
 			containerId := request.ContainerId
@@ -474,21 +474,9 @@ func (s *Worker) manageWorkerCapacity() {
 
 func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error {
 	_, err := handleGRPCResponse(s.workerRepoClient.UpdateWorkerCapacity(s.ctx, &pb.UpdateWorkerCapacityRequest{
-		WorkerId:       s.workerId,
-		CapacityChange: int64(types.AddCapacity),
-		ContainerRequest: &pb.ContainerRequest{
-			ContainerId: request.ContainerId,
-			ImageId:     request.ImageId,
-			Env:         request.Env,
-			EntryPoint:  request.EntryPoint,
-			Cpu:         request.Cpu,
-			Memory:      request.Memory,
-			Gpu:         request.Gpu,
-			GpuRequest:  request.GpuRequest,
-			GpuCount:    request.GpuCount,
-			StubId:      request.StubId,
-			WorkspaceId: request.WorkspaceId,
-		},
+		WorkerId:         s.workerId,
+		CapacityChange:   int64(types.AddCapacity),
+		ContainerRequest: request.ToProto(),
 	}))
 	if err != nil {
 		return err

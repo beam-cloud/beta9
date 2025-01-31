@@ -39,8 +39,7 @@ message GetNextContainerRequestRequest { string worker_id = 1; }
 message GetNextContainerRequestResponse {
   bool ok = 1;
   types.ContainerRequest container_request = 2;
-  bool received_request = 3;
-  string error_msg = 4;
+  string error_msg = 3;
 }
 
 message SetImagePullLockRequest {

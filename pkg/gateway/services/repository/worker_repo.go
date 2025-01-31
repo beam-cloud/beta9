@@ -28,15 +28,13 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(ctx context.Context, r
 
 	if request == nil {
 		return &pb.GetNextContainerRequestResponse{
-			Ok:              true,
-			ReceivedRequest: false,
+			Ok: true,
 		}, nil
 	}
 
 	return &pb.GetNextContainerRequestResponse{
 		Ok:               true,
 		ContainerRequest: request.ToProto(),
-		ReceivedRequest:  true,
 	}, nil
 }
 
