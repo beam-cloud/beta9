@@ -80,24 +80,7 @@ func (s *WorkerRepositoryService) GetWorkerById(ctx context.Context, req *pb.Get
 		return &pb.GetWorkerByIdResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.GetWorkerByIdResponse{Ok: true, Worker: &pb.Worker{
-		Id:                   worker.Id,
-		Status:               string(worker.Status),
-		TotalCpu:             worker.TotalCpu,
-		TotalMemory:          worker.TotalMemory,
-		TotalGpuCount:        worker.TotalGpuCount,
-		FreeCpu:              worker.FreeCpu,
-		FreeMemory:           worker.FreeMemory,
-		FreeGpuCount:         worker.FreeGpuCount,
-		Gpu:                  worker.Gpu,
-		PoolName:             worker.PoolName,
-		MachineId:            worker.MachineId,
-		Priority:             worker.Priority,
-		BuildVersion:         worker.BuildVersion,
-		ResourceVersion:      worker.ResourceVersion,
-		RequiresPoolSelector: worker.RequiresPoolSelector,
-		Preemptable:          worker.Preemptable,
-	}}, nil
+	return &pb.GetWorkerByIdResponse{Ok: true, Worker: worker.ToProto()}, nil
 }
 
 func (s *WorkerRepositoryService) ToggleWorkerAvailable(ctx context.Context, req *pb.ToggleWorkerAvailableRequest) (*pb.ToggleWorkerAvailableResponse, error) {

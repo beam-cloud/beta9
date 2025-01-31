@@ -97,20 +97,11 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	getWorkerResponse, err := workerRepoClient.GetWorkerById(ctx, &pb.GetWorkerByIdRequest{
 		WorkerId: workerId,
 	})
-	if err != nil || getWorkerResponse.Worker == nil {
+	if err != nil {
 		return nil, err
 	}
 
-	worker := &types.Worker{
-		Id:           getWorkerResponse.Worker.Id,
-		PoolName:     getWorkerResponse.Worker.PoolName,
-		MachineId:    getWorkerResponse.Worker.MachineId,
-		Priority:     getWorkerResponse.Worker.Priority,
-		BuildVersion: getWorkerResponse.Worker.BuildVersion,
-		FreeCpu:      getWorkerResponse.Worker.FreeCpu,
-		FreeMemory:   getWorkerResponse.Worker.FreeMemory,
-		FreeGpuCount: getWorkerResponse.Worker.FreeGpuCount,
-	}
+	worker := types.NewWorkerFromProto(getWorkerResponse.Worker)
 
 	networkPrefix := os.Getenv("NETWORK_PREFIX")
 	if networkPrefix == "" {

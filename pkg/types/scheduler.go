@@ -50,6 +50,60 @@ type Worker struct {
 	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
 }
 
+func (w *Worker) ToProto() *pb.Worker {
+	containers := make([]*pb.Container, len(w.ActiveContainers))
+	for i, c := range w.ActiveContainers {
+		containers[i] = c.ToProto()
+	}
+
+	return &pb.Worker{
+		Id:                   w.Id,
+		Status:               string(w.Status),
+		TotalCpu:             w.TotalCpu,
+		TotalMemory:          w.TotalMemory,
+		TotalGpuCount:        w.TotalGpuCount,
+		FreeCpu:              w.FreeCpu,
+		FreeMemory:           w.FreeMemory,
+		FreeGpuCount:         w.FreeGpuCount,
+		Gpu:                  w.Gpu,
+		PoolName:             w.PoolName,
+		MachineId:            w.MachineId,
+		ResourceVersion:      w.ResourceVersion,
+		RequiresPoolSelector: w.RequiresPoolSelector,
+		Priority:             w.Priority,
+		Preemptable:          w.Preemptable,
+		BuildVersion:         w.BuildVersion,
+		ActiveContainers:     containers,
+	}
+}
+
+func NewWorkerFromProto(in *pb.Worker) *Worker {
+	containers := make([]Container, len(in.ActiveContainers))
+	for i, c := range in.ActiveContainers {
+		containers[i] = *NewContainerFromProto(c)
+	}
+
+	return &Worker{
+		Id:                   in.Id,
+		Status:               WorkerStatus(in.Status),
+		TotalCpu:             in.TotalCpu,
+		TotalMemory:          in.TotalMemory,
+		TotalGpuCount:        in.TotalGpuCount,
+		FreeCpu:              in.FreeCpu,
+		FreeMemory:           in.FreeMemory,
+		FreeGpuCount:         in.FreeGpuCount,
+		Gpu:                  in.Gpu,
+		PoolName:             in.PoolName,
+		MachineId:            in.MachineId,
+		ResourceVersion:      in.ResourceVersion,
+		RequiresPoolSelector: in.RequiresPoolSelector,
+		Priority:             in.Priority,
+		Preemptable:          in.Preemptable,
+		BuildVersion:         in.BuildVersion,
+		ActiveContainers:     containers,
+	}
+}
+
 type CapacityUpdateType int
 
 const (
@@ -95,6 +149,30 @@ type Container struct {
 	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
 	WorkerId    string          `redis:"worker_id" json:"worker_id"`
 	MachineId   string          `redis:"machine_id" json:"machine_id"`
+}
+
+func (c *Container) ToProto() *pb.Container {
+	return &pb.Container{
+		ContainerId: c.ContainerId,
+		StubId:      c.StubId,
+		Status:      string(c.Status),
+		ScheduledAt: c.ScheduledAt,
+		WorkspaceId: c.WorkspaceId,
+		WorkerId:    c.WorkerId,
+		MachineId:   c.MachineId,
+	}
+}
+
+func NewContainerFromProto(in *pb.Container) *Container {
+	return &Container{
+		ContainerId: in.ContainerId,
+		StubId:      in.StubId,
+		Status:      ContainerStatus(in.Status),
+		ScheduledAt: in.ScheduledAt,
+		WorkspaceId: in.WorkspaceId,
+		WorkerId:    in.WorkerId,
+		MachineId:   in.MachineId,
+	}
 }
 
 // @go2proto
