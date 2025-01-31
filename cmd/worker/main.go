@@ -25,7 +25,7 @@ func main() {
 	s, err := worker.NewWorker()
 	if err != nil {
 		if notFoundErr.From(err) {
-			log.Info().Msg("worker not found. Shutting down.")
+			log.Info().Msg("worker not found, shutting down.")
 			return
 		}
 
@@ -35,7 +35,7 @@ func main() {
 	err = s.Run()
 	if err != nil {
 		if notFoundErr.From(err) {
-			log.Info().Msg("worker not found. Shutting down.")
+			log.Info().Msg("worker not found, shutting down.")
 			return
 		}
 
