@@ -250,15 +250,18 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	// If user cancels the build, send a stop-build event to the worker
+	// If user cancels the build, send a stop container event to the scheduler
 	go func() {
 		<-ctx.Done()
 		if success.Load() {
 			return
 		}
-		err := b.stopBuild(containerId)
+
+		err := b.scheduler.Stop(&types.StopContainerArgs{
+			ContainerId: containerId,
+		})
 		if err != nil {
-			log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
+			log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop container")
 		}
 	}()
 
@@ -337,7 +340,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			}
 
 			if time.Since(start) > containerSpinupTimeout {
-				err := b.stopBuild(containerId)
+				err := b.scheduler.Stop(&types.StopContainerArgs{
+					ContainerId: containerId,
+				})
 				if err != nil {
 					log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
 				}
@@ -802,21 +807,6 @@ func extractPackageName(pkg string) string {
 
 	// Handle regular packages
 	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
-}
-
-func (b *Builder) stopBuild(containerId string) error {
-	_, err := b.eventBus.Send(&common.Event{
-		Type:          common.StopBuildEventType(containerId),
-		Args:          map[string]any{"container_id": containerId},
-		LockAndDelete: false,
-	})
-	if err != nil {
-		log.Error().Err(err).Msg("failed to send stop build event")
-		return err
-	}
-
-	log.Info().Str("container_id", containerId).Msg("sent stop build event")
-	return nil
 }
 
 func tagOrDigest(digest string, tag string) string {
