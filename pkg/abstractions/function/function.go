@@ -324,6 +324,9 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 
 	for {
 		select {
+		case <-fs.ctx.Done():
+			return nil
+
 		case <-stream.Context().Done():
 			return nil
 
