@@ -51,12 +51,16 @@ class Channel(InterceptorChannel):
         if options is None:
             options = []
 
+        options.append(("grpc.keepalive_time_ms", 10000))
+        options.append(("grpc.keepalive_timeout_ms", 5000))
+        options.append(("grpc.http2.max_pings_without_data", 0))
+
         if credentials is not None:
-            channel = grpc.secure_channel(addr, credentials)
+            channel = grpc.secure_channel(addr, credentials, options=options)
         elif addr.endswith("443"):
-            channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials())
+            channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials(), options=options)
         else:
-            channel = grpc.insecure_channel(addr)
+            channel = grpc.insecure_channel(addr, options=options)
 
         # NOTE: we observed that in a multiprocessing context, this
         # retry mechanism did not work as expected. We're not sure why,
