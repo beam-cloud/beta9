@@ -283,7 +283,6 @@ func (s *Worker) Run() error {
 				return nil
 			}
 
-			log.Error().Err(err).Msg("error starting container request stream")
 			time.Sleep(containerRequestStreamInterval)
 			continue
 		}
