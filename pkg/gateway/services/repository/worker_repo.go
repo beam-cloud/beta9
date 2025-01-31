@@ -5,7 +5,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	pb "github.com/beam-cloud/beta9/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type WorkerRepositoryService struct {
@@ -26,6 +25,13 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(ctx context.Context, r
 		}, nil
 	}
 
+	if request == nil {
+		return &pb.GetNextContainerRequestResponse{
+			Ok:              true,
+			ReceivedRequest: false,
+		}, nil
+	}
+
 	return &pb.GetNextContainerRequestResponse{
 		Ok: true,
 		ContainerRequest: &pb.ContainerRequest{
@@ -41,20 +47,20 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(ctx context.Context, r
 			StubId:      request.StubId,
 			WorkspaceId: request.WorkspaceId,
 			Workspace: &pb.Workspace{
-				Id:                 uint32(request.Workspace.Id),
-				Name:               request.Workspace.Name,
-				CreatedAt:          timestamppb.New(request.Workspace.CreatedAt),
-				UpdatedAt:          timestamppb.New(request.Workspace.UpdatedAt),
-				SigningKey:         *request.Workspace.SigningKey,
-				VolumeCacheEnabled: request.Workspace.VolumeCacheEnabled,
-				MultiGpuEnabled:    request.Workspace.MultiGpuEnabled,
-				ConcurrencyLimitId: uint32(*request.Workspace.ConcurrencyLimitId),
-				ConcurrencyLimit: &pb.ConcurrencyLimit{
-					Id:                uint32(*request.Workspace.ConcurrencyLimitId),
-					ExternalId:        request.Workspace.ConcurrencyLimit.ExternalId,
-					GpuLimit:          request.Workspace.ConcurrencyLimit.GPULimit,
-					CpuMillicoreLimit: request.Workspace.ConcurrencyLimit.CPUMillicoreLimit,
-				},
+				Id:   uint32(request.Workspace.Id),
+				Name: request.Workspace.Name,
+				// CreatedAt:          timestamppb.New(request.Workspace.CreatedAt),
+				// UpdatedAt:          timestamppb.New(request.Workspace.UpdatedAt),
+				// SigningKey:         *request.Workspace.SigningKey,
+				// VolumeCacheEnabled: request.Workspace.VolumeCacheEnabled,
+				// MultiGpuEnabled:    request.Workspace.MultiGpuEnabled,
+				// ConcurrencyLimitId: uint32(*request.Workspace.ConcurrencyLimitId),
+				// ConcurrencyLimit: &pb.ConcurrencyLimit{
+				// 	Id:                uint32(*request.Workspace.ConcurrencyLimitId),
+				// 	ExternalId:        request.Workspace.ConcurrencyLimit.ExternalId,
+				// 	GpuLimit:          request.Workspace.ConcurrencyLimit.GPULimit,
+				// 	CpuMillicoreLimit: request.Workspace.ConcurrencyLimit.CPUMillicoreLimit,
+				// },
 			},
 			Stub: &pb.StubWithRelated{
 				Stub: &pb.Stub{
@@ -65,14 +71,14 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(ctx context.Context, r
 					ConfigVersion: uint32(request.Stub.ConfigVersion),
 					ObjectId:      uint32(request.Stub.ObjectId),
 					WorkspaceId:   uint32(request.Stub.WorkspaceId),
-					CreatedAt:     timestamppb.New(request.Stub.CreatedAt),
+					// CreatedAt:     timestamppb.New(request.Stub.CreatedAt),
 				},
 				Object: &pb.Object{
 					Id:          uint32(request.Stub.ObjectId),
 					Hash:        request.Stub.Object.Hash,
 					Size:        request.Stub.Object.Size,
 					WorkspaceId: uint32(request.Stub.WorkspaceId),
-					CreatedAt:   timestamppb.New(request.Stub.Object.CreatedAt),
+					// CreatedAt:   timestamppb.New(request.Stub.Object.CreatedAt),
 				},
 			},
 		},

@@ -292,8 +292,10 @@ func (s *Worker) Run() error {
 				StubId:      response.ContainerRequest.StubId,
 				WorkspaceId: response.ContainerRequest.WorkspaceId,
 				Workspace: types.Workspace{
-					Id:   uint(response.ContainerRequest.Workspace.Id),
-					Name: response.ContainerRequest.Workspace.Name,
+					Id:        uint(response.ContainerRequest.Workspace.Id),
+					Name:      response.ContainerRequest.Workspace.Name,
+					CreatedAt: response.ContainerRequest.Workspace.CreatedAt.AsTime(),
+					UpdatedAt: response.ContainerRequest.Workspace.UpdatedAt.AsTime(),
 				},
 				Stub: types.StubWithRelated{
 					Stub: types.Stub{
