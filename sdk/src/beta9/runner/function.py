@@ -42,6 +42,9 @@ from ..runner.common import (
 )
 from ..type import TaskExitCode, TaskStatus
 
+os.environ["GRPC_TRACE"] = "http"
+os.environ["GRPC_VERBOSITY"] = "DEBUG"
+
 
 @dataclass
 class InvokeResult:
@@ -89,7 +92,7 @@ def _monitor_task(
                         task_id=function_context.task_id,
                         stub_id=function_context.stub_id,
                         container_id=function_context.container_id,
-                    )
+                    ),
                 ):
                     print(
                         f"Time since last response: {time.time() - start}",
