@@ -275,16 +275,14 @@ func (s *Worker) Run() error {
 	lastContainerRequest := time.Now()
 
 	// Listen for container requests for this worker
+containerRequestStream:
 	for {
 		stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
 			WorkerId: s.workerId,
 		})
 		if err != nil {
-			var notFoundErr *types.ErrWorkerNotFound
-			if err == context.Canceled {
-				return nil
-			} else if notFoundErr.From(err) {
-				return nil
+			if err == context.Canceled || s.ctx.Err() == context.Canceled {
+				break
 			}
 
 			time.Sleep(containerRequestStreamInterval)
@@ -304,10 +302,12 @@ func (s *Worker) Run() error {
 			}
 
 			if exit := s.shouldShutDown(lastContainerRequest); exit {
-				return s.shutdown()
+				break containerRequestStream
 			}
 		}
 	}
+
+	return s.shutdown()
 }
 
 // handleContainerRequest handles an individual container request, spawning a new runc container
@@ -327,8 +327,7 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 			go s.listenForStopBuildEvent(ctx, cancel, containerId)
 		}
 
-		err := s.RunContainer(ctx, request)
-		if err != nil {
+		if err := s.RunContainer(ctx, request); err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
 
 			// Set a non-zero exit code for the container (both in memory, and in repo)
@@ -383,6 +382,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 		return true
 	default:
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
+			s.cancel() // Stops goroutines
 			return true
 		}
 		return false
@@ -554,9 +554,6 @@ func (s *Worker) startup() error {
 func (s *Worker) shutdown() error {
 	log.Info().Msg("shutting down")
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
-
-	// Stops goroutines
-	s.cancel()
 
 	var errs error
 	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{

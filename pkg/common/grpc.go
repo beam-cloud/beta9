@@ -3,7 +3,6 @@ package common
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"google.golang.org/grpc"
@@ -47,29 +46,5 @@ func GRPCClientRetryInterceptor(maxRetries int, delay time.Duration) grpc.UnaryC
 		}
 
 		return errors.New("max retries reached")
-	}
-}
-
-// GRPCClientRetryStreamInterceptor retries the stream on some gRPC errors
-func GRPCClientRetryStreamInterceptor(maxRetries int, delay time.Duration) grpc.StreamClientInterceptor {
-	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		var lastErr error
-		for i := 0; i < maxRetries; i++ {
-			clientStream, err := streamer(ctx, desc, cc, method, opts...)
-			if err == nil {
-				return clientStream, nil
-			}
-
-			lastErr = err
-			st, ok := status.FromError(err)
-			if !ok || (st.Code() != codes.Unavailable && st.Code() != codes.ResourceExhausted) {
-				return nil, err
-			}
-
-			time.Sleep(delay)
-			delay *= 2
-		}
-
-		return nil, fmt.Errorf("max retries reached: %w", lastErr)
 	}
 }
