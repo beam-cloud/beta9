@@ -459,8 +459,14 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
 
-	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
-	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
+	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
+		WorkerId:    s.workerId,
+		ContainerId: request.ContainerId,
+	})
+	defer s.workerRepoClient.RemoveContainerFromWorker(ctx, &pb.RemoveContainerFromWorkerRequest{
+		WorkerId:    s.workerId,
+		ContainerId: request.ContainerId,
+	})
 	defer cancel()
 
 	exitCode := -1

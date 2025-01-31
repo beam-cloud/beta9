@@ -7,7 +7,10 @@
 package proto
 
 import (
+	context "context"
 	grpc "google.golang.org/grpc"
+	codes "google.golang.org/grpc/codes"
+	status "google.golang.org/grpc/status"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -15,12 +18,25 @@ import (
 // Requires gRPC-Go v1.32.0 or later.
 const _ = grpc.SupportPackageIsVersion7
 
-const ()
+const (
+	WorkerRepositoryService_GetNextContainerRequest_FullMethodName   = "/WorkerRepositoryService/GetNextContainerRequest"
+	WorkerRepositoryService_SetImagePullLock_FullMethodName          = "/WorkerRepositoryService/SetImagePullLock"
+	WorkerRepositoryService_RemoveImagePullLock_FullMethodName       = "/WorkerRepositoryService/RemoveImagePullLock"
+	WorkerRepositoryService_AddContainerToWorker_FullMethodName      = "/WorkerRepositoryService/AddContainerToWorker"
+	WorkerRepositoryService_RemoveContainerFromWorker_FullMethodName = "/WorkerRepositoryService/RemoveContainerFromWorker"
+	WorkerRepositoryService_GetWorkerById_FullMethodName             = "/WorkerRepositoryService/GetWorkerById"
+)
 
 // WorkerRepositoryServiceClient is the client API for WorkerRepositoryService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WorkerRepositoryServiceClient interface {
+	GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (*GetNextContainerRequestResponse, error)
+	SetImagePullLock(ctx context.Context, in *SetImagePullLockRequest, opts ...grpc.CallOption) (*SetImagePullLockResponse, error)
+	RemoveImagePullLock(ctx context.Context, in *RemoveImagePullLockRequest, opts ...grpc.CallOption) (*RemoveImagePullLockResponse, error)
+	AddContainerToWorker(ctx context.Context, in *AddContainerToWorkerRequest, opts ...grpc.CallOption) (*AddContainerToWorkerResponse, error)
+	RemoveContainerFromWorker(ctx context.Context, in *RemoveContainerFromWorkerRequest, opts ...grpc.CallOption) (*RemoveContainerFromWorkerResponse, error)
+	GetWorkerById(ctx context.Context, in *GetWorkerByIdRequest, opts ...grpc.CallOption) (*GetWorkerByIdResponse, error)
 }
 
 type workerRepositoryServiceClient struct {
@@ -31,10 +47,70 @@ func NewWorkerRepositoryServiceClient(cc grpc.ClientConnInterface) WorkerReposit
 	return &workerRepositoryServiceClient{cc}
 }
 
+func (c *workerRepositoryServiceClient) GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (*GetNextContainerRequestResponse, error) {
+	out := new(GetNextContainerRequestResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetNextContainerRequest_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) SetImagePullLock(ctx context.Context, in *SetImagePullLockRequest, opts ...grpc.CallOption) (*SetImagePullLockResponse, error) {
+	out := new(SetImagePullLockResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetImagePullLock_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) RemoveImagePullLock(ctx context.Context, in *RemoveImagePullLockRequest, opts ...grpc.CallOption) (*RemoveImagePullLockResponse, error) {
+	out := new(RemoveImagePullLockResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveImagePullLock_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) AddContainerToWorker(ctx context.Context, in *AddContainerToWorkerRequest, opts ...grpc.CallOption) (*AddContainerToWorkerResponse, error) {
+	out := new(AddContainerToWorkerResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_AddContainerToWorker_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) RemoveContainerFromWorker(ctx context.Context, in *RemoveContainerFromWorkerRequest, opts ...grpc.CallOption) (*RemoveContainerFromWorkerResponse, error) {
+	out := new(RemoveContainerFromWorkerResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveContainerFromWorker_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) GetWorkerById(ctx context.Context, in *GetWorkerByIdRequest, opts ...grpc.CallOption) (*GetWorkerByIdResponse, error) {
+	out := new(GetWorkerByIdResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetWorkerById_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerRepositoryServiceServer is the server API for WorkerRepositoryService service.
 // All implementations must embed UnimplementedWorkerRepositoryServiceServer
 // for forward compatibility
 type WorkerRepositoryServiceServer interface {
+	GetNextContainerRequest(context.Context, *GetNextContainerRequestRequest) (*GetNextContainerRequestResponse, error)
+	SetImagePullLock(context.Context, *SetImagePullLockRequest) (*SetImagePullLockResponse, error)
+	RemoveImagePullLock(context.Context, *RemoveImagePullLockRequest) (*RemoveImagePullLockResponse, error)
+	AddContainerToWorker(context.Context, *AddContainerToWorkerRequest) (*AddContainerToWorkerResponse, error)
+	RemoveContainerFromWorker(context.Context, *RemoveContainerFromWorkerRequest) (*RemoveContainerFromWorkerResponse, error)
+	GetWorkerById(context.Context, *GetWorkerByIdRequest) (*GetWorkerByIdResponse, error)
 	mustEmbedUnimplementedWorkerRepositoryServiceServer()
 }
 
@@ -42,6 +118,24 @@ type WorkerRepositoryServiceServer interface {
 type UnimplementedWorkerRepositoryServiceServer struct {
 }
 
+func (UnimplementedWorkerRepositoryServiceServer) GetNextContainerRequest(context.Context, *GetNextContainerRequestRequest) (*GetNextContainerRequestResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNextContainerRequest not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) SetImagePullLock(context.Context, *SetImagePullLockRequest) (*SetImagePullLockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetImagePullLock not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) RemoveImagePullLock(context.Context, *RemoveImagePullLockRequest) (*RemoveImagePullLockResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveImagePullLock not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) AddContainerToWorker(context.Context, *AddContainerToWorkerRequest) (*AddContainerToWorkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AddContainerToWorker not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) RemoveContainerFromWorker(context.Context, *RemoveContainerFromWorkerRequest) (*RemoveContainerFromWorkerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RemoveContainerFromWorker not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) GetWorkerById(context.Context, *GetWorkerByIdRequest) (*GetWorkerByIdResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetWorkerById not implemented")
+}
 func (UnimplementedWorkerRepositoryServiceServer) mustEmbedUnimplementedWorkerRepositoryServiceServer() {
 }
 
@@ -56,13 +150,146 @@ func RegisterWorkerRepositoryServiceServer(s grpc.ServiceRegistrar, srv WorkerRe
 	s.RegisterService(&WorkerRepositoryService_ServiceDesc, srv)
 }
 
+func _WorkerRepositoryService_GetNextContainerRequest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNextContainerRequestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).GetNextContainerRequest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_GetNextContainerRequest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).GetNextContainerRequest(ctx, req.(*GetNextContainerRequestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_SetImagePullLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetImagePullLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).SetImagePullLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_SetImagePullLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).SetImagePullLock(ctx, req.(*SetImagePullLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_RemoveImagePullLock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveImagePullLockRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).RemoveImagePullLock(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_RemoveImagePullLock_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).RemoveImagePullLock(ctx, req.(*RemoveImagePullLockRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_AddContainerToWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AddContainerToWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).AddContainerToWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_AddContainerToWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).AddContainerToWorker(ctx, req.(*AddContainerToWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_RemoveContainerFromWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveContainerFromWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).RemoveContainerFromWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_RemoveContainerFromWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).RemoveContainerFromWorker(ctx, req.(*RemoveContainerFromWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_GetWorkerById_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkerByIdRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).GetWorkerById(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_GetWorkerById_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).GetWorkerById(ctx, req.(*GetWorkerByIdRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerRepositoryService_ServiceDesc is the grpc.ServiceDesc for WorkerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "WorkerRepositoryService",
 	HandlerType: (*WorkerRepositoryServiceServer)(nil),
-	Methods:     []grpc.MethodDesc{},
-	Streams:     []grpc.StreamDesc{},
-	Metadata:    "worker_repo.proto",
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetNextContainerRequest",
+			Handler:    _WorkerRepositoryService_GetNextContainerRequest_Handler,
+		},
+		{
+			MethodName: "SetImagePullLock",
+			Handler:    _WorkerRepositoryService_SetImagePullLock_Handler,
+		},
+		{
+			MethodName: "RemoveImagePullLock",
+			Handler:    _WorkerRepositoryService_RemoveImagePullLock_Handler,
+		},
+		{
+			MethodName: "AddContainerToWorker",
+			Handler:    _WorkerRepositoryService_AddContainerToWorker_Handler,
+		},
+		{
+			MethodName: "RemoveContainerFromWorker",
+			Handler:    _WorkerRepositoryService_RemoveContainerFromWorker_Handler,
+		},
+		{
+			MethodName: "GetWorkerById",
+			Handler:    _WorkerRepositoryService_GetWorkerById_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "worker_repo.proto",
 }

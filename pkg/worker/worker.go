@@ -60,8 +60,8 @@ type Worker struct {
 	workerMetrics           *WorkerMetrics
 	completedRequests       chan *types.ContainerRequest
 	stopContainerChan       chan stopContainerEvent
+	workerRepoClient        pb.WorkerRepositoryServiceClient
 	containerRepoClient     pb.ContainerRepositoryServiceClient
-	workerRepo              repo.WorkerRepository
 	eventRepo               repo.EventRepository
 	userDataStorage         storage.Storage
 	checkpointStorage       storage.Storage
@@ -140,7 +140,11 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
+	workerRepoClient, err := NewWorkerRepositoryClient(context.TODO(), config, workerToken)
+	if err != nil {
+		return nil, err
+	}
+
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	userDataStorage, err := storage.NewStorage(config.Storage)
@@ -161,7 +165,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	fileCacheManager := NewFileCacheManager(config, cacheClient)
-	imageClient, err := NewImageClient(config, workerId, workerRepo, fileCacheManager)
+	imageClient, err := NewImageClient(config, workerId, workerRepoClient, fileCacheManager)
 	if err != nil {
 		return nil, err
 	}
@@ -206,13 +210,13 @@ func NewWorker() (*Worker, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepoClient, config)
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, config)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 
-	workerMetrics, err := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring)
+	workerMetrics, err := NewWorkerMetrics(ctx, workerId, config.Monitoring)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -250,7 +254,7 @@ func NewWorker() (*Worker, error) {
 		},
 		workerMetrics:       workerMetrics,
 		containerRepoClient: containerRepoClient,
-		workerRepo:          workerRepo,
+		workerRepoClient:    workerRepoClient,
 		eventRepo:           eventRepo,
 		completedRequests:   make(chan *types.ContainerRequest, 1000),
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
@@ -271,8 +275,51 @@ func (s *Worker) Run() error {
 
 	lastContainerRequest := time.Now()
 	for {
-		request, err := s.workerRepo.GetNextContainerRequest(s.workerId)
-		if request != nil && err == nil {
+		response, err := handleGRPCResponse(s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
+			WorkerId: s.workerId,
+		}))
+		if err == nil && response.ReceivedRequest {
+			request := &types.ContainerRequest{
+				ContainerId: response.ContainerRequest.ContainerId,
+				ImageId:     response.ContainerRequest.ImageId,
+				Env:         response.ContainerRequest.Env,
+				EntryPoint:  response.ContainerRequest.EntryPoint,
+				Cpu:         response.ContainerRequest.Cpu,
+				Memory:      response.ContainerRequest.Memory,
+				Gpu:         response.ContainerRequest.Gpu,
+				GpuRequest:  response.ContainerRequest.GpuRequest,
+				GpuCount:    response.ContainerRequest.GpuCount,
+				StubId:      response.ContainerRequest.StubId,
+				WorkspaceId: response.ContainerRequest.WorkspaceId,
+				Workspace: types.Workspace{
+					Id:   uint(response.ContainerRequest.Workspace.Id),
+					Name: response.ContainerRequest.Workspace.Name,
+				},
+				Stub: types.StubWithRelated{
+					Stub: types.Stub{
+						Id:   uint(response.ContainerRequest.Stub.Stub.Id),
+						Name: response.ContainerRequest.Stub.Stub.Name,
+						Type: types.StubType(response.ContainerRequest.Stub.Stub.Type),
+					},
+					Workspace: types.Workspace{
+						Id:   uint(response.ContainerRequest.Workspace.Id),
+						Name: response.ContainerRequest.Workspace.Name,
+					},
+					Object: types.Object{
+						Id:   uint(response.ContainerRequest.Stub.Object.Id),
+						Hash: response.ContainerRequest.Stub.Object.Hash,
+						Size: response.ContainerRequest.Stub.Object.Size,
+					},
+				},
+				Timestamp: response.ContainerRequest.Timestamp.AsTime(),
+				// Mounts:            response.ContainerRequest.Mounts,
+				RetryCount:        int(response.ContainerRequest.RetryCount),
+				PoolSelector:      response.ContainerRequest.PoolSelector,
+				Preemptable:       response.ContainerRequest.Preemptable,
+				CheckpointEnabled: response.ContainerRequest.CheckpointEnabled,
+				// BuildOptions:      response.ContainerRequest.BuildOptions,
+			}
+
 			lastContainerRequest = time.Now()
 			containerId := request.ContainerId
 
@@ -466,7 +513,9 @@ func (s *Worker) manageWorkerCapacity() {
 }
 
 func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error {
-	worker, err := s.workerRepo.GetWorkerById(s.workerId)
+	worker, err := s.workerRepoClient.GetWorkerById(s.ctx, &pb.GetWorkerByIdRequest{
+		WorkerId: s.workerId,
+	})
 	if err != nil {
 		return err
 	}
@@ -523,10 +572,14 @@ func (s *Worker) shutdown() error {
 	s.cancel()
 
 	var errs error
-	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
+	if getWorkerResponse, err := s.workerRepoClient.GetWorkerById(s.ctx, &pb.GetWorkerByIdRequest{
+		WorkerId: s.workerId,
+	}); err != nil {
 		errs = errors.Join(errs, err)
-	} else if worker != nil {
-		if err := s.workerRepo.RemoveWorker(worker); err != nil {
+	} else if getWorkerResponse.Ok {
+		if _, err := s.workerRepoClient.RemoveContainerFromWorker(s.ctx, &pb.RemoveContainerFromWorkerRequest{
+			ContainerId: s.workerId,
+		}); err != nil {
 			errs = errors.Join(errs, err)
 		}
 	}

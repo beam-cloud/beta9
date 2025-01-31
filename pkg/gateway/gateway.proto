@@ -130,20 +130,10 @@ message ReplaceObjectContentResponse { bool ok = 1; }
 
 // Container messages
 
-message Container {
-  string container_id = 1;
-  string stub_id = 2;
-  string status = 3;
-  google.protobuf.Timestamp scheduled_at = 4;
-  string workspace_id = 5;
-  string worker_id = 6;
-  string machine_id = 7;
-}
-
 message ListContainersRequest {}
 
 message ListContainersResponse {
-  repeated Container containers = 1;
+  repeated types.Container containers = 1;
   bool ok = 2;
   string error_msg = 3;
 }
@@ -466,29 +456,12 @@ message GetURLResponse {
   string url = 3;
 }
 
-message Worker {
-  string id = 1;
-  string status = 2;
-  string gpu = 3;
-  string pool_name = 4;
-  string machine_id = 5;
-  int32 priority = 6;
-  int64 total_cpu = 7;
-  int64 total_memory = 8;
-  uint32 total_gpu_count = 9;
-  int64 free_cpu = 10;
-  int64 free_memory = 11;
-  uint32 free_gpu_count = 12;
-  repeated Container active_containers = 13;
-  string build_version = 14;
-}
-
 message ListWorkersRequest {}
 
 message ListWorkersResponse {
   bool ok = 1;
   string err_msg = 2;
-  repeated Worker workers = 3;
+  repeated types.Worker workers = 3;
 }
 
 message CordonWorkerRequest { string worker_id = 1; }

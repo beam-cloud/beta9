@@ -26,6 +26,7 @@ const (
 	StubStateHealthy  = "healthy"
 )
 
+// @go2proto
 type Worker struct {
 	Id                   string       `json:"id" redis:"id"`
 	Status               WorkerStatus `json:"status" redis:"status"`
@@ -43,6 +44,7 @@ type Worker struct {
 	Priority             int32        `json:"priority" redis:"priority"`
 	Preemptable          bool         `json:"preemptable" redis:"preemptable"`
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
+	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
 }
 
 type CapacityUpdateType int
@@ -79,6 +81,17 @@ type ContainerState struct {
 	GpuCount    uint32          `redis:"gpu_count" json:"gpu_count"`
 	Cpu         int64           `redis:"cpu" json:"cpu"`
 	Memory      int64           `redis:"memory" json:"memory"`
+}
+
+// @go2proto
+type Container struct {
+	ContainerId string          `redis:"container_id" json:"container_id"`
+	StubId      string          `redis:"stub_id" json:"stub_id"`
+	Status      ContainerStatus `redis:"status" json:"status"`
+	ScheduledAt int64           `redis:"scheduled_at" json:"scheduled_at"`
+	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
+	WorkerId    string          `redis:"worker_id" json:"worker_id"`
+	MachineId   string          `redis:"machine_id" json:"machine_id"`
 }
 
 // @go2proto
