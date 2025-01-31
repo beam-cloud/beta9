@@ -23,7 +23,8 @@ func main() {
 
 	s, err := worker.NewWorker()
 	if err != nil {
-		if _, ok := err.(*types.ErrWorkerNotFound); ok {
+		notFoundErr := &types.ErrWorkerNotFound{}
+		if notFoundErr.From(err) {
 			log.Info().Msg("worker not found. Shutting down.")
 			return
 		}
@@ -32,7 +33,8 @@ func main() {
 
 	err = s.Run()
 	if err != nil {
-		if _, ok := err.(*types.ErrWorkerNotFound); ok {
+		notFoundErr := &types.ErrWorkerNotFound{}
+		if notFoundErr.From(err) {
 			log.Info().Msg("worker not found. Shutting down.")
 			return
 		}

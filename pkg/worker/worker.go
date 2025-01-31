@@ -459,8 +459,9 @@ func (s *Worker) processStopContainerEvents() {
 func (s *Worker) manageWorkerCapacity() {
 	for request := range s.completedRequests {
 		err := s.processCompletedRequest(request)
+		notFoundErr := &types.ErrWorkerNotFound{}
 		if err != nil {
-			if _, ok := err.(*types.ErrWorkerNotFound); ok {
+			if notFoundErr.From(err) {
 				s.cancel()
 				return
 			}

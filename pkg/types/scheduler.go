@@ -359,12 +359,27 @@ func (e *ErrNoSuitableWorkerFound) Error() string {
 	return "no suitable worker found for request"
 }
 
+const workerNotFoundPrefix = "worker not found: "
+
 type ErrWorkerNotFound struct {
 	WorkerId string
 }
 
 func (e *ErrWorkerNotFound) Error() string {
-	return fmt.Sprintf("worker not found: %s", e.WorkerId)
+	return fmt.Sprintf("%s%s", workerNotFoundPrefix, e.WorkerId)
+}
+
+func (e *ErrWorkerNotFound) From(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if strings.HasPrefix(err.Error(), workerNotFoundPrefix) {
+		e.WorkerId = strings.TrimPrefix(err.Error(), workerNotFoundPrefix)
+		return true
+	}
+
+	return false
 }
 
 type WorkerPoolSizingConfig struct {
