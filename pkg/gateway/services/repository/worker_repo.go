@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -129,19 +130,22 @@ func (s *WorkerRepositoryService) GetWorkerById(ctx context.Context, req *pb.Get
 	}
 
 	return &pb.GetWorkerByIdResponse{Ok: true, Worker: &pb.Worker{
-		Id:            worker.Id,
-		Status:        string(worker.Status),
-		TotalCpu:      worker.TotalCpu,
-		TotalMemory:   worker.TotalMemory,
-		TotalGpuCount: worker.TotalGpuCount,
-		FreeCpu:       worker.FreeCpu,
-		FreeMemory:    worker.FreeMemory,
-		FreeGpuCount:  worker.FreeGpuCount,
-		Gpu:           worker.Gpu,
-		PoolName:      worker.PoolName,
-		MachineId:     worker.MachineId,
-		Priority:      worker.Priority,
-		BuildVersion:  worker.BuildVersion,
+		Id:                   worker.Id,
+		Status:               string(worker.Status),
+		TotalCpu:             worker.TotalCpu,
+		TotalMemory:          worker.TotalMemory,
+		TotalGpuCount:        worker.TotalGpuCount,
+		FreeCpu:              worker.FreeCpu,
+		FreeMemory:           worker.FreeMemory,
+		FreeGpuCount:         worker.FreeGpuCount,
+		Gpu:                  worker.Gpu,
+		PoolName:             worker.PoolName,
+		MachineId:            worker.MachineId,
+		Priority:             worker.Priority,
+		BuildVersion:         worker.BuildVersion,
+		ResourceVersion:      worker.ResourceVersion,
+		RequiresPoolSelector: worker.RequiresPoolSelector,
+		Preemptable:          worker.Preemptable,
 	}}, nil
 }
 
@@ -154,6 +158,19 @@ func (s *WorkerRepositoryService) ToggleWorkerAvailable(ctx context.Context, req
 	return &pb.ToggleWorkerAvailableResponse{Ok: true}, nil
 }
 
+func (s *WorkerRepositoryService) UpdateWorkerCapacity(ctx context.Context, req *pb.UpdateWorkerCapacityRequest) (*pb.UpdateWorkerCapacityResponse, error) {
+	worker, err := s.workerRepo.GetWorkerById(req.WorkerId)
+	if err != nil {
+		return &pb.UpdateWorkerCapacityResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	err = s.workerRepo.UpdateWorkerCapacity(worker, &types.ContainerRequest{}, types.CapacityUpdateType(req.CapacityChange))
+	if err != nil {
+		return &pb.UpdateWorkerCapacityResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.UpdateWorkerCapacityResponse{Ok: true}, nil
+}
 func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.SetNetworkLockRequest) (*pb.SetNetworkLockResponse, error) {
 	err := s.workerRepo.SetNetworkLock(req.NetworkPrefix, int(req.Ttl), int(req.Retries))
 	if err != nil {
