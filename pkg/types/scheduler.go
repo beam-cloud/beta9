@@ -223,6 +223,17 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		mounts[i] = m.ToProto()
 	}
 
+	var buildOptions *pb.BuildOptions
+	if c.IsBuildRequest() {
+		buildOptions = &pb.BuildOptions{
+			SourceImage:      *c.BuildOptions.SourceImage,
+			Dockerfile:       *c.BuildOptions.Dockerfile,
+			BuildCtxObject:   *c.BuildOptions.BuildCtxObject,
+			SourceImageCreds: c.BuildOptions.SourceImageCreds,
+			BuildSecrets:     c.BuildOptions.BuildSecrets,
+		}
+	}
+
 	return &pb.ContainerRequest{
 		ContainerId: c.ContainerId,
 		EntryPoint:  c.EntryPoint,
@@ -256,13 +267,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		Preemptable:       c.Preemptable,
 		CheckpointEnabled: c.CheckpointEnabled,
 		Timestamp:         timestamppb.New(c.Timestamp),
-		BuildOptions:      &pb.BuildOptions{
-			// SourceImage:      c.BuildOptions.SourceImage,
-			// Dockerfile:       c.BuildOptions.Dockerfile,
-			// BuildCtxObject:   c.BuildOptions.BuildCtxObject,
-			// SourceImageCreds: c.BuildOptions.SourceImageCreds,
-			// BuildSecrets:     c.BuildOptions.BuildSecrets,
-		},
+		BuildOptions:      buildOptions,
 	}
 }
 
@@ -270,6 +275,17 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 	mounts := make([]Mount, len(in.Mounts))
 	for i, m := range in.Mounts {
 		mounts[i] = *NewMountFromProto(m)
+	}
+
+	var bo BuildOptions
+	if in.BuildOptions != nil {
+		bo = BuildOptions{
+			SourceImage:      &in.BuildOptions.SourceImage,
+			Dockerfile:       &in.BuildOptions.Dockerfile,
+			BuildCtxObject:   &in.BuildOptions.BuildCtxObject,
+			SourceImageCreds: in.BuildOptions.SourceImageCreds,
+			BuildSecrets:     in.BuildOptions.BuildSecrets,
+		}
 	}
 
 	return &ContainerRequest{
@@ -285,18 +301,14 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Mounts:      mounts,
 		WorkspaceId: in.WorkspaceId,
 		Workspace: Workspace{
-			Name: in.Workspace.Name,
+			Name: in.Workspace.GetName(),
 		},
 		StubId:            in.StubId,
-		Timestamp:         in.Timestamp.AsTime(),
+		Timestamp:         in.GetTimestamp().AsTime(),
 		CheckpointEnabled: in.CheckpointEnabled,
 		Preemptable:       in.Preemptable,
-		BuildOptions: BuildOptions{
-			// SourceImage:      in.BuildOptions.SourceImage,
-			// Dockerfile:       in.BuildOptions.Dockerfile,
-			// BuildCtxObject:   in.BuildOptions.BuildCtxObject,
-			SourceImageCreds: in.BuildOptions.SourceImageCreds,
-		},
+		PoolSelector:      in.PoolSelector,
+		BuildOptions:      bo,
 	}
 }
 
