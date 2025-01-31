@@ -139,7 +139,7 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 }
 
 func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
-	log.Info().Interface("stop_args", stopArgs).Msg("received stop request")
+	log.Info().Interface("stop_args", stopArgs).Msg("scheduler received stop request")
 
 	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
 	if err != nil {

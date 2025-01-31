@@ -81,6 +81,7 @@ type ContainerInstance struct {
 	OutputWriter *common.OutputWriter
 	LogBuffer    *common.LogBuffer
 	Request      *types.ContainerRequest
+	Cancel       func()
 }
 
 type ContainerOptions struct {
@@ -272,39 +273,49 @@ func (s *Worker) Run() error {
 			lastContainerRequest = time.Now()
 			containerId := request.ContainerId
 
+			// TODO: make a new containerClaimLock that is released as soon as the container is
+			// set in the containerInstances map and use that in the handleStopContainerEvent method
 			s.containerLock.Lock()
 
 			_, exists := s.containerInstances.Get(containerId)
-			if !exists {
-				log.Info().Str("container_id", containerId).Msg("running container")
+			if exists {
+				s.containerLock.Unlock()
+				continue
+			}
 
-				ctx, cancel := context.WithCancel(s.ctx)
+			log.Info().Str("container_id", containerId).Msg("running container")
 
-				if request.IsBuildRequest() {
-					go s.listenForStopBuildEvent(ctx, cancel, containerId)
+			ctx, cancel := context.WithCancel(s.ctx)
+
+			// worker claims container
+			s.containerInstances.Set(containerId, &ContainerInstance{
+				Id:        containerId,
+				StubId:    request.StubId,
+				LogBuffer: common.NewLogBuffer(),
+				Request:   request,
+				Cancel:    cancel,
+			})
+
+			err := s.RunContainer(ctx, request)
+			if err != nil {
+				log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
+
+				// Set a non-zero exit code for the container (both in memory, and in repo)
+				exitCode := 1
+
+				serr, ok := err.(*types.ExitCodeError)
+				if ok {
+					exitCode = serr.ExitCode
 				}
 
-				err := s.RunContainer(ctx, request)
+				err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
 				if err != nil {
-					log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
-
-					// Set a non-zero exit code for the container (both in memory, and in repo)
-					exitCode := 1
-
-					serr, ok := err.(*types.ExitCodeError)
-					if ok {
-						exitCode = serr.ExitCode
-					}
-
-					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
-					if err != nil {
-						log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
-					}
-
-					s.containerLock.Unlock()
-					s.clearContainer(containerId, request, exitCode)
-					continue
+					log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
 				}
+
+				s.containerLock.Unlock()
+				s.clearContainer(containerId, request, exitCode)
+				continue
 			}
 
 			s.containerLock.Unlock()
@@ -318,16 +329,6 @@ func (s *Worker) Run() error {
 	}
 
 	return s.shutdown()
-}
-
-// listenForStopBuildEvent listens for a stop build event and cancels the context
-func (s *Worker) listenForStopBuildEvent(ctx context.Context, cancel context.CancelFunc, containerId string) {
-	eventbus := common.NewEventBus(s.redisClient, common.EventBusSubscriber{Type: common.StopBuildEventType(containerId), Callback: func(e *common.Event) bool {
-		log.Info().Str("container_id", containerId).Msg("received stop build event")
-		cancel()
-		return true
-	}})
-	go eventbus.ReceiveEvents(ctx)
 }
 
 // listenForShutdown listens for SIGINT and SIGTERM signals and cancels the worker context

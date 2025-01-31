@@ -46,8 +46,9 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 		return false
 	}
 
-	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
+	if instance, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
 		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
+		instance.Cancel()
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
@@ -137,16 +138,16 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 			}
 		}
 
-		s.deleteContainer(containerId, err)
+		s.deleteContainer(containerId)
 
 		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 	}()
 }
 
-func (s *Worker) deleteContainer(containerId string, err error) {
+func (s *Worker) deleteContainer(containerId string) {
 	s.containerInstances.Delete(containerId)
 
-	err = s.containerRepo.DeleteContainerState(containerId)
+	err := s.containerRepo.DeleteContainerState(containerId)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
 	}
@@ -155,13 +156,6 @@ func (s *Worker) deleteContainer(containerId string, err error) {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
-
-	s.containerInstances.Set(containerId, &ContainerInstance{
-		Id:        containerId,
-		StubId:    request.StubId,
-		LogBuffer: common.NewLogBuffer(),
-		Request:   request,
-	})
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
@@ -238,7 +232,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return ctx.Err()
 	default:
 		// Start the container
-		go s.spawn(request, spec, outputLogger, opts)
+		go s.spawn(ctx, request, spec, outputLogger, opts)
 	}
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
@@ -445,8 +439,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
-	ctx, cancel := context.WithCancel(s.ctx)
+func (s *Worker) spawn(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
+	ctx, cancel := context.WithCancel(ctx)
 
 	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
 	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
@@ -577,7 +571,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Invoke runc process (launch the container)
-	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
+	_, err = s.runcHandle.Run(ctx, containerId, opts.BundlePath, &runc.CreateOpts{
 		Detach:        true,
 		ConsoleSocket: consoleWriter,
 		ConfigPath:    configPath,
