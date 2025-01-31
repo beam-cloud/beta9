@@ -274,12 +274,16 @@ func (s *Worker) Run() error {
 
 	lastContainerRequest := time.Now()
 
+	// Listen for container requests for this worker
 	for {
 		stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
 			WorkerId: s.workerId,
 		})
 		if err != nil {
+			var notFoundErr *types.ErrWorkerNotFound
 			if err == context.Canceled {
+				return nil
+			} else if notFoundErr.From(err) {
 				return nil
 			}
 
@@ -294,49 +298,9 @@ func (s *Worker) Run() error {
 			}
 
 			if response.ContainerRequest != nil {
-				request := types.NewContainerRequestFromProto(response.ContainerRequest)
 				lastContainerRequest = time.Now()
-				containerId := request.ContainerId
-
-				s.containerLock.Lock()
-
-				_, exists := s.containerInstances.Get(containerId)
-				if !exists {
-					log.Info().Str("container_id", containerId).Msg("running container")
-
-					ctx, cancel := context.WithCancel(s.ctx)
-
-					if request.IsBuildRequest() {
-						go s.listenForStopBuildEvent(ctx, cancel, containerId)
-					}
-
-					err := s.RunContainer(ctx, request)
-					if err != nil {
-						log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
-
-						// Set a non-zero exit code for the container (both in memory, and in repo)
-						exitCode := 1
-
-						serr, ok := err.(*types.ExitCodeError)
-						if ok {
-							exitCode = serr.ExitCode
-						}
-
-						_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
-							ContainerId: containerId,
-							ExitCode:    int32(exitCode),
-						}))
-						if err != nil {
-							log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
-						}
-
-						s.containerLock.Unlock()
-						s.clearContainer(containerId, request, exitCode)
-						continue
-					}
-				}
-
-				s.containerLock.Unlock()
+				request := types.NewContainerRequestFromProto(response.ContainerRequest)
+				s.handleContainerRequest(request)
 			}
 
 			if exit := s.shouldShutDown(lastContainerRequest); exit {
@@ -344,6 +308,50 @@ func (s *Worker) Run() error {
 			}
 		}
 	}
+}
+
+// handleContainerRequest handles an individual container request, spawning a new runc container
+func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
+	containerId := request.ContainerId
+
+	s.containerLock.Lock()
+	defer s.containerLock.Unlock()
+
+	_, exists := s.containerInstances.Get(containerId)
+	if !exists {
+		log.Info().Str("container_id", containerId).Msg("running container")
+
+		ctx, cancel := context.WithCancel(s.ctx)
+
+		if request.IsBuildRequest() {
+			go s.listenForStopBuildEvent(ctx, cancel, containerId)
+		}
+
+		err := s.RunContainer(ctx, request)
+		if err != nil {
+			log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
+
+			// Set a non-zero exit code for the container (both in memory, and in repo)
+			exitCode := 1
+
+			serr, ok := err.(*types.ExitCodeError)
+			if ok {
+				exitCode = serr.ExitCode
+			}
+
+			_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
+				ContainerId: containerId,
+				ExitCode:    int32(exitCode),
+			}))
+			if err != nil {
+				log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+			}
+
+			s.clearContainer(containerId, request, exitCode)
+			return
+		}
+	}
+
 }
 
 // listenForStopBuildEvent listens for a stop build event and cancels the context
