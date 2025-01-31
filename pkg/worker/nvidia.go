@@ -237,7 +237,9 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string) ([]string, bool) {
 	if existingCudaFound {
 		splitVersion := strings.Split(existingCudaVersion, ".")
 		if len(splitVersion) >= 2 {
-			cudaVersion = splitVersion[0] + "." + splitVersion[1]
+			major := splitVersion[0]
+			minor := splitVersion[1]
+			cudaVersion = fmt.Sprintf("%s.%s", major, minor)
 			log.Info().Str("cuda_version", existingCudaVersion).Str("formatted_version", cudaVersion).Msg("found existing cuda version in container image")
 		}
 		cudaEnvVarDefaults["CUDA_HOME"] = fmt.Sprintf("/usr/local/cuda-%s", cudaVersion)
