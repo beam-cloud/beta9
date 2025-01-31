@@ -36,6 +36,7 @@ func main() {
 			log.Info().Msg("worker not found. Shutting down.")
 			return
 		}
-		log.Fatal().Err(err).Msg("starting worker failed")
+
+		log.Fatal().Err(err).Msg("worker failed")
 	}
 }
