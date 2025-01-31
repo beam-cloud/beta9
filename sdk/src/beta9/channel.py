@@ -22,6 +22,7 @@ from .config import (
     prompt_for_config_context,
     save_config,
 )
+from .env import is_remote
 from .exceptions import RunnerException
 
 
@@ -60,8 +61,8 @@ class Channel(InterceptorChannel):
         # NOTE: we observed that in a multiprocessing context, this
         # retry mechanism did not work as expected. We're not sure why,
         # but for now, just don't subscribe to these events in containers
-        # if not is_remote():
-        channel.subscribe(*retry)
+        if not is_remote():
+            channel.subscribe(*retry)
 
         interceptor = AuthTokenInterceptor(token)
         super().__init__(channel=channel, interceptor=interceptor)

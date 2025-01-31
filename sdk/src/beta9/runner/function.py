@@ -101,6 +101,7 @@ def _monitor_task(
                     response: FunctionMonitorResponse
                     if response.cancelled:
                         print(f"Task cancelled: {function_context.task_id}")
+                        time.sleep(1)
 
                         send_callback(
                             gateway_stub=gateway_stub,
@@ -113,10 +114,13 @@ def _monitor_task(
                         return
 
                     if response.complete:
+                        print(f"Task complete: {function_context.task_id}")
                         return
 
                     if response.timed_out:
                         print(f"Task timed out: {function_context.task_id}")
+
+                        time.sleep(1)
 
                         send_callback(
                             gateway_stub=gateway_stub,
@@ -143,6 +147,8 @@ def _monitor_task(
                 if retry == max_retries:
                     print("Lost connection to task monitor, exiting")
 
+                    time.sleep(1)
+
                     os.kill(parent_pid, signal.SIGABRT)
                     return
 
@@ -152,6 +158,7 @@ def _monitor_task(
 
             except BaseException:
                 print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
+                time.sleep(1)
                 os.kill(parent_pid, signal.SIGABRT)
                 return
 
