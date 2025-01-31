@@ -347,6 +347,15 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			},
 		})
 
+		// XXX: Remove /usr/lib/worker/x86_64-linux-gnu from mounts
+    // as CRIU is unable to find its root mount
+		for i, m := range spec.Mounts {
+			if m.Destination == "/usr/lib/worker/x86_64-linux-gnu" {
+				spec.Mounts = append(spec.Mounts[:i], spec.Mounts[i+1:]...)
+				break
+			}
+		}
+
 		containerIdPath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerIdFileName)
 		err := os.WriteFile(containerIdPath, []byte(request.ContainerId), 0644)
 		if err != nil {
