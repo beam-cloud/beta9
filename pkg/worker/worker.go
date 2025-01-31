@@ -538,7 +538,7 @@ func (s *Worker) shutdown() error {
 	s.cancel()
 
 	var errs error
-	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(s.ctx, &pb.RemoveWorkerRequest{
+	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
 		WorkerId: s.workerId,
 	})); err != nil {
 		errs = errors.Join(errs, err)
