@@ -238,8 +238,8 @@ func NewWorker() (*Worker, error) {
 		fileCacheManager:        fileCacheManager,
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
-		redisClient:             redisClient,
 		containerMountManager:   NewContainerMountManager(config),
+		redisClient:             redisClient,
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		cedanaClient:            cedanaClient,
@@ -513,14 +513,37 @@ func (s *Worker) manageWorkerCapacity() {
 }
 
 func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error {
-	worker, err := s.workerRepoClient.GetWorkerById(s.ctx, &pb.GetWorkerByIdRequest{
+	getWorkerResponse, err := handleGRPCResponse(s.workerRepoClient.GetWorkerById(s.ctx, &pb.GetWorkerByIdRequest{
 		WorkerId: s.workerId,
-	})
+	}))
 	if err != nil {
 		return err
 	}
 
-	return s.workerRepo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
+	worker := getWorkerResponse.Worker
+
+	_, err = handleGRPCResponse(s.workerRepoClient.UpdateWorkerCapacity(s.ctx, &pb.UpdateWorkerCapacityRequest{
+		WorkerId:       worker.Id,
+		CapacityChange: int64(types.AddCapacity),
+		ContainerRequest: &pb.ContainerRequest{
+			ContainerId: request.ContainerId,
+			ImageId:     request.ImageId,
+			Env:         request.Env,
+			EntryPoint:  request.EntryPoint,
+			Cpu:         request.Cpu,
+			Memory:      request.Memory,
+			Gpu:         request.Gpu,
+			GpuRequest:  request.GpuRequest,
+			GpuCount:    request.GpuCount,
+			StubId:      request.StubId,
+			WorkspaceId: request.WorkspaceId,
+		},
+	}))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (s *Worker) keepalive() {
@@ -530,7 +553,9 @@ func (s *Worker) keepalive() {
 	for {
 		select {
 		case <-ticker.C:
-			s.workerRepo.SetWorkerKeepAlive(s.workerId)
+			s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
+				WorkerId: s.workerId,
+			})
 		case <-s.ctx.Done():
 			return
 		}
@@ -540,7 +565,9 @@ func (s *Worker) keepalive() {
 func (s *Worker) startup() error {
 	log.Info().Msg("worker starting up")
 
-	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
+	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
+		WorkerId: s.workerId,
+	}))
 	if err != nil {
 		return err
 	}
