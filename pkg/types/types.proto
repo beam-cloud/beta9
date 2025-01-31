@@ -35,7 +35,7 @@ message Container {
   string container_id = 1;
   string stub_id = 2;
   string status = 3;
-  int64 scheduled_at = 4;
+  google.protobuf.Timestamp scheduled_at = 4;
   string workspace_id = 5;
   string worker_id = 6;
   string machine_id = 7;

@@ -42,7 +42,7 @@ class Container(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     stub_id: str = betterproto.string_field(2)
     status: str = betterproto.string_field(3)
-    scheduled_at: int = betterproto.int64_field(4)
+    scheduled_at: datetime = betterproto.message_field(4)
     workspace_id: str = betterproto.string_field(5)
     worker_id: str = betterproto.string_field(6)
     machine_id: str = betterproto.string_field(7)

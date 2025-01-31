@@ -145,7 +145,7 @@ type Container struct {
 	ContainerId string          `redis:"container_id" json:"container_id"`
 	StubId      string          `redis:"stub_id" json:"stub_id"`
 	Status      ContainerStatus `redis:"status" json:"status"`
-	ScheduledAt int64           `redis:"scheduled_at" json:"scheduled_at"`
+	ScheduledAt time.Time       `redis:"scheduled_at" json:"scheduled_at"`
 	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
 	WorkerId    string          `redis:"worker_id" json:"worker_id"`
 	MachineId   string          `redis:"machine_id" json:"machine_id"`
@@ -156,7 +156,7 @@ func (c *Container) ToProto() *pb.Container {
 		ContainerId: c.ContainerId,
 		StubId:      c.StubId,
 		Status:      string(c.Status),
-		ScheduledAt: c.ScheduledAt,
+		ScheduledAt: timestamppb.New(c.ScheduledAt),
 		WorkspaceId: c.WorkspaceId,
 		WorkerId:    c.WorkerId,
 		MachineId:   c.MachineId,
@@ -168,7 +168,7 @@ func NewContainerFromProto(in *pb.Container) *Container {
 		ContainerId: in.ContainerId,
 		StubId:      in.StubId,
 		Status:      ContainerStatus(in.Status),
-		ScheduledAt: in.ScheduledAt,
+		ScheduledAt: in.ScheduledAt.AsTime(),
 		WorkspaceId: in.WorkspaceId,
 		WorkerId:    in.WorkerId,
 		MachineId:   in.MachineId,

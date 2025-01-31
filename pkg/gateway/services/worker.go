@@ -3,12 +3,14 @@ package gatewayservices
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"golang.org/x/exp/slices"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRequest) (*pb.ListWorkersResponse, error) {
@@ -58,7 +60,7 @@ func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRe
 				ContainerId: c.ContainerId,
 				WorkspaceId: string(c.WorkspaceId),
 				Status:      string(c.Status),
-				ScheduledAt: c.ScheduledAt,
+				ScheduledAt: timestamppb.New(time.Unix(c.ScheduledAt, 0)),
 			}
 		}
 	}
