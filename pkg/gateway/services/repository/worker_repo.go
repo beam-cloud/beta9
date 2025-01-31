@@ -132,6 +132,15 @@ func (s *WorkerRepositoryService) RemoveWorker(ctx context.Context, req *pb.Remo
 	return &pb.RemoveWorkerResponse{Ok: true}, nil
 }
 
+func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *pb.SetWorkerKeepAliveRequest) (*pb.SetWorkerKeepAliveResponse, error) {
+	err := s.workerRepo.SetWorkerKeepAlive(req.WorkerId)
+	if err != nil {
+		return &pb.SetWorkerKeepAliveResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.SetWorkerKeepAliveResponse{Ok: true}, nil
+}
+
 func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.SetNetworkLockRequest) (*pb.SetNetworkLockResponse, error) {
 	err := s.workerRepo.SetNetworkLock(req.NetworkPrefix, int(req.Ttl), int(req.Retries))
 	if err != nil {
