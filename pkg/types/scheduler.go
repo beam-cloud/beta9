@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -134,6 +137,89 @@ func (c *ContainerRequest) RequiresGPU() bool {
 // IsBuildRequest checks if the sourceImage or Dockerfile field is not-nil, which means the container request is for a build container
 func (c *ContainerRequest) IsBuildRequest() bool {
 	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil
+}
+
+func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
+	mounts := make([]*pb.Mount, len(c.Mounts))
+	for i, m := range c.Mounts {
+		mounts[i] = m.ToProto()
+	}
+
+	return &pb.ContainerRequest{
+		ContainerId: c.ContainerId,
+		EntryPoint:  c.EntryPoint,
+		Env:         c.Env,
+		Cpu:         c.Cpu,
+		Memory:      c.Memory,
+		Gpu:         c.Gpu,
+		GpuRequest:  c.GpuRequest,
+		GpuCount:    c.GpuCount,
+		ImageId:     c.ImageId,
+		Mounts:      mounts,
+		StubId:      c.StubId,
+		WorkspaceId: c.WorkspaceId,
+		Workspace: &pb.Workspace{
+			Name: c.Workspace.Name,
+		},
+		Stub: &pb.StubWithRelated{
+			Stub: &pb.Stub{
+				Id: uint32(c.Stub.Stub.Id),
+			},
+			Workspace: &pb.Workspace{
+				Name: c.Stub.Workspace.Name,
+				Id:   uint32(c.Stub.Workspace.Id),
+			},
+			Object: &pb.Object{
+				Id: uint32(c.Stub.Object.Id),
+			},
+		},
+		RetryCount:        int64(c.RetryCount),
+		PoolSelector:      c.PoolSelector,
+		Preemptable:       c.Preemptable,
+		CheckpointEnabled: c.CheckpointEnabled,
+		Timestamp:         timestamppb.New(c.Timestamp),
+		BuildOptions:      &pb.BuildOptions{
+			// SourceImage:      c.BuildOptions.SourceImage,
+			// Dockerfile:       c.BuildOptions.Dockerfile,
+			// BuildCtxObject:   c.BuildOptions.BuildCtxObject,
+			// SourceImageCreds: c.BuildOptions.SourceImageCreds,
+			// BuildSecrets:     c.BuildOptions.BuildSecrets,
+		},
+	}
+}
+
+func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
+	mounts := make([]Mount, len(in.Mounts))
+	for i, m := range in.Mounts {
+		mounts[i] = *NewMountFromProto(m)
+	}
+
+	return &ContainerRequest{
+		ContainerId: in.ContainerId,
+		EntryPoint:  in.EntryPoint,
+		Env:         in.Env,
+		Cpu:         in.Cpu,
+		Memory:      in.Memory,
+		Gpu:         in.Gpu,
+		GpuRequest:  in.GpuRequest,
+		GpuCount:    in.GpuCount,
+		ImageId:     in.ImageId,
+		Mounts:      mounts,
+		WorkspaceId: in.WorkspaceId,
+		Workspace: Workspace{
+			Name: in.Workspace.Name,
+		},
+		StubId:            in.StubId,
+		Timestamp:         in.Timestamp.AsTime(),
+		CheckpointEnabled: in.CheckpointEnabled,
+		Preemptable:       in.Preemptable,
+		BuildOptions: BuildOptions{
+			// SourceImage:      in.BuildOptions.SourceImage,
+			// Dockerfile:       in.BuildOptions.Dockerfile,
+			// BuildCtxObject:   in.BuildOptions.BuildCtxObject,
+			SourceImageCreds: in.BuildOptions.SourceImageCreds,
+		},
+	}
 }
 
 const ContainerExitCodeTtlS int = 300

@@ -97,7 +97,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	getWorkerResponse, err := workerRepoClient.GetWorkerById(ctx, &pb.GetWorkerByIdRequest{
 		WorkerId: workerId,
 	})
-	if err != nil {
+	if err != nil || getWorkerResponse.Worker == nil {
 		return nil, err
 	}
 

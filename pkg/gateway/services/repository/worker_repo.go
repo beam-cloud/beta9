@@ -34,56 +34,9 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(ctx context.Context, r
 	}
 
 	return &pb.GetNextContainerRequestResponse{
-		Ok: true,
-		ContainerRequest: &pb.ContainerRequest{
-			ContainerId: request.ContainerId,
-			ImageId:     request.ImageId,
-			Env:         request.Env,
-			EntryPoint:  request.EntryPoint,
-			Cpu:         request.Cpu,
-			Memory:      request.Memory,
-			Gpu:         request.Gpu,
-			GpuRequest:  request.GpuRequest,
-			GpuCount:    request.GpuCount,
-			StubId:      request.StubId,
-			WorkspaceId: request.WorkspaceId,
-			Workspace: &pb.Workspace{
-				Id:   uint32(request.Workspace.Id),
-				Name: request.Workspace.Name,
-				// CreatedAt:          timestamppb.New(request.Workspace.CreatedAt),
-				// UpdatedAt:          timestamppb.New(request.Workspace.UpdatedAt),
-				// SigningKey:         *request.Workspace.SigningKey,
-				// VolumeCacheEnabled: request.Workspace.VolumeCacheEnabled,
-				// MultiGpuEnabled:    request.Workspace.MultiGpuEnabled,
-				// ConcurrencyLimitId: uint32(*request.Workspace.ConcurrencyLimitId),
-				// ConcurrencyLimit: &pb.ConcurrencyLimit{
-				// 	Id:                uint32(*request.Workspace.ConcurrencyLimitId),
-				// 	ExternalId:        request.Workspace.ConcurrencyLimit.ExternalId,
-				// 	GpuLimit:          request.Workspace.ConcurrencyLimit.GPULimit,
-				// 	CpuMillicoreLimit: request.Workspace.ConcurrencyLimit.CPUMillicoreLimit,
-				// },
-			},
-			Stub: &pb.StubWithRelated{
-				Stub: &pb.Stub{
-					Id:            uint32(request.Stub.Id),
-					Name:          request.Stub.Name,
-					Type:          string(request.Stub.Type),
-					Config:        request.Stub.Config,
-					ConfigVersion: uint32(request.Stub.ConfigVersion),
-					ObjectId:      uint32(request.Stub.ObjectId),
-					WorkspaceId:   uint32(request.Stub.WorkspaceId),
-					// CreatedAt:     timestamppb.New(request.Stub.CreatedAt),
-				},
-				Object: &pb.Object{
-					Id:          uint32(request.Stub.ObjectId),
-					Hash:        request.Stub.Object.Hash,
-					Size:        request.Stub.Object.Size,
-					WorkspaceId: uint32(request.Stub.WorkspaceId),
-					// CreatedAt:   timestamppb.New(request.Stub.Object.CreatedAt),
-				},
-			},
-		},
-		ReceivedRequest: true,
+		Ok:               true,
+		ContainerRequest: request.ToProto(),
+		ReceivedRequest:  true,
 	}, nil
 }
 

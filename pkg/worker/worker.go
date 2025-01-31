@@ -279,49 +279,7 @@ func (s *Worker) Run() error {
 			WorkerId: s.workerId,
 		}))
 		if err == nil && response.ReceivedRequest {
-			request := &types.ContainerRequest{
-				ContainerId: response.ContainerRequest.ContainerId,
-				ImageId:     response.ContainerRequest.ImageId,
-				Env:         response.ContainerRequest.Env,
-				EntryPoint:  response.ContainerRequest.EntryPoint,
-				Cpu:         response.ContainerRequest.Cpu,
-				Memory:      response.ContainerRequest.Memory,
-				Gpu:         response.ContainerRequest.Gpu,
-				GpuRequest:  response.ContainerRequest.GpuRequest,
-				GpuCount:    response.ContainerRequest.GpuCount,
-				StubId:      response.ContainerRequest.StubId,
-				WorkspaceId: response.ContainerRequest.WorkspaceId,
-				Workspace: types.Workspace{
-					Id:        uint(response.ContainerRequest.Workspace.Id),
-					Name:      response.ContainerRequest.Workspace.Name,
-					CreatedAt: response.ContainerRequest.Workspace.CreatedAt.AsTime(),
-					UpdatedAt: response.ContainerRequest.Workspace.UpdatedAt.AsTime(),
-				},
-				Stub: types.StubWithRelated{
-					Stub: types.Stub{
-						Id:   uint(response.ContainerRequest.Stub.Stub.Id),
-						Name: response.ContainerRequest.Stub.Stub.Name,
-						Type: types.StubType(response.ContainerRequest.Stub.Stub.Type),
-					},
-					Workspace: types.Workspace{
-						Id:   uint(response.ContainerRequest.Workspace.Id),
-						Name: response.ContainerRequest.Workspace.Name,
-					},
-					Object: types.Object{
-						Id:   uint(response.ContainerRequest.Stub.Object.Id),
-						Hash: response.ContainerRequest.Stub.Object.Hash,
-						Size: response.ContainerRequest.Stub.Object.Size,
-					},
-				},
-				Timestamp: response.ContainerRequest.Timestamp.AsTime(),
-				// Mounts:            response.ContainerRequest.Mounts,
-				RetryCount:        int(response.ContainerRequest.RetryCount),
-				PoolSelector:      response.ContainerRequest.PoolSelector,
-				Preemptable:       response.ContainerRequest.Preemptable,
-				CheckpointEnabled: response.ContainerRequest.CheckpointEnabled,
-				// BuildOptions:      response.ContainerRequest.BuildOptions,
-			}
-
+			request := types.NewContainerRequestFromProto(response.ContainerRequest)
 			lastContainerRequest = time.Now()
 			containerId := request.ContainerId
 
