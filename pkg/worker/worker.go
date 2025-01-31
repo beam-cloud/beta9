@@ -393,7 +393,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			if err != nil {
 				notFoundErr := &types.ErrContainerStateNotFound{}
 				if notFoundErr.From(err) {
-					s.stopContainerChan <- stopContainerEvent{ContainerId: notFoundErr.ContainerId, Kill: true}
+					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 					return nil
 				}
 
