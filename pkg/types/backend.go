@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // @go2proto
@@ -23,6 +24,38 @@ type Workspace struct {
 	MultiGpuEnabled    bool              `db:"multi_gpu_enabled" json:"multi_gpu_enabled"`
 	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`
 	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
+}
+
+func (w *Workspace) ToProto() *pb.Workspace {
+	return &pb.Workspace{
+		Id:                 uint32(w.Id),
+		ExternalId:         w.ExternalId,
+		Name:               w.Name,
+		CreatedAt:          timestamppb.New(w.CreatedAt),
+		UpdatedAt:          timestamppb.New(w.UpdatedAt),
+		SigningKey:         *w.SigningKey,
+		VolumeCacheEnabled: w.VolumeCacheEnabled,
+		MultiGpuEnabled:    w.MultiGpuEnabled,
+		ConcurrencyLimitId: uint32(*w.ConcurrencyLimitId),
+		ConcurrencyLimit:   w.ConcurrencyLimit.ToProto(),
+	}
+}
+
+func NewWorkspaceFromProto(in *pb.Workspace) *Workspace {
+	concurrencyLimitId := uint(in.ConcurrencyLimitId)
+
+	return &Workspace{
+		Id:                 uint(in.Id),
+		ExternalId:         in.ExternalId,
+		Name:               in.Name,
+		CreatedAt:          in.CreatedAt.AsTime(),
+		UpdatedAt:          in.UpdatedAt.AsTime(),
+		SigningKey:         &in.SigningKey,
+		VolumeCacheEnabled: in.VolumeCacheEnabled,
+		MultiGpuEnabled:    in.MultiGpuEnabled,
+		ConcurrencyLimitId: &concurrencyLimitId,
+		ConcurrencyLimit:   NewConcurrencyLimitFromProto(in.ConcurrencyLimit),
+	}
 }
 
 const (
@@ -91,6 +124,26 @@ type Object struct {
 	Size        int64     `db:"size" json:"size"`
 	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+}
+
+func (o *Object) ToProto() *pb.Object {
+	return &pb.Object{
+		Id:          uint32(o.Id),
+		ExternalId:  o.ExternalId,
+		Hash:        o.Hash,
+		Size:        o.Size,
+		WorkspaceId: uint32(o.WorkspaceId),
+	}
+}
+
+func NewObjectFromProto(in *pb.Object) *Object {
+	return &Object{
+		Id:          uint(in.Id),
+		ExternalId:  in.ExternalId,
+		Hash:        in.Hash,
+		Size:        in.Size,
+		WorkspaceId: uint(in.WorkspaceId),
+	}
 }
 
 type TaskStatus string
@@ -289,11 +342,55 @@ func (s *Stub) SanitizeConfig() error {
 	return nil
 }
 
+func (s *Stub) ToProto() *pb.Stub {
+	return &pb.Stub{
+		Id:            uint32(s.Id),
+		ExternalId:    s.ExternalId,
+		Name:          s.Name,
+		Type:          string(s.Type),
+		Config:        s.Config,
+		ConfigVersion: uint32(s.ConfigVersion),
+		WorkspaceId:   uint32(s.WorkspaceId),
+		CreatedAt:     timestamppb.New(s.CreatedAt),
+		UpdatedAt:     timestamppb.New(s.UpdatedAt),
+	}
+}
+
+func NewStubFromProto(in *pb.Stub) *Stub {
+	return &Stub{
+		Id:            uint(in.Id),
+		ExternalId:    in.ExternalId,
+		Name:          in.Name,
+		Type:          StubType(in.Type),
+		Config:        in.Config,
+		ConfigVersion: uint(in.ConfigVersion),
+		WorkspaceId:   uint(in.WorkspaceId),
+		CreatedAt:     in.CreatedAt.AsTime(),
+		UpdatedAt:     in.UpdatedAt.AsTime(),
+	}
+}
+
 // @go2proto
 type StubWithRelated struct {
 	Stub
 	Workspace Workspace `db:"workspace" json:"workspace"`
 	Object    Object    `db:"object" json:"object"`
+}
+
+func (s *StubWithRelated) ToProto() *pb.StubWithRelated {
+	return &pb.StubWithRelated{
+		Stub:      s.Stub.ToProto(),
+		Workspace: s.Workspace.ToProto(),
+		Object:    s.Object.ToProto(),
+	}
+}
+
+func NewStubWithRelatedFromProto(in *pb.StubWithRelated) *StubWithRelated {
+	return &StubWithRelated{
+		Stub:      *NewStubFromProto(in.Stub),
+		Workspace: *NewWorkspaceFromProto(in.Workspace),
+		Object:    *NewObjectFromProto(in.Object),
+	}
 }
 
 type Image struct {
@@ -386,6 +483,28 @@ type ConcurrencyLimit struct {
 	CPUMillicoreLimit uint32    `db:"cpu_millicore_limit" json:"cpu_millicore_limit" redis:"cpu_millicore_limit"`
 	CreatedAt         time.Time `db:"created_at" json:"created_at,omitempty" redis:"-"`
 	UpdatedAt         time.Time `db:"updated_at" json:"updated_at,omitempty" redis:"-"`
+}
+
+func (c *ConcurrencyLimit) ToProto() *pb.ConcurrencyLimit {
+	return &pb.ConcurrencyLimit{
+		Id:                uint32(c.Id),
+		ExternalId:        c.ExternalId,
+		GpuLimit:          c.GPULimit,
+		CpuMillicoreLimit: c.CPUMillicoreLimit,
+		CreatedAt:         timestamppb.New(c.CreatedAt),
+		UpdatedAt:         timestamppb.New(c.UpdatedAt),
+	}
+}
+
+func NewConcurrencyLimitFromProto(in *pb.ConcurrencyLimit) *ConcurrencyLimit {
+	return &ConcurrencyLimit{
+		Id:                uint(in.Id),
+		ExternalId:        in.ExternalId,
+		GPULimit:          in.GpuLimit,
+		CPUMillicoreLimit: in.CpuMillicoreLimit,
+		CreatedAt:         in.CreatedAt.AsTime(),
+		UpdatedAt:         in.UpdatedAt.AsTime(),
+	}
 }
 
 type Secret struct {
