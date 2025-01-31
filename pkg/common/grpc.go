@@ -34,6 +34,7 @@ func GRPCClientRetryInterceptor(maxRetries int, delay time.Duration) grpc.UnaryC
 			}
 
 			time.Sleep(delay)
+			delay *= 2
 		}
 
 		return errors.New("max retries reached")
