@@ -7,9 +7,11 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 )
 
 type WorkerRepositoryService struct {
+	ctx        context.Context
 	workerRepo repository.WorkerRepository
 	pb.UnimplementedWorkerRepositoryServiceServer
 }
@@ -18,13 +20,15 @@ const (
 	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
 )
 
-func NewWorkerRepositoryService(workerRepo repository.WorkerRepository) *WorkerRepositoryService {
-	return &WorkerRepositoryService{workerRepo: workerRepo}
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository) *WorkerRepositoryService {
+	return &WorkerRepositoryService{ctx: ctx, workerRepo: workerRepo}
 }
 
 func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContainerRequestRequest, stream pb.WorkerRepositoryService_GetNextContainerRequestServer) error {
 	for {
 		select {
+		case <-s.ctx.Done():
+			return s.ctx.Err()
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		default:
@@ -146,6 +150,8 @@ func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.Se
 		return &pb.SetNetworkLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	log.Info().Str("token", token).Msg("set network lock")
+
 	return &pb.SetNetworkLockResponse{Ok: true, Token: token}, nil
 }
 
@@ -154,6 +160,8 @@ func (s *WorkerRepositoryService) RemoveNetworkLock(ctx context.Context, req *pb
 	if err != nil {
 		return &pb.RemoveNetworkLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+
+	log.Info().Str("token", req.Token).Msg("released network lock")
 
 	return &pb.RemoveNetworkLockResponse{Ok: true}, nil
 }

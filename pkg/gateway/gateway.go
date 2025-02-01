@@ -232,10 +232,10 @@ func (g *Gateway) initGrpc() error {
 
 // Register repository services
 func (g *Gateway) registerRepositoryServices() error {
-	wr := repositoryservices.NewWorkerRepositoryService(g.workerRepo)
+	wr := repositoryservices.NewWorkerRepositoryService(g.ctx, g.workerRepo)
 	pb.RegisterWorkerRepositoryServiceServer(g.grpcServer, wr)
 
-	cr := repositoryservices.NewContainerRepositoryService(g.ContainerRepo)
+	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
 	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
 	return nil
 }

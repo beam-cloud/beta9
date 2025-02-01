@@ -281,7 +281,7 @@ containerRequestStream:
 			WorkerId: s.workerId,
 		})
 		if err != nil {
-			if err == context.Canceled || s.ctx.Err() == context.Canceled {
+			if s.ctx.Err() == context.Canceled {
 				break
 			}
 

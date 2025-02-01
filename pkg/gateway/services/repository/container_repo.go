@@ -9,12 +9,13 @@ import (
 )
 
 type ContainerRepositoryService struct {
+	ctx           context.Context
 	containerRepo repository.ContainerRepository
 	pb.UnimplementedContainerRepositoryServiceServer
 }
 
-func NewContainerRepositoryService(containerRepo repository.ContainerRepository) *ContainerRepositoryService {
-	return &ContainerRepositoryService{containerRepo: containerRepo}
+func NewContainerRepositoryService(ctx context.Context, containerRepo repository.ContainerRepository) *ContainerRepositoryService {
+	return &ContainerRepositoryService{ctx: ctx, containerRepo: containerRepo}
 }
 
 func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req *pb.GetContainerStateRequest) (*pb.GetContainerStateResponse, error) {

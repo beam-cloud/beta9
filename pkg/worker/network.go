@@ -225,7 +225,6 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
-
 	link := &netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{Name: hostVethName,
 			MTU:          m.defaultLink.Attrs().MTU,
@@ -525,7 +524,7 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
-		Retries:       3,
+		Retries:       5,
 	}))
 	if err != nil {
 		return err
