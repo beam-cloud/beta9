@@ -174,7 +174,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	}
 
 	// Get lock on image mount
-	_, err := handleGRPCResponse(c.workerRepoClient.SetImagePullLock(context.Background(), &pb.SetImagePullLockRequest{
+	lockResponse, err := handleGRPCResponse(c.workerRepoClient.SetImagePullLock(context.Background(), &pb.SetImagePullLockRequest{
 		WorkerId: c.workerId,
 		ImageId:  imageId,
 	}))
@@ -184,6 +184,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	defer handleGRPCResponse(c.workerRepoClient.RemoveImagePullLock(context.Background(), &pb.RemoveImagePullLockRequest{
 		WorkerId: c.workerId,
 		ImageId:  imageId,
+		Token:    lockResponse.Token,
 	}))
 
 	startServer, _, server, err := clip.MountArchive(*mountOptions)
