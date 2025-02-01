@@ -58,14 +58,14 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	return nil
 }
 
-func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3})
+func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
 	if err != nil {
 		return err
 	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
+	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 
-	stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
+	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
 	res, err := r.rdb.Exists(context.TODO(), stateKey).Result()
 	if err != nil {
 		return err
@@ -73,7 +73,7 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 
 	exists := res > 0
 	if !exists {
-		return &types.ErrWorkerNotFound{WorkerId: worker.Id}
+		return &types.ErrWorkerNotFound{WorkerId: workerId}
 	}
 
 	// Remove worker state from index
@@ -88,7 +88,7 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 		return err
 	}
 
-	err = r.rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Err()
+	err = r.rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Err()
 	if err != nil {
 		return err
 	}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	cedana "github.com/cedana/cedana/pkg/types"
 	corev1 "k8s.io/api/core/v1"
@@ -216,6 +217,28 @@ type MountPointConfig struct {
 	EndpointURL string `json:"bucket_url"`
 	Region      string `json:"region"`
 	ReadOnly    bool   `json:"read_only"`
+}
+
+func (m *MountPointConfig) ToProto() *pb.MountPointConfig {
+	return &pb.MountPointConfig{
+		BucketName:  m.BucketName,
+		AccessKey:   m.AccessKey,
+		SecretKey:   m.SecretKey,
+		EndpointUrl: m.EndpointURL,
+		Region:      m.Region,
+		ReadOnly:    m.ReadOnly,
+	}
+}
+
+func NewMountPointConfigFromProto(in *pb.MountPointConfig) *MountPointConfig {
+	return &MountPointConfig{
+		BucketName:  in.BucketName,
+		AccessKey:   in.AccessKey,
+		SecretKey:   in.SecretKey,
+		EndpointURL: in.EndpointUrl,
+		Region:      in.Region,
+		ReadOnly:    in.ReadOnly,
+	}
 }
 
 type WorkerConfig struct {

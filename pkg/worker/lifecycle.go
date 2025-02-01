@@ -15,6 +15,8 @@ import (
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
@@ -89,7 +91,10 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 		*exitCode = 0
 	}
 
-	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
+	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+		ContainerId: containerId,
+		ExitCode:    int32(*exitCode),
+	}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to set exit code: %v", err)
 	}
@@ -146,7 +151,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 func (s *Worker) deleteContainer(containerId string, err error) {
 	s.containerInstances.Delete(containerId)
 
-	err = s.containerRepo.DeleteContainerState(containerId)
+	_, err = handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
 	}
@@ -167,7 +172,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
-	err := s.containerRepo.SetWorkerAddress(containerId, hostname)
+	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
+		ContainerId: containerId,
+		Address:     hostname,
+	}))
 	if err != nil {
 		return err
 	}
@@ -225,7 +233,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindPort)
-	err = s.containerRepo.SetContainerAddress(request.ContainerId, containerAddr)
+	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
+		ContainerId: request.ContainerId,
+		Address:     containerAddr,
+	}))
 	if err != nil {
 		return err
 	}
@@ -448,8 +459,14 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
 
-	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
-	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
+	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
+		WorkerId:    s.workerId,
+		ContainerId: request.ContainerId,
+	})
+	defer s.workerRepoClient.RemoveContainerFromWorker(ctx, &pb.RemoveContainerFromWorkerRequest{
+		WorkerId:    s.workerId,
+		ContainerId: request.ContainerId,
+	})
 	defer cancel()
 
 	exitCode := -1
@@ -491,15 +508,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		if _, err := s.containerRepo.GetContainerState(containerId); err != nil {
-			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
+		_, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+		if err != nil {
+			notFoundErr := &types.ErrContainerStateNotFound{}
+
+			if notFoundErr.From(err) {
 				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}
 		}
 
 		// Update container status to running
-		err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, types.ContainerStateTtlS)
+		_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+			ContainerId:   containerId,
+			Status:        string(types.ContainerStatusRunning),
+			ExpirySeconds: int64(types.ContainerStateTtlS),
+		}))
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
 		}

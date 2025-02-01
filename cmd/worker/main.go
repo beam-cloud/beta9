@@ -21,21 +21,24 @@ func main() {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
 
+	notFoundErr := &types.ErrWorkerNotFound{}
 	s, err := worker.NewWorker()
 	if err != nil {
-		if _, ok := err.(*types.ErrWorkerNotFound); ok {
-			log.Info().Msg("worker not found. Shutting down.")
+		if notFoundErr.From(err) {
+			log.Info().Msg("worker not found, shutting down.")
 			return
 		}
+
 		log.Fatal().Err(err).Msg("worker initialization failed")
 	}
 
 	err = s.Run()
 	if err != nil {
-		if _, ok := err.(*types.ErrWorkerNotFound); ok {
-			log.Info().Msg("worker not found. Shutting down.")
+		if notFoundErr.From(err) {
+			log.Info().Msg("worker not found, shutting down.")
 			return
 		}
-		log.Fatal().Err(err).Msg("starting worker failed")
+
+		log.Fatal().Err(err).Msg("worker failed")
 	}
 }

@@ -39,6 +39,7 @@ type ExternalWorkerPoolController struct {
 	workerRepo   repository.WorkerRepository
 	providerName *types.MachineProvider
 	providerRepo repository.ProviderRepository
+	workspace    *types.Workspace
 }
 
 func NewExternalWorkerPoolController(
@@ -137,8 +138,12 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuC
 		return worker, nil
 	}
 
-	// TODO: replace hard-coded workspace ID with look up of cluster admin
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeMachine, false)
+	adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, adminWorkspace.Id, types.TokenTypeMachine, false)
 	if err != nil {
 		return nil, err
 	}
@@ -241,12 +246,21 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 }
 
 func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+	if wpc.workspace == nil {
+		adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+		if err != nil {
+			return nil, errors.New("workspace not configured for pool: " + wpc.name)
+		}
+
+		wpc.workspace = adminWorkspace
+	}
+
 	client, err := wpc.getProxiedClient(machineState.HostName, machineState.Token)
 	if err != nil {
 		return nil, err
 	}
 
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, true)
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, wpc.workspace.Id, types.TokenTypeWorker, true)
 	if err != nil {
 		return nil, err
 	}

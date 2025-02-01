@@ -31,6 +31,7 @@ type LocalKubernetesWorkerPoolController struct {
 	workerPool  types.WorkerPoolConfig
 	workerRepo  repository.WorkerRepository
 	backendRepo repository.BackendRepository
+	workspace   *types.Workspace
 }
 
 func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, providerRepo repository.ProviderRepository, backendRepo repository.BackendRepository) (WorkerPoolController, error) {
@@ -100,7 +101,16 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorkerToMachine(cpu int64, me
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeWorker, true)
+	if wpc.workspace == nil {
+		adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+		if err != nil {
+			return nil, errors.New("workspace not configured for pool: " + wpc.name)
+		}
+
+		wpc.workspace = adminWorkspace
+	}
+
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, wpc.workspace.Id, types.TokenTypeWorker, true)
 	if err != nil {
 		return nil, err
 	}
@@ -500,7 +510,7 @@ func (wpc *LocalKubernetesWorkerPoolController) deleteStalePendingWorkerJobs() {
 				if duration >= maxAge {
 					// Remove worker from repository
 					if workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]; ok {
-						if err := wpc.workerRepo.RemoveWorker(&types.Worker{Id: workerId}); err != nil {
+						if err := wpc.workerRepo.RemoveWorker(workerId); err != nil {
 							log.Error().Str("worker_id", workerId).Err(err).Msg("failed to delete pending worker")
 						}
 					}

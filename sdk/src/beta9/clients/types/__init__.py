@@ -38,6 +38,17 @@ class ConcurrencyLimit(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class Container(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    stub_id: str = betterproto.string_field(2)
+    status: str = betterproto.string_field(3)
+    scheduled_at: datetime = betterproto.message_field(4)
+    workspace_id: str = betterproto.string_field(5)
+    worker_id: str = betterproto.string_field(6)
+    machine_id: str = betterproto.string_field(7)
+
+
+@dataclass(eq=False, repr=False)
 class ContainerRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     entry_point: List[str] = betterproto.string_field(2)
@@ -123,6 +134,27 @@ class StubWithRelated(betterproto.Message):
     stub: "Stub" = betterproto.message_field(1)
     workspace: "Workspace" = betterproto.message_field(2)
     object: "Object" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class Worker(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    status: str = betterproto.string_field(2)
+    total_cpu: int = betterproto.int64_field(3)
+    total_memory: int = betterproto.int64_field(4)
+    total_gpu_count: int = betterproto.uint32_field(5)
+    free_cpu: int = betterproto.int64_field(6)
+    free_memory: int = betterproto.int64_field(7)
+    free_gpu_count: int = betterproto.uint32_field(8)
+    gpu: str = betterproto.string_field(9)
+    pool_name: str = betterproto.string_field(10)
+    machine_id: str = betterproto.string_field(11)
+    resource_version: int = betterproto.int64_field(12)
+    requires_pool_selector: bool = betterproto.bool_field(13)
+    priority: int = betterproto.int32_field(14)
+    preemptable: bool = betterproto.bool_field(15)
+    build_version: str = betterproto.string_field(16)
+    active_containers: List["Container"] = betterproto.message_field(17)
 
 
 @dataclass(eq=False, repr=False)

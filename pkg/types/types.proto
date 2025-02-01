@@ -31,6 +31,16 @@ message ConcurrencyLimit {
   google.protobuf.Timestamp updated_at = 6;
 }
 
+message Container {
+  string container_id = 1;
+  string stub_id = 2;
+  string status = 3;
+  google.protobuf.Timestamp scheduled_at = 4;
+  string workspace_id = 5;
+  string worker_id = 6;
+  string machine_id = 7;
+}
+
 message ContainerRequest {
   string container_id = 1;
   repeated string entry_point = 2;
@@ -110,6 +120,26 @@ message StubWithRelated {
   Stub stub = 1;
   Workspace workspace = 2;
   Object object = 3;
+}
+
+message Worker {
+  string id = 1;
+  string status = 2;
+  int64 total_cpu = 3;
+  int64 total_memory = 4;
+  uint32 total_gpu_count = 5;
+  int64 free_cpu = 6;
+  int64 free_memory = 7;
+  uint32 free_gpu_count = 8;
+  string gpu = 9;
+  string pool_name = 10;
+  string machine_id = 11;
+  int64 resource_version = 12;
+  bool requires_pool_selector = 13;
+  int32 priority = 14;
+  bool preemptable = 15;
+  string build_version = 16;
+  repeated Container active_containers = 17;
 }
 
 message Workspace {

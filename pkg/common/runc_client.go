@@ -14,7 +14,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 )
 
 type RunCClient struct {
@@ -60,7 +59,7 @@ func (c *RunCClient) connect() error {
 
 	maxMessageSize := 1 << 30 // 1Gi
 	if c.ServiceToken != "" {
-		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(AuthInterceptor(c.ServiceToken)),
+		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(GRPCClientAuthInterceptor(c.ServiceToken)),
 			grpc.WithDefaultCallOptions(
 				grpc.MaxCallRecvMsgSize(maxMessageSize),
 				grpc.MaxCallSendMsgSize(maxMessageSize),
@@ -79,13 +78,6 @@ func (c *RunCClient) connect() error {
 
 func (c *RunCClient) Close() error {
 	return c.conn.Close()
-}
-
-func AuthInterceptor(token string) grpc.UnaryClientInterceptor {
-	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-		return invoker(newCtx, method, req, reply, cc, opts...)
-	}
 }
 
 func (c *RunCClient) Status(containerId string) (*pb.RunCStatusResponse, error) {
