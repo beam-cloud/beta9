@@ -42,7 +42,7 @@ from ..runner.common import (
 )
 from ..type import TaskExitCode, TaskStatus
 
-os.environ["GRPC_TRACE"] = "http,tcp"
+os.environ["GRPC_TRACE"] = "connectivity_state,tcp,http2_stream_state,call_error"
 os.environ["GRPC_VERBOSITY"] = "DEBUG"
 
 
