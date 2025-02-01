@@ -490,10 +490,10 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 					_, err = handleGRPCResponse(m.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
 					if err != nil && notFoundErr.From(err) {
 						// Container state not found, so tear down the namespace and associated resources
-						log.Info().Str("container_id", containerId).Msg("orphaned namespace detected")
+						log.Info().Str("container_id", containerId).Msg("orphaned namespace detected, cleaning up")
 
 						if err := m.TearDown(containerId); err != nil {
-							log.Error().Str("container_id", containerId).Err(err).Msg("error tearing down namespace")
+							log.Error().Str("container_id", containerId).Err(err).Msg("error tearing down orphaned namespace")
 						}
 					}
 
