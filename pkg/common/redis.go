@@ -280,7 +280,7 @@ func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptions) error {
 	var retryStrategy redislock.RetryStrategy = nil
 	if opts.Retries > 0 {
-		retryStrategy = redislock.LimitRetry(redislock.LinearBackoff(100*time.Millisecond), opts.Retries)
+		retryStrategy = redislock.LimitRetry(redislock.ExponentialBackoff(100*time.Millisecond, time.Duration(opts.TtlS)*time.Second), opts.Retries)
 	}
 	lock, err := redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
 		RetryStrategy: retryStrategy,
@@ -310,23 +310,26 @@ func (l *RedisLock) Release(key string, tokens ...string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	// Check if the lock is available in memory
 	if lock, ok := l.locks[key]; ok {
 		err := lock.Release(context.Background())
 		if err != nil {
 			return err
 		}
-
 		delete(l.locks, key)
 		return nil
-	} else if len(tokens) > 0 {
+	}
+
+	// If lock is not in memory and caller has provided tokens, try to retrieve by token
+	if len(tokens) > 0 {
+		rc := redislock.New(l.client)
+
 		// NOTE: we only ever use the first "token" here (if passed in), but the function
 		// accepts a variadic argument to avoid changing all callers
-		rc := redislock.New(l.client)
 		lock, err := rc.RetrieveLock(context.Background(), key, tokens[0])
 		if err != nil {
 			return err
 		}
-
 		return lock.Release(context.Background())
 	}
 
