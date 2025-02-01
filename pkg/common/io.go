@@ -14,7 +14,8 @@ type OutputMsg struct {
 	Success   bool
 	Archiving bool
 
-	ImageId string
+	ImageId       string
+	PythonVersion string
 }
 
 type OutputWriter struct {

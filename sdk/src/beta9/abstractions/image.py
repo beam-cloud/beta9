@@ -25,6 +25,7 @@ LOCAL_PYTHON_VERSION = PythonVersion(f"python{sys.version_info.major}.{sys.versi
 class ImageBuildResult(NamedTuple):
     success: bool = False
     image_id: str = ""
+    python_version: str = ""
 
 
 class ImageCredentialValueNotFound(Exception):
@@ -85,10 +86,6 @@ ImageCredentials = Union[
 
 
 def detected_python_version() -> PythonVersion:
-    # Only detect python version if we are in a notebook environment
-    if not is_notebook_env():
-        return PythonVersion.Python310
-
     if LOCAL_PYTHON_VERSION in [
         PythonVersion.Python38,
         PythonVersion.Python39,
@@ -97,7 +94,8 @@ def detected_python_version() -> PythonVersion:
         PythonVersion.Python312,
     ]:
         return LOCAL_PYTHON_VERSION
-    return PythonVersion.Python310
+
+    return PythonVersion.Python3
 
 
 class Image(BaseAbstraction):
@@ -107,7 +105,7 @@ class Image(BaseAbstraction):
 
     def __init__(
         self,
-        python_version: PythonVersionAlias = detected_python_version(),
+        python_version: PythonVersionAlias = PythonVersion.Python3,
         python_packages: Union[List[str], str] = [],
         commands: List[str] = [],
         base_image: Optional[str] = None,
@@ -126,9 +124,10 @@ class Image(BaseAbstraction):
 
         Parameters:
             python_version (Union[PythonVersion, str]):
-                The Python version to be used in the image. Default is set to [PythonVersion.Python310](#pythonversion)
-                for normal modules (.py files) and the python version detected in the local environment for notebooks.
-                If the detected version is not supported it will default to [PythonVersion.Python310](#pythonversion).
+                The Python version to be used in the image. Default is set to [PythonVersion.Python3](#pythonversion).
+                When using [PythonVersion.Python3](#pythonversion), whatever version of Python 3 exists in the image will be used.
+                If none exists, Python 3.10 will be installed. When running in a notebook environment without a custom base image,
+                the Python version detected in the local environment will be used if compatible. Otherwise, Python 3.10 will be installed.
             python_packages (Union[List[str], str]):
                 A list of Python packages to install in the container image. Alternatively, a string
                 containing a path to a requirements.txt can be provided. Default is [].
@@ -286,6 +285,11 @@ class Image(BaseAbstraction):
         if isinstance(python_packages, str):
             python_packages = self._load_requirements_file(python_packages)
 
+        # Only attempt to detect an appropriate default python version if we are in a notebook environment
+        # and there is no base image (it might provide a required python version that we will have to detect)
+        if is_notebook_env() and base_image is None:
+            python_version = detected_python_version()
+
         self.python_version = python_version
         self.python_packages = self._sanitize_python_packages(python_packages)
         self.commands = commands
@@ -404,7 +408,12 @@ class Image(BaseAbstraction):
             )
         )
 
-        return (r.exists, ImageBuildResult(success=r.exists, image_id=r.image_id))
+        return (
+            r.exists,
+            ImageBuildResult(
+                success=r.exists, image_id=r.image_id, python_version=self.python_version
+            ),
+        )
 
     def build(self) -> ImageBuildResult:
         terminal.header("Building image")
@@ -421,7 +430,11 @@ class Image(BaseAbstraction):
         exists, exists_response = self.exists()
         if exists:
             terminal.header("Using cached image")
-            return ImageBuildResult(success=True, image_id=exists_response.image_id)
+            return ImageBuildResult(
+                success=True,
+                image_id=exists_response.image_id,
+                python_version=exists_response.python_version,
+            )
 
         with terminal.progress("Working..."):
             last_response = BuildImageResponse(success=False)
@@ -452,7 +465,11 @@ class Image(BaseAbstraction):
             return ImageBuildResult(success=False)
 
         terminal.header("Build complete 🎉")
-        return ImageBuildResult(success=True, image_id=last_response.image_id)
+        return ImageBuildResult(
+            success=True,
+            image_id=last_response.image_id,
+            python_version=last_response.python_version,
+        )
 
     def get_credentials_from_env(self) -> Dict[str, str]:
         if env.is_remote():

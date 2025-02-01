@@ -404,6 +404,7 @@ class RunnerAbstraction(BaseAbstraction):
             if image_build_result and image_build_result.success:
                 self.image_available = True
                 self.image_id = image_build_result.image_id
+                self.image.python_version = image_build_result.python_version
             else:
                 terminal.error("Image build failed ❌", exit=False)
                 return False

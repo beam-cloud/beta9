@@ -141,6 +141,7 @@ type ImageServiceConfig struct {
 	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
 	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
 	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
+	PythonVersion                  string                `key:"pythonVersion" json:"python_version"`
 	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
 	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
 	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
