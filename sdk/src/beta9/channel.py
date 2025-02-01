@@ -122,7 +122,7 @@ class AuthTokenInterceptor(
         new_details = self._add_auth_metadata(client_call_details)
 
         # add timeout to metadata
-        new_details.metadata.append(("timeout", "10"))
+        new_details.metadata.append(("timeout", 10))
 
         return continuation(new_details, request)
 
