@@ -486,7 +486,7 @@ func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) (stri
 }
 
 func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId, token string) error {
-	return r.lock.Release(common.RedisKeys.WorkerImageLock(workerId, imageId), token)
+	return r.lock.ReleaseWithToken(common.RedisKeys.WorkerImageLock(workerId, imageId), token)
 }
 
 func (r *WorkerRedisRepository) GetContainerIps(networkPrefix string) ([]string, error) {
@@ -538,7 +538,7 @@ func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retrie
 }
 
 func (r *WorkerRedisRepository) RemoveNetworkLock(networkPrefix string, token string) error {
-	return r.lock.Release(common.RedisKeys.WorkerNetworkLock(networkPrefix), token)
+	return r.lock.ReleaseWithToken(common.RedisKeys.WorkerNetworkLock(networkPrefix), token)
 }
 
 func (r *WorkerRedisRepository) RemoveContainerIp(networkPrefix string, containerId string) error {

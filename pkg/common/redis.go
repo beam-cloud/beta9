@@ -307,24 +307,24 @@ func (l *RedisLock) Token(key string) (string, error) {
 	return "", redislock.ErrLockNotHeld
 }
 
-func (l *RedisLock) Release(key string, tokens ...string) error {
+func (l *RedisLock) ReleaseWithToken(key string, token string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// If lock is not in memory and caller has provided tokens, try to retrieve by token
-	if len(tokens) > 0 {
-		rc := redislock.New(l.client)
-
-		// NOTE: we only ever use the first "token" here (if passed in), but the function
-		// accepts a variadic argument to avoid changing all callers
-		lock, err := rc.RetrieveLock(context.Background(), key, tokens[0])
-		if err != nil {
-			return err
-		}
-		return lock.Release(context.Background())
+	rc := redislock.New(l.client)
+	lock, err := rc.RetrieveLock(context.Background(), key, token)
+	if err != nil {
+		return err
 	}
 
-	// Check if the lock is available in memory
+	return lock.Release(context.Background())
+}
+
+func (l *RedisLock) Release(key string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// Check if the lock is available in memory and release if so
 	if lock, ok := l.locks[key]; ok {
 		err := lock.Release(context.Background())
 		if err != nil {
