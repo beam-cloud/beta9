@@ -538,10 +538,6 @@ func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retrie
 }
 
 func (r *WorkerRedisRepository) RemoveNetworkLock(networkPrefix string, token string) error {
-	if token == "" {
-		return errors.New("token is required")
-	}
-
 	return r.lock.Release(common.RedisKeys.WorkerNetworkLock(networkPrefix), token)
 }
 
