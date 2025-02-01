@@ -72,6 +72,7 @@ imageService:
   registryStore: local
   registryCredentialProvider: docker
   buildContainerPoolSelector: build
+  pythonVersion: python3.10
   registries:
     docker:
       username: beamcloud

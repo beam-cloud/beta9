@@ -59,4 +59,5 @@ message BuildImageResponse {
   string msg = 2;
   bool done = 3;
   bool success = 4;
+  string python_version = 5;
 }

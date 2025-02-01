@@ -35,6 +35,8 @@ class PythonVersion(str, Enum):
     """
     An enum that defines versions of Python.
 
+    The default version is python3. This defaults to python3 already in the image. If python3 does not exist in the image, then the default version of Python will be determined by the server (e.g. Python 3.10).
+
     Example:
         ```python
         from beta9 import Image, PythonVersion
@@ -47,6 +49,7 @@ class PythonVersion(str, Enum):
         ```
     """
 
+    Python3 = "python3"
     Python38 = "python3.8"
     Python39 = "python3.9"
     Python310 = "python3.10"

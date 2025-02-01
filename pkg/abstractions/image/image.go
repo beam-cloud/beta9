@@ -82,7 +82,12 @@ func NewRuncImageService(
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
 	var valid bool = true
 
-	baseImageTag, ok := is.config.ImageService.Runner.Tags[in.PythonVersion]
+	tag := in.PythonVersion
+	if in.PythonVersion == types.Python3.String() {
+		tag = is.config.ImageService.PythonVersion
+	}
+
+	baseImageTag, ok := is.config.ImageService.Runner.Tags[tag]
 	if !ok {
 		return nil, errors.Errorf("Python version not supportted: %s", in.PythonVersion)
 	}
@@ -139,8 +144,13 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		return err
 	}
 
+	tag := in.PythonVersion
+	if in.PythonVersion == types.Python3.String() {
+		tag = is.config.ImageService.PythonVersion
+	}
+
 	buildOptions := &BuildOpts{
-		BaseImageTag:       is.config.ImageService.Runner.Tags[in.PythonVersion],
+		BaseImageTag:       is.config.ImageService.Runner.Tags[tag],
 		BaseImageName:      is.config.ImageService.Runner.BaseImageName,
 		BaseImageRegistry:  is.config.ImageService.Runner.BaseImageRegistry,
 		PythonVersion:      in.PythonVersion,
@@ -169,7 +179,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 			continue
 		}
 
-		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId}); err != nil {
+		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion}); err != nil {
 			log.Error().Err(err).Msg("failed to complete build")
 			lastMessage = o
 			break
