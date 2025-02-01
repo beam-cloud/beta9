@@ -490,6 +490,7 @@ func (s *Worker) manageWorkerCapacity() {
 
 			log.Error().Err(err).Msg("unable to process completed request")
 			s.completedRequests <- request
+			time.Sleep(time.Second)
 			continue
 		}
 	}
