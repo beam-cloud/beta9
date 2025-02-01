@@ -7,11 +7,98 @@ import "types.proto";
 service ContainerRepositoryService {
   rpc GetContainerState(GetContainerStateRequest)
       returns (GetContainerStateResponse);
+  rpc DeleteContainerState(DeleteContainerStateRequest)
+      returns (DeleteContainerStateResponse);
+  rpc UpdateContainerStatus(UpdateContainerStatusRequest)
+      returns (UpdateContainerStatusResponse);
+  rpc SetContainerExitCode(SetContainerExitCodeRequest)
+      returns (SetContainerExitCodeResponse);
+  rpc SetContainerAddress(SetContainerAddressRequest)
+      returns (SetContainerAddressResponse);
+  rpc SetWorkerAddress(SetWorkerAddressRequest)
+      returns (SetWorkerAddressResponse);
+  rpc UpdateCheckpointState(UpdateCheckpointStateRequest)
+      returns (UpdateCheckpointStateResponse);
+  rpc GetCheckpointState(GetCheckpointStateRequest)
+      returns (GetCheckpointStateResponse);
 }
 
 message GetContainerStateRequest { string container_id = 1; }
 
 message GetContainerStateResponse {
+  bool ok = 1;
+  string container_id = 2;
+  types.ContainerState state = 3;
+  string error_msg = 4;
+}
+
+message DeleteContainerStateRequest { string container_id = 1; }
+
+message DeleteContainerStateResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message UpdateContainerStatusRequest {
   string container_id = 1;
-  types.ContainerState state = 2;
+  string status = 2;
+  int64 expiry_seconds = 3;
+}
+
+message UpdateContainerStatusResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message SetContainerExitCodeRequest {
+  string container_id = 1;
+  int32 exit_code = 2;
+}
+
+message SetContainerExitCodeResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message SetContainerAddressRequest {
+  string container_id = 1;
+  string address = 2;
+}
+
+message SetContainerAddressResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message SetWorkerAddressRequest {
+  string container_id = 1;
+  string address = 2;
+}
+
+message SetWorkerAddressResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message UpdateCheckpointStateRequest {
+  string container_id = 1;
+  string workspace_name = 2;
+  string checkpoint_id = 3;
+  types.CheckpointState checkpoint_state = 4;
+}
+
+message UpdateCheckpointStateResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message GetCheckpointStateRequest {
+  string workspace_name = 1;
+  string checkpoint_id = 2;
+}
+
+message GetCheckpointStateResponse {
+  bool ok = 1;
+  types.CheckpointState checkpoint_state = 2;
+  string error_msg = 3;
 }

@@ -66,8 +66,8 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
         terminal.error(res.error_msg)
 
     if format == "json":
-        deployments = [c.to_dict(casing=Casing.SNAKE) for c in res.containers]  # type:ignore
-        terminal.print_json(deployments)
+        containers = [c.to_dict(casing=Casing.SNAKE) for c in res.containers]  # type:ignore
+        terminal.print_json(containers)
         return
 
     table_cols = []

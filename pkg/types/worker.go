@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"runtime"
 	"time"
+
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const (
@@ -36,6 +38,38 @@ type Mount struct {
 	ReadOnly         bool              `json:"read_only"`
 	MountType        string            `json:"mount_type"`
 	MountPointConfig *MountPointConfig `json:"mountpoint_config"`
+}
+
+func (m *Mount) ToProto() *pb.Mount {
+	var mountPointConfig *pb.MountPointConfig
+	if m.MountPointConfig != nil {
+		mountPointConfig = m.MountPointConfig.ToProto()
+	}
+
+	return &pb.Mount{
+		LocalPath:        m.LocalPath,
+		MountPath:        m.MountPath,
+		LinkPath:         m.LinkPath,
+		ReadOnly:         m.ReadOnly,
+		MountType:        m.MountType,
+		MountPointConfig: mountPointConfig,
+	}
+}
+
+func NewMountFromProto(in *pb.Mount) *Mount {
+	var mountPointConfig *MountPointConfig
+	if in.MountPointConfig != nil {
+		mountPointConfig = NewMountPointConfigFromProto(in.MountPointConfig)
+	}
+
+	return &Mount{
+		LocalPath:        in.LocalPath,
+		MountPath:        in.MountPath,
+		LinkPath:         in.LinkPath,
+		ReadOnly:         in.ReadOnly,
+		MountType:        in.MountType,
+		MountPointConfig: mountPointConfig,
+	}
 }
 
 type ExitCodeError struct {

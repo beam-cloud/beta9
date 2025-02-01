@@ -114,24 +114,13 @@ class ReplaceObjectContentResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class Container(betterproto.Message):
-    container_id: str = betterproto.string_field(1)
-    stub_id: str = betterproto.string_field(2)
-    status: str = betterproto.string_field(3)
-    scheduled_at: datetime = betterproto.message_field(4)
-    workspace_id: str = betterproto.string_field(5)
-    worker_id: str = betterproto.string_field(6)
-    machine_id: str = betterproto.string_field(7)
-
-
-@dataclass(eq=False, repr=False)
 class ListContainersRequest(betterproto.Message):
     pass
 
 
 @dataclass(eq=False, repr=False)
 class ListContainersResponse(betterproto.Message):
-    containers: List["Container"] = betterproto.message_field(1)
+    containers: List["_types__.Container"] = betterproto.message_field(1)
     ok: bool = betterproto.bool_field(2)
     error_msg: str = betterproto.string_field(3)
 
@@ -545,24 +534,6 @@ class GetUrlResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class Worker(betterproto.Message):
-    id: str = betterproto.string_field(1)
-    status: str = betterproto.string_field(2)
-    gpu: str = betterproto.string_field(3)
-    pool_name: str = betterproto.string_field(4)
-    machine_id: str = betterproto.string_field(5)
-    priority: int = betterproto.int32_field(6)
-    total_cpu: int = betterproto.int64_field(7)
-    total_memory: int = betterproto.int64_field(8)
-    total_gpu_count: int = betterproto.uint32_field(9)
-    free_cpu: int = betterproto.int64_field(10)
-    free_memory: int = betterproto.int64_field(11)
-    free_gpu_count: int = betterproto.uint32_field(12)
-    active_containers: List["Container"] = betterproto.message_field(13)
-    build_version: str = betterproto.string_field(14)
-
-
-@dataclass(eq=False, repr=False)
 class ListWorkersRequest(betterproto.Message):
     pass
 
@@ -571,7 +542,7 @@ class ListWorkersRequest(betterproto.Message):
 class ListWorkersResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
-    workers: List["Worker"] = betterproto.message_field(3)
+    workers: List["_types__.Worker"] = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)

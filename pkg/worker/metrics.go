@@ -13,14 +13,12 @@ import (
 type WorkerMetrics struct {
 	workerId    string
 	metricsRepo repo.MetricsRepository
-	workerRepo  repo.WorkerRepository
 	ctx         context.Context
 }
 
 func NewWorkerMetrics(
 	ctx context.Context,
 	workerId string,
-	workerRepo repo.WorkerRepository,
 	config types.MonitoringConfig,
 ) (*WorkerMetrics, error) {
 	metricsRepo, err := metrics.NewMetrics(config, string(metrics.MetricsSourceWorker))
@@ -32,7 +30,6 @@ func NewWorkerMetrics(
 		ctx:         ctx,
 		workerId:    workerId,
 		metricsRepo: metricsRepo,
-		workerRepo:  workerRepo,
 	}, nil
 }
 

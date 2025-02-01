@@ -4,4 +4,176 @@ option go_package = "github.com/beam-cloud/beta9/proto";
 import "google/protobuf/timestamp.proto";
 import "types.proto";
 
-service WorkerRepositoryService {}
+service WorkerRepositoryService {
+  rpc GetNextContainerRequest(GetNextContainerRequestRequest)
+      returns (stream GetNextContainerRequestResponse) {}
+  rpc SetImagePullLock(SetImagePullLockRequest)
+      returns (SetImagePullLockResponse) {}
+  rpc RemoveImagePullLock(RemoveImagePullLockRequest)
+      returns (RemoveImagePullLockResponse) {}
+  rpc AddContainerToWorker(AddContainerToWorkerRequest)
+      returns (AddContainerToWorkerResponse) {}
+  rpc RemoveContainerFromWorker(RemoveContainerFromWorkerRequest)
+      returns (RemoveContainerFromWorkerResponse) {}
+  rpc GetWorkerById(GetWorkerByIdRequest) returns (GetWorkerByIdResponse) {}
+  rpc ToggleWorkerAvailable(ToggleWorkerAvailableRequest)
+      returns (ToggleWorkerAvailableResponse) {}
+  rpc RemoveWorker(RemoveWorkerRequest) returns (RemoveWorkerResponse) {}
+  rpc UpdateWorkerCapacity(UpdateWorkerCapacityRequest)
+      returns (UpdateWorkerCapacityResponse) {}
+  rpc SetWorkerKeepAlive(SetWorkerKeepAliveRequest)
+      returns (SetWorkerKeepAliveResponse) {}
+  rpc SetNetworkLock(SetNetworkLockRequest) returns (SetNetworkLockResponse) {}
+  rpc RemoveNetworkLock(RemoveNetworkLockRequest)
+      returns (RemoveNetworkLockResponse) {}
+  rpc SetContainerIp(SetContainerIpRequest) returns (SetContainerIpResponse) {}
+  rpc GetContainerIp(GetContainerIpRequest) returns (GetContainerIpResponse) {}
+  rpc GetContainerIps(GetContainerIpsRequest)
+      returns (GetContainerIpsResponse) {}
+  rpc RemoveContainerIp(RemoveContainerIpRequest)
+      returns (RemoveContainerIpResponse) {}
+}
+
+message GetNextContainerRequestRequest { string worker_id = 1; }
+
+message GetNextContainerRequestResponse {
+  bool ok = 1;
+  types.ContainerRequest container_request = 2;
+  string error_msg = 3;
+}
+
+message SetImagePullLockRequest {
+  string worker_id = 1;
+  string image_id = 2;
+}
+message SetImagePullLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RemoveImagePullLockRequest {
+  string worker_id = 1;
+  string image_id = 2;
+}
+message RemoveImagePullLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message AddContainerToWorkerRequest {
+  string worker_id = 1;
+  string container_id = 2;
+}
+
+message AddContainerToWorkerResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RemoveContainerFromWorkerRequest {
+  string worker_id = 1;
+  string container_id = 2;
+}
+
+message RemoveContainerFromWorkerResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message GetWorkerByIdRequest { string worker_id = 1; }
+
+message GetWorkerByIdResponse {
+  bool ok = 1;
+  types.Worker worker = 2;
+  string error_msg = 3;
+}
+
+message ToggleWorkerAvailableRequest { string worker_id = 1; }
+
+message ToggleWorkerAvailableResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RemoveWorkerRequest { string worker_id = 1; }
+
+message RemoveWorkerResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message UpdateWorkerCapacityRequest {
+  string worker_id = 1;
+  int64 capacity_change = 2;
+  types.ContainerRequest container_request = 3;
+}
+
+message UpdateWorkerCapacityResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message SetWorkerKeepAliveRequest { string worker_id = 1; }
+
+message SetWorkerKeepAliveResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message SetNetworkLockRequest {
+  string network_prefix = 1;
+  int32 ttl = 2;
+  int32 retries = 3;
+}
+
+message SetNetworkLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RemoveNetworkLockRequest { string network_prefix = 1; }
+
+message RemoveNetworkLockResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message SetContainerIpRequest {
+  string network_prefix = 1;
+  string container_id = 2;
+  string ip_address = 3;
+}
+
+message SetContainerIpResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message GetContainerIpRequest {
+  string network_prefix = 1;
+  string container_id = 2;
+}
+
+message GetContainerIpResponse {
+  bool ok = 1;
+  string ip_address = 2;
+  string error_msg = 3;
+}
+
+message GetContainerIpsRequest { string network_prefix = 1; }
+
+message GetContainerIpsResponse {
+  bool ok = 1;
+  repeated string ips = 2;
+  string error_msg = 3;
+}
+
+message RemoveContainerIpRequest {
+  string network_prefix = 1;
+  string container_id = 2;
+}
+
+message RemoveContainerIpResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}

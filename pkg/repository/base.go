@@ -18,7 +18,7 @@ type WorkerRepository interface {
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
-	RemoveWorker(w *types.Worker) error
+	RemoveWorker(workerId string) error
 	SetWorkerKeepAlive(workerId string) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
@@ -74,6 +74,7 @@ type BackendRepository interface {
 	CreateWorkspace(ctx context.Context) (types.Workspace, error)
 	GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error)
 	GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error)
+	GetAdminWorkspace(ctx context.Context) (*types.Workspace, error)
 	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
 	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
 	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)

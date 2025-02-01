@@ -13,8 +13,8 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	common "github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/repository"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
@@ -70,11 +70,11 @@ type ImageClient struct {
 	skopeoClient       common.SkopeoClient
 	config             types.AppConfig
 	workerId           string
-	workerRepo         repository.WorkerRepository
+	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
 }
 
-func NewImageClient(config types.AppConfig, workerId string, workerRepo repository.WorkerRepository, fileCacheManager *FileCacheManager) (*ImageClient, error) {
+func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
 	registry, err := common.NewImageRegistry(config.ImageService)
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepo reposito
 		imageCachePath:     getImageCachePath(),
 		imageMountPath:     getImageMountPath(workerId),
 		workerId:           workerId,
-		workerRepo:         workerRepo,
+		workerRepoClient:   workerRepoClient,
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		logger: &ContainerLogger{
@@ -174,11 +174,17 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 	}
 
 	// Get lock on image mount
-	err := c.workerRepo.SetImagePullLock(c.workerId, imageId)
+	_, err := handleGRPCResponse(c.workerRepoClient.SetImagePullLock(context.Background(), &pb.SetImagePullLockRequest{
+		WorkerId: c.workerId,
+		ImageId:  imageId,
+	}))
 	if err != nil {
 		return err
 	}
-	defer c.workerRepo.RemoveImagePullLock(c.workerId, imageId)
+	defer handleGRPCResponse(c.workerRepoClient.RemoveImagePullLock(context.Background(), &pb.RemoveImagePullLockRequest{
+		WorkerId: c.workerId,
+		ImageId:  imageId,
+	}))
 
 	startServer, _, server, err := clip.MountArchive(*mountOptions)
 	if err != nil {
