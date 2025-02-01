@@ -151,17 +151,20 @@ class _CallableWrapper(DeployableMixin):
         if not is_local():
             return self.local(*args, **kwargs)
 
-        if not self.parent.prepare_runtime(
-            func=self.func,
-            stub_type=self.base_stub_type,
-        ):
-            return
+        try:
+            if not self.parent.prepare_runtime(
+                func=self.func,
+                stub_type=self.base_stub_type,
+            ):
+                return
+        except KeyboardInterrupt:
+            terminal.error("Exiting shell. Your build was stopped.")
 
         try:
             with terminal.progress("Working..."):
                 return self._call_remote(*args, **kwargs)
         except KeyboardInterrupt:
-            terminal.error("Exiting Shell. Your function will continue running remotely.")
+            terminal.error("Exiting shell. Your function will continue running remotely.")
 
     @with_grpc_error_handling
     def _call_remote(self, *args, **kwargs) -> Any:
