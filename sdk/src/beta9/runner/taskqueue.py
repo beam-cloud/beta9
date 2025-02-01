@@ -42,6 +42,9 @@ TASK_PROCESS_WATCHDOG_INTERVAL = 0.01
 TASK_POLLING_INTERVAL = 0.1
 TASK_MANAGER_INTERVAL = 0.1
 
+os.environ["GRPC_TRACE"] = "connectivity_state,tcp,http2_stream_state,call_error"
+os.environ["GRPC_VERBOSITY"] = "DEBUG"
+
 
 class TaskQueueManager:
     def __init__(self) -> None:
