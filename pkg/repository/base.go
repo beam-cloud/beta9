@@ -26,14 +26,14 @@ type WorkerRepository interface {
 	AddContainerToWorker(workerId string, containerId string) error
 	RemoveContainerFromWorker(workerId string, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
-	SetImagePullLock(workerId, imageId string) error
-	RemoveImagePullLock(workerId, imageId string) error
+	SetImagePullLock(workerId, imageId string) (string, error)
+	RemoveImagePullLock(workerId, imageId, token string) error
 	GetContainerIp(networkPrefix string, containerId string) (string, error)
 	SetContainerIp(networkPrefix string, containerId, containerIp string) error
 	RemoveContainerIp(networkPrefix string, containerId string) error
 	GetContainerIps(networkPrefix string) ([]string, error)
-	SetNetworkLock(networkPrefix string, ttl, retries int) error
-	RemoveNetworkLock(networkPrefix string) error
+	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)
+	RemoveNetworkLock(networkPrefix string, token string) error
 	SetWorkerPoolSizerLock(controllerName string) error
 	RemoveWorkerPoolSizerLock(controllerName string) error
 }

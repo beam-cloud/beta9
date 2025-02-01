@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/bsm/redislock"
+	"github.com/beam-cloud/redislock"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/redis/go-redis/v9"
 )
@@ -295,7 +295,18 @@ func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptio
 	return nil
 }
 
-func (l *RedisLock) Release(key string) error {
+func (l *RedisLock) Token(key string) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if lock, ok := l.locks[key]; ok {
+		return lock.Token(), nil
+	}
+
+	return "", redislock.ErrLockNotHeld
+}
+
+func (l *RedisLock) Release(key string, tokens ...string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -307,6 +318,16 @@ func (l *RedisLock) Release(key string) error {
 
 		delete(l.locks, key)
 		return nil
+	} else if len(tokens) > 0 {
+		// NOTE: we only ever use the first "token" here (if passed in), but the function
+		// accepts a variadic argument to avoid changing all callers
+		rc := redislock.New(l.client)
+		lock, err := rc.RetrieveLock(context.Background(), key, tokens[0])
+		if err != nil {
+			return err
+		}
+
+		return lock.Release(context.Background())
 	}
 
 	return redislock.ErrLockNotHeld

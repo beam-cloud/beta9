@@ -9,7 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/bsm/redislock"
+	"github.com/beam-cloud/redislock"
 	redis "github.com/redis/go-redis/v9"
 )
 

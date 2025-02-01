@@ -46,15 +46,19 @@ message SetImagePullLockRequest {
   string worker_id = 1;
   string image_id = 2;
 }
+
 message SetImagePullLockResponse {
   bool ok = 1;
-  string error_msg = 2;
+  string token = 2;
+  string error_msg = 3;
 }
 
 message RemoveImagePullLockRequest {
   string worker_id = 1;
   string image_id = 2;
+  string token = 3;
 }
+
 message RemoveImagePullLockResponse {
   bool ok = 1;
   string error_msg = 2;
@@ -128,10 +132,14 @@ message SetNetworkLockRequest {
 
 message SetNetworkLockResponse {
   bool ok = 1;
-  string error_msg = 2;
+  string token = 2;
+  string error_msg = 3;
 }
 
-message RemoveNetworkLockRequest { string network_prefix = 1; }
+message RemoveNetworkLockRequest {
+  string network_prefix = 1;
+  string token = 2;
+}
 
 message RemoveNetworkLockResponse {
   bool ok = 1;
