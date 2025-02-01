@@ -239,11 +239,11 @@ func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName
 }
 
 func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, error) {
-	_, err := m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
+	_, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
 		Retries:       5,
-	})
+	}))
 	if err != nil {
 		return nil, err
 	}
@@ -329,11 +329,11 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
-	_, err := m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
+	_, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
 		Retries:       5,
-	})
+	}))
 	if err != nil {
 		return err
 	}
