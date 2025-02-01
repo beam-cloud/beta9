@@ -482,7 +482,6 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 					if err != nil {
 						return
 					}
-
 					defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
 						NetworkPrefix: m.networkPrefix + "-" + containerId,
 						Token:         lockResponse.Token,
