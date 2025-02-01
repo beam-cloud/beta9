@@ -121,6 +121,9 @@ class AuthTokenInterceptor(
         """Intercept all types of calls to add auth token."""
         new_details = self._add_auth_metadata(client_call_details)
 
+        # add timeout to metadata
+        new_details.metadata.append(("timeout", "10"))
+
         return continuation(new_details, request)
 
     def intercept_call_stream(self, continuation, client_call_details, request_iterator):
