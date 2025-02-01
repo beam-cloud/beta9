@@ -486,7 +486,7 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 					})
 
 					// Check if the container still exists
-					var notFoundErr *types.ErrContainerStateNotFound
+					notFoundErr := &types.ErrContainerStateNotFound{}
 					_, err = handleGRPCResponse(m.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
 					if err != nil && notFoundErr.From(err) {
 						// Container state not found, so tear down the namespace and associated resources
