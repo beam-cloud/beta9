@@ -55,16 +55,16 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 }
 
 func (s *WorkerRepositoryService) SetImagePullLock(ctx context.Context, req *pb.SetImagePullLockRequest) (*pb.SetImagePullLockResponse, error) {
-	err := s.workerRepo.SetImagePullLock(req.WorkerId, req.ImageId)
+	token, err := s.workerRepo.SetImagePullLock(req.WorkerId, req.ImageId)
 	if err != nil {
 		return &pb.SetImagePullLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.SetImagePullLockResponse{Ok: true}, nil
+	return &pb.SetImagePullLockResponse{Ok: true, Token: token}, nil
 }
 
 func (s *WorkerRepositoryService) RemoveImagePullLock(ctx context.Context, req *pb.RemoveImagePullLockRequest) (*pb.RemoveImagePullLockResponse, error) {
-	err := s.workerRepo.RemoveImagePullLock(req.WorkerId, req.ImageId)
+	err := s.workerRepo.RemoveImagePullLock(req.WorkerId, req.ImageId, req.Token)
 	if err != nil {
 		return &pb.RemoveImagePullLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -141,16 +141,16 @@ func (s *WorkerRepositoryService) SetWorkerKeepAlive(ctx context.Context, req *p
 }
 
 func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.SetNetworkLockRequest) (*pb.SetNetworkLockResponse, error) {
-	err := s.workerRepo.SetNetworkLock(req.NetworkPrefix, int(req.Ttl), int(req.Retries))
+	token, err := s.workerRepo.SetNetworkLock(req.NetworkPrefix, int(req.Ttl), int(req.Retries))
 	if err != nil {
 		return &pb.SetNetworkLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.SetNetworkLockResponse{Ok: true}, nil
+	return &pb.SetNetworkLockResponse{Ok: true, Token: token}, nil
 }
 
 func (s *WorkerRepositoryService) RemoveNetworkLock(ctx context.Context, req *pb.RemoveNetworkLockRequest) (*pb.RemoveNetworkLockResponse, error) {
-	err := s.workerRepo.RemoveNetworkLock(req.NetworkPrefix)
+	err := s.workerRepo.RemoveNetworkLock(req.NetworkPrefix, req.Token)
 	if err != nil {
 		return &pb.RemoveNetworkLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}

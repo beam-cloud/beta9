@@ -470,16 +470,23 @@ func (r *WorkerRedisRepository) SetContainerResourceValues(workerId string, cont
 	return nil
 }
 
-func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerImageLock(workerId, imageId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) (string, error) {
+	lockKey := common.RedisKeys.WorkerImageLock(workerId, imageId)
+	err := r.lock.Acquire(context.TODO(), lockKey, common.RedisLockOptions{TtlS: 10, Retries: 3})
 	if err != nil {
-		return err
+		return "", err
 	}
-	return nil
+
+	token, err := r.lock.Token(lockKey)
+	if err != nil {
+		return "", err
+	}
+
+	return token, nil
 }
 
-func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId string) error {
-	return r.lock.Release(common.RedisKeys.WorkerImageLock(workerId, imageId))
+func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId, token string) error {
+	return r.lock.Release(common.RedisKeys.WorkerImageLock(workerId, imageId), token)
 }
 
 func (r *WorkerRedisRepository) GetContainerIps(networkPrefix string) ([]string, error) {
@@ -514,16 +521,24 @@ func (r *WorkerRedisRepository) SetContainerIp(networkPrefix string, containerId
 	return nil
 }
 
-func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retries int) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerNetworkLock(networkPrefix), common.RedisLockOptions{TtlS: ttl, Retries: retries})
+func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retries int) (string, error) {
+	lockKey := common.RedisKeys.WorkerNetworkLock(networkPrefix)
+
+	err := r.lock.Acquire(context.TODO(), lockKey, common.RedisLockOptions{TtlS: ttl, Retries: retries})
 	if err != nil {
-		return err
+		return "", err
 	}
-	return nil
+
+	token, err := r.lock.Token(lockKey)
+	if err != nil {
+		return "", err
+	}
+
+	return token, nil
 }
 
-func (r *WorkerRedisRepository) RemoveNetworkLock(networkPrefix string) error {
-	return r.lock.Release(common.RedisKeys.WorkerNetworkLock(networkPrefix))
+func (r *WorkerRedisRepository) RemoveNetworkLock(networkPrefix string, token string) error {
+	return r.lock.Release(common.RedisKeys.WorkerNetworkLock(networkPrefix), token)
 }
 
 func (r *WorkerRedisRepository) RemoveContainerIp(networkPrefix string, containerId string) error {

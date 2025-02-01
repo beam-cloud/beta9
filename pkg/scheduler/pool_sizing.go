@@ -6,7 +6,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/bsm/redislock"
+	"github.com/beam-cloud/redislock"
 	"github.com/rs/zerolog/log"
 )
 
