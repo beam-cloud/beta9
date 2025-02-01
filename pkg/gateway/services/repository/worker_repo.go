@@ -7,7 +7,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/rs/zerolog/log"
 )
 
 type WorkerRepositoryService struct {
@@ -150,8 +149,6 @@ func (s *WorkerRepositoryService) SetNetworkLock(ctx context.Context, req *pb.Se
 		return &pb.SetNetworkLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	log.Info().Str("token", token).Msg("set network lock")
-
 	return &pb.SetNetworkLockResponse{Ok: true, Token: token}, nil
 }
 
@@ -160,8 +157,6 @@ func (s *WorkerRepositoryService) RemoveNetworkLock(ctx context.Context, req *pb
 	if err != nil {
 		return &pb.RemoveNetworkLockResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-
-	log.Info().Str("token", req.Token).Msg("released network lock")
 
 	return &pb.RemoveNetworkLockResponse{Ok: true}, nil
 }
