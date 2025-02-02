@@ -83,6 +83,20 @@ def _monitor_task(
         backoff = initial_backoff
         retry = 0
 
+        def handle_shutdown(signum, frame):
+            print("Shutdown attempt detected! Ignoring...")
+            print("Signum: ", signum)
+            # Prevent shutdown by doing nothing (or handling it gracefully)
+
+        # Intercept SIGINT (Ctrl+C) and SIGTERM (graceful termination)
+        signal.signal(signal.SIGINT, handle_shutdown)
+        signal.signal(signal.SIGTERM, handle_shutdown)
+        signal.signal(signal.SIGABRT, handle_shutdown)
+        signal.signal(signal.SIGQUIT, handle_shutdown)
+        signal.signal(signal.SIGTSTP, handle_shutdown)
+        signal.signal(signal.SIGKILL, handle_shutdown)
+        signal.signal(signal.SIGSTOP, handle_shutdown)
+
         while retry <= max_retries:
             start = time.time()
 
