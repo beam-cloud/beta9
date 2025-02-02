@@ -89,6 +89,8 @@ def _monitor_task(
                         container_id=function_context.container_id,
                     )
                 ):
+                    print(f"Received monitor response: {response}")
+
                     response: FunctionMonitorResponse
                     if response.cancelled:
                         print(f"Task cancelled: {function_context.task_id}")
