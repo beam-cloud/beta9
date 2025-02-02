@@ -148,6 +148,8 @@ def _monitor_task(
                 os.kill(parent_pid, signal.SIGABRT)
                 return
 
+        print("Task monitor stream ended")
+
 
 def _handle_sigterm(*args: Any, **kwargs: Any) -> None:
     os._exit(TaskExitCode.Success)
