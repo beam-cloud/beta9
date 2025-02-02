@@ -71,84 +71,94 @@ def _monitor_task(
     config = get_config_context()
     parent_pid = os.getppid()
 
-    with get_channel(config) as channel:
-        function_stub = FunctionServiceStub(channel)
-        gateway_stub = GatewayServiceStub(channel)
+    def _monitor_task_loop():
+        with get_channel(config) as channel:
+            function_stub = FunctionServiceStub(channel)
+            gateway_stub = GatewayServiceStub(channel)
 
-        initial_backoff = 5
-        max_retries = 5
-        backoff = initial_backoff
-        retry = 0
+            initial_backoff = 5
+            max_retries = 5
+            backoff = initial_backoff
+            retry = 0
 
-        while retry <= max_retries:
-            try:
-                for response in function_stub.function_monitor(
-                    FunctionMonitorRequest(
-                        task_id=function_context.task_id,
-                        stub_id=function_context.stub_id,
-                        container_id=function_context.container_id,
-                    )
+            while retry <= max_retries:
+                try:
+                    for response in function_stub.function_monitor(
+                        FunctionMonitorRequest(
+                            task_id=function_context.task_id,
+                            stub_id=function_context.stub_id,
+                            container_id=function_context.container_id,
+                        )
+                    ):
+                        print(f"Received monitor response: {response}")
+
+                        response: FunctionMonitorResponse
+                        if response.cancelled:
+                            print(f"Task cancelled: {function_context.task_id}")
+
+                            send_callback(
+                                gateway_stub=gateway_stub,
+                                context=function_context,
+                                payload={},
+                                task_status=TaskStatus.Cancelled,
+                            )
+
+                            os.kill(parent_pid, signal.SIGTERM)
+                            return True
+
+                        if response.complete:
+                            return True
+
+                        if response.timed_out:
+                            print(f"Task timed out: {function_context.task_id}")
+
+                            send_callback(
+                                gateway_stub=gateway_stub,
+                                context=function_context,
+                                payload={},
+                                task_status=TaskStatus.Timeout,
+                            )
+
+                            os.kill(parent_pid, signal.SIGTERM)
+                            return True
+
+                        retry = 0
+                        backoff = initial_backoff
+
+                    # If successful, it means the stream is finished.
+                    # Break out of the retry loop
+                    break
+
+                except (
+                    grpc.RpcError,
+                    ConnectionRefusedError,
                 ):
-                    print(f"Received monitor response: {response}")
+                    if retry == max_retries:
+                        print("Lost connection to task monitor, exiting")
 
-                    response: FunctionMonitorResponse
-                    if response.cancelled:
-                        print(f"Task cancelled: {function_context.task_id}")
+                        os.kill(parent_pid, signal.SIGABRT)
+                        return True
 
-                        send_callback(
-                            gateway_stub=gateway_stub,
-                            context=function_context,
-                            payload={},
-                            task_status=TaskStatus.Cancelled,
-                        )
+                    print(f"Lost connection to task monitor, retrying... {retry}")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    retry += 1
 
-                        os.kill(parent_pid, signal.SIGTERM)
-                        return
+                except BaseException:
+                    print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
+                    os.kill(parent_pid, signal.SIGABRT)
+                    return True
 
-                    if response.complete:
-                        return
+                return False
 
-                    if response.timed_out:
-                        print(f"Task timed out: {function_context.task_id}")
-
-                        send_callback(
-                            gateway_stub=gateway_stub,
-                            context=function_context,
-                            payload={},
-                            task_status=TaskStatus.Timeout,
-                        )
-
-                        os.kill(parent_pid, signal.SIGTERM)
-                        return
-
-                    retry = 0
-                    backoff = initial_backoff
-
-                # If successful, it means the stream is finished.
-                # Break out of the retry loop
+        while True:
+            should_break = _monitor_task_loop()
+            if should_break:
                 break
 
-            except (
-                grpc.RpcError,
-                ConnectionRefusedError,
-            ):
-                if retry == max_retries:
-                    print("Lost connection to task monitor, exiting")
+            print("Task monitor loop stream ended, but task not complete -- restarting")
 
-                    os.kill(parent_pid, signal.SIGABRT)
-                    return
-
-                print(f"Lost connection to task monitor, retrying... {retry}")
-                time.sleep(backoff)
-                backoff *= 2
-                retry += 1
-
-            except BaseException:
-                print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
-                os.kill(parent_pid, signal.SIGABRT)
-                return
-
-        print("Task monitor stream ended")
+        print("Task monitor complete")
 
 
 def _handle_sigterm(*args: Any, **kwargs: Any) -> None:
