@@ -126,7 +126,7 @@ class FunctionServiceStub(SyncServiceStub):
             "/function.FunctionService/FunctionMonitor",
             FunctionMonitorRequest,
             FunctionMonitorResponse,
-        )(function_monitor_request, timeout=30):
+        )(function_monitor_request, timeout=10):
             yield response
 
     def function_schedule(
