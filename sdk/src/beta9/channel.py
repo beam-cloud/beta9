@@ -61,7 +61,7 @@ class Channel(InterceptorChannel):
         if options is None:
             options = []
 
-        # options.extend(CHANNEL_OPTIONS)  # add gRPC keepalive options
+        options.extend(CHANNEL_OPTIONS)  # add gRPC keepalive options
 
         if credentials is not None:
             channel = grpc.secure_channel(addr, credentials)
