@@ -36,16 +36,6 @@ def channel_reconnect_event(connect_status: grpc.ChannelConnectivity) -> None:
         terminal.warn("Connection lost, reconnecting...")
 
 
-CHANNEL_OPTIONS = [
-    ("grpc.keepalive_time_ms", 10000),  # send keepalive ping every 10 seconds
-    (
-        "grpc.keepalive_timeout_ms",
-        5000,
-    ),  # wait 5 seconds for ping ack before considering the connection dead
-    ("grpc.keepalive_permit_without_calls", 1),  # allow pings when there are no calls
-]
-
-
 class Channel(InterceptorChannel):
     def __init__(
         self,
@@ -60,8 +50,6 @@ class Channel(InterceptorChannel):
     ):
         if options is None:
             options = []
-
-        options.extend(CHANNEL_OPTIONS)  # add gRPC keepalive options
 
         if credentials is not None:
             channel = grpc.secure_channel(addr, credentials)

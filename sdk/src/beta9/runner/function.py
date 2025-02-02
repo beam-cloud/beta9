@@ -69,7 +69,7 @@ def _monitor_task(
     config = get_config_context()
     parent_pid = os.getppid()
 
-    def monitor_stream() -> bool:
+    def _monitor_stream() -> bool:
         """
         Returns True if the stream ended naturally (and should be restarted),
         or False if a terminal event occurred (cancellation, completion, timeout,
@@ -95,7 +95,7 @@ def _monitor_task(
                     ):
                         print(f"Received monitor response: {response}")
 
-                        # If the task is cancelled then send a callback and terminate.
+                        # If the task is cancelled then send a callback and exit
                         if response.cancelled:
                             print(f"Task cancelled: {function_context.task_id}")
                             send_callback(
@@ -107,11 +107,11 @@ def _monitor_task(
                             os.kill(parent_pid, signal.SIGTERM)
                             return False
 
-                        # If the task is complete, exit monitoring.
+                        # If the task is complete, exit
                         if response.complete:
                             return False
 
-                        # If the task has timed out, send a timeout callback and terminate.
+                        # If the task has timed out, send a timeout callback and exit
                         if response.timed_out:
                             print(f"Task timed out: {function_context.task_id}")
                             send_callback(
@@ -123,12 +123,13 @@ def _monitor_task(
                             os.kill(parent_pid, signal.SIGTERM)
                             return False
 
-                        # Reset retry state if a valid response was received.
+                        # Reset retry state if a valid response was received
                         retry = 0
                         backoff = initial_backoff
 
-                    # Reaching here means that the stream ended naturally.
-                    print("Task monitor stream ended")
+                    # Reaching here means that the stream ended naturally,
+                    # which can occur during a rollout restart of the gateway
+                    # returning True here tells the outer loop to restart the stream
                     return True
 
                 except (grpc.RpcError, ConnectionRefusedError):
@@ -147,12 +148,13 @@ def _monitor_task(
                     os.kill(parent_pid, signal.SIGABRT)
                     return False
 
-    # Outer loop: restart only if the stream ended naturally.
+    # Outer loop: restart only if the stream ended naturally
     while True:
-        should_restart = monitor_stream()
+        should_restart = _monitor_stream()
         if not should_restart:
-            # Terminal condition encountered; exit the monitor task completely.
+            # Exit condition encountered; exit the monitor task completely
             return
+
         # If we reached here, the stream naturally ended;
         # restart the monitoring stream.
         print("Monitor stream ended naturally, restarting monitor stream")
