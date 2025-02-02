@@ -6,7 +6,6 @@ import threading
 import time
 import traceback
 from concurrent import futures
-from concurrent.futures import CancelledError
 from multiprocessing import Event, Process, set_start_method
 from multiprocessing.synchronize import Event as TEvent
 from typing import Any, List, NamedTuple, Type, Union
@@ -197,71 +196,86 @@ class TaskQueueWorker:
         taskqueue_stub: TaskQueueServiceStub,
         gateway_stub: GatewayServiceStub,
     ) -> None:
-        initial_backoff = 5
-        max_retries = 5
-        backoff = initial_backoff
-        retry = 0
+        def _monitor_stream() -> bool:
+            """
+            Returns True if the stream ended with no errors (and should be restarted),
+            or False if a exit event occurred (cancellation, completion, timeout,
+            or a connection issue that caused us to kill the parent process)
+            """
+            initial_backoff = 5
+            max_retries = 5
+            backoff = initial_backoff
+            retry = 0
 
-        while retry <= max_retries:
-            try:
-                for response in taskqueue_stub.task_queue_monitor(
-                    TaskQueueMonitorRequest(
-                        task_id=task.id,
-                        stub_id=stub_id,
-                        container_id=container_id,
-                    )
+            while retry <= max_retries:
+                try:
+                    for response in taskqueue_stub.task_queue_monitor(
+                        TaskQueueMonitorRequest(
+                            task_id=task.id,
+                            stub_id=stub_id,
+                            container_id=container_id,
+                        )
+                    ):
+                        response: TaskQueueMonitorResponse
+                        if response.cancelled:
+                            print(f"Task cancelled: {task.id}")
+
+                            send_callback(
+                                gateway_stub=gateway_stub,
+                                context=context,
+                                payload={},
+                                task_status=TaskStatus.Cancelled,
+                            )
+                            os._exit(TaskExitCode.Cancelled)
+
+                        if response.complete:
+                            return False
+
+                        if response.timed_out:
+                            print(f"Task timed out: {task.id}")
+
+                            send_callback(
+                                gateway_stub=gateway_stub,
+                                context=context,
+                                payload={},
+                                task_status=TaskStatus.Timeout,
+                            )
+                            os._exit(TaskExitCode.Timeout)
+
+                        retry = 0
+                        backoff = initial_backoff
+
+                    # Reaching here means that the stream ended with no errors,
+                    # which can occur during a rollout restart of the gateway
+                    # returning True here tells the outer loop to restart the stream
+                    return True
+
+                except (
+                    grpc.RpcError,
+                    ConnectionRefusedError,
                 ):
-                    response: TaskQueueMonitorResponse
-                    if response.cancelled:
-                        print(f"Task cancelled: {task.id}")
+                    if retry == max_retries:
+                        print("Lost connection to task monitor, exiting")
+                        os._exit(0)
 
-                        send_callback(
-                            gateway_stub=gateway_stub,
-                            context=context,
-                            payload={},
-                            task_status=TaskStatus.Cancelled,
-                        )
-                        os._exit(TaskExitCode.Cancelled)
+                    print(f"Lost connection to task monitor, retrying... {retry}")
+                    time.sleep(backoff)
+                    backoff *= 2
+                    retry += 1
 
-                    if response.complete:
-                        return
-
-                    if response.timed_out:
-                        print(f"Task timed out: {task.id}")
-
-                        send_callback(
-                            gateway_stub=gateway_stub,
-                            context=context,
-                            payload={},
-                            task_status=TaskStatus.Timeout,
-                        )
-                        os._exit(TaskExitCode.Timeout)
-
-                    retry = 0
-                    backoff = initial_backoff
-
-                # If successful, it means the stream is finished.
-                # Break out of the retry loop
-                break
-
-            except (
-                grpc.RpcError,
-                ConnectionRefusedError,
-            ):
-                if retry == max_retries:
-                    print("Lost connection to task monitor, exiting")
+                except BaseException:
+                    print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
                     os._exit(0)
 
-                time.sleep(backoff)
-                backoff *= 2
-                retry += 1
-
-            except (CancelledError, ValueError):
+        # Outer loop: restart only if the stream ended with no errors
+        while True:
+            should_restart = _monitor_stream()
+            if not should_restart:
+                # Exit condition encountered; exit the monitor task completely
                 return
 
-            except BaseException:
-                print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
-                os._exit(0)
+            # If we reached here, the stream ended with no errors;
+            # so we should restart the monitoring stream
 
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
