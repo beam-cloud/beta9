@@ -71,9 +71,9 @@ def _monitor_task(
 
     def _monitor_stream() -> bool:
         """
-        Returns True if the stream ended naturally (and should be restarted),
-        or False if a terminal event occurred (cancellation, completion, timeout,
-        or a connection issue that caused a process kill).
+        Returns True if the stream ended with no errors (and should be restarted),
+        or False if a exit event occurred (cancellation, completion, timeout,
+        or a connection issue that caused us to kill the parent process)
         """
         with get_channel(config) as channel:
             function_stub = FunctionServiceStub(channel)
@@ -93,8 +93,6 @@ def _monitor_task(
                             container_id=function_context.container_id,
                         )
                     ):
-                        print(f"Received monitor response: {response}")
-
                         # If the task is cancelled then send a callback and exit
                         if response.cancelled:
                             print(f"Task cancelled: {function_context.task_id}")
@@ -127,7 +125,7 @@ def _monitor_task(
                         retry = 0
                         backoff = initial_backoff
 
-                    # Reaching here means that the stream ended naturally,
+                    # Reaching here means that the stream ended with no errors,
                     # which can occur during a rollout restart of the gateway
                     # returning True here tells the outer loop to restart the stream
                     return True
@@ -148,16 +146,15 @@ def _monitor_task(
                     os.kill(parent_pid, signal.SIGABRT)
                     return False
 
-    # Outer loop: restart only if the stream ended naturally
+    # Outer loop: restart only if the stream ended with no errors
     while True:
         should_restart = _monitor_stream()
         if not should_restart:
             # Exit condition encountered; exit the monitor task completely
             return
 
-        # If we reached here, the stream naturally ended;
-        # restart the monitoring stream.
-        print("Monitor stream ended naturally, restarting monitor stream")
+        # If we reached here, the stream ended with no errors;
+        # so we should restart the monitoring stream
 
 
 def _handle_sigterm(*args: Any, **kwargs: Any) -> None:
