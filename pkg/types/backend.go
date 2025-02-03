@@ -170,6 +170,12 @@ const (
 	TaskStatusRetry     TaskStatus = "RETRY"
 )
 
+var InflightTaskStatuses = map[TaskStatus]bool{
+	TaskStatusRunning: true,
+	TaskStatusPending: true,
+	TaskStatusRetry:   true,
+}
+
 type TaskParams struct {
 	TaskId      string
 	ContainerId string
