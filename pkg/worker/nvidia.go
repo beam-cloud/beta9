@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	defaultContainerCudaVersion string   = "12.4"
+	defaultContainerCudaVersion string   = "12.3"
 	defaultContainerPath        []string = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 	defaultContainerLibrary     []string = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/worker/x86_64-linux-gnu", "/usr/local/nvidia/lib64"}
 )
@@ -205,15 +205,15 @@ func minor(dev uint64) uint64 {
 
 func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerOptions) ([]string, bool) {
 	existingCudaFound := false
-	cudaEnvVarDefaults := map[string]string{
-		"NVIDIA_DRIVER_CAPABILITIES": "all",
-		"NVIDIA_REQUIRE_CUDA":        "",
-		"NVARCH":                     "",
-		"NV_CUDA_COMPAT_PACKAGE":     "",
-		"NV_CUDA_CUDART_VERSION":     "",
-		"CUDA_VERSION":               "",
-		"GPU_TYPE":                   "",
-		"CUDA_HOME":                  fmt.Sprintf("/usr/local/cuda-%s", defaultContainerCudaVersion),
+	cudaEnvVarNames := []string{
+		"NVIDIA_DRIVER_CAPABILITIES",
+		"NVIDIA_REQUIRE_CUDA",
+		"NVARCH",
+		"NV_CUDA_COMPAT_PACKAGE",
+		"NV_CUDA_CUDART_VERSION",
+		"CUDA_VERSION",
+		"GPU_TYPE",
+		"CUDA_HOME",
 	}
 
 	initialEnvVars := make(map[string]string)
@@ -251,7 +251,7 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerO
 	}
 
 	var cudaEnvVars []string
-	for key, defaultValue := range cudaEnvVarDefaults {
+	for _, key := range cudaEnvVarNames {
 		cudaEnvVarValue := os.Getenv(key)
 
 		if existingCudaFound {
@@ -260,10 +260,6 @@ func (c *ContainerNvidiaManager) InjectEnvVars(env []string, options *ContainerO
 			} else {
 				continue
 			}
-		}
-
-		if cudaEnvVarValue == "" {
-			cudaEnvVarValue = defaultValue
 		}
 
 		cudaEnvVars = append(cudaEnvVars, fmt.Sprintf("%s=%s", key, cudaEnvVarValue))

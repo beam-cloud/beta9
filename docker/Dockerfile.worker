@@ -94,7 +94,7 @@ RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
 # final image
 # ========================
-FROM nvidia/cuda:12.4.1-base-ubuntu22.04 AS release
+FROM nvidia/cuda:12.3.1-base-ubuntu22.04 AS release
 FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
@@ -108,8 +108,6 @@ RUN apt-get update && \
     curl -fsSL https://nvidia.github.io/nvidia-container-runtime/ubuntu22.04/nvidia-container-runtime.list | tee /etc/apt/sources.list.d/nvidia-container-runtime.list && \
     apt-get update && \
     apt-get install psmisc
-
-RUN apt-get install -y cuda-nvcc-12-4 libnvidia-compute-550 libnvidia-encode-550 libnvidia-decode-550 libnvidia-extra-550 nvidia-utils-550
 
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
