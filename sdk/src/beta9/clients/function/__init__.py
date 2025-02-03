@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 class FunctionInvokeRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     args: bytes = betterproto.bytes_field(2)
+    headless: bool = betterproto.bool_field(3)
 
 
 @dataclass(eq=False, repr=False)
