@@ -3,6 +3,7 @@ package worker
 import (
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"syscall"
 	"testing"
@@ -46,55 +47,61 @@ func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
 	os.Setenv("NVIDIA_REQUIRE_CUDA", "cuda>=9.0")
 	os.Setenv("CUDA_HOME", "/usr/local/cuda-12.4")
 
-	defer func() {
-		os.Unsetenv("NVIDIA_DRIVER_CAPABILITIES")
-		os.Unsetenv("NVIDIA_REQUIRE_CUDA")
-		os.Unsetenv("CUDA_HOME")
-	}()
-
 	expectedEnv := []string{
 		"INITIAL=1",
 		"NVIDIA_DRIVER_CAPABILITIES=all",
 		"NVIDIA_REQUIRE_CUDA=cuda>=9.0",
+		"NVARCH=",
+		"NV_CUDA_COMPAT_PACKAGE=",
+		"NV_CUDA_CUDART_VERSION=",
+		"CUDA_VERSION=",
+		"GPU_TYPE=",
 		"CUDA_HOME=/usr/local/cuda-12.4",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.4/bin",
-		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.4/targets/x86_64-linux/lib",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.4/bin:$PATH",
+		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.4/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
 	}
 
-	resultEnv, _ := manager.InjectEnvVars(initialEnv)
+	resultEnv, _ := manager.InjectEnvVars(initialEnv, &ContainerOptions{
+		InitialSpec: &specs.Spec{
+			Process: &specs.Process{},
+		},
+	})
+
+	// Sort both slices before comparison
 	sort.Strings(expectedEnv)
 	sort.Strings(resultEnv)
-	assert.Equal(t, expectedEnv, resultEnv)
+
+	if !reflect.DeepEqual(expectedEnv, resultEnv) {
+		t.Errorf("Expected %v, got %v", expectedEnv, resultEnv)
+	}
 }
 
 func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
 	manager := NewContainerNvidiaManager(4)
-	initialEnv := []string{"INITIAL=1", "CUDA_VERSION=12.3"}
+	initialEnv := []string{"INITIAL=1"}
 
 	// Set some environment variables to simulate NVIDIA settings
 	os.Setenv("NVIDIA_DRIVER_CAPABILITIES", "all")
 	os.Setenv("NVIDIA_REQUIRE_CUDA", "cuda>=9.0")
 	os.Setenv("CUDA_VERSION", "12.4")
 
-	defer func() {
-		os.Unsetenv("NVIDIA_DRIVER_CAPABILITIES")
-		os.Unsetenv("NVIDIA_REQUIRE_CUDA")
-		os.Unsetenv("CUDA_VERSION")
-	}()
-
 	expectedEnv := []string{
 		"INITIAL=1",
-		"NVIDIA_DRIVER_CAPABILITIES=all",
-		"NVIDIA_REQUIRE_CUDA=cuda>=9.0",
-		"CUDA_VERSION=12.3",
-		"CUDA_HOME=/usr/local/cuda-12.3",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/bin",
-		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.3/targets/x86_64-linux/lib",
+		"NVIDIA_REQUIRE_CUDA=",
+		"CUDA_VERSION=12.4.1",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.4/bin:$PATH",
+		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.4/targets/x86_64-linux/lib:$LD_LIBRARY_PATH",
 	}
 
-	resultEnv, _ := manager.InjectEnvVars(initialEnv)
+	resultEnv, _ := manager.InjectEnvVars(initialEnv, &ContainerOptions{
+		InitialSpec: &specs.Spec{
+			Process: &specs.Process{Env: []string{"NVIDIA_REQUIRE_CUDA=", "CUDA_VERSION=12.4.1"}},
+		},
+	})
+
 	sort.Strings(expectedEnv)
 	sort.Strings(resultEnv)
+
 	assert.Equal(t, expectedEnv, resultEnv)
 }
 
