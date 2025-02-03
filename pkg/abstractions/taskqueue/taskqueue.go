@@ -427,6 +427,9 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 			for {
 				select {
+				case <-tq.ctx.Done():
+					return
+
 				case <-timeoutChan:
 					err := timeoutCallback()
 					if err != nil {
@@ -456,8 +459,19 @@ func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stre
 
 	for {
 		select {
+		case <-tq.ctx.Done():
+			return nil
+
 		case <-stream.Context().Done():
-			tq.rdb.Del(context.Background(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId))
+			task, err := tq.backendRepo.GetTask(ctx, req.TaskId)
+			if err != nil {
+				return err
+			}
+
+			if task.Status.IsCompleted() {
+				tq.rdb.Del(context.Background(), Keys.taskQueueTaskRunningLock(authInfo.Workspace.Name, req.StubId, req.ContainerId, task.ExternalId))
+			}
+
 			return nil
 
 		case <-cancelFlag:
