@@ -68,7 +68,7 @@ class Function(RunnerAbstraction):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
         headless (bool):
-            Determines whether the function continues running in the background after the client disconnects. Default: True.
+            Determines whether the function continues running in the background after the client disconnects. Default: False.
     Example:
         ```python
         from beta9 import function, Image
@@ -103,7 +103,7 @@ class Function(RunnerAbstraction):
         name: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
         on_deploy: Optional[AbstractCallableWrapper] = None,
-        headless: bool = True,
+        headless: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
