@@ -31,12 +31,13 @@ type FunctionService interface {
 const (
 	DefaultFunctionTaskTTL uint32 = 3600 * 12 // 12 hours
 
-	functionRoutePrefix             string        = "/function"
-	scheduleRoutePrefix             string        = "/schedule"
-	defaultFunctionContainerCpu     int64         = 100
-	defaultFunctionContainerMemory  int64         = 128
-	functionArgsExpirationTimeout   time.Duration = 600 * time.Second
-	functionResultExpirationTimeout time.Duration = 600 * time.Second
+	functionRoutePrefix              string        = "/function"
+	scheduleRoutePrefix              string        = "/schedule"
+	defaultFunctionContainerCpu      int64         = 100
+	defaultFunctionContainerMemory   int64         = 128
+	defaultFunctionHeartbeatTimeoutS int64         = 60
+	functionArgsExpirationTimeout    time.Duration = 600 * time.Second
+	functionResultExpirationTimeout  time.Duration = 600 * time.Second
 )
 
 type RunCFunctionService struct {
@@ -202,7 +203,7 @@ func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.Funct
 		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
 	}
 
-	err = fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, in.TaskId), 1, time.Duration(60)*time.Second).Err()
+	err = fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, in.TaskId), 1, time.Duration(defaultFunctionHeartbeatTimeoutS)*time.Second).Err()
 	if err != nil {
 		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
 	}
@@ -354,7 +355,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 				return nil
 			}
 
-			err := fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, task.ExternalId), 1, time.Duration(60)*time.Second).Err()
+			err := fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, task.ExternalId), 1, time.Duration(defaultFunctionHeartbeatTimeoutS)*time.Second).Err()
 			if err != nil {
 				return err
 			}

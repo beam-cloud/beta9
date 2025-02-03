@@ -136,7 +136,6 @@ def _monitor_task(
                         os.kill(parent_pid, signal.SIGABRT)
                         return False
 
-                    print(f"Lost connection to task monitor, retrying... {retry}")
                     time.sleep(backoff)
                     backoff *= 2
                     retry += 1
