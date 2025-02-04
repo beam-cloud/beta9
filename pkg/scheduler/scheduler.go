@@ -38,6 +38,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	providerRepo := repo.NewProviderRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
+	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
@@ -50,9 +51,9 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 		switch pool.Mode {
 		case types.PoolModeLocal:
-			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo, providerRepo, backendRepo)
+			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo, providerRepo, backendRepo, workerPoolRepo)
 		case types.PoolModeExternal:
-			controller, err = NewExternalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, providerRepo, tailscale, pool.Provider)
+			controller, err = NewExternalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, providerRepo, workerPoolRepo, tailscale, pool.Provider)
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue

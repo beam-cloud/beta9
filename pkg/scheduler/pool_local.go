@@ -24,17 +24,18 @@ import (
 // A "local" k8s worker pool controller means
 // the pool is local to the control plane / in-cluster
 type LocalKubernetesWorkerPoolController struct {
-	ctx         context.Context
-	name        string
-	config      types.AppConfig
-	kubeClient  *kubernetes.Clientset
-	workerPool  types.WorkerPoolConfig
-	workerRepo  repository.WorkerRepository
-	backendRepo repository.BackendRepository
-	workspace   *types.Workspace
+	ctx            context.Context
+	name           string
+	config         types.AppConfig
+	kubeClient     *kubernetes.Clientset
+	workerPool     types.WorkerPoolConfig
+	workerRepo     repository.WorkerRepository
+	workerPoolRepo repository.WorkerPoolRepository
+	backendRepo    repository.BackendRepository
+	workspace      *types.Workspace
 }
 
-func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, providerRepo repository.ProviderRepository, backendRepo repository.BackendRepository) (WorkerPoolController, error) {
+func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, providerRepo repository.ProviderRepository, backendRepo repository.BackendRepository, workerPoolRepo repository.WorkerPoolRepository) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -47,19 +48,26 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 
 	workerPool := config.Worker.Pools[workerPoolName]
 	wpc := &LocalKubernetesWorkerPoolController{
-		ctx:         ctx,
-		name:        workerPoolName,
-		config:      config,
-		kubeClient:  kubeClient,
-		workerPool:  workerPool,
-		workerRepo:  workerRepo,
-		backendRepo: backendRepo,
+		ctx:            ctx,
+		name:           workerPoolName,
+		config:         config,
+		kubeClient:     kubeClient,
+		workerPool:     workerPool,
+		workerRepo:     workerRepo,
+		backendRepo:    backendRepo,
+		workerPoolRepo: workerPoolRepo,
 	}
 
 	// Start monitoring worker pool size
 	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
+	}
+
+	// Start monitoring worker pool health
+	err = MonitorPoolHealth(wpc, &workerPool, &wpc.config.Worker, workerRepo, providerRepo, workerPoolRepo)
+	if err != nil {
+		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool health")
 	}
 
 	go wpc.deleteStalePendingWorkerJobs()

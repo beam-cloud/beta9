@@ -10,8 +10,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const poolMonitoringInterval = 1 * time.Second
-
 type WorkerPoolSizer struct {
 	controller             WorkerPoolController
 	workerRepo             repository.WorkerRepository

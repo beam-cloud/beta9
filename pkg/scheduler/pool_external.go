@@ -29,17 +29,18 @@ const (
 )
 
 type ExternalWorkerPoolController struct {
-	ctx          context.Context
-	name         string
-	config       types.AppConfig
-	provider     providers.Provider
-	tailscale    *network.Tailscale
-	backendRepo  repository.BackendRepository
-	workerPool   types.WorkerPoolConfig
-	workerRepo   repository.WorkerRepository
-	providerName *types.MachineProvider
-	providerRepo repository.ProviderRepository
-	workspace    *types.Workspace
+	ctx            context.Context
+	name           string
+	config         types.AppConfig
+	provider       providers.Provider
+	tailscale      *network.Tailscale
+	backendRepo    repository.BackendRepository
+	workerPool     types.WorkerPoolConfig
+	workerRepo     repository.WorkerRepository
+	workerPoolRepo repository.WorkerPoolRepository
+	providerName   *types.MachineProvider
+	providerRepo   repository.ProviderRepository
+	workspace      *types.Workspace
 }
 
 func NewExternalWorkerPoolController(
@@ -49,6 +50,7 @@ func NewExternalWorkerPoolController(
 	backendRepo repository.BackendRepository,
 	workerRepo repository.WorkerRepository,
 	providerRepo repository.ProviderRepository,
+	workerPoolRepo repository.WorkerPoolRepository,
 	tailscale *network.Tailscale,
 	providerName *types.MachineProvider) (WorkerPoolController, error) {
 	var provider providers.Provider = nil
@@ -76,22 +78,29 @@ func NewExternalWorkerPoolController(
 
 	workerPool := config.Worker.Pools[workerPoolName]
 	wpc := &ExternalWorkerPoolController{
-		ctx:          ctx,
-		name:         workerPoolName,
-		config:       config,
-		workerPool:   workerPool,
-		backendRepo:  backendRepo,
-		workerRepo:   workerRepo,
-		providerName: providerName,
-		providerRepo: providerRepo,
-		tailscale:    tailscale,
-		provider:     provider,
+		ctx:            ctx,
+		name:           workerPoolName,
+		config:         config,
+		workerPool:     workerPool,
+		backendRepo:    backendRepo,
+		workerRepo:     workerRepo,
+		workerPoolRepo: workerPoolRepo,
+		providerName:   providerName,
+		providerRepo:   providerRepo,
+		tailscale:      tailscale,
+		provider:       provider,
 	}
 
 	// Start monitoring worker pool size
 	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
+	}
+
+	// Start monitoring worker pool health
+	err = MonitorPoolHealth(wpc, &workerPool, &wpc.config.Worker, workerRepo, providerRepo, workerPoolRepo)
+	if err != nil {
+		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool health")
 	}
 
 	// Reconcile nodes with state

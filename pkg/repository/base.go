@@ -62,6 +62,10 @@ type ContainerRepository interface {
 	DeleteStubState(stubId string) error
 }
 
+type WorkerPoolRepository interface {
+	GetWorkerPool(ctx context.Context, poolName string) (*types.WorkerPoolConfig, error)
+}
+
 type WorkspaceRepository interface {
 	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
 	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error

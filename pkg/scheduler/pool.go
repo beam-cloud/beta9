@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -29,6 +31,8 @@ const (
 	defaultWorkerLogPath        string  = "/var/log/worker"
 	defaultImagesPath           string  = "/images"
 	defaultSharedMemoryPct      float32 = 0.5
+	poolMonitoringInterval              = 1 * time.Second
+	poolHealthCheckInterval             = 1 * time.Second
 )
 
 type WorkerPoolState struct {
@@ -72,6 +76,98 @@ func MonitorPoolSize(wpc WorkerPoolController,
 	go poolSizer.Start()
 	return nil
 }
+
+func MonitorPoolHealth(wpc WorkerPoolController,
+	workerPoolConfig *types.WorkerPoolConfig,
+	workerConfig *types.WorkerConfig,
+	workerRepo repository.WorkerRepository,
+	providerRepo repository.ProviderRepository,
+	workerPoolRepo repository.WorkerPoolRepository) error {
+
+	log.Info().Str("pool_name", wpc.Name()).Msg("monitoring pool health")
+
+	poolHealthMonitor := NewPoolHealthMonitor(PoolHealthMonitorOptions{
+		Controller:       wpc,
+		WorkerPoolConfig: workerPoolConfig,
+		WorkerConfig:     workerConfig,
+		WorkerRepo:       workerRepo,
+		ProviderRepo:     providerRepo,
+		WorkerPoolRepo:   workerPoolRepo,
+	})
+	go poolHealthMonitor.Start()
+
+	return nil
+}
+
+// // DeleteStalePendingWorkerJobs ensures that worker jobs are deleted if they don't
+// // start a pod after a certain amount of time.
+// func DeleteStalePendingWorkerJobs(wpc WorkerPoolController,
+// 	workerPoolConfig *types.WorkerPoolConfig,
+// 	workerConfig *types.WorkerConfig,
+// 	workerRepo repository.WorkerRepository,
+// 	providerRepo repository.ProviderRepository) {
+// 	ctx := wpc.Context()
+// 	maxAge := workerConfig.AddWorkerTimeout
+// 	namespace := workerConfig.Namespace
+
+// 	ticker := time.NewTicker(time.Minute)
+// 	defer ticker.Stop()
+
+// 	for range ticker.C {
+// 		select {
+// 		case <-ctx.Done():
+// 			return // Context has been cancelled
+// 		default: // Continue processing requests
+// 		}
+
+// 		jobSelector := strings.Join([]string{
+// 			fmt.Sprintf("%s=%s", Beta9WorkerLabelKey, Beta9WorkerLabelValue),
+// 			fmt.Sprintf("%s=%s", Beta9WorkerLabelPoolNameKey, wpc.Name()),
+// 		}, ",")
+
+// 		jobs, err := wpc.kubeClient.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{LabelSelector: jobSelector})
+// 		if err != nil {
+// 			log.Error().Str("pool_name", wpc.Name()).Err(err).Msg("failed to list jobs for controller")
+// 			continue
+// 		}
+
+// 		for _, job := range jobs.Items {
+// 			podSelector := fmt.Sprintf("job-name=%s", job.Name)
+
+// 			pods, err := wpc.kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: podSelector})
+// 			if err != nil {
+// 				log.Error().Str("job_name", job.Name).Err(err).Msg("failed to list pods for job")
+// 				continue
+// 			}
+
+// 			for _, pod := range pods.Items {
+// 				// Skip the pod if its scheduled/not pending
+// 				if pod.Status.Phase != corev1.PodPending {
+// 					continue
+// 				}
+
+// 				duration := time.Since(pod.CreationTimestamp.Time)
+// 				if duration >= maxAge {
+// 					// Remove worker from repository
+// 					if workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]; ok {
+// 						if err := workerRepo.RemoveWorker(workerId); err != nil {
+// 							log.Error().Str("worker_id", workerId).Err(err).Msg("failed to delete pending worker")
+// 						}
+// 					}
+
+// 					// Remove worker job from kubernetes
+// 					if err := wpc.kubeClient.BatchV1().Jobs(namespace).Delete(ctx, job.Name, metav1.DeleteOptions{
+// 						PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
+// 					}); err != nil {
+// 						log.Error().Str("job_name", job.Name).Err(err).Msg("failed to delete pending worker job")
+// 					}
+
+// 					log.Info().Str("job_name", job.Name).Str("duration", maxAge.String()).Msg("deleted worker due to exceeding age limit")
+// 				}
+// 			}
+// 		}
+// 	}
+// }
 
 func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolController) (*WorkerPoolCapacity, error) {
 	workers, err := workerRepo.GetAllWorkersInPool(wpc.Name())

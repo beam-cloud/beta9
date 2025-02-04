@@ -60,6 +60,7 @@ type Gateway struct {
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
 	EventRepo      repository.EventRepository
 	Tailscale      *network.Tailscale
 	metricsRepo    repository.MetricsRepository
@@ -134,6 +135,7 @@ func NewGateway() (*Gateway, error) {
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker)
+	workerPoolRepo := repository.NewWorkerPoolRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
 	taskDispatcher, err := task.NewDispatcher(ctx, taskRepo)
 	if err != nil {
@@ -146,6 +148,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.WorkspaceRepo = workspaceRepo
 	gateway.ContainerRepo = containerRepo
 	gateway.ProviderRepo = providerRepo
+	gateway.WorkerPoolRepo = workerPoolRepo
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
 	gateway.TaskDispatcher = taskDispatcher
@@ -237,6 +240,9 @@ func (g *Gateway) registerRepositoryServices() error {
 
 	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
 	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
+
+	pr := repositoryservices.NewWorkerPoolRepositoryService(g.ctx, g.WorkerPoolRepo)
+	pb.RegisterWorkerPoolRepositoryServiceServer(g.grpcServer, pr)
 	return nil
 }
 
