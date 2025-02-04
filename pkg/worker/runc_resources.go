@@ -7,8 +7,9 @@ import (
 )
 
 const (
-	standardCPUShare  uint64 = 1024
-	standardCPUPeriod int64  = 100_000
+	standardCPUShare     uint64  = 1024
+	standardCPUPeriod    int64   = 100_000
+	memoryOverheadFactor float64 = 1.25
 )
 
 func calculateCPUShares(millicores int64) uint64 {
@@ -30,7 +31,11 @@ func getLinuxCPU(request *types.ContainerRequest) *specs.LinuxCPU {
 }
 
 func getLinuxMemory(request *types.ContainerRequest) *specs.LinuxMemory {
+	softLimit := request.Memory * 1024 * 1024
+	hardLimit := int64(float64(softLimit) * memoryOverheadFactor)
 	return &specs.LinuxMemory{
-		Limit: ptr.To(request.Memory * 1024 * 1024),
+		Reservation: ptr.To(softLimit), // soft limit
+		Limit:       ptr.To(hardLimit), // hard limit
+		Swap:        ptr.To(hardLimit), // total memory (no swap added)
 	}
 }

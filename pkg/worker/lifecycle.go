@@ -36,6 +36,12 @@ const (
 //go:embed base_runc_config.json
 var baseRuncConfigRaw string
 
+// These parameters are set when runcResourcesEnforced is enabled in the worker config
+var cgroupV2Parameters map[string]string = map[string]string{
+	// When an OOM occurs within a runc container, the kernel will kill the container and all procceses within it.
+	"memory.oom.group": "1",
+}
+
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
 func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
@@ -316,6 +322,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if s.config.Worker.RunCResourcesEnforced {
 		spec.Linux.Resources.CPU = getLinuxCPU(request)
 		spec.Linux.Resources.Memory = getLinuxMemory(request)
+		spec.Linux.Resources.Unified = cgroupV2Parameters
 	}
 
 	env := s.getContainerEnvironment(request, options)
@@ -730,7 +737,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 			seenEvents[event.Type] = struct{}{}
 
 			if event.Type == "oom" {
-				outputLogger.Error("A process in the container was killed due to out-of-memory conditions.")
+				outputLogger.Error("Container was killed due to out-of-memory conditions.")
 				s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			}
 		}
