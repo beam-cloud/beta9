@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, List
 
 import click
 from betterproto import Casing
@@ -10,7 +10,6 @@ from ..clients.gateway import (
     ListTasksRequest,
     ListTasksResponse,
     StopTasksRequest,
-    StopTasksResponse,
     StringList,
 )
 from . import extraclick
@@ -117,15 +116,21 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
     help="Stop a task.",
 )
 @click.argument(
-    "task_id",
+    "task_ids",
+    nargs=-1,
     required=True,
 )
 @extraclick.pass_service_client
-def stop_task(service: ServiceClient, task_id: str):
-    res: StopTasksResponse
-    res = service.gateway.stop_tasks(StopTasksRequest(task_ids=[task_id]))
+def stop_task(service: ServiceClient, task_ids: List[str]):
+    if task_ids and task_ids[0] == "-":
+        task_ids = click.get_text_stream("stdin").read().strip().split()
 
-    if res.ok:
-        terminal.success(f"Stopped task {task_id}.")
-    else:
-        terminal.error(f"{res.err_msg}\nFailed to stop task {task_id}.")
+    if not task_ids:
+        return terminal.error("Must provide at least one task ID.")
+
+    for task_id in task_ids:
+        res = service.gateway.stop_tasks(StopTasksRequest(task_ids=[task_id]))
+        if not res.ok:
+            terminal.warn(str(res.err_msg).capitalize())
+        else:
+            terminal.success(f"Task {task_id} stopped.")
