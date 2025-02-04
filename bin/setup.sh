@@ -10,7 +10,7 @@ set +x
 set -euo pipefail
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
-if [ "$(uname -m)" = "arm64" ]; then
+if [ "$(uname -m)" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then
   arch="arm64"
 elif [ "$(uname -m)" = "x86_64" ]; then
   arch="amd64"

@@ -39,6 +39,6 @@ func main() {
 			return
 		}
 
-		log.Fatal().Err(err).Msg("worker failed")
+		log.Fatal().Err(err).Msgf("worker failed to run: %v\n", err)
 	}
 }
