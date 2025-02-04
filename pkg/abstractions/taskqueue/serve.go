@@ -2,6 +2,7 @@ package taskqueue
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -56,10 +57,19 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 	}
 
 	exitCallback := func(exitCode int32) error {
-		if err := stream.Send(&pb.StartTaskQueueServeResponse{Done: true, ExitCode: int32(exitCode)}); err != nil {
-			return err
+		output := "Container was stopped."
+		if exitCode != 0 {
+			output = fmt.Sprintf("Container failed with exit code %d", exitCode)
+			if exitCode == types.WorkerContainerExitCodeOomKill {
+				output = "Container was killed due to an out-of-memory error"
+			}
 		}
-		return nil
+
+		return stream.Send(&pb.StartTaskQueueServeResponse{
+			Done:     true,
+			ExitCode: int32(exitCode),
+			Output:   output,
+		})
 	}
 
 	ctx, cancel := common.MergeContexts(tq.ctx, ctx)

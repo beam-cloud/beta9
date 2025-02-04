@@ -13,7 +13,6 @@ from ...channel import with_grpc_error_handling
 from ...clients.endpoint import (
     EndpointServeKeepAliveRequest,
     StartEndpointServeRequest,
-    StartEndpointServeResponse,
     StopEndpointServeRequest,
 )
 from ...clients.gateway import DeployStubRequest, DeployStubResponse
@@ -416,20 +415,25 @@ class VLLM(ASGI):
             daemon=True,
         ).start()
 
-        r: Optional[StartEndpointServeResponse] = None
-        for r in self.endpoint_stub.start_endpoint_serve(
+        stream = self.endpoint_stub.start_endpoint_serve(
             StartEndpointServeRequest(
                 stub_id=self.stub_id,
                 timeout=timeout,
             )
-        ):
+        )
+
+        r = None
+        for r in stream:
             if r.output != "":
                 terminal.detail(r.output, end="")
 
             if r.done or r.exit_code != 0:
                 break
 
-        if r is None or not r.done or r.exit_code != 0:
-            terminal.error("Serve container failed ❌")
+        if r is None:
+            return terminal.error("Serve failed ❌")
 
-        terminal.warn("VLLM serve timed out. Container has been stopped.")
+        if not r.done or r.exit_code != 0:
+            return terminal.error(f"{r.output} ❌")
+
+        terminal.success(r.output)
