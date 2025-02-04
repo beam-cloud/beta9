@@ -86,6 +86,8 @@ const (
 	WorkerContainerExitCodeIncorrectImageOs   = 557
 	WorkerContainerExitCodeUnknownError       = 1
 	WorkerContainerExitCodeSuccess            = 0
+	WorkerContainerExitCodeOomKill            = 137 // 128 + 9 (base value + SIGKILL), used to indicate OOM kill
+	WorkerContainerExitCodeSigterm            = 143 // 128 + 15 (base value + SIGTERM), used to indicate a graceful termination
 )
 
 var WorkerContainerExitCodes = map[int]string{

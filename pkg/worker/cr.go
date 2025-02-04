@@ -237,7 +237,7 @@ func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId strin
 
 			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
 				if isOOMKilled {
-					return cleanup(exitCodeSigkill, nil)
+					return cleanup(types.WorkerContainerExitCodeOomKill, nil)
 				}
 				return cleanup(0, nil)
 			}

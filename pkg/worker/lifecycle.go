@@ -29,8 +29,6 @@ const (
 	initialSpecBaseName       string        = "initial_config.json"
 	runcEventsInterval        time.Duration = 5 * time.Second
 	containerInnerPort        int           = 8001 // Use a fixed port inside the container
-	exitCodeSigterm           int           = 143  // Means the container received a SIGTERM by the underlying operating system
-	exitCodeSigkill           int           = 137  // Means the container received a SIGKILL by the underlying operating system
 )
 
 //go:embed base_runc_config.json
@@ -93,7 +91,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 	if *exitCode < 0 {
 		*exitCode = 1
-	} else if *exitCode == exitCodeSigterm {
+	} else if *exitCode == types.WorkerContainerExitCodeSigterm {
 		*exitCode = 0
 	}
 
@@ -664,7 +662,7 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 	}
 
 	if isOOMKilled {
-		return cleanup(exitCodeSigkill, nil)
+		return cleanup(types.WorkerContainerExitCodeOomKill, nil)
 	}
 
 	return cleanup(processState.ExitCode(), nil)
