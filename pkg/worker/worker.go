@@ -95,6 +95,8 @@ type stopContainerEvent struct {
 }
 
 func NewWorker() (*Worker, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 
 	gpuType := os.Getenv("GPU_TYPE")
@@ -153,7 +155,7 @@ func NewWorker() (*Worker, error) {
 
 	var cacheClient *blobcache.BlobCacheClient = nil
 	if config.Worker.BlobCacheEnabled {
-		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
+		cacheClient, err = blobcache.NewBlobCacheClient(ctx, config.BlobCache)
 		if err == nil {
 			err = cacheClient.WaitForHosts(defaultCacheWaitTime)
 		}
@@ -208,7 +210,6 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, config)
 	if err != nil {
 		cancel()
@@ -222,9 +223,9 @@ func NewWorker() (*Worker, error) {
 	}
 
 	return &Worker{
+		ctx:                     ctx,
 		workerId:                workerId,
 		workerToken:             workerToken,
-		ctx:                     ctx,
 		cancel:                  cancel,
 		config:                  config,
 		imageMountPath:          getImageMountPath(workerId),
