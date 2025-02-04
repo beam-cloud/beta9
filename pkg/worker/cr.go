@@ -236,10 +236,11 @@ func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId strin
 			}
 
 			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
+				exitCode := 0
 				if isOOMKilled {
-					return cleanup(types.WorkerContainerExitCodeOomKill, nil)
+					exitCode = types.WorkerContainerExitCodeOomKill
 				}
-				return cleanup(0, nil)
+				return cleanup(exitCode, nil)
 			}
 		}
 	}

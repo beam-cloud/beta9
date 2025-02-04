@@ -661,11 +661,12 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 		return cleanup(-1, err)
 	}
 
+	exitCode := processState.ExitCode()
 	if isOOMKilled {
-		return cleanup(types.WorkerContainerExitCodeOomKill, nil)
+		exitCode = types.WorkerContainerExitCodeOomKill
 	}
 
-	return cleanup(processState.ExitCode(), nil)
+	return cleanup(exitCode, nil)
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
