@@ -36,6 +36,10 @@ const (
 //go:embed base_runc_config.json
 var baseRuncConfigRaw string
 
+var cgroupV2Parameters map[string]string = map[string]string{
+	"memory.oom.group": "1", // Kill all processes in the cgroup when an OOM occurs
+}
+
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
 func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
@@ -313,6 +317,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Args = request.EntryPoint
 	spec.Process.Terminal = true // NOTE: This is since we are using a console writer for logging
 
+	spec.Linux.Resources.Unified = cgroupV2Parameters
 	if s.config.Worker.RunCResourcesEnforced {
 		spec.Linux.Resources.CPU = getLinuxCPU(request)
 		spec.Linux.Resources.Memory = getLinuxMemory(request)
