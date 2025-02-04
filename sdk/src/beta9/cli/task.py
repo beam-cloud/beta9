@@ -114,6 +114,19 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
 @management.command(
     name="stop",
     help="Stop a task.",
+    epilog="""
+    Examples:
+
+      # Stop a task
+      {cli_name} task stop 05cc6c0d-fef2-491c-b9b7-313cc21c3496
+
+      # Stop multiple tasks
+      {cli_name} task stop 05cc6c0d-fef2-491c-b9b7-313cc21c3496 22dee81b-eeab-4c0a-b28a-b81b159358f9
+
+      # Stop multiple tasks from stdin
+      {cli_name} task list --filter status=running --format=json | jq -r '.[] | .id' | {cli_name} task stop -
+      \b
+    """,
 )
 @click.argument(
     "task_ids",
