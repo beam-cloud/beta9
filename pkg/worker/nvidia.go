@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	defaultContainerCudaVersion string   = "12.3"
+	defaultContainerCudaVersion string   = "12.4"
 	defaultContainerPath        []string = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 	defaultContainerLibrary     []string = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/worker/x86_64-linux-gnu", "/usr/local/nvidia/lib64"}
 )

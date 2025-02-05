@@ -94,7 +94,7 @@ RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
 # final image
 # ========================
-FROM nvidia/cuda:12.3.1-base-ubuntu22.04 AS release
+FROM nvidia/cuda:12.4.1-base-ubuntu22.04 AS release
 FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
@@ -112,6 +112,7 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
+RUN apt-get install -y cuda-nvcc-12-4 libnvidia-encode-550 libnvidia-decode-550 libnvidia-extra-550
 
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
