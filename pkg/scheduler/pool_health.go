@@ -209,7 +209,7 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 	if p.workerConfig.Failover.Enabled {
 		// If failover is enabled and status is degraded, we need to cordon all workers in the pool
 		if previousState.Status != status && nextState.Status == types.WorkerPoolStatusDegraded {
-			log.Info().Str("pool_name", p.wpc.Name()).Msg("pool is degraded, cordoning all workers")
+			log.Warn().Str("pool_name", p.wpc.Name()).Msg("pool is degraded, cordoning all workers")
 
 			err = p.workerRepo.CordonAllWorkersInPool(p.wpc.Name())
 			if err != nil {
