@@ -61,16 +61,19 @@ func (p *PoolHealthMonitor) Start() {
 
 				poolState, err := p.getPoolState()
 				if err != nil {
+					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to get pool state")
 					return
 				}
 
 				err = p.updatePoolStatus(poolState)
 				if err != nil {
+					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to update pool status")
 					return
 				}
 
 				err = p.workerPoolRepo.SetWorkerPoolState(p.ctx, p.wpc.Name(), poolState)
 				if err != nil {
+					log.Error().Str("pool_name", p.wpc.Name()).Err(err).Msg("failed to set pool state")
 					return
 				}
 			}()
@@ -159,26 +162,28 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 
 	return &types.WorkerPoolState{
 		SchedulingLatency:  int64(averageSchedulingLatency.Milliseconds()),
-		AvailableWorkers:   availableWorkers,
-		PendingWorkers:     pendingWorkers,
-		PendingContainers:  pendingContainers,
-		RunningContainers:  runningContainers,
+		AvailableWorkers:   int64(availableWorkers),
+		PendingWorkers:     int64(pendingWorkers),
+		PendingContainers:  int64(pendingContainers),
+		RunningContainers:  int64(runningContainers),
 		FreeGpu:            freeCapacity.FreeGpu,
 		FreeCpu:            freeCapacity.FreeCpu,
 		FreeMemory:         freeCapacity.FreeMemory,
-		RegisteredMachines: registeredMachines,
-		PendingMachines:    pendingMachines,
+		RegisteredMachines: int64(registeredMachines),
+		PendingMachines:    int64(pendingMachines),
 	}, nil
 }
 
 // updatePoolStatus updates the status of the pool based on the current state
-func (p *PoolHealthMonitor) updatePoolStatus(poolState *types.WorkerPoolState) error {
+func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) error {
 	status := types.WorkerPoolStatusHealthy
 
-	// Conditions for degraded status
-	if poolState.PendingContainers > 10 {
+	// Go through conditions that could trigger a degraded status
+	if nextState.PendingContainers >= 0 {
 		status = types.WorkerPoolStatusDegraded
 	}
+
+	nextState.Status = status
 
 	// Retrieve the previous state to compare against
 	previousState, err := p.wpc.State()
@@ -193,7 +198,7 @@ func (p *PoolHealthMonitor) updatePoolStatus(poolState *types.WorkerPoolState) e
 		}
 	}
 
-	if previousState.Status != status && status == types.WorkerPoolStatusDegraded {
+	if previousState.Status != status && nextState.Status == types.WorkerPoolStatusDegraded {
 		log.Info().Str("pool_name", p.wpc.Name()).Msg("pool is degraded, cordoning all workers")
 
 		err = p.workerRepo.CordonAllWorkersInPool(p.wpc.Name())

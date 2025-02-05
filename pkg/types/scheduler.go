@@ -414,17 +414,17 @@ func (e *ErrWorkerPoolStateNotFound) From(err error) bool {
 }
 
 type WorkerPoolState struct {
-	Status             WorkerPoolStatus
-	SchedulingLatency  int64
-	FreeGpu            uint
-	FreeCpu            int64
-	FreeMemory         int64
-	PendingWorkers     int
-	AvailableWorkers   int
-	PendingContainers  int
-	RunningContainers  int
-	RegisteredMachines int
-	PendingMachines    int
+	Status             WorkerPoolStatus `redis:"status" json:"status"`
+	SchedulingLatency  int64            `redis:"scheduling_latency" json:"scheduling_latency"`
+	FreeGpu            uint             `redis:"free_gpu" json:"free_gpu"`
+	FreeCpu            int64            `redis:"free_cpu" json:"free_cpu"`
+	FreeMemory         int64            `redis:"free_memory" json:"free_memory"`
+	PendingWorkers     int64            `redis:"pending_workers" json:"pending_workers"`
+	AvailableWorkers   int64            `redis:"available_workers" json:"available_workers"`
+	PendingContainers  int64            `redis:"pending_containers" json:"pending_containers"`
+	RunningContainers  int64            `redis:"running_containers" json:"running_containers"`
+	RegisteredMachines int64            `redis:"registered_machines" json:"registered_machines"`
+	PendingMachines    int64            `redis:"pending_machines" json:"pending_machines"`
 }
 
 type WorkerPoolStatus string

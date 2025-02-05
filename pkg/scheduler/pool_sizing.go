@@ -7,6 +7,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,6 +45,14 @@ func (s *WorkerPoolSizer) Start() {
 	ticker := time.NewTicker(poolMonitoringInterval)
 	defer ticker.Stop()
 
+	sampledLogger := log.Sample(zerolog.LevelSampler{
+		WarnSampler: &zerolog.BurstSampler{
+			Burst:       1,
+			Period:      10 * time.Second,
+			NextSampler: nil,
+		},
+	})
+
 	for range ticker.C {
 		select {
 		case <-ctx.Done():
@@ -59,7 +68,7 @@ func (s *WorkerPoolSizer) Start() {
 
 			// If the pool is degraded, we don't want to keep adding more workers
 			if poolState.Status == types.WorkerPoolStatusDegraded {
-				log.Info().Str("pool_name", s.controller.Name()).Msg("pool is degraded, skipping sizing")
+				sampledLogger.Warn().Str("pool_name", s.controller.Name()).Msg("pool is degraded, skipping pool sizing")
 				return
 			}
 

@@ -48,9 +48,8 @@ func (r *WorkerPoolRedisRepository) RemoveWorkerPoolStateLock(poolName string) e
 
 // SetWorkerPoolState updates the worker pool state with some recent health metrics
 func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error {
-	stateKey := common.RedisKeys.WorkerPoolState(poolName)
-	err := r.rdb.HSet(
-		context.TODO(), stateKey,
+	return r.rdb.HSet(
+		context.TODO(), common.RedisKeys.WorkerPoolState(poolName),
 		"status", string(state.Status),
 		"scheduling_latency", state.SchedulingLatency,
 		"free_gpu", state.FreeGpu,
@@ -63,11 +62,6 @@ func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, pool
 		"registered_machines", state.RegisteredMachines,
 		"pending_machines", state.PendingMachines,
 	).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set worker pool state <%v>: %w", stateKey, err)
-	}
-
-	return nil
 }
 
 func (r *WorkerPoolRedisRepository) SetWorkerPoolSizerLock(poolName string) error {
