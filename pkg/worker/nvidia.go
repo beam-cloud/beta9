@@ -62,6 +62,7 @@ func (c *ContainerNvidiaManager) UnassignGPUDevices(containerId string) {
 func (c *ContainerNvidiaManager) AssignGPUDevices(containerId string, gpuCount uint32) (*AssignedGpuDevices, error) {
 	gpuIds, err := c.chooseDevices(containerId, gpuCount)
 	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to choose devices: %v", err)
 		return nil, err
 	}
 
@@ -74,11 +75,13 @@ func (c *ContainerNvidiaManager) AssignGPUDevices(containerId string, gpuCount u
 
 		majorNum, err := c.getDeviceMajorNumber(gpuDeviceNode)
 		if err != nil {
+			log.Error().Str("container_id", containerId).Str("device_path", gpuDeviceNode).Msgf("failed to get device major number: %v", err)
 			return nil, err
 		}
 
 		minorNum, err := c.getDeviceMinorNumber(gpuDeviceNode)
 		if err != nil {
+			log.Error().Str("container_id", containerId).Str("device_path", gpuDeviceNode).Msgf("failed to get device minor number: %v", err)
 			return nil, err
 		}
 
@@ -98,11 +101,13 @@ func (c *ContainerNvidiaManager) AssignGPUDevices(containerId string, gpuCount u
 	// Assuming control and UVM devices are shared across all GPUs and required
 	majorNum, err := c.getDeviceMajorNumber("/dev/nvidiactl")
 	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to get device major number: %v", err)
 		return nil, err
 	}
 
 	minorNum, err := c.getDeviceMinorNumber("/dev/nvidiactl")
 	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to get device minor number: %v", err)
 		return nil, err
 	}
 	devices = append(devices, specs.LinuxDeviceCgroup{
@@ -145,6 +150,7 @@ func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuC
 
 	availableDevices, err := c.infoClient.AvailableGPUDevices()
 	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to get available devices: %v", err)
 		return nil, err
 	}
 
@@ -176,6 +182,7 @@ func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuC
 func (c *ContainerNvidiaManager) getDeviceMajorNumber(devicePath string) (*int64, error) {
 	stat := syscall.Stat_t{}
 	if err := c.statFunc(devicePath, &stat); err != nil {
+		log.Error().Str("device_path", devicePath).Msgf("failed to get device major number: %v", err)
 		return nil, err
 	}
 
@@ -187,6 +194,7 @@ func (c *ContainerNvidiaManager) getDeviceMajorNumber(devicePath string) (*int64
 func (c *ContainerNvidiaManager) getDeviceMinorNumber(devicePath string) (*int64, error) {
 	stat := syscall.Stat_t{}
 	if err := c.statFunc(devicePath, &stat); err != nil {
+		log.Error().Str("device_path", devicePath).Msgf("failed to get device minor number: %v", err)
 		return nil, err
 	}
 
