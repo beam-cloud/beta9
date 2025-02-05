@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -175,7 +176,14 @@ func (p *PoolHealthMonitor) updatePoolStatus(poolState *types.WorkerPoolState) e
 	// Retrieve the previous state to compare against
 	previousState, err := p.wpc.State()
 	if err != nil {
-		return err
+		var notFoundErr *types.ErrWorkerPoolStateNotFound
+		if errors.As(err, &notFoundErr) {
+			previousState = &types.WorkerPoolState{
+				Status: types.WorkerPoolStatusHealthy,
+			}
+		} else {
+			return err
+		}
 	}
 
 	if previousState.Status != status && status == types.WorkerPoolStatusDegraded {

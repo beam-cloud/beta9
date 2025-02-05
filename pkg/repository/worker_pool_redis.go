@@ -47,8 +47,6 @@ func (r *WorkerPoolRedisRepository) GetWorkerPoolState(ctx context.Context, pool
 
 // SetWorkerPoolState updates the worker pool state with some recent health metrics
 func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error {
-	stateKey := common.RedisKeys.WorkerPoolState(poolName)
-
 	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolStateLock(poolName), common.RedisLockOptions{TtlS: 10, Retries: 0})
 	if err != nil {
 		return err
@@ -56,6 +54,7 @@ func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, pool
 	defer r.lock.Release(common.RedisKeys.WorkerPoolStateLock(poolName))
 
 	// Update worker pool state
+	stateKey := common.RedisKeys.WorkerPoolState(poolName)
 	err = r.rdb.HSet(
 		context.TODO(), stateKey,
 		"status", string(state.Status),

@@ -52,10 +52,8 @@ func (s *WorkerPoolSizer) Start() {
 		}
 
 		func() {
-			// Get the current state of the pool
-			poolState, err := s.controller.State()
+			poolState, err := s.controller.State() // Get the current state of the pool
 			if err != nil {
-				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to get pool state")
 				return
 			}
 
