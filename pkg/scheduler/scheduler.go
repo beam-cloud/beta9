@@ -60,6 +60,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 				ProviderRepo:   providerRepo,
 				WorkerPoolRepo: workerPoolRepo,
 				ContainerRepo:  containerRepo,
+				EventRepo:      eventRepo,
 			})
 		case types.PoolModeExternal:
 			controller, err = NewExternalWorkerPoolController(WorkerPoolControllerOptions{
@@ -73,6 +74,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 				ContainerRepo:  containerRepo,
 				ProviderName:   pool.Provider,
 				Tailscale:      tailscale,
+				EventRepo:      eventRepo,
 			})
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")

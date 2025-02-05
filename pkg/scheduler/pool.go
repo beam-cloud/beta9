@@ -68,6 +68,7 @@ type WorkerPoolControllerOptions struct {
 	ContainerRepo  repository.ContainerRepository
 	ProviderName   *types.MachineProvider
 	ProviderRepo   repository.ProviderRepository
+	EventRepo      repository.EventRepository
 	Tailscale      *network.Tailscale
 }
 
@@ -89,22 +90,16 @@ func MonitorPoolSize(wpc WorkerPoolController,
 	return nil
 }
 
-func MonitorPoolHealth(wpc WorkerPoolController,
-	workerPoolConfig *types.WorkerPoolConfig,
-	workerConfig *types.WorkerConfig,
-	workerRepo repository.WorkerRepository,
-	providerRepo repository.ProviderRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
-	containerRepo repository.ContainerRepository) error {
-
+func MonitorPoolHealth(opts PoolHealthMonitorOptions) error {
 	poolHealthMonitor := NewPoolHealthMonitor(PoolHealthMonitorOptions{
-		Controller:       wpc,
-		WorkerPoolConfig: workerPoolConfig,
-		WorkerConfig:     workerConfig,
-		WorkerRepo:       workerRepo,
-		ProviderRepo:     providerRepo,
-		WorkerPoolRepo:   workerPoolRepo,
-		ContainerRepo:    containerRepo,
+		Controller:       opts.Controller,
+		WorkerPoolConfig: opts.WorkerPoolConfig,
+		WorkerConfig:     opts.WorkerConfig,
+		WorkerRepo:       opts.WorkerRepo,
+		ProviderRepo:     opts.ProviderRepo,
+		WorkerPoolRepo:   opts.WorkerPoolRepo,
+		ContainerRepo:    opts.ContainerRepo,
+		EventRepo:        opts.EventRepo,
 	})
 
 	go poolHealthMonitor.Start()

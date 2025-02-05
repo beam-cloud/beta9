@@ -12,23 +12,25 @@ import (
 
 type PoolHealthMonitorOptions struct {
 	Controller       WorkerPoolController
-	WorkerPoolConfig *types.WorkerPoolConfig
-	WorkerConfig     *types.WorkerConfig
+	WorkerPoolConfig types.WorkerPoolConfig
+	WorkerConfig     types.WorkerConfig
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	ProviderRepo     repository.ProviderRepository
 	ContainerRepo    repository.ContainerRepository
+	EventRepo        repository.EventRepository
 }
 
 type PoolHealthMonitor struct {
 	ctx              context.Context
 	wpc              WorkerPoolController
-	workerPoolConfig *types.WorkerPoolConfig
-	workerConfig     *types.WorkerConfig
+	workerPoolConfig types.WorkerPoolConfig
+	workerConfig     types.WorkerConfig
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
 	containerRepo    repository.ContainerRepository
 	providerRepo     repository.ProviderRepository
+	eventRepo        repository.EventRepository
 }
 
 func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
@@ -41,6 +43,7 @@ func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 		containerRepo:    opts.ContainerRepo,
 		providerRepo:     opts.ProviderRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
+		eventRepo:        opts.EventRepo,
 	}
 }
 
@@ -216,6 +219,8 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 				log.Error().Err(err).Msg("failed to cordon all workers in pool")
 				return err
 			}
+		} else if previousState.Status != status && nextState.Status == types.WorkerPoolStatusHealthy {
+
 		}
 	}
 
