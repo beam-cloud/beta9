@@ -61,6 +61,7 @@ type Worker struct {
 	stopContainerChan       chan stopContainerEvent
 	workerRepoClient        pb.WorkerRepositoryServiceClient
 	containerRepoClient     pb.ContainerRepositoryServiceClient
+	workerPoolRepoClient    pb.WorkerPoolRepositoryServiceClient
 	eventRepo               repo.EventRepository
 	userDataStorage         storage.Storage
 	checkpointStorage       storage.Storage
@@ -142,6 +143,11 @@ func NewWorker() (*Worker, error) {
 	}
 
 	workerRepoClient, err := NewWorkerRepositoryClient(context.TODO(), config, workerToken)
+	if err != nil {
+		return nil, err
+	}
+
+	workerPoolRepoClient, err := NewWorkerPoolRepositoryClient(context.TODO(), config, workerToken)
 	if err != nil {
 		return nil, err
 	}
@@ -252,14 +258,15 @@ func NewWorker() (*Worker, error) {
 			containerInstances: containerInstances,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
-		workerMetrics:       workerMetrics,
-		containerRepoClient: containerRepoClient,
-		workerRepoClient:    workerRepoClient,
-		eventRepo:           eventRepo,
-		completedRequests:   make(chan *types.ContainerRequest, 1000),
-		stopContainerChan:   make(chan stopContainerEvent, 1000),
-		userDataStorage:     userDataStorage,
-		checkpointStorage:   checkpointStorage,
+		workerMetrics:        workerMetrics,
+		containerRepoClient:  containerRepoClient,
+		workerRepoClient:     workerRepoClient,
+		workerPoolRepoClient: workerPoolRepoClient,
+		eventRepo:            eventRepo,
+		completedRequests:    make(chan *types.ContainerRequest, 1000),
+		stopContainerChan:    make(chan stopContainerEvent, 1000),
+		userDataStorage:      userDataStorage,
+		checkpointStorage:    checkpointStorage,
 	}, nil
 }
 

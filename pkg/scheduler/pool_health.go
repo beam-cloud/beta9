@@ -55,7 +55,6 @@ func (p *PoolHealthMonitor) Start() {
 }
 
 func (p *PoolHealthMonitor) checkPoolHealth() {
-	log.Info().Msg("checking pool health for pool " + p.wpc.Name())
 	pool, err := p.workerPoolRepo.GetWorkerPool(p.ctx, p.wpc.Name())
 	if err != nil {
 		log.Error().Msg("error getting worker pool " + p.wpc.Name() + ": " + err.Error())
@@ -63,6 +62,4 @@ func (p *PoolHealthMonitor) checkPoolHealth() {
 	}
 
 	log.Printf("pool: %+v", pool)
-
-	log.Info().Msg("pool health check complete for pool " + p.wpc.Name())
 }
