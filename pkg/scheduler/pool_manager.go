@@ -56,7 +56,6 @@ func (m *WorkerPoolManager) GetPoolByFilters(filters poolFilters) []*WorkerPool 
 		wpc := value.Controller
 		state, err := wpc.State()
 		if err != nil {
-			log.Error().Err(err).Msgf("error getting pool state for %s", value.Name)
 			return true
 		}
 

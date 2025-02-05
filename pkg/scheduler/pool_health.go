@@ -53,20 +53,27 @@ func (p *PoolHealthMonitor) Start() {
 		case <-p.ctx.Done():
 			return
 		case <-ticker.C:
-			poolState, err := p.getPoolState()
-			if err != nil {
-				continue
-			}
+			func() {
+				if err := p.workerPoolRepo.SetWorkerPoolStateLock(p.wpc.Name()); err != nil {
+					return
+				}
+				defer p.workerPoolRepo.RemoveWorkerPoolStateLock(p.wpc.Name())
 
-			err = p.updatePoolStatus(poolState)
-			if err != nil {
-				continue
-			}
+				poolState, err := p.getPoolState()
+				if err != nil {
+					return
+				}
 
-			err = p.workerPoolRepo.SetWorkerPoolState(p.ctx, p.wpc.Name(), poolState)
-			if err != nil {
-				continue
-			}
+				err = p.updatePoolStatus(poolState)
+				if err != nil {
+					return
+				}
+
+				err = p.workerPoolRepo.SetWorkerPoolState(p.ctx, p.wpc.Name(), poolState)
+				if err != nil {
+					return
+				}
+			}()
 		}
 	}
 }

@@ -64,6 +64,8 @@ type ContainerRepository interface {
 type WorkerPoolRepository interface {
 	SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error
 	GetWorkerPoolState(ctx context.Context, poolName string) (*types.WorkerPoolState, error)
+	SetWorkerPoolStateLock(poolName string) error
+	RemoveWorkerPoolStateLock(poolName string) error
 	SetWorkerPoolSizerLock(poolName string) error
 	RemoveWorkerPoolSizerLock(poolName string) error
 }
