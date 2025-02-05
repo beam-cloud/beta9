@@ -314,11 +314,11 @@ func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId s
 	)
 }
 
-func (t *TCPEventClientRepo) PushPoolDegradedEvent(poolName string, reasons []string) {
+func (t *TCPEventClientRepo) PushWorkerPoolDegradedEvent(poolName string, reasons []string) {
 	t.pushEvent(
-		types.EventPoolDegraded,
-		types.EventPoolStateSchemaVersion,
-		types.EventPoolStateSchema{
+		types.EventWorkerPoolDegraded,
+		types.EventWorkerPoolStateSchemaVersion,
+		types.EventWorkerPoolStateSchema{
 			PoolName: poolName,
 			Reasons:  reasons,
 			Status:   string(types.WorkerPoolStatusDegraded),
@@ -326,11 +326,11 @@ func (t *TCPEventClientRepo) PushPoolDegradedEvent(poolName string, reasons []st
 	)
 }
 
-func (t *TCPEventClientRepo) PushPoolHealthyEvent(poolName string) {
+func (t *TCPEventClientRepo) PushWorkerPoolHealthyEvent(poolName string) {
 	t.pushEvent(
-		types.EventPoolDegraded,
-		types.EventPoolStateSchemaVersion,
-		types.EventPoolStateSchema{
+		types.EventWorkerPoolHealthy,
+		types.EventWorkerPoolStateSchemaVersion,
+		types.EventWorkerPoolStateSchema{
 			PoolName: poolName,
 			Status:   string(types.WorkerPoolStatusHealthy),
 		},

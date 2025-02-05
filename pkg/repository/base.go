@@ -195,8 +195,8 @@ type EventRepository interface {
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
-	PushPoolDegradedEvent(poolName string, reasons []string)
-	PushPoolHealthyEvent(poolName string)
+	PushWorkerPoolDegradedEvent(poolName string, reasons []string)
+	PushWorkerPoolHealthyEvent(poolName string)
 }
 
 type MetricsRepository interface {

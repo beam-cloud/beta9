@@ -41,8 +41,8 @@ var (
 	EventStubServe          = "stub.serve"
 	EventStubRun            = "stub.run"
 
-	EventPoolDegraded = "pool.degraded"
-	EventPoolHealthy  = "pool.healthy"
+	EventWorkerPoolDegraded = "workerpool.degraded"
+	EventWorkerPoolHealthy  = "workerpool.healthy"
 )
 
 var (
@@ -149,9 +149,9 @@ type EventStubStateSchema struct {
 	FailedContainers []string `json:"failed_containers"`
 }
 
-var EventPoolStateSchemaVersion = "1.0"
+var EventWorkerPoolStateSchemaVersion = "1.0"
 
-type EventPoolStateSchema struct {
+type EventWorkerPoolStateSchema struct {
 	PoolName string   `json:"pool_name"`
 	Reasons  []string `json:"reasons"`
 	Status   string   `json:"status"`
