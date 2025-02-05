@@ -230,7 +230,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Generate dynamic runc spec for this container
 	spec, err := s.specFromRequest(request, opts)
 	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to create spec from request: %v", err)
 		return err
 	}
 	log.Info().Str("container_id", containerId).Msg("successfully created spec from request")
@@ -243,7 +242,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		Address:     containerAddr,
 	}))
 	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to set container address: %v", err)
 		return err
 	}
 	log.Info().Str("container_id", containerId).Msg("set container address")
@@ -312,7 +310,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec, err := s.newSpecTemplate()
 	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to create new spec template: %v", err)
 		return nil, err
 	}
 
@@ -340,7 +337,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		// Assign n-number of GPUs to a container
 		assignedGpus, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to assign GPUs: %v", err)
 			return nil, err
 		}
 		env = append(env, fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", assignedGpus.String()))
@@ -436,7 +432,6 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
 	err := json.Unmarshal([]byte(specTemplate), &newSpec)
 	if err != nil {
-		log.Error().Msgf("failed to unmarshal base runc config: %v", err)
 		return nil, err
 	}
 	return &newSpec, nil
@@ -610,8 +605,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
-	log.Info().Str("container_id", containerId).Str("config_path", configPath).Str("bundle_path", opts.BundlePath).Msg("running container")
-	time.Sleep(10000 * time.Second)
 	// Invoke runc process (launch the container)
 	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
 		Detach:        true,
