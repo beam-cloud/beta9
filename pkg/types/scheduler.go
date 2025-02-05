@@ -430,8 +430,8 @@ type WorkerPoolState struct {
 type WorkerPoolStatus string
 
 const (
-	WorkerPoolStatusHealthy  WorkerPoolStatus = "healthy"
-	WorkerPoolStatusDegraded WorkerPoolStatus = "degraded"
+	WorkerPoolStatusHealthy  WorkerPoolStatus = "HEALTHY"
+	WorkerPoolStatusDegraded WorkerPoolStatus = "DEGRADED"
 )
 
 type WorkerPoolSizingConfig struct {
