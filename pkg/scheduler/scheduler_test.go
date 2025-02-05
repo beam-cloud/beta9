@@ -136,12 +136,13 @@ func (wpc *LocalWorkerPoolControllerForTest) FreeCapacity() (*WorkerPoolCapacity
 }
 
 type ExternalWorkerPoolControllerForTest struct {
-	ctx          context.Context
-	name         string
-	workerRepo   repo.WorkerRepository
-	providerRepo repo.ProviderRepository
-	poolName     string
-	providerName string
+	ctx            context.Context
+	name           string
+	workerRepo     repo.WorkerRepository
+	providerRepo   repo.ProviderRepository
+	workerPoolRepo repo.WorkerPoolRepository
+	poolName       string
+	providerName   string
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) Context() context.Context {
