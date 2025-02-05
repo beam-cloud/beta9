@@ -204,7 +204,9 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 		}
 	} else {
 		for _, gpu := range request.GpuRequest {
-			pools := s.workerPoolManager.GetPoolsByGPU(gpu)
+			pools := s.workerPoolManager.GetPoolByFilters(poolFilters{
+				GPUType: gpu,
+			})
 
 			for _, pool := range pools {
 				controllers = append(controllers, pool.Controller)

@@ -6,6 +6,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 // WorkerPool represents a pool of workers with specific configuration and controller.
@@ -51,6 +52,15 @@ func (m *WorkerPoolManager) GetPoolByFilters(filters poolFilters) []*WorkerPool 
 		if gpuMatches {
 			pools = append(pools, value)
 		}
+
+		wpc := value.Controller
+		state, err := wpc.State()
+		if err != nil {
+			log.Error().Err(err).Msgf("error getting pool state for %s", value.Name)
+			return true
+		}
+
+		log.Info().Msgf("pool %s state: %+v", value.Name, state)
 
 		return true
 	})

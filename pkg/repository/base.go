@@ -14,6 +14,7 @@ type WorkerRepository interface {
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
+	CordonAllWorkersInPool(poolName string) error
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
@@ -34,8 +35,6 @@ type WorkerRepository interface {
 	GetContainerIps(networkPrefix string) ([]string, error)
 	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)
 	RemoveNetworkLock(networkPrefix string, token string) error
-	SetWorkerPoolSizerLock(controllerName string) error
-	RemoveWorkerPoolSizerLock(controllerName string) error
 }
 
 type ContainerRepository interface {
@@ -63,7 +62,10 @@ type ContainerRepository interface {
 }
 
 type WorkerPoolRepository interface {
-	GetWorkerPool(ctx context.Context, poolName string) (*types.WorkerPoolConfig, error)
+	SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error
+	GetWorkerPoolState(ctx context.Context, poolName string) (*types.WorkerPoolState, error)
+	SetWorkerPoolSizerLock(poolName string) error
+	RemoveWorkerPoolSizerLock(poolName string) error
 }
 
 type WorkspaceRepository interface {

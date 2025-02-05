@@ -7,10 +7,7 @@
 package proto
 
 import (
-	context "context"
 	grpc "google.golang.org/grpc"
-	codes "google.golang.org/grpc/codes"
-	status "google.golang.org/grpc/status"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -18,15 +15,12 @@ import (
 // Requires gRPC-Go v1.32.0 or later.
 const _ = grpc.SupportPackageIsVersion7
 
-const (
-	WorkerPoolRepositoryService_GetWorkerPool_FullMethodName = "/WorkerPoolRepositoryService/GetWorkerPool"
-)
+const ()
 
 // WorkerPoolRepositoryServiceClient is the client API for WorkerPoolRepositoryService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WorkerPoolRepositoryServiceClient interface {
-	GetWorkerPool(ctx context.Context, in *GetWorkerPoolRequest, opts ...grpc.CallOption) (*GetWorkerPoolResponse, error)
 }
 
 type workerPoolRepositoryServiceClient struct {
@@ -37,20 +31,10 @@ func NewWorkerPoolRepositoryServiceClient(cc grpc.ClientConnInterface) WorkerPoo
 	return &workerPoolRepositoryServiceClient{cc}
 }
 
-func (c *workerPoolRepositoryServiceClient) GetWorkerPool(ctx context.Context, in *GetWorkerPoolRequest, opts ...grpc.CallOption) (*GetWorkerPoolResponse, error) {
-	out := new(GetWorkerPoolResponse)
-	err := c.cc.Invoke(ctx, WorkerPoolRepositoryService_GetWorkerPool_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // WorkerPoolRepositoryServiceServer is the server API for WorkerPoolRepositoryService service.
 // All implementations must embed UnimplementedWorkerPoolRepositoryServiceServer
 // for forward compatibility
 type WorkerPoolRepositoryServiceServer interface {
-	GetWorkerPool(context.Context, *GetWorkerPoolRequest) (*GetWorkerPoolResponse, error)
 	mustEmbedUnimplementedWorkerPoolRepositoryServiceServer()
 }
 
@@ -58,9 +42,6 @@ type WorkerPoolRepositoryServiceServer interface {
 type UnimplementedWorkerPoolRepositoryServiceServer struct {
 }
 
-func (UnimplementedWorkerPoolRepositoryServiceServer) GetWorkerPool(context.Context, *GetWorkerPoolRequest) (*GetWorkerPoolResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetWorkerPool not implemented")
-}
 func (UnimplementedWorkerPoolRepositoryServiceServer) mustEmbedUnimplementedWorkerPoolRepositoryServiceServer() {
 }
 
@@ -75,36 +56,13 @@ func RegisterWorkerPoolRepositoryServiceServer(s grpc.ServiceRegistrar, srv Work
 	s.RegisterService(&WorkerPoolRepositoryService_ServiceDesc, srv)
 }
 
-func _WorkerPoolRepositoryService_GetWorkerPool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetWorkerPoolRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WorkerPoolRepositoryServiceServer).GetWorkerPool(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WorkerPoolRepositoryService_GetWorkerPool_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WorkerPoolRepositoryServiceServer).GetWorkerPool(ctx, req.(*GetWorkerPoolRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // WorkerPoolRepositoryService_ServiceDesc is the grpc.ServiceDesc for WorkerPoolRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var WorkerPoolRepositoryService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "WorkerPoolRepositoryService",
 	HandlerType: (*WorkerPoolRepositoryServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "GetWorkerPool",
-			Handler:    _WorkerPoolRepositoryService_GetWorkerPool_Handler,
-		},
-	},
-	Streams:  []grpc.StreamDesc{},
-	Metadata: "worker_pool_repo.proto",
+	Methods:     []grpc.MethodDesc{},
+	Streams:     []grpc.StreamDesc{},
+	Metadata:    "worker_pool_repo.proto",
 }

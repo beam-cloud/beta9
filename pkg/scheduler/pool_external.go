@@ -89,7 +89,7 @@ func NewExternalWorkerPoolController(
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, wpc.workerRepo, opts.ProviderRepo)
+	err = MonitorPoolSize(wpc, &workerPool, wpc.workerRepo, wpc.workerPoolRepo, opts.ProviderRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
 	}
@@ -114,8 +114,8 @@ func (wpc *ExternalWorkerPoolController) IsPreemptable() bool {
 	return wpc.workerPool.Preemptable
 }
 
-func (wpc *ExternalWorkerPoolController) State() WorkerPoolState {
-	return WorkerPoolState{}
+func (wpc *ExternalWorkerPoolController) State() (*types.WorkerPoolState, error) {
+	return wpc.workerPoolRepo.GetWorkerPoolState(wpc.ctx, wpc.name)
 }
 
 func (wpc *ExternalWorkerPoolController) Name() string {

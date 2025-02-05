@@ -390,6 +390,51 @@ func (e *ErrWorkerNotFound) From(err error) bool {
 	return false
 }
 
+const workerPoolStateNotFoundPrefix = "worker pool state not found: "
+
+type ErrWorkerPoolStateNotFound struct {
+	PoolName string
+}
+
+func (e *ErrWorkerPoolStateNotFound) Error() string {
+	return fmt.Sprintf("%s%s", workerPoolStateNotFoundPrefix, e.PoolName)
+}
+
+func (e *ErrWorkerPoolStateNotFound) From(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if strings.HasPrefix(err.Error(), workerPoolStateNotFoundPrefix) {
+		e.PoolName = strings.TrimPrefix(err.Error(), workerPoolStateNotFoundPrefix)
+		return true
+	}
+
+	return false
+}
+
+type WorkerPoolState struct {
+	Status             WorkerPoolStatus
+	SchedulingLatency  time.Duration
+	FreeGpu            uint
+	FreeCpu            int64
+	FreeMemory         int64
+	PendingWorkers     int
+	AvailableWorkers   int
+	PendingContainers  int
+	RunningContainers  int
+	RegisteredMachines int
+	PendingMachines    int
+}
+
+type WorkerPoolStatus string
+
+const (
+	WorkerPoolStatusHealthy   WorkerPoolStatus = "healthy"
+	WorkerPoolStatusDegraded  WorkerPoolStatus = "degraded"
+	WorkerPoolStatusUnhealthy WorkerPoolStatus = "unhealthy"
+)
+
 type WorkerPoolSizingConfig struct {
 	MinFreeCpu            int64
 	MinFreeMemory         int64

@@ -12,7 +12,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -36,19 +35,6 @@ const (
 	poolHealthCheckInterval             = 1 * time.Second
 )
 
-type WorkerPoolState struct {
-	SchedulingLatency  time.Duration
-	FreeGpu            uint
-	FreeCpu            int64
-	FreeMemory         int64
-	PendingWorkers     int
-	AvailableWorkers   int
-	PendingContainers  int
-	RunningContainers  int
-	RegisteredMachines int
-	PendingMachines    int
-}
-
 type WorkerPoolController interface {
 	AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error)
 	AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error)
@@ -56,7 +42,7 @@ type WorkerPoolController interface {
 	FreeCapacity() (*WorkerPoolCapacity, error)
 	Context() context.Context
 	IsPreemptable() bool
-	State() WorkerPoolState
+	State() (*types.WorkerPoolState, error)
 	RequiresPoolSelector() bool
 }
 
@@ -91,8 +77,9 @@ func GenerateWorkerId() string {
 func MonitorPoolSize(wpc WorkerPoolController,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
+	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, providerRepo)
+	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
 	if err != nil {
 		return err
 	}
@@ -109,8 +96,6 @@ func MonitorPoolHealth(wpc WorkerPoolController,
 	workerPoolRepo repository.WorkerPoolRepository,
 	containerRepo repository.ContainerRepository) error {
 
-	log.Info().Str("pool_name", wpc.Name()).Msg("monitoring pool health")
-
 	poolHealthMonitor := NewPoolHealthMonitor(PoolHealthMonitorOptions{
 		Controller:       wpc,
 		WorkerPoolConfig: workerPoolConfig,
@@ -120,6 +105,7 @@ func MonitorPoolHealth(wpc WorkerPoolController,
 		WorkerPoolRepo:   workerPoolRepo,
 		ContainerRepo:    containerRepo,
 	})
+
 	go poolHealthMonitor.Start()
 
 	return nil

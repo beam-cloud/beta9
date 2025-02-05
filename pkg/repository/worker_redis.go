@@ -284,6 +284,22 @@ func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.W
 	return poolWorkers, nil
 }
 
+func (r *WorkerRedisRepository) CordonAllWorkersInPool(poolName string) error {
+	workers, err := r.GetAllWorkersInPool(poolName)
+	if err != nil {
+		return err
+	}
+
+	for _, w := range workers {
+		err := r.UpdateWorkerStatus(w.Id, types.WorkerStatusDisabled)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error) {
 	workers, err := r.getWorkers(false)
 	if err != nil {
@@ -362,19 +378,6 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 	}
 
 	return nil
-}
-
-func (r *WorkerRedisRepository) SetWorkerPoolSizerLock(poolName string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolSizerLock(poolName), common.RedisLockOptions{TtlS: 3, Retries: 0})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (r *WorkerRedisRepository) RemoveWorkerPoolSizerLock(poolName string) error {
-	return r.lock.Release(common.RedisKeys.WorkerPoolSizerLock(poolName))
 }
 
 func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {

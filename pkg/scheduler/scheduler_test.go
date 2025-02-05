@@ -87,8 +87,8 @@ func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
 	return wpc.preemptable
 }
 
-func (wpc *LocalWorkerPoolControllerForTest) State() WorkerPoolState {
-	return WorkerPoolState{}
+func (wpc *LocalWorkerPoolControllerForTest) State() (*types.WorkerPoolState, error) {
+	return &types.WorkerPoolState{}, nil
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
@@ -148,8 +148,8 @@ func (wpc *ExternalWorkerPoolControllerForTest) IsPreemptable() bool {
 	return false
 }
 
-func (wpc *ExternalWorkerPoolControllerForTest) State() WorkerPoolState {
-	return WorkerPoolState{}
+func (wpc *ExternalWorkerPoolControllerForTest) State() (*types.WorkerPoolState, error) {
+	return &types.WorkerPoolState{}, nil
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) RequiresPoolSelector() bool {

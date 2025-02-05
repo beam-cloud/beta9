@@ -57,13 +57,21 @@ func (p *PoolHealthMonitor) Start() {
 				continue
 			}
 
-			log.Info().Msgf("pool state for pool %s: %+v", p.wpc.Name(), poolState)
+			err = p.updatePoolStatus(poolState)
+			if err != nil {
+				continue
+			}
+
+			err = p.workerPoolRepo.SetWorkerPoolState(p.ctx, p.wpc.Name(), poolState)
+			if err != nil {
+				continue
+			}
 		}
 	}
 }
 
 // getPoolState measures various metrics about pool health and returns them
-func (p *PoolHealthMonitor) getPoolState() (WorkerPoolState, error) {
+func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 	schedulingLatencies := []time.Duration{}
 	availableWorkers := 0
 	pendingWorkers := 0
@@ -74,12 +82,12 @@ func (p *PoolHealthMonitor) getPoolState() (WorkerPoolState, error) {
 
 	workers, err := p.workerRepo.GetAllWorkersInPool(p.wpc.Name())
 	if err != nil {
-		return WorkerPoolState{}, err
+		return nil, err
 	}
 
 	machines, err := p.providerRepo.ListAllMachines(p.wpc.Name(), p.wpc.Name(), false)
 	if err != nil {
-		return WorkerPoolState{}, err
+		return nil, err
 	}
 
 	for _, machine := range machines {
@@ -99,6 +107,7 @@ func (p *PoolHealthMonitor) getPoolState() (WorkerPoolState, error) {
 			availableWorkers++
 		}
 
+		// Retrieve active containers for a worker (basically all containers associated w/ a worker that are not "STOPPING")
 		containers, err := p.containerRepo.GetActiveContainersByWorkerId(worker.Id)
 		if err != nil {
 			continue
@@ -137,10 +146,10 @@ func (p *PoolHealthMonitor) getPoolState() (WorkerPoolState, error) {
 
 	freeCapacity, err := p.wpc.FreeCapacity()
 	if err != nil {
-		return WorkerPoolState{}, err
+		return nil, err
 	}
 
-	poolState := WorkerPoolState{
+	return &types.WorkerPoolState{
 		SchedulingLatency:  averageSchedulingLatency,
 		AvailableWorkers:   availableWorkers,
 		PendingWorkers:     pendingWorkers,
@@ -151,7 +160,32 @@ func (p *PoolHealthMonitor) getPoolState() (WorkerPoolState, error) {
 		FreeMemory:         freeCapacity.FreeMemory,
 		RegisteredMachines: registeredMachines,
 		PendingMachines:    pendingMachines,
+	}, nil
+}
+
+// updatePoolStatus updates the status of the pool based on the current state
+func (p *PoolHealthMonitor) updatePoolStatus(poolState *types.WorkerPoolState) error {
+	status := types.WorkerPoolStatusHealthy
+
+	// Conditions for degraded status
+	if poolState.PendingContainers > 10 {
+		status = types.WorkerPoolStatusDegraded
 	}
 
-	return poolState, nil
+	currentState, err := p.wpc.State()
+	if err != nil {
+		return err
+	}
+
+	if currentState.Status != status && status == types.WorkerPoolStatusDegraded {
+		log.Info().Str("pool_name", p.wpc.Name()).Msg("pool is degraded, cordoning all workers")
+
+		err = p.workerRepo.CordonAllWorkersInPool(p.wpc.Name())
+		if err != nil {
+			log.Error().Err(err).Msg("failed to cordon all workers in pool")
+			return err
+		}
+	}
+
+	return nil
 }

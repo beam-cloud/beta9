@@ -62,7 +62,7 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, wpc.workerRepo, opts.ProviderRepo)
+	err = MonitorPoolSize(wpc, &workerPool, wpc.workerRepo, wpc.workerPoolRepo, opts.ProviderRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
 	}
@@ -98,8 +98,8 @@ func (wpc *LocalKubernetesWorkerPoolController) FreeCapacity() (*WorkerPoolCapac
 	return freePoolCapacity(wpc.workerRepo, wpc)
 }
 
-func (wpc *LocalKubernetesWorkerPoolController) State() WorkerPoolState {
-	return WorkerPoolState{}
+func (wpc *LocalKubernetesWorkerPoolController) State() (*types.WorkerPoolState, error) {
+	return wpc.workerPoolRepo.GetWorkerPoolState(wpc.ctx, wpc.name)
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
