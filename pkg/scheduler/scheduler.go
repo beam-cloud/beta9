@@ -44,7 +44,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	// Load worker pools
-	workerPoolManager := NewWorkerPoolManager()
+	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
 	for name, pool := range config.Worker.Pools {
 		var controller WorkerPoolController = nil
 		var err error = nil

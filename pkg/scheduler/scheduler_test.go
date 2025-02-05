@@ -48,7 +48,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		metricsRepo: nil,
 	}
 
-	workerPoolManager := NewWorkerPoolManager()
+	workerPoolManager := NewWorkerPoolManager(false)
 	for name, pool := range config.Worker.Pools {
 		workerPoolManager.SetPool(name, pool, &LocalWorkerPoolControllerForTest{
 			ctx:        context.Background(),
