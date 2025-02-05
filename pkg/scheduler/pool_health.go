@@ -107,7 +107,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 			availableWorkers++
 		}
 
-		// Retrieve active containers for a worker (basically all containers associated w/ a worker that are not "STOPPING")
+		// Retrieve active containers for a worker (all containers associated w/ a worker that are not "STOPPING")
 		containers, err := p.containerRepo.GetActiveContainersByWorkerId(worker.Id)
 		if err != nil {
 			continue
