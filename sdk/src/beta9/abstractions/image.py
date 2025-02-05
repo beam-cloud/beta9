@@ -19,7 +19,7 @@ from ..clients.image import (
 from ..env import is_notebook_env
 from ..type import GpuType, GpuTypeAlias, PythonVersion, PythonVersionAlias
 
-LOCAL_PYTHON_VERSION = PythonVersion(f"python{sys.version_info.major}.{sys.version_info.minor}")
+LOCAL_PYTHON_VERSION = f"python{sys.version_info.major}.{sys.version_info.minor}"
 
 
 class ImageBuildResult(NamedTuple):
@@ -86,16 +86,10 @@ ImageCredentials = Union[
 
 
 def detected_python_version() -> PythonVersion:
-    if LOCAL_PYTHON_VERSION in [
-        PythonVersion.Python38,
-        PythonVersion.Python39,
-        PythonVersion.Python310,
-        PythonVersion.Python311,
-        PythonVersion.Python312,
-    ]:
-        return LOCAL_PYTHON_VERSION
-
-    return PythonVersion.Python3
+    try:
+        return PythonVersion(LOCAL_PYTHON_VERSION)
+    except ValueError:
+        return PythonVersion.Python3
 
 
 class Image(BaseAbstraction):
