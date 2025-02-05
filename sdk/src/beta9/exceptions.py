@@ -75,3 +75,17 @@ class GetFileSizeError(RuntimeError):
         self.message = message
         self.status_code = status_code
         super().__init__(f"Unable to get file size: {status_code=} {message=}")
+
+
+class ListPathError(RuntimeError):
+    def __init__(self, path: str, message: str):
+        self.message = message.capitalize() if message else ""
+        self.path = path
+        super().__init__(f"Unable to list path: {path=} {message=}")
+
+
+class StatPathError(RuntimeError):
+    def __init__(self, path: str, message: str):
+        self.message = message.capitalize() if message else ""
+        self.path = path
+        super().__init__(f"Unable to stat path: {path=} {message=}")
