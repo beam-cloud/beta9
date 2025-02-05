@@ -54,7 +54,9 @@ from .exceptions import (
     CreatePresignedUrlError,
     DownloadChunkError,
     GetFileSizeError,
+    ListPathError,
     RetryableError,
+    StatPathError,
     UploadPartError,
 )
 from .terminal import CustomProgress
@@ -617,7 +619,7 @@ class Beta9Handler(RemoteHandler):
 
         res = self.service.list_path(ListPathRequest(path=path))
         if not res.ok:
-            raise RuntimeError(f"{remote_path} ({res.err_msg})")
+            raise ListPathError(remote_path.path, res.err_msg)
 
         return [
             RemotePath(remote_path.scheme, remote_path.volume_name, p.path, is_dir=p.is_dir)
@@ -630,7 +632,7 @@ class Beta9Handler(RemoteHandler):
 
         res = self.service.stat_path(StatPathRequest(path=remote_path.path))
         if not res.ok:
-            raise RuntimeError(f"{remote_path} ({res.err_msg})")
+            raise StatPathError(remote_path.path, res.err_msg)
 
         return res.path_info.is_dir if not res.err_msg else False
 
