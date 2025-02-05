@@ -361,12 +361,13 @@ func TestOccupyAvailableMachinesConcurrency(t *testing.T) {
 
 	poolName := "pool1"
 	controller := &ExternalWorkerPoolControllerForTest{
-		ctx:          ctx,
-		name:         poolName,
-		workerRepo:   workerRepo,
-		providerRepo: providerRepo,
-		poolName:     poolName,
-		providerName: string(types.ProviderGeneric),
+		ctx:            ctx,
+		name:           poolName,
+		workerRepo:     workerRepo,
+		providerRepo:   providerRepo,
+		workerPoolRepo: workerPoolRepo,
+		poolName:       poolName,
+		providerName:   string(types.ProviderGeneric),
 	}
 
 	sizer1 := &WorkerPoolSizer{
@@ -388,9 +389,10 @@ func TestOccupyAvailableMachinesConcurrency(t *testing.T) {
 	}
 
 	sizer2 := &WorkerPoolSizer{
-		providerRepo: providerRepo,
-		workerRepo:   workerRepo,
-		controller:   controller,
+		providerRepo:   providerRepo,
+		workerRepo:     workerRepo,
+		workerPoolRepo: workerPoolRepo,
+		controller:     controller,
 		workerPoolConfig: &types.WorkerPoolConfig{
 			Provider: &types.ProviderGeneric,
 			GPUType:  "A10G",
