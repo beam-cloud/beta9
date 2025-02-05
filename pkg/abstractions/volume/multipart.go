@@ -3,6 +3,7 @@ package volume
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"path/filepath"
 	"time"
@@ -147,7 +148,7 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 	if err != nil {
 		return &pb.CreateMultipartUploadResponse{
 			Ok:     false,
-			ErrMsg: err.Error(),
+			ErrMsg: fmt.Sprintf("Volume '%s' not found\n", in.VolumeName),
 		}, nil
 	}
 
@@ -219,7 +220,7 @@ func (s *GlobalVolumeService) CompleteMultipartUpload(ctx context.Context, in *p
 	if err != nil {
 		return &pb.CompleteMultipartUploadResponse{
 			Ok:     false,
-			ErrMsg: err.Error(),
+			ErrMsg: fmt.Sprintf("Volume '%s' not found\n", in.VolumeName),
 		}, nil
 	}
 
@@ -261,7 +262,7 @@ func (s *GlobalVolumeService) AbortMultipartUpload(ctx context.Context, in *pb.A
 	if err != nil {
 		return &pb.AbortMultipartUploadResponse{
 			Ok:     false,
-			ErrMsg: err.Error(),
+			ErrMsg: fmt.Sprintf("Volume '%s' not found\n", in.VolumeName),
 		}, nil
 	}
 
