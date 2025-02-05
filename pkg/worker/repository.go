@@ -43,17 +43,6 @@ func NewContainerRepositoryClient(ctx context.Context, config types.AppConfig, t
 	return pb.NewContainerRepositoryServiceClient(conn), nil
 }
 
-// NewWorkerPoolRepositoryClient creates a new worker pool repository client
-func NewWorkerPoolRepositoryClient(ctx context.Context, config types.AppConfig, token string) (pb.WorkerPoolRepositoryServiceClient, error) {
-	host := fmt.Sprintf("%s:%d", config.GatewayService.GRPC.ExternalHost, config.GatewayService.GRPC.ExternalPort)
-	conn, err := newGRPCConn(host, token)
-	if err != nil {
-		return nil, err
-	}
-
-	return pb.NewWorkerPoolRepositoryServiceClient(conn), nil
-}
-
 // newGRPCConn creates a new gRPC connection (with or without TLS/Auth) to the provided host
 func newGRPCConn(host string, token string) (*grpc.ClientConn, error) {
 	creds := insecure.NewCredentials()
