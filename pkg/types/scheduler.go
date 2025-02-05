@@ -415,7 +415,7 @@ func (e *ErrWorkerPoolStateNotFound) From(err error) bool {
 
 type WorkerPoolState struct {
 	Status             WorkerPoolStatus
-	SchedulingLatency  time.Duration
+	SchedulingLatency  int64
 	FreeGpu            uint
 	FreeCpu            int64
 	FreeMemory         int64

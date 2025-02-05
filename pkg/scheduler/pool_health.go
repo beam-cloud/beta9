@@ -150,7 +150,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 	}
 
 	return &types.WorkerPoolState{
-		SchedulingLatency:  averageSchedulingLatency,
+		SchedulingLatency:  int64(averageSchedulingLatency.Milliseconds()),
 		AvailableWorkers:   availableWorkers,
 		PendingWorkers:     pendingWorkers,
 		PendingContainers:  pendingContainers,

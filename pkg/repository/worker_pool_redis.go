@@ -55,6 +55,7 @@ func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, pool
 	}
 	defer r.lock.Release(common.RedisKeys.WorkerPoolStateLock(poolName))
 
+	// Update worker pool state
 	err = r.rdb.HSet(
 		context.TODO(), stateKey,
 		"status", string(state.Status),
@@ -77,12 +78,7 @@ func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, pool
 }
 
 func (r *WorkerPoolRedisRepository) SetWorkerPoolSizerLock(poolName string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolSizerLock(poolName), common.RedisLockOptions{TtlS: 3, Retries: 0})
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolSizerLock(poolName), common.RedisLockOptions{TtlS: 3, Retries: 0})
 }
 
 func (r *WorkerPoolRedisRepository) RemoveWorkerPoolSizerLock(poolName string) error {

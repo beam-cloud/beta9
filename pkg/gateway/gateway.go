@@ -240,9 +240,6 @@ func (g *Gateway) registerRepositoryServices() error {
 
 	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
 	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
-
-	pr := repositoryservices.NewWorkerPoolRepositoryService(g.ctx, g.WorkerPoolRepo)
-	pb.RegisterWorkerPoolRepositoryServiceServer(g.grpcServer, pr)
 	return nil
 }
 
