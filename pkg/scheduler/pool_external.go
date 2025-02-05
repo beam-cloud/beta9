@@ -40,35 +40,31 @@ type ExternalWorkerPoolController struct {
 	workerPoolRepo repository.WorkerPoolRepository
 	providerName   *types.MachineProvider
 	providerRepo   repository.ProviderRepository
+	containerRepo  repository.ContainerRepository
 	workspace      *types.Workspace
 }
 
 func NewExternalWorkerPoolController(
-	ctx context.Context,
-	config types.AppConfig,
-	workerPoolName string,
-	backendRepo repository.BackendRepository,
-	workerRepo repository.WorkerRepository,
-	providerRepo repository.ProviderRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
-	tailscale *network.Tailscale,
-	providerName *types.MachineProvider) (WorkerPoolController, error) {
+	opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
 	var provider providers.Provider = nil
 	var err error = nil
 
+	workerPoolName := opts.Name
+	providerName := opts.ProviderName
+
 	switch *providerName {
 	case types.ProviderEC2:
-		provider, err = providers.NewEC2Provider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewEC2Provider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderOCI:
-		provider, err = providers.NewOCIProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewOCIProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderLambdaLabs:
-		provider, err = providers.NewLambdaLabsProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewLambdaLabsProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderCrusoe:
-		provider, err = providers.NewCrusoeProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewCrusoeProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderHydra:
-		provider, err = providers.NewHydraProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewHydraProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderGeneric:
-		provider, err = providers.NewGenericProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewGenericProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	default:
 		return nil, errors.New("invalid provider name")
 	}
@@ -76,35 +72,36 @@ func NewExternalWorkerPoolController(
 		return nil, err
 	}
 
-	workerPool := config.Worker.Pools[workerPoolName]
+	workerPool := opts.Config.Worker.Pools[workerPoolName]
 	wpc := &ExternalWorkerPoolController{
-		ctx:            ctx,
+		ctx:            opts.Context,
 		name:           workerPoolName,
-		config:         config,
+		config:         opts.Config,
 		workerPool:     workerPool,
-		backendRepo:    backendRepo,
-		workerRepo:     workerRepo,
-		workerPoolRepo: workerPoolRepo,
+		containerRepo:  opts.ContainerRepo,
+		backendRepo:    opts.BackendRepo,
+		workerRepo:     opts.WorkerRepo,
+		workerPoolRepo: opts.WorkerPoolRepo,
 		providerName:   providerName,
-		providerRepo:   providerRepo,
-		tailscale:      tailscale,
+		providerRepo:   opts.ProviderRepo,
+		tailscale:      opts.Tailscale,
 		provider:       provider,
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
+	err = MonitorPoolSize(wpc, &workerPool, wpc.workerRepo, opts.ProviderRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
 	}
 
 	// Start monitoring worker pool health
-	err = MonitorPoolHealth(wpc, &workerPool, &wpc.config.Worker, workerRepo, providerRepo, workerPoolRepo)
+	err = MonitorPoolHealth(wpc, &workerPool, &wpc.config.Worker, wpc.workerRepo, opts.ProviderRepo, wpc.workerPoolRepo, wpc.containerRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool health")
 	}
 
 	// Reconcile nodes with state
-	go provider.Reconcile(ctx, wpc.name)
+	go provider.Reconcile(wpc.ctx, wpc.name)
 
 	return wpc, nil
 }

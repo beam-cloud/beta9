@@ -532,12 +532,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
 		}
-
-		// TODO: add schedule time scheduling latency
-		requestTime := request.Timestamp.Unix()
-		now := time.Now().Unix()
-		schedulingLatency := now - requestTime
-		log.Info().Str("container_id", containerId).Msgf("scheduling latency: %d seconds", schedulingLatency)
 	}()
 
 	// Setup container overlay filesystem

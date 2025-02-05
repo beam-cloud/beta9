@@ -145,6 +145,11 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 		return fmt.Errorf("failed to deserialize container state: %v", err)
 	}
 
+	// Update started at if this is the first time we set container state to RUNNING
+	if status == types.ContainerStatusRunning && state.Status != types.ContainerStatusRunning {
+		state.StartedAt = time.Now().Unix()
+	}
+
 	// Update status
 	state.Status = status
 

@@ -16,6 +16,7 @@ type PoolHealthMonitorOptions struct {
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	ProviderRepo     repository.ProviderRepository
+	ContainerRepo    repository.ContainerRepository
 }
 
 type PoolHealthMonitor struct {
@@ -25,6 +26,7 @@ type PoolHealthMonitor struct {
 	workerConfig     *types.WorkerConfig
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
+	containerRepo    repository.ContainerRepository
 	providerRepo     repository.ProviderRepository
 }
 
@@ -35,6 +37,7 @@ func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 		workerPoolConfig: opts.WorkerPoolConfig,
 		workerConfig:     opts.WorkerConfig,
 		workerRepo:       opts.WorkerRepo,
+		containerRepo:    opts.ContainerRepo,
 		providerRepo:     opts.ProviderRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
 	}
@@ -49,17 +52,106 @@ func (p *PoolHealthMonitor) Start() {
 		case <-p.ctx.Done():
 			return
 		case <-ticker.C:
-			p.checkPoolHealth()
+			poolState, err := p.getPoolState()
+			if err != nil {
+				continue
+			}
+
+			log.Info().Msgf("pool state for pool %s: %+v", p.wpc.Name(), poolState)
 		}
 	}
 }
 
-func (p *PoolHealthMonitor) checkPoolHealth() {
-	pool, err := p.workerPoolRepo.GetWorkerPool(p.ctx, p.wpc.Name())
+// getPoolState measures various metrics about pool health and returns them
+func (p *PoolHealthMonitor) getPoolState() (WorkerPoolState, error) {
+	schedulingLatencies := []time.Duration{}
+	availableWorkers := 0
+	pendingWorkers := 0
+	pendingContainers := 0
+	runningContainers := 0
+	registeredMachines := 0
+	pendingMachines := 0
+
+	workers, err := p.workerRepo.GetAllWorkersInPool(p.wpc.Name())
 	if err != nil {
-		log.Error().Msg("error getting worker pool " + p.wpc.Name() + ": " + err.Error())
-		return
+		return WorkerPoolState{}, err
 	}
 
-	log.Printf("pool: %+v", pool)
+	machines, err := p.providerRepo.ListAllMachines(p.wpc.Name(), p.wpc.Name(), false)
+	if err != nil {
+		return WorkerPoolState{}, err
+	}
+
+	for _, machine := range machines {
+		switch machine.State.Status {
+		case types.MachineStatusPending:
+			pendingMachines++
+		case types.MachineStatusRegistered:
+			registeredMachines++
+		}
+	}
+
+	for _, worker := range workers {
+		switch worker.Status {
+		case types.WorkerStatusPending:
+			pendingWorkers++
+		case types.WorkerStatusAvailable:
+			availableWorkers++
+		}
+
+		containers, err := p.containerRepo.GetActiveContainersByWorkerId(worker.Id)
+		if err != nil {
+			continue
+		}
+
+		for _, container := range containers {
+			switch container.Status {
+			case types.ContainerStatusPending:
+				pendingContainers++
+			case types.ContainerStatusRunning:
+				runningContainers++
+			}
+
+			if container.StartedAt == 0 || container.Status == types.ContainerStatusPending {
+				latency := time.Since(time.Unix(container.ScheduledAt, 0))
+				schedulingLatencies = append(schedulingLatencies, latency)
+				continue
+			}
+
+			latency := time.Unix(container.StartedAt, 0).Sub(time.Unix(container.ScheduledAt, 0))
+			schedulingLatencies = append(schedulingLatencies, latency)
+		}
+	}
+
+	// Calculate the average scheduling latency
+	// -- which is the time between when a container is scheduled and when it actually starts running
+	averageSchedulingLatency := time.Duration(0)
+	if count := len(schedulingLatencies); count > 0 {
+		var total time.Duration
+		for _, latency := range schedulingLatencies {
+			total += latency
+		}
+
+		averageSchedulingLatency = total / time.Duration(count)
+	}
+
+	freeCapacity, err := p.wpc.FreeCapacity()
+	if err != nil {
+		return WorkerPoolState{}, err
+	}
+
+	poolState := WorkerPoolState{
+		SchedulingLatency:  averageSchedulingLatency,
+		AvailableWorkers:   availableWorkers,
+		PendingWorkers:     pendingWorkers,
+		PendingContainers:  pendingContainers,
+		RunningContainers:  runningContainers,
+		FreeGpu:            freeCapacity.FreeGpu,
+		FreeCpu:            freeCapacity.FreeCpu,
+		FreeMemory:         freeCapacity.FreeMemory,
+		RegisteredMachines: registeredMachines,
+		PendingMachines:    pendingMachines,
+	}
+
+	return poolState, nil
 }

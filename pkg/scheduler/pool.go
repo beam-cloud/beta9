@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -36,6 +37,16 @@ const (
 )
 
 type WorkerPoolState struct {
+	SchedulingLatency  time.Duration
+	FreeGpu            uint
+	FreeCpu            int64
+	FreeMemory         int64
+	PendingWorkers     int
+	AvailableWorkers   int
+	PendingContainers  int
+	RunningContainers  int
+	RegisteredMachines int
+	PendingMachines    int
 }
 
 type WorkerPoolController interface {
@@ -60,6 +71,19 @@ type WorkerPoolCapacity struct {
 	FreeGpu    uint
 }
 
+type WorkerPoolControllerOptions struct {
+	Name           string
+	Context        context.Context
+	Config         types.AppConfig
+	BackendRepo    repository.BackendRepository
+	WorkerRepo     repository.WorkerRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
+	ContainerRepo  repository.ContainerRepository
+	ProviderName   *types.MachineProvider
+	ProviderRepo   repository.ProviderRepository
+	Tailscale      *network.Tailscale
+}
+
 func GenerateWorkerId() string {
 	return uuid.New().String()[:8]
 }
@@ -82,7 +106,8 @@ func MonitorPoolHealth(wpc WorkerPoolController,
 	workerConfig *types.WorkerConfig,
 	workerRepo repository.WorkerRepository,
 	providerRepo repository.ProviderRepository,
-	workerPoolRepo repository.WorkerPoolRepository) error {
+	workerPoolRepo repository.WorkerPoolRepository,
+	containerRepo repository.ContainerRepository) error {
 
 	log.Info().Str("pool_name", wpc.Name()).Msg("monitoring pool health")
 
@@ -93,6 +118,7 @@ func MonitorPoolHealth(wpc WorkerPoolController,
 		WorkerRepo:       workerRepo,
 		ProviderRepo:     providerRepo,
 		WorkerPoolRepo:   workerPoolRepo,
+		ContainerRepo:    containerRepo,
 	})
 	go poolHealthMonitor.Start()
 

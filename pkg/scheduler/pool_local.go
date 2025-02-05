@@ -32,10 +32,11 @@ type LocalKubernetesWorkerPoolController struct {
 	workerRepo     repository.WorkerRepository
 	workerPoolRepo repository.WorkerPoolRepository
 	backendRepo    repository.BackendRepository
+	containerRepo  repository.ContainerRepository
 	workspace      *types.Workspace
 }
 
-func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.AppConfig, workerPoolName string, workerRepo repository.WorkerRepository, providerRepo repository.ProviderRepository, backendRepo repository.BackendRepository, workerPoolRepo repository.WorkerPoolRepository) (WorkerPoolController, error) {
+func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, err
@@ -46,26 +47,28 @@ func NewLocalKubernetesWorkerPoolController(ctx context.Context, config types.Ap
 		return nil, err
 	}
 
-	workerPool := config.Worker.Pools[workerPoolName]
+	workerPoolName := opts.Name
+	workerPool := opts.Config.Worker.Pools[workerPoolName]
 	wpc := &LocalKubernetesWorkerPoolController{
-		ctx:            ctx,
-		name:           workerPoolName,
-		config:         config,
+		ctx:            opts.Context,
+		name:           opts.Name,
+		config:         opts.Config,
 		kubeClient:     kubeClient,
 		workerPool:     workerPool,
-		workerRepo:     workerRepo,
-		backendRepo:    backendRepo,
-		workerPoolRepo: workerPoolRepo,
+		workerRepo:     opts.WorkerRepo,
+		backendRepo:    opts.BackendRepo,
+		workerPoolRepo: opts.WorkerPoolRepo,
+		containerRepo:  opts.ContainerRepo,
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
+	err = MonitorPoolSize(wpc, &workerPool, wpc.workerRepo, opts.ProviderRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
 	}
 
 	// Start monitoring worker pool health
-	err = MonitorPoolHealth(wpc, &workerPool, &wpc.config.Worker, workerRepo, providerRepo, workerPoolRepo)
+	err = MonitorPoolHealth(wpc, &workerPool, &wpc.config.Worker, wpc.workerRepo, opts.ProviderRepo, wpc.workerPoolRepo, wpc.containerRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool health")
 	}

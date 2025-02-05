@@ -32,6 +32,7 @@ func (s *ContainerRepositoryService) GetContainerState(ctx context.Context, req 
 			ContainerId: state.ContainerId,
 			StubId:      state.StubId,
 			ScheduledAt: state.ScheduledAt,
+			StartedAt:   state.StartedAt,
 			WorkspaceId: state.WorkspaceId,
 			Gpu:         state.Gpu,
 			GpuCount:    state.GpuCount,

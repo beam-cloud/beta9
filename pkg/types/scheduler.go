@@ -133,6 +133,7 @@ type ContainerState struct {
 	StubId      string          `redis:"stub_id" json:"stub_id"`
 	Status      ContainerStatus `redis:"status" json:"status"`
 	ScheduledAt int64           `redis:"scheduled_at" json:"scheduled_at"`
+	StartedAt   int64           `redis:"started_at" json:"started_at"`
 	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
 	Gpu         string          `redis:"gpu" json:"gpu"`
 	GpuCount    uint32          `redis:"gpu_count" json:"gpu_count"`
@@ -146,6 +147,7 @@ type Container struct {
 	StubId      string          `redis:"stub_id" json:"stub_id"`
 	Status      ContainerStatus `redis:"status" json:"status"`
 	ScheduledAt time.Time       `redis:"scheduled_at" json:"scheduled_at"`
+	StartedAt   time.Time       `redis:"started_at" json:"started_at"`
 	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
 	WorkerId    string          `redis:"worker_id" json:"worker_id"`
 	MachineId   string          `redis:"machine_id" json:"machine_id"`
@@ -157,6 +159,7 @@ func (c *Container) ToProto() *pb.Container {
 		StubId:      c.StubId,
 		Status:      string(c.Status),
 		ScheduledAt: timestamppb.New(c.ScheduledAt),
+		StartedAt:   timestamppb.New(c.StartedAt),
 		WorkspaceId: c.WorkspaceId,
 		WorkerId:    c.WorkerId,
 		MachineId:   c.MachineId,
@@ -169,6 +172,7 @@ func NewContainerFromProto(in *pb.Container) *Container {
 		StubId:      in.StubId,
 		Status:      ContainerStatus(in.Status),
 		ScheduledAt: in.ScheduledAt.AsTime(),
+		StartedAt:   in.StartedAt.AsTime(),
 		WorkspaceId: in.WorkspaceId,
 		WorkerId:    in.WorkerId,
 		MachineId:   in.MachineId,
