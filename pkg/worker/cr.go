@@ -217,8 +217,10 @@ func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId strin
 		return exitCode
 	}
 
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, request, outputLogger)              // Watch for OOM events
+	isOOMKilled := false
+
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -234,7 +236,11 @@ func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId strin
 			}
 
 			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
-				return cleanup(0, nil)
+				exitCode := 0
+				if isOOMKilled {
+					exitCode = types.WorkerContainerExitCodeOomKill
+				}
+				return cleanup(exitCode, nil)
 			}
 		}
 	}

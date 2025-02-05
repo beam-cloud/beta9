@@ -24,7 +24,6 @@ from ..clients.endpoint import (
     EndpointServeKeepAliveRequest,
     EndpointServiceStub,
     StartEndpointServeRequest,
-    StartEndpointServeResponse,
     StopEndpointServeRequest,
 )
 from ..env import is_local
@@ -588,20 +587,25 @@ class _CallableWrapper(DeployableMixin):
             daemon=True,
         ).start()
 
-        r: Optional[StartEndpointServeResponse] = None
-        for r in self.parent.endpoint_stub.start_endpoint_serve(
+        stream = self.parent.endpoint_stub.start_endpoint_serve(
             StartEndpointServeRequest(
                 stub_id=self.parent.stub_id,
                 timeout=timeout,
             )
-        ):
+        )
+
+        r = None
+        for r in stream:
             if r.output != "":
                 terminal.detail(r.output, end="")
 
             if r.done or r.exit_code != 0:
                 break
 
-        if r is None or not r.done or r.exit_code != 0:
-            terminal.error("Serve container failed ❌")
+        if r is None:
+            return terminal.error("Serve failed ❌")
 
-        terminal.warn("Endpoint serve timed out. Container has been stopped.")
+        if not r.done or r.exit_code != 0:
+            return terminal.error(f"{r.output} ❌")
+
+        terminal.success(r.output)

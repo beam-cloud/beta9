@@ -29,8 +29,6 @@ const (
 	initialSpecBaseName       string        = "initial_config.json"
 	runcEventsInterval        time.Duration = 5 * time.Second
 	containerInnerPort        int           = 8001 // Use a fixed port inside the container
-	exitCodeSigterm           int           = 143  // Means the container received a SIGTERM by the underlying operating system
-	exitCodeSigkill           int           = 137  // Means the container received a SIGKILL by the underlying operating system
 )
 
 //go:embed base_runc_config.json
@@ -93,7 +91,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 	if *exitCode < 0 {
 		*exitCode = 1
-	} else if *exitCode == exitCodeSigterm {
+	} else if *exitCode == types.WorkerContainerExitCodeSigterm {
 		*exitCode = 0
 	}
 
@@ -652,10 +650,11 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 		return cleanup(-1, err)
 	}
 	pid := state.Pid
+	isOOMKilled := false
 
 	// Start monitoring the container
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, request, outputLogger)              // Watch for OOM events
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
@@ -668,7 +667,12 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 		return cleanup(-1, err)
 	}
 
-	return cleanup(processState.ExitCode(), nil)
+	exitCode := processState.ExitCode()
+	if isOOMKilled {
+		exitCode = types.WorkerContainerExitCodeOomKill
+	}
+
+	return cleanup(exitCode, nil)
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
@@ -687,7 +691,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
 }
 
-func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) {
+func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *bool) {
 	var (
 		seenEvents  = make(map[string]struct{})
 		ch          <-chan *runc.Event
@@ -743,6 +747,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 			seenEvents[event.Type] = struct{}{}
 
 			if event.Type == "oom" {
+				*isOOMKilled = true
 				outputLogger.Error("Container was killed due to out-of-memory conditions.")
 				s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			}
