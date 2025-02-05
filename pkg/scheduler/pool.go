@@ -44,6 +44,7 @@ type WorkerPoolController interface {
 	IsPreemptable() bool
 	State() (*types.WorkerPoolState, error)
 	RequiresPoolSelector() bool
+	Mode() types.PoolMode
 }
 
 type WorkerPoolConfig struct {

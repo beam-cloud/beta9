@@ -102,6 +102,10 @@ func (wpc *LocalKubernetesWorkerPoolController) State() (*types.WorkerPoolState,
 	return wpc.workerPoolRepo.GetWorkerPoolState(wpc.ctx, wpc.name)
 }
 
+func (wpc *LocalKubernetesWorkerPoolController) Mode() types.PoolMode {
+	return wpc.workerPool.Mode
+}
+
 func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 	return wpc.addWorkerWithId(workerId, cpu, memory, wpc.workerPool.GPUType, gpuCount)

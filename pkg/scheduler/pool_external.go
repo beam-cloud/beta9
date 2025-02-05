@@ -118,6 +118,10 @@ func (wpc *ExternalWorkerPoolController) State() (*types.WorkerPoolState, error)
 	return wpc.workerPoolRepo.GetWorkerPoolState(wpc.ctx, wpc.name)
 }
 
+func (wpc *ExternalWorkerPoolController) Mode() types.PoolMode {
+	return wpc.workerPool.Mode
+}
+
 func (wpc *ExternalWorkerPoolController) Name() string {
 	return wpc.name
 }

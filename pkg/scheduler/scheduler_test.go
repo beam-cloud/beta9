@@ -91,6 +91,10 @@ func (wpc *LocalWorkerPoolControllerForTest) State() (*types.WorkerPoolState, er
 	return &types.WorkerPoolState{}, nil
 }
 
+func (wpc *LocalWorkerPoolControllerForTest) Mode() types.PoolMode {
+	return types.PoolModeLocal
+}
+
 func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
 	return false
 }
@@ -150,6 +154,10 @@ func (wpc *ExternalWorkerPoolControllerForTest) IsPreemptable() bool {
 
 func (wpc *ExternalWorkerPoolControllerForTest) State() (*types.WorkerPoolState, error) {
 	return &types.WorkerPoolState{}, nil
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) Mode() types.PoolMode {
+	return types.PoolModeExternal
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
