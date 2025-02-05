@@ -52,6 +52,20 @@ func (s *WorkerPoolSizer) Start() {
 		}
 
 		func() {
+			// Get the current state of the pool
+			poolState, err := s.controller.State()
+			if err != nil {
+				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to get pool state")
+				return
+			}
+
+			// If the pool is degraded, we don't want to keep adding more workers
+			if poolState.Status == types.WorkerPoolStatusDegraded {
+				log.Info().Str("pool_name", s.controller.Name()).Msg("pool is degraded, skipping sizing")
+				return
+			}
+
+			// Get the current free capacity of the pool
 			freeCapacity, err := s.controller.FreeCapacity()
 			if err != nil {
 				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to get free capacity")
