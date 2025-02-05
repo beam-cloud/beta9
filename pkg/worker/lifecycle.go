@@ -605,6 +605,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
+	time.Sleep(10000 * time.Second)
 	// Invoke runc process (launch the container)
 	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
 		Detach:        true,
