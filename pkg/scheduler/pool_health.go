@@ -180,18 +180,22 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 // updatePoolStatus updates the status of the pool based on the current state
 func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) error {
 	status := types.WorkerPoolStatusHealthy
+	failoverReasons := []string{}
 
 	// Go through each condition that could trigger a degraded status
 	if nextState.PendingWorkers >= p.workerConfig.Failover.MaxPendingWorkers {
 		status = types.WorkerPoolStatusDegraded
+		failoverReasons = append(failoverReasons, "exceeding max pending workers")
 	}
 
 	if nextState.SchedulingLatency > p.workerConfig.Failover.MaxSchedulingLatencyMs {
 		status = types.WorkerPoolStatusDegraded
+		failoverReasons = append(failoverReasons, "exceeding max scheduling latency")
 	}
 
 	if (nextState.RegisteredMachines < p.workerConfig.Failover.MinMachinesAvailable) && p.wpc.Mode() == types.PoolModeExternal {
 		status = types.WorkerPoolStatusDegraded
+		failoverReasons = append(failoverReasons, "not enough registered machines")
 	}
 
 	nextState.Status = status
@@ -212,6 +216,8 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 	if p.workerConfig.Failover.Enabled {
 		// If failover is enabled and status is degraded, we need to cordon all workers in the pool
 		if previousState.Status != status && nextState.Status == types.WorkerPoolStatusDegraded {
+			p.eventRepo.PushPoolDegradedEvent(p.wpc.Name(), failoverReasons)
+
 			log.Warn().Str("pool_name", p.wpc.Name()).Msg("pool is degraded, cordoning all workers")
 
 			err = p.workerRepo.CordonAllWorkersInPool(p.wpc.Name())
@@ -220,7 +226,7 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 				return err
 			}
 		} else if previousState.Status != status && nextState.Status == types.WorkerPoolStatusHealthy {
-
+			p.eventRepo.PushPoolHealthyEvent(p.wpc.Name())
 		}
 	}
 

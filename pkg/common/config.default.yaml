@@ -187,7 +187,7 @@ worker:
     enabled: true
     maxPendingWorkers: 10
     maxSchedulingLatencyMs: 300000 # 5 minutes
-    minMachinesAvailable: 2 # minMachinesAvailable only applies to external pools
+    minMachinesAvailable: 1 # minMachinesAvailable only applies to external pools
   criu:
     storage:
       mountPath: /data/checkpoints
