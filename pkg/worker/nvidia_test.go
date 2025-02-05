@@ -56,9 +56,9 @@ func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
 		"INITIAL=1",
 		"NVIDIA_DRIVER_CAPABILITIES=all",
 		"NVIDIA_REQUIRE_CUDA=cuda>=9.0",
-		"CUDA_HOME=/usr/local/cuda-12.4",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.4/bin",
-		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.4/targets/x86_64-linux/lib",
+		"CUDA_HOME=/usr/local/cuda-12.3",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/bin",
+		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.3/targets/x86_64-linux/lib",
 	}
 
 	resultEnv, _ := manager.InjectEnvVars(initialEnv)
