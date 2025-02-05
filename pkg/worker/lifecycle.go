@@ -605,6 +605,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
+	log.Info().Str("container_id", containerId).Str("config_path", configPath).Str("bundle_path", opts.BundlePath).Msg("running container")
 	time.Sleep(10000 * time.Second)
 	// Invoke runc process (launch the container)
 	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
