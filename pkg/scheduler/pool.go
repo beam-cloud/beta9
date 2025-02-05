@@ -32,7 +32,7 @@ const (
 	defaultImagesPath           string  = "/images"
 	defaultSharedMemoryPct      float32 = 0.5
 	poolMonitoringInterval              = 1 * time.Second
-	poolHealthCheckInterval             = 1 * time.Second
+	poolHealthCheckInterval             = 5 * time.Second
 )
 
 type WorkerPoolController interface {
