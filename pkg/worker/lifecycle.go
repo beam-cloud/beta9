@@ -633,6 +633,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				ConfigPath:   configPath,
 				Started:      startedChan,
 			})
+			if err != nil {
+				log.Error().Str("container_id", containerId).Msgf("failed to run cedana client: %v", err)
+				return
+			}
 		}
 	} else {
 		_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
