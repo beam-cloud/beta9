@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	defaultContainerCudaVersion string   = "12.3"
+	defaultContainerCudaVersion string   = "12.4"
 	defaultContainerPath        []string = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}
 	defaultContainerLibrary     []string = []string{"/usr/lib/x86_64-linux-gnu", "/usr/lib/worker/x86_64-linux-gnu", "/usr/local/nvidia/lib64"}
 )
@@ -207,7 +207,7 @@ func minor(dev uint64) uint64 {
 func (c *ContainerNvidiaManager) InjectEnvVars(env []string) ([]string, bool) {
 	existingCudaFound := false
 	cudaEnvVarDefaults := map[string]string{
-		"NVIDIA_DRIVER_CAPABILITIES": "all",
+		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics,ngx,video",
 		"NVIDIA_REQUIRE_CUDA":        "",
 		"NVARCH":                     "",
 		"NV_CUDA_COMPAT_PACKAGE":     "",
