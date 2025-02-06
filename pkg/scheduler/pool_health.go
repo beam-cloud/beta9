@@ -138,7 +138,12 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 				runningContainers++
 			}
 
-			if container.StartedAt == 0 || container.Status == types.ContainerStatusPending {
+			// Skip containers with invalid StartedAt times
+			if container.StartedAt == 0 && container.Status == types.ContainerStatusRunning {
+				continue
+			}
+
+			if container.Status == types.ContainerStatusPending {
 				latency := time.Since(time.Unix(container.ScheduledAt, 0))
 				schedulingLatencies = append(schedulingLatencies, latency)
 				continue
