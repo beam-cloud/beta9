@@ -159,6 +159,15 @@ func (ts TaskStatus) IsCompleted() bool {
 	}
 }
 
+func (ts TaskStatus) IsInflight() bool {
+	switch ts {
+	case TaskStatusPending, TaskStatusRunning, TaskStatusRetry:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	TaskStatusPending   TaskStatus = "PENDING"
 	TaskStatusRunning   TaskStatus = "RUNNING"
@@ -169,12 +178,6 @@ const (
 	TaskStatusTimeout   TaskStatus = "TIMEOUT"
 	TaskStatusRetry     TaskStatus = "RETRY"
 )
-
-var InflightTaskStatuses = map[TaskStatus]bool{
-	TaskStatusRunning: true,
-	TaskStatusPending: true,
-	TaskStatusRetry:   true,
-}
 
 type TaskParams struct {
 	TaskId      string

@@ -180,7 +180,7 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		return err
 	}
 
-	if !types.InflightTaskStatuses[task.Status] {
+	if !task.Status.IsInflight() {
 		return nil
 	}
 
