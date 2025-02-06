@@ -70,12 +70,12 @@ message ContainerState {
   string stub_id = 2;
   string status = 3;
   int64 scheduled_at = 4;
-  int64 started_at = 5;
-  string workspace_id = 6;
-  string gpu = 7;
-  uint32 gpu_count = 8;
-  int64 cpu = 9;
-  int64 memory = 10;
+  string workspace_id = 5;
+  string gpu = 6;
+  uint32 gpu_count = 7;
+  int64 cpu = 8;
+  int64 memory = 9;
+  int64 started_at = 10;
 }
 
 message Mount {

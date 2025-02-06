@@ -79,12 +79,12 @@ class ContainerState(betterproto.Message):
     stub_id: str = betterproto.string_field(2)
     status: str = betterproto.string_field(3)
     scheduled_at: int = betterproto.int64_field(4)
-    started_at: int = betterproto.int64_field(5)
-    workspace_id: str = betterproto.string_field(6)
-    gpu: str = betterproto.string_field(7)
-    gpu_count: int = betterproto.uint32_field(8)
-    cpu: int = betterproto.int64_field(9)
-    memory: int = betterproto.int64_field(10)
+    workspace_id: str = betterproto.string_field(5)
+    gpu: str = betterproto.string_field(6)
+    gpu_count: int = betterproto.uint32_field(7)
+    cpu: int = betterproto.int64_field(8)
+    memory: int = betterproto.int64_field(9)
+    started_at: int = betterproto.int64_field(10)
 
 
 @dataclass(eq=False, repr=False)

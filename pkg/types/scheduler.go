@@ -133,12 +133,12 @@ type ContainerState struct {
 	StubId      string          `redis:"stub_id" json:"stub_id"`
 	Status      ContainerStatus `redis:"status" json:"status"`
 	ScheduledAt int64           `redis:"scheduled_at" json:"scheduled_at"`
-	StartedAt   int64           `redis:"started_at" json:"started_at"`
 	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
 	Gpu         string          `redis:"gpu" json:"gpu"`
 	GpuCount    uint32          `redis:"gpu_count" json:"gpu_count"`
 	Cpu         int64           `redis:"cpu" json:"cpu"`
 	Memory      int64           `redis:"memory" json:"memory"`
+	StartedAt   int64           `redis:"started_at" json:"started_at"`
 }
 
 // @go2proto
