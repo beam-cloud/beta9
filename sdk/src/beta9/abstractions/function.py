@@ -1,6 +1,5 @@
 import concurrent.futures
 import inspect
-import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
 
@@ -151,17 +150,20 @@ class _CallableWrapper(DeployableMixin):
         if not is_local():
             return self.local(*args, **kwargs)
 
-        if not self.parent.prepare_runtime(
-            func=self.func,
-            stub_type=self.base_stub_type,
-        ):
-            return
+        try:
+            if not self.parent.prepare_runtime(
+                func=self.func,
+                stub_type=self.base_stub_type,
+            ):
+                return
+        except KeyboardInterrupt:
+            terminal.error("Exiting shell. Your build was stopped.")
 
         try:
             with terminal.progress("Working..."):
                 return self._call_remote(*args, **kwargs)
         except KeyboardInterrupt:
-            terminal.error("Exiting Shell. Your function will continue running remotely.")
+            terminal.error("Exiting shell. Your function will continue running remotely.")
 
     @with_grpc_error_handling
     def _call_remote(self, *args, **kwargs) -> Any:
@@ -261,8 +263,9 @@ class ScheduleWrapper(_CallableWrapper):
         terminal.print(f"Schedule: {self.parent.when}")
         terminal.print("Upcoming:")
 
-        current_tz = time.tzname[time.localtime().tm_isdst]
-        cron = croniter(self.parent.when, datetime.now())
+        local_tz = datetime.now().astimezone().tzinfo
+
+        cron = croniter(self.parent.when, datetime.now(local_tz))
         cron_utc = croniter(self.parent.when, datetime.now(timezone.utc))
         for i in range(3):
             next_run = cron.get_next(datetime)
@@ -270,7 +273,7 @@ class ScheduleWrapper(_CallableWrapper):
             terminal.print(
                 (
                     f"  [bright_white]{i+1}.[/bright_white] {next_run_utc:%Y-%m-%d %H:%M:%S %Z} "
-                    f"({next_run:%Y-%m-%d %H:%M:%S} {current_tz})"
+                    f"({next_run:%Y-%m-%d %H:%M:%S} {local_tz})"
                 )
             )
 

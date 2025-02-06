@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/bsm/redislock"
+	"github.com/beam-cloud/redislock"
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/redis/go-redis/v9"
 )
@@ -280,8 +280,9 @@ func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptions) error {
 	var retryStrategy redislock.RetryStrategy = nil
 	if opts.Retries > 0 {
-		retryStrategy = redislock.LimitRetry(redislock.LinearBackoff(100*time.Millisecond), opts.Retries)
+		retryStrategy = redislock.LimitRetry(redislock.ExponentialBackoff(100*time.Millisecond, time.Duration(opts.TtlS)*time.Second), opts.Retries)
 	}
+
 	lock, err := redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{
 		RetryStrategy: retryStrategy,
 	})
@@ -295,16 +296,40 @@ func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptio
 	return nil
 }
 
+func (l *RedisLock) Token(key string) (string, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if lock, ok := l.locks[key]; ok {
+		return lock.Token(), nil
+	}
+
+	return "", redislock.ErrLockNotHeld
+}
+
+func (l *RedisLock) ReleaseWithToken(key string, token string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	rc := redislock.New(l.client)
+	lock, err := rc.RetrieveLock(context.Background(), key, token)
+	if err != nil {
+		return err
+	}
+
+	return lock.Release(context.Background())
+}
+
 func (l *RedisLock) Release(key string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	// Check if the lock is available in memory and release if so
 	if lock, ok := l.locks[key]; ok {
 		err := lock.Release(context.Background())
 		if err != nil {
 			return err
 		}
-
 		delete(l.locks, key)
 		return nil
 	}

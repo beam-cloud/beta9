@@ -29,43 +29,43 @@ const (
 )
 
 type ExternalWorkerPoolController struct {
-	ctx          context.Context
-	name         string
-	config       types.AppConfig
-	provider     providers.Provider
-	tailscale    *network.Tailscale
-	backendRepo  repository.BackendRepository
-	workerPool   types.WorkerPoolConfig
-	workerRepo   repository.WorkerRepository
-	providerName *types.MachineProvider
-	providerRepo repository.ProviderRepository
+	ctx              context.Context
+	name             string
+	config           types.AppConfig
+	provider         providers.Provider
+	tailscale        *network.Tailscale
+	backendRepo      repository.BackendRepository
+	workerPoolConfig types.WorkerPoolConfig
+	workerRepo       repository.WorkerRepository
+	workerPoolRepo   repository.WorkerPoolRepository
+	providerName     *types.MachineProvider
+	providerRepo     repository.ProviderRepository
+	containerRepo    repository.ContainerRepository
+	eventRepo        repository.EventRepository
+	workspace        *types.Workspace
 }
 
 func NewExternalWorkerPoolController(
-	ctx context.Context,
-	config types.AppConfig,
-	workerPoolName string,
-	backendRepo repository.BackendRepository,
-	workerRepo repository.WorkerRepository,
-	providerRepo repository.ProviderRepository,
-	tailscale *network.Tailscale,
-	providerName *types.MachineProvider) (WorkerPoolController, error) {
+	opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
 	var provider providers.Provider = nil
 	var err error = nil
 
+	workerPoolName := opts.Name
+	providerName := opts.ProviderName
+
 	switch *providerName {
 	case types.ProviderEC2:
-		provider, err = providers.NewEC2Provider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewEC2Provider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderOCI:
-		provider, err = providers.NewOCIProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewOCIProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderLambdaLabs:
-		provider, err = providers.NewLambdaLabsProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewLambdaLabsProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderCrusoe:
-		provider, err = providers.NewCrusoeProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewCrusoeProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderHydra:
-		provider, err = providers.NewHydraProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewHydraProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	case types.ProviderGeneric:
-		provider, err = providers.NewGenericProvider(ctx, config, providerRepo, workerRepo, tailscale)
+		provider, err = providers.NewGenericProvider(opts.Context, opts.Config, opts.ProviderRepo, opts.WorkerRepo, opts.Tailscale)
 	default:
 		return nil, errors.New("invalid provider name")
 	}
@@ -73,28 +73,46 @@ func NewExternalWorkerPoolController(
 		return nil, err
 	}
 
-	workerPool := config.Worker.Pools[workerPoolName]
+	workerPoolConfig := opts.Config.Worker.Pools[workerPoolName]
 	wpc := &ExternalWorkerPoolController{
-		ctx:          ctx,
-		name:         workerPoolName,
-		config:       config,
-		workerPool:   workerPool,
-		backendRepo:  backendRepo,
-		workerRepo:   workerRepo,
-		providerName: providerName,
-		providerRepo: providerRepo,
-		tailscale:    tailscale,
-		provider:     provider,
+		ctx:              opts.Context,
+		name:             workerPoolName,
+		config:           opts.Config,
+		workerPoolConfig: workerPoolConfig,
+		containerRepo:    opts.ContainerRepo,
+		backendRepo:      opts.BackendRepo,
+		workerRepo:       opts.WorkerRepo,
+		workerPoolRepo:   opts.WorkerPoolRepo,
+		providerName:     providerName,
+		providerRepo:     opts.ProviderRepo,
+		eventRepo:        opts.EventRepo,
+		tailscale:        opts.Tailscale,
+		provider:         provider,
 	}
 
 	// Start monitoring worker pool size
-	err = MonitorPoolSize(wpc, &workerPool, workerRepo, providerRepo)
+	err = MonitorPoolSize(wpc, &workerPoolConfig, wpc.workerRepo, wpc.workerPoolRepo, opts.ProviderRepo)
 	if err != nil {
 		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool size")
 	}
 
+	// Start monitoring worker pool health
+	err = MonitorPoolHealth(PoolHealthMonitorOptions{
+		Controller:       wpc,
+		WorkerPoolConfig: workerPoolConfig,
+		WorkerConfig:     wpc.config.Worker,
+		WorkerRepo:       wpc.workerRepo,
+		ProviderRepo:     wpc.providerRepo,
+		WorkerPoolRepo:   wpc.workerPoolRepo,
+		ContainerRepo:    wpc.containerRepo,
+		EventRepo:        wpc.eventRepo,
+	})
+	if err != nil {
+		log.Error().Str("pool_name", wpc.name).Err(err).Msg("unable to monitor pool health")
+	}
+
 	// Reconcile nodes with state
-	go provider.Reconcile(ctx, wpc.name)
+	go provider.Reconcile(wpc.ctx, wpc.name)
 
 	return wpc, nil
 }
@@ -104,7 +122,15 @@ func (wpc *ExternalWorkerPoolController) Context() context.Context {
 }
 
 func (wpc *ExternalWorkerPoolController) IsPreemptable() bool {
-	return wpc.workerPool.Preemptable
+	return wpc.workerPoolConfig.Preemptable
+}
+
+func (wpc *ExternalWorkerPoolController) State() (*types.WorkerPoolState, error) {
+	return wpc.workerPoolRepo.GetWorkerPoolState(wpc.ctx, wpc.name)
+}
+
+func (wpc *ExternalWorkerPoolController) Mode() types.PoolMode {
+	return wpc.workerPoolConfig.Mode
 }
 
 func (wpc *ExternalWorkerPoolController) Name() string {
@@ -112,7 +138,7 @@ func (wpc *ExternalWorkerPoolController) Name() string {
 }
 
 func (wpc *ExternalWorkerPoolController) RequiresPoolSelector() bool {
-	return wpc.workerPool.RequiresPoolSelector
+	return wpc.workerPoolConfig.RequiresPoolSelector
 }
 
 func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
@@ -125,7 +151,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuC
 
 	// Attempt to schedule the worker on an existing machine first
 	for _, machine := range machines {
-		worker, err := wpc.attemptToAssignWorkerToMachine(workerId, cpu, memory, wpc.workerPool.GPUType, gpuCount, machine)
+		worker, err := wpc.attemptToAssignWorkerToMachine(workerId, cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount, machine)
 		if err != nil {
 			continue
 		}
@@ -133,8 +159,12 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuC
 		return worker, nil
 	}
 
-	// TODO: replace hard-coded workspace ID with look up of cluster admin
-	token, err := wpc.backendRepo.CreateToken(wpc.ctx, 1, types.TokenTypeMachine, false)
+	adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, adminWorkspace.Id, types.TokenTypeMachine, false)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +173,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuC
 	machineId, err := wpc.provider.ProvisionMachine(wpc.ctx, wpc.name, token.Key, types.ProviderComputeRequest{
 		Cpu:      cpu,
 		Memory:   memory,
-		Gpu:      wpc.workerPool.GPUType,
+		Gpu:      wpc.workerPoolConfig.GPUType,
 		GpuCount: gpuCount,
 	})
 	if err != nil {
@@ -163,7 +193,7 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuC
 	}
 
 	log.Info().Str("machine_id", machineId).Str("hostname", machineState.HostName).Msg("machine registered")
-	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState, cpu, memory, wpc.workerPool.GPUType, gpuCount)
+	worker, err := wpc.createWorkerOnMachine(workerId, machineId, machineState, cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
 	if err != nil {
 		return nil, err
 	}
@@ -237,20 +267,34 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 }
 
 func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
+	if wpc.workspace == nil {
+		adminWorkspace, err := wpc.backendRepo.GetAdminWorkspace(wpc.ctx)
+		if err != nil {
+			return nil, errors.New("workspace not configured for pool: " + wpc.name)
+		}
+
+		wpc.workspace = adminWorkspace
+	}
+
 	client, err := wpc.getProxiedClient(machineState.HostName, machineState.Token)
 	if err != nil {
 		return nil, err
 	}
 
+	token, err := wpc.backendRepo.CreateToken(wpc.ctx, wpc.workspace.Id, types.TokenTypeWorker, true)
+	if err != nil {
+		return nil, err
+	}
+
 	// Create a new worker job
-	job, worker, err := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount)
+	job, worker, err := wpc.createWorkerJob(workerId, machineId, cpu, memory, gpuType, gpuCount, token.Key)
 	if err != nil {
 		return nil, err
 	}
 
 	worker.PoolName = wpc.name
 	worker.MachineId = machineId
-	worker.RequiresPoolSelector = wpc.workerPool.RequiresPoolSelector
+	worker.RequiresPoolSelector = wpc.workerPoolConfig.RequiresPoolSelector
 
 	// Create the job in the cluster
 	_, err = client.BatchV1().Jobs(externalWorkerNamespace).Create(wpc.ctx, job, metav1.CreateOptions{})
@@ -267,7 +311,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 	return worker, nil
 }
 
-func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) (*batchv1.Job, *types.Worker, error) {
+func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker, error) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
 		"app":               Beta9WorkerLabelValue,
@@ -277,7 +321,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 
 	workerCpu := cpu
 	workerMemory := memory
-	workerGpuType := wpc.workerPool.GPUType
+	workerGpuType := wpc.workerPoolConfig.GPUType
 	workerGpuCount := gpuCount
 
 	workerImage := fmt.Sprintf("%s/%s:%s",
@@ -296,7 +340,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		}
 	}
 
-	env, err := wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpuType, workerGpuCount)
+	env, err := wpc.getWorkerEnvironment(workerId, machineId, workerCpu, workerMemory, workerGpuType, workerGpuCount, token)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -331,7 +375,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 			HostNetwork:        true,
 			ImagePullSecrets:   imagePullSecrets,
 			RestartPolicy:      corev1.RestartPolicyOnFailure,
-			NodeSelector:       wpc.workerPool.JobSpec.NodeSelector,
+			NodeSelector:       wpc.workerPoolConfig.JobSpec.NodeSelector,
 			Containers:         containers,
 			Volumes:            wpc.getWorkerVolumes(workerMemory),
 			EnableServiceLinks: ptr.To(false),
@@ -339,8 +383,8 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		},
 	}
 
-	if wpc.workerPool.Runtime != "" {
-		podTemplate.Spec.RuntimeClassName = ptr.To(wpc.workerPool.Runtime)
+	if wpc.workerPoolConfig.Runtime != "" {
+		podTemplate.Spec.RuntimeClassName = ptr.To(wpc.workerPoolConfig.Runtime)
 	}
 
 	ttl := int32(30)
@@ -366,13 +410,13 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		TotalGpuCount: workerGpuCount,
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
-		Priority:      wpc.workerPool.Priority,
+		Priority:      wpc.workerPoolConfig.Priority,
 		BuildVersion:  wpc.config.Worker.ImageTag,
-		Preemptable:   wpc.workerPool.Preemptable,
+		Preemptable:   wpc.workerPoolConfig.Preemptable,
 	}, nil
 }
 
-func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32) ([]corev1.EnvVar, error) {
+func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) ([]corev1.EnvVar, error) {
 	// HOTFIX: clean up the way we pass tailscale hostname to remote worker
 	podHostname := fmt.Sprintf("machine-%s.%s", machineId, wpc.config.Tailscale.HostName)
 	if wpc.config.Tailscale.User != "" {
@@ -387,6 +431,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		{
 			Name:  "WORKER_POOL_NAME",
 			Value: wpc.name,
+		},
+		{
+			Name:  "WORKER_TOKEN",
+			Value: token,
 		},
 		{
 			Name:  "CPU_LIMIT",
@@ -430,7 +478,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "PREEMPTABLE",
-			Value: strconv.FormatBool(wpc.workerPool.Preemptable),
+			Value: strconv.FormatBool(wpc.workerPoolConfig.Preemptable),
 		},
 	}
 
@@ -456,8 +504,8 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 
 func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []corev1.Volume {
 	hostPathType := corev1.HostPathDirectoryOrCreate
-	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPool.PoolSizing.SharedMemoryLimitPct, workerMemory)
-	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPool.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
+	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPoolConfig.PoolSizing.SharedMemoryLimitPct, workerMemory)
+	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPoolConfig.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
 
 	return []corev1.Volume{
 		{

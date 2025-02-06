@@ -35,7 +35,7 @@ gateway:
   host: beta9-gateway
   invokeURLType: path
   grpc:
-    externalHost: localhost
+    externalHost: beta9-gateway
     externalPort: 1993
     tls: false
     port: 1993
@@ -183,6 +183,11 @@ worker:
   addWorkerTimeout: 10m
   blobCacheEnabled: false
   containerLogLinesPerHour: 6000
+  failover:
+    enabled: true
+    maxPendingWorkers: 10
+    maxSchedulingLatencyMs: 300000 # 5 minutes
+    minMachinesAvailable: 1 # minMachinesAvailable only applies to external pools
   criu:
     storage:
       mountPath: /data/checkpoints
@@ -235,21 +240,6 @@ tailscale:
   enabled: false
   debug: false
   hostName: headscale.internal
-proxy:
-  httpPort: 1989
-  services:
-    - name: redis
-      localPort: 6379
-      destination: redis-master:6379
-    - name: juicefs-redis
-      localPort: 6380
-      destination: juicefs-redis-master:6379
-    - name: gateway-http
-      localPort: 1994
-      destination: beta9-gateway:1994
-    - name: gateway-grpc
-      localPort: 1993
-      destination: beta9-gateway:1993
 monitoring:
   containerMetricsInterval: 3s
   metricsCollector: prometheus

@@ -6,7 +6,7 @@ runnerPlatform := linux/arm64
 
 setup:
 	bash bin/setup.sh
-	make k3d-up runner worker gateway proxy
+	make k3d-up runner worker gateway
 	# helm install beta9 deploy/charts/beta9 --create-namespace --values deploy/charts/beta9/values.local.yaml
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
@@ -37,10 +37,6 @@ worker:
 	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag) --build-arg CEDANA_BASE_URL=$(CEDANA_URL) --build-arg CEDANA_TOKEN=$(CEDANA_AUTH_TOKEN)
 	docker push localhost:5001/beta9-worker:$(workerTag)
 	bin/delete_workers.sh
-
-proxy:
-	docker build . --target build -f ./docker/Dockerfile.proxy -t localhost:5001/beta9-proxy:$(tag)
-	docker push localhost:5001/beta9-proxy:$(tag)
 
 runner:
 	for target in py312 py311 py310 py39 py38; do \

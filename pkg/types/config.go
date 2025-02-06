@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	cedana "github.com/cedana/cedana/pkg/config"
 	corev1 "k8s.io/api/core/v1"
@@ -208,13 +209,36 @@ type CunoFSConfig struct {
 	S3BucketName  string `key:"s3BucketName" json:"s3_bucket_name"`
 }
 
+// @go2proto
 type MountPointConfig struct {
-	S3Bucket    string `json:"s3_bucket"`
+	BucketName  string `json:"s3_bucket"`
 	AccessKey   string `json:"access_key"`
 	SecretKey   string `json:"secret_key"`
 	EndpointURL string `json:"bucket_url"`
 	Region      string `json:"region"`
 	ReadOnly    bool   `json:"read_only"`
+}
+
+func (m *MountPointConfig) ToProto() *pb.MountPointConfig {
+	return &pb.MountPointConfig{
+		BucketName:  m.BucketName,
+		AccessKey:   m.AccessKey,
+		SecretKey:   m.SecretKey,
+		EndpointUrl: m.EndpointURL,
+		Region:      m.Region,
+		ReadOnly:    m.ReadOnly,
+	}
+}
+
+func NewMountPointConfigFromProto(in *pb.MountPointConfig) *MountPointConfig {
+	return &MountPointConfig{
+		BucketName:  in.BucketName,
+		AccessKey:   in.AccessKey,
+		SecretKey:   in.SecretKey,
+		EndpointURL: in.EndpointUrl,
+		Region:      in.Region,
+		ReadOnly:    in.ReadOnly,
+	}
 }
 
 type WorkerConfig struct {
@@ -240,6 +264,14 @@ type WorkerConfig struct {
 	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
 	TmpSizeLimit               string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLinesPerHour   int                         `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
+	Failover                   FailoverConfig              `key:"failover" json:"failover"`
+}
+
+type FailoverConfig struct {
+	Enabled                bool  `key:"enabled" json:"enabled"`
+	MaxPendingWorkers      int64 `key:"maxPendingWorkers" json:"max_pending_workers"`
+	MaxSchedulingLatencyMs int64 `key:"maxSchedulingLatencyMs" json:"max_scheduling_latency_ms"`
+	MinMachinesAvailable   int64 `key:"minMachinesAvailable" json:"min_machines_available"`
 }
 
 type PoolMode string

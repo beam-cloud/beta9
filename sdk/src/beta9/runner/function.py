@@ -14,7 +14,6 @@ from ..channel import Channel, get_channel, handle_error, pass_channel
 from ..clients.function import (
     FunctionGetArgsRequest,
     FunctionMonitorRequest,
-    FunctionMonitorResponse,
     FunctionServiceStub,
     FunctionSetResultRequest,
 )
@@ -67,83 +66,94 @@ def _monitor_task(
     env: dict,
 ) -> None:
     os.environ.update(env)
-
     config = get_config_context()
     parent_pid = os.getppid()
 
-    with get_channel(config) as channel:
-        function_stub = FunctionServiceStub(channel)
-        gateway_stub = GatewayServiceStub(channel)
+    def _monitor_stream() -> bool:
+        """
+        Returns True if the stream ended with no errors (and should be restarted),
+        or False if a exit event occurred (cancellation, completion, timeout,
+        or a connection issue that caused us to kill the parent process)
+        """
+        with get_channel(config) as channel:
+            function_stub = FunctionServiceStub(channel)
+            gateway_stub = GatewayServiceStub(channel)
 
-        initial_backoff = 5
-        max_retries = 5
-        backoff = initial_backoff
-        retry = 0
+            initial_backoff = 5
+            max_retries = 5
+            backoff = initial_backoff
+            retry = 0
 
-        while retry <= max_retries:
-            try:
-                for response in function_stub.function_monitor(
-                    FunctionMonitorRequest(
-                        task_id=function_context.task_id,
-                        stub_id=function_context.stub_id,
-                        container_id=function_context.container_id,
-                    )
-                ):
-                    response: FunctionMonitorResponse
-                    if response.cancelled:
-                        print(f"Task cancelled: {function_context.task_id}")
-
-                        send_callback(
-                            gateway_stub=gateway_stub,
-                            context=function_context,
-                            payload={},
-                            task_status=TaskStatus.Cancelled,
+            while retry <= max_retries:
+                try:
+                    for response in function_stub.function_monitor(
+                        FunctionMonitorRequest(
+                            task_id=function_context.task_id,
+                            stub_id=function_context.stub_id,
+                            container_id=function_context.container_id,
                         )
+                    ):
+                        # If the task is cancelled then send a callback and exit
+                        if response.cancelled:
+                            print(f"Task cancelled: {function_context.task_id}")
+                            send_callback(
+                                gateway_stub=gateway_stub,
+                                context=function_context,
+                                payload={},
+                                task_status=TaskStatus.Cancelled,
+                            )
+                            os.kill(parent_pid, signal.SIGTERM)
+                            return False
 
-                        os.kill(parent_pid, signal.SIGTERM)
-                        return
+                        # If the task is complete, exit
+                        if response.complete:
+                            return False
 
-                    if response.complete:
-                        return
+                        # If the task has timed out, send a timeout callback and exit
+                        if response.timed_out:
+                            print(f"Task timed out: {function_context.task_id}")
+                            send_callback(
+                                gateway_stub=gateway_stub,
+                                context=function_context,
+                                payload={},
+                                task_status=TaskStatus.Timeout,
+                            )
+                            os.kill(parent_pid, signal.SIGTERM)
+                            return False
 
-                    if response.timed_out:
-                        print(f"Task timed out: {function_context.task_id}")
+                        # Reset retry state if a valid response was received
+                        retry = 0
+                        backoff = initial_backoff
 
-                        send_callback(
-                            gateway_stub=gateway_stub,
-                            context=function_context,
-                            payload={},
-                            task_status=TaskStatus.Timeout,
-                        )
+                    # Reaching here means that the stream ended with no errors,
+                    # which can occur during a rollout restart of the gateway
+                    # returning True here tells the outer loop to restart the stream
+                    return True
 
-                        os.kill(parent_pid, signal.SIGTERM)
-                        return
+                except (grpc.RpcError, ConnectionRefusedError):
+                    if retry == max_retries:
+                        print("Lost connection to task monitor, exiting")
+                        os.kill(parent_pid, signal.SIGABRT)
+                        return False
 
-                    retry = 0
-                    backoff = initial_backoff
+                    time.sleep(backoff)
+                    backoff *= 2
+                    retry += 1
 
-                # If successful, it means the stream is finished.
-                # Break out of the retry loop
-                break
-
-            except (
-                grpc.RpcError,
-                ConnectionRefusedError,
-            ):
-                if retry == max_retries:
-                    print("Lost connection to task monitor, exiting")
-
+                except BaseException:
+                    print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
                     os.kill(parent_pid, signal.SIGABRT)
-                    return
+                    return False
 
-                time.sleep(backoff)
-                backoff *= 2
-                retry += 1
+    # Outer loop: restart only if the stream ended with no errors
+    while True:
+        should_restart = _monitor_stream()
+        if not should_restart:
+            # Exit condition encountered; exit the monitor task completely
+            return
 
-            except BaseException:
-                print(f"Unexpected error occurred in task monitor: {traceback.format_exc()}")
-                os.kill(parent_pid, signal.SIGABRT)
-                return
+        # If we reached here, the stream ended with no errors;
+        # so we should restart the monitoring stream
 
 
 def _handle_sigterm(*args: Any, **kwargs: Any) -> None:

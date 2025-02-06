@@ -18,20 +18,23 @@ import (
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
+	pb "github.com/beam-cloud/beta9/proto"
+
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
-	requestProcessingInterval     time.Duration = 100 * time.Millisecond
-	containerStatusUpdateInterval time.Duration = 30 * time.Second
-
-	containerLogsPath          string        = "/var/log/worker"
-	defaultWorkerSpindownTimeS float64       = 300 // 5 minutes
-	defaultCacheWaitTime       time.Duration = 30 * time.Second
+	containerLogsPath              string        = "/var/log/worker"
+	defaultWorkerSpindownTimeS     float64       = 300 // 5 minutes
+	defaultCacheWaitTime           time.Duration = 30 * time.Second
+	containerStatusUpdateInterval  time.Duration = 30 * time.Second
+	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
 )
 
 type Worker struct {
+	workerId                string
+	workerToken             string
 	cpuLimit                int64
 	memoryLimit             int64
 	gpuType                 string
@@ -48,17 +51,16 @@ type Worker struct {
 	containerMountManager   *ContainerMountManager
 	redisClient             *common.RedisClient
 	imageClient             *ImageClient
-	workerId                string
 	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
 	containerLock           sync.Mutex
 	containerWg             sync.WaitGroup
-	containerRepo           repo.ContainerRepository
 	containerLogger         *ContainerLogger
 	workerMetrics           *WorkerMetrics
 	completedRequests       chan *types.ContainerRequest
 	stopContainerChan       chan stopContainerEvent
-	workerRepo              repo.WorkerRepository
+	workerRepoClient        pb.WorkerRepositoryServiceClient
+	containerRepoClient     pb.ContainerRepositoryServiceClient
 	eventRepo               repo.EventRepository
 	userDataStorage         storage.Storage
 	checkpointStorage       storage.Storage
@@ -93,10 +95,13 @@ type stopContainerEvent struct {
 }
 
 func NewWorker() (*Worker, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
 
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
+	workerToken := os.Getenv("WORKER_TOKEN")
 	workerPoolName := os.Getenv("WORKER_POOL_NAME")
 	podHostName := os.Getenv("HOSTNAME")
 
@@ -131,8 +136,16 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	containerRepo := repo.NewContainerRedisRepository(redisClient)
-	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
+	containerRepoClient, err := NewContainerRepositoryClient(context.TODO(), config, workerToken)
+	if err != nil {
+		return nil, err
+	}
+
+	workerRepoClient, err := NewWorkerRepositoryClient(context.TODO(), config, workerToken)
+	if err != nil {
+		return nil, err
+	}
+
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	userDataStorage, err := storage.NewStorage(config.Storage)
@@ -142,7 +155,7 @@ func NewWorker() (*Worker, error) {
 
 	var cacheClient *blobcache.BlobCacheClient = nil
 	if config.Worker.BlobCacheEnabled {
-		cacheClient, err = blobcache.NewBlobCacheClient(context.TODO(), config.BlobCache)
+		cacheClient, err = blobcache.NewBlobCacheClient(ctx, config.BlobCache)
 		if err == nil {
 			err = cacheClient.WaitForHosts(defaultCacheWaitTime)
 		}
@@ -153,7 +166,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	fileCacheManager := NewFileCacheManager(config, cacheClient)
-	imageClient, err := NewImageClient(config, workerId, workerRepo, fileCacheManager)
+	imageClient, err := NewImageClient(config, workerId, workerRepoClient, fileCacheManager)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +184,7 @@ func NewWorker() (*Worker, error) {
 		// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
 		if config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeS3) {
 			checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
-				S3Bucket:    config.Worker.CRIU.Storage.ObjectStore.BucketName,
+				BucketName:  config.Worker.CRIU.Storage.ObjectStore.BucketName,
 				AccessKey:   config.Worker.CRIU.Storage.ObjectStore.AccessKey,
 				SecretKey:   config.Worker.CRIU.Storage.ObjectStore.SecretKey,
 				EndpointURL: config.Worker.CRIU.Storage.ObjectStore.EndpointURL,
@@ -197,14 +210,13 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepo, containerRepo, config)
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, config)
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 
-	workerMetrics, err := NewWorkerMetrics(ctx, workerId, workerRepo, config.Monitoring)
+	workerMetrics, err := NewWorkerMetrics(ctx, workerId, config.Monitoring)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -212,6 +224,8 @@ func NewWorker() (*Worker, error) {
 
 	return &Worker{
 		ctx:                     ctx,
+		workerId:                workerId,
+		workerToken:             workerToken,
 		cancel:                  cancel,
 		config:                  config,
 		imageMountPath:          getImageMountPath(workerId),
@@ -224,29 +238,28 @@ func NewWorker() (*Worker, error) {
 		fileCacheManager:        fileCacheManager,
 		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
-		redisClient:             redisClient,
 		containerMountManager:   NewContainerMountManager(config),
+		redisClient:             redisClient,
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
 		cedanaClient:            cedanaClient,
 		podHostName:             podHostName,
 		eventBus:                nil,
-		workerId:                workerId,
 		containerInstances:      containerInstances,
 		containerLock:           sync.Mutex{},
 		containerWg:             sync.WaitGroup{},
-		containerRepo:           containerRepo,
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
-		workerMetrics:     workerMetrics,
-		workerRepo:        workerRepo,
-		eventRepo:         eventRepo,
-		completedRequests: make(chan *types.ContainerRequest, 1000),
-		stopContainerChan: make(chan stopContainerEvent, 1000),
-		userDataStorage:   userDataStorage,
-		checkpointStorage: checkpointStorage,
+		workerMetrics:       workerMetrics,
+		containerRepoClient: containerRepoClient,
+		workerRepoClient:    workerRepoClient,
+		eventRepo:           eventRepo,
+		completedRequests:   make(chan *types.ContainerRequest, 1000),
+		stopContainerChan:   make(chan stopContainerEvent, 1000),
+		userDataStorage:     userDataStorage,
+		checkpointStorage:   checkpointStorage,
 	}, nil
 }
 
@@ -261,58 +274,86 @@ func (s *Worker) Run() error {
 	go s.processStopContainerEvents()
 
 	lastContainerRequest := time.Now()
+
+	// Listen for container requests for this worker
+containerRequestStream:
 	for {
-		request, err := s.workerRepo.GetNextContainerRequest(s.workerId)
-		if request != nil && err == nil {
-			lastContainerRequest = time.Now()
-			containerId := request.ContainerId
-
-			s.containerLock.Lock()
-
-			_, exists := s.containerInstances.Get(containerId)
-			if !exists {
-				log.Info().Str("container_id", containerId).Msg("running container")
-
-				ctx, cancel := context.WithCancel(s.ctx)
-
-				if request.IsBuildRequest() {
-					go s.listenForStopBuildEvent(ctx, cancel, containerId)
-				}
-
-				err := s.RunContainer(ctx, request)
-				if err != nil {
-					log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
-
-					// Set a non-zero exit code for the container (both in memory, and in repo)
-					exitCode := 1
-
-					serr, ok := err.(*types.ExitCodeError)
-					if ok {
-						exitCode = serr.ExitCode
-					}
-
-					err := s.containerRepo.SetContainerExitCode(containerId, exitCode)
-					if err != nil {
-						log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
-					}
-
-					s.containerLock.Unlock()
-					s.clearContainer(containerId, request, exitCode)
-					continue
-				}
+		stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
+			WorkerId: s.workerId,
+		})
+		if err != nil {
+			if s.ctx.Err() == context.Canceled {
+				break
 			}
 
-			s.containerLock.Unlock()
+			time.Sleep(containerRequestStreamInterval)
+			continue
 		}
 
-		if exit := s.shouldShutDown(lastContainerRequest); exit {
-			break
-		}
+		for {
+			response, err := stream.Recv()
+			if err != nil {
+				break
+			}
 
-		time.Sleep(requestProcessingInterval)
+			if response.ContainerRequest != nil {
+				lastContainerRequest = time.Now()
+				request := types.NewContainerRequestFromProto(response.ContainerRequest)
+				s.handleContainerRequest(request)
+			}
+
+			if exit := s.shouldShutDown(lastContainerRequest); exit {
+				break containerRequestStream
+			}
+		}
 	}
 
 	return s.shutdown()
+}
+
+// handleContainerRequest handles an individual container request, spawning a new runc container
+func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
+	containerId := request.ContainerId
+
+	s.containerLock.Lock()
+	_, exists := s.containerInstances.Get(containerId)
+	if !exists {
+		log.Info().Str("container_id", containerId).Msg("running container")
+
+		ctx, cancel := context.WithCancel(s.ctx)
+
+		if request.IsBuildRequest() {
+			go s.listenForStopBuildEvent(ctx, cancel, containerId)
+		}
+
+		if err := s.RunContainer(ctx, request); err != nil {
+			s.containerLock.Unlock()
+
+			log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
+
+			// Set a non-zero exit code for the container (both in memory, and in repo)
+			exitCode := 1
+
+			serr, ok := err.(*types.ExitCodeError)
+			if ok {
+				exitCode = serr.ExitCode
+			}
+
+			_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
+				ContainerId: containerId,
+				ExitCode:    int32(exitCode),
+			}))
+			if err != nil {
+				log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+			}
+
+			s.clearContainer(containerId, request, exitCode)
+			return
+		}
+
+		s.containerLock.Unlock()
+	}
+
 }
 
 // listenForStopBuildEvent listens for a stop build event and cancels the context
@@ -344,6 +385,7 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 		return true
 	default:
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
+			s.cancel() // Stops goroutines
 			return true
 		}
 		return false
@@ -368,10 +410,12 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 			}
 
 			// Stop container if it is "orphaned" - meaning it's running but has no associated state
-			state, err := s.containerRepo.GetContainerState(request.ContainerId)
+			getStateResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{
+				ContainerId: request.ContainerId,
+			}))
 			if err != nil {
-				if _, ok := err.(*types.ErrContainerStateNotFound); ok {
-					log.Info().Str("container_id", request.ContainerId).Msg("container state not found, stopping container")
+				notFoundErr := &types.ErrContainerStateNotFound{}
+				if notFoundErr.From(err) {
 					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 					return nil
 				}
@@ -379,22 +423,29 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 				continue
 			}
 
+			state := getStateResponse.State
+			status := types.ContainerStatus(state.Status)
+
 			log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
 
 			// TODO: remove this hotfix
-			if state.Status == types.ContainerStatusPending {
+			if status == types.ContainerStatusPending {
 				log.Info().Str("container_id", request.ContainerId).Msg("forcing container status to running")
-				state.Status = types.ContainerStatusRunning
+				state.Status = string(types.ContainerStatusRunning)
 			}
 
-			err = s.containerRepo.UpdateContainerStatus(request.ContainerId, state.Status, time.Duration(types.ContainerStateTtlS)*time.Second)
+			_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+				ContainerId:   request.ContainerId,
+				Status:        string(state.Status),
+				ExpirySeconds: int64(types.ContainerStateTtlS),
+			}))
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}
 
 			// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
 			// ensure it is killed after that
-			if state.Status == types.ContainerStatusStopping {
+			if status == types.ContainerStatusStopping {
 				go func() {
 					time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
 
@@ -431,26 +482,32 @@ func (s *Worker) processStopContainerEvents() {
 func (s *Worker) manageWorkerCapacity() {
 	for request := range s.completedRequests {
 		err := s.processCompletedRequest(request)
+		notFoundErr := &types.ErrWorkerNotFound{}
 		if err != nil {
-			if _, ok := err.(*types.ErrWorkerNotFound); ok {
+			if notFoundErr.From(err) {
 				s.cancel()
 				return
 			}
 
 			log.Error().Err(err).Msg("unable to process completed request")
 			s.completedRequests <- request
+			time.Sleep(time.Second)
 			continue
 		}
 	}
 }
 
 func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error {
-	worker, err := s.workerRepo.GetWorkerById(s.workerId)
+	_, err := handleGRPCResponse(s.workerRepoClient.UpdateWorkerCapacity(s.ctx, &pb.UpdateWorkerCapacityRequest{
+		WorkerId:         s.workerId,
+		CapacityChange:   int64(types.AddCapacity),
+		ContainerRequest: request.ToProto(),
+	}))
 	if err != nil {
 		return err
 	}
 
-	return s.workerRepo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
+	return nil
 }
 
 func (s *Worker) keepalive() {
@@ -460,7 +517,9 @@ func (s *Worker) keepalive() {
 	for {
 		select {
 		case <-ticker.C:
-			s.workerRepo.SetWorkerKeepAlive(s.workerId)
+			s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
+				WorkerId: s.workerId,
+			})
 		case <-s.ctx.Done():
 			return
 		}
@@ -470,7 +529,9 @@ func (s *Worker) keepalive() {
 func (s *Worker) startup() error {
 	log.Info().Msg("worker starting up")
 
-	err := s.workerRepo.ToggleWorkerAvailable(s.workerId)
+	_, err := handleGRPCResponse(s.workerRepoClient.ToggleWorkerAvailable(s.ctx, &pb.ToggleWorkerAvailableRequest{
+		WorkerId: s.workerId,
+	}))
 	if err != nil {
 		return err
 	}
@@ -498,16 +559,11 @@ func (s *Worker) shutdown() error {
 	log.Info().Msg("shutting down")
 	defer s.eventRepo.PushWorkerStoppedEvent(s.workerId)
 
-	// Stops goroutines
-	s.cancel()
-
 	var errs error
-	if worker, err := s.workerRepo.GetWorkerById(s.workerId); err != nil {
+	if _, err := handleGRPCResponse(s.workerRepoClient.RemoveWorker(context.Background(), &pb.RemoveWorkerRequest{
+		WorkerId: s.workerId,
+	})); err != nil {
 		errs = errors.Join(errs, err)
-	} else if worker != nil {
-		if err := s.workerRepo.RemoveWorker(worker); err != nil {
-			errs = errors.Join(errs, err)
-		}
 	}
 
 	err := s.userDataStorage.Unmount(s.config.Storage.FilesystemPath)

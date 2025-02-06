@@ -503,9 +503,6 @@ func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.
 	}
 
 	opts.addPythonRequirements()
-	if outputChan != nil {
-		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: "Custom base image is valid.\n"}
-	}
 	return nil
 }
 

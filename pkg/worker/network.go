@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/coreos/go-iptables/iptables"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
@@ -39,19 +39,19 @@ const (
 )
 
 type ContainerNetworkManager struct {
-	ctx           context.Context
-	defaultLink   netlink.Link
-	ipt           *iptables.IPTables
-	ipt6          *iptables.IPTables
-	worker        *types.Worker
-	workerRepo    repository.WorkerRepository
-	containerRepo repository.ContainerRepository
-	networkPrefix string
-	mu            sync.Mutex
-	config        types.AppConfig
+	ctx                 context.Context
+	defaultLink         netlink.Link
+	ipt                 *iptables.IPTables
+	ipt6                *iptables.IPTables
+	worker              *types.Worker
+	workerRepoClient    pb.WorkerRepositoryServiceClient
+	containerRepoClient pb.ContainerRepositoryServiceClient
+	networkPrefix       string
+	mu                  sync.Mutex
+	config              types.AppConfig
 }
 
-func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, containerRepo repository.ContainerRepository, config types.AppConfig) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, config types.AppConfig) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -94,27 +94,21 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		}
 	}
 
-	worker, err := workerRepo.GetWorkerById(workerId)
-	if err != nil {
-		return nil, err
-	}
-
 	networkPrefix := os.Getenv("NETWORK_PREFIX")
 	if networkPrefix == "" {
 		return nil, errors.New("invalid network prefix")
 	}
 
 	m := &ContainerNetworkManager{
-		ctx:           ctx,
-		ipt:           ipt,
-		ipt6:          ipt6,
-		defaultLink:   defaultLink,
-		worker:        worker,
-		workerRepo:    workerRepo,
-		containerRepo: containerRepo,
-		networkPrefix: networkPrefix,
-		mu:            sync.Mutex{},
-		config:        config,
+		ctx:                 ctx,
+		ipt:                 ipt,
+		ipt6:                ipt6,
+		defaultLink:         defaultLink,
+		workerRepoClient:    workerRepoClient,
+		containerRepoClient: containerRepoClient,
+		networkPrefix:       networkPrefix,
+		mu:                  sync.Mutex{},
+		config:              config,
 	}
 
 	// Disable IPv6 if ip6tables is not supported
@@ -231,7 +225,6 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
-
 	link := &netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{Name: hostVethName,
 			MTU:          m.defaultLink.Attrs().MTU,
@@ -245,11 +238,18 @@ func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName
 }
 
 func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, error) {
-	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 5) // ttl=10s, retries=5
+	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
+		NetworkPrefix: m.networkPrefix,
+		Ttl:           10,
+		Retries:       5,
+	}))
 	if err != nil {
 		return nil, err
 	}
-	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
+		NetworkPrefix: m.networkPrefix,
+		Token:         lockResponse.Token,
+	})
 
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err == nil {
@@ -329,11 +329,18 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
-	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 5) // ttl=10s, retries=5
+	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
+		NetworkPrefix: m.networkPrefix,
+		Ttl:           10,
+		Retries:       5,
+	}))
 	if err != nil {
 		return err
 	}
-	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
+		NetworkPrefix: m.networkPrefix,
+		Token:         lockResponse.Token,
+	})
 
 	lo, err := netlink.LinkByName("lo")
 	if err != nil {
@@ -350,11 +357,14 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	}
 
 	// See what IP addresses are already allocated
-	allocatedIpAddresses, err := m.workerRepo.GetContainerIps(m.networkPrefix)
+	getContainerIpsResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIps(m.ctx, &pb.GetContainerIpsRequest{
+		NetworkPrefix: m.networkPrefix,
+	}))
 	if err != nil {
 		return err
 	}
 
+	allocatedIpAddresses := getContainerIpsResponse.Ips
 	allocatedSet := make(map[string]bool, len(allocatedIpAddresses))
 	for _, ip := range allocatedIpAddresses {
 		allocatedSet[ip] = true
@@ -432,7 +442,16 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		}
 	}
 
-	return m.workerRepo.SetContainerIp(m.networkPrefix, containerId, ipAddr.IP.String())
+	_, err = handleGRPCResponse(m.workerRepoClient.SetContainerIp(m.ctx, &pb.SetContainerIpRequest{
+		NetworkPrefix: m.networkPrefix,
+		ContainerId:   containerId,
+		IpAddress:     ipAddr.IP.String(),
+	}))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
@@ -454,21 +473,28 @@ func (m *ContainerNetworkManager) cleanupOrphanedNamespaces() {
 				func() {
 					// Only allow one worker on this machine/worker handle the cleanup
 					// We have a secondary lock for the IP assignment, but we need this lock for the "container" level consistency
-					err = m.workerRepo.SetNetworkLock(m.networkPrefix+"-"+containerId, 10, 0) // ttl=10, retries=0
+					lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
+						NetworkPrefix: m.networkPrefix + "-" + containerId,
+						Ttl:           10,
+						Retries:       0,
+					}))
 					if err != nil {
 						return
 					}
-
-					defer m.workerRepo.RemoveNetworkLock(m.networkPrefix + "-" + containerId)
+					defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
+						NetworkPrefix: m.networkPrefix + "-" + containerId,
+						Token:         lockResponse.Token,
+					})
 
 					// Check if the container still exists
-					var notFoundErr *types.ErrContainerStateNotFound
-					if _, err := m.containerRepo.GetContainerState(containerId); err != nil && errors.As(err, &notFoundErr) {
+					notFoundErr := &types.ErrContainerStateNotFound{}
+					_, err = handleGRPCResponse(m.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+					if err != nil && notFoundErr.From(err) {
 						// Container state not found, so tear down the namespace and associated resources
-						log.Info().Str("container_id", containerId).Msg("orphaned namespace detected")
+						log.Info().Str("container_id", containerId).Msg("orphaned namespace detected, cleaning up")
 
 						if err := m.TearDown(containerId); err != nil {
-							log.Error().Str("container_id", containerId).Err(err).Msg("error tearing down namespace")
+							log.Error().Str("container_id", containerId).Err(err).Msg("error tearing down orphaned namespace")
 						}
 					}
 
@@ -495,11 +521,18 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	err := m.workerRepo.SetNetworkLock(m.networkPrefix, 10, 3) // ttl=10, retries=3
+	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
+		NetworkPrefix: m.networkPrefix,
+		Ttl:           10,
+		Retries:       5,
+	}))
 	if err != nil {
 		return err
 	}
-	defer m.workerRepo.RemoveNetworkLock(m.networkPrefix)
+	defer m.workerRepoClient.RemoveNetworkLock(m.ctx, &pb.RemoveNetworkLockRequest{
+		NetworkPrefix: m.networkPrefix,
+		Token:         lockResponse.Token,
+	})
 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -521,10 +554,15 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		}
 	}
 
-	containerIp, err := m.workerRepo.GetContainerIp(m.networkPrefix, containerId)
+	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
+		NetworkPrefix: m.networkPrefix,
+		ContainerId:   containerId,
+	}))
 	if err != nil {
 		return err
 	}
+
+	containerIp := containerIpResponse.IpAddress
 
 	// Calculate the corresponding IPv6 address
 	ip := net.ParseIP(containerIp)
@@ -550,7 +588,15 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	// the error because the namespace is likely to be gone at this point
 	netns.DeleteNamed(namespace)
 
-	return m.workerRepo.RemoveContainerIp(m.networkPrefix, containerId)
+	_, err = handleGRPCResponse(m.workerRepoClient.RemoveContainerIp(m.ctx, &pb.RemoveContainerIpRequest{
+		NetworkPrefix: m.networkPrefix,
+		ContainerId:   containerId,
+	}))
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.IPTables) error {
@@ -588,10 +634,15 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	containerIp, err := m.workerRepo.GetContainerIp(m.networkPrefix, containerId)
+	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
+		NetworkPrefix: m.networkPrefix,
+		ContainerId:   containerId,
+	}))
 	if err != nil {
 		return err
 	}
+
+	containerIp := containerIpResponse.IpAddress
 
 	// Extract the last octet from the IPv4 address (192.168.1.2 -> 2)
 	ip := net.ParseIP(containerIp)

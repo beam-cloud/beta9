@@ -314,11 +314,35 @@ func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId s
 	)
 }
 
+func (t *TCPEventClientRepo) PushWorkerPoolDegradedEvent(poolName string, reasons []string) {
+	t.pushEvent(
+		types.EventWorkerPoolDegraded,
+		types.EventWorkerPoolStateSchemaVersion,
+		types.EventWorkerPoolStateSchema{
+			PoolName: poolName,
+			Reasons:  reasons,
+			Status:   string(types.WorkerPoolStatusDegraded),
+		},
+	)
+}
+
+func (t *TCPEventClientRepo) PushWorkerPoolHealthyEvent(poolName string) {
+	t.pushEvent(
+		types.EventWorkerPoolHealthy,
+		types.EventWorkerPoolStateSchemaVersion,
+		types.EventWorkerPoolStateSchema{
+			PoolName: poolName,
+			Status:   string(types.WorkerPoolStatusHealthy),
+		},
+	)
+}
+
 func sanitizeContainerRequest(request *types.ContainerRequest) types.ContainerRequest {
 	requestCopy := *request
 	requestCopy.Env = nil
 	requestCopy.EntryPoint = nil
 	requestCopy.Stub = types.StubWithRelated{}
+	requestCopy.Workspace = types.Workspace{}
 	requestCopy.Mounts = nil
 	requestCopy.PoolSelector = ""
 	return requestCopy

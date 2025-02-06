@@ -58,14 +58,14 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	return nil
 }
 
-func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3})
+func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
 	if err != nil {
 		return err
 	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
+	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
 
-	stateKey := common.RedisKeys.SchedulerWorkerState(worker.Id)
+	stateKey := common.RedisKeys.SchedulerWorkerState(workerId)
 	res, err := r.rdb.Exists(context.TODO(), stateKey).Result()
 	if err != nil {
 		return err
@@ -73,7 +73,7 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 
 	exists := res > 0
 	if !exists {
-		return &types.ErrWorkerNotFound{WorkerId: worker.Id}
+		return &types.ErrWorkerNotFound{WorkerId: workerId}
 	}
 
 	// Remove worker state from index
@@ -88,7 +88,7 @@ func (r *WorkerRedisRepository) RemoveWorker(worker *types.Worker) error {
 		return err
 	}
 
-	err = r.rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Err()
+	err = r.rdb.Del(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Err()
 	if err != nil {
 		return err
 	}
@@ -284,6 +284,26 @@ func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.W
 	return poolWorkers, nil
 }
 
+func (r *WorkerRedisRepository) CordonAllPendingWorkersInPool(poolName string) error {
+	workers, err := r.GetAllWorkersInPool(poolName)
+	if err != nil {
+		return err
+	}
+
+	for _, w := range workers {
+		if w.Status != types.WorkerStatusPending {
+			continue
+		}
+
+		err := r.UpdateWorkerStatus(w.Id, types.WorkerStatusDisabled)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error) {
 	workers, err := r.getWorkers(false)
 	if err != nil {
@@ -362,19 +382,6 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 	}
 
 	return nil
-}
-
-func (r *WorkerRedisRepository) SetWorkerPoolSizerLock(poolName string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolSizerLock(poolName), common.RedisLockOptions{TtlS: 3, Retries: 0})
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (r *WorkerRedisRepository) RemoveWorkerPoolSizerLock(poolName string) error {
-	return r.lock.Release(common.RedisKeys.WorkerPoolSizerLock(poolName))
 }
 
 func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {
@@ -470,16 +477,23 @@ func (r *WorkerRedisRepository) SetContainerResourceValues(workerId string, cont
 	return nil
 }
 
-func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerImageLock(workerId, imageId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) (string, error) {
+	lockKey := common.RedisKeys.WorkerImageLock(workerId, imageId)
+	err := r.lock.Acquire(context.TODO(), lockKey, common.RedisLockOptions{TtlS: 10, Retries: 3})
 	if err != nil {
-		return err
+		return "", err
 	}
-	return nil
+
+	token, err := r.lock.Token(lockKey)
+	if err != nil {
+		return "", err
+	}
+
+	return token, nil
 }
 
-func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId string) error {
-	return r.lock.Release(common.RedisKeys.WorkerImageLock(workerId, imageId))
+func (r *WorkerRedisRepository) RemoveImagePullLock(workerId, imageId, token string) error {
+	return r.lock.ReleaseWithToken(common.RedisKeys.WorkerImageLock(workerId, imageId), token)
 }
 
 func (r *WorkerRedisRepository) GetContainerIps(networkPrefix string) ([]string, error) {
@@ -514,16 +528,24 @@ func (r *WorkerRedisRepository) SetContainerIp(networkPrefix string, containerId
 	return nil
 }
 
-func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retries int) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerNetworkLock(networkPrefix), common.RedisLockOptions{TtlS: ttl, Retries: retries})
+func (r *WorkerRedisRepository) SetNetworkLock(networkPrefix string, ttl, retries int) (string, error) {
+	lockKey := common.RedisKeys.WorkerNetworkLock(networkPrefix)
+
+	err := r.lock.Acquire(context.TODO(), lockKey, common.RedisLockOptions{TtlS: ttl, Retries: retries})
 	if err != nil {
-		return err
+		return "", err
 	}
-	return nil
+
+	token, err := r.lock.Token(lockKey)
+	if err != nil {
+		return "", err
+	}
+
+	return token, nil
 }
 
-func (r *WorkerRedisRepository) RemoveNetworkLock(networkPrefix string) error {
-	return r.lock.Release(common.RedisKeys.WorkerNetworkLock(networkPrefix))
+func (r *WorkerRedisRepository) RemoveNetworkLock(networkPrefix string, token string) error {
+	return r.lock.ReleaseWithToken(common.RedisKeys.WorkerNetworkLock(networkPrefix), token)
 }
 
 func (r *WorkerRedisRepository) RemoveContainerIp(networkPrefix string, containerId string) error {

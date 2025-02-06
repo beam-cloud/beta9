@@ -3,7 +3,11 @@ package types
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
+
+	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -25,6 +29,7 @@ const (
 	StubStateHealthy  = "healthy"
 )
 
+// @go2proto
 type Worker struct {
 	Id                   string       `json:"id" redis:"id"`
 	Status               WorkerStatus `json:"status" redis:"status"`
@@ -42,6 +47,61 @@ type Worker struct {
 	Priority             int32        `json:"priority" redis:"priority"`
 	Preemptable          bool         `json:"preemptable" redis:"preemptable"`
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
+	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
+}
+
+func (w *Worker) ToProto() *pb.Worker {
+	containers := make([]*pb.Container, len(w.ActiveContainers))
+	for i, c := range w.ActiveContainers {
+		containers[i] = c.ToProto()
+	}
+
+	return &pb.Worker{
+		Id:                   w.Id,
+		Status:               string(w.Status),
+		TotalCpu:             w.TotalCpu,
+		TotalMemory:          w.TotalMemory,
+		TotalGpuCount:        w.TotalGpuCount,
+		FreeCpu:              w.FreeCpu,
+		FreeMemory:           w.FreeMemory,
+		FreeGpuCount:         w.FreeGpuCount,
+		Gpu:                  w.Gpu,
+		PoolName:             w.PoolName,
+		MachineId:            w.MachineId,
+		ResourceVersion:      w.ResourceVersion,
+		RequiresPoolSelector: w.RequiresPoolSelector,
+		Priority:             w.Priority,
+		Preemptable:          w.Preemptable,
+		BuildVersion:         w.BuildVersion,
+		ActiveContainers:     containers,
+	}
+}
+
+func NewWorkerFromProto(in *pb.Worker) *Worker {
+	containers := make([]Container, len(in.ActiveContainers))
+	for i, c := range in.ActiveContainers {
+		containers[i] = *NewContainerFromProto(c)
+	}
+
+	return &Worker{
+		Id:                   in.Id,
+		Status:               WorkerStatus(in.Status),
+		TotalCpu:             in.TotalCpu,
+		TotalMemory:          in.TotalMemory,
+		TotalGpuCount:        in.TotalGpuCount,
+		FreeCpu:              in.FreeCpu,
+		FreeMemory:           in.FreeMemory,
+		FreeGpuCount:         in.FreeGpuCount,
+		Gpu:                  in.Gpu,
+		PoolName:             in.PoolName,
+		MachineId:            in.MachineId,
+		ResourceVersion:      in.ResourceVersion,
+		RequiresPoolSelector: in.RequiresPoolSelector,
+		Priority:             in.Priority,
+		Preemptable:          in.Preemptable,
+		BuildVersion:         in.BuildVersion,
+		ActiveContainers:     containers,
+	}
 }
 
 type CapacityUpdateType int
@@ -67,6 +127,7 @@ func (e *ContainerAlreadyScheduledError) Error() string {
 	return e.Msg
 }
 
+// @go2proto
 type ContainerState struct {
 	ContainerId string          `redis:"container_id" json:"container_id"`
 	StubId      string          `redis:"stub_id" json:"stub_id"`
@@ -77,8 +138,48 @@ type ContainerState struct {
 	GpuCount    uint32          `redis:"gpu_count" json:"gpu_count"`
 	Cpu         int64           `redis:"cpu" json:"cpu"`
 	Memory      int64           `redis:"memory" json:"memory"`
+	StartedAt   int64           `redis:"started_at" json:"started_at"`
 }
 
+// @go2proto
+type Container struct {
+	ContainerId string          `redis:"container_id" json:"container_id"`
+	StubId      string          `redis:"stub_id" json:"stub_id"`
+	Status      ContainerStatus `redis:"status" json:"status"`
+	ScheduledAt time.Time       `redis:"scheduled_at" json:"scheduled_at"`
+	StartedAt   time.Time       `redis:"started_at" json:"started_at"`
+	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
+	WorkerId    string          `redis:"worker_id" json:"worker_id"`
+	MachineId   string          `redis:"machine_id" json:"machine_id"`
+}
+
+func (c *Container) ToProto() *pb.Container {
+	return &pb.Container{
+		ContainerId: c.ContainerId,
+		StubId:      c.StubId,
+		Status:      string(c.Status),
+		ScheduledAt: timestamppb.New(c.ScheduledAt),
+		StartedAt:   timestamppb.New(c.StartedAt),
+		WorkspaceId: c.WorkspaceId,
+		WorkerId:    c.WorkerId,
+		MachineId:   c.MachineId,
+	}
+}
+
+func NewContainerFromProto(in *pb.Container) *Container {
+	return &Container{
+		ContainerId: in.ContainerId,
+		StubId:      in.StubId,
+		Status:      ContainerStatus(in.Status),
+		ScheduledAt: in.ScheduledAt.AsTime(),
+		StartedAt:   in.StartedAt.AsTime(),
+		WorkspaceId: in.WorkspaceId,
+		WorkerId:    in.WorkerId,
+		MachineId:   in.MachineId,
+	}
+}
+
+// @go2proto
 type BuildOptions struct {
 	SourceImage      *string  `json:"source_image"`
 	Dockerfile       *string  `json:"dockerfile"`
@@ -87,6 +188,7 @@ type BuildOptions struct {
 	BuildSecrets     []string `json:"build_secrets"`
 }
 
+// @go2proto
 type ContainerRequest struct {
 	ContainerId       string          `json:"container_id"`
 	EntryPoint        []string        `json:"entry_point"`
@@ -119,22 +221,136 @@ func (c *ContainerRequest) IsBuildRequest() bool {
 	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil
 }
 
+func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
+	mounts := make([]*pb.Mount, len(c.Mounts))
+	for i, m := range c.Mounts {
+		mounts[i] = m.ToProto()
+	}
+
+	var buildOptions *pb.BuildOptions
+	if c.IsBuildRequest() {
+		sourceImage := getStringOrDefault(c.BuildOptions.SourceImage)
+		dockerfile := getStringOrDefault(c.BuildOptions.Dockerfile)
+		buildCtxObject := getStringOrDefault(c.BuildOptions.BuildCtxObject)
+
+		buildOptions = &pb.BuildOptions{
+			SourceImage:      sourceImage,
+			Dockerfile:       dockerfile,
+			BuildCtxObject:   buildCtxObject,
+			SourceImageCreds: c.BuildOptions.SourceImageCreds,
+			BuildSecrets:     c.BuildOptions.BuildSecrets,
+		}
+	}
+
+	return &pb.ContainerRequest{
+		ContainerId:       c.ContainerId,
+		EntryPoint:        c.EntryPoint,
+		Env:               c.Env,
+		Cpu:               c.Cpu,
+		Memory:            c.Memory,
+		Gpu:               c.Gpu,
+		GpuRequest:        c.GpuRequest,
+		GpuCount:          c.GpuCount,
+		ImageId:           c.ImageId,
+		Mounts:            mounts,
+		StubId:            c.StubId,
+		WorkspaceId:       c.WorkspaceId,
+		Workspace:         c.Workspace.ToProto(),
+		Stub:              c.Stub.ToProto(),
+		RetryCount:        int64(c.RetryCount),
+		PoolSelector:      c.PoolSelector,
+		Preemptable:       c.Preemptable,
+		CheckpointEnabled: c.CheckpointEnabled,
+		Timestamp:         timestamppb.New(c.Timestamp),
+		BuildOptions:      buildOptions,
+	}
+}
+
+func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
+	mounts := make([]Mount, len(in.Mounts))
+	for i, m := range in.Mounts {
+		mounts[i] = *NewMountFromProto(m)
+	}
+
+	var bo BuildOptions
+	if in.BuildOptions != nil {
+		bo = BuildOptions{
+			SourceImage:      getPointerOrNil(in.BuildOptions.SourceImage),
+			Dockerfile:       getPointerOrNil(in.BuildOptions.Dockerfile),
+			BuildCtxObject:   getPointerOrNil(in.BuildOptions.BuildCtxObject),
+			SourceImageCreds: in.BuildOptions.SourceImageCreds,
+			BuildSecrets:     in.BuildOptions.BuildSecrets,
+		}
+	}
+
+	return &ContainerRequest{
+		ContainerId:       in.ContainerId,
+		EntryPoint:        in.EntryPoint,
+		Env:               in.Env,
+		Cpu:               in.Cpu,
+		Memory:            in.Memory,
+		Gpu:               in.Gpu,
+		GpuRequest:        in.GpuRequest,
+		GpuCount:          in.GpuCount,
+		ImageId:           in.ImageId,
+		Mounts:            mounts,
+		WorkspaceId:       in.WorkspaceId,
+		Workspace:         *NewWorkspaceFromProto(in.Workspace),
+		Stub:              *NewStubWithRelatedFromProto(in.Stub),
+		StubId:            in.StubId,
+		Timestamp:         in.GetTimestamp().AsTime(),
+		CheckpointEnabled: in.CheckpointEnabled,
+		Preemptable:       in.Preemptable,
+		PoolSelector:      in.PoolSelector,
+		BuildOptions:      bo,
+	}
+}
+
+func getPointerOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func getStringOrDefault(s *string) string {
+	if s != nil {
+		return *s
+	}
+	return ""
+}
+
 const ContainerExitCodeTtlS int = 300
 
 const (
 	ContainerDurationEmissionInterval      time.Duration = 5 * time.Second
 	ContainerResourceUsageEmissionInterval time.Duration = 3 * time.Second
 )
-const ContainerStateTtlSWhilePending int = 600
-const ContainerStateTtlS int = 120
-const WorkspaceQuotaTtlS int = 600
+const ContainerStateTtlSWhilePending int64 = 600
+const ContainerStateTtlS int64 = 120
+const WorkspaceQuotaTtlS int64 = 600
+
+const containerStateNotFoundPrefix = "container state not found: "
 
 type ErrContainerStateNotFound struct {
 	ContainerId string
 }
 
 func (e *ErrContainerStateNotFound) Error() string {
-	return fmt.Sprintf("container state not found: %s", e.ContainerId)
+	return fmt.Sprintf("%s%s", containerStateNotFoundPrefix, e.ContainerId)
+}
+
+func (e *ErrContainerStateNotFound) From(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if strings.HasPrefix(err.Error(), containerStateNotFoundPrefix) {
+		e.ContainerId = strings.TrimPrefix(err.Error(), containerStateNotFoundPrefix)
+		return true
+	}
+
+	return false
 }
 
 type ErrInvalidWorkerStatus struct {
@@ -151,13 +367,72 @@ func (e *ErrNoSuitableWorkerFound) Error() string {
 	return "no suitable worker found for request"
 }
 
+const workerNotFoundPrefix = "worker not found: "
+
 type ErrWorkerNotFound struct {
 	WorkerId string
 }
 
 func (e *ErrWorkerNotFound) Error() string {
-	return fmt.Sprintf("worker not found: %s", e.WorkerId)
+	return fmt.Sprintf("%s%s", workerNotFoundPrefix, e.WorkerId)
 }
+
+func (e *ErrWorkerNotFound) From(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if strings.HasPrefix(err.Error(), workerNotFoundPrefix) {
+		e.WorkerId = strings.TrimPrefix(err.Error(), workerNotFoundPrefix)
+		return true
+	}
+
+	return false
+}
+
+const workerPoolStateNotFoundPrefix = "worker pool state not found: "
+
+type ErrWorkerPoolStateNotFound struct {
+	PoolName string
+}
+
+func (e *ErrWorkerPoolStateNotFound) Error() string {
+	return fmt.Sprintf("%s%s", workerPoolStateNotFoundPrefix, e.PoolName)
+}
+
+func (e *ErrWorkerPoolStateNotFound) From(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if strings.HasPrefix(err.Error(), workerPoolStateNotFoundPrefix) {
+		e.PoolName = strings.TrimPrefix(err.Error(), workerPoolStateNotFoundPrefix)
+		return true
+	}
+
+	return false
+}
+
+type WorkerPoolState struct {
+	Status             WorkerPoolStatus `redis:"status" json:"status"`
+	SchedulingLatency  int64            `redis:"scheduling_latency" json:"scheduling_latency"`
+	FreeGpu            uint             `redis:"free_gpu" json:"free_gpu"`
+	FreeCpu            int64            `redis:"free_cpu" json:"free_cpu"`
+	FreeMemory         int64            `redis:"free_memory" json:"free_memory"`
+	PendingWorkers     int64            `redis:"pending_workers" json:"pending_workers"`
+	AvailableWorkers   int64            `redis:"available_workers" json:"available_workers"`
+	PendingContainers  int64            `redis:"pending_containers" json:"pending_containers"`
+	RunningContainers  int64            `redis:"running_containers" json:"running_containers"`
+	RegisteredMachines int64            `redis:"registered_machines" json:"registered_machines"`
+	PendingMachines    int64            `redis:"pending_machines" json:"pending_machines"`
+}
+
+type WorkerPoolStatus string
+
+const (
+	WorkerPoolStatusHealthy  WorkerPoolStatus = "HEALTHY"
+	WorkerPoolStatusDegraded WorkerPoolStatus = "DEGRADED"
+)
 
 type WorkerPoolSizingConfig struct {
 	MinFreeCpu            int64
@@ -204,6 +479,7 @@ const (
 	CheckpointStatusNotFound         CheckpointStatus = "not_found"
 )
 
+// @go2proto
 type CheckpointState struct {
 	StubId      string           `redis:"stub_id" json:"stub_id"`
 	ContainerId string           `redis:"container_id" json:"container_id"`

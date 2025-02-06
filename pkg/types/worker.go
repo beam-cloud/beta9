@@ -2,7 +2,10 @@ package types
 
 import (
 	"fmt"
+	"runtime"
 	"time"
+
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const (
@@ -27,6 +30,7 @@ type ContainerResourceUsage struct {
 	GpuType           string `json:"GpuType"`
 }
 
+// @go2proto
 type Mount struct {
 	LocalPath        string            `json:"local_path"`
 	MountPath        string            `json:"mount_path"`
@@ -34,6 +38,38 @@ type Mount struct {
 	ReadOnly         bool              `json:"read_only"`
 	MountType        string            `json:"mount_type"`
 	MountPointConfig *MountPointConfig `json:"mountpoint_config"`
+}
+
+func (m *Mount) ToProto() *pb.Mount {
+	var mountPointConfig *pb.MountPointConfig
+	if m.MountPointConfig != nil {
+		mountPointConfig = m.MountPointConfig.ToProto()
+	}
+
+	return &pb.Mount{
+		LocalPath:        m.LocalPath,
+		MountPath:        m.MountPath,
+		LinkPath:         m.LinkPath,
+		ReadOnly:         m.ReadOnly,
+		MountType:        m.MountType,
+		MountPointConfig: mountPointConfig,
+	}
+}
+
+func NewMountFromProto(in *pb.Mount) *Mount {
+	var mountPointConfig *MountPointConfig
+	if in.MountPointConfig != nil {
+		mountPointConfig = NewMountPointConfigFromProto(in.MountPointConfig)
+	}
+
+	return &Mount{
+		LocalPath:        in.LocalPath,
+		MountPath:        in.MountPath,
+		LinkPath:         in.LinkPath,
+		ReadOnly:         in.ReadOnly,
+		MountType:        in.MountType,
+		MountPointConfig: mountPointConfig,
+	}
 }
 
 type ExitCodeError struct {
@@ -50,14 +86,16 @@ const (
 	WorkerContainerExitCodeIncorrectImageOs   = 557
 	WorkerContainerExitCodeUnknownError       = 1
 	WorkerContainerExitCodeSuccess            = 0
+	WorkerContainerExitCodeOomKill            = 137 // 128 + 9 (base value + SIGKILL), used to indicate OOM kill
+	WorkerContainerExitCodeSigterm            = 143 // 128 + 15 (base value + SIGTERM), used to indicate a graceful termination
 )
 
 var WorkerContainerExitCodes = map[int]string{
 	WorkerContainerExitCodeSuccess:            "Success",
-	WorkerContainerExitCodeUnknownError:       "UnknownError",
-	WorkerContainerExitCodeIncorrectImageArch: "InvalidArch: Image is not amd64/x86_64",
-	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Could not find custom image",
-	WorkerContainerExitCodeIncorrectImageOs:   "InvalidOs: Image is not built for linux",
+	WorkerContainerExitCodeUnknownError:       "UnknownError: An unknown error occurred.",
+	WorkerContainerExitCodeIncorrectImageArch: "InvalidArch: Image must be built for the " + runtime.GOARCH + " architecture.",
+	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Custom image not found. Check your image reference and registry credentials.",
+	WorkerContainerExitCodeIncorrectImageOs:   "InvalidOS: Image must be built for Linux.",
 }
 
 const (

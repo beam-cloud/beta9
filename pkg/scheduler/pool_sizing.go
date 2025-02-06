@@ -6,16 +6,16 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/bsm/redislock"
+	"github.com/beam-cloud/redislock"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
-
-const poolMonitoringInterval = 1 * time.Second
 
 type WorkerPoolSizer struct {
 	controller             WorkerPoolController
 	workerRepo             repository.WorkerRepository
 	providerRepo           repository.ProviderRepository
+	workerPoolRepo         repository.WorkerPoolRepository
 	workerPoolConfig       *types.WorkerPoolConfig
 	workerPoolSizingConfig *types.WorkerPoolSizingConfig
 }
@@ -23,6 +23,7 @@ type WorkerPoolSizer struct {
 func NewWorkerPoolSizer(controller WorkerPoolController,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
+	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository) (*WorkerPoolSizer, error) {
 	poolSizingConfig, err := parsePoolSizingConfig(workerPoolConfig.PoolSizing)
 	if err != nil {
@@ -34,6 +35,7 @@ func NewWorkerPoolSizer(controller WorkerPoolController,
 		workerPoolConfig:       workerPoolConfig,
 		workerPoolSizingConfig: poolSizingConfig,
 		workerRepo:             workerRepo,
+		workerPoolRepo:         workerPoolRepo,
 		providerRepo:           providerRepo,
 	}, nil
 }
@@ -43,6 +45,14 @@ func (s *WorkerPoolSizer) Start() {
 	ticker := time.NewTicker(poolMonitoringInterval)
 	defer ticker.Stop()
 
+	sampledLogger := log.Sample(zerolog.LevelSampler{
+		WarnSampler: &zerolog.BurstSampler{
+			Burst:       1,
+			Period:      10 * time.Second,
+			NextSampler: nil,
+		},
+	})
+
 	for range ticker.C {
 		select {
 		case <-ctx.Done():
@@ -51,6 +61,18 @@ func (s *WorkerPoolSizer) Start() {
 		}
 
 		func() {
+			poolState, err := s.controller.State() // Get the current state of the pool
+			if err != nil {
+				return
+			}
+
+			// If the pool is degraded, we don't want to keep adding more workers
+			if poolState.Status == types.WorkerPoolStatusDegraded {
+				sampledLogger.Warn().Str("pool_name", s.controller.Name()).Msg("pool is degraded, skipping pool sizing")
+				return
+			}
+
+			// Get the current free capacity of the pool
 			freeCapacity, err := s.controller.FreeCapacity()
 			if err != nil {
 				log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to get free capacity")
@@ -80,10 +102,10 @@ func (s *WorkerPoolSizer) Start() {
 // This only adds one worker per machine, so if a machine has more capacity, it will not be fully utilized unless
 // this is called multiple times.
 func (s *WorkerPoolSizer) occupyAvailableMachines() error {
-	if err := s.workerRepo.SetWorkerPoolSizerLock(s.controller.Name()); err != nil {
+	if err := s.workerPoolRepo.SetWorkerPoolSizerLock(s.controller.Name()); err != nil {
 		return err
 	}
-	defer s.workerRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
+	defer s.workerPoolRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
 
 	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name(), true)
 	if err != nil {

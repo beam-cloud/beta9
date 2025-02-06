@@ -43,10 +43,10 @@ func TestAddAndRemoveWorker(t *testing.T) {
 	assert.Equal(t, newWorker.Gpu, worker.Gpu)
 	assert.Equal(t, newWorker.Status, worker.Status)
 
-	err = repo.RemoveWorker(worker)
+	err = repo.RemoveWorker(newWorker.Id)
 	assert.Nil(t, err)
 
-	err = repo.RemoveWorker(worker)
+	err = repo.RemoveWorker(newWorker.Id)
 	assert.Error(t, err)
 
 	_, ok := err.(*types.ErrWorkerNotFound)

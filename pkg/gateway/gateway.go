@@ -35,8 +35,9 @@ import (
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
-	gatewayMiddleware "github.com/beam-cloud/beta9/pkg/gateway/middleware"
+	gatewaymiddleware "github.com/beam-cloud/beta9/pkg/gateway/middleware"
 	gatewayservices "github.com/beam-cloud/beta9/pkg/gateway/services"
+	repositoryservices "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	metrics "github.com/beam-cloud/beta9/pkg/repository/metrics"
@@ -59,6 +60,7 @@ type Gateway struct {
 	ContainerRepo  repository.ContainerRepository
 	BackendRepo    repository.BackendRepository
 	ProviderRepo   repository.ProviderRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
 	EventRepo      repository.EventRepository
 	Tailscale      *network.Tailscale
 	metricsRepo    repository.MetricsRepository
@@ -133,6 +135,7 @@ func NewGateway() (*Gateway, error) {
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker)
+	workerPoolRepo := repository.NewWorkerPoolRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
 	taskDispatcher, err := task.NewDispatcher(ctx, taskRepo)
 	if err != nil {
@@ -145,6 +148,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.WorkspaceRepo = workspaceRepo
 	gateway.ContainerRepo = containerRepo
 	gateway.ProviderRepo = providerRepo
+	gateway.WorkerPoolRepo = workerPoolRepo
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
 	gateway.TaskDispatcher = taskDispatcher
@@ -186,7 +190,7 @@ func (g *Gateway) initHttp() error {
 		AllowHeaders: g.Config.GatewayService.HTTP.CORS.AllowedHeaders,
 		AllowMethods: g.Config.GatewayService.HTTP.CORS.AllowedMethods,
 	}))
-	e.Use(gatewayMiddleware.Subdomain(g.Config.GatewayService.HTTP.GetExternalURL(), g.BackendRepo, g.RedisClient))
+	e.Use(gatewaymiddleware.Subdomain(g.Config.GatewayService.HTTP.GetExternalURL(), g.BackendRepo, g.RedisClient))
 	e.Use(middleware.Recover())
 
 	// Accept both HTTP/2 and HTTP/1
@@ -229,7 +233,22 @@ func (g *Gateway) initGrpc() error {
 	return nil
 }
 
+// Register repository services
+func (g *Gateway) registerRepositoryServices() error {
+	wr := repositoryservices.NewWorkerRepositoryService(g.ctx, g.workerRepo)
+	pb.RegisterWorkerRepositoryServiceServer(g.grpcServer, wr)
+
+	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
+	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
+	return nil
+}
+
 func (g *Gateway) registerServices() error {
+	err := g.registerRepositoryServices()
+	if err != nil {
+		return err
+	}
+
 	// Register map service
 	rm, err := dmap.NewRedisMapService(g.RedisClient)
 	if err != nil {

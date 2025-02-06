@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -196,6 +197,16 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 }
 
 func (t *FunctionTask) HeartBeat(ctx context.Context) (bool, error) {
+	task, err := t.fs.backendRepo.GetTask(ctx, t.msg.TaskId)
+	if err != nil {
+		return false, err
+	}
+
+	// Don't check heartbeats if the task has been running for less than 60 seconds
+	if task.Status == types.TaskStatusRunning && time.Since(time.Unix(task.StartedAt.Time.Unix(), 0)) < time.Duration(defaultFunctionHeartbeatTimeoutS)*time.Second {
+		return true, nil
+	}
+
 	res, err := t.fs.rdb.Exists(ctx, Keys.FunctionHeartbeat(t.msg.WorkspaceName, t.msg.TaskId)).Result()
 	if err != nil {
 		return false, err

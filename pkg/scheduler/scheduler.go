@@ -38,21 +38,44 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	providerRepo := repo.NewProviderRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
+	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	// Load worker pools
-	workerPoolManager := NewWorkerPoolManager()
+	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
 	for name, pool := range config.Worker.Pools {
 		var controller WorkerPoolController = nil
 		var err error = nil
 
 		switch pool.Mode {
 		case types.PoolModeLocal:
-			controller, err = NewLocalKubernetesWorkerPoolController(ctx, config, name, workerRepo, providerRepo)
+			controller, err = NewLocalKubernetesWorkerPoolController(WorkerPoolControllerOptions{
+				Context:        ctx,
+				Name:           name,
+				Config:         config,
+				BackendRepo:    backendRepo,
+				WorkerRepo:     workerRepo,
+				ProviderRepo:   providerRepo,
+				WorkerPoolRepo: workerPoolRepo,
+				ContainerRepo:  containerRepo,
+				EventRepo:      eventRepo,
+			})
 		case types.PoolModeExternal:
-			controller, err = NewExternalWorkerPoolController(ctx, config, name, backendRepo, workerRepo, providerRepo, tailscale, pool.Provider)
+			controller, err = NewExternalWorkerPoolController(WorkerPoolControllerOptions{
+				Context:        ctx,
+				Name:           name,
+				Config:         config,
+				BackendRepo:    backendRepo,
+				WorkerRepo:     workerRepo,
+				ProviderRepo:   providerRepo,
+				WorkerPoolRepo: workerPoolRepo,
+				ContainerRepo:  containerRepo,
+				ProviderName:   pool.Provider,
+				Tailscale:      tailscale,
+				EventRepo:      eventRepo,
+			})
 		default:
 			log.Error().Str("pool_name", name).Str("mode", string(pool.Mode)).Msg("no valid controller found for pool")
 			continue
@@ -141,7 +164,7 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	log.Info().Interface("stop_args", stopArgs).Msg("received stop request")
 
-	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, time.Duration(types.ContainerStateTtlSWhilePending)*time.Second)
+	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
 	if err != nil {
 		return err
 	}
@@ -183,7 +206,9 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 		}
 	} else {
 		for _, gpu := range request.GpuRequest {
-			pools := s.workerPoolManager.GetPoolsByGPU(gpu)
+			pools := s.workerPoolManager.GetPoolByFilters(poolFilters{
+				GPUType: gpu,
+			})
 
 			for _, pool := range pools {
 				controllers = append(controllers, pool.Controller)

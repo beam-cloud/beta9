@@ -6,6 +6,7 @@ toolchain go1.23.5
 
 require (
 	buf.build/gen/go/cedana/cedana/protocolbuffers/go v1.36.3-20250123222419-64bf8384f939.1
+	buf.build/gen/go/cedana/criu/protocolbuffers/go v1.36.3-20250123222419-6ed7871347d0.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.30.5
@@ -16,10 +17,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.51.4
-	github.com/beam-cloud/blobcache-v2 v0.0.0-20250122000617-b94e48cb2e95
+	github.com/beam-cloud/blobcache-v2 v0.0.0-20250204202524-80d61da9a0f8
 	github.com/beam-cloud/clip v0.0.0-20250109221532-5d9d7744594d
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
-	github.com/bsm/redislock v0.9.4
+	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
 	github.com/cedana/cedana v0.9.238-pre
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cloudevents/sdk-go/v2 v2.15.1
@@ -29,7 +30,7 @@ require (
 	github.com/gofrs/uuid v4.4.0+incompatible
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
-	github.com/gorilla/websocket v1.5.1
+	github.com/gorilla/websocket v1.5.3
 	github.com/hanwen/go-fuse/v2 v2.5.1
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/json-iterator/go v1.1.12
@@ -73,9 +74,10 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.31.0
 	go.opentelemetry.io/otel/trace v1.33.0
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56
-	golang.org/x/net v0.33.0
+	golang.org/x/net v0.34.0
 	golang.org/x/sync v0.10.0
-	golang.org/x/sys v0.28.0
+	golang.org/x/sys v0.29.0
+	golang.org/x/time v0.8.0
 	google.golang.org/grpc v1.68.1
 	google.golang.org/protobuf v1.36.3
 	gopkg.in/yaml.v2 v2.4.0
@@ -89,7 +91,6 @@ require (
 
 require (
 	buf.build/gen/go/cedana/cedana/grpc/go v1.5.1-20250123222419-64bf8384f939.2 // indirect
-	buf.build/gen/go/cedana/criu/protocolbuffers/go v1.36.3-20250123222419-6ed7871347d0.1 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/AdamKorcz/go-fuzz-headers v0.0.0-20210312213058-32f4d319f0d2 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
@@ -117,6 +118,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.13.0 // indirect
 	github.com/briandowns/spinner v1.23.0 // indirect
+	github.com/bsm/redislock v0.9.4 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
@@ -139,7 +141,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.6.0 // indirect
 	github.com/gaissmai/bart v0.11.1 // indirect
 	github.com/getkin/kin-openapi v0.127.0 // indirect
-	github.com/go-chi/chi/v5 v5.0.12 // indirect
+	github.com/go-chi/chi/v5 v5.1.0 // indirect
 	github.com/go-json-experiment/json v0.0.0-20231102232822-2e55bd4e08b0 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
@@ -268,13 +270,12 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
-	golang.org/x/crypto v0.31.0 // indirect
-	golang.org/x/mod v0.20.0 // indirect
+	golang.org/x/crypto v0.32.0 // indirect
+	golang.org/x/mod v0.22.0 // indirect
 	golang.org/x/oauth2 v0.24.0 // indirect
-	golang.org/x/term v0.27.0 // indirect
+	golang.org/x/term v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
-	golang.org/x/time v0.8.0 // indirect
-	golang.org/x/tools v0.24.0 // indirect
+	golang.org/x/tools v0.29.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20241209162323-e6fa225c2576 // indirect

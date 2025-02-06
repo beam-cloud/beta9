@@ -3,9 +3,9 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/shirou/gopsutil/v4/net"
@@ -82,7 +82,7 @@ func NewProcessMonitor(pid int, devices []specs.LinuxDeviceCgroup, gpuDeviceIds 
 }
 
 func (m *ProcessMonitor) GetStatistics() (*ProcessStats, error) {
-	processes, err := m.findProcesses()
+	processes, err := common.FindProcesses(m.pid)
 	if err != nil {
 		return nil, err
 	}
@@ -207,40 +207,4 @@ func (m *ProcessMonitor) fetchMemory(processes []*process.Process) *process.Memo
 	}
 
 	return &currentMemory
-}
-
-func (m *ProcessMonitor) findProcesses() ([]*process.Process, error) {
-	processes, err := process.Processes()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, p := range processes {
-		if p.Pid == m.pid {
-			return m.findChildProcesses(p), nil
-		}
-	}
-
-	return nil, fmt.Errorf("failed to find processes for pid %v", m.pid)
-}
-
-func (m *ProcessMonitor) findChildProcesses(p *process.Process) []*process.Process {
-	children, err := p.Children()
-	if err != nil {
-		// An error will occur when there are no children (pgrep -P <pid>)
-		return nil
-	}
-
-	processes := []*process.Process{}
-	processes = append(processes, children...)
-
-	for _, child := range children {
-		grandChildren := m.findChildProcesses(child)
-		if grandChildren == nil {
-			continue
-		}
-		processes = append(processes, grandChildren...)
-	}
-
-	return processes
 }

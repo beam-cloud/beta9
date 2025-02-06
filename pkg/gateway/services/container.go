@@ -41,6 +41,7 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 			WorkspaceId: state.WorkspaceId,
 			Status:      string(state.Status),
 			ScheduledAt: timestamppb.New(time.Unix(state.ScheduledAt, 0)),
+			StartedAt:   timestamppb.New(time.Unix(state.StartedAt, 0)),
 			WorkerId:    containerWorkerMap[state.ContainerId].WorkerId,
 			MachineId:   containerWorkerMap[state.ContainerId].MachineId,
 		}

@@ -48,7 +48,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		metricsRepo: nil,
 	}
 
-	workerPoolManager := NewWorkerPoolManager()
+	workerPoolManager := NewWorkerPoolManager(false)
 	for name, pool := range config.Worker.Pools {
 		workerPoolManager.SetPool(name, pool, &LocalWorkerPoolControllerForTest{
 			ctx:        context.Background(),
@@ -85,6 +85,14 @@ func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
 
 func (wpc *LocalWorkerPoolControllerForTest) IsPreemptable() bool {
 	return wpc.preemptable
+}
+
+func (wpc *LocalWorkerPoolControllerForTest) State() (*types.WorkerPoolState, error) {
+	return &types.WorkerPoolState{}, nil
+}
+
+func (wpc *LocalWorkerPoolControllerForTest) Mode() types.PoolMode {
+	return types.PoolModeLocal
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
@@ -128,12 +136,13 @@ func (wpc *LocalWorkerPoolControllerForTest) FreeCapacity() (*WorkerPoolCapacity
 }
 
 type ExternalWorkerPoolControllerForTest struct {
-	ctx          context.Context
-	name         string
-	workerRepo   repo.WorkerRepository
-	providerRepo repo.ProviderRepository
-	poolName     string
-	providerName string
+	ctx            context.Context
+	name           string
+	workerRepo     repo.WorkerRepository
+	providerRepo   repo.ProviderRepository
+	workerPoolRepo repo.WorkerPoolRepository
+	poolName       string
+	providerName   string
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) Context() context.Context {
@@ -142,6 +151,14 @@ func (wpc *ExternalWorkerPoolControllerForTest) Context() context.Context {
 
 func (wpc *ExternalWorkerPoolControllerForTest) IsPreemptable() bool {
 	return false
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) State() (*types.WorkerPoolState, error) {
+	return &types.WorkerPoolState{}, nil
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) Mode() types.PoolMode {
+	return types.PoolModeExternal
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) RequiresPoolSelector() bool {

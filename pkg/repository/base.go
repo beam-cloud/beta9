@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -15,11 +14,12 @@ type WorkerRepository interface {
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
+	CordonAllPendingWorkersInPool(poolName string) error
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
-	RemoveWorker(w *types.Worker) error
+	RemoveWorker(workerId string) error
 	SetWorkerKeepAlive(workerId string) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
@@ -27,16 +27,14 @@ type WorkerRepository interface {
 	AddContainerToWorker(workerId string, containerId string) error
 	RemoveContainerFromWorker(workerId string, containerId string) error
 	SetContainerResourceValues(workerId string, containerId string, usage types.ContainerResourceUsage) error
-	SetImagePullLock(workerId, imageId string) error
-	RemoveImagePullLock(workerId, imageId string) error
+	SetImagePullLock(workerId, imageId string) (string, error)
+	RemoveImagePullLock(workerId, imageId, token string) error
 	GetContainerIp(networkPrefix string, containerId string) (string, error)
 	SetContainerIp(networkPrefix string, containerId, containerIp string) error
 	RemoveContainerIp(networkPrefix string, containerId string) error
 	GetContainerIps(networkPrefix string) ([]string, error)
-	SetNetworkLock(networkPrefix string, ttl, retries int) error
-	RemoveNetworkLock(networkPrefix string) error
-	SetWorkerPoolSizerLock(controllerName string) error
-	RemoveWorkerPoolSizerLock(controllerName string) error
+	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)
+	RemoveNetworkLock(networkPrefix string, token string) error
 }
 
 type ContainerRepository interface {
@@ -46,7 +44,7 @@ type ContainerRepository interface {
 	GetContainerExitCode(string) (int, error)
 	SetContainerAddress(containerId string, addr string) error
 	GetContainerAddress(containerId string) (string, error)
-	UpdateContainerStatus(string, types.ContainerStatus, time.Duration) error
+	UpdateContainerStatus(string, types.ContainerStatus, int64) error
 	UpdateAssignedContainerGPU(string, string) error
 	DeleteContainerState(containerId string) error
 	SetWorkerAddress(containerId string, addr string) error
@@ -63,6 +61,15 @@ type ContainerRepository interface {
 	DeleteStubState(stubId string) error
 }
 
+type WorkerPoolRepository interface {
+	SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error
+	GetWorkerPoolState(ctx context.Context, poolName string) (*types.WorkerPoolState, error)
+	SetWorkerPoolStateLock(poolName string) error
+	RemoveWorkerPoolStateLock(poolName string) error
+	SetWorkerPoolSizerLock(poolName string) error
+	RemoveWorkerPoolSizerLock(poolName string) error
+}
+
 type WorkspaceRepository interface {
 	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
 	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
@@ -75,6 +82,7 @@ type BackendRepository interface {
 	CreateWorkspace(ctx context.Context) (types.Workspace, error)
 	GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error)
 	GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error)
+	GetAdminWorkspace(ctx context.Context) (*types.Workspace, error)
 	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
 	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
 	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)
@@ -187,6 +195,8 @@ type EventRepository interface {
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
+	PushWorkerPoolDegradedEvent(poolName string, reasons []string)
+	PushWorkerPoolHealthyEvent(poolName string)
 }
 
 type MetricsRepository interface {

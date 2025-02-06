@@ -81,7 +81,7 @@ ImageCredentials = Union[
     DockerHubCredentials,
     GCPCredentials,
     NGCCredentials,
-    ImageCredentialKeys,
+    List[ImageCredentialKeys],
 ]
 
 
@@ -447,7 +447,7 @@ class Image(BaseAbstraction):
                     gpu=self.gpu,
                 )
             ):
-                if r.msg != "":
+                if r.msg != "" and not r.done:
                     terminal.detail(r.msg, end="")
 
                 if r.done:
@@ -455,7 +455,7 @@ class Image(BaseAbstraction):
                     break
 
         if not last_response.success:
-            terminal.error(f"Build failed: {last_response.msg} ❌")
+            terminal.error(str(last_response.msg).rstrip(), exit=False)
             return ImageBuildResult(success=False)
 
         terminal.header("Build complete 🎉")
@@ -491,7 +491,7 @@ class Image(BaseAbstraction):
         return self
 
     def add_micromamba_packages(
-        self, packages: Union[Sequence[str], str], channels: Optional[Sequence[str]] = []
+        self, packages: Union[Sequence[str], str], channels: Sequence[str] = []
     ) -> "Image":
         """
         Add micromamba packages that will be installed when building the image.

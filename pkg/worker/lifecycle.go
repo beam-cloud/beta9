@@ -15,6 +15,8 @@ import (
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
@@ -27,12 +29,16 @@ const (
 	initialSpecBaseName       string        = "initial_config.json"
 	runcEventsInterval        time.Duration = 5 * time.Second
 	containerInnerPort        int           = 8001 // Use a fixed port inside the container
-	exitCodeSigterm           int           = 143  // Means the container received a SIGTERM by the underlying operating system
-	exitCodeSigkill           int           = 137  // Means the container received a SIGKILL by the underlying operating system
 )
 
 //go:embed base_runc_config.json
 var baseRuncConfigRaw string
+
+// These parameters are set when runcResourcesEnforced is enabled in the worker config
+var cgroupV2Parameters map[string]string = map[string]string{
+	// When an OOM occurs within a runc container, the kernel will kill the container and all procceses within it.
+	"memory.oom.group": "1",
+}
 
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
@@ -85,11 +91,14 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 	if *exitCode < 0 {
 		*exitCode = 1
-	} else if *exitCode == exitCodeSigterm {
+	} else if *exitCode == types.WorkerContainerExitCodeSigterm {
 		*exitCode = 0
 	}
 
-	err := s.containerRepo.SetContainerExitCode(containerId, *exitCode)
+	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+		ContainerId: containerId,
+		ExitCode:    int32(*exitCode),
+	}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to set exit code: %v", err)
 	}
@@ -146,7 +155,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 func (s *Worker) deleteContainer(containerId string, err error) {
 	s.containerInstances.Delete(containerId)
 
-	err = s.containerRepo.DeleteContainerState(containerId)
+	_, err = handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
 	}
@@ -167,7 +176,13 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
-	s.containerRepo.SetWorkerAddress(containerId, hostname)
+	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
+		ContainerId: containerId,
+		Address:     hostname,
+	}))
+	if err != nil {
+		return err
+	}
 
 	logChan := make(chan common.LogRecord)
 	outputLogger := slog.New(common.NewChannelHandler(logChan))
@@ -222,7 +237,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindPort)
-	err = s.containerRepo.SetContainerAddress(request.ContainerId, containerAddr)
+	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
+		ContainerId: request.ContainerId,
+		Address:     containerAddr,
+	}))
 	if err != nil {
 		return err
 	}
@@ -302,6 +320,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if s.config.Worker.RunCResourcesEnforced {
 		spec.Linux.Resources.CPU = getLinuxCPU(request)
 		spec.Linux.Resources.Memory = getLinuxMemory(request)
+		spec.Linux.Resources.Unified = cgroupV2Parameters
 	}
 
 	env := s.getContainerEnvironment(request, options)
@@ -309,7 +328,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
 
 		existingCudaFound := false
-		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env, options)
+		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env)
 		if !existingCudaFound {
 			// If the container image does not have cuda libraries installed, mount cuda libs from the host
 			spec.Mounts = s.containerCudaManager.InjectMounts(spec.Mounts)
@@ -348,7 +367,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		})
 
 		// XXX: Remove /usr/lib/worker/x86_64-linux-gnu from mounts
-    // as CRIU is unable to find its root mount
+		// as CRIU is unable to find its root mount
 		for i, m := range spec.Mounts {
 			if m.Destination == "/usr/lib/worker/x86_64-linux-gnu" {
 				spec.Mounts = append(spec.Mounts[:i], spec.Mounts[i+1:]...)
@@ -481,8 +500,14 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
 
-	s.workerRepo.AddContainerToWorker(s.workerId, request.ContainerId)
-	defer s.workerRepo.RemoveContainerFromWorker(s.workerId, request.ContainerId)
+	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
+		WorkerId:    s.workerId,
+		ContainerId: request.ContainerId,
+	})
+	defer s.workerRepoClient.RemoveContainerFromWorker(ctx, &pb.RemoveContainerFromWorkerRequest{
+		WorkerId:    s.workerId,
+		ContainerId: request.ContainerId,
+	})
 	defer cancel()
 
 	exitCode := -1
@@ -524,15 +549,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		if _, err := s.containerRepo.GetContainerState(containerId); err != nil {
-			if _, ok := err.(*types.ErrContainerStateNotFound); ok {
+		_, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+		if err != nil {
+			notFoundErr := &types.ErrContainerStateNotFound{}
+
+			if notFoundErr.From(err) {
 				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}
 		}
 
 		// Update container status to running
-		err := s.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusRunning, time.Duration(types.ContainerStateTtlS)*time.Second)
+		_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+			ContainerId:   containerId,
+			Status:        string(types.ContainerStatusRunning),
+			ExpirySeconds: int64(types.ContainerStateTtlS),
+		}))
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
 		}
@@ -642,10 +674,11 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 		return cleanup(-1, err)
 	}
 	pid := state.Pid
+	isOOMKilled := false
 
 	// Start monitoring the container
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, request, outputLogger)              // Watch for OOM events
+	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
+	go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 
 	process, err := os.FindProcess(pid)
 	if err != nil {
@@ -662,6 +695,10 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 			return cleanup(-1, err)
 		}
 		exitCode = processState.ExitCode()
+	}
+
+	if isOOMKilled {
+		exitCode = types.WorkerContainerExitCodeOomKill
 	}
 
 	return cleanup(exitCode, nil)
@@ -683,7 +720,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
 }
 
-func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) {
+func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *bool) {
 	var (
 		seenEvents  = make(map[string]struct{})
 		ch          <-chan *runc.Event
@@ -739,7 +776,8 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 			seenEvents[event.Type] = struct{}{}
 
 			if event.Type == "oom" {
-				outputLogger.Error("A process in the container was killed due to out-of-memory conditions.")
+				*isOOMKilled = true
+				outputLogger.Error("Container was killed due to out-of-memory conditions.")
 				s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			}
 		}

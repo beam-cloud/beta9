@@ -1,7 +1,6 @@
 bin/gateway
 bin/runner
 bin/worker
-bin/proxy
 tmp/*
 *.gob
 __pycache__
