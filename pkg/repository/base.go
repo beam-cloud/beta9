@@ -14,7 +14,7 @@ type WorkerRepository interface {
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
-	CordonAllWorkersInPool(poolName string) error
+	CordonAllPendingWorkersInPool(poolName string) error
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error

@@ -284,13 +284,17 @@ func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.W
 	return poolWorkers, nil
 }
 
-func (r *WorkerRedisRepository) CordonAllWorkersInPool(poolName string) error {
+func (r *WorkerRedisRepository) CordonAllPendingWorkersInPool(poolName string) error {
 	workers, err := r.GetAllWorkersInPool(poolName)
 	if err != nil {
 		return err
 	}
 
 	for _, w := range workers {
+		if w.Status != types.WorkerStatusPending {
+			continue
+		}
+
 		err := r.UpdateWorkerStatus(w.Id, types.WorkerStatusDisabled)
 		if err != nil {
 			return err
