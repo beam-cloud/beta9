@@ -44,7 +44,7 @@ func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
 	// Set some environment variables to simulate NVIDIA settings
 	os.Setenv("NVIDIA_DRIVER_CAPABILITIES", "all")
 	os.Setenv("NVIDIA_REQUIRE_CUDA", "cuda>=9.0")
-	os.Setenv("CUDA_HOME", "/usr/local/cuda-12.3")
+	os.Setenv("CUDA_HOME", "/usr/local/cuda-12.4")
 
 	defer func() {
 		os.Unsetenv("NVIDIA_DRIVER_CAPABILITIES")
@@ -56,9 +56,9 @@ func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
 		"INITIAL=1",
 		"NVIDIA_DRIVER_CAPABILITIES=all",
 		"NVIDIA_REQUIRE_CUDA=cuda>=9.0",
-		"CUDA_HOME=/usr/local/cuda-12.3",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/bin",
-		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.3/targets/x86_64-linux/lib",
+		"CUDA_HOME=/usr/local/cuda-12.4",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.4/bin",
+		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.4/targets/x86_64-linux/lib",
 	}
 
 	resultEnv, _ := manager.InjectEnvVars(initialEnv)
@@ -69,12 +69,12 @@ func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
 
 func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
 	manager := NewContainerNvidiaManager(4)
-	initialEnv := []string{"INITIAL=1", "CUDA_VERSION=12.3"}
+	initialEnv := []string{"INITIAL=1", "CUDA_VERSION=12.4"}
 
 	// Set some environment variables to simulate NVIDIA settings
 	os.Setenv("NVIDIA_DRIVER_CAPABILITIES", "all")
 	os.Setenv("NVIDIA_REQUIRE_CUDA", "cuda>=9.0")
-	os.Setenv("CUDA_VERSION", "12.3")
+	os.Setenv("CUDA_VERSION", "12.4")
 
 	defer func() {
 		os.Unsetenv("NVIDIA_DRIVER_CAPABILITIES")
@@ -86,10 +86,10 @@ func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
 		"INITIAL=1",
 		"NVIDIA_DRIVER_CAPABILITIES=all",
 		"NVIDIA_REQUIRE_CUDA=cuda>=9.0",
-		"CUDA_VERSION=12.3",
-		"CUDA_HOME=/usr/local/cuda-12.3",
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.3/bin",
-		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.3/targets/x86_64-linux/lib",
+		"CUDA_VERSION=12.4",
+		"CUDA_HOME=/usr/local/cuda-12.4",
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/cuda-12.4/bin",
+		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.4/targets/x86_64-linux/lib",
 	}
 
 	resultEnv, _ := manager.InjectEnvVars(initialEnv)
