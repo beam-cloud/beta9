@@ -14,6 +14,7 @@ type WorkerRepository interface {
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
+	CordonAllPendingWorkersInPool(poolName string) error
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
 	ToggleWorkerAvailable(workerId string) error
@@ -34,8 +35,6 @@ type WorkerRepository interface {
 	GetContainerIps(networkPrefix string) ([]string, error)
 	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)
 	RemoveNetworkLock(networkPrefix string, token string) error
-	SetWorkerPoolSizerLock(controllerName string) error
-	RemoveWorkerPoolSizerLock(controllerName string) error
 }
 
 type ContainerRepository interface {
@@ -60,6 +59,15 @@ type ContainerRepository interface {
 	GetStubState(stubId string) (string, error)
 	SetStubState(stubId, state string) error
 	DeleteStubState(stubId string) error
+}
+
+type WorkerPoolRepository interface {
+	SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error
+	GetWorkerPoolState(ctx context.Context, poolName string) (*types.WorkerPoolState, error)
+	SetWorkerPoolStateLock(poolName string) error
+	RemoveWorkerPoolStateLock(poolName string) error
+	SetWorkerPoolSizerLock(poolName string) error
+	RemoveWorkerPoolSizerLock(poolName string) error
 }
 
 type WorkspaceRepository interface {
@@ -187,6 +195,8 @@ type EventRepository interface {
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
+	PushWorkerPoolDegradedEvent(poolName string, reasons []string)
+	PushWorkerPoolHealthyEvent(poolName string)
 }
 
 type MetricsRepository interface {

@@ -138,6 +138,7 @@ type ContainerState struct {
 	GpuCount    uint32          `redis:"gpu_count" json:"gpu_count"`
 	Cpu         int64           `redis:"cpu" json:"cpu"`
 	Memory      int64           `redis:"memory" json:"memory"`
+	StartedAt   int64           `redis:"started_at" json:"started_at"`
 }
 
 // @go2proto
@@ -146,6 +147,7 @@ type Container struct {
 	StubId      string          `redis:"stub_id" json:"stub_id"`
 	Status      ContainerStatus `redis:"status" json:"status"`
 	ScheduledAt time.Time       `redis:"scheduled_at" json:"scheduled_at"`
+	StartedAt   time.Time       `redis:"started_at" json:"started_at"`
 	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
 	WorkerId    string          `redis:"worker_id" json:"worker_id"`
 	MachineId   string          `redis:"machine_id" json:"machine_id"`
@@ -157,6 +159,7 @@ func (c *Container) ToProto() *pb.Container {
 		StubId:      c.StubId,
 		Status:      string(c.Status),
 		ScheduledAt: timestamppb.New(c.ScheduledAt),
+		StartedAt:   timestamppb.New(c.StartedAt),
 		WorkspaceId: c.WorkspaceId,
 		WorkerId:    c.WorkerId,
 		MachineId:   c.MachineId,
@@ -169,6 +172,7 @@ func NewContainerFromProto(in *pb.Container) *Container {
 		StubId:      in.StubId,
 		Status:      ContainerStatus(in.Status),
 		ScheduledAt: in.ScheduledAt.AsTime(),
+		StartedAt:   in.StartedAt.AsTime(),
 		WorkspaceId: in.WorkspaceId,
 		WorkerId:    in.WorkerId,
 		MachineId:   in.MachineId,
@@ -385,6 +389,50 @@ func (e *ErrWorkerNotFound) From(err error) bool {
 
 	return false
 }
+
+const workerPoolStateNotFoundPrefix = "worker pool state not found: "
+
+type ErrWorkerPoolStateNotFound struct {
+	PoolName string
+}
+
+func (e *ErrWorkerPoolStateNotFound) Error() string {
+	return fmt.Sprintf("%s%s", workerPoolStateNotFoundPrefix, e.PoolName)
+}
+
+func (e *ErrWorkerPoolStateNotFound) From(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if strings.HasPrefix(err.Error(), workerPoolStateNotFoundPrefix) {
+		e.PoolName = strings.TrimPrefix(err.Error(), workerPoolStateNotFoundPrefix)
+		return true
+	}
+
+	return false
+}
+
+type WorkerPoolState struct {
+	Status             WorkerPoolStatus `redis:"status" json:"status"`
+	SchedulingLatency  int64            `redis:"scheduling_latency" json:"scheduling_latency"`
+	FreeGpu            uint             `redis:"free_gpu" json:"free_gpu"`
+	FreeCpu            int64            `redis:"free_cpu" json:"free_cpu"`
+	FreeMemory         int64            `redis:"free_memory" json:"free_memory"`
+	PendingWorkers     int64            `redis:"pending_workers" json:"pending_workers"`
+	AvailableWorkers   int64            `redis:"available_workers" json:"available_workers"`
+	PendingContainers  int64            `redis:"pending_containers" json:"pending_containers"`
+	RunningContainers  int64            `redis:"running_containers" json:"running_containers"`
+	RegisteredMachines int64            `redis:"registered_machines" json:"registered_machines"`
+	PendingMachines    int64            `redis:"pending_machines" json:"pending_machines"`
+}
+
+type WorkerPoolStatus string
+
+const (
+	WorkerPoolStatusHealthy  WorkerPoolStatus = "HEALTHY"
+	WorkerPoolStatusDegraded WorkerPoolStatus = "DEGRADED"
+)
 
 type WorkerPoolSizingConfig struct {
 	MinFreeCpu            int64

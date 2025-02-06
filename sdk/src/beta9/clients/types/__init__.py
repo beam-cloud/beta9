@@ -43,9 +43,10 @@ class Container(betterproto.Message):
     stub_id: str = betterproto.string_field(2)
     status: str = betterproto.string_field(3)
     scheduled_at: datetime = betterproto.message_field(4)
-    workspace_id: str = betterproto.string_field(5)
-    worker_id: str = betterproto.string_field(6)
-    machine_id: str = betterproto.string_field(7)
+    started_at: datetime = betterproto.message_field(5)
+    workspace_id: str = betterproto.string_field(6)
+    worker_id: str = betterproto.string_field(7)
+    machine_id: str = betterproto.string_field(8)
 
 
 @dataclass(eq=False, repr=False)
@@ -83,6 +84,7 @@ class ContainerState(betterproto.Message):
     gpu_count: int = betterproto.uint32_field(7)
     cpu: int = betterproto.int64_field(8)
     memory: int = betterproto.int64_field(9)
+    started_at: int = betterproto.int64_field(10)
 
 
 @dataclass(eq=False, repr=False)

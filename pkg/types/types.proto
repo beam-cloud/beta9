@@ -36,9 +36,10 @@ message Container {
   string stub_id = 2;
   string status = 3;
   google.protobuf.Timestamp scheduled_at = 4;
-  string workspace_id = 5;
-  string worker_id = 6;
-  string machine_id = 7;
+  google.protobuf.Timestamp started_at = 5;
+  string workspace_id = 6;
+  string worker_id = 7;
+  string machine_id = 8;
 }
 
 message ContainerRequest {
@@ -74,6 +75,7 @@ message ContainerState {
   uint32 gpu_count = 7;
   int64 cpu = 8;
   int64 memory = 9;
+  int64 started_at = 10;
 }
 
 message Mount {

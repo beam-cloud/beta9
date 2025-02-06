@@ -38,7 +38,13 @@ var (
 	workerNetworkLock            string = "worker:network:%s:lock"
 	workerNetworkIpIndex         string = "worker:network:%s:ip_index"
 	workerNetworkContainerIp     string = "worker:network:%s:container_ip:%s"
-	workerPoolSizerLock          string = "worker:pool_sizer:%s:lock"
+)
+
+var (
+	workerPoolPrefix    string = "workerpool"
+	workerPoolState     string = "workerpool:%s:state"
+	workerPoolStateLock string = "workerpool:%s:state:lock"
+	workerPoolSizerLock string = "workerpool:%s:sizer:lock"
 )
 
 var (
@@ -193,6 +199,23 @@ func (rk *redisKeys) WorkerNetworkContainerIp(networkPrefix, containerId string)
 	return fmt.Sprintf(workerNetworkContainerIp, networkPrefix, containerId)
 }
 
+// Worker Pool keys
+func (rk *redisKeys) WorkerPoolPrefix() string {
+	return workerPoolPrefix
+}
+
+func (rk *redisKeys) WorkerPoolState(poolName string) string {
+	return fmt.Sprintf(workerPoolState, poolName)
+}
+
+func (rk *redisKeys) WorkerPoolStateLock(poolName string) string {
+	return fmt.Sprintf(workerPoolStateLock, poolName)
+}
+
+func (rk *redisKeys) WorkerPoolSizerLock(poolName string) string {
+	return fmt.Sprintf(workerPoolSizerLock, poolName)
+}
+
 // Task keys
 func (rk *redisKeys) TaskPrefix() string {
 	return taskPrefix
@@ -245,11 +268,6 @@ func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {
 
 func (rl *redisKeys) WorkspaceAuthorizedToken(token string) string {
 	return fmt.Sprintf(workspaceAuthorizedToken, token)
-}
-
-// WorkerPool keys
-func (rk *redisKeys) WorkerPoolSizerLock(poolName string) string {
-	return fmt.Sprintf(workerPoolSizerLock, poolName)
 }
 
 // Tailscale keys

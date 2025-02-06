@@ -23,7 +23,7 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 	assert.Nil(t, err)
 
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(redisClient)
-
+	workerPoolRepo := repo.NewWorkerPoolRedisRepositoryForTest(redisClient)
 	config := &types.WorkerPoolSizingConfig{
 		MinFreeCpu:           10000,
 		MinFreeMemory:        5000,
@@ -89,6 +89,7 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 			sizer := &WorkerPoolSizer{
 				controller:             controller,
 				workerPoolSizingConfig: tt.config,
+				workerPoolRepo:         workerPoolRepo,
 			}
 
 			newWorker, err := sizer.addWorkerIfNeeded(tt.freeCapacity)
@@ -216,21 +217,24 @@ func TestOccupyAvailableMachines(t *testing.T) {
 
 	providerRepo := repo.NewProviderRedisRepositoryForTest(redisClient)
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(redisClient)
+	workerPoolRepo := repo.NewWorkerPoolRedisRepositoryForTest(redisClient)
 
 	lambdaPoolName := "LambdaLabsPool"
 	controller := &ExternalWorkerPoolControllerForTest{
-		ctx:          context.Background(),
-		name:         lambdaPoolName,
-		workerRepo:   workerRepo,
-		providerRepo: providerRepo,
-		poolName:     lambdaPoolName,
-		providerName: string(types.ProviderLambdaLabs),
+		ctx:            context.Background(),
+		name:           lambdaPoolName,
+		workerRepo:     workerRepo,
+		providerRepo:   providerRepo,
+		poolName:       lambdaPoolName,
+		providerName:   string(types.ProviderLambdaLabs),
+		workerPoolRepo: workerPoolRepo,
 	}
 
 	sizer := &WorkerPoolSizer{
-		providerRepo: providerRepo,
-		workerRepo:   workerRepo,
-		controller:   controller,
+		workerRepo:     workerRepo,
+		providerRepo:   providerRepo,
+		workerPoolRepo: workerPoolRepo,
+		controller:     controller,
 		workerPoolConfig: &types.WorkerPoolConfig{
 			Provider: &types.ProviderLambdaLabs,
 			GPUType:  "A10G",
@@ -351,23 +355,26 @@ func TestOccupyAvailableMachinesConcurrency(t *testing.T) {
 
 	providerRepo := repo.NewProviderRedisRepositoryForTest(redisClient)
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(redisClient)
+	workerPoolRepo := repo.NewWorkerPoolRedisRepositoryForTest(redisClient)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	poolName := "pool1"
 	controller := &ExternalWorkerPoolControllerForTest{
-		ctx:          ctx,
-		name:         poolName,
-		workerRepo:   workerRepo,
-		providerRepo: providerRepo,
-		poolName:     poolName,
-		providerName: string(types.ProviderGeneric),
+		ctx:            ctx,
+		name:           poolName,
+		workerRepo:     workerRepo,
+		providerRepo:   providerRepo,
+		workerPoolRepo: workerPoolRepo,
+		poolName:       poolName,
+		providerName:   string(types.ProviderGeneric),
 	}
 
 	sizer1 := &WorkerPoolSizer{
-		providerRepo: providerRepo,
-		workerRepo:   workerRepo,
-		controller:   controller,
+		providerRepo:   providerRepo,
+		workerRepo:     workerRepo,
+		workerPoolRepo: workerPoolRepo,
+		controller:     controller,
 		workerPoolConfig: &types.WorkerPoolConfig{
 			Provider: &types.ProviderGeneric,
 			GPUType:  "A10G",
@@ -382,9 +389,10 @@ func TestOccupyAvailableMachinesConcurrency(t *testing.T) {
 	}
 
 	sizer2 := &WorkerPoolSizer{
-		providerRepo: providerRepo,
-		workerRepo:   workerRepo,
-		controller:   controller,
+		providerRepo:   providerRepo,
+		workerRepo:     workerRepo,
+		workerPoolRepo: workerPoolRepo,
+		controller:     controller,
 		workerPoolConfig: &types.WorkerPoolConfig{
 			Provider: &types.ProviderGeneric,
 			GPUType:  "A10G",

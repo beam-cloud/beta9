@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
@@ -29,10 +31,9 @@ const (
 	defaultWorkerLogPath        string  = "/var/log/worker"
 	defaultImagesPath           string  = "/images"
 	defaultSharedMemoryPct      float32 = 0.5
+	poolMonitoringInterval              = 1 * time.Second
+	poolHealthCheckInterval             = 5 * time.Second
 )
-
-type WorkerPoolState struct {
-}
 
 type WorkerPoolController interface {
 	AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error)
@@ -41,8 +42,9 @@ type WorkerPoolController interface {
 	FreeCapacity() (*WorkerPoolCapacity, error)
 	Context() context.Context
 	IsPreemptable() bool
-	State() WorkerPoolState
+	State() (*types.WorkerPoolState, error)
 	RequiresPoolSelector() bool
+	Mode() types.PoolMode
 }
 
 type WorkerPoolConfig struct {
@@ -56,6 +58,20 @@ type WorkerPoolCapacity struct {
 	FreeGpu    uint
 }
 
+type WorkerPoolControllerOptions struct {
+	Name           string
+	Context        context.Context
+	Config         types.AppConfig
+	BackendRepo    repository.BackendRepository
+	WorkerRepo     repository.WorkerRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
+	ContainerRepo  repository.ContainerRepository
+	ProviderName   *types.MachineProvider
+	ProviderRepo   repository.ProviderRepository
+	EventRepo      repository.EventRepository
+	Tailscale      *network.Tailscale
+}
+
 func GenerateWorkerId() string {
 	return uuid.New().String()[:8]
 }
@@ -63,13 +79,31 @@ func GenerateWorkerId() string {
 func MonitorPoolSize(wpc WorkerPoolController,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
+	workerPoolRepo repository.WorkerPoolRepository,
 	providerRepo repository.ProviderRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, providerRepo)
+	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
 	if err != nil {
 		return err
 	}
 
 	go poolSizer.Start()
+	return nil
+}
+
+func MonitorPoolHealth(opts PoolHealthMonitorOptions) error {
+	poolHealthMonitor := NewPoolHealthMonitor(PoolHealthMonitorOptions{
+		Controller:       opts.Controller,
+		WorkerPoolConfig: opts.WorkerPoolConfig,
+		WorkerConfig:     opts.WorkerConfig,
+		WorkerRepo:       opts.WorkerRepo,
+		ProviderRepo:     opts.ProviderRepo,
+		WorkerPoolRepo:   opts.WorkerPoolRepo,
+		ContainerRepo:    opts.ContainerRepo,
+		EventRepo:        opts.EventRepo,
+	})
+
+	go poolHealthMonitor.Start()
+
 	return nil
 }
 

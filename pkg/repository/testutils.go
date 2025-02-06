@@ -34,6 +34,11 @@ func NewWorkerRedisRepositoryForTest(rdb *common.RedisClient) WorkerRepository {
 	return &WorkerRedisRepository{rdb: rdb, lock: lock, config: config}
 }
 
+func NewWorkerPoolRedisRepositoryForTest(rdb *common.RedisClient) WorkerPoolRepository {
+	lock := common.NewRedisLock(rdb)
+	return &WorkerPoolRedisRepository{rdb: rdb, lock: lock}
+}
+
 func NewContainerRedisRepositoryForTest(rdb *common.RedisClient) ContainerRepository {
 	lock := common.NewRedisLock(rdb)
 	return &ContainerRedisRepository{rdb: rdb, lock: lock}

@@ -264,6 +264,14 @@ type WorkerConfig struct {
 	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
 	TmpSizeLimit               string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLinesPerHour   int                         `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
+	Failover                   FailoverConfig              `key:"failover" json:"failover"`
+}
+
+type FailoverConfig struct {
+	Enabled                bool  `key:"enabled" json:"enabled"`
+	MaxPendingWorkers      int64 `key:"maxPendingWorkers" json:"max_pending_workers"`
+	MaxSchedulingLatencyMs int64 `key:"maxSchedulingLatencyMs" json:"max_scheduling_latency_ms"`
+	MinMachinesAvailable   int64 `key:"minMachinesAvailable" json:"min_machines_available"`
 }
 
 type PoolMode string
