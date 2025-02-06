@@ -99,17 +99,20 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 		return nil, err
 	}
 
-	machines, err := p.providerRepo.ListAllMachines(p.wpc.Name(), p.wpc.Name(), false)
-	if err != nil {
-		return nil, err
-	}
+	if p.wpc.Mode() == types.PoolModeExternal {
+		providerName := string(*p.workerPoolConfig.Provider)
+		machines, err := p.providerRepo.ListAllMachines(providerName, p.wpc.Name(), false)
+		if err != nil {
+			return nil, err
+		}
 
-	for _, machine := range machines {
-		switch machine.State.Status {
-		case types.MachineStatusPending:
-			pendingMachines++
-		case types.MachineStatusRegistered:
-			registeredMachines++
+		for _, machine := range machines {
+			switch machine.State.Status {
+			case types.MachineStatusPending:
+				pendingMachines++
+			case types.MachineStatusRegistered:
+				registeredMachines++
+			}
 		}
 	}
 
