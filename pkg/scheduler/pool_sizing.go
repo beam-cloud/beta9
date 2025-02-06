@@ -53,6 +53,7 @@ func (s *WorkerPoolSizer) Start() {
 		},
 	})
 
+	previousState := &types.WorkerPoolState{}
 	for range ticker.C {
 		select {
 		case <-ctx.Done():
@@ -61,14 +62,21 @@ func (s *WorkerPoolSizer) Start() {
 		}
 
 		func() {
-			poolState, err := s.controller.State() // Get the current state of the pool
+			nextState, err := s.controller.State() // Get the current state of the pool
 			if err != nil {
 				return
 			}
 
-			// If the pool is degraded, we don't want to keep adding more workers
-			if poolState.Status == types.WorkerPoolStatusDegraded {
+			if previousState.Status != nextState.Status && nextState.Status == types.WorkerPoolStatusDegraded {
 				sampledLogger.Warn().Str("pool_name", s.controller.Name()).Msg("pool is degraded, skipping pool sizing")
+			} else if previousState.Status != nextState.Status && nextState.Status == types.WorkerPoolStatusHealthy {
+				sampledLogger.Info().Str("pool_name", s.controller.Name()).Msg("pool is healthy, resuming pool sizing")
+			}
+
+			previousState = nextState
+
+			// If the pool is degraded, we don't want to keep adding more workers
+			if nextState.Status == types.WorkerPoolStatusDegraded {
 				return
 			}
 

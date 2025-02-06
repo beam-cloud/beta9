@@ -165,8 +165,8 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 
 	return &types.WorkerPoolState{
 		SchedulingLatency:  int64(averageSchedulingLatency.Milliseconds()),
-		AvailableWorkers:   int64(availableWorkers),
 		PendingWorkers:     int64(pendingWorkers),
+		AvailableWorkers:   int64(availableWorkers),
 		PendingContainers:  int64(pendingContainers),
 		RunningContainers:  int64(runningContainers),
 		FreeGpu:            freeCapacity.FreeGpu,
@@ -185,12 +185,12 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 	// Go through each condition that could trigger a degraded status
 	if nextState.PendingWorkers >= p.workerConfig.Failover.MaxPendingWorkers {
 		status = types.WorkerPoolStatusDegraded
-		failoverReasons = append(failoverReasons, "exceeding max pending workers")
+		failoverReasons = append(failoverReasons, "exceeded max pending workers")
 	}
 
 	if nextState.SchedulingLatency > p.workerConfig.Failover.MaxSchedulingLatencyMs {
 		status = types.WorkerPoolStatusDegraded
-		failoverReasons = append(failoverReasons, "exceeding max scheduling latency")
+		failoverReasons = append(failoverReasons, "exceeded max scheduling latency")
 	}
 
 	if (nextState.RegisteredMachines < p.workerConfig.Failover.MinMachinesAvailable) && p.wpc.Mode() == types.PoolModeExternal {
@@ -216,7 +216,7 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 	if p.workerConfig.Failover.Enabled {
 		// If failover is enabled and status is degraded, we need to cordon all workers in the pool
 		if previousState.Status != status && nextState.Status == types.WorkerPoolStatusDegraded {
-			p.eventRepo.PushWorkerPoolDegradedEvent(p.wpc.Name(), failoverReasons)
+			p.eventRepo.PushWorkerPoolDegradedEvent(p.wpc.Name(), failoverReasons, nextState)
 
 			log.Warn().Str("pool_name", p.wpc.Name()).Msg("pool is degraded, cordoning all workers")
 
@@ -226,7 +226,7 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 				return err
 			}
 		} else if previousState.Status != status && nextState.Status == types.WorkerPoolStatusHealthy {
-			p.eventRepo.PushWorkerPoolHealthyEvent(p.wpc.Name())
+			p.eventRepo.PushWorkerPoolHealthyEvent(p.wpc.Name(), nextState)
 		}
 	}
 
