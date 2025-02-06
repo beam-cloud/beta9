@@ -21,7 +21,7 @@ func NewWorkerPoolRedisRepository(rdb *common.RedisClient) WorkerPoolRepository 
 // GetWorkerPoolState retrieves a collection of health metrics for a worker pool
 func (r *WorkerPoolRedisRepository) GetWorkerPoolState(ctx context.Context, poolName string) (*types.WorkerPoolState, error) {
 	stateKey := common.RedisKeys.WorkerPoolState(poolName)
-	res, err := r.rdb.HGetAll(context.TODO(), stateKey).Result()
+	res, err := r.rdb.HGetAll(ctx, stateKey).Result()
 	if err != nil && err != redis.Nil {
 		return nil, fmt.Errorf("failed to get worker pool state: %w", err)
 	}
@@ -49,7 +49,7 @@ func (r *WorkerPoolRedisRepository) RemoveWorkerPoolStateLock(poolName string) e
 // SetWorkerPoolState updates the worker pool state with some recent health metrics
 func (r *WorkerPoolRedisRepository) SetWorkerPoolState(ctx context.Context, poolName string, state *types.WorkerPoolState) error {
 	return r.rdb.HSet(
-		context.TODO(), common.RedisKeys.WorkerPoolState(poolName),
+		ctx, common.RedisKeys.WorkerPoolState(poolName),
 		"status", string(state.Status),
 		"scheduling_latency", state.SchedulingLatency,
 		"free_gpu", state.FreeGpu,
