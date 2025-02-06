@@ -207,7 +207,7 @@ func minor(dev uint64) uint64 {
 func (c *ContainerNvidiaManager) InjectEnvVars(env []string) ([]string, bool) {
 	existingCudaFound := false
 	cudaEnvVarDefaults := map[string]string{
-		"NVIDIA_DRIVER_CAPABILITIES": "all",
+		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics,ngx,video",
 		"NVIDIA_REQUIRE_CUDA":        "",
 		"NVARCH":                     "",
 		"NV_CUDA_COMPAT_PACKAGE":     "",
