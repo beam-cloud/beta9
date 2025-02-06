@@ -57,8 +57,6 @@ class Endpoint(RunnerAbstraction):
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
             Default is 3600. Set it to -1 to disable the timeout.
-        retries (Optional[int]):
-            The maximum number of times a task will be retried if the container crashes. Default is 3.
         workers (Optional[int]):
             The number of processes handling tasks per container.
             Modifying this parameter can improve throughput for certain workloads.
