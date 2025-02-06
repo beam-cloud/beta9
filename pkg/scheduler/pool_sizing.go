@@ -69,6 +69,8 @@ func (s *WorkerPoolSizer) Start() {
 
 			if previousState.Status != nextState.Status && nextState.Status == types.WorkerPoolStatusDegraded {
 				sampledLogger.Warn().Str("pool_name", s.controller.Name()).Msg("pool is degraded, skipping pool sizing")
+			} else if previousState.Status != nextState.Status && nextState.Status == types.WorkerPoolStatusHealthy {
+				sampledLogger.Info().Str("pool_name", s.controller.Name()).Msg("pool is healthy, resuming pool sizing")
 			}
 
 			previousState = nextState
