@@ -5,7 +5,6 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,7 +12,6 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/go-runc"
-	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 )
 
@@ -41,10 +39,10 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			containerId:    request.ContainerId,
 			cacheFunc:      s.cacheCheckpoint,
 		}, &runc.CreateOpts{
-			Detach:        true,
-			OutputWriter:  outputWriter,
-			ConfigPath:    configPath,
-			Started:       startedChan,
+			Detach:       true,
+			OutputWriter: outputWriter,
+			ConfigPath:   configPath,
+			Started:      startedChan,
 		})
 
 		if err != nil {
@@ -74,6 +72,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest) error {
+	log.Info().Str("container_id", request.ContainerId).Msg("creating checkpoint")
 	os.MkdirAll(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, request.Workspace.Name), os.ModePerm)
 
 	timeout := defaultCheckpointDeadline
@@ -170,12 +169,15 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 		CheckpointId:  request.StubId,
 	}))
 	if err != nil {
-		if _, ok := err.(*types.ErrCheckpointNotFound); !ok {
-			return types.CheckpointState{}, false
+		notFoundErr := &types.ErrCheckpointNotFound{
+			CheckpointId: request.StubId,
+		}
+		if err.Error() == notFoundErr.Error() {
+			log.Info().Str("container_id", request.ContainerId).Msg("checkpoint not found, creating checkpoint")
+			return types.CheckpointState{Status: types.CheckpointStatusNotFound}, true
 		}
 
-		// If checkpoint not found, we can proceed to create one
-		return types.CheckpointState{Status: types.CheckpointStatusNotFound}, true
+		return types.CheckpointState{}, false
 	}
 
 	state := types.CheckpointState{
@@ -186,53 +188,6 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 	}
 
 	return state, false
-}
-
-// Wait for a restored container to exit
-func (s *Worker) waitForRestoredContainer(ctx context.Context, containerId string, startedChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
-	pid := <-startedChan
-
-	// Clean up runc container state and send final output message
-	cleanup := func(exitCode int, err error) int {
-		log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
-
-		outputLogger.Info("", "done", true, "success", exitCode == 0)
-
-		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
-		}
-
-		return exitCode
-	}
-
-	isOOMKilled := false
-
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return cleanup(0, nil)
-		case <-ticker.C:
-			state, err := s.runcHandle.State(ctx, containerId)
-			if err != nil {
-				return cleanup(-1, err)
-			}
-
-			if state.Status != types.RuncContainerStatusRunning && state.Status != types.RuncContainerStatusPaused {
-				exitCode := 0
-				if isOOMKilled {
-					exitCode = types.WorkerContainerExitCodeOomKill
-				}
-				return cleanup(exitCode, nil)
-			}
-		}
-	}
 }
 
 // Caches a checkpoint nearby if the file cache is available
