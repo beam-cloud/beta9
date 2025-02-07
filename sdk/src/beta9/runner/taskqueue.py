@@ -183,7 +183,8 @@ class TaskQueueWorker:
                 args=task["args"],
                 kwargs=task["kwargs"],
             )
-        except (grpc.RpcError, OSError):
+        except (grpc.RpcError, OSError) as e:
+            print("Failed to pop task", e)
             return None
 
     def _monitor_task(

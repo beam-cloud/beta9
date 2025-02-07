@@ -49,14 +49,17 @@ class Channel(InterceptorChannel):
         ),
     ):
         if options is None:
-            options = []
+            options = [
+                ("grpc.max_receive_message_length", 1024 * 1024 * 1024),
+                ("grpc.max_send_message_length", 1024 * 1024 * 1024),
+            ]
 
         if credentials is not None:
-            channel = grpc.secure_channel(addr, credentials)
+            channel = grpc.secure_channel(addr, credentials, options=options)
         elif addr.endswith("443"):
-            channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials())
+            channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials(), options=options)
         else:
-            channel = grpc.insecure_channel(addr)
+            channel = grpc.insecure_channel(addr, options=options)
 
         # NOTE: we observed that in a multiprocessing context, this
         # retry mechanism did not work as expected. We're not sure why,
