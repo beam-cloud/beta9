@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -718,7 +719,7 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 					reqGpus = append(reqGpus, req.Gpu)
 				}
 
-				if !contains(req.GpuRequest, string(types.GPU_ANY)) {
+				if !slices.Contains(req.GpuRequest, string(types.GPU_ANY)) {
 					assert.True(t, stringInSlice(worker.Gpu, reqGpus))
 				}
 
