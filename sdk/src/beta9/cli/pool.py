@@ -79,8 +79,12 @@ def list_pools(
     from rich.columns import Columns
     from rich.panel import Panel
 
+    name_filters = filter.get("name", StringList())
     pool_cards = []
     for pool in res.pools:
+        if pool.name not in name_filters.values and name_filters.values:
+            continue
+
         # Config table for pool-specific settings
         config_table = Table(show_header=False, box=None, expand=True)
         config_table.add_row("GPU:", pool.gpu)
