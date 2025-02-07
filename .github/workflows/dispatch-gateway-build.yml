@@ -46,3 +46,13 @@ jobs:
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:${{ inputs.tag }}
           target: release
           platforms: linux/amd64
+
+      - name: Package and push Helm chart to Amazon ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          REGISTRY_ALIAS: n4e0e1y0
+          REPOSITORY: beta9-chart
+        run: |
+          cd deploy/charts
+          helm package ./beta9 --dependency-update --version ${{ inputs.tag }} --app-version ${{ inputs.tag }}
+          helm push $REPOSITORY-${{ inputs.tag }}.tgz oci://$REGISTRY/$REGISTRY_ALIAS
