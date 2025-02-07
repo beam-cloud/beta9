@@ -76,13 +76,12 @@ def list_pools(
         terminal.print_json(pools)
         return
 
-    # Instead of one huge table, display each pool as a modern "card" with two sections.
     from rich.columns import Columns
     from rich.panel import Panel
 
     pool_cards = []
     for pool in res.pools:
-        # Create a configuration table for pool-specific settings.
+        # Config table for pool-specific settings
         config_table = Table(show_header=False, box=None, expand=True)
         config_table.add_row("GPU:", pool.gpu)
         config_table.add_row("Minimum Free GPU:", pool.min_free_gpu or "0")
@@ -92,7 +91,7 @@ def list_pools(
             "Default GPU Count (per worker):", pool.default_worker_gpu_count or "0"
         )
 
-        # Create a state table for dynamic status information.
+        # Pool state table for dynamic health info
         state_table = Table(show_header=False, box=None, expand=True)
         state_table.add_row("Status:", pool.state.status)
         state_table.add_row("Scheduling Latency:", str(pool.state.scheduling_latency))
@@ -106,11 +105,8 @@ def list_pools(
         state_table.add_row("Registered Machines:", str(pool.state.registered_machines))
         state_table.add_row("Pending Machines:", str(pool.state.pending_machines))
 
-        # Combine the two tables side by side.
         content = Columns([config_table, state_table], equal=True, expand=True)
-        # Wrap the content in a Panel with the pool's name as title.
         card = Panel(content, title=pool.name, border_style="blue")
         pool_cards.append(card)
 
-    # Lay out multiple pool cards in columns if the terminal width allows.
     terminal.print(Columns(pool_cards, expand=True))
