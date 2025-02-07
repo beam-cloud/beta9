@@ -417,7 +417,7 @@ func (e *ErrWorkerPoolStateNotFound) From(err error) bool {
 type WorkerPoolState struct {
 	Status             WorkerPoolStatus `redis:"status" json:"status"`
 	SchedulingLatency  int64            `redis:"scheduling_latency" json:"scheduling_latency"`
-	FreeGpu            uint             `redis:"free_gpu" json:"free_gpu"`
+	FreeGpu            int64            `redis:"free_gpu" json:"free_gpu"`
 	FreeCpu            int64            `redis:"free_cpu" json:"free_cpu"`
 	FreeMemory         int64            `redis:"free_memory" json:"free_memory"`
 	PendingWorkers     int64            `redis:"pending_workers" json:"pending_workers"`

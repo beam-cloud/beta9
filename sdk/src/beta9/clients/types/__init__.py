@@ -163,7 +163,7 @@ class Worker(betterproto.Message):
 class WorkerPoolState(betterproto.Message):
     status: str = betterproto.string_field(1)
     scheduling_latency: int = betterproto.int64_field(2)
-    free_gpu: int = betterproto.uint32_field(3)
+    free_gpu: int = betterproto.int64_field(3)
     free_cpu: int = betterproto.int64_field(4)
     free_memory: int = betterproto.int64_field(5)
     pending_workers: int = betterproto.int64_field(6)

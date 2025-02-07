@@ -177,7 +177,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 		AvailableWorkers:   int64(availableWorkers),
 		PendingContainers:  int64(pendingContainers),
 		RunningContainers:  int64(runningContainers),
-		FreeGpu:            freeCapacity.FreeGpu,
+		FreeGpu:            int64(freeCapacity.FreeGpu),
 		FreeCpu:            freeCapacity.FreeCpu,
 		FreeMemory:         freeCapacity.FreeMemory,
 		RegisteredMachines: int64(registeredMachines),
