@@ -1674,7 +1674,7 @@ func (r *PostgresBackendRepository) ListenToChannel(ctx context.Context, channel
 	return ch, nil
 }
 
-func (r *PostgresBackendRepository) GetTaskMetrics(ctx context.Context, periodStart, periodEnd time.Time) (types.TaskClusterMetrics, error) {
+func (r *PostgresBackendRepository) GetTaskMetrics(ctx context.Context, periodStart, periodEnd time.Time) (types.TaskMetrics, error) {
 	query := `
 	SELECT status, count(id)
 	FROM task
@@ -1685,17 +1685,17 @@ func (r *PostgresBackendRepository) GetTaskMetrics(ctx context.Context, periodSt
 
 	rows, err := r.client.QueryContext(ctx, query, periodStart, periodEnd)
 	if err != nil {
-		return types.TaskClusterMetrics{}, err
+		return types.TaskMetrics{}, err
 	}
 
-	var metrics types.TaskClusterMetrics
+	var metrics types.TaskMetrics
 	metrics.TaskByStatusCounts = make(map[string]int)
 
 	for rows.Next() {
 		var status string
 		var count int
 		if err := rows.Scan(&status, &count); err != nil {
-			return types.TaskClusterMetrics{}, err
+			return types.TaskMetrics{}, err
 		}
 
 		metrics.TaskByStatusCounts[status] = count
