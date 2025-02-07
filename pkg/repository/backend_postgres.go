@@ -1674,7 +1674,7 @@ func (r *PostgresBackendRepository) ListenToChannel(ctx context.Context, channel
 	return ch, nil
 }
 
-func (r *PostgresBackendRepository) GetTaskClusterMetrics(ctx context.Context, periodStart, periodEnd time.Time) (types.TaskClusterMetrics, error) {
+func (r *PostgresBackendRepository) GetTaskMetrics(ctx context.Context, periodStart, periodEnd time.Time) (types.TaskClusterMetrics, error) {
 	query := `
 	SELECT status, count(id)
 	FROM task

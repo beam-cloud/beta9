@@ -145,7 +145,7 @@ type BackendRepository interface {
 	GetScheduledJob(ctx context.Context, deploymentId uint) (*types.ScheduledJob, error)
 	ListenToChannel(ctx context.Context, channel string) (<-chan string, error)
 	Ping() error
-	GetTaskClusterMetrics(ctx context.Context, periodStart time.Time, periodEnd time.Time) (types.TaskClusterMetrics, error)
+	GetTaskMetrics(ctx context.Context, periodStart time.Time, periodEnd time.Time) (types.TaskClusterMetrics, error)
 }
 
 type TaskRepository interface {

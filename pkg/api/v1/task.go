@@ -250,7 +250,7 @@ func (g *TaskGroup) GetClusterTaskMetrics(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid ended_at")
 	}
 
-	if metrics, err := g.backendRepo.GetTaskClusterMetrics(ctx.Request().Context(), startedAt, endedAt); err != nil {
+	if metrics, err := g.backendRepo.GetTaskMetrics(ctx.Request().Context(), startedAt, endedAt); err != nil {
 		return HTTPInternalServerError("Failed to retrieve cluster task metrics")
 	} else {
 		return ctx.JSON(http.StatusOK, metrics)
