@@ -1,7 +1,9 @@
-from typing import Dict
+import time
+from typing import Any, Dict, List, Tuple
 
 import click
 from betterproto import Casing
+from rich.live import Live
 from rich.table import Table
 
 from .. import terminal
@@ -25,6 +27,75 @@ def management():
     pass
 
 
+def _create_table(rows: List[Tuple[str, str]]) -> Table:
+    table = Table(show_header=False, box=None, expand=True)
+    for label, value in rows:
+        table.add_row(label, value)
+    return table
+
+
+def _get_pool_renderable(
+    service: ServiceClient, limit: int, output_format: str, filters: Dict[str, StringList]
+) -> Any:
+    """
+    Returns a Rich renderable for the pool list
+    """
+    res: ListPoolsResponse = service.gateway.list_pools(ListPoolsRequest(filters, limit))
+    if not res.ok:
+        from rich.text import Text
+
+        return Text(f"[red]{res.err_msg}")
+
+    if output_format == "json":
+        pools = [d.to_dict(casing=Casing.SNAKE) for d in res.pools]  # type: ignore
+        import json
+
+        from rich.text import Text
+
+        return Text(json.dumps(pools, indent=2))
+    else:
+        from rich.columns import Columns
+        from rich.panel import Panel
+
+        name_filters = filters.get("name", StringList())
+        pool_cards = []
+        for pool in res.pools:
+            if name_filters.values and pool.name not in name_filters.values:
+                continue
+
+            # Create pool config table
+            config_rows = [
+                ("GPU:", pool.gpu),
+                ("Minimum Free GPU:", pool.min_free_gpu or "0"),
+                ("Minimum Free CPU:", pool.min_free_cpu or "0"),
+                ("Minimum Free Memory:", pool.min_free_memory or "0"),
+                ("Default GPU Count (per worker):", pool.default_worker_gpu_count or "0"),
+            ]
+            config_table = _create_table(config_rows)
+
+            # Create pool state table
+            state_rows = [
+                ("Status:", pool.state.status),
+                ("Scheduling Latency (ms):", str(pool.state.scheduling_latency)),
+                ("Free GPU:", str(pool.state.free_gpu)),
+                ("Free CPU (millicores):", str(pool.state.free_cpu)),
+                ("Free Memory (MB):", str(pool.state.free_memory)),
+                ("Pending Workers:", str(pool.state.pending_workers)),
+                ("Available Workers:", str(pool.state.available_workers)),
+                ("Pending Containers:", str(pool.state.pending_containers)),
+                ("Running Containers:", str(pool.state.running_containers)),
+                ("Registered Machines:", str(pool.state.registered_machines)),
+                ("Pending Machines:", str(pool.state.pending_machines)),
+            ]
+            state_table = _create_table(state_rows)
+
+            content = Columns([config_table, state_table], equal=True, expand=True)
+            card = Panel(content, title=pool.name, border_style="blue")
+            pool_cards.append(card)
+
+        return Columns(pool_cards, expand=True)
+
+
 @management.command(
     name="list",
     help="List all worker pools.",
@@ -36,6 +107,12 @@ def management():
 
       # List pools and output in JSON format
       {cli_name} pool list --format json
+      
+      # Continuously refresh and show pool information every 1 second (default)
+      {cli_name} pool list --watch
+
+      # Continuously refresh every 2 seconds
+      {cli_name} pool list --watch --period 2
       \b
     """,
 )
@@ -58,59 +135,46 @@ def management():
     callback=extraclick.filter_values_callback,
     help="Filters pools. Add this option for each field you want to filter on.",
 )
+@click.option(
+    "-w",
+    "--watch",
+    is_flag=True,
+    default=False,
+    help="Periodically refreshes the output automatically and re-renders the data.",
+)
+@click.option(
+    "--period",
+    "-p",
+    type=click.FloatRange(min=0.1),
+    default=1.0,
+    show_default=True,
+    help="Refresh interval (in seconds) when in watch mode.",
+)
 @extraclick.pass_service_client
 def list_pools(
     service: ServiceClient,
     limit: int,
     format: str,
     filter: Dict[str, StringList],
+    watch: bool,
+    period: float,
 ):
-    res: ListPoolsResponse
-    res = service.gateway.list_pools(ListPoolsRequest(filter, limit))
-
-    if not res.ok:
-        terminal.error(res.err_msg)
-
-    if format == "json":
-        pools = [d.to_dict(casing=Casing.SNAKE) for d in res.pools]  # type:ignore
-        terminal.print_json(pools)
+    """
+    List all worker pools
+    """
+    if not watch:
+        terminal.print(_get_pool_renderable(service, limit, format, filter))
         return
 
-    from rich.columns import Columns
-    from rich.panel import Panel
-
-    name_filters = filter.get("name", StringList())
-    pool_cards = []
-    for pool in res.pools:
-        if pool.name not in name_filters.values and name_filters.values:
-            continue
-
-        # Config table for pool-specific settings
-        config_table = Table(show_header=False, box=None, expand=True)
-        config_table.add_row("GPU:", pool.gpu)
-        config_table.add_row("Minimum Free GPU:", pool.min_free_gpu or "0")
-        config_table.add_row("Minimum Free CPU:", pool.min_free_cpu or "0")
-        config_table.add_row("Minimum Free Memory:", pool.min_free_memory or "0")
-        config_table.add_row(
-            "Default GPU Count (per worker):", pool.default_worker_gpu_count or "0"
-        )
-
-        # Pool state table for dynamic health info
-        state_table = Table(show_header=False, box=None, expand=True)
-        state_table.add_row("Status:", pool.state.status)
-        state_table.add_row("Scheduling Latency (ms):", str(pool.state.scheduling_latency))
-        state_table.add_row("Free GPU:", str(pool.state.free_gpu))
-        state_table.add_row("Free CPU (millicores):", str(pool.state.free_cpu))
-        state_table.add_row("Free Memory (MB):", str(pool.state.free_memory))
-        state_table.add_row("Pending Workers:", str(pool.state.pending_workers))
-        state_table.add_row("Available Workers:", str(pool.state.available_workers))
-        state_table.add_row("Pending Containers:", str(pool.state.pending_containers))
-        state_table.add_row("Running Containers:", str(pool.state.running_containers))
-        state_table.add_row("Registered Machines:", str(pool.state.registered_machines))
-        state_table.add_row("Pending Machines:", str(pool.state.pending_machines))
-
-        content = Columns([config_table, state_table], equal=True, expand=True)
-        card = Panel(content, title=pool.name, border_style="blue")
-        pool_cards.append(card)
-
-    terminal.print(Columns(pool_cards, expand=True))
+    with Live(
+        _get_pool_renderable(service, limit, format, filter),
+        console=terminal._console,
+        screen=True,
+        refresh_per_second=1 / period,
+    ) as live:
+        try:
+            while True:
+                live.update(_get_pool_renderable(service, limit, format, filter))
+                time.sleep(period)
+        except KeyboardInterrupt:
+            pass
