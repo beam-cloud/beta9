@@ -160,6 +160,21 @@ class Worker(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class WorkerPoolState(betterproto.Message):
+    status: str = betterproto.string_field(1)
+    scheduling_latency: int = betterproto.int64_field(2)
+    free_gpu: int = betterproto.uint32_field(3)
+    free_cpu: int = betterproto.int64_field(4)
+    free_memory: int = betterproto.int64_field(5)
+    pending_workers: int = betterproto.int64_field(6)
+    available_workers: int = betterproto.int64_field(7)
+    pending_containers: int = betterproto.int64_field(8)
+    running_containers: int = betterproto.int64_field(9)
+    registered_machines: int = betterproto.int64_field(10)
+    pending_machines: int = betterproto.int64_field(11)
+
+
+@dataclass(eq=False, repr=False)
 class Workspace(betterproto.Message):
     id: int = betterproto.uint32_field(1)
     external_id: str = betterproto.string_field(2)

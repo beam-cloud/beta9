@@ -422,6 +422,7 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 		Status:      types.ContainerStatusPending,
 		WorkspaceId: request.WorkspaceId,
 		ScheduledAt: time.Now().Unix(),
+		StartedAt:   0,
 		Gpu:         request.Gpu,
 		GpuCount:    request.GpuCount,
 		Cpu:         request.Cpu,

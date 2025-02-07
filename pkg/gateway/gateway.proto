@@ -326,6 +326,7 @@ message Pool {
   string defaultWorkerCpu = 8;
   string defaultWorkerMemory = 9;
   string defaultWorkerGpuCount = 10;
+  types.WorkerPoolState state = 11;
 }
 
 message ListPoolsRequest {

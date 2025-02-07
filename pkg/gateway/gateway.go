@@ -433,6 +433,7 @@ func (g *Gateway) registerServices() error {
 		RedisClient:    g.RedisClient,
 		EventRepo:      g.EventRepo,
 		WorkerRepo:     g.workerRepo,
+		WorkerPoolRepo: g.WorkerPoolRepo,
 	})
 	if err != nil {
 		return err

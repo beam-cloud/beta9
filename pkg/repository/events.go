@@ -54,7 +54,6 @@ func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion s
 	objectId, err := common.GenerateObjectId()
 	if err != nil {
 		return cloudevents.Event{}, err
-
 	}
 
 	event := cloudevents.NewEvent()
@@ -314,25 +313,27 @@ func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId s
 	)
 }
 
-func (t *TCPEventClientRepo) PushWorkerPoolDegradedEvent(poolName string, reasons []string) {
+func (t *TCPEventClientRepo) PushWorkerPoolDegradedEvent(poolName string, reasons []string, poolState *types.WorkerPoolState) {
 	t.pushEvent(
 		types.EventWorkerPoolDegraded,
 		types.EventWorkerPoolStateSchemaVersion,
 		types.EventWorkerPoolStateSchema{
-			PoolName: poolName,
-			Reasons:  reasons,
-			Status:   string(types.WorkerPoolStatusDegraded),
+			PoolName:  poolName,
+			Reasons:   reasons,
+			Status:    string(types.WorkerPoolStatusDegraded),
+			PoolState: poolState,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushWorkerPoolHealthyEvent(poolName string) {
+func (t *TCPEventClientRepo) PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState) {
 	t.pushEvent(
 		types.EventWorkerPoolHealthy,
 		types.EventWorkerPoolStateSchemaVersion,
 		types.EventWorkerPoolStateSchema{
-			PoolName: poolName,
-			Status:   string(types.WorkerPoolStatusHealthy),
+			PoolName:  poolName,
+			Status:    string(types.WorkerPoolStatusHealthy),
+			PoolState: poolState,
 		},
 	)
 }

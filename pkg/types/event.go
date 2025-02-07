@@ -152,7 +152,8 @@ type EventStubStateSchema struct {
 var EventWorkerPoolStateSchemaVersion = "1.0"
 
 type EventWorkerPoolStateSchema struct {
-	PoolName string   `json:"pool_name"`
-	Reasons  []string `json:"reasons"`
-	Status   string   `json:"status"`
+	PoolName  string           `json:"pool_name"`
+	Reasons   []string         `json:"reasons"`
+	Status    string           `json:"status"`
+	PoolState *WorkerPoolState `json:"pool_state"`
 }
