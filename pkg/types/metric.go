@@ -9,6 +9,6 @@ var (
 	MetricsWorkerContainerDuration = "container_duration_milliseconds"
 )
 
-type TaskClusterMetrics struct {
+type TaskMetrics struct {
 	TaskByStatusCounts map[string]int `json:"task_by_status_counts"`
 }
