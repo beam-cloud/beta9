@@ -63,7 +63,12 @@ func (m *WorkerPoolManager) GetPoolByFilters(filters poolFilters) []*WorkerPool 
 
 	m.poolMap.Range(func(key string, pool *WorkerPool) bool {
 		// Skip pools that do not match the GPU filter.
-		if pool.Config.GPUType != filters.GPUType {
+		if pool.Config.GPUType != filters.GPUType && filters.GPUType != string(types.GPU_ANY) {
+			return true
+		}
+
+		// If the GPUType filter is ANY and the pool has no GPUType, skip it.
+		if filters.GPUType == string(types.GPU_ANY) && pool.Config.GPUType == "" {
 			return true
 		}
 
