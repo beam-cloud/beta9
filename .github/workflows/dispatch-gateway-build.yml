@@ -1,0 +1,48 @@
+name: Build and release Custom Gateway Tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'image tag'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build_and_release_worker:
+    environment: Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4.1.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE_GITHUB }}
+          aws-region: us-east-1
+
+      - name: Log in to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+        id: login-ecr
+        with:
+          registry-type: public
+          mask-password: 'true'
+
+      - name: Build and push container image to Amazon ECR
+        uses: docker/build-push-action@v5
+        with:
+          file: ./docker/Dockerfile.gateway
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:${{ inputs.tag }}
+          target: final
+          platforms: linux/amd64
