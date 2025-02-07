@@ -19,6 +19,7 @@ type GatewayService struct {
 	redisClient    *common.RedisClient
 	eventRepo      repository.EventRepository
 	workerRepo     repository.WorkerRepository
+	workerPoolRepo repository.WorkerPoolRepository
 	pb.UnimplementedGatewayServiceServer
 }
 
@@ -32,6 +33,7 @@ type GatewayServiceOpts struct {
 	RedisClient    *common.RedisClient
 	EventRepo      repository.EventRepository
 	WorkerRepo     repository.WorkerRepository
+	WorkerPoolRepo repository.WorkerPoolRepository
 }
 
 func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
@@ -45,5 +47,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		redisClient:    opts.RedisClient,
 		eventRepo:      opts.EventRepo,
 		workerRepo:     opts.WorkerRepo,
+		workerPoolRepo: opts.WorkerPoolRepo,
 	}, nil
 }

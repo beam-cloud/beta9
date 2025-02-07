@@ -413,6 +413,7 @@ func (e *ErrWorkerPoolStateNotFound) From(err error) bool {
 	return false
 }
 
+// @go2proto
 type WorkerPoolState struct {
 	Status             WorkerPoolStatus `redis:"status" json:"status"`
 	SchedulingLatency  int64            `redis:"scheduling_latency" json:"scheduling_latency"`
@@ -425,6 +426,22 @@ type WorkerPoolState struct {
 	RunningContainers  int64            `redis:"running_containers" json:"running_containers"`
 	RegisteredMachines int64            `redis:"registered_machines" json:"registered_machines"`
 	PendingMachines    int64            `redis:"pending_machines" json:"pending_machines"`
+}
+
+func (w *WorkerPoolState) ToProto() *pb.WorkerPoolState {
+	return &pb.WorkerPoolState{
+		Status:             string(w.Status),
+		SchedulingLatency:  w.SchedulingLatency,
+		FreeGpu:            uint32(w.FreeGpu),
+		FreeCpu:            w.FreeCpu,
+		FreeMemory:         w.FreeMemory,
+		PendingWorkers:     w.PendingWorkers,
+		AvailableWorkers:   w.AvailableWorkers,
+		PendingContainers:  w.PendingContainers,
+		RunningContainers:  w.RunningContainers,
+		RegisteredMachines: w.RegisteredMachines,
+		PendingMachines:    w.PendingMachines,
+	}
 }
 
 type WorkerPoolStatus string
