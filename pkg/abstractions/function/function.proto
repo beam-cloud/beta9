@@ -20,6 +20,7 @@ service FunctionService {
 message FunctionInvokeRequest {
   string stub_id = 1;
   bytes args = 2;
+  bool headless = 3;
 }
 
 message FunctionInvokeResponse {

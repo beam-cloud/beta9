@@ -3,6 +3,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -179,15 +180,22 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		return err
 	}
 
+	if !task.Status.IsInflight() {
+		return nil
+	}
+
 	switch reason {
 	case types.TaskExpired:
 		task.Status = types.TaskStatusExpired
 	case types.TaskExceededRetryLimit:
 		task.Status = types.TaskStatusError
+	case types.TaskRequestCancelled:
+		task.Status = types.TaskStatusCancelled
 	default:
 		task.Status = types.TaskStatusError
 	}
 
+	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
 	_, err = t.fs.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
 	if err != nil {
 		return err
