@@ -44,7 +44,7 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 	g.GET("/:workspaceId/aggregate-by-time-window", auth.WithWorkspaceAuth(group.AggregateTasksByTimeWindow))
 	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
 	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
-	g.GET("/cluster-metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
+	g.GET("/metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
 
 	return group
 }
