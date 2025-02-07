@@ -157,7 +157,7 @@ jobs:
           NEW_FILE="v2/releases/${{ steps.release.outputs.created_at }}"
           jq --arg new_file "$NEW_FILE" '
             .navigation[] |= 
-              if .group == "Releases" then 
+              if .group == "Changelog" then 
                 .pages |= if index($new_file) then . else [$new_file] + . end
               else 
                 .
