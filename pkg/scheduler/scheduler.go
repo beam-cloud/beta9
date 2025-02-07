@@ -213,6 +213,11 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 			for _, pool := range pools {
 				controllers = append(controllers, pool.Controller)
 			}
+
+			// If the request contains the "ANY" GPU selector, we've already retrieved all pools
+			if gpu == string(types.GPU_ANY) {
+				break
+			}
 		}
 	}
 
@@ -337,6 +342,16 @@ func filterWorkersByPoolSelector(workers []*types.Worker, request *types.Contain
 	return filteredWorkers
 }
 
+// contains checks if the slice contains a specified string.
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
 func filterWorkersByResources(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
@@ -344,6 +359,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 
 	for index, gpu := range request.GpuRequest {
 		gpuRequestsMap[gpu] = index
+	}
+
+	// If the request contains the "ANY" GPU selector, we need to check all GPU types
+	if contains(request.GpuRequest, string(types.GPU_ANY)) {
+		gpuRequestsMap = types.GPUTypesToMap(types.AllGPUTypes())
 	}
 
 	for _, worker := range workers {

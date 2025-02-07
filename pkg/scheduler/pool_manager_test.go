@@ -44,6 +44,13 @@ func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 			},
 			controller: controller,
 		},
+		{
+			name: "pool4",
+			config: types.WorkerPoolConfig{
+				GPUType:  "H100",
+				Priority: 100,
+			},
+		},
 	}
 
 	// Add pools to manager
@@ -89,6 +96,14 @@ func TestWorkerPoolManager_GetPoolByFilters(t *testing.T) {
 			},
 			want:    []string{},
 			wantLen: 0,
+		},
+		{
+			name: "any gpu",
+			filters: poolFilters{
+				GPUType: string(types.GPU_ANY),
+			},
+			want:    []string{"pool3", "pool4"},
+			wantLen: 2,
 		},
 	}
 

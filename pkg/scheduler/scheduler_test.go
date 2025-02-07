@@ -666,6 +666,23 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 			expectedGpuResults: []string{"A10G"},
 			gpus:               []string{"A10G", "T4"},
 		},
+		{
+			name: "any gpu",
+			requests: []*types.ContainerRequest{
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"ANY"},
+				},
+				{
+					Cpu:        1000,
+					Memory:     1000,
+					GpuRequest: []string{"ANY"},
+				},
+			},
+			expectedGpuResults: []string{"A10G", "T4", "A6000", "H100"},
+			gpus:               []string{"A10G", "T4", "A6000", "H100"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -700,7 +717,10 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 				if req.Gpu != "" {
 					reqGpus = append(reqGpus, req.Gpu)
 				}
-				assert.True(t, stringInSlice(worker.Gpu, reqGpus))
+
+				if !contains(req.GpuRequest, string(types.GPU_ANY)) {
+					assert.True(t, stringInSlice(worker.Gpu, reqGpus))
+				}
 
 				err = wb.scheduleRequest(worker, req)
 				assert.Nil(t, err)
