@@ -673,12 +673,12 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 				{
 					Cpu:        1000,
 					Memory:     1000,
-					GpuRequest: []string{"ANY"},
+					GpuRequest: []string{"any"},
 				},
 				{
 					Cpu:        1000,
 					Memory:     1000,
-					GpuRequest: []string{"ANY"},
+					GpuRequest: []string{"any"},
 				},
 			},
 			expectedGpuResults: []string{"A10G", "T4", "A6000", "H100"},

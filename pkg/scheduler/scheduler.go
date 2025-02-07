@@ -215,7 +215,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 				controllers = append(controllers, pool.Controller)
 			}
 
-			// If the request contains the "ANY" GPU selector, we've already retrieved all pools
+			// If the request contains the "any" GPU selector, we've already retrieved all pools
 			if gpu == string(types.GPU_ANY) {
 				break
 			}
@@ -352,7 +352,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		gpuRequestsMap[gpu] = index
 	}
 
-	// If the request contains the "ANY" GPU selector, we need to check all GPU types
+	// If the request contains the "any" GPU selector, we need to check all GPU types
 	if slices.Contains(request.GpuRequest, string(types.GPU_ANY)) {
 		gpuRequestsMap = types.GPUTypesToMap(types.AllGPUTypes())
 	}

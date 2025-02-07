@@ -7,7 +7,6 @@ func (g GPUType) String() string {
 }
 
 const (
-	GPU_ANY     GPUType = "ANY"
 	GPU_A10G    GPUType = "A10G"
 	GPU_A100_40 GPUType = "A100-40"
 	GPU_A100_80 GPUType = "A100-80"
@@ -17,7 +16,8 @@ const (
 	GPU_A6000   GPUType = "A6000"
 	GPU_RTX4090 GPUType = "RTX4090"
 
-	NO_GPU GPUType = "NO_GPU"
+	NO_GPU  GPUType = "NO_GPU"
+	GPU_ANY GPUType = "any"
 )
 
 func AllGPUTypes() []GPUType {
