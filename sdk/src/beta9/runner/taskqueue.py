@@ -184,7 +184,7 @@ class TaskQueueWorker:
                 kwargs=task["kwargs"],
             )
         except (grpc.RpcError, OSError) as e:
-            print("Failed to pop task", e)
+            print("Failed to retrieve task due to unexpected error", e)
             return None
 
     def _monitor_task(

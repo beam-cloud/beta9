@@ -25,6 +25,8 @@ from .config import (
 from .env import is_remote
 from .exceptions import RunnerException
 
+GRPC_MAX_MESSAGE_SIZE = 16 * 1024 * 1024
+
 
 def channel_reconnect_event(connect_status: grpc.ChannelConnectivity) -> None:
     if connect_status not in (
@@ -50,8 +52,8 @@ class Channel(InterceptorChannel):
     ):
         if options is None:
             options = [
-                ("grpc.max_receive_message_length", 1024 * 1024 * 1024),
-                ("grpc.max_send_message_length", 1024 * 1024 * 1024),
+                ("grpc.max_receive_message_length", GRPC_MAX_MESSAGE_SIZE),
+                ("grpc.max_send_message_length", GRPC_MAX_MESSAGE_SIZE),
             ]
 
         if credentials is not None:
