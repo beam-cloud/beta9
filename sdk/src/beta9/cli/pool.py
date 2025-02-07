@@ -98,10 +98,10 @@ def list_pools(
         # Pool state table for dynamic health info
         state_table = Table(show_header=False, box=None, expand=True)
         state_table.add_row("Status:", pool.state.status)
-        state_table.add_row("Scheduling Latency:", str(pool.state.scheduling_latency))
+        state_table.add_row("Scheduling Latency (ms):", str(pool.state.scheduling_latency))
         state_table.add_row("Free GPU:", str(pool.state.free_gpu))
-        state_table.add_row("Free CPU:", str(pool.state.free_cpu))
-        state_table.add_row("Free Memory:", str(pool.state.free_memory))
+        state_table.add_row("Free CPU (millicores):", str(pool.state.free_cpu))
+        state_table.add_row("Free Memory (MB):", str(pool.state.free_memory))
         state_table.add_row("Pending Workers:", str(pool.state.pending_workers))
         state_table.add_row("Available Workers:", str(pool.state.available_workers))
         state_table.add_row("Pending Containers:", str(pool.state.pending_containers))
