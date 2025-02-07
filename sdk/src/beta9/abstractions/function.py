@@ -66,6 +66,8 @@ class Function(RunnerAbstraction):
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
+        headless (bool):
+            Determines whether the function continues running in the background after the client disconnects. Default: False.
     Example:
         ```python
         from beta9 import function, Image
@@ -100,6 +102,7 @@ class Function(RunnerAbstraction):
         name: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
         on_deploy: Optional[AbstractCallableWrapper] = None,
+        headless: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -119,6 +122,7 @@ class Function(RunnerAbstraction):
 
         self._function_stub: Optional[FunctionServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+        self.headless = headless
 
     def __call__(self, func):
         return _CallableWrapper(func, self)
@@ -181,6 +185,7 @@ class _CallableWrapper(DeployableMixin):
             FunctionInvokeRequest(
                 stub_id=self.parent.stub_id,
                 args=args,
+                headless=self.parent.headless,
             )
         ):
             if r.output != "":

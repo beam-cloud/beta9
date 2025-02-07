@@ -159,6 +159,15 @@ func (ts TaskStatus) IsCompleted() bool {
 	}
 }
 
+func (ts TaskStatus) IsInflight() bool {
+	switch ts {
+	case TaskStatusPending, TaskStatusRunning, TaskStatusRetry:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	TaskStatusPending   TaskStatus = "PENDING"
 	TaskStatusRunning   TaskStatus = "RUNNING"
