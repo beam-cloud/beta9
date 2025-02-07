@@ -44,5 +44,5 @@ jobs:
           push: true
           tags: |
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-gateway:${{ inputs.tag }}
-          target: final
+          target: release
           platforms: linux/amd64
