@@ -144,6 +144,20 @@ message Worker {
   repeated Container active_containers = 17;
 }
 
+message WorkerPoolState {
+  string status = 1;
+  int64 scheduling_latency = 2;
+  uint32 free_gpu = 3;
+  int64 free_cpu = 4;
+  int64 free_memory = 5;
+  int64 pending_workers = 6;
+  int64 available_workers = 7;
+  int64 pending_containers = 8;
+  int64 running_containers = 9;
+  int64 registered_machines = 10;
+  int64 pending_machines = 11;
+}
+
 message Workspace {
   uint32 id = 1;
   string external_id = 2;

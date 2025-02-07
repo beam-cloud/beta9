@@ -29,6 +29,11 @@ func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsReques
 	formattedPools := []*pb.Pool{}
 	for _, poolName := range keys {
 		poolConfig := pools[poolName]
+		poolState, err := gws.workerPoolRepo.GetWorkerPoolState(ctx, poolName)
+		if err != nil {
+			return nil, err
+		}
+
 		formattedPools = append(formattedPools, &pb.Pool{
 			Name:                  poolName,
 			Gpu:                   poolConfig.GPUType,
@@ -38,6 +43,7 @@ func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsReques
 			DefaultWorkerCpu:      poolConfig.PoolSizing.DefaultWorkerCPU,
 			DefaultWorkerMemory:   poolConfig.PoolSizing.DefaultWorkerMemory,
 			DefaultWorkerGpuCount: poolConfig.PoolSizing.DefaultWorkerGpuCount,
+			State:                 poolState.ToProto(),
 		})
 	}
 

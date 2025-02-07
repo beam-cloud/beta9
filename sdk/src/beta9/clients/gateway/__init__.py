@@ -368,6 +368,7 @@ class Pool(betterproto.Message):
     default_worker_cpu: str = betterproto.string_field(8)
     default_worker_memory: str = betterproto.string_field(9)
     default_worker_gpu_count: str = betterproto.string_field(10)
+    state: "_types__.WorkerPoolState" = betterproto.message_field(11)
 
 
 @dataclass(eq=False, repr=False)
