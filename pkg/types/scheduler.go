@@ -432,7 +432,7 @@ func (w *WorkerPoolState) ToProto() *pb.WorkerPoolState {
 	return &pb.WorkerPoolState{
 		Status:             string(w.Status),
 		SchedulingLatency:  w.SchedulingLatency,
-		FreeGpu:            uint32(w.FreeGpu),
+		FreeGpu:            w.FreeGpu,
 		FreeCpu:            w.FreeCpu,
 		FreeMemory:         w.FreeMemory,
 		PendingWorkers:     w.PendingWorkers,
