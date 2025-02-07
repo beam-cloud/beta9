@@ -121,11 +121,11 @@ RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/m
     -o /etc/containers/registries.conf.d/shortnames.conf
 
 ARG CEDANA_VERSION=0.9.238-pre
-ARG CEDANA_TOKEN
-ARG CEDANA_BASE_URL
+ARG CEDANA_BASE_URL=""
+ARG CEDANA_TOKEN=""
 RUN <<EOT
 set -eux
-if [ "$(uname -m)" = "x86_64" ]; then
+if [ "$(uname -m)" = "x86_64" ] && [ ! -z "${CEDANA_BASE_URL}" ] && [ ! -z "${CEDANA_TOKEN}" ]; then
     apt-get install -y python3-protobuf libnet1 libnftables1 libnl-3-200 libprotobuf-c1 iptables
     curl -L -o cedana.tar.gz https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_linux_amd64.tar.gz
     tar -xzf cedana.tar.gz cedana
