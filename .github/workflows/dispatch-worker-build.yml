@@ -7,6 +7,10 @@ on:
         description: 'image tag'
         required: true
         type: string
+      build_args:
+        description: 'Optional build arguments (format: KEY1=VALUE1,KEY2=VALUE2)'
+        required: false
+        type: string
 
 permissions:
   id-token: write
@@ -46,3 +50,4 @@ jobs:
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:${{ inputs.tag }}
           target: final
           platforms: linux/amd64
+          build-args: ${{ inputs.build_args }}
