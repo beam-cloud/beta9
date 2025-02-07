@@ -44,6 +44,7 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 	g.GET("/:workspaceId/aggregate-by-time-window", auth.WithWorkspaceAuth(group.AggregateTasksByTimeWindow))
 	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
 	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
+	g.GET("/metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
 
 	return group
 }
@@ -224,4 +225,34 @@ func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, erro
 	filters.WorkspaceID = workspace.Id
 
 	return &filters, nil
+}
+
+func (g *TaskGroup) GetClusterTaskMetrics(ctx echo.Context) error {
+	query := ctx.QueryParams()
+
+	startedAtTimestamp, err := strconv.ParseInt(query.Get("started_at"), 10, 64)
+	if err != nil {
+		return HTTPBadRequest("Invalid started_at")
+	}
+
+	startedAt := time.Unix(startedAtTimestamp, 0)
+	if err != nil {
+		return HTTPBadRequest("Invalid started_at")
+	}
+
+	endedAtTimestamp, err := strconv.ParseInt(query.Get("ended_at"), 10, 64)
+	if err != nil {
+		return HTTPBadRequest("Invalid ended_at")
+	}
+
+	endedAt := time.Unix(endedAtTimestamp, 0)
+	if err != nil {
+		return HTTPBadRequest("Invalid ended_at")
+	}
+
+	if metrics, err := g.backendRepo.GetTaskMetrics(ctx.Request().Context(), startedAt, endedAt); err != nil {
+		return HTTPInternalServerError("Failed to retrieve cluster task metrics")
+	} else {
+		return ctx.JSON(http.StatusOK, metrics)
+	}
 }
