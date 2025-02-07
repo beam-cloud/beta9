@@ -1,10 +1,14 @@
+import json
 import time
 from typing import Any, Dict, List, Tuple
 
 import click
 from betterproto import Casing
+from rich.columns import Columns
 from rich.live import Live
+from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from .. import terminal
 from ..channel import ServiceClient
@@ -42,21 +46,12 @@ def _get_pool_renderable(
     """
     res: ListPoolsResponse = service.gateway.list_pools(ListPoolsRequest(filters, limit))
     if not res.ok:
-        from rich.text import Text
-
         return Text(f"[red]{res.err_msg}")
 
     if output_format == "json":
         pools = [d.to_dict(casing=Casing.SNAKE) for d in res.pools]  # type: ignore
-        import json
-
-        from rich.text import Text
-
         return Text(json.dumps(pools, indent=2))
     else:
-        from rich.columns import Columns
-        from rich.panel import Panel
-
         name_filters = filters.get("name", StringList())
         pool_cards = []
         for pool in res.pools:
