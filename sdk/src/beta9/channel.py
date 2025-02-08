@@ -25,6 +25,8 @@ from .config import (
 from .env import is_remote
 from .exceptions import RunnerException
 
+GRPC_MAX_MESSAGE_SIZE = 16 * 1024 * 1024
+
 
 def channel_reconnect_event(connect_status: grpc.ChannelConnectivity) -> None:
     if connect_status not in (
@@ -49,14 +51,17 @@ class Channel(InterceptorChannel):
         ),
     ):
         if options is None:
-            options = []
+            options = [
+                ("grpc.max_receive_message_length", GRPC_MAX_MESSAGE_SIZE),
+                ("grpc.max_send_message_length", GRPC_MAX_MESSAGE_SIZE),
+            ]
 
         if credentials is not None:
-            channel = grpc.secure_channel(addr, credentials)
+            channel = grpc.secure_channel(addr, credentials, options=options)
         elif addr.endswith("443"):
-            channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials())
+            channel = grpc.secure_channel(addr, grpc.ssl_channel_credentials(), options=options)
         else:
-            channel = grpc.insecure_channel(addr)
+            channel = grpc.insecure_channel(addr, options=options)
 
         # NOTE: we observed that in a multiprocessing context, this
         # retry mechanism did not work as expected. We're not sure why,

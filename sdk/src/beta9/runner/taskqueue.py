@@ -184,6 +184,7 @@ class TaskQueueWorker:
                 kwargs=task["kwargs"],
             )
         except (grpc.RpcError, OSError):
+            print("Failed to retrieve task due to unexpected error", traceback.format_exc())
             return None
 
     def _monitor_task(
