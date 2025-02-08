@@ -21,6 +21,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	bot "github.com/beam-cloud/beta9/pkg/abstractions/experimental/bot"
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
+	pod "github.com/beam-cloud/beta9/pkg/abstractions/pod"
 	_shell "github.com/beam-cloud/beta9/pkg/abstractions/shell"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
@@ -362,6 +363,24 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterContainerServiceServer(g.grpcServer, cs)
+
+	// Register pod service
+	ps, err := pod.NewPodService(
+		g.ctx,
+		pod.PodServiceOpts{
+			Config:        g.Config,
+			BackendRepo:   g.BackendRepo,
+			ContainerRepo: g.ContainerRepo,
+			Tailscale:     g.Tailscale,
+			Scheduler:     g.Scheduler,
+			RedisClient:   g.RedisClient,
+			EventRepo:     g.EventRepo,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	pb.RegisterPodServiceServer(g.grpcServer, ps)
 
 	// Register output service
 	o, err := output.NewOutputRedisService(g.Config, g.RedisClient, g.BackendRepo, g.rootRouteGroup)
