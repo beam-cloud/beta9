@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beam/proto";
+
+package pod;
+
+service PodService {
+  rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {}
+}
+
+message CreatePodRequest {
+  string name = 1;
+  string image = 2;
+  string entry_point = 3;
+}
+
+message CreatePodResponse { string pod_id = 1; }

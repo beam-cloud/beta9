@@ -40,6 +40,9 @@ protoc -I ./pkg/abstractions/endpoint/ --python_betterproto_beta9_out=./sdk/src/
 protoc -I ./pkg/abstractions/container/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/container/container.proto
 protoc -I ./pkg/abstractions/container/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/container/container.proto
 
+protoc -I ./pkg/abstractions/pod/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/pod/pod.proto
+protoc -I ./pkg/abstractions/pod/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/pod/pod.proto
+
 protoc -I ./pkg/abstractions/output/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/output/output.proto
 protoc -I ./pkg/abstractions/output/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/output/output.proto
 
