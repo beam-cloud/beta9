@@ -15,7 +15,7 @@ func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tail
 	var conn net.Conn = nil
 
 	if tsConfig.Enabled && strings.Contains(host, tsConfig.HostName) {
-		conn, err := tailscale.Dial(ctx, "tcp4", host)
+		conn, err := tailscale.Dial(ctx, "tcp6", host)
 		if err != nil {
 			return nil, err
 		}
@@ -23,7 +23,7 @@ func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tail
 		return conn, err
 	}
 
-	conn, err := net.DialTimeout("tcp4", host, timeout)
+	conn, err := net.DialTimeout("tcp", host, timeout)
 	if err != nil {
 		return conn, err
 	}
