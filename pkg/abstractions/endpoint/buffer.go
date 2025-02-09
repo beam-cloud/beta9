@@ -23,6 +23,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -184,22 +185,29 @@ func (rb *RequestBuffer) processRequests() {
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 	httpClient, err := rb.getHttpClient(address)
 	if err != nil {
+		log.Error().Msgf("error getting http client: %s, stubId: %s", err, rb.stubId)
 		return false
 	}
+
+	log.Info().Msgf("checking if address is ready: %s, stubId: %s", address, rb.stubId)
 
 	ctx, cancel := context.WithTimeout(rb.ctx, httpConnectionTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s/health", address), nil)
 	if err != nil {
+		log.Error().Msgf("error creating request: %s, stubId: %s", err, rb.stubId)
 		return false
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		log.Error().Msgf("error checking if address is ready: %s, stubId: %s", err, rb.stubId)
 		return false
 	}
 	defer resp.Body.Close()
+
+	log.Info().Msgf("response status code: %d, stubId: %s", resp.StatusCode, rb.stubId)
 
 	return resp.StatusCode == http.StatusOK
 }
