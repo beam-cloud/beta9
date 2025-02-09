@@ -220,6 +220,7 @@ func (rb *RequestBuffer) discoverContainers() {
 		default:
 			containerStates, err := rb.containerRepo.GetActiveContainersByStubId(rb.stubId)
 			if err != nil {
+				log.Error().Msgf("error getting active containers: %s, stubId: %s", err, rb.stubId)
 				continue
 			}
 
@@ -227,21 +228,25 @@ func (rb *RequestBuffer) discoverContainers() {
 			availableContainersChan := make(chan container, len(containerStates))
 
 			for _, containerState := range containerStates {
+				log.Info().Msgf("checking container: %s, stubId: %s", containerState.ContainerId, rb.stubId)
 				wg.Add(1)
 
 				go func(cs types.ContainerState) {
 					defer wg.Done()
 					if cs.Status != types.ContainerStatusRunning {
+						log.Info().Msgf("container is not running: %s, stubId: %s", cs.ContainerId, rb.stubId)
 						return
 					}
 
 					containerAddress, err := rb.containerRepo.GetContainerAddress(cs.ContainerId)
 					if err != nil {
+						log.Error().Msgf("error getting container address: %s, stubId: %s", err, rb.stubId)
 						return
 					}
 
 					availableTokens, err := rb.requestTokens(cs.ContainerId)
 					if err != nil {
+						log.Error().Msgf("error getting request tokens: %s, stubId: %s", err, rb.stubId)
 						return
 					}
 
