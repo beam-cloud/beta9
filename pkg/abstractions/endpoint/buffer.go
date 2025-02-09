@@ -244,11 +244,15 @@ func (rb *RequestBuffer) discoverContainers() {
 						return
 					}
 
+					log.Info().Msgf("getting request tokens for container: %s, stubId: %s, container address: %s", cs.ContainerId, rb.stubId, containerAddress)
+
 					availableTokens, err := rb.requestTokens(cs.ContainerId)
 					if err != nil {
 						log.Error().Msgf("error getting request tokens: %s, stubId: %s", err, rb.stubId)
 						return
 					}
+
+					log.Info().Msgf("got request tokens for container: %s, stubId: %s, available tokens: %d", cs.ContainerId, rb.stubId, availableTokens)
 
 					// Let's say we have 5 workers available, and there are three tokens left in this bucket
 					// that means we currently have 5-3 -> 2 requests in flight
@@ -266,7 +270,9 @@ func (rb *RequestBuffer) discoverContainers() {
 				}(containerState)
 			}
 
+			log.Info().Msgf("waiting at wait group, stubId: %s", rb.stubId)
 			wg.Wait()
+			log.Info().Msgf("done waiting at wait group, stubId: %s", rb.stubId)
 			close(availableContainersChan)
 
 			// Collect available containers
@@ -280,9 +286,11 @@ func (rb *RequestBuffer) discoverContainers() {
 				return availableContainers[i].inFlightRequests < availableContainers[j].inFlightRequests
 			})
 
+			log.Info().Msgf("updating available containers, stubId: %s", rb.stubId)
 			rb.availableContainersLock.Lock()
 			rb.availableContainers = availableContainers
 			rb.availableContainersLock.Unlock()
+			log.Info().Msgf("done updating available containers, stubId: %s", rb.stubId)
 
 			time.Sleep(500 * time.Millisecond)
 		}
