@@ -120,7 +120,7 @@ RUN mkdir -p /etc/containers/registries.conf.d
 RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/main/shortnames.conf \
     -o /etc/containers/registries.conf.d/shortnames.conf
 
-ARG CEDANA_VERSION=0.9.238-pre
+ARG CEDANA_VERSION=0.9.239
 ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
 RUN <<EOT
@@ -131,7 +131,7 @@ if [ "$(uname -m)" = "x86_64" ] && [ ! -z "${CEDANA_BASE_URL}" ] && [ ! -z "${CE
     tar -xzf cedana.tar.gz cedana
     mv cedana /usr/local/bin/cedana
     rm cedana.tar.gz
-    CEDANA_URL=${CEDANA_BASE_URL} CEDANA_AUTH_TOKEN=${CEDANA_TOKEN} cedana plugin install criu runc gpu
+    CEDANA_URL=${CEDANA_BASE_URL} CEDANA_AUTH_TOKEN=${CEDANA_TOKEN} cedana plugin install criu runc gpu streamer
 fi
 EOT
 

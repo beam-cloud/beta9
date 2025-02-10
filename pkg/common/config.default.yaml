@@ -217,6 +217,9 @@ worker:
       db:
         # Use remote DB on the cedana endpoint
         remote: true
+      metrics:
+        # Let cedana collect C/R metrics for improvements
+        otel: true
       profiling:
         # Receive profiling info in the gRPC trailer
         enabled: false
