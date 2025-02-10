@@ -251,8 +251,6 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 	ctx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
 
-	log.Info().Str("task_id", req.TaskId).Msg("monitoring task")
-
 	task, err := fs.backendRepo.GetTaskWithRelated(ctx, req.TaskId)
 	if err != nil {
 		return err
@@ -352,7 +350,6 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 			return nil
 
 		case <-cancelFlag:
-			log.Info().Msg("task cancelled")
 			err := fs.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
 			if err != nil {
 				return err
@@ -371,7 +368,6 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 			return nil
 
 		default:
-			log.Info().Str("status", string(task.Status)).Msg("task status")
 			if task.Status == types.TaskStatusCancelled {
 				stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: true, Complete: false, TimedOut: false})
 				return nil
