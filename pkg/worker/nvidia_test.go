@@ -2,10 +2,13 @@ package worker
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"sort"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/tj/assert"
@@ -191,5 +194,109 @@ func TestAssignGPUsStatFail(t *testing.T) {
 	_, err := manager.AssignGPUDevices("container1", 2)
 	if err == nil {
 		t.Errorf("Expected error due to stat failure, but got none")
+	}
+}
+
+func TestConcurrentlyAssignGPUDevices(t *testing.T) {
+	manager := NewContainerNvidiaManagerForTest(4)
+	numContainers := 4
+	iterations := 10
+	gpusPerContainer := 1 // Number of GPUs to assign per container
+
+	// seed the random number generator
+	rand.Seed(time.Now().UnixNano())
+
+	var wg sync.WaitGroup
+
+	// channel to collect errors from all iterations
+	errCh := make(chan error, numContainers*iterations)
+
+	// map to track currently assigned GPU strings
+	currentlyAssignedGPUs := make(map[string]string) // Use assignedRes.String() as key
+	var currentlyAssignedGPUsMu sync.Mutex
+
+	for i := 0; i < numContainers; i++ {
+		containerID := fmt.Sprintf("concurrent_container_%d", i)
+		wg.Add(1)
+
+		go func(id string) {
+			defer wg.Done()
+
+			for iter := 0; iter < iterations; iter++ {
+				// retry up to maxRetries times
+				maxRetries := 3
+				attempt := 0
+				var assignedRes *AssignedGpuDevices
+				var err error
+
+				for {
+					assignedRes, err = manager.AssignGPUDevices(id, uint32(gpusPerContainer))
+					if err != nil {
+						attempt++
+
+						if attempt >= maxRetries {
+							errCh <- fmt.Errorf("failed to assign GPU devices for %s on iteration %d after %d retries: %w", id, iter, attempt, err)
+							break
+						}
+
+						time.Sleep(time.Duration(rand.Intn(200)+100) * time.Millisecond)
+						continue
+					}
+
+					// Use assignedRes.String() to check for duplicate GPU assignment
+					key := assignedRes.String()
+					currentlyAssignedGPUsMu.Lock()
+					if owner, exists := currentlyAssignedGPUs[key]; exists {
+						errCh <- fmt.Errorf("GPU assignment %s is already assigned to container %s, but was also assigned to container %s", key, owner, id)
+						currentlyAssignedGPUsMu.Unlock()
+						manager.UnassignGPUDevices(id)
+						break // Exit the loop to avoid infinite retry
+					}
+
+					// Mark GPUs as assigned
+					currentlyAssignedGPUs[key] = id
+					currentlyAssignedGPUsMu.Unlock()
+					break
+				}
+				if err != nil {
+					// move on to the next iteration if we couldn't get an assignment
+					continue
+				}
+
+				// validate that the NVIDIA_VISIBLE_DEVICES string isn't empty
+				if assignedRes.visible == "" {
+					errCh <- fmt.Errorf("empty NVIDIA_VISIBLE_DEVICES for container %s on iteration %d", id, iter)
+					manager.UnassignGPUDevices(id)
+					continue
+				}
+
+				// retrieve the GPUs assigned to this container - it should be exactly gpusPerContainer
+				gpus := manager.GetContainerGPUDevices(id)
+				if len(gpus) != gpusPerContainer {
+					errCh <- fmt.Errorf("expected %d GPUs for container %s on iteration %d but got %d", gpusPerContainer, id, iter, len(gpus))
+					manager.UnassignGPUDevices(id)
+					continue
+				}
+
+				// hold the assignment for a longer time interval to increase concurrency issues
+				time.Sleep(time.Duration(rand.Intn(200)+100) * time.Millisecond)
+
+				// unassign the GPU and then wait a short random period before the next iteration.
+				manager.UnassignGPUDevices(id)
+
+				// Unmark GPUs as assigned
+				currentlyAssignedGPUsMu.Lock()
+				delete(currentlyAssignedGPUs, assignedRes.String())
+				currentlyAssignedGPUsMu.Unlock()
+			}
+		}(containerID)
+	}
+
+	wg.Wait()
+	close(errCh)
+
+	// report any errors encountered during the test
+	for err := range errCh {
+		t.Error(err)
 	}
 }
