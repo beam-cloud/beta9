@@ -2,6 +2,7 @@ package pod
 
 import (
 	"context"
+	"log"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -63,6 +64,7 @@ func NewPodService(
 
 // CreatePod creates a new container that will run to completion, with an associated task
 func (s *CmdPodService) CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error) {
+	log.Println("CreatePod", in)
 	return &pb.CreatePodResponse{
 		PodId: "123",
 	}, nil
