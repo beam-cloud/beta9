@@ -31,7 +31,7 @@ func TestAvailableGPUDevicesSomeVisibleDevices(t *testing.T) {
 	}
 
 	client := &NvidiaInfoClient{}
-	os.Setenv("NVIDIA_VISIBLE_DEVICES", "GPU-c3a5fd20-3426-6869-e9cd-d9a80d6cfd0f, GPU-df0e69ce-6dbd-a6cf-89f3-92ac8be4e7c6")
+	os.Setenv("NVIDIA_VISIBLE_DEVICES", "GPU-c3a5fd20-3426-6869-e9cd-d9a80d6cfd0f,GPU-df0e69ce-6dbd-a6cf-89f3-92ac8be4e7c6")
 
 	devices, err := client.AvailableGPUDevices()
 	assert.NoError(t, err)
