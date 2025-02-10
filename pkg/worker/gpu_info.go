@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strconv"
@@ -96,7 +95,6 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 		if exists, err := checkGPUExists(busId); err == nil && exists {
 			index, err := strconv.Atoi(strings.TrimSpace(gpuIndex))
 			if err != nil {
-				log.Printf("error converting gpuIndex to int: %v", err)
 				return nil, err
 			}
 
