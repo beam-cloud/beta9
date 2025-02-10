@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strconv"
@@ -37,20 +38,34 @@ func (c *NvidiaInfoClient) hexToPaddedString(hexStr string) (string, error) {
 	return paddedStr, nil
 }
 
-func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
-	// Find available GPU BUS IDs
-	command := "nvidia-smi"
-	commandArgs := []string{"--query-gpu=pci.domain,pci.bus_id,index,uuid", "--format=csv,noheader,nounits"}
-	visibleDevices := os.Getenv("NVIDIA_VISIBLE_DEVICES")
+var queryDevices = func() ([]byte, error) {
+	cmd := exec.Command("nvidia-smi", "--query-gpu=pci.domain,pci.bus_id,index,uuid", "--format=csv,noheader,nounits")
+	return cmd.Output()
+}
 
-	out, err := exec.Command(command, commandArgs...).Output()
+var checkGPUExists = func(busId string) (bool, error) {
+	_, err := os.Stat(fmt.Sprintf("/proc/driver/nvidia/gpus/%s", busId))
+	if err == nil {
+		return true, nil
+	}
+
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+
+	return false, err
+}
+
+func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
+	visibleDevices := os.Getenv("NVIDIA_VISIBLE_DEVICES") // Find available GPU BUS IDs
+	devices, err := queryDevices()
 	if err != nil {
 		return nil, err
 	}
 
 	// Parse the output
 	result := []int{}
-	for _, line := range strings.Split(string(out), "\n") {
+	for _, line := range strings.Split(string(devices), "\n") {
 		if len(line) == 0 {
 			continue
 		}
@@ -65,7 +80,7 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 			return nil, err
 		}
 
-		uuid := strings.TrimSpace(parts[4])
+		uuid := strings.TrimSpace(parts[3])
 		if !strings.Contains(visibleDevices, uuid) && visibleDevices != "all" {
 			continue
 		}
@@ -78,9 +93,10 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 		)
 		gpuIndex := strings.TrimSpace(parts[2])
 
-		if _, err := os.Stat(fmt.Sprintf("/proc/driver/nvidia/gpus/%s", busId)); err == nil {
+		if exists, err := checkGPUExists(busId); err == nil && exists {
 			index, err := strconv.Atoi(strings.TrimSpace(gpuIndex))
 			if err != nil {
+				log.Printf("error converting gpuIndex to int: %v", err)
 				return nil, err
 			}
 
