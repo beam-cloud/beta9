@@ -119,7 +119,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 		return err
 	}
 
-	return fs.stream(ctx, stream, authInfo, task, in.Headless)
+	return fs.stream(ctx, stream, authInfo, task, in.StubId, in.Headless)
 }
 
 func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
@@ -157,7 +157,7 @@ func (fs *RunCFunctionService) functionTaskFactory(ctx context.Context, msg type
 	}, nil
 }
 
-func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, headless bool) error {
+func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, stubId string, headless bool) error {
 	taskId := task.Metadata().TaskId
 	containerId := task.Metadata().ContainerId
 
@@ -199,6 +199,11 @@ func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionSer
 		err = task.Cancel(context.Background(), types.TaskRequestCancelled)
 		if err != nil {
 			log.Error().Err(err).Msg("error cancelling task")
+		}
+
+		err = fs.rdb.Publish(context.Background(), common.RedisKeys.TaskCancel(authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId), task.Message().TaskId).Err()
+		if err != nil {
+			log.Error().Err(err).Msg("error publishing task cancel event")
 		}
 	}()
 
@@ -245,6 +250,8 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 
 	ctx, cancel := context.WithCancel(stream.Context())
 	defer cancel()
+
+	log.Info().Str("task_id", req.TaskId).Msg("monitoring task")
 
 	task, err := fs.backendRepo.GetTaskWithRelated(ctx, req.TaskId)
 	if err != nil {
@@ -345,6 +352,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 			return nil
 
 		case <-cancelFlag:
+			log.Info().Msg("task cancelled")
 			err := fs.taskDispatcher.Complete(ctx, authInfo.Workspace.Name, req.StubId, task.ExternalId)
 			if err != nil {
 				return err
@@ -363,6 +371,7 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 			return nil
 
 		default:
+			log.Info().Str("status", string(task.Status)).Msg("task status")
 			if task.Status == types.TaskStatusCancelled {
 				stream.Send(&pb.FunctionMonitorResponse{Ok: true, Cancelled: true, Complete: false, TimedOut: false})
 				return nil
