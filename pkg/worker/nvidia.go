@@ -149,6 +149,7 @@ func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuC
 	}
 
 	allocableDevices := []int{}
+
 	// Find available GPUs and allocate to the current container
 	if len(currentAllocations) < len(availableDevices) {
 		for _, gpuId := range availableDevices {

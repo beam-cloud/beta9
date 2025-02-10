@@ -40,7 +40,8 @@ func (c *NvidiaInfoClient) hexToPaddedString(hexStr string) (string, error) {
 func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 	// Find available GPU BUS IDs
 	command := "nvidia-smi"
-	commandArgs := []string{"--query-gpu=pci.domain,pci.bus_id,index", "--format=csv,noheader,nounits"}
+	commandArgs := []string{"--query-gpu=pci.domain,pci.bus_id,index,uuid", "--format=csv,noheader,nounits"}
+	visibleDevices := os.Getenv("NVIDIA_VISIBLE_DEVICES")
 
 	out, err := exec.Command(command, commandArgs...).Output()
 	if err != nil {
@@ -55,13 +56,18 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 		}
 
 		parts := strings.Split(line, ",")
-		if len(parts) != 3 {
+		if len(parts) != 4 {
 			return nil, fmt.Errorf("unexpected output from nvidia-smi: %s", line)
 		}
 
 		domain, err := c.hexToPaddedString(strings.TrimSpace(parts[0]))
 		if err != nil {
 			return nil, err
+		}
+
+		uuid := strings.TrimSpace(parts[4])
+		if !strings.Contains(visibleDevices, uuid) && visibleDevices != "all" {
+			continue
 		}
 
 		// PCI bus_id is shown to be "domain:bus:device.function", but the folder in /proc/driver/nvidia/gpus is just "bus:device.function"
