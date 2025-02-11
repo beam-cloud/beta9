@@ -447,7 +447,9 @@ class Image(BaseAbstraction):
                     gpu=self.gpu,
                 )
             ):
-                if r.msg != "" and not r.done:
+                if r.warning:
+                    terminal.warn("WARNING: " + r.msg)
+                elif r.msg != "" and not r.done:
                     terminal.detail(r.msg, end="")
 
                 if r.done:

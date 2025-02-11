@@ -81,6 +81,7 @@ class BuildImageResponse(betterproto.Message):
     done: bool = betterproto.bool_field(3)
     success: bool = betterproto.bool_field(4)
     python_version: str = betterproto.string_field(5)
+    warning: bool = betterproto.bool_field(6)
 
 
 class ImageServiceStub(SyncServiceStub):

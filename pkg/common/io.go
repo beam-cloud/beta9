@@ -13,6 +13,7 @@ type OutputMsg struct {
 	Done      bool
 	Success   bool
 	Archiving bool
+	Warning   bool
 
 	ImageId       string
 	PythonVersion string
