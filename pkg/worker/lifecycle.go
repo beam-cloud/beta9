@@ -618,14 +618,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		restoredExitCodeChan, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, startedChan, configPath)
+		exitCode, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, startedChan, configPath)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("C/R failed: %v", err)
 		}
 
-		if restoredExitCodeChan != nil {
+		if exitCode != -1 {
 			containerId = restoredContainerId
-			exitCodeChan = restoredExitCodeChan
+			exitCodeChan = make(chan int, 1)
+			exitCodeChan <- exitCode
 		} else {
 			exitCodeChan, err = s.criuManager.Run(ctx, containerId, opts.BundlePath, request.RequiresGPU(), &runc.CreateOpts{
 				Detach:       true,

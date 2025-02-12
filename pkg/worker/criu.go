@@ -20,7 +20,7 @@ type CRIUManager interface {
 	Available() bool
 	Run(ctx context.Context, containerId string, bundle string, gpuEnabled bool, runcOpts *runc.CreateOpts) (chan int, error)
 	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
-	RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, state types.CheckpointState, runcOpts *runc.CreateOpts) (chan int, error)
+	RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, state types.CheckpointState, runcOpts *runc.CreateOpts) (int, error)
 }
 
 const defaultCheckpointDeadline = 10 * time.Minute
@@ -67,7 +67,7 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUMa
 	return criuManager, nil
 }
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, configPath string) (chan int, string, error) {
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, configPath string) (int, string, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
@@ -81,7 +81,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 	} else if state.Status == types.CheckpointStatusAvailable {
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 
-		exitCodeChan, err := s.criuManager.RestoreCheckpoint(ctx, request, state, &runc.CreateOpts{
+		exitCode, err := s.criuManager.RestoreCheckpoint(ctx, request, state, &runc.CreateOpts{
 			Detach:       true,
 			OutputWriter: outputWriter,
 			ConfigPath:   configPath,
@@ -102,14 +102,14 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 				},
 			})
 
-			return nil, "", err
+			return -1, "", err
 		} else {
 			log.Info().Str("container_id", request.ContainerId).Msg("checkpoint found and restored")
-			return exitCodeChan, request.ContainerId, nil
+			return exitCode, request.ContainerId, nil
 		}
 	}
 
-	return nil, "", nil
+	return -1, "", nil
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.

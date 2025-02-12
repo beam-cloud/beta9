@@ -176,7 +176,7 @@ type cedanaRestoreOpts struct {
 	cacheFunc      func(string, string) (string, error)
 }
 
-func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, state types.CheckpointState, runcOpts *runc.CreateOpts) (chan int, error) {
+func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, state types.CheckpointState, runcOpts *runc.CreateOpts) (int, error) {
 	restoreOpts := cedanaRestoreOpts{
 		checkpointPath: state.RemoteKey,
 		jobId:          state.ContainerId,
@@ -217,7 +217,7 @@ func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, request *type
 
 	resp, profilingData, err := c.client.Restore(ctx, args)
 	if err != nil {
-		return nil, fmt.Errorf("failed to restore runc container: %w", err)
+		return -1, fmt.Errorf("failed to restore runc container: %w", err)
 	}
 
 	if runcOpts.Started != nil {
@@ -226,13 +226,14 @@ func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, request *type
 
 	_ = profilingData
 
-	_, stdout, stderr, exitCode, _, err := c.client.AttachIO(ctx, &cedanadaemon.AttachReq{PID: resp.PID})
+	_, stdout, stderr, exitCodeChan, _, err := c.client.AttachIO(ctx, &cedanadaemon.AttachReq{PID: resp.PID})
 	if err != nil {
-		return nil, fmt.Errorf("failed to attach to runc container: %w", err)
+		return -1, fmt.Errorf("failed to attach to runc container: %w", err)
 	}
 
 	go io.Copy(runcOpts.OutputWriter, stdout)
 	go io.Copy(runcOpts.OutputWriter, stderr)
 
+	exitCode := <-exitCodeChan
 	return exitCode, nil
 }
