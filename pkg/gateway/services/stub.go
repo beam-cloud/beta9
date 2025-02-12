@@ -93,6 +93,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Autoscaler:         autoscaler,
 		Extra:              json.RawMessage(in.Extra),
 		CheckpointEnabled:  in.CheckpointEnabled,
+		EntryPoint:         in.Entrypoint,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required
