@@ -7,6 +7,10 @@ on:
         description: 'image tag'
         required: true
         type: string
+      build_args:
+        description: 'Optional build arguments (format: KEY1=VALUE1,KEY2=VALUE2)'
+        required: false
+        type: string
 
 permissions:
   id-token: write
