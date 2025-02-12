@@ -479,6 +479,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		WorkerId:    s.workerId,
 		ContainerId: request.ContainerId,
 	})
+
 	defer cancel()
 
 	exitCode := -1
@@ -566,7 +567,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	if request.Gpu != "" {
+	if request.RequiresGPU() {
 		// Assign n-number of GPUs to a container
 		assignedDevices, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		if err != nil {
@@ -627,17 +628,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			containerId = restoredContainerId
 			exitCodeChan = make(chan int, 1)
 			exitCodeChan <- exitCode
-		} else {
-			exitCodeChan, err = s.criuManager.Run(ctx, containerId, opts.BundlePath, request.RequiresGPU(), &runc.CreateOpts{
-				Detach:       true,
-				OutputWriter: outputWriter,
-				ConfigPath:   configPath,
-				Started:      startedChan,
-			})
-			if err != nil {
-				log.Error().Str("container_id", containerId).Msgf("failed to run cedana client: %v", err)
-				return
-			}
 		}
 	} else {
 		// Invoke runc process (launch the container)

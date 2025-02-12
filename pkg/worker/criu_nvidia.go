@@ -35,12 +35,16 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, request *type
 	return exitCode, nil
 }
 
-func (c *NvidiaCRIUManager) Run(ctx context.Context, containerId string, bundle string, gpuEnabled bool, runcOpts *runc.CreateOpts) (chan int, error) {
-	// TODO: possibly remove this and clean up interface
-	return nil, nil
-}
-
 func (c *NvidiaCRIUManager) Available() bool {
 	// TODO: check for correct version of criu, correct driver version, etc.
 	return false
+}
+
+func (c *NvidiaCRIUManager) Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (chan int, error) {
+	_, err := c.runcHandle.Run(ctx, request.ContainerId, bundlePath, runcOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	return nil, nil
 }

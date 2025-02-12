@@ -18,7 +18,7 @@ import (
 
 type CRIUManager interface {
 	Available() bool
-	Run(ctx context.Context, containerId string, bundle string, gpuEnabled bool, runcOpts *runc.CreateOpts) (chan int, error)
+	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (chan int, error)
 	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
 	RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, state types.CheckpointState, runcOpts *runc.CreateOpts) (int, error)
 }
@@ -73,7 +73,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 	// If checkpointing is enabled, attempt to create a checkpoint
 	if createCheckpoint {
 		go func() {
-			err := s.createCheckpoint(ctx, request)
+			err := s.createCheckpoint(ctx, request, outputWriter, startedChan, configPath)
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
 			}
@@ -81,10 +81,10 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 	} else if state.Status == types.CheckpointStatusAvailable {
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 
+		// TODO: this will probably not return an exit code...
 		exitCode, err := s.criuManager.RestoreCheckpoint(ctx, request, state, &runc.CreateOpts{
 			Detach:       true,
 			OutputWriter: outputWriter,
-			ConfigPath:   configPath,
 			Started:      startedChan,
 		})
 
@@ -114,7 +114,17 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
-func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest) error {
+func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, configPath string) error {
+	bundlePath := filepath.Dir(configPath) // TODO: copied and pasted this, probably not correct
+
+	// TODO: figure out what this should return / what it needs passed in
+	_, err := s.criuManager.Run(ctx, request, bundlePath, &runc.CreateOpts{
+		Detach:       true,
+		OutputWriter: outputWriter,
+		ConfigPath:   configPath,
+		Started:      startedChan,
+	})
+
 	log.Info().Str("container_id", request.ContainerId).Msg("creating checkpoint")
 	os.MkdirAll(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, request.Workspace.Name), os.ModePerm)
 
@@ -261,6 +271,10 @@ func (s *Worker) cacheCheckpoint(containerId, checkpointPath string) (string, er
 
 func (s *Worker) IsCRIUAvailable() bool {
 	if s.criuManager == nil {
+		return false
+	}
+
+	if !s.criuManager.Available() {
 		return false
 	}
 

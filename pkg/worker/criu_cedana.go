@@ -104,22 +104,22 @@ func (c *CedanaCRIUManager) Available() bool {
 }
 
 // Spawn a runc container using cedana, creating a 'job' in cedana
-func (c *CedanaCRIUManager) Run(ctx context.Context, containerId string, bundle string, gpuEnabled bool, runcOpts *runc.CreateOpts) (chan int, error) {
+func (c *CedanaCRIUManager) Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (chan int, error) {
 	// If config path provided directly, derive bundle from it
 	if runcOpts.ConfigPath != "" {
-		bundle = strings.TrimRight(runcOpts.ConfigPath, filepath.Base(runcOpts.ConfigPath))
+		bundlePath = strings.TrimRight(runcOpts.ConfigPath, filepath.Base(runcOpts.ConfigPath))
 	}
 
 	args := &cedanadaemon.RunReq{
 		Action:     cedanadaemon.RunAction_START_NEW,
-		JID:        containerId, // just use containerId for convenience
-		GPUEnabled: gpuEnabled,
+		JID:        request.ContainerId,
+		GPUEnabled: request.RequiresGPU(),
 		Attachable: true,
 		Type:       "runc",
 		Details: &cedanadaemon.Details{
 			Runc: &cedanarunc.Runc{
-				ID:     containerId,
-				Bundle: bundle,
+				ID:     request.ContainerId,
+				Bundle: bundlePath,
 				Root:   runcRoot,
 			},
 		},
@@ -136,7 +136,7 @@ func (c *CedanaCRIUManager) Run(ctx context.Context, containerId string, bundle 
 
 	_ = profilingData
 
-	_, stdout, stderr, exitCode, _, err := c.client.AttachIO(ctx, &cedanadaemon.AttachReq{PID: resp.PID})
+	_, stdout, stderr, exitCodeChan, _, err := c.client.AttachIO(ctx, &cedanadaemon.AttachReq{PID: resp.PID})
 	if err != nil {
 		return nil, fmt.Errorf("failed to attach to runc container: %w", err)
 	}
@@ -144,7 +144,7 @@ func (c *CedanaCRIUManager) Run(ctx context.Context, containerId string, bundle 
 	go io.Copy(runcOpts.OutputWriter, stdout)
 	go io.Copy(runcOpts.OutputWriter, stderr)
 
-	return exitCode, nil
+	return exitCodeChan, nil
 }
 
 func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
