@@ -16,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"tags.cncf.io/container-device-interface/pkg/cdi"
 
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -27,6 +28,7 @@ const (
 	defaultContainerDirectory string        = "/mnt/code"
 	specBaseName              string        = "config.json"
 	initialSpecBaseName       string        = "initial_config.json"
+	nvidiaVendorPrefix        string        = "nvidia.com/gpu"
 	runcEventsInterval        time.Duration = 5 * time.Second
 	containerInnerPort        int           = 8001 // Use a fixed port inside the container
 )
@@ -306,7 +308,6 @@ func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.S
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
 	os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm)
-	configPath := filepath.Join(baseConfigPath, request.ContainerId, specBaseName)
 
 	spec, err := s.newSpecTemplate()
 	if err != nil {
@@ -325,27 +326,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	env := s.getContainerEnvironment(request, options)
 	if request.Gpu != "" {
-		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
-
-		existingCudaFound := false
-		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env)
-		if !existingCudaFound {
-			// If the container image does not have cuda libraries installed, mount cuda libs from the host
-			spec.Mounts = s.containerCudaManager.InjectMounts(spec.Mounts)
-		}
-
-		// Assign n-number of GPUs to a container
-		assignedGpus, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
-		if err != nil {
-			return nil, err
-		}
-		env = append(env, fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", assignedGpus.String()))
-
-		spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, assignedGpus.devices...)
-
-	} else {
-		spec.Hooks.Prestart = nil
+		env = s.containerCudaManager.InjectEnvVars(env)
 	}
+	spec.Process.Env = append(spec.Process.Env, env...)
 
 	// We need to include the checkpoint signal files in the container spec
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
@@ -388,9 +371,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			return nil, err
 		}
 	}
-
-	spec.Process.Env = append(spec.Process.Env, env...)
-	spec.Root.Readonly = false
 
 	var volumeCacheMap map[string]string = make(map[string]string)
 
@@ -578,6 +558,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 	defer containerInstance.Overlay.Cleanup()
 
+	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
@@ -594,15 +575,43 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
+	if request.Gpu != "" {
+		// Assign n-number of GPUs to a container
+		assignedDevices, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to assign GPUs: %v", err)
+			return
+		}
+
+		cdiCache := cdi.GetDefaultCache()
+
+		var devicesToInject []string
+		for _, device := range assignedDevices {
+			devicePath := fmt.Sprintf("%s=%d", nvidiaVendorPrefix, device)
+			devicesToInject = append(devicesToInject, devicePath)
+		}
+
+		unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
+			return
+		}
+		if len(unresolvable) > 0 {
+			log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
+			return
+		}
+	}
+
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
 	if err != nil {
 		return
 	}
 
-	configPath := filepath.Join(baseConfigPath, containerId, specBaseName)
+	configPath := filepath.Join(spec.Root.Path, specBaseName)
 	err = os.WriteFile(configPath, configContents, 0644)
 	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to write runc config: %v", err)
 		return
 	}
 
@@ -639,16 +648,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 		}
 	} else {
-		_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
+		// Invoke runc process (launch the container)
+		bundlePath := filepath.Dir(configPath)
+		_, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
 			Detach:       true,
 			OutputWriter: outputWriter,
-			ConfigPath:   configPath,
 			Started:      startedChan,
 		})
-	}
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to run container: %v", err)
-		return
+		if err != nil {
+			log.Error().Str("container_id", containerId).Msgf("failed to run container: %v", err)
+			return
+		}
 	}
 
 	exitCode = s.wait(ctx, containerId, startedChan, exitCodeChan, outputLogger, request, spec)
@@ -657,7 +667,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 // Wait for a container to exit and return the exit code
 func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, exitCodeChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
 	<-startedChan
-
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
 		log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)

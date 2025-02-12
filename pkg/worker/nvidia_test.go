@@ -2,13 +2,20 @@ package worker
 
 import (
 	"fmt"
+	"math/rand"
 	"os"
 	"sort"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/tj/assert"
+
+	"gvisor.dev/gvisor/pkg/sync"
 )
 
 type GPUInfoClientForTest struct {
@@ -16,8 +23,14 @@ type GPUInfoClientForTest struct {
 }
 
 func NewContainerNvidiaManagerForTest(gpuCount int) GPUManager {
-	manager := NewContainerNvidiaManager(uint32(gpuCount))
-	gpuManager := manager.(*ContainerNvidiaManager)
+	gpuManager := &ContainerNvidiaManager{
+		gpuAllocationMap: common.NewSafeMap[[]int](),
+		gpuCount:         uint32(gpuCount),
+		mu:               sync.Mutex{},
+		statFunc:         syscall.Stat,
+		infoClient:       &NvidiaInfoClient{},
+	}
+
 	gpuManager.infoClient = &GPUInfoClientForTest{GpuCount: gpuCount}
 	gpuManager.statFunc = mockStat
 
@@ -61,14 +74,14 @@ func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
 		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.4/targets/x86_64-linux/lib",
 	}
 
-	resultEnv, _ := manager.InjectEnvVars(initialEnv)
+	resultEnv := manager.InjectEnvVars(initialEnv)
 	sort.Strings(expectedEnv)
 	sort.Strings(resultEnv)
 	assert.Equal(t, expectedEnv, resultEnv)
 }
 
 func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
-	manager := NewContainerNvidiaManager(4)
+	manager := NewContainerNvidiaManagerForTest(4)
 	initialEnv := []string{"INITIAL=1", "CUDA_VERSION=12.4"}
 
 	// Set some environment variables to simulate NVIDIA settings
@@ -92,14 +105,14 @@ func TestInjectNvidiaEnvVarsExistingCudaInImage(t *testing.T) {
 		"LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu:/usr/local/nvidia/lib64:/usr/local/cuda-12.4/targets/x86_64-linux/lib",
 	}
 
-	resultEnv, _ := manager.InjectEnvVars(initialEnv)
+	resultEnv := manager.InjectEnvVars(initialEnv)
 	sort.Strings(expectedEnv)
 	sort.Strings(resultEnv)
 	assert.Equal(t, expectedEnv, resultEnv)
 }
 
 func TestInjectNvidiaMounts(t *testing.T) {
-	manager := NewContainerNvidiaManager(4)
+	manager := NewContainerNvidiaManagerForTest(4)
 	initialMounts := []specs.Mount{{Type: "bind", Source: "/src", Destination: "/dst"}}
 
 	resultMounts := manager.InjectMounts(initialMounts)
@@ -127,12 +140,12 @@ func TestAssignAndUnassignGPUDevices(t *testing.T) {
 	}
 
 	// Verify that 2 GPUs are assigned and the visible string is correct
-	if len(assignedDevices.devices) != gpuCount+1 {
-		t.Errorf("Expected 2 GPUs to be assigned, got %d", len(assignedDevices.devices))
+	if len(assignedDevices) != gpuCount {
+		t.Errorf("Expected 2 GPUs to be assigned, got %d", len(assignedDevices))
 	}
 
-	if assignedDevices.visible != "0,1" && assignedDevices.visible != "1,0" { // Order might vary
-		t.Errorf("Expected visible GPUs to be '0,1' or '1,0', got '%s'", assignedDevices.visible)
+	if assignedDevices[0] != 0 && assignedDevices[1] != 1 { // Order might vary
+		t.Errorf("Expected visible GPUs to be '0,1' or '1,0', got '%d'", assignedDevices)
 	}
 
 	// Unassign the GPUs from the container
@@ -178,18 +191,102 @@ func TestAssignGPUsToMultipleContainers(t *testing.T) {
 	}
 }
 
-func TestAssignGPUsStatFail(t *testing.T) {
+func TestConcurrentlyAssignGPUDevices(t *testing.T) {
 	manager := NewContainerNvidiaManagerForTest(4)
-	gpuManager := manager.(*ContainerNvidiaManager)
-	// Override syscall.Stat to simulate failure
+	numContainers := 4
+	iterations := 10
+	gpusPerContainer := 1 // Number of GPUs to assign per container
 
-	gpuManager.statFunc = func(path string, stat *syscall.Stat_t) error {
-		return fmt.Errorf("mock stat error")
+	// seed the random number generator
+	rand.Seed(time.Now().UnixNano())
+
+	var wg sync.WaitGroup
+
+	// channel to collect errors from all iterations
+	errCh := make(chan error, numContainers*iterations)
+
+	// map to track currently assigned GPU strings
+	currentlyAssignedGPUs := make(map[string]string) // Use assignedRes.String() as key
+	var currentlyAssignedGPUsMu sync.Mutex
+
+	for i := 0; i < numContainers; i++ {
+		containerID := fmt.Sprintf("concurrent_container_%d", i)
+		wg.Add(1)
+
+		go func(id string) {
+			defer wg.Done()
+
+			for iter := 0; iter < iterations; iter++ {
+				// retry up to maxRetries times
+				maxRetries := 3
+				attempt := 0
+				var key string
+				var err error
+
+				for {
+					assignedDevices, err := manager.AssignGPUDevices(id, uint32(gpusPerContainer))
+					if err != nil {
+						attempt++
+
+						if attempt >= maxRetries {
+							errCh <- fmt.Errorf("failed to assign GPU devices for %s on iteration %d after %d retries: %w", id, iter, attempt, err)
+							break
+						}
+
+						time.Sleep(time.Duration(rand.Intn(200)+100) * time.Millisecond)
+						continue
+					}
+
+					nums := make([]string, len(assignedDevices))
+					for i, num := range assignedDevices {
+						nums[i] = strconv.Itoa(num)
+					}
+					key = strings.Join(nums, ",")
+					currentlyAssignedGPUsMu.Lock()
+					if owner, exists := currentlyAssignedGPUs[key]; exists {
+						errCh <- fmt.Errorf("GPU assignment %s is already assigned to container %s, but was also assigned to container %s", key, owner, id)
+						currentlyAssignedGPUsMu.Unlock()
+						manager.UnassignGPUDevices(id)
+						break // Exit the loop to avoid infinite retry
+					}
+
+					// Mark GPUs as assigned
+					currentlyAssignedGPUs[key] = id
+					currentlyAssignedGPUsMu.Unlock()
+					break
+				}
+				if err != nil {
+					// move on to the next iteration if we couldn't get an assignment
+					continue
+				}
+
+				// retrieve the GPUs assigned to this container - it should be exactly gpusPerContainer
+				gpus := manager.GetContainerGPUDevices(id)
+				if len(gpus) != gpusPerContainer {
+					errCh <- fmt.Errorf("expected %d GPUs for container %s on iteration %d but got %d", gpusPerContainer, id, iter, len(gpus))
+					manager.UnassignGPUDevices(id)
+					continue
+				}
+
+				// hold the assignment for a longer time interval to increase concurrency issues
+				time.Sleep(time.Duration(rand.Intn(200)+100) * time.Millisecond)
+
+				// unassign the GPU and then wait a short random period before the next iteration.
+				manager.UnassignGPUDevices(id)
+
+				// Unmark GPUs as assigned
+				currentlyAssignedGPUsMu.Lock()
+				delete(currentlyAssignedGPUs, key)
+				currentlyAssignedGPUsMu.Unlock()
+			}
+		}(containerID)
 	}
 
-	// Attempt to assign GPUs should fail due to statFunc error
-	_, err := manager.AssignGPUDevices("container1", 2)
-	if err == nil {
-		t.Errorf("Expected error due to stat failure, but got none")
+	wg.Wait()
+	close(errCh)
+
+	// report any errors encountered during the test
+	for err := range errCh {
+		t.Error(err)
 	}
 }

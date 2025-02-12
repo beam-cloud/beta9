@@ -370,6 +370,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 		if opts.PythonVersion == types.Python3.String() {
 			opts.PythonVersion = b.config.ImageService.PythonVersion
+		} else {
+			// Check if any python version is installed and warn the user that they are overriding it
+			checkPythonVersionCmd := fmt.Sprintf("%s --version", types.Python3.String())
+			if resp, err := client.Exec(containerId, checkPythonVersionCmd); err == nil && resp.Ok {
+				outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: fmt.Sprintf("requested python version (%s) was not detected, but an existing python3 environment was detected. The requested python version will be installed, replacing the existing python environment.\n", opts.PythonVersion), Warning: true}
+			}
 		}
 
 		outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}

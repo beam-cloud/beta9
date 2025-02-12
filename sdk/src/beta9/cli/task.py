@@ -83,6 +83,7 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
     table = Table(
         Column("Task ID"),
         Column("Status"),
+        Column("Created At"),
         Column("Started At"),
         Column("Ended At"),
         Column("Container ID"),
@@ -99,6 +100,7 @@ def list_tasks(service: ServiceClient, limit: int, format: str, filter: Dict[str
                 if task.status.lower() == "complete"
                 else f"[bold yellow]{task.status}"
             ),
+            terminal.humanize_date(task.created_at),
             terminal.humanize_date(task.started_at),
             terminal.humanize_date(task.ended_at),
             task.container_id,

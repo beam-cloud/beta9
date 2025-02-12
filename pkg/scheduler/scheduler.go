@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"slices"
 	"sort"
 	"time"
 
@@ -213,6 +214,11 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 			for _, pool := range pools {
 				controllers = append(controllers, pool.Controller)
 			}
+
+			// If the request contains the "any" GPU selector, we've already retrieved all pools
+			if gpu == string(types.GPU_ANY) {
+				break
+			}
 		}
 	}
 
@@ -344,6 +350,11 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 
 	for index, gpu := range request.GpuRequest {
 		gpuRequestsMap[gpu] = index
+	}
+
+	// If the request contains the "any" GPU selector, we need to check all GPU types
+	if slices.Contains(request.GpuRequest, string(types.GPU_ANY)) {
+		gpuRequestsMap = types.GPUTypesToMap(types.AllGPUTypes())
 	}
 
 	for _, worker := range workers {

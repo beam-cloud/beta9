@@ -39,8 +39,8 @@ gateway:
     externalPort: 1993
     tls: false
     port: 1993
-    maxRecvMsgSize: 1024
-    maxSendMsgSize: 1024
+    maxRecvMsgSize: 16
+    maxSendMsgSize: 16
   http:
     externalHost: localhost
     externalPort: 1994

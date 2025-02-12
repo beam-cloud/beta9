@@ -36,7 +36,7 @@ RUN apt-get install -y libseccomp-dev
 
 RUN <<EOT
 set -eux
-git clone https://github.com/beam-cloud/runc.git .
+git clone --branch v1.2.4 --depth 1 https://github.com/opencontainers/runc.git .
 make
 make install
 /usr/local/sbin/runc --version
@@ -125,13 +125,29 @@ ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
 RUN <<EOT
 set -eux
-if [ "$(uname -m)" = "x86_64" ] && [ ! -z "${CEDANA_BASE_URL}" ] && [ ! -z "${CEDANA_TOKEN}" ]; then
-    apt-get install -y python3-protobuf libnet1 libnftables1 libnl-3-200 libprotobuf-c1 iptables
-    curl -L -o cedana.tar.gz https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_linux_amd64.tar.gz
-    tar -xzf cedana.tar.gz cedana
-    mv cedana /usr/local/bin/cedana
-    rm cedana.tar.gz
-    CEDANA_URL=${CEDANA_BASE_URL} CEDANA_AUTH_TOKEN=${CEDANA_TOKEN} cedana plugin install criu runc gpu
+
+if [ "$(uname -m)" = "x86_64" ]; then
+    apt-get update && apt-get install -y \
+        python3-protobuf \
+        libbsd-dev \
+        libdrm-dev \
+        libnet1-dev \
+        libnl-3-dev \
+        libcap-dev \
+        uuid-dev \
+        gnutls-dev \
+        libnftables-dev \
+        pkg-config \
+        protobuf-c-compiler \
+        protobuf-compiler \
+        libprotobuf-c-dev \
+        git
+    git clone https://github.com/checkpoint-restore/criu.git
+    cd criu
+    make install-lib install-criu install-compel install-amdgpu_plugin install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
+    criu --version
+    stat /usr/lib/criu/cuda_plugin.so 
+    cd .. && rm -rf criu
 fi
 EOT
 
