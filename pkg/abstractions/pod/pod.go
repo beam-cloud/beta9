@@ -8,12 +8,14 @@ import (
 	"log"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/google/uuid"
 )
 
 type PodServiceOpts struct {
@@ -33,7 +35,7 @@ const (
 
 type PodService interface {
 	pb.PodServiceServer
-	CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error)
+	RunPod(ctx context.Context, in *pb.RunPodRequest) (*pb.RunPodResponse, error)
 }
 
 type GenericPodService struct {
@@ -173,9 +175,47 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 }
 
 // CreatePod creates a new container that will run to completion, with an associated task
-func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error) {
-	log.Println("CreatePod", in)
-	return &pb.CreatePodResponse{
-		PodId: "123",
+func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*pb.RunPodResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	stub, err := s.backendRepo.GetStubByExternalId(ctx, in.StubId)
+	if err != nil {
+		return &pb.RunPodResponse{
+			Ok: false,
+		}, nil
+	}
+
+	stubConfig := types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return &pb.RunPodResponse{
+			Ok: false,
+		}, nil
+	}
+
+	log.Println("stubConfig", stubConfig)
+
+	containerId := fmt.Sprintf("%s%s", "run-", uuid.New().String()[:8])
+	containerRequest := &types.ContainerRequest{
+		StubId:      stub.ExternalId,
+		ContainerId: containerId,
+		Cpu:         stubConfig.Runtime.Cpu,
+		Memory:      stubConfig.Runtime.Memory,
+		ImageId:     stubConfig.Runtime.ImageId,
+		WorkspaceId: authInfo.Workspace.ExternalId,
+		Workspace:   *authInfo.Workspace,
+		EntryPoint:  stubConfig.EntryPoint,
+	}
+
+	err = s.scheduler.Run(containerRequest)
+	if err != nil {
+		return &pb.RunPodResponse{
+			Ok:          false,
+			ContainerId: containerId,
+		}, nil
+	}
+
+	return &pb.RunPodResponse{
+		Ok:          false,
+		ContainerId: containerId,
 	}, nil
 }

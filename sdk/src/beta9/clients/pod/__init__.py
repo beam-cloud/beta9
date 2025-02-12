@@ -23,21 +23,20 @@ if TYPE_CHECKING:
 
 
 @dataclass(eq=False, repr=False)
-class CreatePodRequest(betterproto.Message):
-    name: str = betterproto.string_field(1)
-    image: str = betterproto.string_field(2)
-    entry_point: str = betterproto.string_field(3)
+class RunPodRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class CreatePodResponse(betterproto.Message):
-    pod_id: str = betterproto.string_field(1)
+class RunPodResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    container_id: str = betterproto.string_field(2)
 
 
 class PodServiceStub(SyncServiceStub):
-    def create_pod(self, create_pod_request: "CreatePodRequest") -> "CreatePodResponse":
+    def run_pod(self, run_pod_request: "RunPodRequest") -> "RunPodResponse":
         return self._unary_unary(
-            "/pod.PodService/CreatePod",
-            CreatePodRequest,
-            CreatePodResponse,
-        )(create_pod_request)
+            "/pod.PodService/RunPod",
+            RunPodRequest,
+            RunPodResponse,
+        )(run_pod_request)

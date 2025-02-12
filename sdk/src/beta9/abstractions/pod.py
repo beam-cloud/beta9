@@ -1,14 +1,15 @@
 from typing import List, Optional, Union
 
+from .. import terminal
 from ..abstractions.base.runner import (
-    AbstractCallableWrapper,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
 from ..clients.pod import (
-    CreatePodRequest,
     PodServiceStub,
+    RunPodRequest,
+    RunPodResponse,
 )
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
@@ -56,6 +57,7 @@ class Pod(RunnerAbstraction):
 
     def __init__(
         self,
+        entrypoint: List[str],
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
@@ -63,8 +65,6 @@ class Pod(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
-        callback_url: Optional[str] = None,
-        on_deploy: Optional[AbstractCallableWrapper] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -74,8 +74,7 @@ class Pod(RunnerAbstraction):
             image=image,
             volumes=volumes,
             secrets=secrets,
-            callback_url=callback_url,
-            on_deploy=on_deploy,
+            entrypoint=entrypoint,
         )
 
         self.task_id = ""
@@ -92,11 +91,18 @@ class Pod(RunnerAbstraction):
     def stub(self, value: PodServiceStub) -> None:
         self._pod_stub = value
 
-    def create(self) -> None:
-        self.stub.create_pod(
-            CreatePodRequest(
-                name="what",
-                image="what",
-                entry_point="what",
+    def run(self):
+        if not self.prepare_runtime(stub_type="pod"):
+            return False
+
+        terminal.header("Running")
+        run_response: RunPodResponse = self.stub.run_pod(
+            RunPodRequest(
+                stub_id=self.stub_id,
             )
         )
+
+        if run_response.ok:
+            terminal.header("Running pod 🎉")
+
+        return run_response.ok

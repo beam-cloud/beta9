@@ -270,6 +270,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     gpu_count: int = betterproto.uint32_field(27)
     on_deploy: str = betterproto.string_field(28)
     on_deploy_stub_id: str = betterproto.string_field(29)
+    entrypoint: List[str] = betterproto.string_field(30)
 
 
 @dataclass(eq=False, repr=False)
