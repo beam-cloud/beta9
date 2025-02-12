@@ -29,7 +29,7 @@ const (
 	defaultContainerDirectory string        = "/mnt/code"
 	specBaseName              string        = "config.json"
 	initialSpecBaseName       string        = "initial_config.json"
-	nvidiaVendorPrefix        string        = "nvidia.com/gpu"
+	nvidiaDeviceKindPrefix    string        = "nvidia.com/gpu"
 	runcEventsInterval        time.Duration = 5 * time.Second
 	containerInnerPort        int           = 8001 // Use a fixed port inside the container
 )
@@ -149,16 +149,16 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 			}
 		}
 
-		s.deleteContainer(containerId, err)
+		s.deleteContainer(containerId)
 
 		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 	}()
 }
 
-func (s *Worker) deleteContainer(containerId string, err error) {
+func (s *Worker) deleteContainer(containerId string) {
 	s.containerInstances.Delete(containerId)
 
-	_, err = handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
+	_, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
 	}
@@ -580,7 +580,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		var devicesToInject []string
 		for _, device := range assignedDevices {
-			devicePath := fmt.Sprintf("%s=%d", nvidiaVendorPrefix, device)
+			devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
 			devicesToInject = append(devicesToInject, devicePath)
 		}
 
