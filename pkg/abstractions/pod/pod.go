@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -191,8 +190,6 @@ func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*
 			Ok: false,
 		}, nil
 	}
-
-	log.Println("stubConfig", stubConfig)
 
 	containerId := fmt.Sprintf("%s%s", "run-", uuid.New().String()[:8])
 	containerRequest := &types.ContainerRequest{
