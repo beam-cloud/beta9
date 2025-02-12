@@ -340,7 +340,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		spec.Mounts = append(spec.Mounts, specs.Mount{
 			Type:        "bind",
 			Source:      checkpointSignalDir(request.ContainerId),
-			Destination: "/cedana",
+			Destination: "/criu",
 			Options: []string{
 				"rbind",
 				"rprivate",
@@ -348,15 +348,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				"nodev",
 			},
 		})
-
-		// XXX: Remove /usr/lib/worker/x86_64-linux-gnu from mounts
-		// as CRIU is unable to find its root mount
-		for i, m := range spec.Mounts {
-			if m.Destination == "/usr/lib/worker/x86_64-linux-gnu" {
-				spec.Mounts = append(spec.Mounts[:i], spec.Mounts[i+1:]...)
-				break
-			}
-		}
 
 		containerIdPath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerIdFileName)
 		err := os.WriteFile(containerIdPath, []byte(request.ContainerId), 0644)
@@ -667,6 +658,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 // Wait for a container to exit and return the exit code
 func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, exitCodeChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
 	<-startedChan
+
 	// Clean up runc container state and send final output message
 	cleanup := func(exitCode int, err error) int {
 		log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)

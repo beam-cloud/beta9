@@ -15,6 +15,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type CheckpointManager interface {
+	IsCRIUAvailable() bool
+	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) error
+	RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest) (chan int, string, error)
+}
+
 const defaultCheckpointDeadline = 10 * time.Minute
 
 func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, configPath string) (chan int, string, error) {
