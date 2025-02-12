@@ -7,15 +7,6 @@ on:
         description: 'image tag'
         required: true
         type: string
-      cedana_url:
-        description: 'Cedana Base URL'
-        required: false
-        type: string
-        default: 'https://beam.cedana.ai/v1'
-      cedana_token:
-        description: 'Cedana Auth Token'
-        required: false
-        type: string
 
 permissions:
   id-token: write
@@ -55,6 +46,4 @@ jobs:
             ${{ steps.login-ecr.outputs.registry }}/n4e0e1y0/beta9-worker:${{ inputs.tag }}
           target: final
           platforms: linux/amd64
-          build-args: |
-            CEDANA_BASE_URL=${{ inputs.cedana_url }}
-            CEDANA_TOKEN=${{ inputs.cedana_token }}
+          build-args: ${{ inputs.build_args }}

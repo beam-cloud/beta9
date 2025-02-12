@@ -2,7 +2,7 @@ module github.com/beam-cloud/beta9
 
 go 1.23.0
 
-toolchain go1.23.5
+toolchain go1.23.6
 
 require (
 	buf.build/gen/go/cedana/cedana/protocolbuffers/go v1.36.3-20250123222419-64bf8384f939.1
@@ -21,7 +21,7 @@ require (
 	github.com/beam-cloud/clip v0.0.0-20250109221532-5d9d7744594d
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
-	github.com/cedana/cedana v0.9.238-pre
+	github.com/cedana/cedana v0.9.239
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cloudevents/sdk-go/v2 v2.15.1
 	github.com/containerd/console v1.0.4
