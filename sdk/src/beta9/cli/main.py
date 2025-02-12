@@ -17,6 +17,7 @@ from . import (
     deployment,
     machine,
     pool,
+    run,
     secret,
     serve,
     shell,
@@ -105,6 +106,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(token)
     cli.register(worker)
     cli.register(shell)
+    cli.register(run)
 
     if check_config:
         cli.check_config()
