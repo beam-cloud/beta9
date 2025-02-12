@@ -101,6 +101,7 @@ class RunnerAbstraction(BaseAbstraction):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
+        entrypoint: Optional[List[str]] = None,
     ) -> None:
         super().__init__()
 
@@ -122,7 +123,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.on_deploy: "AbstractCallableWrapper" = self._validate_on_deploy(on_deploy)
         self.callback_url = callback_url or ""
         self.cpu = cpu
-        self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
+        self.memory = self.parse_memory(memory) if isinstance(memory, str) else memory
         self.gpu = gpu
         self.gpu_count = gpu_count
         self.volumes = volumes or []
@@ -139,6 +140,7 @@ class RunnerAbstraction(BaseAbstraction):
         )
         self.checkpoint_enabled = checkpoint_enabled
         self.extra: dict = {}
+        self.entrypoint: Optional[List[str]] = entrypoint
 
         if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
             self.gpu_count = 1
@@ -194,7 +196,7 @@ class RunnerAbstraction(BaseAbstraction):
         terminal.print("\n".join(commands), crop=False, overflow="ignore")
         return res
 
-    def _parse_memory(self, memory_str: str) -> int:
+    def parse_memory(self, memory_str: str) -> int:
         """Parse memory str (with units) to megabytes."""
 
         if memory_str.lower().endswith("mi"):
@@ -476,6 +478,7 @@ class RunnerAbstraction(BaseAbstraction):
                 concurrent_requests=self.concurrent_requests,
                 checkpoint_enabled=self.checkpoint_enabled,
                 extra=json.dumps(self.extra),
+                entrypoint=self.entrypoint,
             )
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(

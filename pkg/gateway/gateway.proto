@@ -249,6 +249,7 @@ message GetOrCreateStubRequest {
   uint32 gpu_count = 27;
   string on_deploy = 28;
   string on_deploy_stub_id = 29;
+  repeated string entrypoint = 30;
 }
 
 message GetOrCreateStubResponse {
@@ -269,6 +270,7 @@ message DeployStubResponse {
   uint32 version = 3;
   string invoke_url = 4;
 }
+
 
 message Deployment {
   string id = 1;
