@@ -120,12 +120,19 @@ RUN mkdir -p /etc/containers/registries.conf.d
 RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/main/shortnames.conf \
     -o /etc/containers/registries.conf.d/shortnames.conf
 
-ARG CEDANA_VERSION=0.9.238-pre
+ARG CEDANA_VERSION=0.9.239
 ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
+
+RUN if [ -n "${CEDANA_TOKEN}" ]; then \
+    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/gpucontroller -o /usr/local/bin/cedana-gpu-controller && \
+    chmod +x /usr/local/bin/cedana-gpu-controller && \
+    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/libcedana -o /usr/local/lib/libcedana-gpu.so && \
+    chmod +x /usr/local/lib/libcedana-gpu.so; \
+    fi
+
 RUN <<EOT
 set -eux
-
 if [ "$(uname -m)" = "x86_64" ]; then
     apt-get update && apt-get install -y \
         python3-protobuf \
