@@ -489,6 +489,9 @@ class Image(BaseAbstraction):
         """
         Use micromamba to manage python packages.
         """
+        if self.python_version == PythonVersion.Python3:
+            self.python_version = PythonVersion.Python311
+
         self.python_version = self.python_version.replace("python", "micromamba")
         return self
 
