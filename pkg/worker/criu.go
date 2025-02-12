@@ -9,19 +9,63 @@ import (
 	"path/filepath"
 	"time"
 
+	storage "github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/go-runc"
 	"github.com/rs/zerolog/log"
 )
 
-type CheckpointManager interface {
-	IsCRIUAvailable() bool
-	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) error
-	RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest) (chan int, string, error)
+type CRIUManager interface {
+	Available() bool
+	Run(ctx context.Context, containerId string, bundle string, gpuEnabled bool, runcOpts *runc.CreateOpts) (chan int, error)
+	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
+	RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, state types.CheckpointState, runcOpts *runc.CreateOpts) (chan int, error)
 }
 
 const defaultCheckpointDeadline = 10 * time.Minute
+
+// InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers
+// -- depending on the mode, it will use either cedana or nvidia cuda checkpoint under the hood
+func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUManager, error) {
+	var criuManager CRIUManager = nil
+	var err error = nil
+
+	switch config.Mode {
+	case types.CRIUConfigModeCedana:
+		criuManager, err = InitializeCedanaCRIU(ctx, config.Cedana)
+	case types.CRIUConfigModeNvidia:
+		criuManager, err = InitializeNvidiaCRIU(ctx, config.Nvidia)
+	default:
+		return nil, fmt.Errorf("invalid CRIU mode: %s", config.Mode)
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	os.MkdirAll(config.Storage.MountPath, os.ModePerm)
+
+	// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
+	if config.Storage.Mode == string(types.CheckpointStorageModeS3) {
+		checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
+			BucketName:  config.Storage.ObjectStore.BucketName,
+			AccessKey:   config.Storage.ObjectStore.AccessKey,
+			SecretKey:   config.Storage.ObjectStore.SecretKey,
+			EndpointURL: config.Storage.ObjectStore.EndpointURL,
+			Region:      config.Storage.ObjectStore.Region,
+			ReadOnly:    false,
+		})
+
+		err := checkpointStorage.Mount(config.Storage.MountPath)
+		if err != nil {
+			log.Warn().Msgf("C/R unavailable, unable to mount checkpoint storage: %v", err)
+			return nil, err
+		}
+	}
+
+	return criuManager, nil
+}
 
 func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, configPath string) (chan int, string, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
@@ -35,16 +79,9 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			}
 		}()
 	} else if state.Status == types.CheckpointStatusAvailable {
-		checkpointPath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, state.RemoteKey)
-
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 
-		exitCodeChan, err := s.cedanaClient.Restore(ctx, cedanaRestoreOpts{
-			checkpointPath: checkpointPath,
-			jobId:          state.ContainerId,
-			containerId:    request.ContainerId,
-			cacheFunc:      s.cacheCheckpoint,
-		}, &runc.CreateOpts{
+		exitCodeChan, err := s.criuManager.RestoreCheckpoint(ctx, request, state, &runc.CreateOpts{
 			Detach:       true,
 			OutputWriter: outputWriter,
 			ConfigPath:   configPath,
@@ -114,7 +151,7 @@ waitForReady:
 	}
 
 	// Proceed to create the checkpoint
-	checkpointPath, err := s.cedanaClient.Checkpoint(ctx, request.ContainerId)
+	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, request)
 	if err != nil {
 		s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
 			ContainerId:   request.ContainerId,
@@ -223,7 +260,7 @@ func (s *Worker) cacheCheckpoint(containerId, checkpointPath string) (string, er
 }
 
 func (s *Worker) IsCRIUAvailable() bool {
-	if s.cedanaClient == nil {
+	if s.criuManager == nil {
 		return false
 	}
 

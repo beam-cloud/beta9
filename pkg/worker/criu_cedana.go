@@ -13,6 +13,7 @@ import (
 	cedanarunc "buf.build/gen/go/cedana/cedana/protocolbuffers/go/plugins/runc"
 	"buf.build/gen/go/cedana/criu/protocolbuffers/go/criu"
 	common "github.com/beam-cloud/beta9/pkg/common"
+	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
 	cedana "github.com/cedana/cedana/pkg/client"
 	"github.com/cedana/cedana/pkg/config"
@@ -24,14 +25,14 @@ import (
 
 const runcRoot = "/run/runc"
 
-type CedanaClient struct {
+type CedanaCRIUManager struct {
 	client *cedana.Client
 }
 
-func InitializeCedana(
+func InitializeCedanaCRIU(
 	ctx context.Context,
 	c config.Config,
-) (*CedanaClient, error) {
+) (*CedanaCRIUManager, error) {
 	path, err := exec.LookPath("cedana")
 	if err != nil {
 		return nil, fmt.Errorf("cedana binary not found: %w", err)
@@ -91,11 +92,19 @@ func InitializeCedana(
 
 	log.Info().Msg("cedana client initialized")
 
-	return &CedanaClient{client: client}, nil
+	return &CedanaCRIUManager{client: client}, nil
+}
+
+func (c *CedanaCRIUManager) Available() bool {
+	if c.client == nil {
+		return false
+	}
+
+	return true
 }
 
 // Spawn a runc container using cedana, creating a 'job' in cedana
-func (c *CedanaClient) Run(ctx context.Context, containerId string, bundle string, gpuEnabled bool, runcOpts *runc.CreateOpts) (chan int, error) {
+func (c *CedanaCRIUManager) Run(ctx context.Context, containerId string, bundle string, gpuEnabled bool, runcOpts *runc.CreateOpts) (chan int, error) {
 	// If config path provided directly, derive bundle from it
 	if runcOpts.ConfigPath != "" {
 		bundle = strings.TrimRight(runcOpts.ConfigPath, filepath.Base(runcOpts.ConfigPath))
@@ -138,9 +147,9 @@ func (c *CedanaClient) Run(ctx context.Context, containerId string, bundle strin
 	return exitCode, nil
 }
 
-func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (string, error) {
+func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
 	args := &cedanadaemon.DumpReq{
-		Name: containerId,
+		Name: request.ContainerId,
 		Type: "job",
 		Criu: &criu.CriuOpts{
 			TcpSkipInFlight: proto.Bool(true),
@@ -148,7 +157,7 @@ func (c *CedanaClient) Checkpoint(ctx context.Context, containerId string) (stri
 			LeaveRunning:    proto.Bool(true),
 			LinkRemap:       proto.Bool(true),
 		},
-		Details: &cedanadaemon.Details{JID: &containerId},
+		Details: &cedanadaemon.Details{JID: &request.ContainerId},
 	}
 
 	resp, profilingData, err := c.client.Dump(ctx, args)
@@ -167,7 +176,14 @@ type cedanaRestoreOpts struct {
 	cacheFunc      func(string, string) (string, error)
 }
 
-func (c *CedanaClient) Restore(ctx context.Context, restoreOpts cedanaRestoreOpts, runcOpts *runc.CreateOpts) (chan int, error) {
+func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, state types.CheckpointState, runcOpts *runc.CreateOpts) (chan int, error) {
+	restoreOpts := cedanaRestoreOpts{
+		checkpointPath: state.RemoteKey,
+		jobId:          state.ContainerId,
+		containerId:    request.ContainerId,
+		// cacheFunc:      c.cacheCheckpoint,
+	}
+
 	bundle := strings.TrimRight(runcOpts.ConfigPath, filepath.Base(runcOpts.ConfigPath))
 
 	// If a cache function is provided, attempt to cache the checkpoint nearby

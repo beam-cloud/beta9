@@ -189,6 +189,7 @@ worker:
     maxSchedulingLatencyMs: 300000 # 5 minutes
     minMachinesAvailable: 1 # minMachinesAvailable only applies to external pools
   criu:
+    mode: nvidia
     storage:
       mountPath: /data/checkpoints
       mode: local

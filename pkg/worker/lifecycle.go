@@ -627,7 +627,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			containerId = restoredContainerId
 			exitCodeChan = restoredExitCodeChan
 		} else {
-			exitCodeChan, err = s.cedanaClient.Run(ctx, containerId, opts.BundlePath, request.RequiresGPU(), &runc.CreateOpts{
+			exitCodeChan, err = s.criuManager.Run(ctx, containerId, opts.BundlePath, request.RequiresGPU(), &runc.CreateOpts{
 				Detach:       true,
 				OutputWriter: outputWriter,
 				ConfigPath:   configPath,
