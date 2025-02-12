@@ -616,28 +616,28 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
 	startedChan := make(chan int, 1)
-	var exitCodeChan chan int
+	checkpointPIDChan := make(chan int, 1)
+	monitorPIDChan := make(chan int, 1)
+
+	go func() {
+		// When the process starts monitor it and potentially checkpoint it
+		pid := <-startedChan
+		monitorPIDChan <- pid
+		checkpointPIDChan <- pid
+	}()
 
 	isOOMKilled := atomic.Bool{}
 	go func() {
-		pid := <-startedChan
-
-		// Start monitoring the container
+		pid := <-monitorPIDChan
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
 		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 	}()
 
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		exitCode, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, startedChan, configPath)
+		exitCode, containerId, err = s.attemptCheckpointOrRestore(ctx, request, outputWriter, checkpointPIDChan, configPath)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("C/R failed: %v", err)
-		}
-
-		if exitCode != -1 {
-			containerId = restoredContainerId
-			exitCodeChan = make(chan int, 1)
-			exitCodeChan <- exitCode
 		}
 	} else {
 		// Invoke runc process (launch the container)

@@ -172,18 +172,6 @@
 			]
 		},
 		{
-			"destination": "/usr/lib/worker/x86_64-linux-gnu",
-			"type": "bind",
-			"source": "/usr/lib/x86_64-linux-gnu",
-			"options": [
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev",
-				"ro"
-			]
-		},
-		{
 			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",

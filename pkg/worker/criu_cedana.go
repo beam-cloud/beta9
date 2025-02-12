@@ -106,10 +106,6 @@ func (c *CedanaCRIUManager) Available() bool {
 // Spawn a runc container using cedana, creating a 'job' in cedana
 func (c *CedanaCRIUManager) Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error) {
 	// If config path provided directly, derive bundle from it
-	if runcOpts.ConfigPath != "" {
-		bundlePath = strings.TrimRight(runcOpts.ConfigPath, filepath.Base(runcOpts.ConfigPath))
-	}
-
 	args := &cedanadaemon.RunReq{
 		Action:     cedanadaemon.RunAction_START_NEW,
 		JID:        request.ContainerId,
@@ -177,15 +173,15 @@ type cedanaRestoreOpts struct {
 	cacheFunc      func(string, string) (string, error)
 }
 
-func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, state types.CheckpointState, runcOpts *runc.CreateOpts) (int, error) {
+func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	restoreOpts := cedanaRestoreOpts{
-		checkpointPath: state.RemoteKey,
-		jobId:          state.ContainerId,
-		containerId:    request.ContainerId,
+		checkpointPath: opts.state.RemoteKey,
+		jobId:          opts.state.ContainerId,
+		containerId:    opts.request.ContainerId,
 		// cacheFunc:      c.cacheCheckpoint,
 	}
 
-	bundle := strings.TrimRight(runcOpts.ConfigPath, filepath.Base(runcOpts.ConfigPath))
+	bundle := strings.TrimRight(opts.configPath, filepath.Base(opts.configPath))
 
 	// If a cache function is provided, attempt to cache the checkpoint nearby
 	if restoreOpts.cacheFunc != nil {
@@ -221,8 +217,8 @@ func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, request *type
 		return -1, fmt.Errorf("failed to restore runc container: %w", err)
 	}
 
-	if runcOpts.Started != nil {
-		runcOpts.Started <- int(resp.PID)
+	if opts.runcOpts.Started != nil {
+		opts.runcOpts.Started <- int(resp.PID)
 	}
 
 	_ = profilingData
@@ -232,8 +228,8 @@ func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, request *type
 		return -1, fmt.Errorf("failed to attach to runc container: %w", err)
 	}
 
-	go io.Copy(runcOpts.OutputWriter, stdout)
-	go io.Copy(runcOpts.OutputWriter, stderr)
+	go io.Copy(opts.runcOpts.OutputWriter, stdout)
+	go io.Copy(opts.runcOpts.OutputWriter, stderr)
 
 	exitCode := <-exitCodeChan
 	return exitCode, nil

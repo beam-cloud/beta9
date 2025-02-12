@@ -36,7 +36,8 @@ RUN apt-get install -y libseccomp-dev
 
 RUN <<EOT
 set -eux
-git clone --branch v1.2.4 --depth 1 https://github.com/opencontainers/runc.git .
+echo hi
+git clone https://github.com/beam-cloud/runc.git .
 make
 make install
 /usr/local/sbin/runc --version
@@ -171,6 +172,8 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
     mv mount-s3/bin/mount-s3 /usr/local/bin/ms3 && chmod +x /usr/local/bin/ms3 && \
     rm -rf mount-s3 $TARBALL
 
+RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint && \
+    chmod +x /usr/local/bin/cuda-checkpoint
 
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
     curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /tmp/cuno_1.2.6_amd64_glibc.deb && \
