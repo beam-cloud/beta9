@@ -40,11 +40,11 @@ func (c *NvidiaCRIUManager) Available() bool {
 	return false
 }
 
-func (c *NvidiaCRIUManager) Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (chan int, error) {
-	_, err := c.runcHandle.Run(ctx, request.ContainerId, bundlePath, runcOpts)
+func (c *NvidiaCRIUManager) Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error) {
+	exitCode, err := c.runcHandle.Run(ctx, request.ContainerId, bundlePath, runcOpts)
 	if err != nil {
-		return nil, err
+		return -1, err
 	}
 
-	return nil, nil
+	return exitCode, nil
 }

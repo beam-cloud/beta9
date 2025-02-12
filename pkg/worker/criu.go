@@ -18,7 +18,7 @@ import (
 
 type CRIUManager interface {
 	Available() bool
-	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (chan int, error)
+	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error)
 	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
 	RestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, state types.CheckpointState, runcOpts *runc.CreateOpts) (int, error)
 }
@@ -118,14 +118,16 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 	bundlePath := filepath.Dir(configPath) // TODO: copied and pasted this, probably not correct
 
 	// TODO: figure out what this should return / what it needs passed in
-	_, err := s.criuManager.Run(ctx, request, bundlePath, &runc.CreateOpts{
-		Detach:       true,
-		OutputWriter: outputWriter,
-		ConfigPath:   configPath,
-		Started:      startedChan,
-	})
+	go func() {
+		exitCode, err := s.criuManager.Run(ctx, request, bundlePath, &runc.CreateOpts{
+			OutputWriter: outputWriter,
+			Started:      startedChan,
+		})
+		log.Info().Str("container_id", request.ContainerId).Int("exit_code", exitCode).Msgf("ran container: %v", err)
+	}()
 
-	log.Info().Str("container_id", request.ContainerId).Msg("creating checkpoint")
+	pid := <-startedChan
+	log.Info().Str("container_id", request.ContainerId).Int("pid", pid).Msg("creating checkpoint")
 	os.MkdirAll(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, request.Workspace.Name), os.ModePerm)
 
 	timeout := defaultCheckpointDeadline

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -617,6 +618,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	startedChan := make(chan int, 1)
 	var exitCodeChan chan int
 
+	isOOMKilled := atomic.Bool{}
+	go func() {
+		pid := <-startedChan
+
+		// Start monitoring the container
+		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
+		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
+	}()
+
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
 		exitCode, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, startedChan, configPath)
@@ -632,8 +642,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	} else {
 		// Invoke runc process (launch the container)
 		bundlePath := filepath.Dir(configPath)
-		_, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
-			Detach:       true,
+
+		exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
 			OutputWriter: outputWriter,
 			Started:      startedChan,
 		})
@@ -643,61 +653,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
-	exitCode = s.wait(ctx, containerId, startedChan, exitCodeChan, outputLogger, request, spec)
-}
-
-// Wait for a container to exit and return the exit code
-func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, exitCodeChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
-	<-startedChan
-
-	// Clean up runc container state and send final output message
-	cleanup := func(exitCode int, err error) int {
-		log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
-
-		outputLogger.Info("", "done", true, "success", exitCode == 0)
-
-		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
-		}
-
-		return exitCode
-	}
-
-	// Look up the PID of the container
-	state, err := s.runcHandle.State(ctx, containerId)
-	if err != nil {
-		return cleanup(-1, err)
-	}
-	pid := state.Pid
-	isOOMKilled := false
-
-	// Start monitoring the container
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
-
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return cleanup(-1, err)
-	}
-
-	// Wait for the container to exit
-	var exitCode int
-	if exitCodeChan != nil {
-		exitCode = <-exitCodeChan
-	} else {
-		processState, err := process.Wait()
-		if err != nil {
-			return cleanup(-1, err)
-		}
-		exitCode = processState.ExitCode()
-	}
-
-	if isOOMKilled {
+	if isOOMKilled.Load() {
 		exitCode = types.WorkerContainerExitCodeOomKill
 	}
 
-	return cleanup(exitCode, nil)
+	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
+	outputLogger.Info("", "done", true, "success", exitCode == 0)
+	// FIXME: is this needed?
+	err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
+	}
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
@@ -716,7 +682,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
 }
 
-func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *bool) {
+func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *atomic.Bool) {
 	var (
 		seenEvents  = make(map[string]struct{})
 		ch          <-chan *runc.Event
@@ -772,7 +738,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 			seenEvents[event.Type] = struct{}{}
 
 			if event.Type == "oom" {
-				*isOOMKilled = true
+				isOOMKilled.Store(true)
 				outputLogger.Error("Container was killed due to out-of-memory conditions.")
 				s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			}
