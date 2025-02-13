@@ -2,6 +2,7 @@ package pod
 
 import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 type podAutoscalerSample struct {
@@ -28,6 +29,12 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 // podScaleFunc scales based on the number of items in the queue
 func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
+
+	if i.Stub.Type == types.StubType(types.StubTypePodRun) {
+		if s.CurrentContainers == 0 {
+			desiredContainers = 0
+		}
+	}
 
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: desiredContainers,

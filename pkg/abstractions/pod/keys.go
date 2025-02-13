@@ -4,8 +4,9 @@ import "fmt"
 
 // Redis keys
 var (
-	podKeepWarmLock string = "pod:%s:%s:keep_warm_lock:%s"
-	podInstanceLock string = "pod:%s:%s:instance_lock"
+	podKeepWarmLock         string = "pod:%s:%s:keep_warm_lock:%s"
+	podInstanceLock         string = "pod:%s:%s:instance_lock"
+	podContainerConnections string = "pod:%s:%s:container_connections:%s"
 )
 
 var Keys = &keys{}
@@ -18,4 +19,8 @@ func (k *keys) podKeepWarmLock(workspaceName, stubId, containerId string) string
 
 func (k *keys) podInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(podInstanceLock, workspaceName, stubId)
+}
+
+func (k *keys) podContainerConnections(workspaceName, stubId, containerId string) string {
+	return fmt.Sprintf(podContainerConnections, workspaceName, stubId, containerId)
 }
