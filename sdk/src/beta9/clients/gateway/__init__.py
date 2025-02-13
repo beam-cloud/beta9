@@ -271,7 +271,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     on_deploy: str = betterproto.string_field(28)
     on_deploy_stub_id: str = betterproto.string_field(29)
     entrypoint: List[str] = betterproto.string_field(30)
-    ports: List[int] = betterproto.uint32_field(31)
+    port: int = betterproto.uint32_field(31)
 
 
 @dataclass(eq=False, repr=False)

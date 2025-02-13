@@ -20,6 +20,12 @@ class Pod(RunnerAbstraction):
     Pod allows you to run arbitrary services in fast, scalable, and secure remote containers.
 
     Parameters:
+        entrypoint (List[str]): Required
+            The command to run in the container.
+        port (Optional[int]):
+            The port to expose the container to. Default is None.
+        name (Optional[str]):
+            A name for the pod. Default is None.
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the pod. Default is 1.0.
         memory (Union[int, str]):
@@ -39,10 +45,6 @@ class Pod(RunnerAbstraction):
             A list of volumes to be mounted to the pod. Default is None.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the pod as environment variables. Default is [].
-        name (Optional[str]):
-            A name for the pod. Default is None.
-        callback_url (Optional[str]):
-            An optional URL to send a callback to when a task is completed, timed out, or cancelled.
 
     Example usage:
         ```
@@ -58,6 +60,8 @@ class Pod(RunnerAbstraction):
     def __init__(
         self,
         entrypoint: List[str],
+        port: Optional[int] = None,
+        name: Optional[str] = None,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
@@ -65,7 +69,6 @@ class Pod(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
-        ports: Optional[List[int]] = None,  # TODO: Update to port mapping
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -76,7 +79,8 @@ class Pod(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             entrypoint=entrypoint,
-            ports=ports,
+            port=port,
+            name=name,
         )
 
         self.task_id = ""
