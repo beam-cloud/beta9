@@ -205,6 +205,7 @@ func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*
 		WorkspaceId: authInfo.Workspace.ExternalId,
 		Workspace:   *authInfo.Workspace,
 		EntryPoint:  stubConfig.EntryPoint,
+		Ports:       stubConfig.ExposePorts,
 	}
 
 	err = s.scheduler.Run(containerRequest)

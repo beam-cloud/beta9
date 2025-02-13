@@ -63,6 +63,7 @@ message ContainerRequest {
   bool preemptable = 18;
   bool checkpoint_enabled = 19;
   BuildOptions build_options = 20;
+  repeated uint32 ports = 21;
 }
 
 message ContainerState {

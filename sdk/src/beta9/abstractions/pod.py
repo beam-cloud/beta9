@@ -65,6 +65,7 @@ class Pod(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        ports: Optional[List[int]] = None,  # TODO: Update to port mapping
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -75,6 +76,7 @@ class Pod(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             entrypoint=entrypoint,
+            ports=ports,
         )
 
         self.task_id = ""

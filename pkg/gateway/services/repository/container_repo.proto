@@ -75,6 +75,16 @@ message SetWorkerAddressRequest {
   string address = 2;
 }
 
+message SetContainerPortMappingRequest {
+  string container_id = 1;
+  map<int32, int32> port_mapping = 2;
+}
+
+message SetContainerPortMappingResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
 message SetWorkerAddressResponse {
   bool ok = 1;
   string error_msg = 2;
