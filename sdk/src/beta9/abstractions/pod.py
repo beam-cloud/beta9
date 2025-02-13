@@ -1,17 +1,23 @@
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
+    POD_DEPLOYMENT_STUB_TYPE,
     POD_RUN_STUB_TYPE,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
+from ..clients.gateway import (
+    DeployStubRequest,
+    DeployStubResponse,
+)
 from ..clients.pod import (
     PodServiceStub,
     RunPodRequest,
     RunPodResponse,
 )
+from ..config import ConfigContext
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
 
@@ -113,3 +119,33 @@ class Pod(RunnerAbstraction):
             terminal.header("Running pod 🎉")
 
         return run_response.ok
+
+    def deploy(
+        self,
+        name: Optional[str] = None,
+        context: Optional[ConfigContext] = None,
+        **invocation_details_options: Any,
+    ):
+        self.name = name or self.name
+        if not self.name:
+            terminal.error(
+                "You must specify an app name (either in the decorator or via the --name argument)."
+            )
+
+        if context is not None:
+            self.config_context = context
+
+        if not self.prepare_runtime(stub_type=POD_DEPLOYMENT_STUB_TYPE):
+            return False
+
+        terminal.header("Deploying")
+        deploy_response: DeployStubResponse = self.gateway_stub.deploy_stub(
+            DeployStubRequest(stub_id=self.stub_id, name=self.name)
+        )
+
+        self.deployment_id = deploy_response.deployment_id
+        if deploy_response.ok:
+            terminal.header("Deployed 🎉")
+            self.print_invocation_snippet(**invocation_details_options)
+
+        return deploy_response.ok
