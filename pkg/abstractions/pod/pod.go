@@ -191,7 +191,7 @@ func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*
 		}, nil
 	}
 
-	containerId := fmt.Sprintf("%s%s", "run-", uuid.New().String()[:8])
+	containerId := s.generateContainerId(stub.ExternalId)
 	containerRequest := &types.ContainerRequest{
 		StubId:      stub.ExternalId,
 		ContainerId: containerId,
@@ -212,7 +212,11 @@ func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*
 	}
 
 	return &pb.RunPodResponse{
-		Ok:          false,
+		Ok:          true,
 		ContainerId: containerId,
 	}, nil
+}
+
+func (s *GenericPodService) generateContainerId(stubId string) string {
+	return fmt.Sprintf("%s-%s-%s", podContainerPrefix, stubId, uuid.New().String()[:8])
 }
