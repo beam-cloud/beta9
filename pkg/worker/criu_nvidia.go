@@ -19,10 +19,7 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.NvidiaCRIUConfig) (C
 }
 
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
-	// TODO: actually implement this with sensible args
 	checkpointPath := fmt.Sprintf("/checkpoints/%s", request.StubId)
-	// FIXME: wtf is wrong with this?
-	// cmd below does not work correctly either?
 	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
 		LeaveRunning: true,
 		SkipInFlight: true,
@@ -30,7 +27,6 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 		LinkRemap:    true,
 		ImagePath:    checkpointPath,
 	})
-	// err := exec.Command("runc", "checkpoint", "--leave-running", "--tcp-skip-in-flight", "--link-remap", "--tcp-established", "--image-path", checkpointPath, request.ContainerId).Run()
 	if err != nil {
 		return "", err
 	}
@@ -40,9 +36,13 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
+	imagePath := fmt.Sprintf("/checkpoints/%s", opts.request.StubId)
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
-			ImagePath: fmt.Sprintf("/checkpoints/%s", opts.request.StubId),
+			SkipInFlight: true,
+			AllowOpenTCP: true,
+			LinkRemap:    true,
+			ImagePath:    imagePath,
 		},
 	})
 	if err != nil {
