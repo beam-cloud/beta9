@@ -107,10 +107,6 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 		return nil, errors.New("invalid stub id")
 	}
 
-	if stub.Type != types.StubType(types.StubTypePodDeployment) {
-		return nil, errors.New("invalid stub type")
-	}
-
 	var stubConfig *types.StubConfigV1 = &types.StubConfigV1{}
 	err = json.Unmarshal([]byte(stub.Config), stubConfig)
 	if err != nil {
@@ -156,7 +152,7 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 	}
 
 	if instance.Autoscaler == nil {
-		if stub.Type.IsDeployment() || stub.Type == types.StubType(types.StubTypeTaskQueue) {
+		if stub.Type.IsDeployment() {
 			instance.Autoscaler = abstractions.NewAutoscaler(instance, podAutoscalerSampleFunc, podScaleFunc)
 		}
 	}
@@ -195,6 +191,11 @@ func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*
 		}, nil
 	}
 
+	ports := []uint32{}
+	if stubConfig.Port > 0 {
+		ports = append(ports, stubConfig.Port)
+	}
+
 	containerId := s.generateContainerId(stub.ExternalId)
 	containerRequest := &types.ContainerRequest{
 		StubId:      stub.ExternalId,
@@ -205,7 +206,7 @@ func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*
 		WorkspaceId: authInfo.Workspace.ExternalId,
 		Workspace:   *authInfo.Workspace,
 		EntryPoint:  stubConfig.EntryPoint,
-		Ports:       []uint32{stubConfig.Port},
+		Ports:       ports,
 	}
 
 	err = s.scheduler.Run(containerRequest)

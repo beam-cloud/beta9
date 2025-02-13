@@ -57,6 +57,11 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		checkpointEnabled = false
 	}
 
+	ports := []uint32{}
+	if i.StubConfig.Port > 0 {
+		ports = append(ports, i.StubConfig.Port)
+	}
+
 	for c := 0; c < containersToRun; c++ {
 		runRequest := &types.ContainerRequest{
 			ContainerId:       i.genContainerId(),
@@ -73,6 +78,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			Mounts:            mounts,
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
+			Ports:             ports,
 		}
 
 		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
