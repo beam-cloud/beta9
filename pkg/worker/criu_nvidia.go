@@ -44,6 +44,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 			LinkRemap:    true,
 			ImagePath:    imagePath,
 		},
+		ConsoleSocket: opts.runcOpts.ConsoleSocket,
 	})
 	if err != nil {
 		return -1, err
