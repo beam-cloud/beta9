@@ -15,6 +15,7 @@ import (
 
 type podInstance struct {
 	*abstractions.AutoscaledInstance
+	buffer *PodProxyBuffer
 }
 
 func (i *podInstance) startContainers(containersToRun int) error {

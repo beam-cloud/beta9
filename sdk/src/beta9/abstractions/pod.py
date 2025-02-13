@@ -2,6 +2,7 @@ from typing import List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
+    POD_RUN_STUB_TYPE,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
@@ -98,7 +99,7 @@ class Pod(RunnerAbstraction):
         self._pod_stub = value
 
     def run(self):
-        if not self.prepare_runtime(stub_type="pod"):
+        if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE):
             return False
 
         terminal.header("Running")

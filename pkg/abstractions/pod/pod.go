@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -28,8 +29,10 @@ type PodServiceOpts struct {
 }
 
 const (
-	podContainerPrefix string = "pod"
-	podRoutePrefix     string = "/pod"
+	podContainerPrefix            string = "pod"
+	podRoutePrefix                string = "/pod"
+	podContainerConnectionTimeout        = 600 * time.Second
+	podProxyBufferSize                   = 300
 )
 
 type PodService interface {
@@ -143,6 +146,8 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 		return nil, err
 	}
 
+	instance.buffer = NewPodProxyBuffer(autoscaledInstance.Ctx, ps.rdb, &stub.Workspace, stubId, podProxyBufferSize, ps.containerRepo, ps.keyEventManager, stubConfig, ps.tailscale, ps.config.Tailscale)
+
 	// Embed autoscaled instance struct
 	instance.AutoscaledInstance = autoscaledInstance
 
@@ -152,9 +157,7 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 	}
 
 	if instance.Autoscaler == nil {
-		if stub.Type.IsDeployment() {
-			instance.Autoscaler = abstractions.NewAutoscaler(instance, podAutoscalerSampleFunc, podScaleFunc)
-		}
+		instance.Autoscaler = abstractions.NewAutoscaler(instance, podAutoscalerSampleFunc, podScaleFunc)
 	}
 
 	if len(instance.EntryPoint) == 0 {

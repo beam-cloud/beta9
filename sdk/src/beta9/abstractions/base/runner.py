@@ -62,6 +62,9 @@ ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
 BOT_SERVE_STUB_TYPE = "bot/serve"
 
+POD_DEPLOYMENT_STUB_TYPE = "pod/deployment"
+POD_RUN_STUB_TYPE = "pod/run"
+
 _stub_creation_lock = threading.Lock()
 _stub_created_for_workspace = False
 
