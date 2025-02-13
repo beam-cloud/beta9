@@ -194,22 +194,70 @@ func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*
 		}, nil
 	}
 
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(authInfo.Workspace, stubConfig)
+	if err != nil {
+		return &pb.RunPodResponse{
+			Ok: false,
+		}, err
+	}
+
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		stub.Object.ExternalId,
+		authInfo.Workspace,
+		stubConfig,
+		stub.ExternalId,
+	)
+	if err != nil {
+		return &pb.RunPodResponse{
+			Ok: false,
+		}, err
+	}
+
+	env := []string{
+		fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
+		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
+		fmt.Sprintf("STUB_TYPE=%s", stub.Type),
+		fmt.Sprintf("KEEP_WARM_SECONDS=%d", stubConfig.KeepWarmSeconds),
+	}
+
+	env = append(secrets, env...)
+
+	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
+	if stubConfig.Runtime.Gpu != "" {
+		gpuRequest = append(gpuRequest, stubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := stubConfig.Runtime.GpuCount
+	if stubConfig.RequiresGPU() && gpuCount == 0 {
+		gpuCount = 1
+	}
+
+	checkpointEnabled := stubConfig.CheckpointEnabled
+	if gpuCount > 1 {
+		checkpointEnabled = false
+	}
+
 	ports := []uint32{}
 	if stubConfig.Port > 0 {
 		ports = append(ports, stubConfig.Port)
 	}
-
 	containerId := s.generateContainerId(stub.ExternalId)
 	containerRequest := &types.ContainerRequest{
-		StubId:      stub.ExternalId,
-		ContainerId: containerId,
-		Cpu:         stubConfig.Runtime.Cpu,
-		Memory:      stubConfig.Runtime.Memory,
-		ImageId:     stubConfig.Runtime.ImageId,
-		WorkspaceId: authInfo.Workspace.ExternalId,
-		Workspace:   *authInfo.Workspace,
-		EntryPoint:  stubConfig.EntryPoint,
-		Ports:       ports,
+		StubId:            stub.ExternalId,
+		Env:               env,
+		ContainerId:       containerId,
+		Cpu:               stubConfig.Runtime.Cpu,
+		Memory:            stubConfig.Runtime.Memory,
+		GpuRequest:        gpuRequest,
+		GpuCount:          uint32(gpuCount),
+		Mounts:            mounts,
+		Stub:              *stub,
+		ImageId:           stubConfig.Runtime.ImageId,
+		WorkspaceId:       authInfo.Workspace.ExternalId,
+		Workspace:         *authInfo.Workspace,
+		EntryPoint:        stubConfig.EntryPoint,
+		Ports:             ports,
+		CheckpointEnabled: checkpointEnabled,
 	}
 
 	err = s.scheduler.Run(containerRequest)
