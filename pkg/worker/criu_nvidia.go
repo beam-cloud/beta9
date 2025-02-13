@@ -10,16 +10,17 @@ import (
 )
 
 type NvidiaCRIUManager struct {
-	runcHandle runc.Runc
+	cpStorageConfig types.CheckpointStorageConfig
+	runcHandle      runc.Runc
 }
 
-func InitializeNvidiaCRIU(ctx context.Context, config types.NvidiaCRIUConfig) (CRIUManager, error) {
+func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUManager, error) {
 	runcHandle := runc.Runc{}
-	return &NvidiaCRIUManager{runcHandle: runcHandle}, nil
+	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage}, nil
 }
 
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
-	checkpointPath := fmt.Sprintf("/checkpoints/%s", request.StubId)
+	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, request.StubId)
 	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
 		LeaveRunning: true,
 		SkipInFlight: true,
@@ -36,7 +37,8 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
-	imagePath := fmt.Sprintf("/checkpoints/%s", opts.request.StubId)
+	imagePath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, opts.request.StubId)
+
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
 			SkipInFlight: true,
