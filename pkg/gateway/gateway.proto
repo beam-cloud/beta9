@@ -250,6 +250,7 @@ message GetOrCreateStubRequest {
   string on_deploy = 28;
   string on_deploy_stub_id = 29;
   repeated string entrypoint = 30;
+  uint32 port = 31;
 }
 
 message GetOrCreateStubResponse {

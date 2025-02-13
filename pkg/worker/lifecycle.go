@@ -551,13 +551,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
+	innerPort := containerInnerPort
+	if len(request.Ports) > 0 {
+		innerPort = int(request.Ports[0])
+	}
+
 	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, containerInnerPort)
+	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, innerPort)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 		return
 	}
-
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
 	if err != nil {

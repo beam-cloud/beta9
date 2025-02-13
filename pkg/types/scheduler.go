@@ -210,6 +210,7 @@ type ContainerRequest struct {
 	Preemptable       bool            `json:"preemptable"`
 	CheckpointEnabled bool            `json:"checkpoint_enabled"`
 	BuildOptions      BuildOptions    `json:"build_options"`
+	Ports             []uint32        `json:"ports"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -263,6 +264,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		CheckpointEnabled: c.CheckpointEnabled,
 		Timestamp:         timestamppb.New(c.Timestamp),
 		BuildOptions:      buildOptions,
+		Ports:             c.Ports,
 	}
 }
 
@@ -303,6 +305,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Preemptable:       in.Preemptable,
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
+		Ports:             in.Ports,
 	}
 }
 

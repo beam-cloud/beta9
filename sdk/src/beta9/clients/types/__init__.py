@@ -71,6 +71,7 @@ class ContainerRequest(betterproto.Message):
     preemptable: bool = betterproto.bool_field(18)
     checkpoint_enabled: bool = betterproto.bool_field(19)
     build_options: "BuildOptions" = betterproto.message_field(20)
+    ports: List[int] = betterproto.uint32_field(21)
 
 
 @dataclass(eq=False, repr=False)

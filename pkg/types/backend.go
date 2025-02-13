@@ -255,9 +255,9 @@ type StubConfigV1 struct {
 	CheckpointEnabled  bool            `json:"checkpoint_enabled"`
 
 	// TODO: added these for pod
-	WorkDir     string   `json:"work_dir"`
-	EntryPoint  []string `json:"entry_point"`
-	ExposePorts []uint   `json:"expose_ports"`
+	WorkDir    string   `json:"work_dir"`
+	EntryPoint []string `json:"entry_point"`
+	Port       uint32   `json:"port"`
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {
