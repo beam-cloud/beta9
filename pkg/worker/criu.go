@@ -42,7 +42,7 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUMa
 	case types.CRIUConfigModeCedana:
 		criuManager, err = InitializeCedanaCRIU(ctx, config.Cedana)
 	case types.CRIUConfigModeNvidia:
-		criuManager, err = InitializeNvidiaCRIU(ctx, config.Nvidia)
+		criuManager, err = InitializeNvidiaCRIU(ctx, config)
 	default:
 		return nil, fmt.Errorf("invalid CRIU mode: %s", config.Mode)
 	}
