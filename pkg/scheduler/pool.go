@@ -198,8 +198,9 @@ func cleanupWorkers(ctx context.Context, poolName string, workerConfig types.Wor
 				if _, ok := err.(*types.ErrWorkerNotFound); ok {
 					if err := deleteWorker(ctx, workerId, workerRepo, kubeClient, workerConfig.Namespace, job); err != nil {
 						log.Error().Str("job_name", job.Name).Err(err).Msg("failed to delete worker job")
+					} else {
+						log.Info().Str("job_name", job.Name).Msg("deleted worker due to non-existent worker state")
 					}
-					log.Info().Str("job_name", job.Name).Msg("deleted worker due to non-existent worker state")
 					continue
 				}
 			}
