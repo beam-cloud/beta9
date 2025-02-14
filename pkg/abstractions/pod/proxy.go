@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"net/http"
+
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -17,8 +19,11 @@ import (
 )
 
 const (
-	bufferProcessingInterval   time.Duration = time.Millisecond * 100
-	containerDiscoveryInterval time.Duration = time.Millisecond * 500
+	bufferProcessingInterval      time.Duration = time.Millisecond * 100
+	containerDiscoveryInterval    time.Duration = time.Millisecond * 500
+	containerDialTimeoutDurationS time.Duration = time.Second * 30
+	connectionBufferSize          int           = 1024 * 4 // 4KB
+	connectionKeepAliveInterval   time.Duration = time.Second * 1
 )
 
 type container struct {
@@ -28,9 +33,8 @@ type container struct {
 }
 
 type connection struct {
-	ctx       echo.Context
-	done      chan bool
-	processed bool
+	ctx  echo.Context
+	done chan struct{}
 }
 
 type PodProxyBuffer struct {
@@ -83,7 +87,7 @@ func NewPodProxyBuffer(ctx context.Context,
 }
 
 func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
-	done := make(chan bool)
+	done := make(chan struct{})
 	req := &connection{
 		ctx:  ctx,
 		done: done,
@@ -144,15 +148,49 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	pb.availableContainersLock.RUnlock()
 
-	err := pb.incrementConnections(container.id)
+	// Hijack the connection
+	hijacker, ok := conn.ctx.Response().Writer.(http.Hijacker)
+	if !ok {
+		conn.ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
+		return
+	}
+
+	clientConn, _, err := hijacker.Hijack()
+	if err != nil {
+		conn.ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
+		return
+	}
+	defer clientConn.Close()
+
+	// Dial server in the pod container
+	containerConn, err := network.ConnectToHost(conn.ctx.Request().Context(), container.address, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	if err != nil {
+		log.Error().Msgf("Error dialing pod container %s: %s", container.address, err.Error())
+		return
+	}
+
+	defer containerConn.Close()
+	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval)
+
+	// Start bidirectional proxy
+	go abstractions.ProxyConn(containerConn, clientConn, conn.done, connectionBufferSize)
+	go abstractions.ProxyConn(clientConn, containerConn, conn.done, connectionBufferSize)
+
+	err = pb.incrementConnections(container.id)
 	if err != nil {
 		pb.buffer.Push(conn, true)
 		return
 	}
 	defer pb.decrementConnections(container.id)
 
-	conn.processed = true
-
+	select {
+	case <-conn.done:
+		return
+	case <-conn.ctx.Request().Context().Done():
+		return
+	case <-pb.ctx.Done():
+		return
+	}
 }
 
 func (pb *PodProxyBuffer) discoverContainers() {

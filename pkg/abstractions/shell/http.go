@@ -2,11 +2,9 @@ package shell
 
 import (
 	"fmt"
-	"io"
-	"net"
 	"net/http"
-	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -62,7 +60,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
 	}
 	defer conn.Close()
-	setConnOptions(conn)
+	abstractions.SetConnOptions(conn, true, shellKeepAliveIntervalS)
 
 	// Dial ssh server in the container
 	containerConn, err := network.ConnectToHost(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale)
@@ -71,7 +69,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return err
 	}
 	defer containerConn.Close()
-	setConnOptions(containerConn)
+	abstractions.SetConnOptions(containerConn, true, shellKeepAliveIntervalS)
 
 	// Tell the client to proceed now that everything is set up
 	if _, err = conn.Write([]byte("OK")); err != nil {
@@ -79,8 +77,8 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	}
 
 	// Start bidirectional proxy
-	go proxyConn(containerConn, conn, done)
-	go proxyConn(conn, containerConn, done)
+	go abstractions.ProxyConn(containerConn, conn, done, shellProxyBufferSizeKb)
+	go abstractions.ProxyConn(conn, containerConn, done, shellProxyBufferSizeKb)
 
 	select {
 	case <-done:
@@ -89,19 +87,5 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return nil
 	case <-g.ss.ctx.Done():
 		return nil
-	}
-}
-
-func proxyConn(dst io.Writer, src io.Reader, done chan<- struct{}) {
-	buf := make([]byte, shellProxyBufferSizeKb)
-	io.CopyBuffer(dst, src, buf)
-	done <- struct{}{}
-}
-
-func setConnOptions(conn net.Conn) {
-	if tcpConn, ok := conn.(*net.TCPConn); ok {
-		tcpConn.SetKeepAlive(true)
-		tcpConn.SetKeepAlivePeriod(shellKeepAliveIntervalS)
-		tcpConn.SetDeadline(time.Time{})
 	}
 }
