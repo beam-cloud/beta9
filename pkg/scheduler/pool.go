@@ -215,7 +215,7 @@ func cleanupWorkers(ctx context.Context, poolName string, workerConfig types.Wor
 				if err := deleteWorker(ctx, workerId, workerRepo, kubeClient, workerConfig.Namespace, job); err != nil {
 					log.Error().Str("job_name", job.Name).Err(err).Msg("failed to delete worker job")
 				} else {
-					log.Info().Str("job_name", job.Name).Str("duration", workerConfig.CleanupPendingWorkerAgeLimit.String()).Msg("deleted worker due to exceeding age limit")
+					log.Info().Str("job_name", job.Name).Str("duration", duration.String()).Msg("deleted worker due to exceeding age limit")
 				}
 			}
 		}
