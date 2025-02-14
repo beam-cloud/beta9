@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -113,6 +114,9 @@ func NewExternalWorkerPoolController(
 
 	// Reconcile nodes with state
 	go provider.Reconcile(wpc.ctx, wpc.name)
+
+	// Monitor and cleanup workers
+	go wpc.monitorAndCleanupWorkers()
 
 	return wpc, nil
 }
@@ -596,4 +600,33 @@ func (wpc *ExternalWorkerPoolController) getProxiedClient(hostname, token string
 
 func (wpc *ExternalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
 	return freePoolCapacity(wpc.workerRepo, wpc)
+}
+
+func (wpc *ExternalWorkerPoolController) monitorAndCleanupWorkers() {
+	ticker := time.NewTicker(wpc.config.Worker.CleanupWorkerInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		select {
+		case <-wpc.ctx.Done():
+			return // Exit
+		default: // Continue
+		}
+
+		machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
+		if err != nil {
+			log.Error().Err(err).Str("provider", wpc.provider.GetName()).Msg("unable to list machines to cleanup workers")
+			continue
+		}
+
+		for _, machine := range machines {
+			kubeClient, err := wpc.getProxiedClient(machine.State.HostName, machine.State.Token)
+			if err != nil {
+				log.Error().Err(err).Str("machine_id", machine.State.MachineId).Str("hostname", machine.State.HostName).Msg("unable to create kube client for machine")
+				continue
+			}
+
+			cleanupWorkers(wpc.ctx, wpc.name, wpc.config.Worker, kubeClient, wpc.workerRepo)
+		}
+	}
 }
