@@ -2,6 +2,7 @@ package pod
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -110,9 +111,6 @@ func (pb *PodProxyBuffer) processBuffer() {
 		case <-pb.ctx.Done():
 			return
 		default:
-			log.Info().Msgf("Processing buffer for pod %s", pb.stubId)
-
-			log.Info().Msgf("Available containers: %v", pb.availableContainers)
 			if len(pb.availableContainers) == 0 {
 				time.Sleep(bufferProcessingInterval)
 				continue
@@ -142,11 +140,12 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		return
 	}
 
-	// Select an available container to forward the request to (whichever one has the lowest # of inflight requests)
-	// Basically least-connections load balancing
 	container := pb.availableContainers[0]
-
 	pb.availableContainersLock.RUnlock()
+
+	// Capture headers and other metadata
+	request := conn.ctx.Request()
+	headers := request.Header.Clone()
 
 	// Hijack the connection
 	hijacker, ok := conn.ctx.Response().Writer.(http.Hijacker)
@@ -162,17 +161,21 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	}
 	defer clientConn.Close()
 
-	// Dial server in the pod container
-	containerConn, err := network.ConnectToHost(conn.ctx.Request().Context(), container.address, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	containerConn, err := network.ConnectToHost(request.Context(), container.address, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
 	if err != nil {
 		log.Error().Msgf("Error dialing pod container %s: %s", container.address, err.Error())
 		return
 	}
-
 	defer containerConn.Close()
+
 	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval)
 
-	// Start bidirectional proxy
+	// Manually send the request line and headers to the container
+	fmt.Fprintf(containerConn, "%s %s %s\r\n", request.Method, request.URL.RequestURI(), request.Proto)
+	headers.Write(containerConn)
+	fmt.Fprint(containerConn, "\r\n")
+
+	// Start proxying data
 	go abstractions.ProxyConn(containerConn, clientConn, conn.done, connectionBufferSize)
 	go abstractions.ProxyConn(clientConn, containerConn, conn.done, connectionBufferSize)
 
@@ -186,7 +189,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	select {
 	case <-conn.done:
 		return
-	case <-conn.ctx.Request().Context().Done():
+	case <-request.Context().Done():
 		return
 	case <-pb.ctx.Done():
 		return
