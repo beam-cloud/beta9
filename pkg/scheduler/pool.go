@@ -191,6 +191,7 @@ func cleanupWorkers(ctx context.Context, poolName string, workerConfig types.Wor
 		for _, pod := range pods.Items {
 			workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]
 			if !ok {
+				log.Warn().Str("job_name", job.Name).Str("pod_name", pod.Name).Msg("worker id not found in pod labels")
 				continue
 			}
 
