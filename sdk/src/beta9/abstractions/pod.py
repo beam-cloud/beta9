@@ -105,7 +105,7 @@ class Pod(RunnerAbstraction):
         self._pod_stub = value
 
     def run(self):
-        if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE):
+        if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
             return False
 
         terminal.header("Running")
