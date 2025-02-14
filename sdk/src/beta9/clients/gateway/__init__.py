@@ -349,6 +349,18 @@ class StartDeploymentResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class ScaleDeploymentRequest(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    containers: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ScaleDeploymentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
 class DeleteDeploymentRequest(betterproto.Message):
     id: str = betterproto.string_field(1)
 
@@ -747,6 +759,15 @@ class GatewayServiceStub(SyncServiceStub):
             StartDeploymentRequest,
             StartDeploymentResponse,
         )(start_deployment_request)
+
+    def scale_deployment(
+        self, scale_deployment_request: "ScaleDeploymentRequest"
+    ) -> "ScaleDeploymentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ScaleDeployment",
+            ScaleDeploymentRequest,
+            ScaleDeploymentResponse,
+        )(scale_deployment_request)
 
     def delete_deployment(
         self, delete_deployment_request: "DeleteDeploymentRequest"

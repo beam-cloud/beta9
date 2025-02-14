@@ -17,6 +17,8 @@ from ..clients.gateway import (
     DeleteDeploymentResponse,
     ListDeploymentsRequest,
     ListDeploymentsResponse,
+    ScaleDeploymentRequest,
+    ScaleDeploymentResponse,
     StartDeploymentRequest,
     StartDeploymentResponse,
     StopDeploymentRequest,
@@ -309,3 +311,37 @@ def delete_deployment(service: ServiceClient, deployment_id: str):
         terminal.error(res.err_msg)
 
     terminal.print(f"Deleted {deployment_id}")
+
+
+@management.command(
+    name="scale",
+    help="Scale an active deployment.",
+    epilog="""
+    Examples:
+
+        # Start a deployment
+        {cli_name} deployment scale 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572 --containers 2
+        """,
+)
+@click.argument(
+    "deployment_id",
+    type=click.STRING,
+    required=True,
+)
+@click.option(
+    "--containers",
+    type=click.INT,
+    required=True,
+    help="The number of containers to scale to.",
+)
+@extraclick.pass_service_client
+def scale_deployment(service: ServiceClient, deployment_id: str, containers: int):
+    res: ScaleDeploymentResponse
+    res = service.gateway.scale_deployment(
+        ScaleDeploymentRequest(id=deployment_id, containers=containers)
+    )
+
+    if not res.ok:
+        terminal.error(res.err_msg)
+
+    terminal.print(f"Scaled deployment {deployment_id} to {containers} containers")

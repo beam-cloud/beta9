@@ -37,6 +37,7 @@ service GatewayService {
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
   rpc StartDeployment(StartDeploymentRequest) returns (StartDeploymentResponse);
+  rpc ScaleDeployment(ScaleDeploymentRequest) returns (ScaleDeploymentResponse);
   rpc DeleteDeployment(DeleteDeploymentRequest)
       returns (DeleteDeploymentResponse);
 
@@ -272,7 +273,6 @@ message DeployStubResponse {
   string invoke_url = 4;
 }
 
-
 message Deployment {
   string id = 1;
   string name = 2;
@@ -308,6 +308,16 @@ message StopDeploymentResponse {
 message StartDeploymentRequest { string id = 1; }
 
 message StartDeploymentResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message ScaleDeploymentRequest {
+  string id = 1;
+  uint32 containers = 2;
+}
+
+message ScaleDeploymentResponse {
   bool ok = 1;
   string err_msg = 2;
 }
