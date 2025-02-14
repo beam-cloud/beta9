@@ -168,7 +168,10 @@ func (co *ContainerOverlay) TopLayerPath() string {
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
-	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,user_xattr", layer.lower, layer.upper, layer.work)
+	// log command
+	log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Str("command", fmt.Sprintf("mount -t overlay overlay -o lowerdir=%s,upperdir=%s,workdir=%s,user_xattr %s", layer.lower, layer.upper, layer.work, layer.merged)).Msg("mounting layer")
+	time.Sleep(500 * time.Second)
+	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,userxattr", layer.lower, layer.upper, layer.work)
 	err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run()
 	if err != nil {
 		return err
