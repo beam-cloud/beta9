@@ -29,7 +29,7 @@ func NewRedisClientForTest() (*common.RedisClient, error) {
 func NewWorkerRedisRepositoryForTest(rdb *common.RedisClient) WorkerRepository {
 	lock := common.NewRedisLock(rdb)
 	config := types.WorkerConfig{
-		AddWorkerTimeout: time.Duration(time.Minute * 10),
+		CleanupPendingWorkerAgeLimit: time.Duration(time.Minute * 10),
 	}
 	return &WorkerRedisRepository{rdb: rdb, lock: lock, config: config}
 }

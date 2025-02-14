@@ -242,29 +242,30 @@ func NewMountPointConfigFromProto(in *pb.MountPointConfig) *MountPointConfig {
 }
 
 type WorkerConfig struct {
-	Pools                      map[string]WorkerPoolConfig `key:"pools" json:"pools"`
-	HostNetwork                bool                        `key:"hostNetwork" json:"host_network"`
-	UseGatewayServiceHostname  bool                        `key:"useGatewayServiceHostname" json:"use_gateway_service_hostname"`
-	UseHostResolvConf          bool                        `key:"useHostResolvConf" json:"use_host_resolv_conf"`
-	ImageTag                   string                      `key:"imageTag" json:"image_tag"`
-	ImageName                  string                      `key:"imageName" json:"image_name"`
-	ImageRegistry              string                      `key:"imageRegistry" json:"image_registry"`
-	ImagePullSecrets           []string                    `key:"imagePullSecrets" json:"image_pull_secrets"`
-	Namespace                  string                      `key:"namespace" json:"namespace"`
-	ServiceAccountName         string                      `key:"serviceAccountName" json:"service_account_name"`
-	JobResourcesEnforced       bool                        `key:"jobResourcesEnforced" json:"job_resources_enforced"`
-	RunCResourcesEnforced      bool                        `key:"runcResourcesEnforced" json:"runc_resources_enforced"`
-	EagerCacheStubCode         bool                        `key:"eagerCacheStubCode" json:"eager_cache_stub_code"`
-	DefaultWorkerCPURequest    int64                       `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
-	DefaultWorkerMemoryRequest int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
-	ImagePVCName               string                      `key:"imagePVCName" json:"image_pvc_name"`
-	AddWorkerTimeout           time.Duration               `key:"addWorkerTimeout" json:"add_worker_timeout"`
-	TerminationGracePeriod     int64                       `key:"terminationGracePeriod"`
-	BlobCacheEnabled           bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
-	CRIU                       CRIUConfig                  `key:"criu" json:"criu"`
-	TmpSizeLimit               string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
-	ContainerLogLinesPerHour   int                         `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
-	Failover                   FailoverConfig              `key:"failover" json:"failover"`
+	Pools                        map[string]WorkerPoolConfig `key:"pools" json:"pools"`
+	HostNetwork                  bool                        `key:"hostNetwork" json:"host_network"`
+	UseGatewayServiceHostname    bool                        `key:"useGatewayServiceHostname" json:"use_gateway_service_hostname"`
+	UseHostResolvConf            bool                        `key:"useHostResolvConf" json:"use_host_resolv_conf"`
+	ImageTag                     string                      `key:"imageTag" json:"image_tag"`
+	ImageName                    string                      `key:"imageName" json:"image_name"`
+	ImageRegistry                string                      `key:"imageRegistry" json:"image_registry"`
+	ImagePullSecrets             []string                    `key:"imagePullSecrets" json:"image_pull_secrets"`
+	Namespace                    string                      `key:"namespace" json:"namespace"`
+	ServiceAccountName           string                      `key:"serviceAccountName" json:"service_account_name"`
+	JobResourcesEnforced         bool                        `key:"jobResourcesEnforced" json:"job_resources_enforced"`
+	RunCResourcesEnforced        bool                        `key:"runcResourcesEnforced" json:"runc_resources_enforced"`
+	EagerCacheStubCode           bool                        `key:"eagerCacheStubCode" json:"eager_cache_stub_code"`
+	DefaultWorkerCPURequest      int64                       `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
+	DefaultWorkerMemoryRequest   int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
+	ImagePVCName                 string                      `key:"imagePVCName" json:"image_pvc_name"`
+	CleanupWorkerInterval        time.Duration               `key:"cleanupWorkerInterval" json:"cleanup_worker_interval"`
+	CleanupPendingWorkerAgeLimit time.Duration               `key:"cleanupPendingWorkerAgeLimit" json:"cleanup_pending_worker_age_limit"`
+	TerminationGracePeriod       int64                       `key:"terminationGracePeriod"`
+	BlobCacheEnabled             bool                        `key:"blobCacheEnabled" json:"blob_cache_enabled"`
+	CRIU                         CRIUConfig                  `key:"criu" json:"criu"`
+	TmpSizeLimit                 string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
+	ContainerLogLinesPerHour     int                         `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
+	Failover                     FailoverConfig              `key:"failover" json:"failover"`
 }
 
 type FailoverConfig struct {
