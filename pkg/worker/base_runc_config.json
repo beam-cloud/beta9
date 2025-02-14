@@ -12,8 +12,6 @@
 			"/dev/null"
 		],
 		"env": [
-			"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-			"LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/lib/x86_64-linux-gnu:/usr/lib/worker/x86_64-linux-gnu",
 			"TERM=xterm",
 			"LAMBDA_TASK_ROOT=/workspace",
 			"MAMBA_ROOT_PREFIX=/micromamba"
@@ -90,7 +88,12 @@
 			"destination": "/proc",
 			"type": "proc",
 			"source": "proc",
-      "options": ["rw", "nosuid", "noexec", "nodev"]
+			"options": [
+				"rw",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/volumes",
@@ -107,7 +110,7 @@
 			"type": "tmpfs",
 			"source": "tmpfs",
 			"options": [
-        "rw",
+				"rw",
 				"nosuid",
 				"strictatime",
 				"mode=755",
@@ -154,7 +157,7 @@
 			"type": "sysfs",
 			"source": "sysfs",
 			"options": [
-        "rw",
+				"rw",
 				"nosuid",
 				"noexec",
 				"nodev"
@@ -175,229 +178,457 @@
 			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.8/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.9/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.9/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.10/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.10/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.11/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.11/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.12/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.12/dist-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.8/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.8/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.9/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.9/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.10/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.10/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.11/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.11/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.12/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/usr/local/lib/python3.12/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.8/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.8/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.9/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.9/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.10/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.10/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.11/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.11/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.12/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/micromamba/envs/beta9/lib/python3.12/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/opt/conda/lib/python3.9/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/opt/conda/lib/python3.9/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/opt/conda/lib/python3.10/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/opt/conda/lib/python3.10/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/opt/conda/lib/python3.11/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/opt/conda/lib/python3.11/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/opt/conda/lib/python3.12/site-packages/beta9",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/opt/conda/lib/python3.12/site-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
-			"options": ["ro", "rbind", "rprivate", "nosuid", "nodev"]
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
 		},
 		{
 			"destination": "/run/sshd",
@@ -423,11 +654,21 @@
 			]
 		},
 		"namespaces": [
-      { "type": "mount" },
-      { "type": "uts" },
-      { "type": "pid" },
-      { "type": "ipc" },
-      { "type": "cgroup" }
+			{
+				"type": "mount"
+			},
+			{
+				"type": "uts"
+			},
+			{
+				"type": "pid"
+			},
+			{
+				"type": "ipc"
+			},
+			{
+				"type": "cgroup"
+			}
 		]
 	}
 }
