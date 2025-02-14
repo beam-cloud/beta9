@@ -371,6 +371,8 @@ func (g *Gateway) registerServices() error {
 			Scheduler:     g.Scheduler,
 			RedisClient:   g.RedisClient,
 			EventRepo:     g.EventRepo,
+			RouteGroup:    g.rootRouteGroup,
+			WorkspaceRepo: g.WorkspaceRepo,
 		},
 	)
 	if err != nil {

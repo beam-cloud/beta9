@@ -16,16 +16,19 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
+	"github.com/labstack/echo/v4"
 )
 
 type PodServiceOpts struct {
 	Config        types.AppConfig
 	BackendRepo   repository.BackendRepository
 	ContainerRepo repository.ContainerRepository
+	WorkspaceRepo repository.WorkspaceRepository
 	Tailscale     *network.Tailscale
 	Scheduler     *scheduler.Scheduler
 	RedisClient   *common.RedisClient
 	EventRepo     repository.EventRepository
+	RouteGroup    *echo.Group
 }
 
 const (
@@ -46,6 +49,7 @@ type GenericPodService struct {
 	config          types.AppConfig
 	backendRepo     repository.BackendRepository
 	containerRepo   repository.ContainerRepository
+	workspaceRepo   repository.WorkspaceRepository
 	scheduler       *scheduler.Scheduler
 	keyEventManager *common.KeyEventManager
 	rdb             *common.RedisClient
@@ -68,6 +72,7 @@ func NewPodService(
 		ctx:             ctx,
 		backendRepo:     opts.BackendRepo,
 		containerRepo:   opts.ContainerRepo,
+		workspaceRepo:   opts.WorkspaceRepo,
 		scheduler:       opts.Scheduler,
 		rdb:             opts.RedisClient,
 		keyEventManager: keyEventManager,
@@ -92,11 +97,23 @@ func NewPodService(
 		return nil, err
 	}
 
+	authMiddleware := auth.AuthMiddleware(ps.backendRepo, ps.workspaceRepo)
+	registerPodGroup(opts.RouteGroup.Group(podRoutePrefix, authMiddleware), ps)
+
 	return ps, nil
 }
 
 func (ps *GenericPodService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
 	return ps.getOrCreatePodInstance(stubId)
+}
+
+func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) error {
+	instance, err := ps.getOrCreatePodInstance(stubId)
+	if err != nil {
+		return err
+	}
+
+	return instance.buffer.ForwardRequest(ctx)
 }
 
 func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...func(*podInstance)) (*podInstance, error) {
