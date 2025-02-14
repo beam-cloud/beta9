@@ -82,6 +82,24 @@ func NewPodProxyBuffer(ctx context.Context,
 	return pb
 }
 
+func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
+	done := make(chan bool)
+	req := &connection{
+		ctx:  ctx,
+		done: done,
+	}
+	pb.buffer.Push(req, false)
+
+	for {
+		select {
+		case <-pb.ctx.Done():
+			return nil
+		case <-done:
+			return nil
+		}
+	}
+}
+
 func (pb *PodProxyBuffer) processBuffer() {
 	for {
 		select {
