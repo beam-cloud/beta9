@@ -635,8 +635,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		log.Info().Str("container_id", containerId).Str("config_path", configPath).Msg("attempting checkpoint")
-		time.Sleep(500 * time.Second)
 		exitCode, containerId, err = s.attemptCheckpointOrRestore(ctx, request, outputWriter, checkpointPIDChan, configPath)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("C/R failed: %v", err)
