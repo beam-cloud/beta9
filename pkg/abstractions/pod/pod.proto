@@ -5,14 +5,12 @@ option go_package = "github.com/beam-cloud/beam/proto";
 package pod;
 
 service PodService {
-  rpc RunPod(RunPodRequest) returns (RunPodResponse) {}
+  rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {}
 }
 
-message RunPodRequest {
-  string stub_id = 1;
-}
+message CreatePodRequest { string stub_id = 1; }
 
-message RunPodResponse { 
+message CreatePodResponse {
   bool ok = 1;
-  string container_id = 2; 
+  string container_id = 2;
 }

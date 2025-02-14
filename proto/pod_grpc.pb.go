@@ -19,14 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	PodService_RunPod_FullMethodName = "/pod.PodService/RunPod"
+	PodService_CreatePod_FullMethodName = "/pod.PodService/CreatePod"
 )
 
 // PodServiceClient is the client API for PodService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PodServiceClient interface {
-	RunPod(ctx context.Context, in *RunPodRequest, opts ...grpc.CallOption) (*RunPodResponse, error)
+	CreatePod(ctx context.Context, in *CreatePodRequest, opts ...grpc.CallOption) (*CreatePodResponse, error)
 }
 
 type podServiceClient struct {
@@ -37,9 +37,9 @@ func NewPodServiceClient(cc grpc.ClientConnInterface) PodServiceClient {
 	return &podServiceClient{cc}
 }
 
-func (c *podServiceClient) RunPod(ctx context.Context, in *RunPodRequest, opts ...grpc.CallOption) (*RunPodResponse, error) {
-	out := new(RunPodResponse)
-	err := c.cc.Invoke(ctx, PodService_RunPod_FullMethodName, in, out, opts...)
+func (c *podServiceClient) CreatePod(ctx context.Context, in *CreatePodRequest, opts ...grpc.CallOption) (*CreatePodResponse, error) {
+	out := new(CreatePodResponse)
+	err := c.cc.Invoke(ctx, PodService_CreatePod_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func (c *podServiceClient) RunPod(ctx context.Context, in *RunPodRequest, opts .
 // All implementations must embed UnimplementedPodServiceServer
 // for forward compatibility
 type PodServiceServer interface {
-	RunPod(context.Context, *RunPodRequest) (*RunPodResponse, error)
+	CreatePod(context.Context, *CreatePodRequest) (*CreatePodResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
 
@@ -58,8 +58,8 @@ type PodServiceServer interface {
 type UnimplementedPodServiceServer struct {
 }
 
-func (UnimplementedPodServiceServer) RunPod(context.Context, *RunPodRequest) (*RunPodResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunPod not implemented")
+func (UnimplementedPodServiceServer) CreatePod(context.Context, *CreatePodRequest) (*CreatePodResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreatePod not implemented")
 }
 func (UnimplementedPodServiceServer) mustEmbedUnimplementedPodServiceServer() {}
 
@@ -74,20 +74,20 @@ func RegisterPodServiceServer(s grpc.ServiceRegistrar, srv PodServiceServer) {
 	s.RegisterService(&PodService_ServiceDesc, srv)
 }
 
-func _PodService_RunPod_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunPodRequest)
+func _PodService_CreatePod_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreatePodRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PodServiceServer).RunPod(ctx, in)
+		return srv.(PodServiceServer).CreatePod(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PodService_RunPod_FullMethodName,
+		FullMethod: PodService_CreatePod_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PodServiceServer).RunPod(ctx, req.(*RunPodRequest))
+		return srv.(PodServiceServer).CreatePod(ctx, req.(*CreatePodRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -100,8 +100,8 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*PodServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "RunPod",
-			Handler:    _PodService_RunPod_Handler,
+			MethodName: "CreatePod",
+			Handler:    _PodService_CreatePod_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

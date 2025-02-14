@@ -40,7 +40,7 @@ const (
 
 type PodService interface {
 	pb.PodServiceServer
-	RunPod(ctx context.Context, in *pb.RunPodRequest) (*pb.RunPodResponse, error)
+	CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error)
 }
 
 type GenericPodService struct {
@@ -194,26 +194,26 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 }
 
 // CreatePod creates a new container that will run to completion, with an associated task
-func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*pb.RunPodResponse, error) {
+func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	stub, err := s.backendRepo.GetStubByExternalId(ctx, in.StubId)
 	if err != nil {
-		return &pb.RunPodResponse{
+		return &pb.CreatePodResponse{
 			Ok: false,
 		}, nil
 	}
 
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
-		return &pb.RunPodResponse{
+		return &pb.CreatePodResponse{
 			Ok: false,
 		}, nil
 	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(authInfo.Workspace, stubConfig)
 	if err != nil {
-		return &pb.RunPodResponse{
+		return &pb.CreatePodResponse{
 			Ok: false,
 		}, err
 	}
@@ -225,7 +225,7 @@ func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*
 		stub.ExternalId,
 	)
 	if err != nil {
-		return &pb.RunPodResponse{
+		return &pb.CreatePodResponse{
 			Ok: false,
 		}, err
 	}
@@ -279,13 +279,13 @@ func (s *GenericPodService) RunPod(ctx context.Context, in *pb.RunPodRequest) (*
 
 	err = s.scheduler.Run(containerRequest)
 	if err != nil {
-		return &pb.RunPodResponse{
+		return &pb.CreatePodResponse{
 			Ok:          false,
 			ContainerId: containerId,
 		}, nil
 	}
 
-	return &pb.RunPodResponse{
+	return &pb.CreatePodResponse{
 		Ok:          true,
 		ContainerId: containerId,
 	}, nil

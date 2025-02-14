@@ -120,4 +120,4 @@ def run(
     if memory:
         pod_spec.memory = pod_spec.parse_memory(memory)
 
-    pod_spec.run()
+    pod_spec.create()

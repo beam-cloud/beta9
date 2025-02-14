@@ -13,9 +13,9 @@ from ..clients.gateway import (
     DeployStubResponse,
 )
 from ..clients.pod import (
+    CreatePodRequest,
+    CreatePodResponse,
     PodServiceStub,
-    RunPodRequest,
-    RunPodResponse,
 )
 from ..config import ConfigContext
 from ..sync import FileSyncer
@@ -104,22 +104,22 @@ class Pod(RunnerAbstraction):
     def stub(self, value: PodServiceStub) -> None:
         self._pod_stub = value
 
-    def run(self):
+    def create(self) -> str:
         if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
-            return False
+            return ""
 
-        terminal.header("Running")
-        run_response: RunPodResponse = self.stub.run_pod(
-            RunPodRequest(
+        terminal.header("Creating")
+        create_response: CreatePodResponse = self.stub.create_pod(
+            CreatePodRequest(
                 stub_id=self.stub_id,
             )
         )
 
-        if run_response.ok:
-            terminal.header(f"Container created successfully ===> {run_response.container_id}")
+        if create_response.ok:
+            terminal.header(f"Container created successfully ===> {create_response.container_id}")
             self.print_invocation_snippet(url_type="path")
 
-        return run_response.ok
+        return create_response.container_id
 
     def deploy(
         self,

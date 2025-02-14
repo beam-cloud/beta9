@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -128,6 +129,14 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 		return &pb.ScaleDeploymentResponse{
 			Ok:     false,
 			ErrMsg: "Deployment not found",
+		}, nil
+	}
+
+	// For now, we only support direct scaling of pod deployments
+	if deploymentWithRelated.Stub.Type != types.StubType(types.StubTypePodDeployment) {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("This type of deployment cannot be scaled directly."),
 		}, nil
 	}
 

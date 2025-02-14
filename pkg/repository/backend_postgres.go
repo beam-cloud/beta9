@@ -1051,7 +1051,7 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
 	query := `
         SELECT d.*,
                w.external_id AS "workspace.external_id", w.name AS "workspace.name",
-               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
+               s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", s.type AS "stub.type"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
