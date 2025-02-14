@@ -117,6 +117,7 @@ class Pod(RunnerAbstraction):
 
         if run_response.ok:
             terminal.header("Running pod 🎉")
+            self.print_invocation_snippet(url_type="path")
 
         return run_response.ok
 

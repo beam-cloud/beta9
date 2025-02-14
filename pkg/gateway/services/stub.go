@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"time"
@@ -239,7 +240,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	if config.Autoscaler.MinContainers > 0 {
+	if config.Autoscaler.MinContainers > 0 || stub.Type == types.StubType(types.StubTypePodDeployment) {
 		// Publish reload instance event
 		eventBus := common.NewEventBus(gws.redisClient)
 		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
@@ -278,9 +279,10 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 		in.UrlType = gws.appConfig.GatewayService.InvokeURLType
 	}
 
-	// Get URL for Serves or Shells
-	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell {
+	// Get URL for Serves, Shells, or Pods
+	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell || stub.Type == types.StubType(types.StubTypePodRun) {
 		invokeUrl := common.BuildStubURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub)
+		log.Print("invokeUrl: ", invokeUrl)
 		return &pb.GetURLResponse{
 			Ok:  true,
 			Url: invokeUrl,

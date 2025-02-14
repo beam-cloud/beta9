@@ -2,7 +2,11 @@ package pod
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +50,7 @@ type PodProxyBuffer struct {
 	containerRepo           repository.ContainerRepository
 	keyEventManager         *common.KeyEventManager
 	stubConfig              *types.StubConfigV1
+	httpClient              *http.Client
 	tailscale               *network.Tailscale
 	tsConfig                types.TailscaleConfig
 	availableContainers     []container
@@ -72,6 +77,7 @@ func NewPodProxyBuffer(ctx context.Context,
 		size:                    size,
 		containerRepo:           containerRepo,
 		keyEventManager:         keyEventManager,
+		httpClient:              &http.Client{},
 		stubConfig:              stubConfig,
 		tailscale:               tailscale,
 		tsConfig:                tsConfig,
@@ -94,11 +100,15 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	}
 	pb.buffer.Push(req, false)
 
+	log.Info().Msg("Forwarded request")
+
 	for {
 		select {
 		case <-pb.ctx.Done():
+			log.Info().Msg("Pod proxy buffer context done")
 			return nil
 		case <-done:
+			log.Info().Msg("Forwarded request done")
 			return nil
 		}
 	}
@@ -110,9 +120,9 @@ func (pb *PodProxyBuffer) processBuffer() {
 		case <-pb.ctx.Done():
 			return
 		default:
-			log.Info().Msgf("Processing buffer for pod %s", pb.stubId)
+			// log.Info().Msgf("Processing buffer for pod %s", pb.stubId)
 
-			log.Info().Msgf("Available containers: %v", pb.availableContainers)
+			// log.Info().Msgf("Available containers: %v", pb.availableContainers)
 			if len(pb.availableContainers) == 0 {
 				time.Sleep(bufferProcessingInterval)
 				continue
@@ -120,23 +130,35 @@ func (pb *PodProxyBuffer) processBuffer() {
 
 			conn, ok := pb.buffer.Pop()
 			if !ok {
+				// log.Info().Msg("No connections to process")
 				time.Sleep(bufferProcessingInterval)
 				continue
 			}
 
+			log.Info().Msg("Processing connection")
+
 			if conn.ctx.Request().Context().Err() != nil {
+				log.Info().Msg("Connection context error")
 				continue
 			}
 
-			go pb.handleConnection(conn)
+			go pb.handleRequest(conn)
 		}
 	}
 }
 
+func (pb *PodProxyBuffer) handleRequest(req *connection) {
+	pb.handleHttpRequest(req, pb.availableContainers[0])
+}
+
 func (pb *PodProxyBuffer) handleConnection(conn *connection) {
+	log.Info().Msg("Handling connection")
 	pb.availableContainersLock.RLock()
 
+	log.Info().Msgf("Available containers: %v", pb.availableContainers)
+
 	if len(pb.availableContainers) == 0 {
+		log.Info().Msg("No available containers")
 		pb.buffer.Push(conn, true)
 		pb.availableContainersLock.RUnlock()
 		return
@@ -155,12 +177,18 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		return
 	}
 
+	log.Info().Msg("Hijacking connection")
+
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		conn.ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
 		return
 	}
 	defer clientConn.Close()
+
+	log.Info().Msg("Dialing container")
+
+	log.Info().Msgf("Dialing container %s", container.address)
 
 	// Dial server in the pod container
 	containerConn, err := network.ConnectToHost(conn.ctx.Request().Context(), container.address, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
@@ -169,12 +197,16 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		return
 	}
 
+	log.Info().Msg("Setting connection options")
+
 	defer containerConn.Close()
 	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval)
 
 	// Start bidirectional proxy
 	go abstractions.ProxyConn(containerConn, clientConn, conn.done, connectionBufferSize)
 	go abstractions.ProxyConn(clientConn, containerConn, conn.done, connectionBufferSize)
+
+	log.Info().Msg("Incrementing connections")
 
 	err = pb.incrementConnections(container.id)
 	if err != nil {
@@ -334,4 +366,104 @@ func (pb *PodProxyBuffer) decrementConnections(containerId string) error {
 	}
 
 	return nil
+}
+
+func (pb *PodProxyBuffer) getHttpClient(address string) (*http.Client, error) {
+	// If it isn't an tailnet address, just return the standard http client
+	if !pb.tsConfig.Enabled || !strings.Contains(address, pb.tsConfig.HostName) {
+		return pb.httpClient, nil
+	}
+
+	conn, err := network.ConnectToHost(pb.ctx, address, types.RequestTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a custom transport that uses the established connection
+	// Either using tailscale or not
+	transport := &http.Transport{
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return conn, nil
+		},
+	}
+
+	client := &http.Client{
+		Transport: transport,
+	}
+
+	return client, nil
+}
+
+func (pb *PodProxyBuffer) handleHttpRequest(req *connection, c container) {
+	request := req.ctx.Request()
+
+	var requestBody io.ReadCloser = request.Body
+
+	httpClient, err := pb.getHttpClient(c.address)
+	if err != nil {
+		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "Internal server error",
+		})
+		return
+	}
+	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
+
+	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, requestBody)
+	if err != nil {
+		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "Internal server error",
+		})
+		return
+	}
+
+	// Copy headers to new request
+	for key, values := range request.Header {
+		for _, val := range values {
+			httpReq.Header.Add(key, val)
+		}
+	} // Send heartbeat via redis for duration of request
+
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	// Set response headers and status code before writing the body
+	for key, values := range resp.Header {
+		for _, value := range values {
+			req.ctx.Response().Header().Add(key, value)
+		}
+	}
+	req.ctx.Response().WriteHeader(resp.StatusCode)
+
+	// Check if we can stream the response
+	streamingSupported := true
+	flusher, ok := req.ctx.Response().Writer.(http.Flusher)
+	if !ok {
+		streamingSupported = false
+	}
+
+	// Send response to client in chunks
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			req.ctx.Response().Writer.Write(buf[:n])
+
+			if streamingSupported {
+				flusher.Flush()
+			}
+		}
+
+		if err != nil {
+			if err != io.EOF && err != context.Canceled {
+				req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+					"error": "Internal server error",
+				})
+			}
+
+			break
+		}
+	}
 }
