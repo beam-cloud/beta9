@@ -3,7 +3,10 @@ package pod
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +50,7 @@ type PodProxyBuffer struct {
 	containerRepo           repository.ContainerRepository
 	keyEventManager         *common.KeyEventManager
 	stubConfig              *types.StubConfigV1
+	httpClient              *http.Client
 	tailscale               *network.Tailscale
 	tsConfig                types.TailscaleConfig
 	availableContainers     []container
@@ -73,6 +77,7 @@ func NewPodProxyBuffer(ctx context.Context,
 		size:                    size,
 		containerRepo:           containerRepo,
 		keyEventManager:         keyEventManager,
+		httpClient:              &http.Client{},
 		stubConfig:              stubConfig,
 		tailscale:               tailscale,
 		tsConfig:                tsConfig,
@@ -126,9 +131,13 @@ func (pb *PodProxyBuffer) processBuffer() {
 				continue
 			}
 
-			go pb.handleConnection(conn)
+			go pb.handleRequest(conn)
 		}
 	}
+}
+
+func (pb *PodProxyBuffer) handleRequest(req *connection) {
+	pb.handleHttpRequest(req, pb.availableContainers[0])
 }
 
 func (pb *PodProxyBuffer) handleConnection(conn *connection) {
@@ -349,4 +358,104 @@ func (pb *PodProxyBuffer) decrementConnections(containerId string) error {
 	}
 
 	return nil
+}
+
+func (pb *PodProxyBuffer) getHttpClient(address string) (*http.Client, error) {
+	// If it isn't an tailnet address, just return the standard http client
+	if !pb.tsConfig.Enabled || !strings.Contains(address, pb.tsConfig.HostName) {
+		return pb.httpClient, nil
+	}
+
+	conn, err := network.ConnectToHost(pb.ctx, address, types.RequestTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a custom transport that uses the established connection
+	// Either using tailscale or not
+	transport := &http.Transport{
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return conn, nil
+		},
+	}
+
+	client := &http.Client{
+		Transport: transport,
+	}
+
+	return client, nil
+}
+
+func (pb *PodProxyBuffer) handleHttpRequest(req *connection, c container) {
+	request := req.ctx.Request()
+
+	var requestBody io.ReadCloser = request.Body
+
+	httpClient, err := pb.getHttpClient(c.address)
+	if err != nil {
+		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "Internal server error",
+		})
+		return
+	}
+	containerUrl := fmt.Sprintf("http://%s/%s", c.address, req.ctx.Param("subPath"))
+
+	httpReq, err := http.NewRequestWithContext(request.Context(), request.Method, containerUrl, requestBody)
+	if err != nil {
+		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+			"error": "Internal server error",
+		})
+		return
+	}
+
+	// Copy headers to new request
+	for key, values := range request.Header {
+		for _, val := range values {
+			httpReq.Header.Add(key, val)
+		}
+	} // Send heartbeat via redis for duration of request
+
+	resp, err := httpClient.Do(httpReq)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	// Set response headers and status code before writing the body
+	for key, values := range resp.Header {
+		for _, value := range values {
+			req.ctx.Response().Header().Add(key, value)
+		}
+	}
+	req.ctx.Response().WriteHeader(resp.StatusCode)
+
+	// Check if we can stream the response
+	streamingSupported := true
+	flusher, ok := req.ctx.Response().Writer.(http.Flusher)
+	if !ok {
+		streamingSupported = false
+	}
+
+	// Send response to client in chunks
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			req.ctx.Response().Writer.Write(buf[:n])
+
+			if streamingSupported {
+				flusher.Flush()
+			}
+		}
+
+		if err != nil {
+			if err != io.EOF && err != context.Canceled {
+				req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
+					"error": "Internal server error",
+				})
+			}
+
+			break
+		}
+	}
 }
