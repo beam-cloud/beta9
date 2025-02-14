@@ -592,8 +592,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			"/usr/lib/x86_64-linux-gnu/libnvidia-opencl",
 			"/usr/lib/x86_64-linux-gnu/libnvidia-pkcs11-openssl3.so",
 			"/usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so",
-			"/lib/firmware/nvidia/570.86.16/gsp_ga10x.bin",
-			"/lib/firmware/nvidia/570.86.16/gsp_tu10x.bin",
+			"/lib/firmware/nvidia",
 		}
 		for _, mount := range spec.Mounts {
 			safeMountPrefixes = append(safeMountPrefixes, mount.Source)
