@@ -116,7 +116,7 @@ class Pod(RunnerAbstraction):
         )
 
         if run_response.ok:
-            terminal.header("Running pod 🎉")
+            terminal.header(f"Container created successfully ===> {run_response.container_id}")
             self.print_invocation_snippet(url_type="path")
 
         return run_response.ok
