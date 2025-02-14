@@ -93,6 +93,7 @@ class Pod(RunnerAbstraction):
         self.task_id = ""
         self._pod_stub: Optional[PodServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
+        self.image.ignore_python = True
 
     @property
     def stub(self) -> PodServiceStub:

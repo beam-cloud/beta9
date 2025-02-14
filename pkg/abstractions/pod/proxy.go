@@ -2,12 +2,10 @@ package pod
 
 import (
 	"context"
-	"fmt"
+	"net/http"
 	"sort"
 	"sync"
 	"time"
-
-	"net/http"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -147,7 +145,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	// Capture headers and other metadata
 	request := conn.ctx.Request()
-	headers := request.Header.Clone()
 
 	// Hijack the connection
 	hijacker, ok := conn.ctx.Response().Writer.(http.Hijacker)
@@ -179,10 +176,14 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	}
 	defer pb.decrementConnections(container.id)
 
-	// Manually send the request line and headers to the container
-	fmt.Fprintf(containerConn, "%s %s %s\r\n", request.Method, fmt.Sprintf("/%s", conn.ctx.Param("subPath")), request.Proto)
-	headers.Write(containerConn)
-	fmt.Fprint(containerConn, "\r\n")
+	// Ensure the request URL is correctly formatted for the proxy
+	request.URL.Scheme = "http"
+	request.URL.Host = conn.ctx.Param("subPath")
+
+	// Use the http.Request's Write method to send the request
+	if err := request.Write(containerConn); err != nil {
+		return
+	}
 
 	// Start proxying data
 	var wg sync.WaitGroup

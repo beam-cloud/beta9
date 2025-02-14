@@ -73,6 +73,7 @@ type BuildOpts struct {
 	EnvVars            []string
 	BuildSecrets       []string
 	Gpu                string
+	IgnorePython       bool
 }
 
 func (o *BuildOpts) String() string {
@@ -93,6 +94,7 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
 	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
 	fmt.Fprintf(&b, "  \"Gpu\": %q,", o.Gpu)
+	fmt.Fprintf(&b, "  \"IgnorePython\": %v,", o.IgnorePython)
 	fmt.Fprintf(&b, "}")
 	return b.String()
 }
@@ -364,27 +366,30 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	var setupCommands []string
-	// Detect if python3.x is installed in the container, if not install it
-	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 
-		if opts.PythonVersion == types.Python3.String() {
-			opts.PythonVersion = b.config.ImageService.PythonVersion
+	if !opts.IgnorePython {
+		// Detect if python3.x is installed in the container, if not install it
+		checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
+		if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
+
+			if opts.PythonVersion == types.Python3.String() {
+				opts.PythonVersion = b.config.ImageService.PythonVersion
+			}
+
+			outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
+			installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, opts.PythonVersion)
+			if err != nil {
+				outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: err.Error() + "\n"}
+				return err
+			}
+			setupCommands = append(setupCommands, installCmd)
 		}
 
-		outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: fmt.Sprintf("%s not detected, installing it for you...\n", opts.PythonVersion)}
-		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, opts.PythonVersion)
-		if err != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: err.Error() + "\n"}
-			return err
+		// Generate the pip install command and prepend it to the commands list
+		if len(opts.PythonPackages) > 0 {
+			pipInstallCmd := generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
+			setupCommands = append(setupCommands, pipInstallCmd)
 		}
-		setupCommands = append(setupCommands, installCmd)
-	}
-
-	// Generate the pip install command and prepend it to the commands list
-	if len(opts.PythonPackages) > 0 {
-		pipInstallCmd := generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
-		setupCommands = append(setupCommands, pipInstallCmd)
 	}
 
 	opts.Commands = append(setupCommands, opts.Commands...)
