@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"time"
@@ -282,7 +281,6 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 	// Get URL for Serves, Shells, or Pods
 	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell || stub.Type == types.StubType(types.StubTypePodRun) {
 		invokeUrl := common.BuildStubURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub)
-		log.Print("invokeUrl: ", invokeUrl)
 		return &pb.GetURLResponse{
 			Ok:  true,
 			Url: invokeUrl,

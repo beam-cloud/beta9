@@ -15,6 +15,7 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 	state, err := i.State()
 	if err != nil {
 		currentContainers = -1
+		return nil, err
 	}
 
 	currentContainers = state.PendingContainers + state.RunningContainers
