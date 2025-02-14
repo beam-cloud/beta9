@@ -576,28 +576,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		safeMountPrefixes := []string{
-			"/usr/bin/nvidia-cuda-mps-control",
-			"/usr/bin/nvidia-cuda-mps-server",
-			"/usr/bin/nvidia-debugdump",
-			"/usr/bin/nvidia-persistenced",
-			"/usr/bin/nvidia-smi",
-			"/usr/lib/x86_64-linux-gnu/libcuda.so",
-			"/usr/lib/x86_64-linux-gnu/libcudadebugger.so",
-			"/usr/lib/x86_64-linux-gnu/libnvidia-allocator.so",
-			"/usr/lib/x86_64-linux-gnu/libnvidia-cfg.so",
-			"/usr/lib/x86_64-linux-gnu/libnvidia-gpucomp.so",
-			"/usr/lib/x86_64-linux-gnu/libnvidia-ml",
-			"/usr/lib/x86_64-linux-gnu/libnvidia-nvvm",
-			"/usr/lib/x86_64-linux-gnu/libnvidia-opencl",
-			"/usr/lib/x86_64-linux-gnu/libnvidia-pkcs11-openssl3.so",
-			"/usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so",
-			"/lib/firmware/nvidia",
-		}
-		for _, mount := range spec.Mounts {
-			safeMountPrefixes = append(safeMountPrefixes, mount.Source)
-		}
-
 		cdiCache := cdi.GetDefaultCache()
 
 		var devicesToInject []string
@@ -615,22 +593,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
 			return
 		}
-
-		// Remove any mount that does not start with a safe prefix
-		filteredMounts := make([]specs.Mount, 0, len(spec.Mounts))
-		for _, mount := range spec.Mounts {
-			safe := false
-			for _, prefix := range safeMountPrefixes {
-				if strings.HasPrefix(mount.Source, prefix) {
-					safe = true
-					break
-				}
-			}
-			if safe {
-				filteredMounts = append(filteredMounts, mount)
-			}
-		}
-		spec.Mounts = filteredMounts
 	}
 
 	// Write runc config spec to disk
