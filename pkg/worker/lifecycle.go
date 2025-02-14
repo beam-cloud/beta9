@@ -14,7 +14,6 @@ import (
 	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
@@ -316,7 +315,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Process.Cwd = defaultContainerDirectory
-	spec.Process.Args = request.EntryPoint
+	spec.Process.Args = []string{"python3", "-c", "import time; time.sleep(1000)"}
 	spec.Process.Terminal = false
 
 	if s.config.Worker.RunCResourcesEnforced {
@@ -332,106 +331,106 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Env = append(spec.Process.Env, env...)
 
 	// We need to include the checkpoint signal files in the container spec
-	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		err = os.MkdirAll(checkpointSignalDir(request.ContainerId), os.ModePerm) // Add a mount point for the checkpoint signal file
-		if err != nil {
-			return nil, err
-		}
+	// if s.IsCRIUAvailable() && request.CheckpointEnabled {
+	// 	err = os.MkdirAll(checkpointSignalDir(request.ContainerId), os.ModePerm) // Add a mount point for the checkpoint signal file
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
 
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Type:        "bind",
-			Source:      checkpointSignalDir(request.ContainerId),
-			Destination: "/criu",
-			Options: []string{
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev",
-			},
-		})
+	// 	spec.Mounts = append(spec.Mounts, specs.Mount{
+	// 		Type:        "bind",
+	// 		Source:      checkpointSignalDir(request.ContainerId),
+	// 		Destination: "/criu",
+	// 		Options: []string{
+	// 			"rbind",
+	// 			"rprivate",
+	// 			"nosuid",
+	// 			"nodev",
+	// 		},
+	// 	})
 
-		containerIdPath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerIdFileName)
-		err := os.WriteFile(containerIdPath, []byte(request.ContainerId), 0644)
-		if err != nil {
-			return nil, err
-		}
+	// 	containerIdPath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerIdFileName)
+	// 	err := os.WriteFile(containerIdPath, []byte(request.ContainerId), 0644)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
 
-		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)
-		containerHostnamePath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerHostnameFileName)
-		err = os.WriteFile(containerHostnamePath, []byte(containerHostname), 0644)
-		if err != nil {
-			return nil, err
-		}
-	}
+	// 	containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)
+	// 	containerHostnamePath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerHostnameFileName)
+	// 	err = os.WriteFile(containerHostnamePath, []byte(containerHostname), 0644)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
 
-	var volumeCacheMap map[string]string = make(map[string]string)
+	// var volumeCacheMap map[string]string = make(map[string]string)
 
 	// Add bind mounts to runc spec
-	for _, m := range request.Mounts {
-		// Skip mountpoint storage if the local path does not exist (mounting failed)
-		if m.MountType == storage.StorageModeMountPoint {
-			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
-				continue
-			}
-		} else {
-			volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
+	// for _, m := range request.Mounts {
+	// 	// Skip mountpoint storage if the local path does not exist (mounting failed)
+	// 	if m.MountType == storage.StorageModeMountPoint {
+	// 		if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
+	// 			continue
+	// 		}
+	// 	} else {
+	// 		volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
 
-			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
-				err := os.MkdirAll(m.LocalPath, 0755)
-				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
-				}
-			}
-		}
+	// 		if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
+	// 			err := os.MkdirAll(m.LocalPath, 0755)
+	// 			if err != nil {
+	// 				log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
+	// 			}
+	// 		}
+	// 	}
 
-		mode := "rw"
-		if m.ReadOnly {
-			mode = "ro"
-		}
+	// 	mode := "rw"
+	// 	if m.ReadOnly {
+	// 		mode = "ro"
+	// 	}
 
-		if m.LinkPath != "" {
-			err = forceSymlink(m.MountPath, m.LinkPath)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("unable to symlink volume: %v", err)
-			}
-		}
+	// 	if m.LinkPath != "" {
+	// 		err = forceSymlink(m.MountPath, m.LinkPath)
+	// 		if err != nil {
+	// 			log.Error().Str("container_id", request.ContainerId).Msgf("unable to symlink volume: %v", err)
+	// 		}
+	// 	}
 
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Type:        "none",
-			Source:      m.LocalPath,
-			Destination: m.MountPath,
-			Options:     []string{"rbind", mode},
-		})
-	}
+	// 	spec.Mounts = append(spec.Mounts, specs.Mount{
+	// 		Type:        "none",
+	// 		Source:      m.LocalPath,
+	// 		Destination: m.MountPath,
+	// 		Options:     []string{"rbind", mode},
+	// 	})
+	// }
 
 	// If volume caching is enabled, set it up and add proper mounts to spec
-	if !request.CheckpointEnabled && s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled && !request.IsBuildRequest() {
-		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to setup volume caching: %v", err)
-		}
-	}
+	// if !request.CheckpointEnabled && s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled && !request.IsBuildRequest() {
+	// 	err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
+	// 	if err != nil {
+	// 		log.Error().Str("container_id", request.ContainerId).Msgf("failed to setup volume caching: %v", err)
+	// 	}
+	// }
 
 	// Configure resolv.conf
-	resolvMount := specs.Mount{
-		Type:        "none",
-		Source:      "/workspace/resolv.conf",
-		Destination: "/etc/resolv.conf",
-		Options: []string{
-			"ro",
-			"rbind",
-			"rprivate",
-			"nosuid",
-			"noexec",
-			"nodev",
-		},
-	}
+	// resolvMount := specs.Mount{
+	// 	Type:        "none",
+	// 	Source:      "/workspace/resolv.conf",
+	// 	Destination: "/etc/resolv.conf",
+	// 	Options: []string{
+	// 		"ro",
+	// 		"rbind",
+	// 		"rprivate",
+	// 		"nosuid",
+	// 		"noexec",
+	// 		"nodev",
+	// 	},
+	// }
 
-	if s.config.Worker.UseHostResolvConf {
-		resolvMount.Source = "/etc/resolv.conf"
-	}
+	// if s.config.Worker.UseHostResolvConf {
+	// 	resolvMount.Source = "/etc/resolv.conf"
+	// }
 
-	spec.Mounts = append(spec.Mounts, resolvMount)
+	// spec.Mounts = append(spec.Mounts, resolvMount)
 	return spec, nil
 }
 

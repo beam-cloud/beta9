@@ -151,20 +151,21 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 				log.Info().Str("container_id", request.ContainerId).Msg("checkpoint deadline exceeded or container exited")
 				return
 			case <-ticker.C:
-				instance, exists := s.containerInstances.Get(request.ContainerId)
-				if !exists {
-					log.Info().Str("container_id", request.ContainerId).Msg("container instance not found yet")
-					continue
-				}
+				break waitForReady
+				// instance, exists := s.containerInstances.Get(request.ContainerId)
+				// if !exists {
+				// 	log.Info().Str("container_id", request.ContainerId).Msg("container instance not found yet")
+				// 	continue
+				// }
 
-				// Check if the container is ready for checkpoint by verifying the existence of a signal file
-				readyFilePath := filepath.Join(checkpointSignalDir(instance.Id), checkpointSignalFileName)
-				if _, err := os.Stat(readyFilePath); err == nil {
-					log.Info().Str("container_id", instance.Id).Msg("container ready for checkpoint")
-					break waitForReady
-				} else {
-					log.Info().Str("container_id", instance.Id).Msg("container not ready for checkpoint")
-				}
+				// // Check if the container is ready for checkpoint by verifying the existence of a signal file
+				// readyFilePath := filepath.Join(checkpointSignalDir(instance.Id), checkpointSignalFileName)
+				// if _, err := os.Stat(readyFilePath); err == nil {
+				// 	log.Info().Str("container_id", instance.Id).Msg("container ready for checkpoint")
+				// 	break waitForReady
+				// } else {
+				// 	log.Info().Str("container_id", instance.Id).Msg("container not ready for checkpoint")
+				// }
 
 			}
 		}
