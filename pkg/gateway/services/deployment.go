@@ -112,6 +112,38 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 	}, nil
 }
 
+func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDeploymentRequest) (*pb.ScaleDeploymentResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	// Get deployment
+	deploymentWithRelated, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.Id)
+	if err != nil {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get deployment",
+		}, nil
+	}
+
+	if deploymentWithRelated == nil {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Deployment not found",
+		}, nil
+	}
+
+	// Scale deployment
+	if err := gws.scaleDeployment(*deploymentWithRelated, ctx); err != nil {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to scale deployment",
+		}, nil
+	}
+
+	return &pb.ScaleDeploymentResponse{
+		Ok: true,
+	}, nil
+}
+
 func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
@@ -226,6 +258,23 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 			"timestamp": time.Now().Unix(),
 		}})
 	}
+
+	return nil
+}
+
+func (gws *GatewayService) scaleDeployment(deployment types.DeploymentWithRelated, ctx context.Context) error {
+	_, err := gws.backendRepo.UpdateDeployment(ctx, deployment.Deployment)
+	if err != nil {
+		return err
+	}
+
+	// Publish reload instance event
+	eventBus := common.NewEventBus(gws.redisClient)
+	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+		"stub_id":   deployment.Stub.ExternalId,
+		"stub_type": deployment.StubType,
+		"timestamp": time.Now().Unix(),
+	}})
 
 	return nil
 }
