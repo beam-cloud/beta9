@@ -170,21 +170,33 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval)
 
-	// Manually send the request line and headers to the container
-	fmt.Fprintf(containerConn, "%s %s %s\r\n", request.Method, fmt.Sprintf("/%s", conn.ctx.Param("subPath")), request.Proto)
-	headers.Write(containerConn)
-	fmt.Fprint(containerConn, "\r\n")
-
-	// Start proxying data
-	go abstractions.ProxyConn(containerConn, clientConn, conn.done, connectionBufferSize)
-	go abstractions.ProxyConn(clientConn, containerConn, conn.done, connectionBufferSize)
-
 	err = pb.incrementConnections(container.id)
 	if err != nil {
 		pb.buffer.Push(conn, true)
 		return
 	}
 	defer pb.decrementConnections(container.id)
+
+	// Manually send the request line and headers to the container
+	fmt.Fprintf(containerConn, "%s %s %s\r\n", request.Method, fmt.Sprintf("/%s", conn.ctx.Param("subPath")), request.Proto)
+	headers.Write(containerConn)
+	fmt.Fprint(containerConn, "\r\n")
+
+	// Start proxying data
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		abstractions.ProxyConn(containerConn, clientConn, conn.done, connectionBufferSize)
+	}()
+
+	go func() {
+		defer wg.Done()
+		abstractions.ProxyConn(clientConn, containerConn, conn.done, connectionBufferSize)
+	}()
+
+	wg.Wait()
 
 	select {
 	case <-conn.done:
