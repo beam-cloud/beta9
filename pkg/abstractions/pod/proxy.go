@@ -171,7 +171,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval)
 
 	// Manually send the request line and headers to the container
-	fmt.Fprintf(containerConn, "%s %s %s\r\n", request.Method, request.URL.RequestURI(), request.Proto)
+	fmt.Fprintf(containerConn, "%s %s %s\r\n", request.Method, fmt.Sprintf("/%s", conn.ctx.Param("subPath")), request.Proto)
 	headers.Write(containerConn)
 	fmt.Fprint(containerConn, "\r\n")
 
