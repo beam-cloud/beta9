@@ -97,8 +97,6 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	}
 	pb.buffer.Push(req, false)
 
-	log.Info().Msg("Forwarded request")
-
 	for {
 		select {
 		case <-pb.ctx.Done():
