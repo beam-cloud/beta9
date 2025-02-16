@@ -531,8 +531,8 @@ func (r *PostgresBackendRepository) GetTaskByWorkspace(ctx context.Context, exte
 	var taskWithRelated types.TaskWithRelated
 	query := `
 	SELECT
-		w.external_id AS "workspace.external_id", w.name AS "workspace.name",
-		s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", t.*
+		w.external_id AS "workspace.external_id", w.name AS "workspace.name", t.*,
+		s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", s.type AS "stub.type", s.created_at AS "stub.created_at", s.updated_at AS "stub.updated_at"
 	FROM task t
 	JOIN workspace w ON t.workspace_id = w.id
 	JOIN stub s ON t.stub_id = s.id

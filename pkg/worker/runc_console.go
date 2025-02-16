@@ -51,7 +51,7 @@ func NewConsoleWriter(writer io.Writer) (*ConsoleWriter, error) {
 		defer socket.Close()
 
 		// Get the master file descriptor from runC.
-		master, err := utils.RecvFd(socket)
+		master, err := utils.RecvFile(socket)
 		if err != nil {
 			return
 		}

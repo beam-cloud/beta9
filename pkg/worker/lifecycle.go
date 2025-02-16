@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"tags.cncf.io/container-device-interface/pkg/cdi"
 
 	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -27,6 +29,7 @@ const (
 	defaultContainerDirectory string        = "/mnt/code"
 	specBaseName              string        = "config.json"
 	initialSpecBaseName       string        = "initial_config.json"
+	nvidiaDeviceKindPrefix    string        = "nvidia.com/gpu"
 	runcEventsInterval        time.Duration = 5 * time.Second
 	containerInnerPort        int           = 8001 // Use a fixed port inside the container
 )
@@ -146,16 +149,16 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 			}
 		}
 
-		s.deleteContainer(containerId, err)
+		s.deleteContainer(containerId)
 
 		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 	}()
 }
 
-func (s *Worker) deleteContainer(containerId string, err error) {
+func (s *Worker) deleteContainer(containerId string) {
 	s.containerInstances.Delete(containerId)
 
-	_, err = handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
+	_, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
 	}
@@ -224,7 +227,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	err = s.containerMountManager.SetupContainerMounts(request)
 	if err != nil {
-		s.containerLogger.Log(request.ContainerId, request.StubId, fmt.Sprintf("failed to setup container mounts: %v", err))
+		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
 	}
 
 	// Generate dynamic runc spec for this container
@@ -306,7 +309,6 @@ func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.S
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
 	os.MkdirAll(filepath.Join(baseConfigPath, request.ContainerId), os.ModePerm)
-	configPath := filepath.Join(baseConfigPath, request.ContainerId, specBaseName)
 
 	spec, err := s.newSpecTemplate()
 	if err != nil {
@@ -315,7 +317,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Process.Cwd = defaultContainerDirectory
 	spec.Process.Args = request.EntryPoint
-	spec.Process.Terminal = true // NOTE: This is since we are using a console writer for logging
+	spec.Process.Terminal = false
 
 	if s.config.Worker.RunCResourcesEnforced {
 		spec.Linux.Resources.CPU = getLinuxCPU(request)
@@ -325,36 +327,42 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	env := s.getContainerEnvironment(request, options)
 	if request.Gpu != "" {
-		spec.Hooks.Prestart[0].Args = append(spec.Hooks.Prestart[0].Args, configPath, "prestart")
+		env = s.containerCudaManager.InjectEnvVars(env)
+	}
+	spec.Process.Env = append(spec.Process.Env, env...)
 
-		existingCudaFound := false
-		env, existingCudaFound = s.containerCudaManager.InjectEnvVars(env)
-		if !existingCudaFound {
-			// If the container image does not have cuda libraries installed, mount cuda libs from the host
-			spec.Mounts = s.containerCudaManager.InjectMounts(spec.Mounts)
-		}
-
-		// Assign n-number of GPUs to a container
-		assignedGpus, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
+	// We need to include the checkpoint signal files in the container spec
+	if s.IsCRIUAvailable() && request.CheckpointEnabled {
+		err = os.MkdirAll(checkpointSignalDir(request.ContainerId), os.ModePerm) // Add a mount point for the checkpoint signal file
 		if err != nil {
 			return nil, err
 		}
-		env = append(env, fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", assignedGpus.String()))
 
-		spec.Linux.Resources.Devices = append(spec.Linux.Resources.Devices, assignedGpus.devices...)
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Type:        "bind",
+			Source:      checkpointSignalDir(request.ContainerId),
+			Destination: "/criu",
+			Options: []string{
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev",
+			},
+		})
 
-	} else {
-		spec.Hooks.Prestart = nil
-	}
+		containerIdPath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerIdFileName)
+		err := os.WriteFile(containerIdPath, []byte(request.ContainerId), 0644)
+		if err != nil {
+			return nil, err
+		}
 
-	// We need to modify the spec to support Cedana C/R if enabled
-	if s.IsCRIUAvailable() && request.CheckpointEnabled {
 		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)
-		s.cedanaClient.PrepareContainerSpec(spec, request.ContainerId, containerHostname, request.RequiresGPU())
+		containerHostnamePath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerHostnameFileName)
+		err = os.WriteFile(containerHostnamePath, []byte(containerHostname), 0644)
+		if err != nil {
+			return nil, err
+		}
 	}
-
-	spec.Process.Env = append(spec.Process.Env, env...)
-	spec.Root.Readonly = false
 
 	var volumeCacheMap map[string]string = make(map[string]string)
 
@@ -397,7 +405,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	// If volume caching is enabled, set it up and add proper mounts to spec
-	if s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled && !request.IsBuildRequest() {
+	if !request.CheckpointEnabled && s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled && !request.IsBuildRequest() {
 		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to setup volume caching: %v", err)
@@ -472,6 +480,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		WorkerId:    s.workerId,
 		ContainerId: request.ContainerId,
 	})
+
 	defer cancel()
 
 	exitCode := -1
@@ -542,6 +551,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 	defer containerInstance.Overlay.Cleanup()
 
+	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
@@ -562,23 +572,48 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 		return
 	}
+
+	if request.RequiresGPU() {
+		// Assign n-number of GPUs to a container
+		assignedDevices, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to assign GPUs: %v", err)
+			return
+		}
+
+		cdiCache := cdi.GetDefaultCache()
+
+		var devicesToInject []string
+		for _, device := range assignedDevices {
+			devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
+			devicesToInject = append(devicesToInject, devicePath)
+		}
+
+		unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
+			return
+		}
+		if len(unresolvable) > 0 {
+			log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
+			return
+		}
+	}
+
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
 	if err != nil {
 		return
 	}
 
-	configPath := filepath.Join(baseConfigPath, containerId, specBaseName)
+	configPath := filepath.Join(spec.Root.Path, specBaseName)
 	err = os.WriteFile(configPath, configContents, 0644)
 	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to write runc config: %v", err)
 		return
 	}
 
-	consoleWriter, err := NewConsoleWriter(containerInstance.OutputWriter)
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to create console writer: %v", err)
-		return
-	}
+	outputWriter := containerInstance.OutputWriter
 
 	// Log metrics
 	go s.workerMetrics.EmitContainerUsage(ctx, request)
@@ -586,91 +621,54 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
 	startedChan := make(chan int, 1)
+	checkpointPIDChan := make(chan int, 1)
+	monitorPIDChan := make(chan int, 1)
+
+	go func() {
+		// When the process starts monitor it and potentially checkpoint it
+		pid := <-startedChan
+		monitorPIDChan <- pid
+		checkpointPIDChan <- pid
+	}()
+
+	isOOMKilled := atomic.Bool{}
+	go func() {
+		pid := <-monitorPIDChan
+		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
+		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
+	}()
 
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		restored, restoredContainerId, err := s.attemptCheckpointOrRestore(ctx, request, consoleWriter, startedChan, configPath)
+		exitCode, containerId, err = s.attemptCheckpointOrRestore(ctx, request, outputWriter, checkpointPIDChan, configPath)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("C/R failed: %v", err)
 		}
+	} else {
+		// Invoke runc process (launch the container)
+		bundlePath := filepath.Dir(configPath)
 
-		if restored {
-			// HOTFIX: If we restored from a checkpoint, we need to use the container ID of the restored container
-			// instead of the original container ID
-			containerInstance, exists := s.containerInstances.Get(request.ContainerId)
-			if exists {
-				containerInstance.Id = restoredContainerId
-				s.containerInstances.Set(containerId, containerInstance)
-				containerId = restoredContainerId
-			}
-
-			exitCode = s.waitForRestoredContainer(ctx, containerId, startedChan, outputLogger, request, spec)
+		exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
+			OutputWriter: outputWriter,
+			Started:      startedChan,
+		})
+		if err != nil {
+			log.Error().Str("container_id", containerId).Msgf("failed to run container: %v", err)
 			return
 		}
 	}
 
-	// Invoke runc process (launch the container)
-	_, err = s.runcHandle.Run(s.ctx, containerId, opts.BundlePath, &runc.CreateOpts{
-		Detach:        true,
-		ConsoleSocket: consoleWriter,
-		ConfigPath:    configPath,
-		Started:       startedChan,
-	})
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to run container: %v", err)
-		return
-	}
-
-	exitCode = s.wait(ctx, containerId, startedChan, outputLogger, request, spec)
-}
-
-// Wait for a container to exit and return the exit code
-func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan int, outputLogger *slog.Logger, request *types.ContainerRequest, spec *specs.Spec) int {
-	<-startedChan
-
-	// Clean up runc container state and send final output message
-	cleanup := func(exitCode int, err error) int {
-		log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
-
-		outputLogger.Info("", "done", true, "success", exitCode == 0)
-
-		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
-		}
-
-		return exitCode
-	}
-
-	// Look up the PID of the container
-	state, err := s.runcHandle.State(ctx, containerId)
-	if err != nil {
-		return cleanup(-1, err)
-	}
-	pid := state.Pid
-	isOOMKilled := false
-
-	// Start monitoring the container
-	go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
-	go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
-
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return cleanup(-1, err)
-	}
-
-	// Wait for the container to exit
-	processState, err := process.Wait()
-	if err != nil {
-		return cleanup(-1, err)
-	}
-
-	exitCode := processState.ExitCode()
-	if isOOMKilled {
+	if isOOMKilled.Load() {
 		exitCode = types.WorkerContainerExitCodeOomKill
 	}
 
-	return cleanup(exitCode, nil)
+	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
+	outputLogger.Info("", "done", true, "success", exitCode == 0)
+	// FIXME: is this needed?
+	err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
+	}
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
@@ -689,7 +687,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
 }
 
-func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *bool) {
+func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *atomic.Bool) {
 	var (
 		seenEvents  = make(map[string]struct{})
 		ch          <-chan *runc.Event
@@ -745,7 +743,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 			seenEvents[event.Type] = struct{}{}
 
 			if event.Type == "oom" {
-				*isOOMKilled = true
+				isOOMKilled.Store(true)
 				outputLogger.Error("Container was killed due to out-of-memory conditions.")
 				s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			}

@@ -449,7 +449,9 @@ class Image(BaseAbstraction):
                     ignore_python=self.ignore_python,
                 )
             ):
-                if r.msg != "" and not r.done:
+                if r.warning:
+                    terminal.warn("WARNING: " + r.msg)
+                elif r.msg != "" and not r.done:
                     terminal.detail(r.msg, end="")
 
                 if r.done:
@@ -489,6 +491,9 @@ class Image(BaseAbstraction):
         """
         Use micromamba to manage python packages.
         """
+        if self.python_version == PythonVersion.Python3:
+            self.python_version = PythonVersion.Python311
+
         self.python_version = self.python_version.replace("python", "micromamba")
         return self
 
