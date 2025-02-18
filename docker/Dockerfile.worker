@@ -95,7 +95,7 @@ RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
 # final image
 # ========================
-FROM nvidia/cuda:12.4.1-base-ubuntu22.04 AS release
+FROM nvidia/cuda:12.8.0-base-ubuntu22.04 AS release
 FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
