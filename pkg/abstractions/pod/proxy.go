@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -27,7 +28,7 @@ const (
 
 type container struct {
 	id          string
-	address     string
+	addressMap  map[int32]string
 	connections int
 }
 
@@ -172,9 +173,16 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	}
 	defer clientConn.Close()
 
-	containerConn, err := network.ConnectToHost(request.Context(), container.address, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	portStr := conn.ctx.Param("port")
+	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		log.Error().Msgf("Error dialing pod container %s: %s", container.address, err.Error())
+		conn.ctx.String(http.StatusBadRequest, "Invalid port")
+		return
+	}
+
+	containerConn, err := network.ConnectToHost(request.Context(), container.addressMap[int32(port)], containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	if err != nil {
+		log.Error().Msgf("Error dialing pod container %s: %s", container.addressMap[int32(port)], err.Error())
 		return
 	}
 	defer containerConn.Close()
@@ -193,7 +201,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	// Ensure the request URL is correctly formatted for the proxy.
 	// We'll set container.address to the Host and put subPath into the Path field.
 	request.URL.Scheme = "http"
-	request.URL.Host = container.address
+	request.URL.Host = container.addressMap[int32(port)]
 
 	// Get subPath, ensure it starts with a slash, and assign it to the path portion.
 	subPath := conn.ctx.Param("subPath")
@@ -256,7 +264,7 @@ func (pb *PodProxyBuffer) discoverContainers() {
 						return
 					}
 
-					containerAddress, err := pb.containerRepo.GetContainerAddress(cs.ContainerId)
+					addressMap, err := pb.containerRepo.GetContainerAddressMap(cs.ContainerId)
 					if err != nil {
 						return
 					}
@@ -268,14 +276,16 @@ func (pb *PodProxyBuffer) discoverContainers() {
 
 					connections := currentConnections
 
-					if pb.checkContainerAvailable(containerAddress) {
-						availableContainersChan <- container{
-							id:          cs.ContainerId,
-							address:     containerAddress,
-							connections: connections,
-						}
+					for _, port := range pb.stubConfig.Ports {
+						if pb.checkContainerAvailable(addressMap[int32(port)]) {
+							availableContainersChan <- container{
+								id:          cs.ContainerId,
+								addressMap:  addressMap,
+								connections: connections,
+							}
 
-						return
+							return
+						}
 					}
 				}(containerState)
 			}

@@ -50,6 +50,8 @@ type ContainerRepository interface {
 	DeleteContainerState(containerId string) error
 	SetWorkerAddress(containerId string, addr string) error
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
+	SetContainerAddressMap(containerId string, addressMap map[int32]string) error
+	GetContainerAddressMap(containerId string) (map[int32]string, error)
 	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
