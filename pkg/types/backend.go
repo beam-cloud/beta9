@@ -257,7 +257,7 @@ type StubConfigV1 struct {
 	// TODO: added these for pod
 	WorkDir    string   `json:"work_dir"`
 	EntryPoint []string `json:"entry_point"`
-	Port       uint32   `json:"port"`
+	Ports      []uint32 `json:"ports"`
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {

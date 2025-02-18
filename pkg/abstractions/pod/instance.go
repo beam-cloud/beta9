@@ -59,8 +59,8 @@ func (i *podInstance) startContainers(containersToRun int) error {
 	}
 
 	ports := []uint32{}
-	if i.StubConfig.Port > 0 {
-		ports = append(ports, i.StubConfig.Port)
+	if len(i.StubConfig.Ports) > 0 {
+		ports = i.StubConfig.Ports
 	}
 
 	for c := 0; c < containersToRun; c++ {
