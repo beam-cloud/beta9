@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -235,6 +236,38 @@ func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr
 
 func (cr *ContainerRedisRepository) GetContainerAddress(containerId string) (string, error) {
 	return cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerAddress(containerId)).Result()
+}
+
+func (cr *ContainerRedisRepository) SetContainerAddressMap(containerId string, addressMap map[int32]string) error {
+	data, err := json.Marshal(addressMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal addressMap for container %s: %w", containerId, err)
+	}
+
+	err = cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerAddressMap(containerId), data, 0).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set container addressMap for container %s: %w", containerId, err)
+	}
+
+	return nil
+}
+
+func (cr *ContainerRedisRepository) GetContainerAddressMap(containerId string) (map[int32]string, error) {
+	data, err := cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerAddressMap(containerId)).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("failed to get container addressMap for container %s: %w", containerId, err)
+	}
+
+	addressMap := make(map[int32]string)
+	if err := json.Unmarshal(data, &addressMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal addressMap for container %s: %w", containerId, err)
+	}
+
+	return addressMap, nil
 }
 
 func (cr *ContainerRedisRepository) SetWorkerAddress(containerId string, addr string) error {

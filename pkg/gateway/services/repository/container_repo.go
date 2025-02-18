@@ -77,6 +77,34 @@ func (s *ContainerRepositoryService) SetContainerAddress(ctx context.Context, re
 	return &pb.SetContainerAddressResponse{Ok: true}, nil
 }
 
+func (s *ContainerRepositoryService) SetContainerAddressMap(ctx context.Context, req *pb.SetContainerAddressMapRequest) (*pb.SetContainerAddressMapResponse, error) {
+	addressMap := make(map[int32]string)
+	for k, v := range req.AddressMap {
+		addressMap[int32(k)] = v
+	}
+
+	err := s.containerRepo.SetContainerAddressMap(req.ContainerId, addressMap)
+	if err != nil {
+		return &pb.SetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.SetContainerAddressMapResponse{Ok: true}, nil
+}
+
+func (s *ContainerRepositoryService) GetContainerAddressMap(ctx context.Context, req *pb.GetContainerAddressMapRequest) (*pb.GetContainerAddressMapResponse, error) {
+	addressMap, err := s.containerRepo.GetContainerAddressMap(req.ContainerId)
+	if err != nil {
+		return &pb.GetContainerAddressMapResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	protoMap := make(map[int32]string)
+	for k, v := range addressMap {
+		protoMap[int32(k)] = v
+	}
+
+	return &pb.GetContainerAddressMapResponse{Ok: true, AddressMap: protoMap}, nil
+}
+
 func (s *ContainerRepositoryService) SetWorkerAddress(ctx context.Context, req *pb.SetWorkerAddressRequest) (*pb.SetWorkerAddressResponse, error) {
 	err := s.containerRepo.SetWorkerAddress(req.ContainerId, req.Address)
 	if err != nil {

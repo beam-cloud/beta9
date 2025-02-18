@@ -85,7 +85,7 @@ type ContainerInstance struct {
 
 type ContainerOptions struct {
 	BundlePath  string
-	BindPort    int
+	BindPorts   []int
 	InitialSpec *specs.Spec
 }
 
