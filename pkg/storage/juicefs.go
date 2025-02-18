@@ -44,6 +44,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"mount",
 		s.config.RedisURI,
 		localPath,
+		"-d",
 		"--bucket", s.config.AWSS3Bucket,
 		"--cache-size", cacheSize,
 		"--prefetch", prefetch,
@@ -51,7 +52,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"--no-usage-report",
 	)
 
-	// Start and run the mount command in the background
+	// Start the mount command in the background
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
 		if err != nil {
@@ -82,11 +83,6 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 	if !<-done {
 		return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s'", localPath)
 	}
-
-	// // Set the OOM score adjustment to the same as the parent process
-	// if err := common.MatchParentOOMScoreAdj(s.mountCmd.Process.Pid); err != nil {
-	// 	log.Error().Err(err).Int("pid", s.mountCmd.Process.Pid).Msg("failed to match parent oom_score_adj")
-	// }
 
 	log.Info().Str("local_path", localPath).Msg("juicefs filesystem mounted")
 	return nil
