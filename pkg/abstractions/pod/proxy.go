@@ -176,9 +176,17 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	}
 	defer pb.decrementConnections(container.id)
 
-	// Ensure the request URL is correctly formatted for the proxy
+	// Ensure the request URL is correctly formatted for the proxy.
+	// We'll set container.address to the Host and put subPath into the Path field.
 	request.URL.Scheme = "http"
-	request.URL.Host = conn.ctx.Param("subPath")
+	request.URL.Host = container.address
+
+	// Get subPath, ensure it starts with a slash, and assign it to the path portion.
+	subPath := conn.ctx.Param("subPath")
+	if subPath != "" && subPath[0] != '/' {
+		subPath = "/" + subPath
+	}
+	request.URL.Path = subPath
 
 	// Use the http.Request's Write method to send the request
 	if err := request.Write(containerConn); err != nil {
