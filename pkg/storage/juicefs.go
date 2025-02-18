@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/cenkalti/backoff"
 	"github.com/rs/zerolog/log"
@@ -84,10 +83,10 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s'", localPath)
 	}
 
-	// Set the OOM score adjustment to the same as the parent process
-	if err := common.MatchParentOOMScoreAdj(s.mountCmd.Process.Pid); err != nil {
-		log.Error().Err(err).Int("pid", s.mountCmd.Process.Pid).Msg("failed to match parent oom_score_adj")
-	}
+	// // Set the OOM score adjustment to the same as the parent process
+	// if err := common.MatchParentOOMScoreAdj(s.mountCmd.Process.Pid); err != nil {
+	// 	log.Error().Err(err).Int("pid", s.mountCmd.Process.Pid).Msg("failed to match parent oom_score_adj")
+	// }
 
 	log.Info().Str("local_path", localPath).Msg("juicefs filesystem mounted")
 	return nil
