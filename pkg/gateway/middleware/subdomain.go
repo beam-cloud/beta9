@@ -66,8 +66,6 @@ func Subdomain(externalURL string, backendRepo SubdomainBackendRepo, redisClient
 				return next(ctx)
 			}
 
-			log.Printf("subdomain: %s", subdomain)
-
 			handlerKey := fmt.Sprintf("middleware:subdomain:%s:handler", subdomain)
 			handlerPath := redisClient.Get(ctx.Request().Context(), handlerKey).Val()
 
