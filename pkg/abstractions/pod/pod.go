@@ -255,9 +255,10 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	}
 
 	ports := []uint32{}
-	if stubConfig.Port > 0 {
-		ports = append(ports, stubConfig.Port)
+	if len(stubConfig.Ports) > 0 {
+		ports = stubConfig.Ports
 	}
+
 	containerId := s.generateContainerId(stub.ExternalId)
 	containerRequest := &types.ContainerRequest{
 		StubId:            stub.ExternalId,

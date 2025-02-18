@@ -105,7 +105,7 @@ class RunnerAbstraction(BaseAbstraction):
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
         entrypoint: Optional[List[str]] = None,
-        port: Optional[int] = None,
+        ports: Optional[List[int]] = [],
     ) -> None:
         super().__init__()
 
@@ -159,7 +159,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.config_context: ConfigContext = get_config_context()
         self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
-        self.port: Optional[int] = port
+        self.ports: List[int] = ports or []
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
@@ -484,7 +484,7 @@ class RunnerAbstraction(BaseAbstraction):
                 checkpoint_enabled=self.checkpoint_enabled,
                 extra=json.dumps(self.extra),
                 entrypoint=self.entrypoint,
-                port=self.port,
+                ports=self.ports,
             )
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(

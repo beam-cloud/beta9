@@ -94,7 +94,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Extra:              json.RawMessage(in.Extra),
 		CheckpointEnabled:  in.CheckpointEnabled,
 		EntryPoint:         in.Entrypoint,
-		Port:               in.Port,
+		Ports:              in.Ports,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required
@@ -279,11 +279,25 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 	}
 
 	// Get URL for Serves, Shells, or Pods
-	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell || stub.Type == types.StubType(types.StubTypePodRun) {
+	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell {
 		invokeUrl := common.BuildStubURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub)
 		return &pb.GetURLResponse{
 			Ok:  true,
 			Url: invokeUrl,
+		}, nil
+	} else if stub.Type.Kind() == types.StubTypePod {
+		stubConfig := &types.StubConfigV1{}
+		if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+			return &pb.GetURLResponse{
+				Ok:     false,
+				ErrMsg: "Unable to get config",
+			}, nil
+		}
+
+		invokeUrls := common.BuildPodURLS(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub, stubConfig)
+		return &pb.GetURLResponse{
+			Ok:  true,
+			Url: invokeUrls[0],
 		}, nil
 	}
 

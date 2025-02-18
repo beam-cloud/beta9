@@ -29,8 +29,8 @@ class Pod(RunnerAbstraction):
     Parameters:
         entrypoint (List[str]): Required
             The command to run in the container.
-        port (Optional[int]):
-            The port to expose the container to. Default is None.
+        ports (Optional[List[int]]):
+            The ports to expose the container to. Default is [].
         name (Optional[str]):
             A name for the pod. Default is None.
         cpu (Union[int, float, str]):
@@ -67,7 +67,7 @@ class Pod(RunnerAbstraction):
     def __init__(
         self,
         entrypoint: List[str],
-        port: Optional[int] = None,
+        ports: Optional[List[int]] = [],
         name: Optional[str] = None,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
@@ -86,7 +86,7 @@ class Pod(RunnerAbstraction):
             volumes=volumes,
             secrets=secrets,
             entrypoint=entrypoint,
-            port=port,
+            ports=ports,
             name=name,
         )
 
@@ -118,7 +118,7 @@ class Pod(RunnerAbstraction):
 
         if create_response.ok:
             terminal.header(f"Container created successfully ===> {create_response.container_id}")
-            self.print_invocation_snippet(url_type="path")
+            self.print_invocation_snippet()
 
         return create_response.container_id
 
