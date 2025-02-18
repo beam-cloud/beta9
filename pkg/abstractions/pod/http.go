@@ -15,14 +15,14 @@ type podGroup struct {
 func registerPodGroup(g *echo.Group, ps *GenericPodService) *podGroup {
 	group := &podGroup{routeGroup: g, ps: ps}
 
-	g.Any("/id/:stubId", auth.WithAuth(group.PodRequest))
-	g.Any("/id/:stubId/:subPath", auth.WithAuth(group.PodRequest))
-	g.Any("/:deploymentName", auth.WithAuth(group.PodRequest))
-	g.Any("/:deploymentName/:subPath", auth.WithAuth(group.PodRequest))
-	g.Any("/:deploymentName/latest", auth.WithAuth(group.PodRequest))
-	g.Any("/:deploymentName/latest/:subPath", auth.WithAuth(group.PodRequest))
-	g.Any("/:deploymentName/v:version", auth.WithAuth(group.PodRequest))
-	g.Any("/:deploymentName/v:version/:subPath", auth.WithAuth(group.PodRequest))
+	g.Any("/id/:stubId/:port", auth.WithAuth(group.PodRequest))
+	g.Any("/id/:stubId/:port/:subPath", auth.WithAuth(group.PodRequest))
+	g.Any("/:deploymentName/:port", auth.WithAuth(group.PodRequest))
+	g.Any("/:deploymentName/:port/:subPath", auth.WithAuth(group.PodRequest))
+	g.Any("/:deploymentName/latest/:port", auth.WithAuth(group.PodRequest))
+	g.Any("/:deploymentName/latest/:port/:subPath", auth.WithAuth(group.PodRequest))
+	g.Any("/:deploymentName/v:version/:port", auth.WithAuth(group.PodRequest))
+	g.Any("/:deploymentName/v:version/:port/:subPath", auth.WithAuth(group.PodRequest))
 	// g.Any("/public/:stubId", auth.WithAssumedStubAuth(group.PodRequest, group.ps.IsPublic))
 	// g.Any("/public/:stubId/:subPath", auth.WithAssumedStubAuth(group.PodRequest, group.ps.IsPublic))
 
