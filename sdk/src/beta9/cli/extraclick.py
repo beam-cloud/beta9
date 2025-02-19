@@ -9,11 +9,13 @@ import click
 
 from .. import terminal
 from ..abstractions import base as base_abstraction
+from ..abstractions.image import Image
 from ..channel import ServiceClient, with_grpc_error_handling
 from ..clients.gateway import (
     StringList,
 )
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
+from ..utils import get_init_args_kwargs
 
 CLICK_CONTEXT_SETTINGS = dict(
     help_option_names=["-h", "--help"],
@@ -237,16 +239,13 @@ def filter_values_callback(
     return filters
 
 
-# Get all kwargs from __init__
-def get_init_kwargs(cls):
-    sig = inspect.signature(cls.__init__)
-    kwargs = {
-        k: v.default
-        for k, v in sig.parameters.items()
-        if v.default is not inspect.Parameter.empty
-        and v.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
-    }
-    return kwargs
+class ImageParser(click.ParamType):
+    name = "base_image"
+
+    def convert(self, value, param, ctx):
+        return Image(
+            base_image=value,
+        )
 
 
 def override_config_options(func: click.Command):
@@ -266,7 +265,7 @@ def override_config_options(func: click.Command):
         "--gpu-count", type=click.INT, help="The number of GPUs to allocate.", required=False
     )(f)
     f = click.option(
-        "--image", type=click.STRING, help="The image to use for the deployment.", required=False
+        "--image", type=ImageParser(), help="The image to use for the deployment.", required=False
     )(f)
     f = click.option(
         "--secrets",
@@ -293,7 +292,7 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
 
         # We only want to override the config if the config class has an __init__ method
         # For example, ports is only available on a Pod
-        init_kwargs = get_init_kwargs(config_class_instance)
+        init_kwargs = get_init_args_kwargs(config_class_instance)
 
         for key, value in kwargs.items():
             if value is not None and key in init_kwargs:
