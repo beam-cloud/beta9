@@ -75,7 +75,6 @@ type Gateway struct {
 	cancelFunc     context.CancelFunc
 	baseRouteGroup *echo.Group
 	rootRouteGroup *echo.Group
-	healthServer   *health.Server
 }
 
 func NewGateway() (*Gateway, error) {
@@ -446,9 +445,13 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
 
 	// Register health service
-	g.healthServer = health.NewServer()
-	healthpb.RegisterHealthServer(g.grpcServer, g.healthServer)
-	g.healthServer.Resume()
+	hs := health.NewServer()
+	hs.Resume()
+	go func() {
+		<-g.ctx.Done()
+		hs.Shutdown()
+	}()
+	healthpb.RegisterHealthServer(g.grpcServer, hs)
 
 	return nil
 }
@@ -520,8 +523,6 @@ func (g *Gateway) Start() error {
 // Shutdown gracefully shuts down the gateway.
 // This function is blocking and will only return when the gateway has been shut down.
 func (g *Gateway) shutdown() {
-	g.healthServer.Shutdown()
-
 	ctx, cancel := context.WithTimeout(context.Background(), g.Config.GatewayService.ShutdownTimeout)
 	defer cancel()
 
