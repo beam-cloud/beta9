@@ -1,5 +1,10 @@
+import importlib
 import inspect
 import os
+import sys
+from pathlib import Path
+
+from . import terminal
 
 
 class TempFile:
@@ -56,3 +61,37 @@ def get_init_args_kwargs(cls):
 
     all_args_set = args + list(kwargs.keys())
     return set(all_args_set)
+
+
+def get_class_name(cls):
+    if not inspect.isclass(type(cls)):
+        return None
+
+    return cls.__class__.__name__
+
+
+def load_module_spec(specfile: str):
+    current_dir = os.getcwd()
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+
+    module_path, obj_name, *_ = specfile.split(":") if ":" in specfile else (specfile, "")
+    module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
+
+    if not Path(module_path).exists():
+        terminal.error(f"Unable to find file: '{module_path}'")
+
+    if not obj_name:
+        terminal.error(
+            "Invalid handler function specified. Expected format: beam serve [file.py]:[function]"
+        )
+
+    module = importlib.import_module(module_name)
+
+    module_spec = getattr(module, obj_name, None)
+    if module_spec is None:
+        terminal.error(
+            f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{obj_name}'"
+        )
+
+    return module_spec, module_name, obj_name
