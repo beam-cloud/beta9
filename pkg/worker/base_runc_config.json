@@ -62,20 +62,7 @@
 				"CAP_SYS_CHROOT",
 				"CAP_MKNOD"
 			],
-			"ambient": [
-				"CAP_AUDIT_WRITE",
-				"CAP_KILL",
-				"CAP_NET_RAW",
-				"CAP_CHOWN",
-				"CAP_DAC_OVERRIDE",
-				"CAP_FSETID",
-				"CAP_FOWNER",
-				"CAP_SETGID",
-				"CAP_SETUID",
-				"CAP_SETFCAP",
-				"CAP_SYS_CHROOT",
-				"CAP_MKNOD"
-			]
+			"ambient": []
 		},
 		"rlimits": [],
 		"noNewPrivileges": true
