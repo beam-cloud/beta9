@@ -37,7 +37,7 @@ RUN apt-get install -y libseccomp-dev
 RUN <<EOT
 set -eux
 echo hi
-git clone https://github.com/beam-cloud/runc.git .
+git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git .
 make
 make install
 /usr/local/sbin/runc --version
@@ -135,6 +135,8 @@ RUN <<EOT
 set -eux
 if [ "$(uname -m)" = "x86_64" ]; then
     apt-get update && apt-get install -y \
+        gcc \
+        make \
         python3-protobuf \
         libbsd-dev \
         libdrm-dev \
@@ -198,9 +200,11 @@ COPY --from=buildah /usr/local/bin/buildah /usr/local/bin/buildah
 VOLUME "/usr/lib/x86_64-linux-gnu"
 VOLUME "/usr/lib/aarch64-linux-gnu"
 
+RUN mkdir -p /etc/criu
 RUN touch /etc/criu/default.conf
 # add the following options to the default.conf file on new lines
-RUN echo -e "mntns-compat-mode\nv4\ndisplay-stats" >> /etc/criu/default.conf
+RUN echo "verbosity=4" >> /etc/criu/default.conf
+RUN echo "display-stats" >> /etc/criu/default.conf
 
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,ngx,video
 ENV _BUILDAH_STARTED_IN_USERNS="" \
