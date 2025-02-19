@@ -1,15 +1,11 @@
-import importlib
-import os
-import sys
-from pathlib import Path
-from typing import Dict, List, Optional
+import shlex
+from typing import Dict, List
 
 import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import terminal
-from ..abstractions.mixins import DeployableMixin
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
@@ -25,6 +21,7 @@ from ..clients.gateway import (
     StopDeploymentResponse,
     StringList,
 )
+from ..utils import load_module_spec
 from .extraclick import (
     ClickCommonGroup,
     ClickManagementGroup,
@@ -145,43 +142,29 @@ def create_deployment(
     url_type: str,
     **kwargs,
 ):
+    module = None
     try:
-        current_dir = os.getcwd()
-        if current_dir not in sys.path:
-            sys.path.insert(0, current_dir)
-
-        module_path, obj_name, *_ = entrypoint.split(":") if ":" in entrypoint else (entrypoint, "")
-        module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
-
-        if not Path(module_path).exists():
-            terminal.error(f"Unable to find file: '{module_path}'")
-
-        if not obj_name:
-            terminal.error(
-                "Invalid handler function specified. Expected format: beam deploy [file.py]:[function]"
-            )
-
-        module = importlib.import_module(module_name)
-
-        user_obj: Optional[DeployableMixin] = getattr(module, obj_name, None)
-        if user_obj is None:
-            terminal.error(
-                f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{obj_name}'"
-            )
+        user_obj, module_name, obj_name = load_module_spec(entrypoint)
 
         if hasattr(user_obj, "set_handler"):
             user_obj.set_handler(f"{module_name}:{obj_name}")
     except BaseException as e:
         terminal.error(f"Error importing module with entrypoint: {e}", exit=False)
-        # There is no entrypoint, so we generate a pod appfile
-        user_obj = generate_pod_module(name, entrypoint)
+        user_obj = generate_pod_module(name, shlex.split(entrypoint))
+        kwargs["entrypoint"] = entrypoint
 
     if not handle_config_override(user_obj, kwargs):
         terminal.error("Failed to override config")
         return
 
+    if not module and hasattr(user_obj, "generate_deployment_artifacts"):
+        user_obj.generate_deployment_artifacts(**kwargs)
+
     if not user_obj.deploy(name=name, context=service._config, url_type=url_type):  # type: ignore
         terminal.error("Deployment failed ☠️")
+
+    if not module and hasattr(user_obj, "cleanup_deployment_artifacts"):
+        user_obj.cleanup_deployment_artifacts()
 
 
 @management.command(
