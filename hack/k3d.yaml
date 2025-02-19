@@ -3,7 +3,7 @@ apiVersion: k3d.io/v1alpha5
 kind: Simple
 metadata:
   name: beta9
-image: docker.io/rancher/k3s:v1.29.13-k3s1
+image: docker.io/rancher/k3s:v1.31.5-k3s1
 servers: 1
 
 ports:

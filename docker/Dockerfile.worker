@@ -36,7 +36,6 @@ RUN apt-get install -y libseccomp-dev
 
 RUN <<EOT
 set -eux
-echo hi
 git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git .
 make
 make install
