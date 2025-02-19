@@ -1,3 +1,4 @@
+import inspect
 import os
 
 
@@ -25,3 +26,33 @@ class TempFile:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+
+def get_init_args_kwargs(cls):
+    sig = inspect.signature(cls.__init__)
+
+    # Separate args and kwargs
+    args = []
+    kwargs = {}
+
+    for k, v in sig.parameters.items():
+        # Skip 'self' since it's implicit for instance methods
+        if k == "self":
+            continue
+
+        # Check if the argument is a required positional argument
+        if v.default is inspect.Parameter.empty and v.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.POSITIONAL_ONLY,
+        ):
+            args.append(k)
+
+        # Check if the argument is a keyword argument (with default)
+        elif v.default is not inspect.Parameter.empty and v.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            kwargs[k] = v.default
+
+    all_args_set = args + list(kwargs.keys())
+    return set(all_args_set)

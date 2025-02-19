@@ -1,3 +1,4 @@
+import os
 from typing import Any, List, Optional, Union
 
 from .. import terminal
@@ -20,6 +21,7 @@ from ..clients.pod import (
 from ..config import ConfigContext
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
+from ..utils import get_init_args_kwargs
 
 
 class Pod(RunnerAbstraction):
@@ -153,3 +155,37 @@ class Pod(RunnerAbstraction):
                 self.print_invocation_snippet(url_type="path")
 
         return deploy_response.ok
+
+    def generate_pod_config_script(self, kwargs) -> str:
+        pod_py = """
+from {module} import Pod
+
+app = Pod(
+{arguments}
+)
+"""
+        arguments = []
+        argkwargs = get_init_args_kwargs(self.__class__)
+        for key, value in kwargs.items():
+            if key not in argkwargs or value is None:
+                continue
+
+            if isinstance(value, tuple):
+                value = list(value)
+
+            if isinstance(value, str):
+                value = f'"{value}"'
+
+            arguments.append(f"    {key}={value}")
+
+        content = pod_py.format(
+            module="beta9",
+            arguments=",\n".join(arguments),
+        )
+
+        with open("pod.py", "w") as f:
+            f.write(content)
+
+    def delete_pod_config_script(self):
+        if os.path.exists("pod.py"):
+            os.remove("pod.py")

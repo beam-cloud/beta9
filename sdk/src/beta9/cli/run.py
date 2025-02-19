@@ -9,7 +9,11 @@ import click
 
 from .. import terminal
 from ..abstractions.pod import Pod
-from .extraclick import ClickCommonGroup, handle_config_override, override_config_options
+from .extraclick import (
+    ClickCommonGroup,
+    handle_config_override,
+    override_config_options,
+)
 
 
 @click.group(cls=ClickCommonGroup)
@@ -90,6 +94,11 @@ def run(
         terminal.error("Failed to handle config overrides.")
         return
 
+    if not specfile:
+        pod_spec.generate_pod_config_script(kwargs={"entrypoint": pod_spec.entrypoint, **kwargs})
+
     if not pod_spec.create():
         terminal.error("Failed to create pod.")
-        return
+
+    if not specfile:
+        pod_spec.delete_pod_config_script()

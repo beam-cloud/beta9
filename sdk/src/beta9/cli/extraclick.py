@@ -14,6 +14,7 @@ from ..clients.gateway import (
     StringList,
 )
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
+from ..utils import get_init_args_kwargs
 
 CLICK_CONTEXT_SETTINGS = dict(
     help_option_names=["-h", "--help"],
@@ -237,18 +238,6 @@ def filter_values_callback(
     return filters
 
 
-# Get all kwargs from __init__
-def get_init_kwargs(cls):
-    sig = inspect.signature(cls.__init__)
-    kwargs = {
-        k: v.default
-        for k, v in sig.parameters.items()
-        if v.default is not inspect.Parameter.empty
-        and v.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
-    }
-    return kwargs
-
-
 def override_config_options(func: click.Command):
     f = click.option(
         "--cpu", type=click.INT, help="The number of CPU units to allocate.", required=False
@@ -293,7 +282,7 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
 
         # We only want to override the config if the config class has an __init__ method
         # For example, ports is only available on a Pod
-        init_kwargs = get_init_kwargs(config_class_instance)
+        init_kwargs = get_init_args_kwargs(config_class_instance)
 
         for key, value in kwargs.items():
             if value is not None and key in init_kwargs:
