@@ -161,8 +161,10 @@ class Pod(RunnerAbstraction):
         return deploy_response.ok
 
     def generate_deployment_artifacts(self, **kwargs) -> str:
+        imports = ["Pod"]
+
         pod_py = """
-from {module} import Pod
+from {module} import {import_string}
 
 app = Pod(
 {arguments}
@@ -174,15 +176,19 @@ app = Pod(
             if key not in argkwargs or value is None:
                 continue
 
-            if isinstance(value, tuple):
+            if isinstance(value, Image):
+                imports.append("Image")
+                value = f'Image(base_image="{value.base_image}")'
+            elif isinstance(value, tuple):
                 value = list(value)
-
-            if isinstance(value, str):
+            elif isinstance(value, str):
                 value = f'"{value}"'
 
             arguments.append(f"    {key}={value}")
+
         content = pod_py.format(
             module=get_settings().name.lower(),
+            import_string=", ".join(imports),
             arguments=",\n".join(arguments),
         )
 
