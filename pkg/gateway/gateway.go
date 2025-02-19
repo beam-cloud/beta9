@@ -16,7 +16,6 @@ import (
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/container"
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
@@ -46,6 +45,11 @@ import (
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 )
 
 type Gateway struct {
@@ -217,7 +221,7 @@ func (g *Gateway) initHttp() error {
 }
 
 func (g *Gateway) initGrpc() error {
-	authInterceptor := auth.NewAuthInterceptor(g.BackendRepo, g.WorkspaceRepo)
+	authInterceptor := auth.NewAuthInterceptor(g.Config, g.BackendRepo, g.WorkspaceRepo)
 
 	serverOptions := []grpc.ServerOption{
 		grpc.UnaryInterceptor(authInterceptor.Unary()),
@@ -440,6 +444,15 @@ func (g *Gateway) registerServices() error {
 	}
 	pb.RegisterGatewayServiceServer(g.grpcServer, gws)
 
+	// Register health service
+	hs := health.NewServer()
+	hs.Resume()
+	go func() {
+		<-g.ctx.Done()
+		hs.Shutdown()
+	}()
+	healthpb.RegisterHealthServer(g.grpcServer, hs)
+
 	return nil
 }
 
@@ -467,6 +480,10 @@ func (g *Gateway) Start() error {
 	err = g.registerServices()
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to register services")
+	}
+
+	if g.Config.DebugMode {
+		reflection.Register(g.grpcServer)
 	}
 
 	go func() {
