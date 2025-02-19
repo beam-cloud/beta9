@@ -65,7 +65,7 @@ controllers:
             custom: true
             spec:
               initialDelaySeconds: 10
-              successThreshold: 2
+              successThreshold: 1
               failureThreshold: 10
               periodSeconds: 3
               timeoutSeconds: 1
