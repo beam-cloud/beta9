@@ -258,21 +258,21 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 	log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
 
-	// Set container address map
-	addressMap := make(map[int32]string)
-	for idx, containerPort := range request.Ports {
-		addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
+	// For pod stubs, set the container address map
+	if request.Stub.Type.Kind() == types.StubTypePod {
+		addressMap := make(map[int32]string)
+		for idx, containerPort := range request.Ports {
+			addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
+		}
+		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
+			ContainerId: request.ContainerId,
+			AddressMap:  addressMap,
+		}))
+		if err != nil {
+			return err
+		}
+		log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
 	}
-	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
-		ContainerId: request.ContainerId,
-		AddressMap:  addressMap,
-	}))
-
-	if err != nil {
-		return err
-	}
-
-	log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
 
 	go s.containerWg.Add(1)
 
