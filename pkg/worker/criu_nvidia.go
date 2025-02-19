@@ -41,9 +41,10 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
-			ImagePath: imagePath,
+			ImagePath:    imagePath,
+			OutputWriter: opts.runcOpts.OutputWriter,
 		},
-		ConsoleSocket: opts.runcOpts.ConsoleSocket,
+		Started: opts.runcOpts.Started,
 	})
 	if err != nil {
 		return -1, err
