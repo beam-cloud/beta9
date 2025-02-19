@@ -105,9 +105,9 @@ class Pod(RunnerAbstraction):
     def stub(self, value: PodServiceStub) -> None:
         self._pod_stub = value
 
-    def create(self) -> str:
+    def create(self) -> bool:
         if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
-            return ""
+            return
 
         terminal.header("Creating")
         create_response: CreatePodResponse = self.stub.create_pod(
@@ -120,7 +120,7 @@ class Pod(RunnerAbstraction):
             terminal.header(f"Container created successfully ===> {create_response.container_id}")
             self.print_invocation_snippet()
 
-        return create_response.container_id
+        return create_response.ok
 
     def deploy(
         self,
@@ -148,6 +148,8 @@ class Pod(RunnerAbstraction):
         self.deployment_id = deploy_response.deployment_id
         if deploy_response.ok:
             terminal.header("Deployed 🎉")
-            self.print_invocation_snippet(**invocation_details_options)
+
+            if len(self.ports) > 0:
+                self.print_invocation_snippet(url_type="path")
 
         return deploy_response.ok

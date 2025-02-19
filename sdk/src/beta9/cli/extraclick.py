@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import click
 
+from .. import terminal
 from ..abstractions import base as base_abstraction
 from ..channel import ServiceClient, with_grpc_error_handling
 from ..clients.gateway import (
@@ -18,7 +19,6 @@ CLICK_CONTEXT_SETTINGS = dict(
     help_option_names=["-h", "--help"],
     show_default=True,
 )
-
 
 config_context_param = click.Option(
     param_decls=["-c", "--context"],
@@ -235,3 +235,78 @@ def filter_values_callback(
         filters[key] = StringList(values=value_list)
 
     return filters
+
+
+# Get all kwargs from __init__
+def get_init_kwargs(cls):
+    sig = inspect.signature(cls.__init__)
+    kwargs = {
+        k: v.default
+        for k, v in sig.parameters.items()
+        if v.default is not inspect.Parameter.empty
+        and v.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+    }
+    return kwargs
+
+
+def override_config_options(func: click.Command):
+    f = click.option(
+        "--cpu", type=click.INT, help="The number of CPU units to allocate.", required=False
+    )(func)
+    f = click.option(
+        "--memory",
+        type=click.STRING,
+        help="The amount of memory to allocate in MB.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--gpu", type=click.STRING, help="The type of GPU to allocate.", required=False
+    )(f)
+    f = click.option(
+        "--gpu-count", type=click.INT, help="The number of GPUs to allocate.", required=False
+    )(f)
+    f = click.option(
+        "--image", type=click.STRING, help="The image to use for the deployment.", required=False
+    )(f)
+    f = click.option(
+        "--secrets",
+        type=click.STRING,
+        multiple=True,
+        help="The secrets to inject into the deployment.",
+    )(f)
+    f = click.option(
+        "--ports",
+        type=click.INT,
+        multiple=True,
+        help="The ports to expose the deployment on.",
+    )(f)
+    return f
+
+
+def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
+    try:
+        config_class_instance = None
+        if hasattr(func, "parent"):
+            config_class_instance = func.parent
+        else:
+            config_class_instance = func
+
+        # We only want to override the config if the config class has an __init__ method
+        # For example, ports is only available on a Pod
+        init_kwargs = get_init_kwargs(config_class_instance)
+
+        for key, value in kwargs.items():
+            if value is not None and key in init_kwargs:
+                if isinstance(value, tuple):
+                    value = list(value)
+
+                    if len(value) == 0:
+                        continue
+
+                if hasattr(config_class_instance, f"parse_{key}"):
+                    value = config_class_instance.__getattribute__(f"parse_{key}")(value)
+                setattr(config_class_instance, key, value)
+        return True
+    except BaseException as e:
+        terminal.error(f"Error overriding config: {e}", exit=False)
+        return False

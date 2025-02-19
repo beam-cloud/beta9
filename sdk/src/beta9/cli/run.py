@@ -9,7 +9,7 @@ import click
 
 from .. import terminal
 from ..abstractions.pod import Pod
-from .extraclick import ClickCommonGroup
+from .extraclick import ClickCommonGroup, handle_config_override, override_config_options
 
 
 @click.group(cls=ClickCommonGroup)
@@ -41,37 +41,15 @@ def common(**_):
     required=False,
 )
 @click.option(
-    "--image",
-    help="The image to use for the pod.",
-    type=str,
-)
-@click.option(
-    "--gpu",
-    help="The GPU to use for the pod.",
-    type=str,
-)
-@click.option(
-    "--cpu",
-    help="The CPU to use for the pod.",
-    type=str,
-)
-@click.option(
-    "--memory",
-    help="The memory to use for the pod.",
-    type=str,
-)
-@click.option(
     "--entrypoint",
     help="The entrypoint to use for the pod.",
     type=str,
 )
+@override_config_options
 def run(
     specfile: str,
-    image: str,
-    gpu: str,
-    cpu: str,
-    memory: str,
     entrypoint: str,
+    **kwargs,
 ):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
@@ -99,7 +77,7 @@ def run(
                 f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{obj_name}'"
             )
 
-        if not inspect.isclass(type(pod_spec)) and pod_spec.__class__.__name__ != "Pod":
+        if not inspect.isclass(type(pod_spec)) or pod_spec.__class__.__name__ != "Pod":
             terminal.error("Invalid handler function specified. Expected a Pod abstraction.")
 
     if pod_spec is None:
@@ -108,16 +86,10 @@ def run(
 
         pod_spec = Pod(entrypoint=shlex.split(entrypoint))
 
-    if image:
-        pod_spec.image.base = image
+    if not handle_config_override(pod_spec, kwargs):
+        terminal.error("Failed to handle config overrides.")
+        return
 
-    if gpu:
-        pod_spec.gpu = gpu
-
-    if cpu:
-        pod_spec.cpu = cpu
-
-    if memory:
-        pod_spec.memory = pod_spec.parse_memory(memory)
-
-    pod_spec.create()
+    if not pod_spec.create():
+        terminal.error("Failed to create pod.")
+        return

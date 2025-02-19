@@ -124,10 +124,10 @@ class RunnerAbstraction(BaseAbstraction):
         self.stub_id: str = ""
         self.handler: str = ""
         self.on_start: str = ""
-        self.on_deploy: "AbstractCallableWrapper" = self._validate_on_deploy(on_deploy)
+        self.on_deploy: "AbstractCallableWrapper" = self.parse_on_deploy(on_deploy)
         self.callback_url = callback_url or ""
-        self.cpu = cpu
-        self.memory = self.parse_memory(memory) if isinstance(memory, str) else memory
+        self.cpu = self.parse_cpu(cpu)
+        self.memory = self.parse_memory(memory)
         self.gpu = gpu
         self.gpu_count = gpu_count
         self.volumes = volumes or []
@@ -202,6 +202,9 @@ class RunnerAbstraction(BaseAbstraction):
         return res
 
     def parse_memory(self, memory_str: str) -> int:
+        if not isinstance(memory_str, str):
+            return memory_str
+
         """Parse memory str (with units) to megabytes."""
 
         if memory_str.lower().endswith("mi"):
@@ -233,7 +236,7 @@ class RunnerAbstraction(BaseAbstraction):
     def shell_stub(self, value) -> None:
         self._shell_stub = value
 
-    def _parse_cpu_to_millicores(self, cpu: Union[float, str]) -> int:
+    def parse_cpu(self, cpu: Union[float, str]) -> int:
         """
         Parse the cpu argument to an integer value in millicores.
 
@@ -349,7 +352,7 @@ class RunnerAbstraction(BaseAbstraction):
         except Exception as e:
             terminal.warn(str(e))
 
-    def _parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
+    def parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
         if not isinstance(gpu, str) and not isinstance(gpu, list):
             raise ValueError("Invalid GPU type")
 
@@ -358,7 +361,7 @@ class RunnerAbstraction(BaseAbstraction):
         else:
             return GpuType(gpu).value
 
-    def _validate_on_deploy(self, func: Callable):
+    def parse_on_deploy(self, func: Callable):
         if func is None:
             return None
 
@@ -403,8 +406,6 @@ class RunnerAbstraction(BaseAbstraction):
         if self.runtime_ready:
             return True
 
-        self.cpu = self._parse_cpu_to_millicores(self.cpu)
-
         if not self.image_available:
             image_build_result: ImageBuildResult = self.image.build()
 
@@ -433,7 +434,7 @@ class RunnerAbstraction(BaseAbstraction):
                 return False
 
         try:
-            self.gpu = self._parse_gpu(self.gpu)
+            self.gpu = self.parse_gpu(self.gpu)
         except ValueError:
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False
