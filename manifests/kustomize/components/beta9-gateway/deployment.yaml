@@ -43,13 +43,21 @@ spec:
         image: registry.localhost:5000/beta9-gateway:latest
         name: main
         readinessProbe:
-          failureThreshold: 3
           initialDelaySeconds: 5
-          periodSeconds: 5
-          timeoutSeconds: 2
-          httpGet:
-            path: /api/v1/health
-            port: 1994
+          successThreshold: 2
+          failureThreshold: 2
+          periodSeconds: 3
+          timeoutSeconds: 1
+          grpc:
+            port: 1993
+        livenessProbe:
+          initialDelaySeconds: 10
+          successThreshold: 2
+          failureThreshold: 10
+          periodSeconds: 3
+          timeoutSeconds: 1
+          grpc:
+            port: 1993
         resources:
           limits:
             cpu: 4000m
