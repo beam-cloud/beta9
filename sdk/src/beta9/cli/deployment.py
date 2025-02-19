@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -180,8 +181,14 @@ def create_deployment(
         terminal.error("Failed to override config")
         return
 
+    if not module and inspect.isclass(type(user_obj)) and user_obj.__class__.__name__ == "Pod":
+        user_obj.generate_pod_config_script(kwargs={"entrypoint": user_obj.entrypoint, **kwargs})
+
     if not user_obj.deploy(name=name, context=service._config, url_type=url_type):  # type: ignore
         terminal.error("Deployment failed ☠️")
+
+    if not module and inspect.isclass(type(user_obj)) and user_obj.__class__.__name__ == "Pod":
+        user_obj.delete_pod_config_script()
 
 
 @management.command(
