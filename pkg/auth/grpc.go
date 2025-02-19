@@ -31,19 +31,20 @@ type AuthInterceptor struct {
 	workspaceRepo          repository.WorkspaceRepository
 }
 
-func NewAuthInterceptor(backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) *AuthInterceptor {
+func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) *AuthInterceptor {
 	return &AuthInterceptor{
 		backendRepo:   backendRepo,
 		workspaceRepo: workspaceRepo,
 		unauthenticatedMethods: map[string]bool{
-			"/gateway.GatewayService/Authorize": true,
+			"/gateway.GatewayService/Authorize":                         true,
+			"/grpc.health.v1.Health/Check":                              true,
+			"/grpc.reflection.v1.ServerReflection/ServerReflectionInfo": config.DebugMode,
 		},
 	}
 }
 
 func (ai *AuthInterceptor) isAuthRequired(method string) bool {
-	_, ok := ai.unauthenticatedMethods[method]
-	return !ok
+	return !ai.unauthenticatedMethods[method]
 }
 
 func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {

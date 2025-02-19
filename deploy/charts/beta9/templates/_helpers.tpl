@@ -53,14 +53,24 @@ controllers:
             enabled: true
             custom: true
             spec:
-              successThreshold: 1
-              failureThreshold: 3
               initialDelaySeconds: 5
-              periodSeconds: 5
+              successThreshold: 2
+              failureThreshold: 2
+              periodSeconds: 3
               timeoutSeconds: 1
-              httpGet:
-                path: /api/v1/health
-                port: 1994
+              grpc:
+                port: 1993
+          liveness:
+            enabled: true
+            custom: true
+            spec:
+              initialDelaySeconds: 10
+              successThreshold: 2
+              failureThreshold: 10
+              periodSeconds: 3
+              timeoutSeconds: 1
+              grpc:
+                port: 1993
         securityContext:
           privileged: true
     hostNetwork: true
