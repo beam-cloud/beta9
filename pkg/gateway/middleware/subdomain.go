@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/url"
 	"path"
@@ -72,11 +71,8 @@ func Subdomain(externalURL string, backendRepo SubdomainBackendRepo, redisClient
 			if handlerPath == "" {
 				fields, err := parseSubdomainFields(subdomain)
 				if err != nil {
-					log.Printf("error parsing subdomain fields: %s", err)
 					return next(ctx)
 				}
-
-				log.Printf("fields: %+v", fields)
 
 				stub, err := getStubForSubdomain(ctx.Request().Context(), backendRepo, fields)
 				if err != nil {

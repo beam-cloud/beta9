@@ -728,6 +728,12 @@ func (s *Worker) wait(ctx context.Context, containerId string, startedChan chan 
 		exitCode = types.WorkerContainerExitCodeOomKill
 	}
 
+	// If the container exited with a code of -1 and was not OOM killed, set the exit code to 0
+	// since the container was likely terminated by a SIGTERM/SIGKILL
+	if exitCode == -1 && !isOOMKilled {
+		exitCode = 0
+	}
+
 	return cleanup(exitCode, nil)
 }
 

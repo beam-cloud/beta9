@@ -15,7 +15,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -99,10 +98,8 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	for {
 		select {
 		case <-pb.ctx.Done():
-			log.Info().Msg("Pod proxy buffer context done")
 			return nil
 		case <-done:
-			log.Info().Msg("Forwarded request done")
 			return nil
 		}
 	}
@@ -121,15 +118,11 @@ func (pb *PodProxyBuffer) processBuffer() {
 
 			conn, ok := pb.buffer.Pop()
 			if !ok {
-				// log.Info().Msg("No connections to process")
 				time.Sleep(bufferProcessingInterval)
 				continue
 			}
 
-			log.Info().Msg("Processing connection")
-
 			if conn.ctx.Request().Context().Err() != nil {
-				log.Info().Msg("Connection context error")
 				continue
 			}
 
@@ -139,13 +132,9 @@ func (pb *PodProxyBuffer) processBuffer() {
 }
 
 func (pb *PodProxyBuffer) handleConnection(conn *connection) {
-	log.Info().Msg("Handling connection")
 	pb.availableContainersLock.RLock()
 
-	log.Info().Msgf("Available containers: %v", pb.availableContainers)
-
 	if len(pb.availableContainers) == 0 {
-		log.Info().Msg("No available containers")
 		pb.buffer.Push(conn, true)
 		pb.availableContainersLock.RUnlock()
 		return
@@ -164,8 +153,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		return
 	}
 
-	log.Info().Msg("Hijacking connection")
-
 	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		conn.ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
@@ -182,14 +169,12 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	containerConn, err := network.ConnectToHost(request.Context(), container.addressMap[int32(port)], containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
 	if err != nil {
-		log.Error().Msgf("Error dialing pod container %s: %s", container.addressMap[int32(port)], err.Error())
+		conn.ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
 		return
 	}
 	defer containerConn.Close()
 
 	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval)
-
-	log.Info().Msg("Incrementing connections")
 
 	err = pb.incrementConnections(container.id)
 	if err != nil {

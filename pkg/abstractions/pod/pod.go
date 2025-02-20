@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -46,6 +47,7 @@ type PodService interface {
 type GenericPodService struct {
 	pb.PodServiceServer
 	ctx             context.Context
+	mu              sync.Mutex
 	config          types.AppConfig
 	backendRepo     repository.BackendRepository
 	containerRepo   repository.ContainerRepository
@@ -70,6 +72,7 @@ func NewPodService(
 
 	ps := &GenericPodService{
 		ctx:             ctx,
+		mu:              sync.Mutex{},
 		backendRepo:     opts.BackendRepo,
 		containerRepo:   opts.ContainerRepo,
 		workspaceRepo:   opts.WorkspaceRepo,
@@ -117,6 +120,9 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 }
 
 func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...func(*podInstance)) (*podInstance, error) {
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
 	instance, exists := ps.podInstances.Get(stubId)
 	if exists {
 		return instance, nil
