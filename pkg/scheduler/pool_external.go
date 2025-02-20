@@ -46,13 +46,13 @@ type ExternalWorkerPoolController struct {
 	workspace        *types.Workspace
 }
 
-func NewExternalWorkerPoolController(
-	opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
+func NewExternalWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
 	var provider providers.Provider = nil
 	var err error = nil
 
 	workerPoolName := opts.Name
 	providerName := opts.ProviderName
+	opts.Config.Worker.Namespace = externalWorkerNamespace
 
 	switch *providerName {
 	case types.ProviderEC2:
@@ -301,7 +301,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 	worker.RequiresPoolSelector = wpc.workerPoolConfig.RequiresPoolSelector
 
 	// Create the job in the cluster
-	_, err = client.BatchV1().Jobs(externalWorkerNamespace).Create(wpc.ctx, job, metav1.CreateOptions{})
+	_, err = client.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(wpc.ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +398,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
-			Namespace: externalWorkerNamespace,
+			Namespace: wpc.config.Worker.Namespace,
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
@@ -461,7 +461,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "POD_NAMESPACE",
-			Value: externalWorkerNamespace,
+			Value: wpc.config.Worker.Namespace,
 		},
 		{
 			Name:  "BETA9_GATEWAY_HOST",
@@ -606,7 +606,6 @@ func (wpc *ExternalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, er
 }
 
 func (wpc *ExternalWorkerPoolController) monitorAndCleanupWorkers() {
-	wpc.config.Worker.Namespace = externalWorkerNamespace
 	cleaner := WorkerResourceCleaner{
 		PoolName:   wpc.name,
 		Config:     wpc.config.Worker,
