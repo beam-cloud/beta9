@@ -127,7 +127,7 @@ func (d DeletedWorkerReason) String() string {
 }
 
 const (
-	DeletedWorkerReasonStateWithoutPod            DeletedWorkerReason = "state_without_pod"
+	DeletedWorkerReasonPodWithoutState            DeletedWorkerReason = "pod_without_state"
 	DeletedWorkerReasonPodExceededPendingAgeLimit DeletedWorkerReason = "pod_exceeded_pending_age_limit"
 )
 
