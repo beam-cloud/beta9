@@ -115,7 +115,7 @@ func (i *podInstance) stopContainers(containersToStop int) error {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
 
-		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
+		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: true})
 		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to stop container")
 			return err

@@ -37,6 +37,10 @@ func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.Autoscal
 		}
 	}
 
+	if i.Stub.Type == types.StubType(types.StubTypePodDeployment) && i.StubConfig.Autoscaler.MinContainers > 0 {
+		desiredContainers = int(i.StubConfig.Autoscaler.MinContainers)
+	}
+
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: desiredContainers,
 		ResultValid:       true,

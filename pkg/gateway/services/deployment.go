@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -141,7 +142,7 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 	}
 
 	// Scale deployment
-	if err := gws.scaleDeployment(*deploymentWithRelated, ctx); err != nil {
+	if err := gws.scaleDeployment(ctx, *deploymentWithRelated, uint(in.Containers)); err != nil {
 		return &pb.ScaleDeploymentResponse{
 			Ok:     false,
 			ErrMsg: "Unable to scale deployment",
@@ -271,8 +272,17 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 	return nil
 }
 
-func (gws *GatewayService) scaleDeployment(deployment types.DeploymentWithRelated, ctx context.Context) error {
-	_, err := gws.backendRepo.UpdateDeployment(ctx, deployment.Deployment)
+func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types.DeploymentWithRelated, containers uint) error {
+	stubConfigRaw := deployment.Stub.Config
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(stubConfigRaw), stubConfig); err != nil {
+		return err
+	}
+
+	stubConfig.Autoscaler.MaxContainers = containers
+	stubConfig.Autoscaler.MinContainers = containers
+
+	err := gws.backendRepo.UpdateStubConfig(ctx, deployment.Stub.Id, stubConfig)
 	if err != nil {
 		return err
 	}

@@ -2,6 +2,7 @@ package abstractions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -275,6 +276,14 @@ func (i *AutoscaledInstance) Sync() error {
 		if len(deployments) == 1 && !deployments[0].Active {
 			i.IsActive = false
 		}
+
+		stubConfigRaw := deployments[0].Stub.Config
+		stubConfig := &types.StubConfigV1{}
+		if err := json.Unmarshal([]byte(stubConfigRaw), stubConfig); err != nil {
+			return err
+		}
+
+		i.StubConfig = stubConfig
 	}
 
 	return nil

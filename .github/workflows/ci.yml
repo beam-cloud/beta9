@@ -112,5 +112,6 @@ jobs:
       - name: Verify Protobuf Codegen
         env:
           GO_PATH: ~/go
+          PROTOC_INCLUDE_PATH: /usr/local/include
         run: |
           make verify-protocol
