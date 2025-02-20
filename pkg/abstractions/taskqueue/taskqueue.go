@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -57,6 +58,7 @@ const (
 
 type RedisTaskQueue struct {
 	ctx             context.Context
+	mu              sync.Mutex
 	config          types.AppConfig
 	rdb             *common.RedisClient
 	stubConfigCache *common.SafeMap[*types.StubConfigV1]
@@ -86,6 +88,7 @@ func NewRedisTaskQueueService(
 
 	tq := &RedisTaskQueue{
 		ctx:             ctx,
+		mu:              sync.Mutex{},
 		config:          opts.Config,
 		rdb:             opts.RedisClient,
 		scheduler:       opts.Scheduler,
@@ -543,6 +546,19 @@ func (tq *RedisTaskQueue) InstanceFactory(ctx context.Context, stubId string, op
 
 func (tq *RedisTaskQueue) getOrCreateQueueInstance(stubId string, options ...func(*taskQueueInstance)) (*taskQueueInstance, error) {
 	instance, exists := tq.queueInstances.Get(stubId)
+	if exists {
+		return instance, nil
+	}
+
+	// The reason we lock here, and then check again -- is because if the instance does not exist, we may have two separate
+	// goroutines trying to create the instance. So, we check first, then get the mutex. If another
+	// routine got the lock, it should have created the instance, so we check once again. That way
+	// we don't create two instances of the same stub, but we also ensure that we return quickly if the instance
+	// _does_ already exist.
+	tq.mu.Lock()
+	defer tq.mu.Unlock()
+
+	instance, exists = tq.queueInstances.Get(stubId)
 	if exists {
 		return instance, nil
 	}
