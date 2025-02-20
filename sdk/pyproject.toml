@@ -48,21 +48,21 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-addopts = "--verbose --cov --cov-report=html:.htmlcov"
+# addopts = "--verbose --cov --cov-report=html:.htmlcov"
 
-[tool.coverage.report]
-omit = ["tests/*"]
-exclude_also = [
-    # Don't complain if tests don't hit defensive assertion code:
-    "raise AssertionError",
-    "raise NotImplementedError",
+# [tool.coverage.report]
+# omit = ["tests/*"]
+# exclude_also = [
+#     # Don't complain if tests don't hit defensive assertion code:
+#     "raise AssertionError",
+#     "raise NotImplementedError",
 
-    # Don't complain if non-runnable code isn't run:
-    "if __name__ == .__main__.:",
+#     # Don't complain if non-runnable code isn't run:
+#     "if __name__ == .__main__.:",
 
-    # Don't complain about abstract methods, they aren't run:
-    "@(abc\\.)?abstractmethod",
-]
+#     # Don't complain about abstract methods, they aren't run:
+#     "@(abc\\.)?abstractmethod",
+# ]
 
 [tool.ruff]
 line-length = 100
