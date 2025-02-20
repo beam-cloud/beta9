@@ -1,6 +1,6 @@
 module github.com/beam-cloud/beta9
 
-go 1.22.7
+go 1.22.8
 
 require (
 	buf.build/gen/go/cedana/task/grpc/go v1.5.1-20241203191352-12c25eb032cd.1
