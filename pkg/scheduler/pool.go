@@ -217,7 +217,7 @@ func (c *WorkerResourceCleaner) deleteStaleJob(ctx context.Context, pod corev1.P
 		return
 	}
 
-	if err := c.deleteWorkerResources(ctx, workerId, job.Name); err != nil {
+	if err := c.deleteWorkerResources(ctx, workerId, job); err != nil {
 		return
 	}
 
@@ -240,7 +240,7 @@ func (c *WorkerResourceCleaner) deletePendingJob(ctx context.Context, pod corev1
 		return
 	}
 
-	if err := c.deleteWorkerResources(ctx, workerId, job.Name); err != nil {
+	if err := c.deleteWorkerResources(ctx, workerId, job); err != nil {
 		return
 	}
 
@@ -248,7 +248,7 @@ func (c *WorkerResourceCleaner) deletePendingJob(ctx context.Context, pod corev1
 	c.EventRepo.PushWorkerDeletedEvent(workerId, machineId, c.PoolName, types.DeletedWorkerReasonPodExceededPendingAgeLimit)
 }
 
-func (c *WorkerResourceCleaner) deleteWorkerResources(ctx context.Context, workerId, jobName string) error {
+func (c *WorkerResourceCleaner) deleteWorkerResources(ctx context.Context, workerId string, job batchv1.Job) error {
 	var eg errgroup.Group
 
 	// Remove worker state from Repository
@@ -263,11 +263,7 @@ func (c *WorkerResourceCleaner) deleteWorkerResources(ctx context.Context, worke
 
 	// Remove worker job from Kubernetes
 	eg.Go(func() error {
-		if jobName == "" {
-			return nil
-		}
-
-		return c.KubeClient.BatchV1().Jobs(c.Config.Namespace).Delete(ctx, jobName, metav1.DeleteOptions{
+		return c.KubeClient.BatchV1().Jobs(c.Config.Namespace).Delete(ctx, job.Name, metav1.DeleteOptions{
 			PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 		})
 	})
