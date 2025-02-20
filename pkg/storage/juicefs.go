@@ -11,7 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const juiceFsMountTimeout time.Duration = 30 * time.Second
+const juiceFsMountTimeout time.Duration = 30 * time.Minute
 
 type JuiceFsStorage struct {
 	mountCmd *exec.Cmd
@@ -44,7 +44,6 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"mount",
 		s.config.RedisURI,
 		localPath,
-		"-d",
 		"--bucket", s.config.AWSS3Bucket,
 		"--cache-size", cacheSize,
 		"--prefetch", prefetch,
@@ -54,6 +53,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 
 	// Start the mount command in the background
 	go func() {
+		log.Info().Str("command", s.mountCmd.String()).Msg("executing juicefs mount")
 		output, err := s.mountCmd.CombinedOutput()
 		if err != nil {
 			log.Error().Err(err).Str("output", string(output)).Msg("error executing juicefs mount")
