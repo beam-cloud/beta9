@@ -12,9 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
-	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,6 +24,7 @@ const (
 	Beta9WorkerLabelKey         string  = "run.beam.cloud/role"
 	Beta9WorkerLabelValue       string  = "worker"
 	Beta9WorkerJobPrefix        string  = "worker"
+	Beta9MachineLabelIDKey      string  = "run.beam.cloud/machine-id"
 	Beta9WorkerLabelIDKey       string  = "run.beam.cloud/worker-id"
 	Beta9WorkerLabelPoolNameKey string  = "run.beam.cloud/worker-pool-name"
 	PrometheusPortKey           string  = "prometheus.io/port"
@@ -167,68 +166,99 @@ func parseMemoryPercentage(percentStr string) (float32, error) {
 	return float32(percent) / 100, nil
 }
 
-func cleanupWorkers(ctx context.Context, poolName string, workerConfig types.WorkerConfig, kubeClient *kubernetes.Clientset, workerRepo repository.WorkerRepository) {
-	jobSelector := strings.Join([]string{
-		fmt.Sprintf("%s=%s", Beta9WorkerLabelKey, Beta9WorkerLabelValue),
-		fmt.Sprintf("%s=%s", Beta9WorkerLabelPoolNameKey, poolName),
-	}, ",")
+type WorkerResourceCleaner struct {
+	PoolName   string
+	Config     types.WorkerConfig
+	KubeClient *kubernetes.Clientset
+	EventRepo  repository.EventRepository
+	WorkerRepo repository.WorkerRepository
+}
 
-	jobs, err := kubeClient.BatchV1().Jobs(workerConfig.Namespace).List(ctx, metav1.ListOptions{LabelSelector: jobSelector})
+func (c *WorkerResourceCleaner) Clean(ctx context.Context) {
+	c.deleteStaleWorkerStates(ctx)
+	c.deletePendingWorkerJobs(ctx)
+}
+
+func (c *WorkerResourceCleaner) deleteStaleWorkerStates(ctx context.Context) {
+	workers, err := c.WorkerRepo.GetAllWorkersInPool(c.PoolName)
 	if err != nil {
-		log.Error().Str("pool_name", poolName).Err(err).Msg("failed to list jobs for controller")
 		return
 	}
 
-	for _, job := range jobs.Items {
-		podSelector := fmt.Sprintf("job-name=%s", job.Name)
-
-		pods, err := kubeClient.CoreV1().Pods(workerConfig.Namespace).List(ctx, metav1.ListOptions{LabelSelector: podSelector})
+	for _, worker := range workers {
+		podList, err := c.KubeClient.CoreV1().Pods(c.Config.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("%s=%s,%s=%s",
+				Beta9WorkerLabelIDKey, worker.Id,
+				Beta9WorkerLabelPoolNameKey, c.PoolName,
+			),
+		})
 		if err != nil {
-			log.Error().Str("job_name", job.Name).Err(err).Msg("failed to list pods for job")
 			continue
 		}
 
-		for _, pod := range pods.Items {
-			workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]
-			if !ok {
-				log.Warn().Str("job_name", job.Name).Str("pod_name", pod.Name).Msg("worker id not found in pod labels")
+		if len(podList.Items) > 0 {
+			continue
+		}
+
+		if worker.Status == types.WorkerStatusAvailable {
+			if err := c.deleteWorkerResources(ctx, worker.Id, ""); err != nil {
 				continue
 			}
 
-			if _, err := workerRepo.GetWorkerById(workerId); err != nil {
-				if _, ok := err.(*types.ErrWorkerNotFound); ok {
-					if err := deleteWorker(ctx, workerId, workerRepo, kubeClient, workerConfig.Namespace, job); err != nil {
-						log.Error().Str("job_name", job.Name).Err(err).Msg("failed to delete worker job")
-					} else {
-						log.Info().Str("job_name", job.Name).Msg("deleted worker due to non-existent worker state")
-					}
-					continue
-				}
-			}
-
-			// Skip the pod if its scheduled/not pending
-			if pod.Status.Phase != corev1.PodPending {
-				continue
-			}
-
-			duration := time.Since(pod.CreationTimestamp.Time)
-			if duration >= workerConfig.CleanupPendingWorkerAgeLimit {
-				if err := deleteWorker(ctx, workerId, workerRepo, kubeClient, workerConfig.Namespace, job); err != nil {
-					log.Error().Str("job_name", job.Name).Err(err).Msg("failed to delete worker job")
-				} else {
-					log.Info().Str("job_name", job.Name).Str("duration", duration.String()).Msg("deleted worker due to exceeding age limit")
-				}
-			}
+			c.EventRepo.PushWorkerDeletedEvent(worker.Id, worker.MachineId, c.PoolName, types.DeletedWorkerReasonStateWithoutPod)
 		}
 	}
 }
 
-func deleteWorker(ctx context.Context, workerId string, workerRepo repository.WorkerRepository, kubeClient *kubernetes.Clientset, namespace string, job batchv1.Job) error {
+func (c *WorkerResourceCleaner) deletePendingWorkerJobs(ctx context.Context) {
+	jobList, err := c.KubeClient.BatchV1().Jobs(c.Config.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("%s=%s,%s=%s",
+			Beta9WorkerLabelKey, Beta9WorkerLabelValue,
+			Beta9WorkerLabelPoolNameKey, c.PoolName,
+		),
+	})
+	if err != nil {
+		return
+	}
+
+	for _, job := range jobList.Items {
+		podList, err := c.KubeClient.CoreV1().Pods(c.Config.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: fmt.Sprintf("job-name=%s", job.Name),
+		})
+		if err != nil {
+			continue
+		}
+
+		for _, pod := range podList.Items {
+			workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]
+			if !ok {
+				continue
+			}
+
+			if pod.Status.Phase != corev1.PodPending {
+				continue
+			}
+
+			if time.Since(pod.CreationTimestamp.Time) < c.Config.CleanupPendingWorkerAgeLimit {
+				continue
+			}
+
+			if err := c.deleteWorkerResources(ctx, workerId, job.Name); err != nil {
+				continue
+			}
+
+			machineId := pod.Labels[Beta9MachineLabelIDKey]
+			c.EventRepo.PushWorkerDeletedEvent(workerId, machineId, c.PoolName, types.DeletedWorkerReasonPodExceededPendingAgeLimit)
+		}
+	}
+}
+
+func (c *WorkerResourceCleaner) deleteWorkerResources(ctx context.Context, workerId, jobName string) error {
 	var eg errgroup.Group
 
 	// Remove worker state from Repository
 	eg.Go(func() error {
-		if err := workerRepo.RemoveWorker(workerId); err != nil {
+		if err := c.WorkerRepo.RemoveWorker(workerId); err != nil {
 			if _, ok := err.(*types.ErrWorkerNotFound); !ok {
 				return err
 			}
@@ -238,7 +268,11 @@ func deleteWorker(ctx context.Context, workerId string, workerRepo repository.Wo
 
 	// Remove worker job from Kubernetes
 	eg.Go(func() error {
-		return kubeClient.BatchV1().Jobs(namespace).Delete(ctx, job.Name, metav1.DeleteOptions{
+		if jobName == "" {
+			return nil
+		}
+
+		return c.KubeClient.BatchV1().Jobs(c.Config.Namespace).Delete(ctx, jobName, metav1.DeleteOptions{
 			PropagationPolicy: ptr.To(metav1.DeletePropagationBackground),
 		})
 	})

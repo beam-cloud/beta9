@@ -318,9 +318,12 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker, error) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
-		"app":               Beta9WorkerLabelValue,
-		Beta9WorkerLabelKey: Beta9WorkerLabelValue,
-		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
+		"app":                       Beta9WorkerLabelValue,
+		Beta9WorkerLabelKey:         Beta9WorkerLabelValue,
+		Beta9WorkerLabelPoolNameKey: wpc.name,
+		Beta9WorkerLabelIDKey:       workerId,
+		Beta9MachineLabelIDKey:      machineId,
+		PrometheusScrapeKey:         strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
 
 	workerCpu := cpu
@@ -603,6 +606,14 @@ func (wpc *ExternalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, er
 }
 
 func (wpc *ExternalWorkerPoolController) monitorAndCleanupWorkers() {
+	wpc.config.Worker.Namespace = externalWorkerNamespace
+	cleaner := WorkerResourceCleaner{
+		PoolName:   wpc.name,
+		Config:     wpc.config.Worker,
+		EventRepo:  wpc.eventRepo,
+		WorkerRepo: wpc.workerRepo,
+	}
+
 	ticker := time.NewTicker(wpc.config.Worker.CleanupWorkerInterval)
 	defer ticker.Stop()
 
@@ -615,18 +626,17 @@ func (wpc *ExternalWorkerPoolController) monitorAndCleanupWorkers() {
 
 		machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
 		if err != nil {
-			log.Error().Err(err).Str("provider", wpc.provider.GetName()).Msg("unable to list machines to cleanup workers")
 			continue
 		}
 
 		for _, machine := range machines {
 			kubeClient, err := wpc.getProxiedClient(machine.State.HostName, machine.State.Token)
 			if err != nil {
-				log.Error().Err(err).Str("machine_id", machine.State.MachineId).Str("hostname", machine.State.HostName).Msg("unable to create kube client for machine")
 				continue
 			}
 
-			cleanupWorkers(wpc.ctx, wpc.name, wpc.config.Worker, kubeClient, wpc.workerRepo)
+			cleaner.KubeClient = kubeClient
+			cleaner.Clean(wpc.ctx)
 		}
 	}
 }

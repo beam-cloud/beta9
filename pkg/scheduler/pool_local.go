@@ -32,6 +32,7 @@ type LocalKubernetesWorkerPoolController struct {
 	workerPoolRepo   repository.WorkerPoolRepository
 	backendRepo      repository.BackendRepository
 	containerRepo    repository.ContainerRepository
+	eventRepo        repository.EventRepository
 	workspace        *types.Workspace
 }
 
@@ -58,6 +59,7 @@ func NewLocalKubernetesWorkerPoolController(opts WorkerPoolControllerOptions) (W
 		backendRepo:      opts.BackendRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
 		containerRepo:    opts.ContainerRepo,
+		eventRepo:        opts.EventRepo,
 	}
 
 	// Start monitoring worker pool size
@@ -163,8 +165,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 	labels := map[string]string{
 		"app":                       Beta9WorkerLabelValue,
 		Beta9WorkerLabelKey:         Beta9WorkerLabelValue,
-		Beta9WorkerLabelIDKey:       workerId,
 		Beta9WorkerLabelPoolNameKey: wpc.name,
+		Beta9WorkerLabelIDKey:       workerId,
 		PrometheusPortKey:           fmt.Sprintf("%d", wpc.config.Monitoring.Prometheus.Port),
 		PrometheusScrapeKey:         strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
@@ -487,6 +489,14 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) monitorAndCleanupWorkers() {
+	cleaner := WorkerResourceCleaner{
+		PoolName:   wpc.name,
+		Config:     wpc.config.Worker,
+		KubeClient: wpc.kubeClient,
+		EventRepo:  wpc.eventRepo,
+		WorkerRepo: wpc.workerRepo,
+	}
+
 	ticker := time.NewTicker(wpc.config.Worker.CleanupWorkerInterval)
 	defer ticker.Stop()
 
@@ -495,7 +505,7 @@ func (wpc *LocalKubernetesWorkerPoolController) monitorAndCleanupWorkers() {
 		case <-wpc.ctx.Done():
 			return // Exit
 		default: // Continue
-			cleanupWorkers(wpc.ctx, wpc.name, wpc.config.Worker, wpc.kubeClient, wpc.workerRepo)
+			cleaner.Clean(wpc.ctx)
 		}
 	}
 }
