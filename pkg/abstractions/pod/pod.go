@@ -120,10 +120,20 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 }
 
 func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...func(*podInstance)) (*podInstance, error) {
+	instance, exists := ps.podInstances.Get(stubId)
+	if exists {
+		return instance, nil
+	}
+
+	// The reason we lock here, and then check again -- is because if the instance does not exist, we may have two separate
+	// goroutines trying to create the instance. So, we check first, then get the mutex. If another
+	// routine got the lock, it should have created the instance, so we check once again. That way
+	// we don't create two instances of the same stub, but we also ensure that we return quickly if the instance
+	// _does_ already exist.
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 
-	instance, exists := ps.podInstances.Get(stubId)
+	instance, exists = ps.podInstances.Get(stubId)
 	if exists {
 		return instance, nil
 	}
