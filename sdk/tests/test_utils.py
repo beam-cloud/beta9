@@ -67,7 +67,9 @@ def my_function():
         module_name = self.module_path
         function_name = "my_function"
 
-        module_spec, mod_name, obj_name = load_module_spec(f"{self.module_path}:{function_name}")
+        module_spec, mod_name, obj_name = load_module_spec(
+            f"{self.module_path}:{function_name}", "test"
+        )
 
         self.assertEqual(mod_name, str(module_name).replace(".py", "").replace("/", "."))
         self.assertEqual(obj_name, function_name)
@@ -75,10 +77,10 @@ def my_function():
 
     def test_load_module_spec_file_not_found(self):
         with pytest.raises(SystemExit):
-            result = load_module_spec("non_existent.py:function_name")
+            result = load_module_spec("non_existent.py:function_name", "test")
             self.assertIsNone(result)
 
     def test_load_module_spec_function_not_found(self):
         with pytest.raises(SystemExit):
-            result = load_module_spec(f"{self.module_path}:non_existent_function")
+            result = load_module_spec(f"{self.module_path}:non_existent_function", "test")
             self.assertIsNone(result)
