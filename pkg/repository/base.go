@@ -194,6 +194,7 @@ type EventRepository interface {
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
+	PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason)
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)
