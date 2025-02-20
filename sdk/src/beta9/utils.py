@@ -64,9 +64,6 @@ def get_init_args_kwargs(cls):
 
 
 def get_class_name(cls):
-    if not inspect.isclass(type(cls)):
-        return None
-
     return cls.__class__.__name__
 
 
