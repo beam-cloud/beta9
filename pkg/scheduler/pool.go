@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -175,42 +176,6 @@ type WorkerResourceCleaner struct {
 }
 
 func (c *WorkerResourceCleaner) Clean(ctx context.Context) {
-	c.deleteStaleWorkerStates(ctx)
-	c.deletePendingWorkerJobs(ctx)
-}
-
-func (c *WorkerResourceCleaner) deleteStaleWorkerStates(ctx context.Context) {
-	workers, err := c.WorkerRepo.GetAllWorkersInPool(c.PoolName)
-	if err != nil {
-		return
-	}
-
-	for _, worker := range workers {
-		podList, err := c.KubeClient.CoreV1().Pods(c.Config.Namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("%s=%s,%s=%s",
-				Beta9WorkerLabelIDKey, worker.Id,
-				Beta9WorkerLabelPoolNameKey, c.PoolName,
-			),
-		})
-		if err != nil {
-			continue
-		}
-
-		if len(podList.Items) > 0 {
-			continue
-		}
-
-		if worker.Status == types.WorkerStatusAvailable {
-			if err := c.deleteWorkerResources(ctx, worker.Id, ""); err != nil {
-				continue
-			}
-
-			c.EventRepo.PushWorkerDeletedEvent(worker.Id, worker.MachineId, c.PoolName, types.DeletedWorkerReasonStateWithoutPod)
-		}
-	}
-}
-
-func (c *WorkerResourceCleaner) deletePendingWorkerJobs(ctx context.Context) {
 	jobList, err := c.KubeClient.BatchV1().Jobs(c.Config.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("%s=%s,%s=%s",
 			Beta9WorkerLabelKey, Beta9WorkerLabelValue,
@@ -230,27 +195,57 @@ func (c *WorkerResourceCleaner) deletePendingWorkerJobs(ctx context.Context) {
 		}
 
 		for _, pod := range podList.Items {
-			workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]
-			if !ok {
-				continue
-			}
-
-			if pod.Status.Phase != corev1.PodPending {
-				continue
-			}
-
-			if time.Since(pod.CreationTimestamp.Time) < c.Config.CleanupPendingWorkerAgeLimit {
-				continue
-			}
-
-			if err := c.deleteWorkerResources(ctx, workerId, job.Name); err != nil {
-				continue
-			}
-
-			machineId := pod.Labels[Beta9MachineLabelIDKey]
-			c.EventRepo.PushWorkerDeletedEvent(workerId, machineId, c.PoolName, types.DeletedWorkerReasonPodExceededPendingAgeLimit)
+			c.deleteStaleJob(ctx, pod, job)
+			c.deletePendingJob(ctx, pod, job)
 		}
 	}
+}
+
+// deleteStaleJob deletes jobs/pods that have no corresponding state in the repository
+func (c *WorkerResourceCleaner) deleteStaleJob(ctx context.Context, pod corev1.Pod, job batchv1.Job) {
+	workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]
+	if !ok {
+		return
+	}
+
+	_, err := c.WorkerRepo.GetWorkerById(workerId)
+	if err == nil {
+		return
+	}
+
+	if _, ok := err.(*types.ErrWorkerNotFound); !ok {
+		return
+	}
+
+	if err := c.deleteWorkerResources(ctx, workerId, job.Name); err != nil {
+		return
+	}
+
+	machineId := pod.Labels[Beta9MachineLabelIDKey]
+	c.EventRepo.PushWorkerDeletedEvent(workerId, machineId, c.PoolName, types.DeletedWorkerReasonPodWithoutState)
+}
+
+// deletePendingJob deletes pending jobs/pods that have exceeded the age limit in a "pending" state
+func (c *WorkerResourceCleaner) deletePendingJob(ctx context.Context, pod corev1.Pod, job batchv1.Job) {
+	workerId, ok := pod.Labels[Beta9WorkerLabelIDKey]
+	if !ok {
+		return
+	}
+
+	if pod.Status.Phase != corev1.PodPending {
+		return
+	}
+
+	if time.Since(pod.CreationTimestamp.Time) < c.Config.CleanupPendingWorkerAgeLimit {
+		return
+	}
+
+	if err := c.deleteWorkerResources(ctx, workerId, job.Name); err != nil {
+		return
+	}
+
+	machineId := pod.Labels[Beta9MachineLabelIDKey]
+	c.EventRepo.PushWorkerDeletedEvent(workerId, machineId, c.PoolName, types.DeletedWorkerReasonPodExceededPendingAgeLimit)
 }
 
 func (c *WorkerResourceCleaner) deleteWorkerResources(ctx context.Context, workerId, jobName string) error {
