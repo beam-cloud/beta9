@@ -48,7 +48,7 @@ def run(
     pod_spec = None
     module = None
     try:
-        pod_spec, module, _ = load_module_spec(entrypoint)
+        pod_spec, module, _ = load_module_spec(entrypoint, "run")
 
         if not inspect.isclass(type(pod_spec)) or pod_spec.__class__.__name__ != "Pod":
             terminal.error("Invalid handler function specified. Expected a Pod abstraction.")

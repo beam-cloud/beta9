@@ -144,7 +144,7 @@ def create_deployment(
 ):
     module = None
     try:
-        user_obj, module_name, obj_name = load_module_spec(entrypoint)
+        user_obj, module_name, obj_name = load_module_spec(entrypoint, "deploy")
 
         if hasattr(user_obj, "set_handler"):
             user_obj.set_handler(f"{module_name}:{obj_name}")

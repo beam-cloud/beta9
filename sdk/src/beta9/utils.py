@@ -67,7 +67,7 @@ def get_class_name(cls):
     return cls.__class__.__name__
 
 
-def load_module_spec(specfile: str):
+def load_module_spec(specfile: str, command: str):
     current_dir = os.getcwd()
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
@@ -80,7 +80,7 @@ def load_module_spec(specfile: str):
 
     if not obj_name:
         terminal.error(
-            "Invalid handler function specified. Expected format: beam serve [file.py]:[function]"
+            f"Invalid handler function specified. Expected format: beam {command} [file.py]:[function]"
         )
 
     module = importlib.import_module(module_name)
