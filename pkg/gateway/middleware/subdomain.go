@@ -25,7 +25,7 @@ var (
 	subdomainRegex = regexp.MustCompile(
 		`^` +
 			`(?:` +
-			// Subdomain form: something-abcdefg optional -vN or -latest
+			// Deployment form: something-abcdefg optional -vN or -latest
 			`(?P<Subdomain>[a-zA-Z0-9-]+-[a-zA-Z0-9]{7})(?:-(?P<Version>v[0-9]+|latest))?` +
 			// OR StubID form: 36-char (UUID)
 			`|` +
