@@ -174,6 +174,9 @@ class RunnerAbstraction(BaseAbstraction):
         if not res.ok:
             return terminal.error("Failed to get invocation URL", exit=False)
 
+        if not res.url:
+            return
+
         terminal.header("Invocation details")
         commands = [
             f"curl -X POST '{res.url}' \\",
