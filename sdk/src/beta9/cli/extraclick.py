@@ -1,5 +1,6 @@
 import functools
 import inspect
+import shlex
 import sys
 import textwrap
 from gettext import gettext
@@ -248,6 +249,16 @@ class ImageParser(click.ParamType):
         )
 
 
+class ShlexParser(click.ParamType):
+    name = "shlex"
+
+    def convert(self, value, param, ctx):
+        print(value)
+        if not value:
+            return []
+        return shlex.split(value)
+
+
 def override_config_options(func: click.Command):
     f = click.option(
         "--cpu", type=click.INT, help="The number of CPU units to allocate.", required=False
@@ -278,6 +289,11 @@ def override_config_options(func: click.Command):
         type=click.INT,
         multiple=True,
         help="The ports to expose the deployment on.",
+    )(f)
+    f = click.option(
+        "--entrypoint",
+        type=ShlexParser(),
+        help="The entrypoint script to run for pod",
     )(f)
     return f
 

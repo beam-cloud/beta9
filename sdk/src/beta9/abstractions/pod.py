@@ -1,4 +1,5 @@
 import os
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from typing import Any, List, Optional, Union
@@ -7,23 +8,29 @@ from .. import terminal
 from ..abstractions.base.runner import (
     POD_DEPLOYMENT_STUB_TYPE,
     POD_RUN_STUB_TYPE,
+    SHELL_STUB_TYPE,
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
 from ..abstractions.volume import Volume
+from ..channel import with_grpc_error_handling
 from ..clients.gateway import (
     DeployStubRequest,
     DeployStubResponse,
+    GetUrlRequest,
+    GetUrlResponse,
 )
 from ..clients.pod import (
     CreatePodRequest,
     CreatePodResponse,
     PodServiceStub,
 )
+from ..clients.shell import CreateShellRequest
 from ..config import ConfigContext, get_settings
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
 from ..utils import get_init_args_kwargs
+from .shell import SSHShell
 
 
 @dataclass
@@ -238,6 +245,55 @@ app = Pod(
     def cleanup_deployment_artifacts(self):
         if os.path.exists(f"pod-{self._id}.py"):
             os.remove(f"pod-{self._id}.py")
+
+    @with_grpc_error_handling
+    def shell(self, url_type: str = ""):
+        stub_type = SHELL_STUB_TYPE
+
+        if not self.prepare_runtime(stub_type=stub_type, force_create_stub=True):
+            return False
+
+        # First, spin up the shell container
+        with terminal.progress("Creating shell..."):
+            create_shell_response = self.shell_stub.create_shell(
+                CreateShellRequest(
+                    stub_id=self.stub_id,
+                )
+            )
+            if not create_shell_response.ok:
+                return terminal.error(f"Failed to create shell: {create_shell_response.err_msg} ❌")
+
+        # Then, we can retrieve the URL and issue a CONNECT request / establish a tunnel
+        res: GetUrlResponse = self.gateway_stub.get_url(
+            GetUrlRequest(
+                stub_id=self.stub_id,
+                deployment_id=getattr(self, "deployment_id", ""),
+                url_type=url_type,
+            )
+        )
+        if not res.ok:
+            return terminal.error(f"Failed to get shell connection URL: {res.err_msg} ❌")
+
+        # Parse the URL to extract the container_id
+        parsed_url = urllib.parse.urlparse(res.url)
+        proxy_host, proxy_port = parsed_url.hostname, parsed_url.port
+        container_id = create_shell_response.container_id
+        ssh_token = create_shell_response.token
+
+        if not proxy_port:
+            proxy_port = 443 if parsed_url.scheme == "https" else 80
+
+        with SSHShell(
+            host=proxy_host,
+            port=proxy_port,
+            path=parsed_url.path,
+            container_id=container_id,
+            stub_id=self.stub_id,
+            auth_token=self.config_context.token,
+            username="root",
+            password=ssh_token,
+        ) as shell:
+            shell.start()
 
     def serve(self, **kwargs):
         terminal.error("Serve has not yet been implemented for Pods.")
