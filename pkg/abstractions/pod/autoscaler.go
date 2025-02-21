@@ -27,7 +27,7 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 	return sample, nil
 }
 
-// podScaleFunc scales based on the number of items in the queue
+// podScaleFunc scales based on the number of desired containers
 func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
 
