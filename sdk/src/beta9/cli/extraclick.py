@@ -259,6 +259,20 @@ class ShlexParser(click.ParamType):
         return shlex.split(value)
 
 
+class CommaSeparatedList(click.ParamType):
+    name = "comma_separated_list"
+
+    def __init__(self, type: click.ParamType):
+        self.type = type
+
+    def convert(self, value, param, ctx):
+        if not value:
+            return []
+        values = value.split(",")
+        print([self.type.convert(v, param, ctx) for v in values])
+        return [self.type.convert(v, param, ctx) for v in values]
+
+
 def override_config_options(func: click.Command):
     f = click.option(
         "--cpu",
@@ -283,14 +297,12 @@ def override_config_options(func: click.Command):
     )(f)
     f = click.option(
         "--secrets",
-        type=click.STRING,
-        multiple=True,
+        type=CommaSeparatedList(click.STRING),
         help="The secrets to inject into the container (e.g. --secrets SECRET1,SECRET2).",
     )(f)
     f = click.option(
         "--ports",
-        type=click.INT,
-        multiple=True,
+        type=CommaSeparatedList(click.INT),
         help="The ports to expose inside the container (e.g. --ports 8000,8001).",
     )(f)
     f = click.option(
