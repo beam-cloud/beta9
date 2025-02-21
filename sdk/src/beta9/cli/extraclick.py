@@ -122,6 +122,7 @@ class CommandGroupCollection(click.CommandCollection):
                 continue
             for command in source.commands:
                 r[command] = source
+
         return r
 
     def invoke(self, ctx: click.Context) -> Any:
@@ -253,7 +254,6 @@ class ShlexParser(click.ParamType):
     name = "shlex"
 
     def convert(self, value, param, ctx):
-        print(value)
         if not value:
             return []
         return shlex.split(value)
@@ -298,6 +298,9 @@ def override_config_options(func: click.Command):
     return f
 
 
+PARSE_CONFIG_PREFIX = "parse_"
+
+
 def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
     try:
         config_class_instance = None
@@ -318,9 +321,13 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
                     if len(value) == 0:
                         continue
 
-                if hasattr(config_class_instance, f"parse_{key}"):
-                    value = config_class_instance.__getattribute__(f"parse_{key}")(value)
+                if hasattr(config_class_instance, f"{PARSE_CONFIG_PREFIX}{key}"):
+                    value = config_class_instance.__getattribute__(f"{PARSE_CONFIG_PREFIX}{key}")(
+                        value
+                    )
+
                 setattr(config_class_instance, key, value)
+
         return True
     except BaseException as e:
         terminal.error(f"Error overriding config: {e}", exit=False)

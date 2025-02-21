@@ -140,6 +140,10 @@ class Pod(RunnerAbstraction):
     def stub(self, value: PodServiceStub) -> None:
         self._pod_stub = value
 
+    def parse_image(self, image: Image) -> Image:
+        image.ignore_python = True
+        return image
+
     def create(self, entrypoint: List[str] = []) -> CreatePodResult:
         """
         Create a new container that will run until either it completes normally, or is killed.
