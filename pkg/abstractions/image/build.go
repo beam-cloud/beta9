@@ -73,6 +73,7 @@ type BuildOpts struct {
 	EnvVars            []string
 	BuildSecrets       []string
 	Gpu                string
+	IgnorePython       bool
 }
 
 func (o *BuildOpts) String() string {
@@ -93,6 +94,7 @@ func (o *BuildOpts) String() string {
 	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
 	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
 	fmt.Fprintf(&b, "  \"Gpu\": %q,", o.Gpu)
+	fmt.Fprintf(&b, "  \"IgnorePython\": %v,", o.IgnorePython)
 	fmt.Fprintf(&b, "}")
 	return b.String()
 }
@@ -330,6 +332,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				if !ok {
 					msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
 				}
+
 				// Wait for any final logs to get sent before returning
 				time.Sleep(200 * time.Millisecond)
 				outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: fmt.Sprintf("Container exited with error: %s\n", msg)}
@@ -341,6 +344,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 				if err != nil {
 					log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
 				}
+
 				outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout)}
 				return errors.New(fmt.Sprintf("timeout: container not running after %s seconds", containerSpinupTimeout))
 			}
@@ -364,9 +368,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	var setupCommands []string
+
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv && !opts.IgnorePython {
 
 		if opts.PythonVersion == types.Python3.String() {
 			opts.PythonVersion = b.config.ImageService.PythonVersion
@@ -384,11 +389,14 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: err.Error() + "\n"}
 			return err
 		}
+
 		setupCommands = append(setupCommands, installCmd)
+	} else if opts.IgnorePython {
+		opts.PythonVersion = ""
 	}
 
 	// Generate the pip install command and prepend it to the commands list
-	if len(opts.PythonPackages) > 0 {
+	if len(opts.PythonPackages) > 0 && opts.PythonVersion != "" {
 		pipInstallCmd := generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
 		setupCommands = append(setupCommands, pipInstallCmd)
 	}
@@ -838,7 +846,7 @@ func (b *Builder) calculateImageArchiveDuration(ctx context.Context, opts *Build
 	}
 
 	timePerByte := time.Duration(b.config.ImageService.ArchiveNanosecondsPerByte) * time.Nanosecond
-	timeLimit := timePerByte * time.Duration(imageSizeBytes)
+	timeLimit := timePerByte * time.Duration(imageSizeBytes) * 10
 	log.Info().Int("image_size", imageSizeBytes).Msgf("estimated time to prepare new base image: %s", timeLimit.String())
 	return timeLimit
 }

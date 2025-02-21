@@ -270,6 +270,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     gpu_count: int = betterproto.uint32_field(27)
     on_deploy: str = betterproto.string_field(28)
     on_deploy_stub_id: str = betterproto.string_field(29)
+    entrypoint: List[str] = betterproto.string_field(30)
+    ports: List[int] = betterproto.uint32_field(31)
 
 
 @dataclass(eq=False, repr=False)
@@ -342,6 +344,18 @@ class StartDeploymentRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StartDeploymentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ScaleDeploymentRequest(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    containers: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ScaleDeploymentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
@@ -745,6 +759,15 @@ class GatewayServiceStub(SyncServiceStub):
             StartDeploymentRequest,
             StartDeploymentResponse,
         )(start_deployment_request)
+
+    def scale_deployment(
+        self, scale_deployment_request: "ScaleDeploymentRequest"
+    ) -> "ScaleDeploymentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ScaleDeployment",
+            ScaleDeploymentRequest,
+            ScaleDeploymentResponse,
+        )(scale_deployment_request)
 
     def delete_deployment(
         self, delete_deployment_request: "DeleteDeploymentRequest"

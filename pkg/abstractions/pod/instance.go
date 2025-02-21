@@ -1,0 +1,171 @@
+package pod
+
+import (
+	"context"
+	"fmt"
+	"math/rand"
+	"time"
+
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
+)
+
+type podInstance struct {
+	*abstractions.AutoscaledInstance
+	buffer *PodProxyBuffer
+}
+
+func (i *podInstance) startContainers(containersToRun int) error {
+	secrets, err := abstractions.ConfigureContainerRequestSecrets(i.Workspace, *i.StubConfig)
+	if err != nil {
+		return err
+	}
+
+	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		i.Stub.Object.ExternalId,
+		i.Workspace,
+		*i.StubConfig,
+		i.Stub.ExternalId,
+	)
+	if err != nil {
+		return err
+	}
+
+	env := []string{
+		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
+		fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
+		fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
+		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
+	}
+
+	env = append(secrets, env...)
+
+	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
+	if i.StubConfig.Runtime.Gpu != "" {
+		gpuRequest = append(gpuRequest, i.StubConfig.Runtime.Gpu.String())
+	}
+
+	gpuCount := i.StubConfig.Runtime.GpuCount
+	if i.StubConfig.RequiresGPU() && gpuCount == 0 {
+		gpuCount = 1
+	}
+
+	checkpointEnabled := i.StubConfig.CheckpointEnabled
+	if gpuCount > 1 {
+		checkpointEnabled = false
+	}
+
+	ports := []uint32{}
+	if len(i.StubConfig.Ports) > 0 {
+		ports = i.StubConfig.Ports
+	}
+
+	for c := 0; c < containersToRun; c++ {
+		runRequest := &types.ContainerRequest{
+			ContainerId:       i.genContainerId(),
+			Env:               env,
+			Cpu:               i.StubConfig.Runtime.Cpu,
+			Memory:            i.StubConfig.Runtime.Memory,
+			GpuRequest:        gpuRequest,
+			GpuCount:          uint32(gpuCount),
+			ImageId:           i.StubConfig.Runtime.ImageId,
+			StubId:            i.Stub.ExternalId,
+			WorkspaceId:       i.Workspace.ExternalId,
+			Workspace:         *i.Workspace,
+			EntryPoint:        i.EntryPoint,
+			Mounts:            mounts,
+			Stub:              *i.Stub,
+			CheckpointEnabled: checkpointEnabled,
+			Ports:             ports,
+		}
+
+		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
+		i.Rdb.SetEx(
+			context.Background(),
+			Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, runRequest.ContainerId),
+			1,
+			time.Duration(i.StubConfig.KeepWarmSeconds)*time.Second,
+		)
+
+		err := i.Scheduler.Run(runRequest)
+		if err != nil {
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to run container")
+			return err
+		}
+
+		continue
+	}
+
+	return nil
+}
+
+func (i *podInstance) stopContainers(containersToStop int) error {
+	src := rand.NewSource(time.Now().UnixNano())
+	rnd := rand.New(src)
+
+	containerIds, err := i.stoppableContainers()
+	if err != nil {
+		return err
+	}
+
+	for c := 0; c < containersToStop && len(containerIds) > 0; c++ {
+		idx := rnd.Intn(len(containerIds))
+		containerId := containerIds[idx]
+
+		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: true})
+		if err != nil {
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to stop container")
+			return err
+		}
+
+		// Remove the containerId from the containerIds slice to avoid
+		// sending multiple stop requests to the same container
+		containerIds = append(containerIds[:idx], containerIds[idx+1:]...)
+	}
+
+	return nil
+}
+
+func (i *podInstance) stoppableContainers() ([]string, error) {
+	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create a slice to hold the keys
+	keys := make([]string, 0, len(containers))
+	for _, container := range containers {
+		if container.Status == types.ContainerStatusStopping || container.Status == types.ContainerStatusPending {
+			continue
+		}
+
+		// When deployment is stopped, all containers should be stopped even if they have keep warm
+		if !i.IsActive {
+			keys = append(keys, container.ContainerId)
+			continue
+		}
+
+		// Skip containers with keep warm locks
+		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
+		if err != nil && err != redis.Nil {
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")
+			continue
+		}
+
+		keepWarm := keepWarmVal > 0
+		if keepWarm {
+			continue
+		}
+
+		keys = append(keys, container.ContainerId)
+	}
+
+	return keys, nil
+}
+
+func (i *podInstance) genContainerId() string {
+	return fmt.Sprintf("%s-%s-%s", podContainerPrefix, i.Stub.ExternalId, uuid.New().String()[:8])
+}

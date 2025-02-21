@@ -15,6 +15,10 @@ service ContainerRepositoryService {
       returns (SetContainerExitCodeResponse);
   rpc SetContainerAddress(SetContainerAddressRequest)
       returns (SetContainerAddressResponse);
+  rpc SetContainerAddressMap(SetContainerAddressMapRequest)
+      returns (SetContainerAddressMapResponse);
+  rpc GetContainerAddressMap(GetContainerAddressMapRequest)
+      returns (GetContainerAddressMapResponse);
   rpc SetWorkerAddress(SetWorkerAddressRequest)
       returns (SetWorkerAddressResponse);
   rpc UpdateCheckpointState(UpdateCheckpointStateRequest)
@@ -68,6 +72,26 @@ message SetContainerAddressRequest {
 message SetContainerAddressResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message SetContainerAddressMapRequest {
+  string container_id = 1;
+  map<int32, string> address_map = 2;
+}
+
+message SetContainerAddressMapResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message GetContainerAddressMapRequest {
+  string container_id = 1;
+}
+
+message GetContainerAddressMapResponse {
+  bool ok = 1;
+  map<int32, string> address_map = 2;
+  string error_msg = 3;
 }
 
 message SetWorkerAddressRequest {

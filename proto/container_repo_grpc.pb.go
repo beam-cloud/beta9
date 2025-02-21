@@ -19,14 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	ContainerRepositoryService_GetContainerState_FullMethodName     = "/ContainerRepositoryService/GetContainerState"
-	ContainerRepositoryService_DeleteContainerState_FullMethodName  = "/ContainerRepositoryService/DeleteContainerState"
-	ContainerRepositoryService_UpdateContainerStatus_FullMethodName = "/ContainerRepositoryService/UpdateContainerStatus"
-	ContainerRepositoryService_SetContainerExitCode_FullMethodName  = "/ContainerRepositoryService/SetContainerExitCode"
-	ContainerRepositoryService_SetContainerAddress_FullMethodName   = "/ContainerRepositoryService/SetContainerAddress"
-	ContainerRepositoryService_SetWorkerAddress_FullMethodName      = "/ContainerRepositoryService/SetWorkerAddress"
-	ContainerRepositoryService_UpdateCheckpointState_FullMethodName = "/ContainerRepositoryService/UpdateCheckpointState"
-	ContainerRepositoryService_GetCheckpointState_FullMethodName    = "/ContainerRepositoryService/GetCheckpointState"
+	ContainerRepositoryService_GetContainerState_FullMethodName      = "/ContainerRepositoryService/GetContainerState"
+	ContainerRepositoryService_DeleteContainerState_FullMethodName   = "/ContainerRepositoryService/DeleteContainerState"
+	ContainerRepositoryService_UpdateContainerStatus_FullMethodName  = "/ContainerRepositoryService/UpdateContainerStatus"
+	ContainerRepositoryService_SetContainerExitCode_FullMethodName   = "/ContainerRepositoryService/SetContainerExitCode"
+	ContainerRepositoryService_SetContainerAddress_FullMethodName    = "/ContainerRepositoryService/SetContainerAddress"
+	ContainerRepositoryService_SetContainerAddressMap_FullMethodName = "/ContainerRepositoryService/SetContainerAddressMap"
+	ContainerRepositoryService_GetContainerAddressMap_FullMethodName = "/ContainerRepositoryService/GetContainerAddressMap"
+	ContainerRepositoryService_SetWorkerAddress_FullMethodName       = "/ContainerRepositoryService/SetWorkerAddress"
+	ContainerRepositoryService_UpdateCheckpointState_FullMethodName  = "/ContainerRepositoryService/UpdateCheckpointState"
+	ContainerRepositoryService_GetCheckpointState_FullMethodName     = "/ContainerRepositoryService/GetCheckpointState"
 )
 
 // ContainerRepositoryServiceClient is the client API for ContainerRepositoryService service.
@@ -38,6 +40,8 @@ type ContainerRepositoryServiceClient interface {
 	UpdateContainerStatus(ctx context.Context, in *UpdateContainerStatusRequest, opts ...grpc.CallOption) (*UpdateContainerStatusResponse, error)
 	SetContainerExitCode(ctx context.Context, in *SetContainerExitCodeRequest, opts ...grpc.CallOption) (*SetContainerExitCodeResponse, error)
 	SetContainerAddress(ctx context.Context, in *SetContainerAddressRequest, opts ...grpc.CallOption) (*SetContainerAddressResponse, error)
+	SetContainerAddressMap(ctx context.Context, in *SetContainerAddressMapRequest, opts ...grpc.CallOption) (*SetContainerAddressMapResponse, error)
+	GetContainerAddressMap(ctx context.Context, in *GetContainerAddressMapRequest, opts ...grpc.CallOption) (*GetContainerAddressMapResponse, error)
 	SetWorkerAddress(ctx context.Context, in *SetWorkerAddressRequest, opts ...grpc.CallOption) (*SetWorkerAddressResponse, error)
 	UpdateCheckpointState(ctx context.Context, in *UpdateCheckpointStateRequest, opts ...grpc.CallOption) (*UpdateCheckpointStateResponse, error)
 	GetCheckpointState(ctx context.Context, in *GetCheckpointStateRequest, opts ...grpc.CallOption) (*GetCheckpointStateResponse, error)
@@ -96,6 +100,24 @@ func (c *containerRepositoryServiceClient) SetContainerAddress(ctx context.Conte
 	return out, nil
 }
 
+func (c *containerRepositoryServiceClient) SetContainerAddressMap(ctx context.Context, in *SetContainerAddressMapRequest, opts ...grpc.CallOption) (*SetContainerAddressMapResponse, error) {
+	out := new(SetContainerAddressMapResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerAddressMap_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *containerRepositoryServiceClient) GetContainerAddressMap(ctx context.Context, in *GetContainerAddressMapRequest, opts ...grpc.CallOption) (*GetContainerAddressMapResponse, error) {
+	out := new(GetContainerAddressMapResponse)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetContainerAddressMap_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *containerRepositoryServiceClient) SetWorkerAddress(ctx context.Context, in *SetWorkerAddressRequest, opts ...grpc.CallOption) (*SetWorkerAddressResponse, error) {
 	out := new(SetWorkerAddressResponse)
 	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetWorkerAddress_FullMethodName, in, out, opts...)
@@ -132,6 +154,8 @@ type ContainerRepositoryServiceServer interface {
 	UpdateContainerStatus(context.Context, *UpdateContainerStatusRequest) (*UpdateContainerStatusResponse, error)
 	SetContainerExitCode(context.Context, *SetContainerExitCodeRequest) (*SetContainerExitCodeResponse, error)
 	SetContainerAddress(context.Context, *SetContainerAddressRequest) (*SetContainerAddressResponse, error)
+	SetContainerAddressMap(context.Context, *SetContainerAddressMapRequest) (*SetContainerAddressMapResponse, error)
+	GetContainerAddressMap(context.Context, *GetContainerAddressMapRequest) (*GetContainerAddressMapResponse, error)
 	SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error)
 	UpdateCheckpointState(context.Context, *UpdateCheckpointStateRequest) (*UpdateCheckpointStateResponse, error)
 	GetCheckpointState(context.Context, *GetCheckpointStateRequest) (*GetCheckpointStateResponse, error)
@@ -156,6 +180,12 @@ func (UnimplementedContainerRepositoryServiceServer) SetContainerExitCode(contex
 }
 func (UnimplementedContainerRepositoryServiceServer) SetContainerAddress(context.Context, *SetContainerAddressRequest) (*SetContainerAddressResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetContainerAddress not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) SetContainerAddressMap(context.Context, *SetContainerAddressMapRequest) (*SetContainerAddressMapResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetContainerAddressMap not implemented")
+}
+func (UnimplementedContainerRepositoryServiceServer) GetContainerAddressMap(context.Context, *GetContainerAddressMapRequest) (*GetContainerAddressMapResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetContainerAddressMap not implemented")
 }
 func (UnimplementedContainerRepositoryServiceServer) SetWorkerAddress(context.Context, *SetWorkerAddressRequest) (*SetWorkerAddressResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetWorkerAddress not implemented")
@@ -270,6 +300,42 @@ func _ContainerRepositoryService_SetContainerAddress_Handler(srv interface{}, ct
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ContainerRepositoryService_SetContainerAddressMap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetContainerAddressMapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).SetContainerAddressMap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_SetContainerAddressMap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).SetContainerAddressMap(ctx, req.(*SetContainerAddressMapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ContainerRepositoryService_GetContainerAddressMap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetContainerAddressMapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerRepositoryServiceServer).GetContainerAddressMap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerRepositoryService_GetContainerAddressMap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerRepositoryServiceServer).GetContainerAddressMap(ctx, req.(*GetContainerAddressMapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ContainerRepositoryService_SetWorkerAddress_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetWorkerAddressRequest)
 	if err := dec(in); err != nil {
@@ -350,6 +416,14 @@ var ContainerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetContainerAddress",
 			Handler:    _ContainerRepositoryService_SetContainerAddress_Handler,
+		},
+		{
+			MethodName: "SetContainerAddressMap",
+			Handler:    _ContainerRepositoryService_SetContainerAddressMap_Handler,
+		},
+		{
+			MethodName: "GetContainerAddressMap",
+			Handler:    _ContainerRepositoryService_GetContainerAddressMap_Handler,
 		},
 		{
 			MethodName: "SetWorkerAddress",

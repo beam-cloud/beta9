@@ -72,6 +72,7 @@ class BuildImageRequest(betterproto.Message):
     build_ctx_object: str = betterproto.string_field(9)
     secrets: List[str] = betterproto.string_field(10)
     gpu: str = betterproto.string_field(11)
+    ignore_python: bool = betterproto.bool_field(12)
 
 
 @dataclass(eq=False, repr=False)

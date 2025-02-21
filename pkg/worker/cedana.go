@@ -13,7 +13,7 @@ import (
 	cedanaproto "buf.build/gen/go/cedana/task/protocolbuffers/go"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/go-runc"
-	types "github.com/cedana/cedana/pkg/types"
+	types "github.com/cedana/cedana/pkg/config"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -76,10 +76,8 @@ func NewCedanaClient(
 	// XXX: Set config using env until config JSON parsing is fixed
 	daemon.Env = append(os.Environ(),
 		fmt.Sprintf("CEDANA_LOG_LEVEL=%s", cedanaLogLevel),
-		fmt.Sprintf("CEDANA_CLIENT_LEAVE_RUNNING=%t", config.Client.LeaveRunning),
-		fmt.Sprintf("CEDANA_DUMP_STORAGE_DIR=%s", config.SharedStorage.DumpStorageDir),
-		fmt.Sprintf("CEDANA_URL=%s", config.Connection.CedanaUrl),
-		fmt.Sprintf("CEDANA_AUTH_TOKEN=%s", config.Connection.CedanaAuthToken),
+		fmt.Sprintf("CEDANA_URL=%s", config.Connection.URL),
+		fmt.Sprintf("CEDANA_AUTH_TOKEN=%s", config.Connection.AuthToken),
 		fmt.Sprintf("CEDANA_REMOTE=%t", cedanaUseRemoteDB),
 	)
 

@@ -212,7 +212,7 @@ class _CallableWrapper(DeployableMixin):
         return self(*args, **kwargs)
 
     def serve(self, **kwargs):
-        terminal.error("Serve has not yet been implemented.")
+        terminal.error("Serve has not been implemented for functions.")
 
     def _format_args(self, args):
         if isinstance(args, tuple):

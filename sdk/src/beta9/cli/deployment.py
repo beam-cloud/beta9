@@ -1,15 +1,10 @@
-import importlib
-import os
-import sys
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import terminal
-from ..abstractions.mixins import DeployableMixin
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
@@ -17,13 +12,21 @@ from ..clients.gateway import (
     DeleteDeploymentResponse,
     ListDeploymentsRequest,
     ListDeploymentsResponse,
+    ScaleDeploymentRequest,
+    ScaleDeploymentResponse,
     StartDeploymentRequest,
     StartDeploymentResponse,
     StopDeploymentRequest,
     StopDeploymentResponse,
     StringList,
 )
-from .extraclick import ClickCommonGroup, ClickManagementGroup
+from ..utils import load_module_spec
+from .extraclick import (
+    ClickCommonGroup,
+    ClickManagementGroup,
+    handle_config_override,
+    override_config_options,
+)
 
 
 @click.group(cls=ClickCommonGroup)
@@ -36,12 +39,12 @@ def common(**_):
     help="""
     Deploy a new function.
 
-    ENTRYPOINT is in the format of "file:function".
+    HANDLER is in the format of "file:function".
     """,
     epilog="""
       Examples:
 
-        {cli_name} deploy --name my-app app.py:handler
+        {cli_name} deploy --name my-app app.py:my_func
 
         {cli_name} deploy -n my-app-2 app.py:my_func
         \b
@@ -55,18 +58,31 @@ def common(**_):
     required=False,
 )
 @click.argument(
-    "entrypoint",
+    "handler",
     nargs=1,
-    required=True,
+    required=False,
 )
 @click.option(
     "--url-type",
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@override_config_options
 @click.pass_context
-def deploy(ctx: click.Context, name: str, entrypoint: str, url_type: str):
-    ctx.invoke(create_deployment, name=name, entrypoint=entrypoint, url_type=url_type)
+def deploy(
+    ctx: click.Context,
+    name: str,
+    handler: str,
+    url_type: str,
+    **kwargs,
+):
+    ctx.invoke(
+        create_deployment,
+        name=name,
+        handler=handler,
+        url_type=url_type,
+        **kwargs,
+    )
 
 
 @click.group(
@@ -76,6 +92,17 @@ def deploy(ctx: click.Context, name: str, entrypoint: str, url_type: str):
 )
 def management():
     pass
+
+
+def _generate_pod_module(name: str, entrypoint: str):
+    from beta9.abstractions.pod import Pod
+
+    pod = Pod(
+        name=name,
+        entrypoint=entrypoint,
+    )
+
+    return pod
 
 
 @management.command(
@@ -95,46 +122,49 @@ def management():
     required=False,
 )
 @click.option(
-    "--entrypoint",
-    "-e",
-    help='The name the entrypoint e.g. "file:function".',
-    required=True,
+    "--handler",
+    help='The name the handler e.g. "file:function" or script to run.',
 )
 @click.option(
     "--url-type",
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@override_config_options
 @extraclick.pass_service_client
-def create_deployment(service: ServiceClient, name: str, entrypoint: str, url_type: str):
-    current_dir = os.getcwd()
-    if current_dir not in sys.path:
-        sys.path.insert(0, current_dir)
+def create_deployment(
+    service: ServiceClient,
+    name: str,
+    handler: str,
+    url_type: str,
+    **kwargs,
+):
+    module = None
+    entrypoint = kwargs["entrypoint"]
+    if handler:
+        user_obj, module_name, obj_name = load_module_spec(handler, "deploy")
 
-    module_path, obj_name, *_ = entrypoint.split(":") if ":" in entrypoint else (entrypoint, "")
-    module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
+        if hasattr(user_obj, "set_handler"):
+            user_obj.set_handler(f"{module_name}:{obj_name}")
 
-    if not Path(module_path).exists():
-        terminal.error(f"Unable to find file: '{module_path}'")
+    elif entrypoint:
+        user_obj = _generate_pod_module(name, entrypoint)
 
-    if not obj_name:
-        terminal.error(
-            "Invalid handler function specified. Expected format: beam deploy [file.py]:[function]"
-        )
+    else:
+        terminal.error("No handler or entrypoint specified")
+        return
 
-    module = importlib.import_module(module_name)
+    if not handle_config_override(user_obj, kwargs):
+        return
 
-    user_obj: Optional[DeployableMixin] = getattr(module, obj_name, None)
-    if user_obj is None:
-        terminal.error(
-            f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{obj_name}'"
-        )
-
-    if hasattr(user_obj, "set_handler"):
-        user_obj.set_handler(f"{module_name}:{obj_name}")
+    if not module and hasattr(user_obj, "generate_deployment_artifacts"):
+        user_obj.generate_deployment_artifacts(**kwargs)
 
     if not user_obj.deploy(name=name, context=service._config, url_type=url_type):  # type: ignore
         terminal.error("Deployment failed ☠️")
+
+    if not module and hasattr(user_obj, "cleanup_deployment_artifacts"):
+        user_obj.cleanup_deployment_artifacts()
 
 
 @management.command(
@@ -309,3 +339,37 @@ def delete_deployment(service: ServiceClient, deployment_id: str):
         terminal.error(res.err_msg)
 
     terminal.print(f"Deleted {deployment_id}")
+
+
+@management.command(
+    name="scale",
+    help="Scale an active deployment.",
+    epilog="""
+    Examples:
+
+        # Start a deployment
+        {cli_name} deployment scale 5bd2e248-6d7c-417b-ac7b-0b92aa0a5572 --containers 2
+        """,
+)
+@click.argument(
+    "deployment_id",
+    type=click.STRING,
+    required=True,
+)
+@click.option(
+    "--containers",
+    type=click.INT,
+    required=True,
+    help="The number of containers to scale to.",
+)
+@extraclick.pass_service_client
+def scale_deployment(service: ServiceClient, deployment_id: str, containers: int):
+    res: ScaleDeploymentResponse
+    res = service.gateway.scale_deployment(
+        ScaleDeploymentRequest(id=deployment_id, containers=containers)
+    )
+
+    if not res.ok:
+        terminal.error(res.err_msg)
+
+    terminal.print(f"Scaled deployment {deployment_id} to {containers} containers")

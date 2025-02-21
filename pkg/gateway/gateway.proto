@@ -37,6 +37,7 @@ service GatewayService {
   rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
   rpc StartDeployment(StartDeploymentRequest) returns (StartDeploymentResponse);
+  rpc ScaleDeployment(ScaleDeploymentRequest) returns (ScaleDeploymentResponse);
   rpc DeleteDeployment(DeleteDeploymentRequest)
       returns (DeleteDeploymentResponse);
 
@@ -249,6 +250,8 @@ message GetOrCreateStubRequest {
   uint32 gpu_count = 27;
   string on_deploy = 28;
   string on_deploy_stub_id = 29;
+  repeated string entrypoint = 30;
+  repeated uint32 ports = 31;
 }
 
 message GetOrCreateStubResponse {
@@ -305,6 +308,16 @@ message StopDeploymentResponse {
 message StartDeploymentRequest { string id = 1; }
 
 message StartDeploymentResponse {
+  bool ok = 1;
+  string err_msg = 2;
+}
+
+message ScaleDeploymentRequest {
+  string id = 1;
+  uint32 containers = 2;
+}
+
+message ScaleDeploymentResponse {
   bool ok = 1;
   string err_msg = 2;
 }

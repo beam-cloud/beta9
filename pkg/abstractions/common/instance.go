@@ -2,6 +2,7 @@ package abstractions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -175,6 +176,7 @@ func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 
 func (i *AutoscaledInstance) Monitor() error {
 	go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
+
 	ignoreScalingEventWindow := time.Now().Add(-IgnoreScalingEventInterval)
 
 	for {
@@ -274,6 +276,14 @@ func (i *AutoscaledInstance) Sync() error {
 		if len(deployments) == 1 && !deployments[0].Active {
 			i.IsActive = false
 		}
+
+		stubConfigRaw := deployments[0].Stub.Config
+		stubConfig := &types.StubConfigV1{}
+		if err := json.Unmarshal([]byte(stubConfigRaw), stubConfig); err != nil {
+			return err
+		}
+
+		i.StubConfig = stubConfig
 	}
 
 	return nil

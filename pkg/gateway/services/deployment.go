@@ -2,6 +2,8 @@ package gatewayservices
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -108,6 +110,46 @@ func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploy
 	}
 
 	return &pb.StopDeploymentResponse{
+		Ok: true,
+	}, nil
+}
+
+func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDeploymentRequest) (*pb.ScaleDeploymentResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	// Get deployment
+	deploymentWithRelated, err := gws.backendRepo.GetDeploymentByExternalId(ctx, authInfo.Workspace.Id, in.Id)
+	if err != nil {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get deployment",
+		}, nil
+	}
+
+	if deploymentWithRelated == nil {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Deployment not found",
+		}, nil
+	}
+
+	// For now, we only support direct scaling of pod deployments
+	if deploymentWithRelated.Stub.Type != types.StubType(types.StubTypePodDeployment) {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("This type of deployment cannot be scaled directly."),
+		}, nil
+	}
+
+	// Scale deployment
+	if err := gws.scaleDeployment(ctx, *deploymentWithRelated, uint(in.Containers)); err != nil {
+		return &pb.ScaleDeploymentResponse{
+			Ok:     false,
+			ErrMsg: "Unable to scale deployment",
+		}, nil
+	}
+
+	return &pb.ScaleDeploymentResponse{
 		Ok: true,
 	}, nil
 }
@@ -226,6 +268,32 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 			"timestamp": time.Now().Unix(),
 		}})
 	}
+
+	return nil
+}
+
+func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types.DeploymentWithRelated, containers uint) error {
+	stubConfigRaw := deployment.Stub.Config
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(stubConfigRaw), stubConfig); err != nil {
+		return err
+	}
+
+	stubConfig.Autoscaler.MaxContainers = containers
+	stubConfig.Autoscaler.MinContainers = containers
+
+	err := gws.backendRepo.UpdateStubConfig(ctx, deployment.Stub.Id, stubConfig)
+	if err != nil {
+		return err
+	}
+
+	// Publish reload instance event
+	eventBus := common.NewEventBus(gws.redisClient)
+	eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
+		"stub_id":   deployment.Stub.ExternalId,
+		"stub_type": deployment.StubType,
+		"timestamp": time.Now().Unix(),
+	}})
 
 	return nil
 }

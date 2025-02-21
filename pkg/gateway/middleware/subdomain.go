@@ -22,13 +22,18 @@ const (
 )
 
 var (
-	subdomainRegex *regexp.Regexp = regexp.MustCompile(
+	subdomainRegex = regexp.MustCompile(
 		`^` +
 			`(?:` +
-			`(?P<Subdomain>[a-zA-Z0-9-]+-[a-zA-Z0-9]{7})(?:-(?P<Version>v[0-9]+|latest))?` + // Matches Subdomain-Version. Version is optional.
+			// Deployment form: something-abcdefg optional -vN or -latest
+			`(?P<Subdomain>[a-zA-Z0-9-]+-[a-zA-Z0-9]{7})(?:-(?P<Version>v[0-9]+|latest))?` +
+			// OR StubID form: 36-char (UUID)
 			`|` +
-			`(?P<StubID>[a-f0-9-]{36})` + // Matches Stub ID
-			`)$`,
+			`(?P<StubID>[a-f0-9-]{36})` +
+			`)` +
+			// Optional "-8080"-style port suffix
+			`(?:-(?P<Port>[0-9]+))?` +
+			`$`,
 	)
 
 	ErrSubdomainDoesNotMatchRegex = errors.New("subdomain does not match regex")
@@ -98,6 +103,7 @@ type SubdomainFields struct {
 	Version   uint
 	StubId    string
 	Subdomain string
+	Port      uint32
 }
 
 func parseSubdomain(host, baseDomain string) string {
@@ -137,10 +143,19 @@ func parseSubdomainFields(subdomain string) (*SubdomainFields, error) {
 		}
 	}
 
+	// Parse the numeric port if provided
+	var portVal uint32
+	if portStr := fields["Port"]; portStr != "" {
+		if p, err := strconv.ParseUint(portStr, 10, 32); err == nil {
+			portVal = uint32(p)
+		}
+	}
+
 	return &SubdomainFields{
 		StubId:    fields["StubID"],
 		Subdomain: fields["Subdomain"],
 		Version:   parseVersion(fields["Version"]),
+		Port:      portVal,
 	}, nil
 }
 
@@ -196,6 +211,11 @@ func buildHandlerPath(stub *types.Stub, fields *SubdomainFields, extraPaths ...s
 		} else {
 			pathSegments = append(pathSegments, "latest")
 		}
+	}
+
+	// If a port is specified, add it as a separate path segment
+	if fields != nil && fields.Port > 0 {
+		pathSegments = append(pathSegments, fmt.Sprintf("%d", fields.Port))
 	}
 
 	pathSegments = append(pathSegments, extraPaths...)

@@ -164,6 +164,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		BuildCtxObject:     in.BuildCtxObject,
 		BuildSecrets:       buildSecrets,
 		Gpu:                in.Gpu,
+		IgnorePython:       in.IgnorePython,
 	}
 
 	ctx := stream.Context()
