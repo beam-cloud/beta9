@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
 from .. import terminal
@@ -22,13 +23,27 @@ from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
 
 
+@dataclass
+class CreatePodResult:
+    """
+    Stores the result of creating a Pod container.
+
+    Attributes:
+        container_id: The unique ID of the created container.
+        url: The URL for accessing the container over HTTP (if ports were exposed).
+    """
+
+    container_id: str
+    url: str
+
+
 class Pod(RunnerAbstraction):
     """
     Pod allows you to run arbitrary services in fast, scalable, and secure remote containers.
 
     Parameters:
-        entrypoint (List[str]): Required
-            The command to run in the container.
+        entrypoint (Optional[List[str]]):
+            The command to run in the container. Default is [].
         ports (Optional[List[int]]):
             The ports to expose the container to. Default is [].
         name (Optional[str]):
@@ -61,15 +76,17 @@ class Pod(RunnerAbstraction):
         from beta9 import Image, Pod
 
         image = Image()
-        pod = Pod(cpu=2, memory=512, image=image)
-        container_id = pod.create(entrypoint=["python", "-c", "\"print('Hello, World!')\""])
-        print(container_id)
+        pod = Pod(cpu=2, memory=512, image=image, ports=[8080])
+        result = pod.create(entrypoint=["python", "-c", "\"print('Hello, World!')\""])
+        print(result.container_id)
+        print(result.url)
+
         ```
     """
 
     def __init__(
         self,
-        entrypoint: List[str],
+        entrypoint: List[str] = [],
         ports: Optional[List[int]] = [],
         name: Optional[str] = None,
         cpu: Union[int, float, str] = 1.0,
@@ -110,7 +127,7 @@ class Pod(RunnerAbstraction):
     def stub(self, value: PodServiceStub) -> None:
         self._pod_stub = value
 
-    def create(self, entrypoint: List[str] = []) -> str:
+    def create(self, entrypoint: List[str] = []) -> CreatePodResult:
         """
         Create a new container that will run until either it completes normally, or is killed.
 
@@ -122,10 +139,9 @@ class Pod(RunnerAbstraction):
 
         if not self.entrypoint:
             terminal.error("You must specify an entrypoint.")
-            return ""
 
         if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
-            return ""
+            return CreatePodResult(container_id="", url="")
 
         terminal.header("Creating container")
         create_response: CreatePodResponse = self.stub.create_pod(
@@ -134,11 +150,13 @@ class Pod(RunnerAbstraction):
             )
         )
 
+        url = ""
         if create_response.ok:
             terminal.header(f"Container created successfully ===> {create_response.container_id}")
-            self.print_invocation_snippet()
+            url_res = self.print_invocation_snippet()
+            url = url_res.url
 
-        return create_response.container_id
+        return CreatePodResult(container_id=create_response.container_id, url=url)
 
     def deploy(
         self,
