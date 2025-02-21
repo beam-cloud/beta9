@@ -253,11 +253,9 @@ type StubConfigV1 struct {
 	Autoscaler         *Autoscaler     `json:"autoscaler"`
 	Extra              json.RawMessage `json:"extra"`
 	CheckpointEnabled  bool            `json:"checkpoint_enabled"`
-
-	// TODO: added these for pod
-	WorkDir    string   `json:"work_dir"`
-	EntryPoint []string `json:"entry_point"`
-	Ports      []uint32 `json:"ports"`
+	WorkDir            string          `json:"work_dir"`
+	EntryPoint         []string        `json:"entry_point"`
+	Ports              []uint32        `json:"ports"`
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {
