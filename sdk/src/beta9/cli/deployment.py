@@ -1,15 +1,11 @@
-import importlib
-import os
-import sys
-from pathlib import Path
-from typing import Dict, List, Optional
+import shlex
+from typing import Dict, List
 
 import click
 from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import terminal
-from ..abstractions.mixins import DeployableMixin
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
@@ -25,7 +21,13 @@ from ..clients.gateway import (
     StopDeploymentResponse,
     StringList,
 )
-from .extraclick import ClickCommonGroup, ClickManagementGroup
+from ..utils import load_module_spec
+from .extraclick import (
+    ClickCommonGroup,
+    ClickManagementGroup,
+    handle_config_override,
+    override_config_options,
+)
 
 
 @click.group(cls=ClickCommonGroup)
@@ -66,9 +68,22 @@ def common(**_):
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@override_config_options
 @click.pass_context
-def deploy(ctx: click.Context, name: str, entrypoint: str, url_type: str):
-    ctx.invoke(create_deployment, name=name, entrypoint=entrypoint, url_type=url_type)
+def deploy(
+    ctx: click.Context,
+    name: str,
+    entrypoint: str,
+    url_type: str,
+    **kwargs,
+):
+    ctx.invoke(
+        create_deployment,
+        name=name,
+        entrypoint=entrypoint,
+        url_type=url_type,
+        **kwargs,
+    )
 
 
 @click.group(
@@ -78,6 +93,17 @@ def deploy(ctx: click.Context, name: str, entrypoint: str, url_type: str):
 )
 def management():
     pass
+
+
+def generate_pod_module(name: str, entrypoint: str):
+    from beta9.abstractions.pod import Pod
+
+    pod = Pod(
+        name=name,
+        entrypoint=entrypoint,
+    )
+
+    return pod
 
 
 @management.command(
@@ -99,7 +125,7 @@ def management():
 @click.option(
     "--entrypoint",
     "-e",
-    help='The name the entrypoint e.g. "file:function".',
+    help='The name the entrypoint e.g. "file:function" or script to run.',
     required=True,
 )
 @click.option(
@@ -107,36 +133,38 @@ def management():
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@override_config_options
 @extraclick.pass_service_client
-def create_deployment(service: ServiceClient, name: str, entrypoint: str, url_type: str):
-    current_dir = os.getcwd()
-    if current_dir not in sys.path:
-        sys.path.insert(0, current_dir)
+def create_deployment(
+    service: ServiceClient,
+    name: str,
+    entrypoint: str,
+    url_type: str,
+    **kwargs,
+):
+    module = None
+    try:
+        user_obj, module_name, obj_name = load_module_spec(entrypoint, "deploy")
 
-    module_path, obj_name, *_ = entrypoint.split(":") if ":" in entrypoint else (entrypoint, "")
-    module_name = module_path.replace(".py", "").replace(os.path.sep, ".")
+        if hasattr(user_obj, "set_handler"):
+            user_obj.set_handler(f"{module_name}:{obj_name}")
+    except BaseException as e:
+        terminal.error(f"Error importing module with entrypoint: {e}", exit=False)
+        user_obj = generate_pod_module(name, shlex.split(entrypoint))
+        kwargs["entrypoint"] = entrypoint
 
-    if not Path(module_path).exists():
-        terminal.error(f"Unable to find file: '{module_path}'")
+    if not handle_config_override(user_obj, kwargs):
+        terminal.error("Failed to override config")
+        return
 
-    if not obj_name:
-        terminal.error(
-            "Invalid handler function specified. Expected format: beam deploy [file.py]:[function]"
-        )
-
-    module = importlib.import_module(module_name)
-
-    user_obj: Optional[DeployableMixin] = getattr(module, obj_name, None)
-    if user_obj is None:
-        terminal.error(
-            f"Invalid handler function specified. Make sure '{module_path}' contains the function: '{obj_name}'"
-        )
-
-    if hasattr(user_obj, "set_handler"):
-        user_obj.set_handler(f"{module_name}:{obj_name}")
+    if not module and hasattr(user_obj, "generate_deployment_artifacts"):
+        user_obj.generate_deployment_artifacts(**kwargs)
 
     if not user_obj.deploy(name=name, context=service._config, url_type=url_type):  # type: ignore
         terminal.error("Deployment failed ☠️")
+
+    if not module and hasattr(user_obj, "cleanup_deployment_artifacts"):
+        user_obj.cleanup_deployment_artifacts()
 
 
 @management.command(
