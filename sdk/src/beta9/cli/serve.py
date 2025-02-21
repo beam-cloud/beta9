@@ -2,10 +2,11 @@ from typing import Optional
 
 import click
 
+from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..utils import load_module_spec
-from .extraclick import ClickCommonGroup
+from .extraclick import ClickCommonGroup, handle_config_override, override_config_options
 
 
 @click.group(cls=ClickCommonGroup)
@@ -45,6 +46,7 @@ def common(**_):
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@override_config_options
 @extraclick.pass_service_client
 @click.pass_context
 def serve(
@@ -53,10 +55,15 @@ def serve(
     handler: str,
     timeout: Optional[int] = None,
     url_type: str = "path",
+    **kwargs,
 ):
     user_obj, module_name, obj_name = load_module_spec(handler, "serve")
 
     if hasattr(user_obj, "set_handler"):
         user_obj.set_handler(f"{module_name}:{obj_name}")
+
+    if not handle_config_override(user_obj, kwargs):
+        terminal.error("Failed to override config")
+        return
 
     user_obj.serve(timeout=int(timeout), url_type=url_type)  # type:ignore

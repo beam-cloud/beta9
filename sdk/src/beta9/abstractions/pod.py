@@ -294,3 +294,6 @@ app = Pod(
             password=ssh_token,
         ) as shell:
             shell.start()
+
+    def serve(self, **kwargs):
+        terminal.error("Serve has not yet been implemented for Pods.")
