@@ -2,7 +2,6 @@ from typing import Optional
 
 import click
 
-from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..utils import load_module_spec
@@ -63,7 +62,6 @@ def serve(
         user_obj.set_handler(f"{module_name}:{obj_name}")
 
     if not handle_config_override(user_obj, kwargs):
-        terminal.error("Failed to override config")
         return
 
     user_obj.serve(timeout=int(timeout), url_type=url_type)  # type:ignore

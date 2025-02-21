@@ -302,6 +302,7 @@ PARSE_CONFIG_PREFIX = "parse_"
 
 
 def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
+    current_key = None
     try:
         config_class_instance = None
         if hasattr(func, "parent"):
@@ -314,6 +315,7 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
         init_kwargs = get_init_args_kwargs(config_class_instance)
 
         for key, value in kwargs.items():
+            current_key = key
             if value is not None and key in init_kwargs:
                 if isinstance(value, tuple):
                     value = list(value)
@@ -330,5 +332,5 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
 
         return True
     except BaseException as e:
-        terminal.error(f"Error overriding config: {e}", exit=False)
+        terminal.error(f"Invalid CLI argument ==> {current_key}: {e}", exit=False)
         return False

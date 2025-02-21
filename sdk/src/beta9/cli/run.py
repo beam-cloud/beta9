@@ -59,7 +59,6 @@ def run(
         return
 
     if not handle_config_override(pod_spec, kwargs):
-        terminal.error("Failed to handle config overrides.")
         return
 
     if not pod_spec.create():

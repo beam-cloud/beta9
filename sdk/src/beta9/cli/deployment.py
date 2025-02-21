@@ -155,7 +155,6 @@ def create_deployment(
         return
 
     if not handle_config_override(user_obj, kwargs):
-        terminal.error("Failed to override config")
         return
 
     if not module and hasattr(user_obj, "generate_deployment_artifacts"):

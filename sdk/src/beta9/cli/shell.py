@@ -63,7 +63,6 @@ def shell(
         terminal.error("No handler or entrypoint specified.")
 
     if not handle_config_override(user_obj, kwargs):
-        terminal.error("Failed to handle config overrides.")
         return
 
     user_obj.shell(url_type=url_type)  # type:ignore
