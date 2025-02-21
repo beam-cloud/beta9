@@ -110,6 +110,19 @@ func (ps *GenericPodService) InstanceFactory(ctx context.Context, stubId string,
 	return ps.getOrCreatePodInstance(stubId)
 }
 
+func (ps *GenericPodService) IsPublic(stubId string) (*types.Workspace, error) {
+	instance, err := ps.getOrCreatePodInstance(stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance.StubConfig.Authorized {
+		return nil, errors.New("unauthorized")
+	}
+
+	return instance.Workspace, nil
+}
+
 func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) error {
 	instance, err := ps.getOrCreatePodInstance(stubId)
 	if err != nil {

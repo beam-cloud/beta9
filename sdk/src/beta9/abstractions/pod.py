@@ -52,6 +52,9 @@ class Pod(RunnerAbstraction):
             A list of volumes to be mounted to the pod. Default is None.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the pod as environment variables. Default is [].
+        authorized (bool):
+            If false, allows the pod to be accessed without an auth token.
+            Default is False.
 
     Example usage:
         ```
@@ -59,8 +62,8 @@ class Pod(RunnerAbstraction):
 
         image = Image()
         pod = Pod(cpu=2, memory=512, image=image)
-        exit_code = pod.run((["python", "-c", "\"print('Hello, World!')\""]))
-        print(exit_code)
+        container_id = pod.create(entrypoint=["python", "-c", "\"print('Hello, World!')\""])
+        print(container_id)
         ```
     """
 
@@ -76,6 +79,7 @@ class Pod(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        authorized: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -88,6 +92,7 @@ class Pod(RunnerAbstraction):
             entrypoint=entrypoint,
             ports=ports,
             name=name,
+            authorized=authorized,
         )
 
         self.task_id = ""
@@ -105,11 +110,24 @@ class Pod(RunnerAbstraction):
     def stub(self, value: PodServiceStub) -> None:
         self._pod_stub = value
 
-    def create(self) -> str:
+    def create(self, entrypoint: List[str] = []) -> str:
+        """
+        Create a new container that will run until either it completes normally, or is killed.
+
+        Args:
+            entrypoint (List[str]): The command to run in the pod container (overrides the entrypoint specified in the Pod constructor).
+        """
+        if entrypoint:
+            self.entrypoint = entrypoint
+
+        if not self.entrypoint:
+            terminal.error("You must specify an entrypoint.")
+            return ""
+
         if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
             return ""
 
-        terminal.header("Creating")
+        terminal.header("Creating container")
         create_response: CreatePodResponse = self.stub.create_pod(
             CreatePodRequest(
                 stub_id=self.stub_id,
@@ -133,6 +151,10 @@ class Pod(RunnerAbstraction):
             terminal.error(
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
+
+        if not self.entrypoint:
+            terminal.error("You must specify an entrypoint.")
+            return False
 
         if context is not None:
             self.config_context = context

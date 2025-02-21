@@ -23,8 +23,8 @@ func registerPodGroup(g *echo.Group, ps *GenericPodService) *podGroup {
 	g.Any("/:deploymentName/latest/:port/:subPath", auth.WithAuth(group.PodRequest))
 	g.Any("/:deploymentName/v:version/:port", auth.WithAuth(group.PodRequest))
 	g.Any("/:deploymentName/v:version/:port/:subPath", auth.WithAuth(group.PodRequest))
-	// g.Any("/public/:stubId", auth.WithAssumedStubAuth(group.PodRequest, group.ps.IsPublic))
-	// g.Any("/public/:stubId/:subPath", auth.WithAssumedStubAuth(group.PodRequest, group.ps.IsPublic))
+	g.Any("/public/:stubId/:port", auth.WithAssumedStubAuth(group.PodRequest, group.ps.IsPublic))
+	g.Any("/public/:stubId/:port/:subPath", auth.WithAssumedStubAuth(group.PodRequest, group.ps.IsPublic))
 
 	return group
 }
