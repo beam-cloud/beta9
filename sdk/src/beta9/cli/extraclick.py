@@ -293,7 +293,7 @@ def override_config_options(func: click.Command):
     f = click.option(
         "--entrypoint",
         type=ShlexParser(),
-        help="The entrypoint script to run for pod",
+        help="The entrypoint for the container - only used if a handler is not provided.",
     )(f)
     return f
 
