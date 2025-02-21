@@ -369,7 +369,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv && !opts.IgnorePython {
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv {
 
 		if opts.PythonVersion == types.Python3.String() {
 			opts.PythonVersion = b.config.ImageService.PythonVersion
@@ -388,12 +388,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return err
 		}
 		setupCommands = append(setupCommands, installCmd)
-	} else if opts.IgnorePython {
-		opts.PythonVersion = ""
 	}
 
 	// Generate the pip install command and prepend it to the commands list
-	if len(opts.PythonPackages) > 0 && opts.PythonVersion != "" {
+	if len(opts.PythonPackages) > 0 {
 		pipInstallCmd := generatePipInstallCommand(opts.PythonPackages, opts.PythonVersion)
 		setupCommands = append(setupCommands, pipInstallCmd)
 	}
