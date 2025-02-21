@@ -95,7 +95,7 @@ def management():
     pass
 
 
-def generate_pod_module(name: str, entrypoint: str):
+def _generate_pod_module(name: str, entrypoint: str):
     from beta9.abstractions.pod import Pod
 
     pod = Pod(
@@ -148,9 +148,8 @@ def create_deployment(
 
         if hasattr(user_obj, "set_handler"):
             user_obj.set_handler(f"{module_name}:{obj_name}")
-    except BaseException as e:
-        terminal.error(f"Error importing module with entrypoint: {e}", exit=False)
-        user_obj = generate_pod_module(name, shlex.split(entrypoint))
+    except BaseException:
+        user_obj = _generate_pod_module(name, shlex.split(entrypoint))
         kwargs["entrypoint"] = entrypoint
 
     if not handle_config_override(user_obj, kwargs):

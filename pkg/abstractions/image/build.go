@@ -841,7 +841,7 @@ func (b *Builder) calculateImageArchiveDuration(ctx context.Context, opts *Build
 	}
 
 	timePerByte := time.Duration(b.config.ImageService.ArchiveNanosecondsPerByte) * time.Nanosecond
-	timeLimit := timePerByte * time.Duration(imageSizeBytes)
+	timeLimit := timePerByte * time.Duration(imageSizeBytes) * 10
 	log.Info().Int("image_size", imageSizeBytes).Msgf("estimated time to prepare new base image: %s", timeLimit.String())
 	return timeLimit
 }
