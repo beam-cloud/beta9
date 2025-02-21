@@ -175,7 +175,6 @@ func (i *AutoscaledInstance) ConsumeContainerEvent(event types.ContainerEvent) {
 }
 
 func (i *AutoscaledInstance) Monitor() error {
-	log.Printf("starting autoscaler for %s", i.Name)
 	go i.Autoscaler.Start(i.Ctx) // Start the autoscaler
 
 	ignoreScalingEventWindow := time.Now().Add(-IgnoreScalingEventInterval)
