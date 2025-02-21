@@ -261,39 +261,48 @@ class ShlexParser(click.ParamType):
 
 def override_config_options(func: click.Command):
     f = click.option(
-        "--cpu", type=click.INT, help="The number of CPU units to allocate.", required=False
+        "--cpu",
+        type=click.FLOAT,
+        help="The amount of CPU to allocate (in cores, e.g. --cpu 0.5).",
+        required=False,
     )(func)
     f = click.option(
         "--memory",
         type=click.STRING,
-        help="The amount of memory to allocate in MB.",
+        help="The amount of memory to allocate (in MB).",
         required=False,
     )(f)
     f = click.option(
         "--gpu", type=click.STRING, help="The type of GPU to allocate.", required=False
     )(f)
     f = click.option(
-        "--gpu-count", type=click.INT, help="The number of GPUs to allocate.", required=False
-    )(f)
-    f = click.option(
-        "--image", type=ImageParser(), help="The image to use for the deployment.", required=False
+        "--gpu-count",
+        type=click.INT,
+        help="The number of GPUs to allocate to the container.",
+        required=False,
     )(f)
     f = click.option(
         "--secrets",
         type=click.STRING,
         multiple=True,
-        help="The secrets to inject into the deployment.",
+        help="The secrets to inject into the container (e.g. --secrets SECRET1,SECRET2).",
     )(f)
     f = click.option(
         "--ports",
         type=click.INT,
         multiple=True,
-        help="The ports to expose the deployment on.",
+        help="The ports to expose inside the container (e.g. --ports 8000,8001).",
     )(f)
     f = click.option(
         "--entrypoint",
         type=ShlexParser(),
         help="The entrypoint for the container - only used if a handler is not provided.",
+    )(f)
+    f = click.option(
+        "--image",
+        type=ImageParser(),
+        help="The image to use for the container (e.g. --image python:3.10).",
+        required=False,
     )(f)
     return f
 
