@@ -43,6 +43,12 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		autoscaler.MinContainers = uint(in.Autoscaler.MinContainers)
 	}
 
+	// By default, pod deployments are scaled to 1 container
+	if in.StubType == types.StubTypePodDeployment {
+		autoscaler.MinContainers = 1
+		autoscaler.MaxContainers = 1
+	}
+
 	if in.TaskPolicy == nil {
 		in.TaskPolicy = &pb.TaskPolicy{
 			MaxRetries: in.Retries,
@@ -239,7 +245,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		}, nil
 	}
 
-	if config.Autoscaler.MinContainers > 0 || stub.Type == types.StubType(types.StubTypePodDeployment) {
+	if config.Autoscaler.MinContainers > 0 {
 		// Publish reload instance event
 		eventBus := common.NewEventBus(gws.redisClient)
 		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
