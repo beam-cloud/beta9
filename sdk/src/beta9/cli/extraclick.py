@@ -269,7 +269,6 @@ class CommaSeparatedList(click.ParamType):
         if not value:
             return []
         values = value.split(",")
-        print([self.type.convert(v, param, ctx) for v in values])
         return [self.type.convert(v, param, ctx) for v in values]
 
 
