@@ -33,7 +33,7 @@ storage:
     bufferSize: 300
 gateway:
   host: beta9-gateway
-  invokeURLType: host
+  invokeURLType: path
   grpc:
     externalHost: beta9-gateway
     externalPort: 1993
