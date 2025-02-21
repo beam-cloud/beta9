@@ -1,5 +1,3 @@
-import shlex
-
 import click
 
 from .. import terminal
@@ -59,7 +57,7 @@ def shell(
             user_obj.set_handler(f"{module_name}:{obj_name}")
 
     elif entrypoint:
-        user_obj = Pod(entrypoint=shlex.split(entrypoint))
+        user_obj = Pod(entrypoint=entrypoint)
 
     else:
         terminal.error("No handler or entrypoint specified.")

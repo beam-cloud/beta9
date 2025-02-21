@@ -1,5 +1,4 @@
 import inspect
-import shlex
 
 import click
 
@@ -53,8 +52,7 @@ def run(
             terminal.error("Invalid handler function specified. Expected a Pod abstraction.")
 
     elif entrypoint:
-        print(entrypoint)
-        pod_spec = Pod(entrypoint=shlex.split(entrypoint))
+        pod_spec = Pod(entrypoint=entrypoint)
 
     else:
         terminal.error("No handler or entrypoint specified.")

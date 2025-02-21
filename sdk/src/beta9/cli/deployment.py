@@ -1,4 +1,3 @@
-import shlex
 from typing import Dict, List
 
 import click
@@ -149,7 +148,7 @@ def create_deployment(
             user_obj.set_handler(f"{module_name}:{obj_name}")
 
     elif entrypoint:
-        user_obj = _generate_pod_module(name, shlex.split(entrypoint))
+        user_obj = _generate_pod_module(name, entrypoint)
 
     else:
         terminal.error("No handler or entrypoint specified")
