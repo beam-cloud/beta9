@@ -207,7 +207,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		}
 	}
 
-	// Determine how many ports we need
+	// Determine how many ports we need to expose
 	portsToExpose := len(request.Ports)
 	if portsToExpose == 0 {
 		portsToExpose = 1
