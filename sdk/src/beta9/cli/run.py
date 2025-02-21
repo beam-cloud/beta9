@@ -36,35 +36,33 @@ def common(**_):
     """,
 )
 @click.argument(
-    "entrypoint",
+    "handler",
     nargs=1,
-    required=True,
+    required=False,
 )
 @override_config_options
 def run(
-    entrypoint: str,
+    handler: str,
     **kwargs,
 ):
-    pod_spec = None
-    module = None
-    try:
-        pod_spec, module, _ = load_module_spec(entrypoint, "run")
+    entrypoint = kwargs["entrypoint"]
+    if handler:
+        pod_spec, _, _ = load_module_spec(handler, "run")
 
         if not inspect.isclass(type(pod_spec)) or pod_spec.__class__.__name__ != "Pod":
             terminal.error("Invalid handler function specified. Expected a Pod abstraction.")
-    except BaseException:
+
+    elif entrypoint:
+        print(entrypoint)
         pod_spec = Pod(entrypoint=shlex.split(entrypoint))
-        kwargs["entrypoint"] = pod_spec.entrypoint
+
+    else:
+        terminal.error("No handler or entrypoint specified.")
+        return
 
     if not handle_config_override(pod_spec, kwargs):
         terminal.error("Failed to handle config overrides.")
         return
 
-    if not module:
-        # If there no module specified, we need to generate a module file for the pod
-        pod_spec.generate_deployment_artifacts(**kwargs)
-
     if not pod_spec.create():
         terminal.error("Failed to create pod.")
-
-    pod_spec.cleanup_deployment_artifacts()

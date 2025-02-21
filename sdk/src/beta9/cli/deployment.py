@@ -40,12 +40,12 @@ def common(**_):
     help="""
     Deploy a new function.
 
-    ENTRYPOINT is in the format of "file:function".
+    HANDLER is in the format of "file:function".
     """,
     epilog="""
       Examples:
 
-        {cli_name} deploy --name my-app app.py:handler
+        {cli_name} deploy --name my-app app.py:my_func
 
         {cli_name} deploy -n my-app-2 app.py:my_func
         \b
@@ -59,9 +59,9 @@ def common(**_):
     required=False,
 )
 @click.argument(
-    "entrypoint",
+    "handler",
     nargs=1,
-    required=True,
+    required=False,
 )
 @click.option(
     "--url-type",
@@ -73,14 +73,14 @@ def common(**_):
 def deploy(
     ctx: click.Context,
     name: str,
-    entrypoint: str,
+    handler: str,
     url_type: str,
     **kwargs,
 ):
     ctx.invoke(
         create_deployment,
         name=name,
-        entrypoint=entrypoint,
+        handler=handler,
         url_type=url_type,
         **kwargs,
     )
@@ -123,10 +123,8 @@ def _generate_pod_module(name: str, entrypoint: str):
     required=False,
 )
 @click.option(
-    "--entrypoint",
-    "-e",
-    help='The name the entrypoint e.g. "file:function" or script to run.',
-    required=True,
+    "--handler",
+    help='The name the handler e.g. "file:function" or script to run.',
 )
 @click.option(
     "--url-type",
@@ -138,19 +136,24 @@ def _generate_pod_module(name: str, entrypoint: str):
 def create_deployment(
     service: ServiceClient,
     name: str,
-    entrypoint: str,
+    handler: str,
     url_type: str,
     **kwargs,
 ):
     module = None
-    try:
-        user_obj, module_name, obj_name = load_module_spec(entrypoint, "deploy")
+    entrypoint = kwargs["entrypoint"]
+    if handler:
+        user_obj, module_name, obj_name = load_module_spec(handler, "deploy")
 
         if hasattr(user_obj, "set_handler"):
             user_obj.set_handler(f"{module_name}:{obj_name}")
-    except BaseException:
+
+    elif entrypoint:
         user_obj = _generate_pod_module(name, shlex.split(entrypoint))
-        kwargs["entrypoint"] = entrypoint
+
+    else:
+        terminal.error("No handler or entrypoint specified")
+        return
 
     if not handle_config_override(user_obj, kwargs):
         terminal.error("Failed to override config")

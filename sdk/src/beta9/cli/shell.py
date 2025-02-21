@@ -1,9 +1,13 @@
+import shlex
+
 import click
 
+from .. import terminal
+from ..abstractions.pod import Pod
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..utils import load_module_spec
-from .extraclick import ClickCommonGroup
+from .extraclick import ClickCommonGroup, handle_config_override, override_config_options
 
 
 @click.group(cls=ClickCommonGroup)
@@ -16,7 +20,7 @@ def common(**_):
     help="""
     Connect to a container with the same config as your handler.
 
-    ENTRYPOINT is in the format of "file:function".
+    HANDLER is in the format of "file:function".
     """,
     epilog="""
       Examples:
@@ -28,26 +32,40 @@ def common(**_):
     """,
 )
 @click.argument(
-    "entrypoint",
+    "handler",
     nargs=1,
-    required=True,
+    required=False,
 )
 @click.option(
     "--url-type",
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@override_config_options
 @extraclick.pass_service_client
 @click.pass_context
 def shell(
     ctx: click.Context,
     service: ServiceClient,
-    entrypoint: str,
+    handler: str,
     url_type: str = "path",
+    **kwargs,
 ):
-    user_obj, module_name, obj_name = load_module_spec(entrypoint, "shell")
+    entrypoint = kwargs["entrypoint"]
+    if handler:
+        user_obj, module_name, obj_name = load_module_spec(handler, "shell")
 
-    if hasattr(user_obj, "set_handler"):
-        user_obj.set_handler(f"{module_name}:{obj_name}")
+        if hasattr(user_obj, "set_handler"):
+            user_obj.set_handler(f"{module_name}:{obj_name}")
+
+    elif entrypoint:
+        user_obj = Pod(entrypoint=shlex.split(entrypoint))
+
+    else:
+        terminal.error("No handler or entrypoint specified.")
+
+    if not handle_config_override(user_obj, kwargs):
+        terminal.error("Failed to handle config overrides.")
+        return
 
     user_obj.shell(url_type=url_type)  # type:ignore

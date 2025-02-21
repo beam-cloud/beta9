@@ -279,6 +279,11 @@ def override_config_options(func: click.Command):
         multiple=True,
         help="The ports to expose the deployment on.",
     )(f)
+    f = click.option(
+        "--entrypoint",
+        type=click.STRING,
+        help="The entrypoint script to run for pod",
+    )(f)
     return f
 
 
