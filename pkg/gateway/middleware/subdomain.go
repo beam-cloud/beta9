@@ -213,8 +213,8 @@ func buildHandlerPath(stub *types.Stub, fields *SubdomainFields, extraPaths ...s
 		}
 	}
 
-	// If a port is specified, add it as a separate path segment.
-	if fields.Port > 0 {
+	// If a port is specified, add it as a separate path segment
+	if fields != nil && fields.Port > 0 {
 		pathSegments = append(pathSegments, fmt.Sprintf("%d", fields.Port))
 	}
 
