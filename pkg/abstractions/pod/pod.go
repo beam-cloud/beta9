@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -46,6 +47,7 @@ type PodService interface {
 type GenericPodService struct {
 	pb.PodServiceServer
 	ctx             context.Context
+	mu              sync.Mutex
 	config          types.AppConfig
 	backendRepo     repository.BackendRepository
 	containerRepo   repository.ContainerRepository
@@ -70,6 +72,7 @@ func NewPodService(
 
 	ps := &GenericPodService{
 		ctx:             ctx,
+		mu:              sync.Mutex{},
 		backendRepo:     opts.BackendRepo,
 		containerRepo:   opts.ContainerRepo,
 		workspaceRepo:   opts.WorkspaceRepo,
@@ -107,6 +110,19 @@ func (ps *GenericPodService) InstanceFactory(ctx context.Context, stubId string,
 	return ps.getOrCreatePodInstance(stubId)
 }
 
+func (ps *GenericPodService) IsPublic(stubId string) (*types.Workspace, error) {
+	instance, err := ps.getOrCreatePodInstance(stubId)
+	if err != nil {
+		return nil, err
+	}
+
+	if instance.StubConfig.Authorized {
+		return nil, errors.New("unauthorized")
+	}
+
+	return instance.Workspace, nil
+}
+
 func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) error {
 	instance, err := ps.getOrCreatePodInstance(stubId)
 	if err != nil {
@@ -118,6 +134,19 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 
 func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...func(*podInstance)) (*podInstance, error) {
 	instance, exists := ps.podInstances.Get(stubId)
+	if exists {
+		return instance, nil
+	}
+
+	// The reason we lock here, and then check again -- is because if the instance does not exist, we may have two separate
+	// goroutines trying to create the instance. So, we check first, then get the mutex. If another
+	// routine got the lock, it should have created the instance, so we check once again. That way
+	// we don't create two instances of the same stub, but we also ensure that we return quickly if the instance
+	// _does_ already exist.
+	ps.mu.Lock()
+	defer ps.mu.Unlock()
+
+	instance, exists = ps.podInstances.Get(stubId)
 	if exists {
 		return instance, nil
 	}

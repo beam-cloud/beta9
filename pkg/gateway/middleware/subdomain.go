@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/url"
 	"path"
@@ -26,7 +25,7 @@ var (
 	subdomainRegex = regexp.MustCompile(
 		`^` +
 			`(?:` +
-			// Subdomain form: something-abcdefg optional -vN or -latest
+			// Deployment form: something-abcdefg optional -vN or -latest
 			`(?P<Subdomain>[a-zA-Z0-9-]+-[a-zA-Z0-9]{7})(?:-(?P<Version>v[0-9]+|latest))?` +
 			// OR StubID form: 36-char (UUID)
 			`|` +
@@ -72,11 +71,8 @@ func Subdomain(externalURL string, backendRepo SubdomainBackendRepo, redisClient
 			if handlerPath == "" {
 				fields, err := parseSubdomainFields(subdomain)
 				if err != nil {
-					log.Printf("error parsing subdomain fields: %s", err)
 					return next(ctx)
 				}
-
-				log.Printf("fields: %+v", fields)
 
 				stub, err := getStubForSubdomain(ctx.Request().Context(), backendRepo, fields)
 				if err != nil {
@@ -217,8 +213,8 @@ func buildHandlerPath(stub *types.Stub, fields *SubdomainFields, extraPaths ...s
 		}
 	}
 
-	// If a port is specified, add it as a separate path segment.
-	if fields.Port > 0 {
+	// If a port is specified, add it as a separate path segment
+	if fields != nil && fields.Port > 0 {
 		pathSegments = append(pathSegments, fmt.Sprintf("%d", fields.Port))
 	}
 

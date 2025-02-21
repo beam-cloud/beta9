@@ -1,6 +1,6 @@
 module github.com/beam-cloud/beta9
 
-go 1.22.8
+go 1.22.10
 
 require (
 	buf.build/gen/go/cedana/task/grpc/go v1.5.1-20241203191352-12c25eb032cd.1
@@ -263,7 +263,6 @@ require (
 	github.com/yuin/gopher-lua v1.1.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.33.0 // indirect
 	go.opentelemetry.io/otel/metric v1.33.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.4.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect

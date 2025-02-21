@@ -43,20 +43,24 @@ func BuildStubURL(externalUrl, urlType string, stub *types.StubWithRelated) stri
 	return fmt.Sprintf("%s://%s/%s/id/%s", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), stub.ExternalId)
 }
 
-func BuildPodURLS(externalUrl, urlType string, stub *types.StubWithRelated, stubConfig *types.StubConfigV1) []string {
+func BuildPodURL(externalUrl, urlType string, stub *types.StubWithRelated, stubConfig *types.StubConfigV1) string {
 	parsedUrl, err := url.Parse(externalUrl)
 	if err != nil {
-		return []string{}
+		return ""
 	}
 
-	urls := []string{}
-	for _, port := range stubConfig.Ports {
-		if urlType == InvokeUrlTypeHost {
-			urls = append(urls, fmt.Sprintf("%s://%s-%d.%s", parsedUrl.Scheme, stub.ExternalId, port, parsedUrl.Host))
-		} else {
-			urls = append(urls, fmt.Sprintf("%s://%s/%s/id/%s/%d", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), stub.ExternalId, port))
-		}
+	url := ""
+
+	portPlaceholder := "<PORT>"
+	if len(stubConfig.Ports) == 1 {
+		portPlaceholder = fmt.Sprintf("%d", stubConfig.Ports[0])
 	}
 
-	return urls
+	if urlType == InvokeUrlTypeHost {
+		url = fmt.Sprintf("%s://%s-%s.%s", parsedUrl.Scheme, stub.ExternalId, portPlaceholder, parsedUrl.Host)
+	} else {
+		url = fmt.Sprintf("%s://%s/%s/id/%s/%s", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), stub.ExternalId, portPlaceholder)
+	}
+
+	return url
 }

@@ -1,5 +1,6 @@
 import os
 import uuid
+from dataclasses import dataclass
 from typing import Any, List, Optional, Union
 
 from .. import terminal
@@ -25,13 +26,27 @@ from ..type import GpuType, GpuTypeAlias
 from ..utils import get_init_args_kwargs
 
 
+@dataclass
+class CreatePodResult:
+    """
+    Stores the result of creating a Pod container.
+
+    Attributes:
+        container_id: The unique ID of the created container.
+        url: The URL for accessing the container over HTTP (if ports were exposed).
+    """
+
+    container_id: str
+    url: str
+
+
 class Pod(RunnerAbstraction):
     """
     Pod allows you to run arbitrary services in fast, scalable, and secure remote containers.
 
     Parameters:
-        entrypoint (List[str]): Required
-            The command to run in the container.
+        entrypoint (Optional[List[str]]):
+            The command to run in the container. Default is [].
         ports (Optional[List[int]]):
             The ports to expose the container to. Default is [].
         name (Optional[str]):
@@ -55,21 +70,26 @@ class Pod(RunnerAbstraction):
             A list of volumes to be mounted to the pod. Default is None.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the pod as environment variables. Default is [].
+        authorized (bool):
+            If false, allows the pod to be accessed without an auth token.
+            Default is False.
 
     Example usage:
         ```
         from beta9 import Image, Pod
 
         image = Image()
-        pod = Pod(cpu=2, memory=512, image=image)
-        exit_code = pod.run((["python", "-c", "\"print('Hello, World!')\""]))
-        print(exit_code)
+        pod = Pod(cpu=2, memory=512, image=image, ports=[8080])
+        result = pod.create(entrypoint=["python", "-c", "\"print('Hello, World!')\""])
+        print(result.container_id)
+        print(result.url)
+
         ```
     """
 
     def __init__(
         self,
-        entrypoint: List[str],
+        entrypoint: List[str] = [],
         ports: Optional[List[int]] = [],
         name: Optional[str] = None,
         cpu: Union[int, float, str] = 1.0,
@@ -79,6 +99,7 @@ class Pod(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        authorized: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -91,6 +112,7 @@ class Pod(RunnerAbstraction):
             entrypoint=entrypoint,
             ports=ports,
             name=name,
+            authorized=authorized,
         )
 
         self.task_id = ""
@@ -111,22 +133,36 @@ class Pod(RunnerAbstraction):
     def stub(self, value: PodServiceStub) -> None:
         self._pod_stub = value
 
-    def create(self) -> bool:
-        if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
-            return
+    def create(self, entrypoint: List[str] = []) -> CreatePodResult:
+        """
+        Create a new container that will run until either it completes normally, or is killed.
 
-        terminal.header("Creating")
+        Args:
+            entrypoint (List[str]): The command to run in the pod container (overrides the entrypoint specified in the Pod constructor).
+        """
+        if entrypoint:
+            self.entrypoint = entrypoint
+
+        if not self.entrypoint:
+            terminal.error("You must specify an entrypoint.")
+
+        if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
+            return CreatePodResult(container_id="", url="")
+
+        terminal.header("Creating container")
         create_response: CreatePodResponse = self.stub.create_pod(
             CreatePodRequest(
                 stub_id=self.stub_id,
             )
         )
 
+        url = ""
         if create_response.ok:
             terminal.header(f"Container created successfully ===> {create_response.container_id}")
-            self.print_invocation_snippet()
+            url_res = self.print_invocation_snippet()
+            url = url_res.url
 
-        return create_response.ok
+        return CreatePodResult(container_id=create_response.container_id, url=url)
 
     def deploy(
         self,
@@ -139,6 +175,10 @@ class Pod(RunnerAbstraction):
             terminal.error(
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
+
+        if not self.entrypoint:
+            terminal.error("You must specify an entrypoint.")
+            return False
 
         if context is not None:
             self.config_context = context

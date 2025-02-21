@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
@@ -33,6 +34,7 @@ type EndpointService interface {
 type HttpEndpointService struct {
 	pb.UnimplementedEndpointServiceServer
 	ctx               context.Context
+	mu                sync.Mutex
 	config            types.AppConfig
 	rdb               *common.RedisClient
 	keyEventManager   *common.KeyEventManager
@@ -87,6 +89,7 @@ func NewHTTPEndpointService(
 
 	es := &HttpEndpointService{
 		ctx:               ctx,
+		mu:                sync.Mutex{},
 		config:            opts.Config,
 		rdb:               opts.RedisClient,
 		keyEventManager:   keyEventManager,
@@ -195,6 +198,19 @@ func (es *HttpEndpointService) InstanceFactory(ctx context.Context, stubId strin
 
 func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, stubId string, options ...func(*endpointInstance)) (*endpointInstance, error) {
 	instance, exists := es.endpointInstances.Get(stubId)
+	if exists {
+		return instance, nil
+	}
+
+	// The reason we lock here, and then check again -- is because if the instance does not exist, we may have two separate
+	// goroutines trying to create the instance. So, we check first, then get the mutex. If another
+	// routine got the lock, it should have created the instance, so we check once again. That way
+	// we don't create two instances of the same stub, but we also ensure that we return quickly if the instance
+	// _does_ already exist.
+	es.mu.Lock()
+	defer es.mu.Unlock()
+
+	instance, exists = es.endpointInstances.Get(stubId)
 	if exists {
 		return instance, nil
 	}
