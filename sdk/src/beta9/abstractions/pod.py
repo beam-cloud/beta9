@@ -238,3 +238,6 @@ app = Pod(
     def cleanup_deployment_artifacts(self):
         if os.path.exists(f"pod-{self._id}.py"):
             os.remove(f"pod-{self._id}.py")
+
+    def serve(self, **kwargs):
+        terminal.error("Serve has not yet been implemented for Pods.")
