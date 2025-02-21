@@ -207,7 +207,7 @@ class Pod(RunnerAbstraction):
             terminal.header("Deployed 🎉")
 
             if len(self.ports) > 0:
-                self.print_invocation_snippet(url_type="path")
+                self.print_invocation_snippet()
 
         return deploy_response.ok
 
