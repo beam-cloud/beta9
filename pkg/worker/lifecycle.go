@@ -258,7 +258,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 	log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
 
-	// For pod stubs, set the container address map
+	// For pod stubs, set the container address map - this is a mapping of worker ports -> container ports
 	if request.Stub.Type.Kind() == types.StubTypePod {
 		addressMap := make(map[int32]string)
 		for idx, containerPort := range request.Ports {
@@ -271,6 +271,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		if err != nil {
 			return err
 		}
+
 		log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
 	}
 
