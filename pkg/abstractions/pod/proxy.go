@@ -88,17 +88,20 @@ func NewPodProxyBuffer(ctx context.Context,
 }
 
 func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
+	ctx.Set("stubId", pb.stubId)
+
 	done := make(chan struct{})
 	req := &connection{
 		ctx:  ctx,
 		done: done,
 	}
+
 	pb.buffer.Push(req, false)
 
 	for {
 		select {
 		case <-pb.ctx.Done():
-			return nil
+			return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
 		case <-done:
 			return nil
 		}

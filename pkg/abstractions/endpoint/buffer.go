@@ -131,6 +131,8 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 }
 
 func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
+	ctx.Set("stubId", rb.stubId)
+
 	done := make(chan bool)
 	req := &request{
 		ctx:  ctx,

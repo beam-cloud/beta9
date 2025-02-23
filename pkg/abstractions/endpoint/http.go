@@ -106,7 +106,6 @@ func (g *endpointGroup) WarmupASGI(ctx echo.Context) error {
 func (g *endpointGroup) warmup(
 	ctx echo.Context,
 	deploymentType string,
-
 ) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
