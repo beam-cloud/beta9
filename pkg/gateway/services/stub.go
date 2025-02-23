@@ -108,6 +108,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		CheckpointEnabled:  in.CheckpointEnabled,
 		EntryPoint:         in.Entrypoint,
 		Ports:              in.Ports,
+		Env:                in.Env,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required

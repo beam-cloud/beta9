@@ -250,6 +250,7 @@ type StubConfigV1 struct {
 	Authorized         bool            `json:"authorized"`
 	Volumes            []*pb.Volume    `json:"volumes"`
 	Secrets            []Secret        `json:"secrets,omitempty"`
+	Env                []string        `json:"env,omitempty"`
 	Autoscaler         *Autoscaler     `json:"autoscaler"`
 	Extra              json.RawMessage `json:"extra"`
 	CheckpointEnabled  bool            `json:"checkpoint_enabled"`

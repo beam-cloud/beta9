@@ -2,7 +2,7 @@ import os
 import urllib.parse
 import uuid
 from dataclasses import dataclass
-from typing import Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -77,6 +77,8 @@ class Pod(RunnerAbstraction):
             A list of volumes to be mounted to the pod. Default is None.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the pod as environment variables. Default is [].
+        env (Optional[Dict[str, str]]):
+            A dictionary of environment variables to be injected into the container. Default is {}.
         keep_warm_seconds (int):
             The number of seconds to keep the container up the last request. -1 means never scale down to zero.
             Default is -1. (only applies to deployments)
@@ -109,6 +111,7 @@ class Pod(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = {},
         keep_warm_seconds: int = -1,
         authorized: bool = False,
     ) -> None:
@@ -120,6 +123,7 @@ class Pod(RunnerAbstraction):
             image=image,
             volumes=volumes,
             secrets=secrets,
+            env=env,
             entrypoint=entrypoint,
             ports=ports,
             name=name,

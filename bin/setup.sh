@@ -67,5 +67,7 @@ check_status
 
 echo "=> Installing go2proto"
 go get -u github.com/beam-cloud/go2proto@latest
+go get -u google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
 go install github.com/beam-cloud/go2proto
 check_status
