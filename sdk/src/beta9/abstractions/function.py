@@ -1,7 +1,7 @@
 import concurrent.futures
 import inspect
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterator, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
 import cloudpickle
 
@@ -60,6 +60,8 @@ class Function(RunnerAbstraction):
             A list of storage volumes to be associated with the function. Default is [].
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
+        env (Optional[Dict[str, str]]):
+            A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
             An optional name for this function, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
@@ -99,6 +101,7 @@ class Function(RunnerAbstraction):
         callback_url: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
         on_deploy: Optional[AbstractCallableWrapper] = None,
@@ -115,6 +118,7 @@ class Function(RunnerAbstraction):
             callback_url=callback_url,
             volumes=volumes,
             secrets=secrets,
+            env=env,
             name=name,
             task_policy=task_policy,
             on_deploy=on_deploy,
@@ -318,6 +322,8 @@ class Schedule(Function):
             A list of storage volumes to be associated with the function. Default is [].
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
+        env (Optional[Dict[str, str]]):
+            A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
             An optional name for this function, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
@@ -355,6 +361,7 @@ class Schedule(Function):
         callback_url: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
         on_deploy: Optional[AbstractCallableWrapper] = None,
     ) -> None:
