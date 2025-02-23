@@ -3,6 +3,7 @@ package pod
 import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/redis/go-redis/v9"
 )
 
 type podAutoscalerSample struct {
@@ -21,8 +22,10 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 
 	currentContainers = state.PendingContainers + state.RunningContainers
 	totalConnections, err := i.Rdb.Get(i.Ctx, Keys.podTotalConnections(i.Workspace.Name, i.Stub.ExternalId)).Int64()
-	if err != nil {
+	if err != nil && err != redis.Nil {
 		return nil, err
+	} else if err == redis.Nil {
+		totalConnections = 0
 	}
 
 	sample := &podAutoscalerSample{
