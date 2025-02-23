@@ -259,14 +259,15 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		}, err
 	}
 
-	env := []string{
+	env := []string{}
+	env = append(stubConfig.Env, env...)
+	env = append(secrets, env...)
+	env = append(env, []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", stub.Type),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", stubConfig.KeepWarmSeconds),
-	}
-
-	env = append(secrets, env...)
+	}...)
 
 	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
 	if stubConfig.Runtime.Gpu != "" {
