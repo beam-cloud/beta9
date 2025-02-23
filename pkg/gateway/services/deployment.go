@@ -280,7 +280,12 @@ func (gws *GatewayService) scaleDeployment(ctx context.Context, deployment types
 	}
 
 	stubConfig.Autoscaler.MaxContainers = containers
-	stubConfig.Autoscaler.MinContainers = containers
+
+	if stubConfig.KeepWarmSeconds > 0 {
+		stubConfig.Autoscaler.MinContainers = 0
+	} else {
+		stubConfig.Autoscaler.MinContainers = containers
+	}
 
 	err := gws.backendRepo.UpdateStubConfig(ctx, deployment.Stub.Id, stubConfig)
 	if err != nil {

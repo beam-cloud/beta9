@@ -77,6 +77,9 @@ class Pod(RunnerAbstraction):
             A list of volumes to be mounted to the pod. Default is None.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the pod as environment variables. Default is [].
+        keep_warm_seconds (int):
+            The number of seconds to keep the container up the last request. -1 means never scale down to zero.
+            Default is -1. (only applies to deployments)
         authorized (bool):
             If false, allows the pod to be accessed without an auth token.
             Default is False.
@@ -106,6 +109,7 @@ class Pod(RunnerAbstraction):
         image: Image = Image(),
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        keep_warm_seconds: int = -1,
         authorized: bool = False,
     ) -> None:
         super().__init__(
@@ -120,6 +124,7 @@ class Pod(RunnerAbstraction):
             ports=ports,
             name=name,
             authorized=authorized,
+            keep_warm_seconds=keep_warm_seconds,
         )
 
         self.task_id = ""

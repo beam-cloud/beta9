@@ -13,6 +13,7 @@ if kubectl get sts redis-master &> /dev/null; then
     kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys scheduler:worker:requests:*); do redis-cli -c del $k; done' &
     kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys scheduler:container:*); do redis-cli -c del $k; done' &
     kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys worker:*); do redis-cli -c del $k; done' &
+    kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys pod:*); do redis-cli -c del $k; done' &
   done
 fi
 

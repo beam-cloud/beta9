@@ -45,8 +45,15 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 
 	// By default, pod deployments are scaled to 1 container
 	if in.StubType == types.StubTypePodDeployment {
-		autoscaler.MinContainers = 1
 		autoscaler.MaxContainers = 1
+
+		// If we keep warm is set, allow scaling down to 0 containers
+		if in.KeepWarmSeconds > 0 {
+			autoscaler.MinContainers = 0
+		} else {
+			in.KeepWarmSeconds = 0
+			autoscaler.MinContainers = 1
+		}
 	}
 
 	if in.TaskPolicy == nil {

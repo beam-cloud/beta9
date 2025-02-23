@@ -7,6 +7,7 @@ import (
 
 type podAutoscalerSample struct {
 	CurrentContainers int
+	TotalConnections  int64
 }
 
 // podAutoscalerSampleFunc retrieves an autoscaling sample from the pod instance
@@ -19,9 +20,14 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 	}
 
 	currentContainers = state.PendingContainers + state.RunningContainers
+	totalConnections, err := i.Rdb.Get(i.Ctx, Keys.podTotalConnections(i.Workspace.Name, i.Stub.ExternalId)).Int64()
+	if err != nil {
+		return nil, err
+	}
 
 	sample := &podAutoscalerSample{
 		CurrentContainers: currentContainers,
+		TotalConnections:  totalConnections,
 	}
 
 	return sample, nil
@@ -38,7 +44,11 @@ func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.Autoscal
 	}
 
 	if i.Stub.Type == types.StubType(types.StubTypePodDeployment) {
-		desiredContainers = int(i.StubConfig.Autoscaler.MinContainers)
+		desiredContainers = int(i.StubConfig.Autoscaler.MaxContainers)
+
+		if s.TotalConnections == 0 {
+			desiredContainers = int(i.StubConfig.Autoscaler.MinContainers)
+		}
 	}
 
 	return &abstractions.AutoscalerResult{

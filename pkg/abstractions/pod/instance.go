@@ -160,6 +160,17 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
+		connectionsVal, err := i.Rdb.Get(context.TODO(), Keys.podContainerConnections(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
+		if err != nil && err != redis.Nil {
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting connections for container")
+			continue
+		}
+
+		connections := connectionsVal > 0
+		if connections {
+			continue
+		}
+
 		keys = append(keys, container.ContainerId)
 	}
 
