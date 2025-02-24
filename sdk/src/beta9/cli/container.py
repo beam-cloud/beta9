@@ -92,7 +92,7 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
     if add_admin_columns:
         user_requested_columns.update(["worker_id", "machine_id"])
 
-    # Build the ordered list of columns based on the ordering in AVAILABLE_LIST_COLUMNS.
+    # Build the ordered list of columns based on the ordering of AVAILABLE_LIST_COLUMNS
     ordered_columns = [
         col for col in AVAILABLE_LIST_COLUMNS.keys() if col in user_requested_columns
     ]
