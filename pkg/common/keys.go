@@ -42,10 +42,11 @@ var (
 )
 
 var (
-	workerPoolPrefix    string = "workerpool"
-	workerPoolState     string = "workerpool:%s:state"
-	workerPoolStateLock string = "workerpool:%s:state:lock"
-	workerPoolSizerLock string = "workerpool:%s:sizer:lock"
+	workerPoolPrefix      string = "workerpool"
+	workerPoolState       string = "workerpool:%s:state"
+	workerPoolStateLock   string = "workerpool:%s:state:lock"
+	workerPoolSizerLock   string = "workerpool:%s:sizer:lock"
+	workerPoolCleanerLock string = "workerpool:%s:cleaner:lock"
 )
 
 var (
@@ -219,6 +220,10 @@ func (rk *redisKeys) WorkerPoolStateLock(poolName string) string {
 
 func (rk *redisKeys) WorkerPoolSizerLock(poolName string) string {
 	return fmt.Sprintf(workerPoolSizerLock, poolName)
+}
+
+func (rk *redisKeys) WorkerPoolCleanerLock(poolName string) string {
+	return fmt.Sprintf(workerPoolCleanerLock, poolName)
 }
 
 // Task keys

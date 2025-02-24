@@ -500,12 +500,17 @@ func (wpc *LocalKubernetesWorkerPoolController) monitorAndCleanupWorkers() {
 	ticker := time.NewTicker(wpc.config.Worker.CleanupWorkerInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
 		select {
 		case <-wpc.ctx.Done():
-			return // Exit
-		default: // Continue
+			return
+		case <-ticker.C:
+			if err := wpc.workerPoolRepo.SetWorkerCleanerLock(wpc.name); err != nil {
+				continue
+			}
+
 			cleaner.Clean(wpc.ctx)
+			wpc.workerPoolRepo.RemoveWorkerCleanerLock(wpc.name)
 		}
 	}
 }

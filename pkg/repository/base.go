@@ -71,6 +71,8 @@ type WorkerPoolRepository interface {
 	RemoveWorkerPoolStateLock(poolName string) error
 	SetWorkerPoolSizerLock(poolName string) error
 	RemoveWorkerPoolSizerLock(poolName string) error
+	SetWorkerCleanerLock(poolName string) error
+	RemoveWorkerCleanerLock(poolName string) error
 }
 
 type WorkspaceRepository interface {

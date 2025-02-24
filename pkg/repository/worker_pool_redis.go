@@ -71,3 +71,11 @@ func (r *WorkerPoolRedisRepository) SetWorkerPoolSizerLock(poolName string) erro
 func (r *WorkerPoolRedisRepository) RemoveWorkerPoolSizerLock(poolName string) error {
 	return r.lock.Release(common.RedisKeys.WorkerPoolSizerLock(poolName))
 }
+
+func (r *WorkerPoolRedisRepository) SetWorkerCleanerLock(poolName string) error {
+	return r.lock.Acquire(context.TODO(), common.RedisKeys.WorkerPoolCleanerLock(poolName), common.RedisLockOptions{TtlS: 10, Retries: 3})
+}
+
+func (r *WorkerPoolRedisRepository) RemoveWorkerCleanerLock(poolName string) error {
+	return r.lock.Release(common.RedisKeys.WorkerPoolCleanerLock(poolName))
+}
