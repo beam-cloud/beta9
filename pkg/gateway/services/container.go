@@ -11,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -114,6 +115,7 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 
 	err = gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: in.ContainerId})
 	if err != nil {
+		log.Error().Err(err).Msg("unable to stop container")
 		return &pb.StopContainerResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Unable to stop container: %s", in.ContainerId),

@@ -32,14 +32,14 @@ def management():
 
 
 AVAILABLE_LIST_COLUMNS = {
-    "container_id": "Id",
+    "container_id": "ID",
     "status": "Status",
     "stub_id": "Stub ID",
-    "deployment_id": "Deployment Id",
+    "deployment_id": "Deployment ID",
     "scheduled_at": "Scheduled At",
     "uptime": "Uptime",
-    "worker_id": "Worker Id",
-    "machine_id": "Machine Id",
+    "worker_id": "Worker ID",
+    "machine_id": "Machine ID",
 }
 
 
