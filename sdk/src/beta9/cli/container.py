@@ -37,6 +37,7 @@ AVAILABLE_LIST_COLUMNS = {
     "scheduled_at": "Scheduled At",
     "worker_id": "Worker Id",
     "machine_id": "Machine Id",
+    "deployment_id": "Deployment Id",
 }
 
 
@@ -56,10 +57,10 @@ AVAILABLE_LIST_COLUMNS = {
 @click.option(
     "--columns",
     type=click.STRING,
-    default="container_id,status,stub_id,scheduled_at",
+    default="container_id,status,stub_id,scheduled_at,deployment_id",
     help="""
       Specify columns to display.
-      Available columns: container_id, status, stub_id, scheduled_at
+      Available columns: container_id, status, stub_id, scheduled_at, deployment_id
     """,
 )
 @extraclick.pass_service_client

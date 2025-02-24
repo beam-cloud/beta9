@@ -47,6 +47,7 @@ class Container(betterproto.Message):
     workspace_id: str = betterproto.string_field(6)
     worker_id: str = betterproto.string_field(7)
     machine_id: str = betterproto.string_field(8)
+    deployment_id: str = betterproto.string_field(9)
 
 
 @dataclass(eq=False, repr=False)

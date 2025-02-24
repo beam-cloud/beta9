@@ -143,26 +143,28 @@ type ContainerState struct {
 
 // @go2proto
 type Container struct {
-	ContainerId string          `redis:"container_id" json:"container_id"`
-	StubId      string          `redis:"stub_id" json:"stub_id"`
-	Status      ContainerStatus `redis:"status" json:"status"`
-	ScheduledAt time.Time       `redis:"scheduled_at" json:"scheduled_at"`
-	StartedAt   time.Time       `redis:"started_at" json:"started_at"`
-	WorkspaceId string          `redis:"workspace_id" json:"workspace_id"`
-	WorkerId    string          `redis:"worker_id" json:"worker_id"`
-	MachineId   string          `redis:"machine_id" json:"machine_id"`
+	ContainerId  string          `redis:"container_id" json:"container_id"`
+	StubId       string          `redis:"stub_id" json:"stub_id"`
+	Status       ContainerStatus `redis:"status" json:"status"`
+	ScheduledAt  time.Time       `redis:"scheduled_at" json:"scheduled_at"`
+	StartedAt    time.Time       `redis:"started_at" json:"started_at"`
+	WorkspaceId  string          `redis:"workspace_id" json:"workspace_id"`
+	WorkerId     string          `redis:"worker_id" json:"worker_id"`
+	MachineId    string          `redis:"machine_id" json:"machine_id"`
+	DeploymentId string          `redis:"deployment_id" json:"deployment_id"`
 }
 
 func (c *Container) ToProto() *pb.Container {
 	return &pb.Container{
-		ContainerId: c.ContainerId,
-		StubId:      c.StubId,
-		Status:      string(c.Status),
-		ScheduledAt: timestamppb.New(c.ScheduledAt),
-		StartedAt:   timestamppb.New(c.StartedAt),
-		WorkspaceId: c.WorkspaceId,
-		WorkerId:    c.WorkerId,
-		MachineId:   c.MachineId,
+		ContainerId:  c.ContainerId,
+		StubId:       c.StubId,
+		Status:       string(c.Status),
+		ScheduledAt:  timestamppb.New(c.ScheduledAt),
+		StartedAt:    timestamppb.New(c.StartedAt),
+		WorkspaceId:  c.WorkspaceId,
+		WorkerId:     c.WorkerId,
+		MachineId:    c.MachineId,
+		DeploymentId: c.DeploymentId,
 	}
 }
 
