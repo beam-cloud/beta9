@@ -11,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -36,18 +37,25 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 		}
 	}
 
-	containers := make([]*pb.Container, len(containerStates))
-	for i, state := range containerStates {
-		containers[i] = &pb.Container{
-			ContainerId: state.ContainerId,
-			StubId:      state.StubId,
-			WorkspaceId: state.WorkspaceId,
-			Status:      string(state.Status),
-			ScheduledAt: timestamppb.New(time.Unix(state.ScheduledAt, 0)),
-			StartedAt:   timestamppb.New(time.Unix(state.StartedAt, 0)),
-			WorkerId:    containerWorkerMap[state.ContainerId].WorkerId,
-			MachineId:   containerWorkerMap[state.ContainerId].MachineId,
+	containers := []*pb.Container{}
+	for _, state := range containerStates {
+		deploymentId := ""
+		deployment, err := gws.backendRepo.GetDeploymentByStubExternalId(ctx, authInfo.Workspace.Id, state.StubId)
+		if err == nil && deployment != nil {
+			deploymentId = deployment.ExternalId
 		}
+
+		containers = append(containers, &pb.Container{
+			ContainerId:  state.ContainerId,
+			StubId:       state.StubId,
+			WorkspaceId:  state.WorkspaceId,
+			Status:       string(state.Status),
+			ScheduledAt:  timestamppb.New(time.Unix(state.ScheduledAt, 0)),
+			StartedAt:    timestamppb.New(time.Unix(state.StartedAt, 0)),
+			WorkerId:     containerWorkerMap[state.ContainerId].WorkerId,
+			MachineId:    containerWorkerMap[state.ContainerId].MachineId,
+			DeploymentId: deploymentId,
+		})
 	}
 
 	return &pb.ListContainersResponse{
@@ -88,29 +96,29 @@ func (gws GatewayService) getContainersAsAdmin() ([]types.ContainerState, map[st
 
 func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
 	workspaceId := authInfo.Workspace.ExternalId
 
 	state, err := gws.containerRepo.GetContainerState(in.ContainerId)
 	if err != nil {
 		return &pb.StopContainerResponse{
 			Ok:       false,
-			ErrorMsg: "Container not found",
+			ErrorMsg: fmt.Sprintf("Container not found: %s", in.ContainerId),
 		}, nil
 	}
 
 	if state.WorkspaceId != workspaceId {
 		return &pb.StopContainerResponse{
 			Ok:       false,
-			ErrorMsg: "Container not found",
+			ErrorMsg: fmt.Sprintf("Container not found: %s", in.ContainerId),
 		}, nil
 	}
 
 	err = gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: in.ContainerId})
 	if err != nil {
+		log.Error().Err(err).Msg("unable to stop container")
 		return &pb.StopContainerResponse{
 			Ok:       false,
-			ErrorMsg: "Unable to stop container",
+			ErrorMsg: fmt.Sprintf("Unable to stop container: %s", in.ContainerId),
 		}, nil
 	}
 

@@ -284,7 +284,7 @@ def stop_deployments(service: ServiceClient, deployment_ids: List[str]):
             terminal.error(res.err_msg, exit=False)
             continue
 
-        terminal.print(f"Stopped {id}")
+        terminal.success(f"Stopped deployment: {id}")
 
 
 @management.command(

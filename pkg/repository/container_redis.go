@@ -342,6 +342,10 @@ func (cr *ContainerRedisRepository) listContainerStateByIndex(indexKey string, k
 			continue
 		}
 
+		if state.ContainerId == "" {
+			continue
+		}
+
 		containerStates = append(containerStates, state)
 	}
 

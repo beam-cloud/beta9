@@ -1,4 +1,5 @@
 import datetime
+from typing import List
 
 import click
 from betterproto import Casing
@@ -33,10 +34,12 @@ def management():
 AVAILABLE_LIST_COLUMNS = {
     "container_id": "ID",
     "status": "Status",
-    "stub_id": "Stub Id",
+    "stub_id": "Stub ID",
+    "deployment_id": "Deployment ID",
     "scheduled_at": "Scheduled At",
-    "worker_id": "Worker Id",
-    "machine_id": "Machine Id",
+    "uptime": "Uptime",
+    "worker_id": "Worker ID",
+    "machine_id": "Machine ID",
 }
 
 
@@ -56,64 +59,65 @@ AVAILABLE_LIST_COLUMNS = {
 @click.option(
     "--columns",
     type=click.STRING,
-    default="container_id,status,stub_id,scheduled_at",
+    default="container_id,status,stub_id,scheduled_at,deployment_id,uptime",
     help="""
       Specify columns to display.
-      Available columns: container_id, status, stub_id, scheduled_at
+      Available columns: container_id, status, stub_id, scheduled_at, deployment_id, uptime
     """,
 )
 @extraclick.pass_service_client
 @click.pass_context
 def list_containers(ctx: click.Context, service: ServiceClient, format: str, columns: str):
     res = service.gateway.list_containers(ListContainersRequest())
-
     if not res.ok:
         terminal.error(res.error_msg)
 
+    now = datetime.datetime.now(datetime.timezone.utc)
     if format == "json":
-        containers = [c.to_dict(casing=Casing.SNAKE) for c in res.containers]  # type:ignore
+        containers = []
+        for c in res.containers:
+            container_dict = c.to_dict(casing=Casing.SNAKE)
+            container_dict["uptime"] = (
+                terminal.humanize_duration(now - c.started_at) if c.started_at else "N/A"
+            )
+            containers.append(container_dict)
         terminal.print_json(containers)
         return
 
-    table_cols = []
-    desired_columns = columns.split(",")
+    user_requested_columns = set(columns.split(","))
 
-    for col in desired_columns:
-        if col not in AVAILABLE_LIST_COLUMNS:
-            terminal.error(f"Invalid column: {col}")
-            return
-
-        table_cols.append(Column(AVAILABLE_LIST_COLUMNS[col]))
-
+    # If admin columns are present on every container, include them.
     add_admin_columns = all(c.worker_id for c in res.containers)
     if add_admin_columns:
-        for column_name in ["worker_id", "machine_id"]:
-            desired_columns.append(column_name)
-            table_cols.append(Column(AVAILABLE_LIST_COLUMNS[column_name]))
+        user_requested_columns.update(["worker_id", "machine_id"])
+
+    # Build the ordered list of columns based on the ordering of AVAILABLE_LIST_COLUMNS
+    ordered_columns = [
+        col for col in AVAILABLE_LIST_COLUMNS.keys() if col in user_requested_columns
+    ]
+
+    table_cols = [Column(AVAILABLE_LIST_COLUMNS[col]) for col in ordered_columns]
 
     if len(res.containers) == 0:
         terminal.print("No containers found.")
         return
 
-    table = Table(
-        *table_cols,
-        box=box.SIMPLE,
-    )
-
+    table = Table(*table_cols, box=box.SIMPLE)
     for container in res.containers:
-        cols = []
-
-        for dc in desired_columns:
-            val = getattr(container, dc)
-
-            if isinstance(val, datetime.datetime):
-                cols.append(terminal.humanize_date(val))
+        row = []
+        for col in ordered_columns:
+            if col == "uptime":
+                value = (
+                    terminal.humanize_duration(now - container.started_at)
+                    if container.started_at
+                    else "N/A"
+                )
             else:
-                cols.append(val)
-
-        table.add_row(
-            *cols,
-        )
+                value = getattr(container, col)
+                if isinstance(value, datetime.datetime):
+                    value = terminal.humanize_date(value)
+            row.append(value)
+        table.add_row(*row)
 
     table.add_section()
     table.add_row(f"[bold]{len(res.containers)} items")
@@ -125,18 +129,20 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
     help="Stop a container.",
 )
 @click.argument(
-    "container_id",
+    "container_ids",
+    nargs=-1,
     required=True,
 )
 @extraclick.pass_service_client
-def stop_container(service: ServiceClient, container_id: str):
-    res: StopContainerResponse
-    res = service.gateway.stop_container(StopContainerRequest(container_id=container_id))
+def stop_container(service: ServiceClient, container_ids: List[str]):
+    for container_id in container_ids:
+        res: StopContainerResponse
+        res = service.gateway.stop_container(StopContainerRequest(container_id=container_id))
 
-    if res.ok:
-        terminal.success(f"Stopped container: {container_id}.")
-    else:
-        terminal.error(f"{res.error_msg}")
+        if res.ok:
+            terminal.success(f"Stopped container: {container_id}")
+        else:
+            terminal.error(f"{res.error_msg}", exit=False)
 
 
 def _attach_to_container(service: ServiceClient, container_id: str):
