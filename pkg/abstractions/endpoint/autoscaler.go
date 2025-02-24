@@ -45,9 +45,9 @@ func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSampl
 			}
 		}
 
-		tasksPerContainer := 1
+		tasksPerContainer := int64(1)
 		if i.StubConfig.Autoscaler != nil && i.StubConfig.Autoscaler.TasksPerContainer > 0 {
-			tasksPerContainer = int(i.StubConfig.Autoscaler.TasksPerContainer)
+			tasksPerContainer = int64(i.StubConfig.Autoscaler.TasksPerContainer)
 		}
 
 		desiredContainers = int(s.TotalRequests / int64(tasksPerContainer))
