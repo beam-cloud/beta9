@@ -160,7 +160,7 @@ def _attach_to_container(service: ServiceClient, container_id: str):
         return terminal.error("Container failed ❌")
 
     if not r.done or r.exit_code != 0:
-        return terminal.error(f"{r.output} ❌")
+        return terminal.error(f"\n{r.output} ❌")
 
     terminal.success(r.output)
 
