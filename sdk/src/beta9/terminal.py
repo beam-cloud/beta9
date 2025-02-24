@@ -153,6 +153,21 @@ def humanize_date(d: datetime.datetime) -> str:
         return f"{s // 3600} hours ago"
 
 
+def humanize_duration(delta: datetime.timedelta) -> str:
+    total_seconds = int(delta.total_seconds())
+    if total_seconds < 60:
+        return f"{total_seconds} seconds"
+    elif total_seconds < 3600:
+        minutes = total_seconds // 60
+        return f"{minutes} minutes"
+    elif total_seconds < 86400:
+        hours = total_seconds // 3600
+        return f"{hours} hours"
+    else:
+        days = total_seconds // 86400
+        return f"{days} days"
+
+
 def humanize_memory(m: float, base: Literal[2, 10] = 2) -> str:
     if base not in [2, 10]:
         raise ValueError("Base must be 2 (binary) or 10 (decimal)")
