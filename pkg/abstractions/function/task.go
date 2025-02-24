@@ -132,15 +132,16 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		return err
 	}
 
-	env := []string{
+	env := []string{}
+	env = append(stubConfig.Env, env...)
+	env = append(secrets, env...)
+	env = append(env, []string{
 		fmt.Sprintf("TASK_ID=%s", t.msg.TaskId),
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
 		fmt.Sprintf("BETA9_TOKEN=%s", token.Key),
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		fmt.Sprintf("CALLBACK_URL=%s", stubConfig.CallbackUrl),
-	}
-
-	env = append(secrets, env...)
+	}...)
 
 	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)
 	if stubConfig.Runtime.Gpu != "" {

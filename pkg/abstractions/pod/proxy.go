@@ -2,6 +2,7 @@ package pod
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -88,18 +89,24 @@ func NewPodProxyBuffer(ctx context.Context,
 }
 
 func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
+	ctx.Set("stubId", pb.stubId)
+
+	pb.incrementTotalConnections()
+	defer pb.decrementTotalConnections()
+
 	done := make(chan struct{})
 	req := &connection{
 		ctx:  ctx,
 		done: done,
 	}
+
 	pb.buffer.Push(req, false)
 
 	for {
 		select {
 		case <-pb.ctx.Done():
-			return nil
-		case <-done:
+			return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
+		case <-ctx.Request().Context().Done():
 			return nil
 		}
 	}
@@ -176,12 +183,12 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval)
 
-	err = pb.incrementConnections(container.id)
+	err = pb.incrementContainerConnections(container.id)
 	if err != nil {
 		pb.buffer.Push(conn, true)
 		return
 	}
-	defer pb.decrementConnections(container.id)
+	defer pb.decrementContainerConnections(container.id)
 
 	// Ensure the request URL is correctly formatted
 	// by setting the container.address to the Host and subPath into the Path field
@@ -204,15 +211,26 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	go func() {
-		defer wg.Done()
-		abstractions.ProxyConn(containerConn, clientConn, conn.done, connectionBufferSize)
-	}()
+	var once sync.Once
+	closeConnections := func() {
+		clientConn.Close()
+		containerConn.Close()
+	}
 
-	go func() {
-		defer wg.Done()
-		abstractions.ProxyConn(clientConn, containerConn, conn.done, connectionBufferSize)
-	}()
+	// Proxy the connection in both directions
+	for _, pair := range []struct {
+		src net.Conn
+		dst net.Conn
+	}{
+		{containerConn, clientConn},
+		{clientConn, containerConn},
+	} {
+		go func(src, dst net.Conn) {
+			defer wg.Done()
+			abstractions.ProxyConn(src, dst, conn.done, connectionBufferSize)
+			once.Do(closeConnections)
+		}(pair.src, pair.dst)
+	}
 
 	wg.Wait()
 
@@ -336,14 +354,29 @@ func (pb *PodProxyBuffer) containerConnections(containerId string) (int, error) 
 	return val, nil
 }
 
-func (pb *PodProxyBuffer) incrementConnections(containerId string) error {
-	key := Keys.podContainerConnections(pb.workspace.Name, pb.stubId, containerId)
-	_, err := pb.rdb.Incr(pb.ctx, key).Result()
+func (pb *PodProxyBuffer) incrementTotalConnections() (int64, error) {
+	key := Keys.podTotalConnections(pb.workspace.Name, pb.stubId)
+	val, err := pb.rdb.Incr(context.Background(), key).Result()
+	if err != nil {
+		return 0, err
+	}
+
+	err = pb.rdb.Expire(context.Background(), key, podContainerConnectionTimeout).Err()
+	if err != nil {
+		return 0, err
+	}
+
+	return val, nil
+}
+
+func (pb *PodProxyBuffer) decrementTotalConnections() error {
+	key := Keys.podTotalConnections(pb.workspace.Name, pb.stubId)
+	_, err := pb.rdb.Decr(context.Background(), key).Result()
 	if err != nil {
 		return err
 	}
 
-	err = pb.rdb.Expire(pb.ctx, key, podContainerConnectionTimeout).Err()
+	err = pb.rdb.Expire(context.Background(), key, podContainerConnectionTimeout).Err()
 	if err != nil {
 		return err
 	}
@@ -351,22 +384,44 @@ func (pb *PodProxyBuffer) incrementConnections(containerId string) error {
 	return nil
 }
 
-func (pb *PodProxyBuffer) decrementConnections(containerId string) error {
+func (pb *PodProxyBuffer) incrementContainerConnections(containerId string) error {
+	key := Keys.podContainerConnections(pb.workspace.Name, pb.stubId, containerId)
+	_, err := pb.rdb.Incr(context.Background(), key).Result()
+	if err != nil {
+		return err
+	}
+
+	err = pb.rdb.Expire(context.Background(), key, podContainerConnectionTimeout).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (pb *PodProxyBuffer) decrementContainerConnections(containerId string) error {
 	key := Keys.podContainerConnections(pb.workspace.Name, pb.stubId, containerId)
 
-	connections, err := pb.rdb.Decr(pb.ctx, key).Result()
+	connections, err := pb.rdb.Decr(context.Background(), key).Result()
 	if err != nil {
 		return err
 	}
 
 	if connections < 0 {
-		pb.rdb.Incr(pb.ctx, key)
+		pb.rdb.Incr(context.Background(), key)
 	}
 
-	err = pb.rdb.Expire(pb.ctx, key, podContainerConnectionTimeout).Err()
+	err = pb.rdb.Expire(context.Background(), key, podContainerConnectionTimeout).Err()
 	if err != nil {
 		return err
 	}
+
+	pb.rdb.SetEx(
+		context.Background(),
+		Keys.podKeepWarmLock(pb.workspace.Name, pb.stubId, containerId),
+		1,
+		time.Duration(pb.stubConfig.KeepWarmSeconds)*time.Second,
+	)
 
 	return nil
 }

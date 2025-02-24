@@ -6,10 +6,26 @@ import (
 	"time"
 )
 
-func ProxyConn(dst io.Writer, src io.Reader, done chan<- struct{}, bufferSize int) {
+func ProxyConn(dst io.Writer, src io.Reader, done <-chan struct{}, bufferSize int) error {
 	buf := make([]byte, bufferSize)
-	io.CopyBuffer(dst, src, buf)
-	done <- struct{}{}
+
+	for {
+		select {
+		case <-done:
+			return nil
+		default:
+		}
+
+		n, err := src.Read(buf)
+		if n > 0 {
+			if _, err := dst.Write(buf[:n]); err != nil {
+				return err
+			}
+		}
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func SetConnOptions(conn net.Conn, keepAlive bool, keepAliveInterval time.Duration) {

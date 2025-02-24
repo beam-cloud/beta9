@@ -34,14 +34,15 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		return err
 	}
 
-	env := []string{
+	env := []string{}
+	env = append(i.StubConfig.Env, env...)
+	env = append(secrets, env...)
+	env = append(env, []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 		fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
-	}
-
-	env = append(secrets, env...)
+	}...)
 
 	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
 	if i.StubConfig.Runtime.Gpu != "" {
@@ -157,6 +158,17 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 
 		keepWarm := keepWarmVal > 0
 		if keepWarm {
+			continue
+		}
+
+		connectionsVal, err := i.Rdb.Get(context.TODO(), Keys.podContainerConnections(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
+		if err != nil && err != redis.Nil {
+			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting connections for container")
+			continue
+		}
+
+		connections := connectionsVal > 0
+		if connections {
 			continue
 		}
 

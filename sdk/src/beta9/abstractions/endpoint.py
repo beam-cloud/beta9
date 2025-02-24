@@ -2,7 +2,7 @@ import os
 import threading
 import traceback
 import types
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from uvicorn.protocols.utils import ClientDisconnected
 
@@ -73,6 +73,8 @@ class Endpoint(RunnerAbstraction):
             Default is 100.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
+        env (Optional[Dict[str, str]]):
+            A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
             An optional name for this endpoint, used during deployment. If not specified, you must specify the name
             at deploy time with the --name argument
@@ -127,6 +129,7 @@ class Endpoint(RunnerAbstraction):
         on_deploy: Optional[AbstractCallableWrapper] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
@@ -149,6 +152,7 @@ class Endpoint(RunnerAbstraction):
             on_deploy=on_deploy,
             volumes=volumes,
             secrets=secrets,
+            env=env,
             name=name,
             authorized=authorized,
             autoscaler=autoscaler,
@@ -218,6 +222,8 @@ class ASGI(Endpoint):
             Default is 100.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
+        env (Optional[Dict[str, str]]):
+            A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
             An optional name for this ASGI application, used during deployment. If not specified, you must
             specify the name at deploy time with the --name argument
@@ -279,6 +285,7 @@ class ASGI(Endpoint):
         on_deploy: Optional[AbstractCallableWrapper] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
@@ -300,6 +307,7 @@ class ASGI(Endpoint):
             on_deploy=on_deploy,
             volumes=volumes,
             secrets=secrets,
+            env=env,
             name=name,
             authorized=authorized,
             autoscaler=autoscaler,
@@ -361,6 +369,8 @@ class RealtimeASGI(ASGI):
             Default is 100.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
+        env (Optional[Dict[str, str]]):
+            A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
             An optional name for this ASGI application, used during deployment. If not specified, you must
             specify the name at deploy time with the --name argument
@@ -410,6 +420,7 @@ class RealtimeASGI(ASGI):
         on_deploy: Optional[AbstractCallableWrapper] = None,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
         authorized: bool = True,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
@@ -430,6 +441,7 @@ class RealtimeASGI(ASGI):
             on_deploy=on_deploy,
             volumes=volumes,
             secrets=secrets,
+            env=env,
             name=name,
             authorized=authorized,
             autoscaler=autoscaler,

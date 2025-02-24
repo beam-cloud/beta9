@@ -7,6 +7,7 @@ var (
 	podKeepWarmLock         string = "pod:%s:%s:keep_warm_lock:%s"
 	podInstanceLock         string = "pod:%s:%s:instance_lock"
 	podContainerConnections string = "pod:%s:%s:container_connections:%s"
+	podTotalConnections     string = "pod:%s:%s:total_connections"
 )
 
 var Keys = &keys{}
@@ -23,4 +24,8 @@ func (k *keys) podInstanceLock(workspaceName, stubId string) string {
 
 func (k *keys) podContainerConnections(workspaceName, stubId, containerId string) string {
 	return fmt.Sprintf(podContainerConnections, workspaceName, stubId, containerId)
+}
+
+func (k *keys) podTotalConnections(workspaceName, stubId string) string {
+	return fmt.Sprintf(podTotalConnections, workspaceName, stubId)
 }

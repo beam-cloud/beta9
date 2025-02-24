@@ -315,6 +315,12 @@ def override_config_options(func: click.Command):
         help="The image to use for the container (e.g. --image python:3.10).",
         required=False,
     )(f)
+    f = click.option(
+        "--env",
+        type=click.STRING,
+        multiple=True,
+        help="Environment variables to pass to the container (e.g. --env VAR1=value --env VAR2=value).",
+    )(f)
     return f
 
 

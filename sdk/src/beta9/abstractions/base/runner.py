@@ -4,7 +4,7 @@ import os
 import threading
 import time
 from queue import Empty, Queue
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import cloudpickle
 from watchdog.observers import Observer
@@ -96,6 +96,7 @@ class RunnerAbstraction(BaseAbstraction):
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = {},
         on_start: Optional[Callable] = None,
         on_deploy: Optional["AbstractCallableWrapper"] = None,
         callback_url: Optional[str] = None,
@@ -111,6 +112,10 @@ class RunnerAbstraction(BaseAbstraction):
 
         if image is None:
             image = Image()
+
+        formatted_env = []
+        if env:
+            formatted_env = [f"{k}={v}" for k, v in env.items()]
 
         self.name = name
         self.authorized = authorized
@@ -132,6 +137,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.gpu_count = gpu_count
         self.volumes = volumes or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
+        self.env: List[str] = formatted_env
         self.workers = workers
         self.concurrent_requests = concurrent_requests
         self.keep_warm_seconds = keep_warm_seconds
@@ -468,6 +474,7 @@ class RunnerAbstraction(BaseAbstraction):
                 max_pending_tasks=self.max_pending_tasks,
                 volumes=[v.export() for v in self.volumes],
                 secrets=self.secrets,
+                env=self.env,
                 force_create=force_create_stub,
                 authorized=self.authorized,
                 autoscaler=AutoscalerProto(
