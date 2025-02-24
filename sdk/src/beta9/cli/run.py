@@ -3,12 +3,15 @@ import inspect
 import click
 
 from .. import terminal
-from ..abstractions.pod import Pod
+from ..abstractions.pod import CreatePodResult, Pod
+from ..channel import ServiceClient
 from ..utils import load_module_spec
+from .container import _attach_to_container
 from .extraclick import (
     ClickCommonGroup,
     handle_config_override,
     override_config_options,
+    pass_service_client,
 )
 
 
@@ -20,7 +23,7 @@ def common(**_):
 @common.command(
     name="run",
     help="""
-    Run a pod.
+    Run a container.
 
     """,
     epilog="""
@@ -40,7 +43,9 @@ def common(**_):
     required=False,
 )
 @override_config_options
+@pass_service_client
 def run(
+    service: ServiceClient,
     handler: str,
     **kwargs,
 ):
@@ -61,5 +66,9 @@ def run(
     if not handle_config_override(pod_spec, kwargs):
         return
 
-    if not pod_spec.create():
-        terminal.error("Failed to create pod.")
+    result: CreatePodResult = pod_spec.create()
+    if not result.ok:
+        terminal.error("Failed to create container.")
+        return
+
+    _attach_to_container(service, result.container_id)

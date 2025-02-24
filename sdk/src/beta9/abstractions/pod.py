@@ -43,6 +43,7 @@ class CreatePodResult:
         url: The URL for accessing the container over HTTP (if ports were exposed).
     """
 
+    ok: bool
     container_id: str
     url: str
 
@@ -167,7 +168,11 @@ class Pod(RunnerAbstraction):
             terminal.error("You must specify an entrypoint.")
 
         if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
-            return CreatePodResult(container_id="", url="")
+            return CreatePodResult(
+                container_id="",
+                url="",
+                ok=False,
+            )
 
         terminal.header("Creating container")
         create_response: CreatePodResponse = self.stub.create_pod(
@@ -182,7 +187,11 @@ class Pod(RunnerAbstraction):
             url_res = self.print_invocation_snippet()
             url = url_res.url
 
-        return CreatePodResult(container_id=create_response.container_id, url=url)
+        return CreatePodResult(
+            container_id=create_response.container_id,
+            url=url,
+            ok=create_response.ok,
+        )
 
     def deploy(
         self,

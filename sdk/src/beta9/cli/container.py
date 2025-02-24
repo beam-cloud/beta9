@@ -7,7 +7,12 @@ from rich.table import Column, Table, box
 from .. import terminal
 from ..channel import ServiceClient
 from ..cli import extraclick
-from ..clients.gateway import ListContainersRequest, StopContainerRequest, StopContainerResponse
+from ..clients.gateway import (
+    AttachToContainerRequest,
+    ListContainersRequest,
+    StopContainerRequest,
+    StopContainerResponse,
+)
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -132,3 +137,42 @@ def stop_container(service: ServiceClient, container_id: str):
         terminal.success(f"Stopped container: {container_id}.")
     else:
         terminal.error(f"{res.error_msg}")
+
+
+def _attach_to_container(service: ServiceClient, container_id: str):
+    terminal.header(f"Connecting to {container_id}...")
+
+    stream = service.gateway.attach_to_container(
+        AttachToContainerRequest(
+            container_id=container_id,
+        )
+    )
+
+    r = None
+    for r in stream:
+        if r.output != "":
+            terminal.detail(r.output, end="")
+
+        if r.done or r.exit_code != 0:
+            break
+
+    if r is None:
+        return terminal.error("Container failed ❌")
+
+    if not r.done or r.exit_code != 0:
+        return terminal.error(f"{r.output} ❌")
+
+    terminal.success(r.output)
+
+
+@management.command(
+    name="attach",
+    help="Attach to a running container.",
+)
+@click.argument(
+    "container_id",
+    required=True,
+)
+@extraclick.pass_service_client
+def attach_to_container(service: ServiceClient, container_id: str):
+    _attach_to_container(service, container_id)

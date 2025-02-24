@@ -21,6 +21,8 @@ service GatewayService {
   // Containers
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {}
   rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
+  rpc AttachToContainer(AttachToContainerRequest)
+      returns (stream AttachToContainerResponse) {}
 
   // Tasks
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse);
@@ -144,6 +146,14 @@ message StopContainerRequest { string container_id = 1; }
 message StopContainerResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message AttachToContainerRequest { string container_id = 1; }
+
+message AttachToContainerResponse {
+  string output = 1;
+  bool done = 2;
+  int32 exit_code = 3;
 }
 
 // Task messages

@@ -449,6 +449,7 @@ func (g *Gateway) registerServices() error {
 	// Register gateway services
 	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
 	gws, err := gatewayservices.NewGatewayService(&gatewayservices.GatewayServiceOpts{
+		Ctx:            g.ctx,
 		Config:         g.Config,
 		BackendRepo:    g.BackendRepo,
 		ContainerRepo:  g.ContainerRepo,
@@ -459,6 +460,7 @@ func (g *Gateway) registerServices() error {
 		EventRepo:      g.EventRepo,
 		WorkerRepo:     g.workerRepo,
 		WorkerPoolRepo: g.WorkerPoolRepo,
+		Tailscale:      g.Tailscale,
 	})
 	if err != nil {
 		return err
