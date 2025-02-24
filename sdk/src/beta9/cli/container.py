@@ -71,7 +71,6 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
     res = service.gateway.list_containers(ListContainersRequest())
     if not res.ok:
         terminal.error(res.error_msg)
-        return
 
     now = datetime.datetime.now(datetime.timezone.utc)
     if format == "json":
