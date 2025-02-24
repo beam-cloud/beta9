@@ -1,4 +1,5 @@
 import datetime
+from typing import List
 
 import click
 from betterproto import Casing
@@ -129,18 +130,20 @@ def list_containers(ctx: click.Context, service: ServiceClient, format: str, col
     help="Stop a container.",
 )
 @click.argument(
-    "container_id",
+    "container_ids",
+    nargs=-1,
     required=True,
 )
 @extraclick.pass_service_client
-def stop_container(service: ServiceClient, container_id: str):
-    res: StopContainerResponse
-    res = service.gateway.stop_container(StopContainerRequest(container_id=container_id))
+def stop_container(service: ServiceClient, container_ids: List[str]):
+    for container_id in container_ids:
+        res: StopContainerResponse
+        res = service.gateway.stop_container(StopContainerRequest(container_id=container_id))
 
-    if res.ok:
-        terminal.success(f"Stopped container: {container_id}.")
-    else:
-        terminal.error(f"{res.error_msg}")
+        if res.ok:
+            terminal.success(f"Stopped container: {container_id}")
+        else:
+            terminal.error(f"{res.error_msg}", exit=False)
 
 
 def _attach_to_container(service: ServiceClient, container_id: str):

@@ -95,21 +95,20 @@ func (gws GatewayService) getContainersAsAdmin() ([]types.ContainerState, map[st
 
 func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
 	workspaceId := authInfo.Workspace.ExternalId
 
 	state, err := gws.containerRepo.GetContainerState(in.ContainerId)
 	if err != nil {
 		return &pb.StopContainerResponse{
 			Ok:       false,
-			ErrorMsg: "Container not found",
+			ErrorMsg: fmt.Sprintf("Container not found: %s", in.ContainerId),
 		}, nil
 	}
 
 	if state.WorkspaceId != workspaceId {
 		return &pb.StopContainerResponse{
 			Ok:       false,
-			ErrorMsg: "Container not found",
+			ErrorMsg: fmt.Sprintf("Container not found: %s", in.ContainerId),
 		}, nil
 	}
 
@@ -117,7 +116,7 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 	if err != nil {
 		return &pb.StopContainerResponse{
 			Ok:       false,
-			ErrorMsg: "Unable to stop container",
+			ErrorMsg: fmt.Sprintf("Unable to stop container: %s", in.ContainerId),
 		}, nil
 	}
 
