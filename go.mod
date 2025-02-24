@@ -48,6 +48,7 @@ require (
 	github.com/opencontainers/umoci v0.4.7
 	github.com/openmeterio/openmeter v1.0.0-beta.47
 	github.com/oracle/oci-go-sdk v24.3.0+incompatible
+	github.com/panjf2000/ants/v2 v2.11.1
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.21.1
 	github.com/prometheus/client_golang v1.19.1
@@ -73,7 +74,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.33.0
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56
 	golang.org/x/net v0.34.0
-	golang.org/x/sync v0.10.0
+	golang.org/x/sync v0.11.0
 	golang.org/x/sys v0.29.0
 	golang.org/x/time v0.8.0
 	google.golang.org/grpc v1.68.1

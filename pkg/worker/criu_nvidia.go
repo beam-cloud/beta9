@@ -3,20 +3,26 @@ package worker
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"sync"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
+	"github.com/panjf2000/ants/v2"
+	"github.com/rs/zerolog/log"
 )
 
 type NvidiaCRIUManager struct {
-	cpStorageConfig types.CheckpointStorageConfig
-	runcHandle      runc.Runc
+	runcHandle       runc.Runc
+	cpStorageConfig  types.CheckpointStorageConfig
+	fileCacheManager *FileCacheManager
 }
 
-func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUManager, error) {
+func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig, fileCacheManager *FileCacheManager) (CRIUManager, error) {
 	runcHandle := runc.Runc{}
-	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage}, nil
+	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, fileCacheManager: fileCacheManager}, nil
 }
 
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
@@ -65,4 +71,72 @@ func (c *NvidiaCRIUManager) Run(ctx context.Context, request *types.ContainerReq
 	}
 
 	return exitCode, nil
+}
+
+// Caches a checkpoint nearby if the file cache is available
+func (c *NvidiaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) (string, error) {
+	if !c.fileCacheManager.CacheAvailable() {
+		log.Warn().Str("container_id", containerId).Msg("file cache unavailable, skipping checkpoint caching")
+		return checkpointPath, nil
+	}
+
+	cachedCheckpointPath := filepath.Join(baseFileCachePath, checkpointPath)
+
+	// If the checkpoint is already cached, we can use that path without the extra grpc call
+	if _, err := os.Stat(cachedCheckpointPath); err == nil {
+		return cachedCheckpointPath, nil
+	}
+
+	log.Info().Str("container_id", containerId).Msgf("caching checkpoint nearby: %s", checkpointPath)
+
+	err := c.cacheDir(containerId, checkpointPath)
+	if err != nil {
+		return "", err
+	}
+	return cachedCheckpointPath, nil
+}
+
+func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
+	client := c.fileCacheManager.GetClient()
+	wg := sync.WaitGroup{}
+	p, err := ants.NewPool(20)
+	if err != nil {
+		return err
+	}
+	defer p.Release()
+
+	var walkErr error
+
+	err = filepath.WalkDir(checkpointPath, func(path string, info fs.DirEntry, err error) error {
+		if err != nil {
+			walkErr = err
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		wg.Add(1)
+		submitErr := p.Submit(func() {
+			defer wg.Done()
+			_, err := client.StoreContentFromSource(path[1:], 0)
+			if err != nil {
+				walkErr = err
+				log.Error().Err(err).Str("container_id", containerId).Msgf("error caching checkpoint file: %s", path)
+			}
+		})
+
+		if submitErr != nil {
+			wg.Done() // Handle failed submission
+			walkErr = submitErr
+			return submitErr
+		}
+
+		return nil
+	})
+
+	wg.Wait() // Wait for all tasks to finish
+
+	return walkErr
 }

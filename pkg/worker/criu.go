@@ -28,21 +28,22 @@ type CRIUManager interface {
 	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error)
 	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
 	RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error)
+	CacheCheckpoint(containerId, checkpointPath string) (string, error)
 }
 
 const defaultCheckpointDeadline = 10 * time.Minute
 
 // InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers
 // -- depending on the mode, it will use either cedana or nvidia cuda checkpoint under the hood
-func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUManager, error) {
+func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, fileCacheManager *FileCacheManager) (CRIUManager, error) {
 	var criuManager CRIUManager = nil
 	var err error = nil
 
 	switch config.Mode {
 	case types.CRIUConfigModeCedana:
-		criuManager, err = InitializeCedanaCRIU(ctx, config.Cedana)
+		criuManager, err = InitializeCedanaCRIU(ctx, config.Cedana, fileCacheManager)
 	case types.CRIUConfigModeNvidia:
-		criuManager, err = InitializeNvidiaCRIU(ctx, config)
+		criuManager, err = InitializeNvidiaCRIU(ctx, config, fileCacheManager)
 	default:
 		return nil, fmt.Errorf("invalid CRIU mode: %s", config.Mode)
 	}
@@ -185,6 +186,13 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", err)
 		}
 
+		go func() {
+			_, err := s.criuManager.CacheCheckpoint(request.ContainerId, checkpointPath)
+			if err != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to cache checkpoint: %v", err)
+			}
+		}()
+
 		// Create a file accessible to the container to indicate that the checkpoint has been captured
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 		log.Info().Str("container_id", request.ContainerId).Msg("checkpoint created successfully")
@@ -243,32 +251,6 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 	}
 
 	return state, false
-}
-
-// Caches a checkpoint nearby if the file cache is available
-func (s *Worker) cacheCheckpoint(containerId, checkpointPath string) (string, error) {
-	cachedCheckpointPath := filepath.Join(baseFileCachePath, checkpointPath)
-
-	if s.fileCacheManager.CacheAvailable() {
-
-		// If the checkpoint is already cached, we can use that path without the extra grpc call
-		if _, err := os.Stat(cachedCheckpointPath); err == nil {
-			return cachedCheckpointPath, nil
-		}
-
-		log.Info().Str("container_id", containerId).Msgf("caching checkpoint nearby: %s", checkpointPath)
-		client := s.fileCacheManager.GetClient()
-
-		// Remove the leading "/" from the checkpoint path
-		_, err := client.StoreContentFromSource(checkpointPath[1:], 0)
-		if err != nil {
-			return "", err
-		}
-
-		checkpointPath = cachedCheckpointPath
-	}
-
-	return checkpointPath, nil
 }
 
 func (s *Worker) IsCRIUAvailable() bool {
