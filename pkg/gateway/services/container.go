@@ -3,9 +3,12 @@ package gatewayservices
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -114,4 +117,59 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 	return &pb.StopContainerResponse{
 		Ok: true,
 	}, nil
+}
+
+func (gws *GatewayService) AttachToContainer(in *pb.AttachToContainerRequest, stream pb.GatewayService_AttachToContainerServer) error {
+	ctx := stream.Context()
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	container, err := gws.containerRepo.GetContainerState(in.ContainerId)
+	if err != nil {
+		return stream.Send(&pb.AttachToContainerResponse{
+			Done:     true,
+			ExitCode: 1,
+			Output:   "Container not found",
+		})
+	}
+
+	sendCallback := func(o common.OutputMsg) error {
+		if err := stream.Send(&pb.AttachToContainerResponse{Output: o.Msg}); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	exitCallback := func(exitCode int32) error {
+		output := "Container was stopped."
+		if exitCode != 0 {
+			output = fmt.Sprintf("Container failed with exit code %d", exitCode)
+			if exitCode == types.WorkerContainerExitCodeOomKill {
+				output = "Container was killed due to an out-of-memory error"
+			}
+		}
+
+		return stream.Send(&pb.AttachToContainerResponse{
+			Done:     true,
+			ExitCode: int32(exitCode),
+			Output:   output,
+		})
+	}
+
+	ctx, cancel := common.MergeContexts(gws.ctx, ctx)
+	defer cancel()
+
+	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
+		SendCallback:    sendCallback,
+		ExitCallback:    exitCallback,
+		ContainerRepo:   gws.containerRepo,
+		Config:          gws.appConfig,
+		Tailscale:       gws.tailscale,
+		KeyEventManager: gws.keyEventManager,
+	})
+	if err != nil {
+		return err
+	}
+
+	return logStream.Stream(ctx, authInfo, container.ContainerId)
 }

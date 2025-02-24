@@ -27,6 +27,7 @@ const (
 	GatewayService_ReplaceObjectContent_FullMethodName  = "/gateway.GatewayService/ReplaceObjectContent"
 	GatewayService_ListContainers_FullMethodName        = "/gateway.GatewayService/ListContainers"
 	GatewayService_StopContainer_FullMethodName         = "/gateway.GatewayService/StopContainer"
+	GatewayService_AttachToContainer_FullMethodName     = "/gateway.GatewayService/AttachToContainer"
 	GatewayService_StartTask_FullMethodName             = "/gateway.GatewayService/StartTask"
 	GatewayService_EndTask_FullMethodName               = "/gateway.GatewayService/EndTask"
 	GatewayService_StopTasks_FullMethodName             = "/gateway.GatewayService/StopTasks"
@@ -69,6 +70,7 @@ type GatewayServiceClient interface {
 	// Containers
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
 	StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error)
+	AttachToContainer(ctx context.Context, in *AttachToContainerRequest, opts ...grpc.CallOption) (GatewayService_AttachToContainerClient, error)
 	// Tasks
 	StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error)
 	EndTask(ctx context.Context, in *EndTaskRequest, opts ...grpc.CallOption) (*EndTaskResponse, error)
@@ -207,6 +209,38 @@ func (c *gatewayServiceClient) StopContainer(ctx context.Context, in *StopContai
 		return nil, err
 	}
 	return out, nil
+}
+
+func (c *gatewayServiceClient) AttachToContainer(ctx context.Context, in *AttachToContainerRequest, opts ...grpc.CallOption) (GatewayService_AttachToContainerClient, error) {
+	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[1], GatewayService_AttachToContainer_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &gatewayServiceAttachToContainerClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type GatewayService_AttachToContainerClient interface {
+	Recv() (*AttachToContainerResponse, error)
+	grpc.ClientStream
+}
+
+type gatewayServiceAttachToContainerClient struct {
+	grpc.ClientStream
+}
+
+func (x *gatewayServiceAttachToContainerClient) Recv() (*AttachToContainerResponse, error) {
+	m := new(AttachToContainerResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (c *gatewayServiceClient) StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error) {
@@ -449,6 +483,7 @@ type GatewayServiceServer interface {
 	// Containers
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
 	StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error)
+	AttachToContainer(*AttachToContainerRequest, GatewayService_AttachToContainerServer) error
 	// Tasks
 	StartTask(context.Context, *StartTaskRequest) (*StartTaskResponse, error)
 	EndTask(context.Context, *EndTaskRequest) (*EndTaskResponse, error)
@@ -512,6 +547,9 @@ func (UnimplementedGatewayServiceServer) ListContainers(context.Context, *ListCo
 }
 func (UnimplementedGatewayServiceServer) StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StopContainer not implemented")
+}
+func (UnimplementedGatewayServiceServer) AttachToContainer(*AttachToContainerRequest, GatewayService_AttachToContainerServer) error {
+	return status.Errorf(codes.Unimplemented, "method AttachToContainer not implemented")
 }
 func (UnimplementedGatewayServiceServer) StartTask(context.Context, *StartTaskRequest) (*StartTaskResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method StartTask not implemented")
@@ -751,6 +789,27 @@ func _GatewayService_StopContainer_Handler(srv interface{}, ctx context.Context,
 		return srv.(GatewayServiceServer).StopContainer(ctx, req.(*StopContainerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
+}
+
+func _GatewayService_AttachToContainer_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(AttachToContainerRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(GatewayServiceServer).AttachToContainer(m, &gatewayServiceAttachToContainerServer{stream})
+}
+
+type GatewayService_AttachToContainerServer interface {
+	Send(*AttachToContainerResponse) error
+	grpc.ServerStream
+}
+
+type gatewayServiceAttachToContainerServer struct {
+	grpc.ServerStream
+}
+
+func (x *gatewayServiceAttachToContainerServer) Send(m *AttachToContainerResponse) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 func _GatewayService_StartTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1344,6 +1403,11 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "PutObjectStream",
 			Handler:       _GatewayService_PutObjectStream_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "AttachToContainer",
+			Handler:       _GatewayService_AttachToContainer_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "gateway.proto",
