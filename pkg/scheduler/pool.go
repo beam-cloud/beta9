@@ -208,6 +208,11 @@ func (c *WorkerResourceCleaner) deleteStaleJob(ctx context.Context, pod corev1.P
 		return
 	}
 
+	switch pod.Status.Phase {
+	case corev1.PodSucceeded, corev1.PodFailed:
+		return
+	}
+
 	_, err := c.WorkerRepo.GetWorkerById(workerId)
 	if err == nil {
 		return
