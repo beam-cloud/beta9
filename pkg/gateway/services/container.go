@@ -36,15 +36,15 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 		}
 	}
 
-	containers := make([]*pb.Container, len(containerStates))
-	for i, state := range containerStates {
+	containers := []*pb.Container{}
+	for _, state := range containerStates {
 		deploymentId := ""
 		deployment, err := gws.backendRepo.GetDeploymentByStubExternalId(ctx, authInfo.Workspace.Id, state.StubId)
 		if err == nil && deployment != nil {
 			deploymentId = deployment.ExternalId
 		}
 
-		containers[i] = &pb.Container{
+		containers = append(containers, &pb.Container{
 			ContainerId:  state.ContainerId,
 			StubId:       state.StubId,
 			WorkspaceId:  state.WorkspaceId,
@@ -54,7 +54,7 @@ func (gws GatewayService) ListContainers(ctx context.Context, in *pb.ListContain
 			WorkerId:     containerWorkerMap[state.ContainerId].WorkerId,
 			MachineId:    containerWorkerMap[state.ContainerId].MachineId,
 			DeploymentId: deploymentId,
-		}
+		})
 	}
 
 	return &pb.ListContainersResponse{
