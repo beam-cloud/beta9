@@ -269,7 +269,7 @@ class EndpointManager:
 
 if __name__ == "__main__":
     options = {
-        "bind": [f"[::]:{cfg.bind_port}"],
+        "bind": [f"0.0.0.0:{cfg.bind_port}", f"[::]:{cfg.bind_port}"],
         "workers": cfg.workers,
         "worker_class": "uvicorn.workers.UvicornWorker",
         "loglevel": "info",

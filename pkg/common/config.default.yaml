@@ -164,6 +164,7 @@ worker:
     #     sharedMemoryLimitPct: 100%
   # global pool attributes
   useHostResolvConf: true
+  ipv6BindV6Only: true
   hostNetwork: false
   useGatewayServiceHostname: true
   imageTag: latest
