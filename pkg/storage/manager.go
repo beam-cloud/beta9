@@ -9,3 +9,11 @@ func NewStorageManager() *StorageManager {
 		storage: make(map[string]Storage),
 	}
 }
+
+func (s *StorageManager) CreateWorkspaceStorage(name string, storage Storage) {
+	s.storage[name] = storage
+}
+
+func (s *StorageManager) MountWorkspaceStorage(name string) Storage {
+	return s.storage[name]
+}
