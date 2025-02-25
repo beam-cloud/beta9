@@ -46,10 +46,14 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	imagePath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, opts.request.StubId)
 	originalImagePath := imagePath
 
-	cachedCheckpointPath := filepath.Join(baseFileCachePath, imagePath)
-	checkpointCached := c.checkpointCached(cachedCheckpointPath, opts.request.ContainerId)
-	if checkpointCached {
-		imagePath = cachedCheckpointPath
+	if c.fileCacheManager.CacheAvailable() {
+		cachedCheckpointPath := filepath.Join(baseFileCachePath, imagePath)
+		checkpointCached := c.checkpointCached(cachedCheckpointPath, opts.request.ContainerId)
+		if checkpointCached {
+			imagePath = cachedCheckpointPath
+		} else {
+			go c.cacheDir(opts.request.ContainerId, imagePath)
+		}
 	}
 
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
@@ -94,8 +98,6 @@ func (c *NvidiaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) 
 		return cachedCheckpointPath, nil
 	}
 
-	log.Info().Str("container_id", containerId).Msgf("caching checkpoint nearby: %s", checkpointPath)
-
 	err := c.cacheDir(containerId, checkpointPath)
 	if err != nil {
 		return "", err
@@ -113,6 +115,7 @@ func (c *NvidiaCRIUManager) checkpointCached(cachedCheckpointPath string, contai
 }
 
 func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
+	log.Info().Str("container_id", containerId).Msgf("caching checkpoint nearby: %s", checkpointPath)
 	client := c.fileCacheManager.GetClient()
 	wg := sync.WaitGroup{}
 	p, err := ants.NewPool(20)
