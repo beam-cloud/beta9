@@ -14,6 +14,7 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/go-runc"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -149,6 +150,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 
+		sampledLogger := log.Sample(&zerolog.BasicSampler{N: 5})
 	waitForReady:
 		for {
 			select {
@@ -168,9 +170,8 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 					log.Info().Str("container_id", instance.Id).Msg("container ready for checkpoint")
 					break waitForReady
 				} else {
-					log.Info().Str("container_id", instance.Id).Msg("container not ready for checkpoint")
+					sampledLogger.Info().Str("container_id", instance.Id).Msg("container not ready for checkpoint")
 				}
-
 			}
 		}
 
