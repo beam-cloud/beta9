@@ -203,10 +203,20 @@ type JuiceFSConfig struct {
 }
 
 type GeeseConfig struct {
-	S3AccessKey   string `key:"s3AccessKey" json:"s3_access_key"`
-	S3SecretKey   string `key:"s3SecretKey" json:"s3_secret_key"`
-	S3EndpointUrl string `key:"s3EndpointURL" json:"s3_endpoint_url"`
-	S3BucketName  string `key:"s3BucketName" json:"s3_bucket_name"`
+	Debug            bool   `key:"debug" json:"debug"`                         // --debug
+	Force            bool   `key:"force" json:"force"`                         // -f (force)
+	FsyncOnClose     bool   `key:"fsyncOnClose" json:"fsync_on_close"`         // --fsync-on-close
+	MemoryLimit      int64  `key:"memoryLimit" json:"memory_limit"`            // --memory-limit
+	MaxFlushers      int    `key:"maxFlushers" json:"max_flushers"`            // --max-flushers
+	MaxParallelParts int    `key:"maxParallelParts" json:"max_parallel_parts"` // --max-parallel-parts
+	PartSizes        int64  `key:"partSizes" json:"part_sizes"`                // --part-sizes
+	DirMode          string `key:"dirMode" json:"dir_mode"`                    // --dir-mode, e.g., "0777"
+	FileMode         string `key:"fileMode" json:"file_mode"`                  // --file-mode, e.g., "0666"
+	ListType         int    `key:"listType" json:"list_type"`                  // --list-type
+	AccessKey        string `key:"accessKey" json:"access_key"`
+	SecretKey        string `key:"secretKey" json:"secret_key"`
+	EndpointUrl      string `key:"endpointURL" json:"endpoint_url"` // --endpoint
+	BucketName       string `key:"bucketName" json:"bucket_name"`
 }
 
 // @go2proto
