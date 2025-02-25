@@ -1664,6 +1664,69 @@ func (x *WorkspaceStorage) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+type WorkspaceWithRelated struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Workspace        *Workspace        `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	ConcurrencyLimit *ConcurrencyLimit `protobuf:"bytes,2,opt,name=concurrency_limit,json=concurrencyLimit,proto3" json:"concurrency_limit,omitempty"`
+	Storage          *WorkspaceStorage `protobuf:"bytes,3,opt,name=storage,proto3" json:"storage,omitempty"`
+}
+
+func (x *WorkspaceWithRelated) Reset() {
+	*x = WorkspaceWithRelated{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_types_proto_msgTypes[15]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *WorkspaceWithRelated) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WorkspaceWithRelated) ProtoMessage() {}
+
+func (x *WorkspaceWithRelated) ProtoReflect() protoreflect.Message {
+	mi := &file_types_proto_msgTypes[15]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WorkspaceWithRelated.ProtoReflect.Descriptor instead.
+func (*WorkspaceWithRelated) Descriptor() ([]byte, []int) {
+	return file_types_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *WorkspaceWithRelated) GetWorkspace() *Workspace {
+	if x != nil {
+		return x.Workspace
+	}
+	return nil
+}
+
+func (x *WorkspaceWithRelated) GetConcurrencyLimit() *ConcurrencyLimit {
+	if x != nil {
+		return x.ConcurrencyLimit
+	}
+	return nil
+}
+
+func (x *WorkspaceWithRelated) GetStorage() *WorkspaceStorage {
+	if x != nil {
+		return x.Storage
+	}
+	return nil
+}
+
 var File_types_proto protoreflect.FileDescriptor
 
 var file_types_proto_rawDesc = []byte{
@@ -1978,10 +2041,22 @@ var file_types_proto_rawDesc = []byte{
 	0x12, 0x39, 0x0a, 0x0a, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x5f, 0x61, 0x74, 0x18, 0x07,
 	0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72,
 	0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70,
-	0x52, 0x09, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74, 0x42, 0x23, 0x5a, 0x21, 0x67,
-	0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x62, 0x65, 0x61, 0x6d, 0x2d, 0x63,
-	0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f,
-	0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x52, 0x09, 0x75, 0x70, 0x64, 0x61, 0x74, 0x65, 0x64, 0x41, 0x74, 0x22, 0xbf, 0x01, 0x0a, 0x14,
+	0x57, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x57, 0x69, 0x74, 0x68, 0x52, 0x65, 0x6c,
+	0x61, 0x74, 0x65, 0x64, 0x12, 0x2e, 0x0a, 0x09, 0x77, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63,
+	0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x10, 0x2e, 0x74, 0x79, 0x70, 0x65, 0x73, 0x2e,
+	0x57, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x52, 0x09, 0x77, 0x6f, 0x72, 0x6b, 0x73,
+	0x70, 0x61, 0x63, 0x65, 0x12, 0x44, 0x0a, 0x11, 0x63, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72, 0x65,
+	0x6e, 0x63, 0x79, 0x5f, 0x6c, 0x69, 0x6d, 0x69, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0b, 0x32,
+	0x17, 0x2e, 0x74, 0x79, 0x70, 0x65, 0x73, 0x2e, 0x43, 0x6f, 0x6e, 0x63, 0x75, 0x72, 0x72, 0x65,
+	0x6e, 0x63, 0x79, 0x4c, 0x69, 0x6d, 0x69, 0x74, 0x52, 0x10, 0x63, 0x6f, 0x6e, 0x63, 0x75, 0x72,
+	0x72, 0x65, 0x6e, 0x63, 0x79, 0x4c, 0x69, 0x6d, 0x69, 0x74, 0x12, 0x31, 0x0a, 0x07, 0x73, 0x74,
+	0x6f, 0x72, 0x61, 0x67, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x17, 0x2e, 0x74, 0x79,
+	0x70, 0x65, 0x73, 0x2e, 0x57, 0x6f, 0x72, 0x6b, 0x73, 0x70, 0x61, 0x63, 0x65, 0x53, 0x74, 0x6f,
+	0x72, 0x61, 0x67, 0x65, 0x52, 0x07, 0x73, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x42, 0x23, 0x5a,
+	0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x62, 0x65, 0x61, 0x6d,
+	0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39, 0x2f, 0x70, 0x72, 0x6f,
+	0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -1996,7 +2071,7 @@ func file_types_proto_rawDescGZIP() []byte {
 	return file_types_proto_rawDescData
 }
 
-var file_types_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_types_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_types_proto_goTypes = []interface{}{
 	(*BuildOptions)(nil),          // 0: types.BuildOptions
 	(*CheckpointState)(nil),       // 1: types.CheckpointState
@@ -2013,37 +2088,41 @@ var file_types_proto_goTypes = []interface{}{
 	(*WorkerPoolState)(nil),       // 12: types.WorkerPoolState
 	(*Workspace)(nil),             // 13: types.Workspace
 	(*WorkspaceStorage)(nil),      // 14: types.WorkspaceStorage
-	(*timestamppb.Timestamp)(nil), // 15: google.protobuf.Timestamp
+	(*WorkspaceWithRelated)(nil),  // 15: types.WorkspaceWithRelated
+	(*timestamppb.Timestamp)(nil), // 16: google.protobuf.Timestamp
 }
 var file_types_proto_depIdxs = []int32{
-	15, // 0: types.ConcurrencyLimit.created_at:type_name -> google.protobuf.Timestamp
-	15, // 1: types.ConcurrencyLimit.updated_at:type_name -> google.protobuf.Timestamp
-	15, // 2: types.Container.scheduled_at:type_name -> google.protobuf.Timestamp
-	15, // 3: types.Container.started_at:type_name -> google.protobuf.Timestamp
+	16, // 0: types.ConcurrencyLimit.created_at:type_name -> google.protobuf.Timestamp
+	16, // 1: types.ConcurrencyLimit.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 2: types.Container.scheduled_at:type_name -> google.protobuf.Timestamp
+	16, // 3: types.Container.started_at:type_name -> google.protobuf.Timestamp
 	13, // 4: types.ContainerRequest.workspace:type_name -> types.Workspace
 	10, // 5: types.ContainerRequest.stub:type_name -> types.StubWithRelated
-	15, // 6: types.ContainerRequest.timestamp:type_name -> google.protobuf.Timestamp
+	16, // 6: types.ContainerRequest.timestamp:type_name -> google.protobuf.Timestamp
 	6,  // 7: types.ContainerRequest.mounts:type_name -> types.Mount
 	0,  // 8: types.ContainerRequest.build_options:type_name -> types.BuildOptions
 	7,  // 9: types.Mount.mount_point_config:type_name -> types.MountPointConfig
-	15, // 10: types.Object.created_at:type_name -> google.protobuf.Timestamp
-	15, // 11: types.Stub.created_at:type_name -> google.protobuf.Timestamp
-	15, // 12: types.Stub.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 10: types.Object.created_at:type_name -> google.protobuf.Timestamp
+	16, // 11: types.Stub.created_at:type_name -> google.protobuf.Timestamp
+	16, // 12: types.Stub.updated_at:type_name -> google.protobuf.Timestamp
 	9,  // 13: types.StubWithRelated.stub:type_name -> types.Stub
 	13, // 14: types.StubWithRelated.workspace:type_name -> types.Workspace
 	8,  // 15: types.StubWithRelated.object:type_name -> types.Object
 	3,  // 16: types.Worker.active_containers:type_name -> types.Container
-	15, // 17: types.Workspace.created_at:type_name -> google.protobuf.Timestamp
-	15, // 18: types.Workspace.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 17: types.Workspace.created_at:type_name -> google.protobuf.Timestamp
+	16, // 18: types.Workspace.updated_at:type_name -> google.protobuf.Timestamp
 	2,  // 19: types.Workspace.concurrency_limit:type_name -> types.ConcurrencyLimit
 	14, // 20: types.Workspace.storage:type_name -> types.WorkspaceStorage
-	15, // 21: types.WorkspaceStorage.created_at:type_name -> google.protobuf.Timestamp
-	15, // 22: types.WorkspaceStorage.updated_at:type_name -> google.protobuf.Timestamp
-	23, // [23:23] is the sub-list for method output_type
-	23, // [23:23] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	16, // 21: types.WorkspaceStorage.created_at:type_name -> google.protobuf.Timestamp
+	16, // 22: types.WorkspaceStorage.updated_at:type_name -> google.protobuf.Timestamp
+	13, // 23: types.WorkspaceWithRelated.workspace:type_name -> types.Workspace
+	2,  // 24: types.WorkspaceWithRelated.concurrency_limit:type_name -> types.ConcurrencyLimit
+	14, // 25: types.WorkspaceWithRelated.storage:type_name -> types.WorkspaceStorage
+	26, // [26:26] is the sub-list for method output_type
+	26, // [26:26] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_types_proto_init() }
@@ -2232,6 +2311,18 @@ func file_types_proto_init() {
 				return nil
 			}
 		}
+		file_types_proto_msgTypes[15].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*WorkspaceWithRelated); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -2239,7 +2330,7 @@ func file_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_types_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
