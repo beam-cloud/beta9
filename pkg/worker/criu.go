@@ -18,6 +18,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	defaultCheckpointDeadline = 10 * time.Minute
+	readyLogRate              = 10
+)
+
 type RestoreOpts struct {
 	request    *types.ContainerRequest
 	state      types.CheckpointState
@@ -32,8 +37,6 @@ type CRIUManager interface {
 	RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error)
 	CacheCheckpoint(containerId, checkpointPath string) (string, error)
 }
-
-const defaultCheckpointDeadline = 10 * time.Minute
 
 // InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers
 // -- depending on the mode, it will use either cedana or nvidia cuda checkpoint under the hood
@@ -87,7 +90,6 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		log.Info().Str("container_id", request.ContainerId).Msg("attempting to create checkpoint")
 		exitCode, err := s.createCheckpoint(ctx, request, outputWriter, checkpointPIDChan, configPath)
 		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
 			return -1, "", err
 		}
 
@@ -96,7 +98,6 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		log.Info().Str("container_id", request.ContainerId).Msg("attempting to restore checkpoint")
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 
-		// TODO: In the future, perhaps we should fallback to starting the container from scratch if the restore fails
 		exitCode, err := s.criuManager.RestoreCheckpoint(ctx, &RestoreOpts{
 			request: request,
 			state:   state,
@@ -106,10 +107,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			},
 			configPath: configPath,
 		})
-
 		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to restore checkpoint: %v", err)
-
 			s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
 				ContainerId:   request.ContainerId,
 				CheckpointId:  request.StubId,
@@ -122,13 +120,21 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			})
 
 			return -1, "", err
-		} else {
-			log.Info().Str("container_id", request.ContainerId).Msg("checkpoint found and restored")
-			return exitCode, request.ContainerId, nil
 		}
+
+		log.Info().Str("container_id", request.ContainerId).Msg("checkpoint found and restored")
+		return exitCode, request.ContainerId, nil
 	}
 
-	return -1, "", nil
+	// If a checkpoint exists but is not available (previously failed), run the container normally
+	bundlePath := filepath.Dir(configPath)
+
+	exitCode, err := s.runcHandle.Run(s.ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
+		OutputWriter: outputWriter,
+		Started:      checkpointPIDChan,
+	})
+
+	return exitCode, request.ContainerId, err
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
@@ -150,7 +156,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 
-		sampledLogger := log.Sample(&zerolog.BasicSampler{N: 5})
+		sampledLogger := log.Sample(&zerolog.BasicSampler{N: readyLogRate})
 	waitForReady:
 		for {
 			select {
