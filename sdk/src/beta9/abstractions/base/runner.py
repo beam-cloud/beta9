@@ -4,7 +4,7 @@ import os
 import threading
 import time
 from queue import Empty, Queue
-from typing import Callable, List, Optional, Union
+from typing import Callable, Dict, List, Optional, Union
 
 import cloudpickle
 from watchdog.observers import Observer
@@ -62,6 +62,9 @@ ASGI_SERVE_STUB_TYPE = "asgi/serve"
 FUNCTION_SERVE_STUB_TYPE = "function/serve"
 BOT_SERVE_STUB_TYPE = "bot/serve"
 
+POD_DEPLOYMENT_STUB_TYPE = "pod/deployment"
+POD_RUN_STUB_TYPE = "pod/run"
+
 _stub_creation_lock = threading.Lock()
 _stub_created_for_workspace = False
 
@@ -93,6 +96,7 @@ class RunnerAbstraction(BaseAbstraction):
         timeout: int = 3600,
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = {},
         on_start: Optional[Callable] = None,
         on_deploy: Optional["AbstractCallableWrapper"] = None,
         callback_url: Optional[str] = None,
@@ -101,11 +105,17 @@ class RunnerAbstraction(BaseAbstraction):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
+        entrypoint: Optional[List[str]] = None,
+        ports: Optional[List[int]] = [],
     ) -> None:
         super().__init__()
 
         if image is None:
             image = Image()
+
+        formatted_env = []
+        if env:
+            formatted_env = [f"{k}={v}" for k, v in env.items()]
 
         self.name = name
         self.authorized = authorized
@@ -119,14 +129,15 @@ class RunnerAbstraction(BaseAbstraction):
         self.stub_id: str = ""
         self.handler: str = ""
         self.on_start: str = ""
-        self.on_deploy: "AbstractCallableWrapper" = self._validate_on_deploy(on_deploy)
+        self.on_deploy: "AbstractCallableWrapper" = self.parse_on_deploy(on_deploy)
         self.callback_url = callback_url or ""
-        self.cpu = cpu
-        self.memory = self._parse_memory(memory) if isinstance(memory, str) else memory
+        self.cpu = self.parse_cpu(cpu)
+        self.memory = self.parse_memory(memory)
         self.gpu = gpu
         self.gpu_count = gpu_count
         self.volumes = volumes or []
         self.secrets = [SecretVar(name=s) for s in (secrets or [])]
+        self.env: List[str] = formatted_env
         self.workers = workers
         self.concurrent_requests = concurrent_requests
         self.keep_warm_seconds = keep_warm_seconds
@@ -139,6 +150,7 @@ class RunnerAbstraction(BaseAbstraction):
         )
         self.checkpoint_enabled = checkpoint_enabled
         self.extra: dict = {}
+        self.entrypoint: Optional[List[str]] = entrypoint
 
         if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
             self.gpu_count = 1
@@ -153,6 +165,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.config_context: ConfigContext = get_config_context()
         self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
+        self.ports: List[int] = ports or []
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
@@ -194,7 +207,10 @@ class RunnerAbstraction(BaseAbstraction):
         terminal.print("\n".join(commands), crop=False, overflow="ignore")
         return res
 
-    def _parse_memory(self, memory_str: str) -> int:
+    def parse_memory(self, memory_str: str) -> int:
+        if not isinstance(memory_str, str):
+            return memory_str
+
         """Parse memory str (with units) to megabytes."""
 
         if memory_str.lower().endswith("mi"):
@@ -226,7 +242,7 @@ class RunnerAbstraction(BaseAbstraction):
     def shell_stub(self, value) -> None:
         self._shell_stub = value
 
-    def _parse_cpu_to_millicores(self, cpu: Union[float, str]) -> int:
+    def parse_cpu(self, cpu: Union[float, str]) -> int:
         """
         Parse the cpu argument to an integer value in millicores.
 
@@ -342,7 +358,7 @@ class RunnerAbstraction(BaseAbstraction):
         except Exception as e:
             terminal.warn(str(e))
 
-    def _parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
+    def parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
         if not isinstance(gpu, str) and not isinstance(gpu, list):
             raise ValueError("Invalid GPU type")
 
@@ -351,7 +367,7 @@ class RunnerAbstraction(BaseAbstraction):
         else:
             return GpuType(gpu).value
 
-    def _validate_on_deploy(self, func: Callable):
+    def parse_on_deploy(self, func: Callable):
         if func is None:
             return None
 
@@ -396,8 +412,6 @@ class RunnerAbstraction(BaseAbstraction):
         if self.runtime_ready:
             return True
 
-        self.cpu = self._parse_cpu_to_millicores(self.cpu)
-
         if not self.image_available:
             image_build_result: ImageBuildResult = self.image.build()
 
@@ -426,7 +440,7 @@ class RunnerAbstraction(BaseAbstraction):
                 return False
 
         try:
-            self.gpu = self._parse_gpu(self.gpu)
+            self.gpu = self.parse_gpu(self.gpu)
         except ValueError:
             terminal.error(f"Invalid GPU type: {self.gpu}", exit=False)
             return False
@@ -460,6 +474,7 @@ class RunnerAbstraction(BaseAbstraction):
                 max_pending_tasks=self.max_pending_tasks,
                 volumes=[v.export() for v in self.volumes],
                 secrets=self.secrets,
+                env=self.env,
                 force_create=force_create_stub,
                 authorized=self.authorized,
                 autoscaler=AutoscalerProto(
@@ -476,6 +491,8 @@ class RunnerAbstraction(BaseAbstraction):
                 concurrent_requests=self.concurrent_requests,
                 checkpoint_enabled=self.checkpoint_enabled,
                 extra=json.dumps(self.extra),
+                entrypoint=self.entrypoint,
+                ports=self.ports,
             )
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(

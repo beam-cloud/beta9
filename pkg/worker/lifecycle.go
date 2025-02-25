@@ -210,18 +210,30 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		}
 	}
 
-	bindPort, err := getRandomFreePort()
-	if err != nil {
-		return err
+	// Determine how many ports we need to expose
+	portsToExpose := len(request.Ports)
+	if portsToExpose == 0 {
+		portsToExpose = 1
+		request.Ports = []uint32{uint32(containerInnerPort)}
 	}
-	log.Info().Str("container_id", containerId).Msgf("acquired port: %d", bindPort)
+
+	bindPorts := make([]int, 0, portsToExpose)
+	for i := 0; i < portsToExpose; i++ {
+		bindPort, err := getRandomFreePort()
+		if err != nil {
+			return err
+		}
+		bindPorts = append(bindPorts, bindPort)
+	}
+
+	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
 
 	// Read spec from bundle
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
 
 	opts := &ContainerOptions{
 		BundlePath:  bundlePath,
-		BindPort:    bindPort,
+		BindPorts:   bindPorts,
 		InitialSpec: initialBundleSpec,
 	}
 
@@ -239,7 +251,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
-	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, bindPort)
+	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[0])
 	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
 		ContainerId: request.ContainerId,
 		Address:     containerAddr,
@@ -247,7 +259,24 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if err != nil {
 		return err
 	}
-	log.Info().Str("container_id", containerId).Msg("set container address")
+	log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
+
+	// For pod stubs, set the container address map - this is a mapping of worker ports -> container ports
+	if request.Stub.Type.Kind() == types.StubTypePod {
+		addressMap := make(map[int32]string)
+		for idx, containerPort := range request.Ports {
+			addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
+		}
+		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
+			ContainerId: request.ContainerId,
+			AddressMap:  addressMap,
+		}))
+		if err != nil {
+			return err
+		}
+
+		log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
+	}
 
 	go s.containerWg.Add(1)
 
@@ -449,7 +478,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	// Most of these env vars are required to communicate with the gateway and vice versa
 	env := []string{
 		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
-		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)),
+		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
@@ -561,11 +590,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	// Expose the bind port
-	err = s.containerNetworkManager.ExposePort(containerId, opts.BindPort, containerInnerPort)
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
-		return
+	portsToExpose := len(request.Ports)
+	if portsToExpose == 0 {
+		portsToExpose = 1
+		request.Ports = []uint32{uint32(containerInnerPort)}
 	}
 
 	if request.RequiresGPU() {
@@ -591,6 +619,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 		if len(unresolvable) > 0 {
 			log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
+			return
+		}
+	}
+
+	// Expose the bind ports
+	for idx, bindPort := range opts.BindPorts {
+		err = s.containerNetworkManager.ExposePort(containerId, bindPort, int(request.Ports[idx]))
+		if err != nil {
+			log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 			return
 		}
 	}
@@ -664,6 +701,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
 	}
+	// If the container exited with a code of -1 and was not OOM killed, set the exit code to 0
+	// since the container was likely terminated by a SIGTERM/SIGKILL
+	if exitCode == -1 && !isOOMKilled {
+		exitCode = 0
+	}
+
+	return cleanup(exitCode, nil)
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {

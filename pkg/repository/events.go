@@ -195,6 +195,20 @@ func (t *TCPEventClientRepo) PushWorkerStoppedEvent(workerID string) {
 	)
 }
 
+func (t *TCPEventClientRepo) PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason) {
+	t.pushEvent(
+		types.EventWorkerLifecycle,
+		types.EventWorkerLifecycleSchemaVersion,
+		types.EventWorkerLifecycleSchema{
+			WorkerID:  workerID,
+			MachineID: machineID,
+			PoolName:  poolName,
+			Reason:    reason,
+			Status:    types.EventWorkerLifecycleDeleted,
+		},
+	)
+}
+
 func (t *TCPEventClientRepo) PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData) {
 	t.pushEvent(
 		types.EventContainerMetrics,

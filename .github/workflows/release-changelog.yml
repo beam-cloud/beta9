@@ -156,13 +156,18 @@ jobs:
           cd beam-docs
           NEW_FILE="v2/releases/${{ steps.release.outputs.created_at }}"
           jq --arg new_file "$NEW_FILE" '
-            .navigation[] |= 
-              if .group == "Changelog" then 
-                .pages |= if index($new_file) then . else [$new_file] + . end
+            .navigation.tabs[] |= 
+              if .tab == "Changelog" then 
+                .groups[] |= 
+                  if .group == "Changelog" then
+                    .pages |= if index($new_file) then . else [$new_file] + . end
+                  else
+                    .
+                  end
               else 
                 .
               end
-          ' ./mint.json > ./mint.json.tmp && mv ./mint.json.tmp ./mint.json
+          ' ./docs.json > ./docs.json.tmp && mv ./docs.json.tmp ./docs.json
 
       - name: Commit and push changes
         if: steps.release.outputs.should_continue == 'true'

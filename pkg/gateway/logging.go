@@ -14,10 +14,28 @@ func configureEchoLogger(e *echo.Echo, debug bool) {
 			LogURIPath:   true,
 			LogError:     true,
 			LogValuesFunc: func(c echo.Context, v middleware.RequestLoggerValues) error {
+				stubId, ok := c.Get("stubId").(string)
+				if !ok {
+					stubId = "unknown"
+				}
+
 				if v.Error != nil {
-					log.Error().Str("error", v.Error.Error()).Str("method", c.Request().Method).Str("uri", v.URIPath).Int("status", v.Status).Msg("request error")
+					log.Error().
+						Str("error", v.Error.Error()).
+						Str("method", c.Request().Method).
+						Str("route", v.RoutePath).
+						Str("path", v.URIPath).
+						Str("stub_id", stubId).
+						Int("status", v.Status).
+						Msg("request error")
 				} else {
-					log.Info().Str("method", c.Request().Method).Str("uri", v.URIPath).Int("status", v.Status).Msg("request")
+					log.Info().
+						Str("method", c.Request().Method).
+						Str("route", v.RoutePath).
+						Str("path", v.URIPath).
+						Str("stub_id", stubId).
+						Int("status", v.Status).
+						Msg("request")
 				}
 				return nil
 			},

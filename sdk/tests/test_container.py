@@ -28,7 +28,7 @@ class TestContainer(TestCase):
         c.stub = MagicMock()
 
         self.assertEqual(c.image.python_version, "python3.8")
-        self.assertEqual(c.cpu, 1)
+        self.assertEqual(c.cpu, 1000)
         self.assertEqual(c.memory, 128)
 
     def test_run(self):

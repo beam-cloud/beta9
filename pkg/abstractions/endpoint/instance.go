@@ -48,7 +48,10 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		return err
 	}
 
-	env := []string{
+	env := []string{}
+	env = append(i.StubConfig.Env, env...)
+	env = append(secrets, env...)
+	env = append(env, []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 		fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
 		fmt.Sprintf("ON_START=%s", i.StubConfig.OnStart),
@@ -59,9 +62,7 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 		fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
 		fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
 		fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),
-	}
-
-	env = append(secrets, env...)
+	}...)
 
 	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
 	if i.StubConfig.Runtime.Gpu != "" {

@@ -21,6 +21,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	bot "github.com/beam-cloud/beta9/pkg/abstractions/experimental/bot"
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
+	pod "github.com/beam-cloud/beta9/pkg/abstractions/pod"
 	_shell "github.com/beam-cloud/beta9/pkg/abstractions/shell"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
@@ -363,6 +364,26 @@ func (g *Gateway) registerServices() error {
 	}
 	pb.RegisterContainerServiceServer(g.grpcServer, cs)
 
+	// Register pod service
+	ps, err := pod.NewPodService(
+		g.ctx,
+		pod.PodServiceOpts{
+			Config:        g.Config,
+			BackendRepo:   g.BackendRepo,
+			ContainerRepo: g.ContainerRepo,
+			Tailscale:     g.Tailscale,
+			Scheduler:     g.Scheduler,
+			RedisClient:   g.RedisClient,
+			EventRepo:     g.EventRepo,
+			RouteGroup:    g.rootRouteGroup,
+			WorkspaceRepo: g.WorkspaceRepo,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	pb.RegisterPodServiceServer(g.grpcServer, ps)
+
 	// Register output service
 	o, err := output.NewOutputRedisService(g.Config, g.RedisClient, g.BackendRepo, g.rootRouteGroup)
 	if err != nil {
@@ -428,6 +449,7 @@ func (g *Gateway) registerServices() error {
 	// Register gateway services
 	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
 	gws, err := gatewayservices.NewGatewayService(&gatewayservices.GatewayServiceOpts{
+		Ctx:            g.ctx,
 		Config:         g.Config,
 		BackendRepo:    g.BackendRepo,
 		ContainerRepo:  g.ContainerRepo,
@@ -438,6 +460,7 @@ func (g *Gateway) registerServices() error {
 		EventRepo:      g.EventRepo,
 		WorkerRepo:     g.workerRepo,
 		WorkerPoolRepo: g.WorkerPoolRepo,
+		Tailscale:      g.Tailscale,
 	})
 	if err != nil {
 		return err

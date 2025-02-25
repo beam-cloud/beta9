@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -220,6 +221,12 @@ func (cr *ContainerRedisRepository) DeleteContainerState(containerId string) err
 		return fmt.Errorf("failed to delete container addr <%v>: %w", addrKey, err)
 	}
 
+	addrMapKey := common.RedisKeys.SchedulerContainerAddressMap(containerId)
+	err = cr.rdb.Del(context.TODO(), addrMapKey).Err()
+	if err != nil {
+		return fmt.Errorf("failed to delete container addrMap <%v>: %w", addrMapKey, err)
+	}
+
 	workerAddrKey := common.RedisKeys.SchedulerWorkerAddress(containerId)
 	err = cr.rdb.Del(context.TODO(), workerAddrKey).Err()
 	if err != nil {
@@ -235,6 +242,38 @@ func (cr *ContainerRedisRepository) SetContainerAddress(containerId string, addr
 
 func (cr *ContainerRedisRepository) GetContainerAddress(containerId string) (string, error) {
 	return cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerAddress(containerId)).Result()
+}
+
+func (cr *ContainerRedisRepository) SetContainerAddressMap(containerId string, addressMap map[int32]string) error {
+	data, err := json.Marshal(addressMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal addressMap for container %s: %w", containerId, err)
+	}
+
+	err = cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerAddressMap(containerId), data, 0).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set container addressMap for container %s: %w", containerId, err)
+	}
+
+	return nil
+}
+
+func (cr *ContainerRedisRepository) GetContainerAddressMap(containerId string) (map[int32]string, error) {
+	data, err := cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerAddressMap(containerId)).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, nil
+		}
+
+		return nil, fmt.Errorf("failed to get container addressMap for container %s: %w", containerId, err)
+	}
+
+	addressMap := make(map[int32]string)
+	if err := json.Unmarshal(data, &addressMap); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal addressMap for container %s: %w", containerId, err)
+	}
+
+	return addressMap, nil
 }
 
 func (cr *ContainerRedisRepository) SetWorkerAddress(containerId string, addr string) error {
@@ -303,6 +342,10 @@ func (cr *ContainerRedisRepository) listContainerStateByIndex(indexKey string, k
 			continue
 		}
 
+		if state.ContainerId == "" {
+			continue
+		}
+
 		containerStates = append(containerStates, state)
 	}
 
@@ -362,7 +405,7 @@ func (cr *ContainerRedisRepository) GetFailedContainersByStubId(stubId string) (
 		}
 
 		// Check if the exit code is non-zero
-		if exitCode != 0 {
+		if exitCode != 0 && exitCode != types.WorkerContainerExitCodeOomKill {
 			failedContainerIds = append(failedContainerIds, containerId)
 		}
 	}

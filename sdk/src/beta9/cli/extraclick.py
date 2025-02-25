@@ -1,5 +1,6 @@
 import functools
 import inspect
+import shlex
 import sys
 import textwrap
 from gettext import gettext
@@ -7,18 +8,20 @@ from typing import Any, Callable, Dict, List, Optional
 
 import click
 
+from .. import terminal
 from ..abstractions import base as base_abstraction
+from ..abstractions.image import Image
 from ..channel import ServiceClient, with_grpc_error_handling
 from ..clients.gateway import (
     StringList,
 )
 from ..config import DEFAULT_CONTEXT_NAME, get_config_context
+from ..utils import get_init_args_kwargs
 
 CLICK_CONTEXT_SETTINGS = dict(
     help_option_names=["-h", "--help"],
     show_default=True,
 )
-
 
 config_context_param = click.Option(
     param_decls=["-c", "--context"],
@@ -119,6 +122,7 @@ class CommandGroupCollection(click.CommandCollection):
                 continue
             for command in source.commands:
                 r[command] = source
+
         return r
 
     def invoke(self, ctx: click.Context) -> Any:
@@ -235,3 +239,124 @@ def filter_values_callback(
         filters[key] = StringList(values=value_list)
 
     return filters
+
+
+class ImageParser(click.ParamType):
+    name = "base_image"
+
+    def convert(self, value, param, ctx):
+        return Image(
+            base_image=value,
+        )
+
+
+class ShlexParser(click.ParamType):
+    name = "shlex"
+
+    def convert(self, value, param, ctx):
+        if not value:
+            return []
+        return shlex.split(value)
+
+
+class CommaSeparatedList(click.ParamType):
+    name = "comma_separated_list"
+
+    def __init__(self, type: click.ParamType):
+        self.type = type
+
+    def convert(self, value, param, ctx):
+        if not value:
+            return []
+        values = value.split(",")
+        return [self.type.convert(v, param, ctx) for v in values]
+
+
+def override_config_options(func: click.Command):
+    f = click.option(
+        "--cpu",
+        type=click.FLOAT,
+        help="The amount of CPU to allocate (in cores, e.g. --cpu 0.5).",
+        required=False,
+    )(func)
+    f = click.option(
+        "--memory",
+        type=click.STRING,
+        help="The amount of memory to allocate (in MB).",
+        required=False,
+    )(f)
+    f = click.option(
+        "--gpu", type=click.STRING, help="The type of GPU to allocate.", required=False
+    )(f)
+    f = click.option(
+        "--gpu-count",
+        type=click.INT,
+        help="The number of GPUs to allocate to the container.",
+        required=False,
+    )(f)
+    f = click.option(
+        "--secrets",
+        type=CommaSeparatedList(click.STRING),
+        help="The secrets to inject into the container (e.g. --secrets SECRET1,SECRET2).",
+    )(f)
+    f = click.option(
+        "--ports",
+        type=CommaSeparatedList(click.INT),
+        help="The ports to expose inside the container (e.g. --ports 8000,8001).",
+    )(f)
+    f = click.option(
+        "--entrypoint",
+        type=ShlexParser(),
+        help="The entrypoint for the container - only used if a handler is not provided.",
+    )(f)
+    f = click.option(
+        "--image",
+        type=ImageParser(),
+        help="The image to use for the container (e.g. --image python:3.10).",
+        required=False,
+    )(f)
+    f = click.option(
+        "--env",
+        type=click.STRING,
+        multiple=True,
+        help="Environment variables to pass to the container (e.g. --env VAR1=value --env VAR2=value).",
+    )(f)
+    return f
+
+
+PARSE_CONFIG_PREFIX = "parse_"
+
+
+def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
+    current_key = None
+    try:
+        config_class_instance = None
+        if hasattr(func, "parent"):
+            config_class_instance = func.parent
+        else:
+            config_class_instance = func
+
+        # We only want to override the config if the config class has an __init__ method
+        # For example, ports is only available on a Pod
+        init_kwargs = get_init_args_kwargs(config_class_instance)
+
+        for key, value in kwargs.items():
+            current_key = key
+            if value is not None and key in init_kwargs:
+                if isinstance(value, tuple):
+                    value = list(value)
+
+                    if len(value) == 0:
+                        continue
+
+                if hasattr(config_class_instance, f"{PARSE_CONFIG_PREFIX}{key}"):
+                    value = config_class_instance.__getattribute__(f"{PARSE_CONFIG_PREFIX}{key}")(
+                        value
+                    )
+
+                setattr(config_class_instance, key, value)
+
+        return True
+    except BaseException as e:
+        terminal.error(f"Invalid CLI argument ==> {current_key}: {e}", exit=False)
+        return False

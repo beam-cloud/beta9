@@ -19,6 +19,7 @@ const (
 	Beta9WorkerLabelKey         string  = "run.beam.cloud/role"
 	Beta9WorkerLabelValue       string  = "worker"
 	Beta9WorkerJobPrefix        string  = "worker"
+	Beta9MachineLabelIDKey      string  = "run.beam.cloud/machine-id"
 	Beta9WorkerLabelIDKey       string  = "run.beam.cloud/worker-id"
 	Beta9WorkerLabelPoolNameKey string  = "run.beam.cloud/worker-pool-name"
 	PrometheusPortKey           string  = "prometheus.io/port"

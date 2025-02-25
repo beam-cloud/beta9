@@ -57,6 +57,7 @@ var (
 var (
 	EventWorkerLifecycleStarted = "started"
 	EventWorkerLifecycleStopped = "stopped"
+	EventWorkerLifecycleDeleted = "deleted"
 )
 
 // Schema versions should be in ISO 8601 format
@@ -112,9 +113,23 @@ type EventContainerStatusRequestedSchema struct {
 var EventWorkerLifecycleSchemaVersion = "1.0"
 
 type EventWorkerLifecycleSchema struct {
-	WorkerID string `json:"worker_id"`
-	Status   string `json:"status"`
+	WorkerID  string              `json:"worker_id"`
+	MachineID string              `json:"machine_id"`
+	Status    string              `json:"status"`
+	PoolName  string              `json:"pool_name"`
+	Reason    DeletedWorkerReason `json:"reason"`
 }
+
+type DeletedWorkerReason string
+
+func (d DeletedWorkerReason) String() string {
+	return string(d)
+}
+
+const (
+	DeletedWorkerReasonPodWithoutState            DeletedWorkerReason = "pod_without_state"
+	DeletedWorkerReasonPodExceededPendingAgeLimit DeletedWorkerReason = "pod_exceeded_pending_age_limit"
+)
 
 var EventStubSchemaVersion = "1.0"
 

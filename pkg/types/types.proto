@@ -40,6 +40,7 @@ message Container {
   string workspace_id = 6;
   string worker_id = 7;
   string machine_id = 8;
+  string deployment_id = 9;
 }
 
 message ContainerRequest {
@@ -63,6 +64,7 @@ message ContainerRequest {
   bool preemptable = 18;
   bool checkpoint_enabled = 19;
   BuildOptions build_options = 20;
+  repeated uint32 ports = 21;
 }
 
 message ContainerState {

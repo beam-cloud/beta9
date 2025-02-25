@@ -50,6 +50,8 @@ type ContainerRepository interface {
 	DeleteContainerState(containerId string) error
 	SetWorkerAddress(containerId string, addr string) error
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
+	SetContainerAddressMap(containerId string, addressMap map[int32]string) error
+	GetContainerAddressMap(containerId string) (map[int32]string, error)
 	SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error
 	GetActiveContainersByStubId(stubId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
@@ -69,6 +71,8 @@ type WorkerPoolRepository interface {
 	RemoveWorkerPoolStateLock(poolName string) error
 	SetWorkerPoolSizerLock(poolName string) error
 	RemoveWorkerPoolSizerLock(poolName string) error
+	SetWorkerCleanerLock(poolName string) error
+	RemoveWorkerCleanerLock(poolName string) error
 }
 
 type WorkspaceRepository interface {
@@ -109,6 +113,7 @@ type BackendRepository interface {
 	AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error)
 	GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error)
 	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
+	UpdateStubConfig(ctx context.Context, stubId uint, config *types.StubConfigV1) error
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
 	GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error)
 	GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
@@ -120,6 +125,7 @@ type BackendRepository interface {
 	ListDeploymentsPaginated(ctx context.Context, filters types.DeploymentFilter) (common.CursorPaginationInfo[types.DeploymentWithRelated], error)
 	GetLatestDeploymentByName(ctx context.Context, workspaceId uint, name string, stubType string, filterDeleted bool) (*types.DeploymentWithRelated, error)
 	GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error)
+	GetDeploymentByStubExternalId(ctx context.Context, workspaceId uint, stubExternalId string) (*types.DeploymentWithRelated, error)
 	GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error)
 	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
@@ -191,6 +197,7 @@ type EventRepository interface {
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
+	PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason)
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)

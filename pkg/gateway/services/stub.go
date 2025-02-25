@@ -43,6 +43,19 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		autoscaler.MinContainers = uint(in.Autoscaler.MinContainers)
 	}
 
+	// By default, pod deployments are scaled to 1 container
+	if in.StubType == types.StubTypePodDeployment {
+		autoscaler.MaxContainers = 1
+
+		// If we keep warm is set, allow scaling down to 0 containers
+		if in.KeepWarmSeconds > 0 {
+			autoscaler.MinContainers = 0
+		} else {
+			in.KeepWarmSeconds = 0
+			autoscaler.MinContainers = 1
+		}
+	}
+
 	if in.TaskPolicy == nil {
 		in.TaskPolicy = &pb.TaskPolicy{
 			MaxRetries: in.Retries,
@@ -93,6 +106,9 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Autoscaler:         autoscaler,
 		Extra:              json.RawMessage(in.Extra),
 		CheckpointEnabled:  in.CheckpointEnabled,
+		EntryPoint:         in.Entrypoint,
+		Ports:              in.Ports,
+		Env:                in.Env,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required
@@ -276,12 +292,25 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 		in.UrlType = gws.appConfig.GatewayService.InvokeURLType
 	}
 
-	// Get URL for Serves or Shells
+	// Get URL for Serves, Shells, or Pods
 	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell {
 		invokeUrl := common.BuildStubURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub)
 		return &pb.GetURLResponse{
 			Ok:  true,
 			Url: invokeUrl,
+		}, nil
+	} else if stub.Type.Kind() == types.StubTypePod {
+		stubConfig := &types.StubConfigV1{}
+		if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+			return &pb.GetURLResponse{
+				Ok:     false,
+				ErrMsg: "Unable to get config",
+			}, nil
+		}
+
+		return &pb.GetURLResponse{
+			Ok:  true,
+			Url: common.BuildPodURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub, stubConfig),
 		}, nil
 	}
 

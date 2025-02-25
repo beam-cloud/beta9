@@ -14,6 +14,7 @@ var (
 	schedulerContainerConfig         string = "scheduler:container:config:%s"
 	schedulerContainerState          string = "scheduler:container:state:%s"
 	schedulerContainerAddress        string = "scheduler:container:container_addr:%s"
+	schedulerContainerAddressMap     string = "scheduler:container:container_addr_map:%s"
 	schedulerContainerIndex          string = "scheduler:container:index:%s"
 	schedulerContainerWorkerIndex    string = "scheduler:container:worker:index:%s"
 	schedulerContainerWorkspaceIndex string = "scheduler:container:workspace:index:%s"
@@ -41,10 +42,11 @@ var (
 )
 
 var (
-	workerPoolPrefix    string = "workerpool"
-	workerPoolState     string = "workerpool:%s:state"
-	workerPoolStateLock string = "workerpool:%s:state:lock"
-	workerPoolSizerLock string = "workerpool:%s:sizer:lock"
+	workerPoolPrefix      string = "workerpool"
+	workerPoolState       string = "workerpool:%s:state"
+	workerPoolStateLock   string = "workerpool:%s:state:lock"
+	workerPoolSizerLock   string = "workerpool:%s:sizer:lock"
+	workerPoolCleanerLock string = "workerpool:%s:cleaner:lock"
 )
 
 var (
@@ -141,6 +143,10 @@ func (rk *redisKeys) SchedulerContainerAddress(containerId string) string {
 	return fmt.Sprintf(schedulerContainerAddress, containerId)
 }
 
+func (rk *redisKeys) SchedulerContainerAddressMap(containerId string) string {
+	return fmt.Sprintf(schedulerContainerAddressMap, containerId)
+}
+
 func (rk *redisKeys) SchedulerWorkerAddress(containerId string) string {
 	return fmt.Sprintf(schedulerWorkerAddress, containerId)
 }
@@ -214,6 +220,10 @@ func (rk *redisKeys) WorkerPoolStateLock(poolName string) string {
 
 func (rk *redisKeys) WorkerPoolSizerLock(poolName string) string {
 	return fmt.Sprintf(workerPoolSizerLock, poolName)
+}
+
+func (rk *redisKeys) WorkerPoolCleanerLock(poolName string) string {
+	return fmt.Sprintf(workerPoolCleanerLock, poolName)
 }
 
 // Task keys

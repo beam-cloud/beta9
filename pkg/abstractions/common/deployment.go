@@ -19,6 +19,7 @@ func ParseAndValidateDeploymentStubId(
 	stubType string,
 	backendRepo repository.BackendRepository,
 ) (string, error) {
+
 	if deploymentName != "" {
 		var deployment *types.DeploymentWithRelated
 

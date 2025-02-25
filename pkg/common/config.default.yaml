@@ -180,7 +180,8 @@ worker:
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024
   terminationGracePeriod: 30
-  addWorkerTimeout: 10m
+  cleanupWorkerInterval: 1m
+  cleanupPendingWorkerAgeLimit: 10m
   blobCacheEnabled: false
   containerLogLinesPerHour: 6000
   failover:

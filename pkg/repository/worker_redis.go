@@ -50,7 +50,7 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	}
 
 	// Set TTL on state key
-	err = r.rdb.Expire(context.TODO(), stateKey, r.config.AddWorkerTimeout).Err()
+	err = r.rdb.Expire(context.TODO(), stateKey, r.config.CleanupPendingWorkerAgeLimit).Err()
 	if err != nil {
 		return fmt.Errorf("failed to set worker state ttl <%v>: %w", stateKey, err)
 	}

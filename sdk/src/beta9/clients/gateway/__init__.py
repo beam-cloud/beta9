@@ -137,6 +137,18 @@ class StopContainerResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class AttachToContainerRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class AttachToContainerResponse(betterproto.Message):
+    output: str = betterproto.string_field(1)
+    done: bool = betterproto.bool_field(2)
+    exit_code: int = betterproto.int32_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class StartTaskRequest(betterproto.Message):
     """Task messages"""
 
@@ -270,6 +282,9 @@ class GetOrCreateStubRequest(betterproto.Message):
     gpu_count: int = betterproto.uint32_field(27)
     on_deploy: str = betterproto.string_field(28)
     on_deploy_stub_id: str = betterproto.string_field(29)
+    entrypoint: List[str] = betterproto.string_field(30)
+    ports: List[int] = betterproto.uint32_field(31)
+    env: List[str] = betterproto.string_field(32)
 
 
 @dataclass(eq=False, repr=False)
@@ -342,6 +357,18 @@ class StartDeploymentRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StartDeploymentResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    err_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ScaleDeploymentRequest(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    containers: int = betterproto.uint32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ScaleDeploymentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
 
@@ -666,6 +693,16 @@ class GatewayServiceStub(SyncServiceStub):
             StopContainerResponse,
         )(stop_container_request)
 
+    def attach_to_container(
+        self, attach_to_container_request: "AttachToContainerRequest"
+    ) -> Iterator["AttachToContainerResponse"]:
+        for response in self._unary_stream(
+            "/gateway.GatewayService/AttachToContainer",
+            AttachToContainerRequest,
+            AttachToContainerResponse,
+        )(attach_to_container_request):
+            yield response
+
     def start_task(self, start_task_request: "StartTaskRequest") -> "StartTaskResponse":
         return self._unary_unary(
             "/gateway.GatewayService/StartTask",
@@ -745,6 +782,15 @@ class GatewayServiceStub(SyncServiceStub):
             StartDeploymentRequest,
             StartDeploymentResponse,
         )(start_deployment_request)
+
+    def scale_deployment(
+        self, scale_deployment_request: "ScaleDeploymentRequest"
+    ) -> "ScaleDeploymentResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ScaleDeployment",
+            ScaleDeploymentRequest,
+            ScaleDeploymentResponse,
+        )(scale_deployment_request)
 
     def delete_deployment(
         self, delete_deployment_request: "DeleteDeploymentRequest"

@@ -59,7 +59,8 @@
 				"CAP_SETFCAP",
 				"CAP_SYS_CHROOT",
 				"CAP_MKNOD"
-			]
+			],
+			"ambient": []
 		},
 		"rlimits": [],
 		"noNewPrivileges": false

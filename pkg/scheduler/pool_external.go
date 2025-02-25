@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
@@ -45,13 +46,13 @@ type ExternalWorkerPoolController struct {
 	workspace        *types.Workspace
 }
 
-func NewExternalWorkerPoolController(
-	opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
+func NewExternalWorkerPoolController(opts WorkerPoolControllerOptions) (WorkerPoolController, error) {
 	var provider providers.Provider = nil
 	var err error = nil
 
 	workerPoolName := opts.Name
 	providerName := opts.ProviderName
+	opts.Config.Worker.Namespace = externalWorkerNamespace
 
 	switch *providerName {
 	case types.ProviderEC2:
@@ -113,6 +114,9 @@ func NewExternalWorkerPoolController(
 
 	// Reconcile nodes with state
 	go provider.Reconcile(wpc.ctx, wpc.name)
+
+	// Monitor and cleanup workers
+	go wpc.monitorAndCleanupWorkers()
 
 	return wpc, nil
 }
@@ -297,7 +301,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 	worker.RequiresPoolSelector = wpc.workerPoolConfig.RequiresPoolSelector
 
 	// Create the job in the cluster
-	_, err = client.BatchV1().Jobs(externalWorkerNamespace).Create(wpc.ctx, job, metav1.CreateOptions{})
+	_, err = client.BatchV1().Jobs(wpc.config.Worker.Namespace).Create(wpc.ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -314,9 +318,12 @@ func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machine
 func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) (*batchv1.Job, *types.Worker, error) {
 	jobName := fmt.Sprintf("%s-%s-%s", Beta9WorkerJobPrefix, wpc.name, workerId)
 	labels := map[string]string{
-		"app":               Beta9WorkerLabelValue,
-		Beta9WorkerLabelKey: Beta9WorkerLabelValue,
-		PrometheusScrapeKey: strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
+		"app":                       Beta9WorkerLabelValue,
+		Beta9WorkerLabelKey:         Beta9WorkerLabelValue,
+		Beta9WorkerLabelPoolNameKey: wpc.name,
+		Beta9WorkerLabelIDKey:       workerId,
+		Beta9MachineLabelIDKey:      machineId,
+		PrometheusScrapeKey:         strconv.FormatBool(wpc.config.Monitoring.Prometheus.ScrapeWorkers),
 	}
 
 	workerCpu := cpu
@@ -391,7 +398,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
-			Namespace: externalWorkerNamespace,
+			Namespace: wpc.config.Worker.Namespace,
 			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
@@ -454,7 +461,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "POD_NAMESPACE",
-			Value: externalWorkerNamespace,
+			Value: wpc.config.Worker.Namespace,
 		},
 		{
 			Name:  "BETA9_GATEWAY_HOST",
@@ -596,4 +603,44 @@ func (wpc *ExternalWorkerPoolController) getProxiedClient(hostname, token string
 
 func (wpc *ExternalWorkerPoolController) FreeCapacity() (*WorkerPoolCapacity, error) {
 	return freePoolCapacity(wpc.workerRepo, wpc)
+}
+
+func (wpc *ExternalWorkerPoolController) monitorAndCleanupWorkers() {
+	cleaner := WorkerResourceCleaner{
+		PoolName:   wpc.name,
+		Config:     wpc.config.Worker,
+		EventRepo:  wpc.eventRepo,
+		WorkerRepo: wpc.workerRepo,
+	}
+
+	ticker := time.NewTicker(wpc.config.Worker.CleanupWorkerInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-wpc.ctx.Done():
+			return
+		case <-ticker.C:
+			if err := wpc.workerPoolRepo.SetWorkerCleanerLock(wpc.name); err != nil {
+				continue
+			}
+
+			machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
+			if err != nil {
+				continue
+			}
+
+			for _, machine := range machines {
+				kubeClient, err := wpc.getProxiedClient(machine.State.HostName, machine.State.Token)
+				if err != nil {
+					continue
+				}
+
+				cleaner.KubeClient = kubeClient
+				cleaner.Clean(wpc.ctx)
+			}
+
+			wpc.workerPoolRepo.RemoveWorkerCleanerLock(wpc.name)
+		}
+	}
 }
