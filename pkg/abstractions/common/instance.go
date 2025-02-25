@@ -124,13 +124,6 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		FailedContainerThreshold: failedContainerThreshold,
 	}
 
-	if instance.StubConfig.Autoscaler == nil {
-		instance.StubConfig.Autoscaler = &types.Autoscaler{}
-		instance.StubConfig.Autoscaler.Type = types.QueueDepthAutoscaler
-		instance.StubConfig.Autoscaler.MaxContainers = 1
-		instance.StubConfig.Autoscaler.TasksPerContainer = 1
-	}
-
 	instance.Sync()
 	return instance, nil
 }
@@ -284,6 +277,14 @@ func (i *AutoscaledInstance) Sync() error {
 		}
 
 		i.StubConfig = stubConfig
+	}
+
+	// We must make sure that the autoscaler is initialized at all costs
+	if i.StubConfig.Autoscaler == nil {
+		i.StubConfig.Autoscaler = &types.Autoscaler{}
+		i.StubConfig.Autoscaler.Type = types.QueueDepthAutoscaler
+		i.StubConfig.Autoscaler.MaxContainers = 1
+		i.StubConfig.Autoscaler.TasksPerContainer = 1
 	}
 
 	return nil
