@@ -27,6 +27,21 @@ type Workspace struct {
 	Storage            *WorkspaceStorage `db:"storage" json:"storage"`
 }
 
+// @go2proto
+type WorkspaceWithRelated struct {
+	Workspace
+	ConcurrencyLimit *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
+	Storage          *WorkspaceStorage `db:"storage" json:"storage"`
+}
+
+func (w *WorkspaceWithRelated) ToProto() *pb.WorkspaceWithRelated {
+	return &pb.WorkspaceWithRelated{
+		Workspace:        w.Workspace.ToProto(),
+		Storage:          w.Storage.ToProto(),
+		ConcurrencyLimit: w.ConcurrencyLimit.ToProto(),
+	}
+}
+
 func (w *Workspace) ToProto() *pb.Workspace {
 	concurrencyLimit := &pb.ConcurrencyLimit{}
 	if w.ConcurrencyLimit != nil {
