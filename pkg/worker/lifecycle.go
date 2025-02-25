@@ -701,7 +701,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
 	outputLogger.Info("", "done", true, "success", exitCode == 0)
-	// FIXME: is this needed?
 	err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
