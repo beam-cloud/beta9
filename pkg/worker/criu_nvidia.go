@@ -10,9 +10,12 @@ import (
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
+	"github.com/hashicorp/go-multierror"
 	"github.com/panjf2000/ants/v2"
 	"github.com/rs/zerolog/log"
 )
+
+const CacheWorkerPoolSize = 20
 
 type NvidiaCRIUManager struct {
 	runcHandle       runc.Runc
@@ -118,17 +121,17 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 	log.Info().Str("container_id", containerId).Msgf("caching checkpoint nearby: %s", checkpointPath)
 	client := c.fileCacheManager.GetClient()
 	wg := sync.WaitGroup{}
-	p, err := ants.NewPool(20)
+	p, err := ants.NewPool(CacheWorkerPoolSize)
 	if err != nil {
 		return err
 	}
 	defer p.Release()
 
-	var walkErr error
+	var storeContentErrMu sync.Mutex
+	var storeContentErr *multierror.Error
 
-	err = filepath.WalkDir(checkpointPath, func(path string, info fs.DirEntry, err error) error {
+	storeContentErr = multierror.Append(storeContentErr, filepath.WalkDir(checkpointPath, func(path string, info fs.DirEntry, err error) error {
 		if err != nil {
-			walkErr = err
 			return err
 		}
 
@@ -137,28 +140,25 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 		}
 
 		wg.Add(1)
-		submitErr := p.Submit(func() {
+		poolSubmitErr := p.Submit(func() {
 			defer wg.Done()
 			_, err := client.StoreContentFromSource(path[1:], 0)
 			if err != nil {
-				walkErr = err
+				storeContentErrMu.Lock()
+				storeContentErr = multierror.Append(storeContentErr, err)
+				storeContentErrMu.Unlock()
 				log.Error().Err(err).Str("container_id", containerId).Msgf("error caching checkpoint file: %s", path)
 			}
 		})
 
-		if submitErr != nil {
-			wg.Done() // Handle failed submission
-			walkErr = submitErr
-			return submitErr
+		if poolSubmitErr != nil {
+			wg.Done()
+			return poolSubmitErr
 		}
 
 		return nil
-	})
+	}))
 
-	if err != nil {
-		return err
-	}
 	wg.Wait() // Wait for all tasks to finish
-
-	return walkErr
+	return storeContentErr.ErrorOrNil()
 }

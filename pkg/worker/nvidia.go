@@ -41,7 +41,7 @@ func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 	if gpuCount > 0 {
 		err := exec.Command("nvidia-ctk", "cdi", "generate", "--output", "/etc/cdi/nvidia.yaml").Run()
 		if err != nil {
-			log.Error().Msgf("failed to generate cdi config: %v", err)
+			log.Fatal().Msgf("failed to generate cdi config: %v", err)
 		}
 	}
 
