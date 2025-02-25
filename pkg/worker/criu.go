@@ -53,7 +53,9 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, fileCac
 		return nil, err
 	}
 
-	os.MkdirAll(config.Storage.MountPath, os.ModePerm)
+	if err := os.MkdirAll(config.Storage.MountPath, os.ModePerm); err != nil {
+		return nil, err
+	}
 
 	// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
 	if config.Storage.Mode == string(types.CheckpointStorageModeS3) {
