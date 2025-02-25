@@ -232,9 +232,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
 
 	opts := &ContainerOptions{
-		BundlePath:  bundlePath,
-		BindPorts:   bindPorts,
-		InitialSpec: initialBundleSpec,
+		BundlePath:   bundlePath,
+		HostBindPort: bindPorts[0],
+		BindPorts:    bindPorts,
+		InitialSpec:  initialBundleSpec,
 	}
 
 	err = s.containerMountManager.SetupContainerMounts(request)
@@ -385,7 +386,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			return nil, err
 		}
 
-		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.BindPort)
+		containerHostname := fmt.Sprintf("%s:%d", s.podAddr, options.HostBindPort)
 		containerHostnamePath := filepath.Join(checkpointSignalDir(request.ContainerId), checkpointContainerHostnameFileName)
 		err = os.WriteFile(containerHostnamePath, []byte(containerHostname), 0644)
 		if err != nil {
@@ -692,6 +693,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	if isOOMKilled.Load() {
 		exitCode = types.WorkerContainerExitCodeOomKill
+	} else if exitCode == -1 {
+		// If the container exited with a code of -1 and was not OOM killed, set the exit code to 0
+		// since the container was likely terminated by a SIGTERM/SIGKILL
+		exitCode = 0
 	}
 
 	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
@@ -701,13 +706,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
 	}
-	// If the container exited with a code of -1 and was not OOM killed, set the exit code to 0
-	// since the container was likely terminated by a SIGTERM/SIGKILL
-	if exitCode == -1 && !isOOMKilled {
-		exitCode = 0
-	}
-
-	return cleanup(exitCode, nil)
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {

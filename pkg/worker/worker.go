@@ -84,9 +84,10 @@ type ContainerInstance struct {
 }
 
 type ContainerOptions struct {
-	BundlePath  string
-	BindPorts   []int
-	InitialSpec *specs.Spec
+	BundlePath   string
+	HostBindPort int
+	BindPorts    []int
+	InitialSpec  *specs.Spec
 }
 
 type stopContainerEvent struct {
