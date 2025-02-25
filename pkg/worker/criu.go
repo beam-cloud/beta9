@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	storage "github.com/beam-cloud/beta9/pkg/storage"
@@ -129,6 +130,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, checkpointPIDChan chan int, configPath string) (int, error) {
+	wg := sync.WaitGroup{}
 	bundlePath := filepath.Dir(configPath)
 
 	go func() {
@@ -172,7 +174,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		// Proceed to create the checkpoint
 		checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, request)
 		if err != nil {
-			s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
+			_, updateStateErr := s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
 				ContainerId:   request.ContainerId,
 				CheckpointId:  request.StubId,
 				WorkspaceName: request.Workspace.Name,
@@ -182,10 +184,16 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 					StubId:      request.StubId,
 				},
 			})
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", err)
+			if updateStateErr != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+			}
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
+			return
 		}
 
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			_, err := s.criuManager.CacheCheckpoint(request.ContainerId, checkpointPath)
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Msgf("failed to cache checkpoint: %v", err)
@@ -216,6 +224,8 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		OutputWriter: outputWriter,
 		Started:      checkpointPIDChan,
 	})
+
+	wg.Wait()
 	return exitCode, err
 }
 
