@@ -10,8 +10,8 @@ import (
 
 const (
 	StorageModeJuiceFS    string = "juicefs"
-	StorageModeCunoFS     string = "cunofs"
 	StorageModeMountPoint string = "mountpoint"
+	StorageModeGeese      string = "geese"
 )
 
 type Storage interface {
@@ -54,8 +54,8 @@ func NewStorage(config types.StorageConfig) (Storage, error) {
 		}
 
 		return s, nil
-	case StorageModeCunoFS:
-		s, err := NewCunoFsStorage(config.CunoFS)
+	case StorageModeGeese:
+		s, err := NewGeeseStorage(config.Geese)
 		if err != nil {
 			return nil, err
 		}
