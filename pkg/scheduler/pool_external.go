@@ -616,26 +616,31 @@ func (wpc *ExternalWorkerPoolController) monitorAndCleanupWorkers() {
 	ticker := time.NewTicker(wpc.config.Worker.CleanupWorkerInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
 		select {
 		case <-wpc.ctx.Done():
-			return // Exit
-		default: // Continue
-		}
+			return
+		case <-ticker.C:
+			if err := wpc.workerPoolRepo.SetWorkerCleanerLock(wpc.name); err != nil {
+				continue
+			}
 
-		machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
-		if err != nil {
-			continue
-		}
-
-		for _, machine := range machines {
-			kubeClient, err := wpc.getProxiedClient(machine.State.HostName, machine.State.Token)
+			machines, err := wpc.providerRepo.ListAllMachines(wpc.provider.GetName(), wpc.name, true)
 			if err != nil {
 				continue
 			}
 
-			cleaner.KubeClient = kubeClient
-			cleaner.Clean(wpc.ctx)
+			for _, machine := range machines {
+				kubeClient, err := wpc.getProxiedClient(machine.State.HostName, machine.State.Token)
+				if err != nil {
+					continue
+				}
+
+				cleaner.KubeClient = kubeClient
+				cleaner.Clean(wpc.ctx)
+			}
+
+			wpc.workerPoolRepo.RemoveWorkerCleanerLock(wpc.name)
 		}
 	}
 }
