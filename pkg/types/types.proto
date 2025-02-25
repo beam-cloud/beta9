@@ -171,5 +171,16 @@ message Workspace {
   bool multi_gpu_enabled = 8;
   uint32 concurrency_limit_id = 9;
   ConcurrencyLimit concurrency_limit = 10;
+  WorkspaceStorage storage = 11;
+}
+
+message WorkspaceStorage {
+  string bucket_name = 1;
+  string access_key = 2;
+  string secret_key = 3;
+  string endpoint_url = 4;
+  string region = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
 }
 
