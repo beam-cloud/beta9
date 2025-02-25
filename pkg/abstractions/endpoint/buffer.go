@@ -350,7 +350,8 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 		return rb.httpClient, nil
 	}
 
-	conn, err := network.ConnectToHost(rb.ctx, address, types.RequestTimeoutDurationS, rb.tailscale, rb.tsConfig)
+	ctx := context.WithValue(rb.ctx, "caller", "RequestBuffer.getHttpClient")
+	conn, err := network.ConnectToHost(ctx, address, 15*time.Second, rb.tailscale, rb.tsConfig)
 	if err != nil {
 		return nil, err
 	}

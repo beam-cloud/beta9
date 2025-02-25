@@ -47,6 +47,7 @@ func (l *LogStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, contain
 		return err
 	}
 
+	ctx = context.WithValue(ctx, "caller", "LogStream.Stream")
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, l.tailscale, l.config.Tailscale)
 	if err != nil {
 		return err

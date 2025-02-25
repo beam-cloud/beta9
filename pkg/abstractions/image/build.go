@@ -284,6 +284,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go b.keepAlive(ctx, containerId, ctx.Done())
 
+	ctx = context.WithValue(ctx, "caller", "Builder.Build")
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Failed to connect to build container.\n"}

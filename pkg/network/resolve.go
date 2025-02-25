@@ -8,25 +8,37 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 	"tailscale.com/client/tailscale"
 )
 
 func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tailscale *Tailscale, tsConfig types.TailscaleConfig) (net.Conn, error) {
-	var conn net.Conn = nil
+	caller := ctx.Value("caller")
+	l := log.Info().Str("func", "ConnectToHost").Str("caller", fmt.Sprintf("%v", caller)).Str("host", host)
+	startTime := time.Now()
 
 	if tsConfig.Enabled && strings.Contains(host, tsConfig.HostName) {
-		conn, err := tailscale.Dial(ctx, "tcp", host)
+		conn, err := tailscale.DialTimeout("tcp", host, timeout)
+		finishedTime := time.Since(startTime)
+		l.Float64("duration_s", finishedTime.Seconds()).Str("is_tailscale", "true")
 		if err != nil {
+			l.Err(err).Msg("dial failed")
 			return nil, err
 		}
 
-		return conn, err
+		l.Msg("dialed successfully")
+		return conn, nil
 	}
 
 	conn, err := net.DialTimeout("tcp", host, timeout)
 	if err != nil {
-		return conn, err
+		finishedTime := time.Since(startTime)
+		l.Float64("duration_s", finishedTime.Seconds()).Str("is_tailscale", "false")
+		l.Err(err).Msg("dial failed")
+		return nil, err
 	}
+
+	l.Msg("dialed successfully")
 	return conn, nil
 }
 

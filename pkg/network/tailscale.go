@@ -104,16 +104,12 @@ func (t *Tailscale) Serve(ctx context.Context, service types.InternalService) (n
 	return listener, nil
 }
 
-// Dial returns a TCP connection to a tailscale service
+// Dial attempts to establish a TCP connection to a tailscale service
 func (t *Tailscale) Dial(ctx context.Context, network, addr string) (net.Conn, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	// Connect to tailnet, if we aren't already
 	if !t.initialized {
 		t.mu.Lock()
 
-		_, err := t.server.Up(timeoutCtx)
+		_, err := t.server.Up(ctx)
 		if err != nil {
 			t.mu.Unlock()
 			return nil, err
@@ -123,12 +119,15 @@ func (t *Tailscale) Dial(ctx context.Context, network, addr string) (net.Conn, e
 		t.mu.Unlock()
 	}
 
-	conn, err := t.server.Dial(timeoutCtx, network, addr)
-	if err != nil {
-		return nil, err
-	}
+	return t.server.Dial(ctx, network, addr)
+}
 
-	return conn, nil
+// DialTimeout attempts to establish a TCP connection to a tailscale service with the specified timeout duration
+func (t *Tailscale) DialTimeout(network, addr string, timeout time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	return t.Dial(ctx, network, addr)
 }
 
 // GetHostnameForService retrieves a random, available hostname for a particular service
@@ -143,7 +142,7 @@ func (t *Tailscale) GetHostnameForService(serviceName string) (string, error) {
 		index := rand.Intn(len(hostnames))
 		hostname := hostnames[index]
 
-		conn, err := t.Dial(context.TODO(), "tcp", hostname)
+		conn, err := t.DialTimeout("tcp", hostname, time.Second*30)
 		if err == nil {
 			conn.Close()
 			return hostname, nil
