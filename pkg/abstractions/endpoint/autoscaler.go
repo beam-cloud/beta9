@@ -55,8 +55,13 @@ func endpointDeploymentScaleFunc(i *endpointInstance, s *endpointAutoscalerSampl
 			desiredContainers += 1
 		}
 
+		maxContainers := uint(1)
+		if i.StubConfig.Autoscaler != nil {
+			maxContainers = i.StubConfig.Autoscaler.MaxContainers
+		}
+
 		// Limit max replicas to either what was set in autoscaler config, or the limit specified on the gateway config (whichever is lower)
-		maxReplicas := math.Min(float64(i.StubConfig.Autoscaler.MaxContainers), float64(i.AppConfig.GatewayService.StubLimits.MaxReplicas))
+		maxReplicas := math.Min(float64(maxContainers), float64(i.AppConfig.GatewayService.StubLimits.MaxReplicas))
 		desiredContainers = int(math.Min(maxReplicas, float64(desiredContainers)))
 	}
 
