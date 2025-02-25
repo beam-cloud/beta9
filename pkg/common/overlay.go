@@ -168,7 +168,7 @@ func (co *ContainerOverlay) TopLayerPath() string {
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
-	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,userxattr", layer.lower, layer.upper, layer.work)
+	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", layer.lower, layer.upper, layer.work)
 	err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run()
 	if err != nil {
 		return err
