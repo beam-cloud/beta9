@@ -1356,6 +1356,33 @@ func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, con
 	return &limit, nil
 }
 
+func (r *PostgresBackendRepository) GetWorkspaceStorage(ctx context.Context, workspaceId uint) (*types.WorkspaceStorage, error) {
+	var storage types.WorkspaceStorage
+
+	query := `SELECT bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at FROM workspace_storage WHERE id = $1;`
+	err := r.client.GetContext(ctx, &storage, query, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &storage, nil
+}
+
+func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, workspaceId uint, storage types.WorkspaceStorage) (*types.WorkspaceStorage, error) {
+	query := `
+	INSERT INTO workspace_storage (bucket_name, access_key, secret_key, endpoint_url, region)
+	VALUES ($1, $2, $3, $4, $5)
+	RETURNING id, bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at;
+	`
+
+	var created types.WorkspaceStorage
+	if err := r.client.GetContext(ctx, &created, query, storage.BucketName, storage.AccessKey, storage.SecretKey, storage.EndpointURL, storage.Region); err != nil {
+		return nil, err
+	}
+
+	return &created, nil
+}
+
 func (r *PostgresBackendRepository) CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuMillicoreLimit uint32) (*types.ConcurrencyLimit, error) {
 	query := `
 	INSERT INTO concurrency_limit (gpu_limit, cpu_millicore_limit)

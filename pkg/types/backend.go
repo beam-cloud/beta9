@@ -24,6 +24,7 @@ type Workspace struct {
 	MultiGpuEnabled    bool              `db:"multi_gpu_enabled" json:"multi_gpu_enabled"`
 	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`
 	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
+	Storage            *WorkspaceStorage `db:"storage" json:"storage"`
 }
 
 func (w *Workspace) ToProto() *pb.Workspace {
@@ -40,6 +41,7 @@ func (w *Workspace) ToProto() *pb.Workspace {
 		VolumeCacheEnabled: w.VolumeCacheEnabled,
 		MultiGpuEnabled:    w.MultiGpuEnabled,
 		ConcurrencyLimit:   concurrencyLimit,
+		Storage:            w.Storage.ToProto(),
 	}
 }
 
@@ -57,6 +59,41 @@ func NewWorkspaceFromProto(in *pb.Workspace) *Workspace {
 		VolumeCacheEnabled: in.VolumeCacheEnabled,
 		MultiGpuEnabled:    in.MultiGpuEnabled,
 		ConcurrencyLimit:   concurrencyLimit,
+	}
+}
+
+// @go2proto
+type WorkspaceStorage struct {
+	BucketName  string    `db:"bucket_name" json:"bucket_name"`
+	AccessKey   string    `db:"access_key" json:"access_key"`
+	SecretKey   string    `db:"secret_key" json:"secret_key"`
+	EndpointURL string    `db:"endpoint_url" json:"endpoint_url"`
+	Region      string    `db:"region" json:"region"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at,omitempty"`
+}
+
+func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
+	return &WorkspaceStorage{
+		BucketName:  in.BucketName,
+		AccessKey:   in.AccessKey,
+		SecretKey:   in.SecretKey,
+		EndpointURL: in.EndpointUrl,
+		Region:      in.Region,
+		CreatedAt:   in.CreatedAt.AsTime(),
+		UpdatedAt:   in.UpdatedAt.AsTime(),
+	}
+}
+
+func (w *WorkspaceStorage) ToProto() *pb.WorkspaceStorage {
+	return &pb.WorkspaceStorage{
+		BucketName:  w.BucketName,
+		AccessKey:   w.AccessKey,
+		SecretKey:   w.SecretKey,
+		Region:      w.Region,
+		EndpointUrl: w.EndpointURL,
+		CreatedAt:   timestamppb.New(w.CreatedAt),
+		UpdatedAt:   timestamppb.New(w.UpdatedAt),
 	}
 }
 

@@ -188,3 +188,15 @@ class Workspace(betterproto.Message):
     multi_gpu_enabled: bool = betterproto.bool_field(8)
     concurrency_limit_id: int = betterproto.uint32_field(9)
     concurrency_limit: "ConcurrencyLimit" = betterproto.message_field(10)
+    storage: "WorkspaceStorage" = betterproto.message_field(11)
+
+
+@dataclass(eq=False, repr=False)
+class WorkspaceStorage(betterproto.Message):
+    bucket_name: str = betterproto.string_field(1)
+    access_key: str = betterproto.string_field(2)
+    secret_key: str = betterproto.string_field(3)
+    endpoint_url: str = betterproto.string_field(4)
+    region: str = betterproto.string_field(5)
+    created_at: datetime = betterproto.message_field(6)
+    updated_at: datetime = betterproto.message_field(7)
