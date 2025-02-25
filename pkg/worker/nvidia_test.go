@@ -51,7 +51,7 @@ func (c *GPUInfoClientForTest) GetGPUMemoryUsage(gpuId int) (GPUMemoryUsageStats
 }
 
 func TestInjectNvidiaEnvVarsNoCudaInImage(t *testing.T) {
-	manager := NewContainerNvidiaManager(4)
+	manager := NewContainerNvidiaManagerForTest(4)
 	initialEnv := []string{"INITIAL=1"}
 
 	// Set some environment variables to simulate NVIDIA settings

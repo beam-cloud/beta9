@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -15,7 +18,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const CacheWorkerPoolSize = 20
+const (
+	CacheWorkerPoolSize    = 20
+	minNvidiaDriverVersion = 570
+)
 
 type NvidiaCRIUManager struct {
 	runcHandle       runc.Runc
@@ -75,7 +81,18 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 }
 
 func (c *NvidiaCRIUManager) Available() bool {
-	// TODO: check for correct version of criu, correct driver version, etc.
+	// Check NVIDIA driver version is >= 570
+	driverVersion, err := getNvidiaDriverVersion()
+	if err != nil {
+		log.Error().Msgf("Failed to get NVIDIA driver version: %v", err)
+		return false
+	}
+
+	if driverVersion < minNvidiaDriverVersion {
+		log.Error().Msgf("NVIDIA driver version %d is less than required version 570", driverVersion)
+		return false
+	}
+
 	return true
 }
 
@@ -161,4 +178,26 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 
 	wg.Wait() // Wait for all tasks to finish
 	return storeContentErr.ErrorOrNil()
+}
+
+// getNvidiaDriverVersion returns the NVIDIA driver version as an integer
+func getNvidiaDriverVersion() (int, error) {
+	cmd := exec.Command("nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader")
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("failed to execute nvidia-smi: %v", err)
+	}
+
+	versionStr := strings.TrimSpace(string(output))
+	parts := strings.Split(versionStr, ".")
+	if len(parts) < 1 {
+		return 0, fmt.Errorf("unexpected driver version format: %s", versionStr)
+	}
+
+	majorVersion, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse driver version: %v", err)
+	}
+
+	return majorVersion, nil
 }
