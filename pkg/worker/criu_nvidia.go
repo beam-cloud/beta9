@@ -44,9 +44,17 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, opts.request.StubId)
+	originalImagePath := imagePath
+
+	cachedCheckpointPath := filepath.Join(baseFileCachePath, imagePath)
+	checkpointCached := c.checkpointCached(cachedCheckpointPath, opts.request.ContainerId)
+	if checkpointCached {
+		imagePath = cachedCheckpointPath
+	}
 
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
+			WorkDir:      originalImagePath,
 			ImagePath:    imagePath,
 			OutputWriter: opts.runcOpts.OutputWriter,
 		},
@@ -81,9 +89,8 @@ func (c *NvidiaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) 
 	}
 
 	cachedCheckpointPath := filepath.Join(baseFileCachePath, checkpointPath)
-
-	// If the checkpoint is already cached, we can use that path without the extra grpc call
-	if _, err := os.Stat(cachedCheckpointPath); err == nil {
+	checkpointCached := c.checkpointCached(cachedCheckpointPath, containerId)
+	if checkpointCached {
 		return cachedCheckpointPath, nil
 	}
 
@@ -94,6 +101,15 @@ func (c *NvidiaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) 
 		return "", err
 	}
 	return cachedCheckpointPath, nil
+}
+
+func (c *NvidiaCRIUManager) checkpointCached(cachedCheckpointPath string, containerId string) bool {
+	// If the checkpoint is already cached, we can use that path without the extra grpc call
+	if _, err := os.Stat(cachedCheckpointPath); err == nil {
+		log.Info().Str("container_id", containerId).Msgf("checkpoint already cached: %s", cachedCheckpointPath)
+		return true
+	}
+	return false
 }
 
 func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
@@ -136,6 +152,9 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 		return nil
 	})
 
+	if err != nil {
+		return err
+	}
 	wg.Wait() // Wait for all tasks to finish
 
 	return walkErr

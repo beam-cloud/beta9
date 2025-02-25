@@ -92,7 +92,6 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		log.Info().Str("container_id", request.ContainerId).Msg("attempting to restore checkpoint")
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 
-		// TODO: this will probably not return an exit code...
 		exitCode, err := s.criuManager.RestoreCheckpoint(ctx, &RestoreOpts{
 			request: request,
 			state:   state,

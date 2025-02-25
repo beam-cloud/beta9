@@ -174,7 +174,7 @@ func NewWorker() (*Worker, error) {
 	var criuManager CRIUManager = nil
 	var checkpointStorage storage.Storage = nil
 	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
-		criuManager, err = InitializeCRIUManager(context.Background(), config.Worker.CRIU)
+		criuManager, err = InitializeCRIUManager(context.Background(), config.Worker.CRIU, fileCacheManager)
 		if err != nil {
 			log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create CRIU manager: %v", err)
 		}
