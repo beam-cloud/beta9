@@ -24,6 +24,7 @@ const (
 	containerDialTimeoutDurationS time.Duration = time.Second * 30
 	connectionBufferSize          int           = 1024 * 4 // 4KB
 	connectionKeepAliveInterval   time.Duration = time.Second * 1
+	connectionReadTimeout         time.Duration = time.Second * 10
 )
 
 type container struct {
@@ -183,8 +184,8 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	}
 	defer containerConn.Close()
 
-	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval)
-	abstractions.SetConnOptions(clientConn, true, connectionKeepAliveInterval)
+	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval, connectionReadTimeout)
+	abstractions.SetConnOptions(clientConn, true, connectionKeepAliveInterval, connectionReadTimeout)
 
 	err = pb.incrementContainerConnections(container.id)
 	if err != nil {
