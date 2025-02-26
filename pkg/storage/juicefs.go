@@ -44,7 +44,6 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"mount",
 		s.config.RedisURI,
 		localPath,
-		"-d",
 		"--bucket", s.config.AWSS3Bucket,
 		"--cache-size", cacheSize,
 		"--prefetch", prefetch,
@@ -52,11 +51,15 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"--no-usage-report",
 	)
 
-	// Start the mount command in the background
+	// Start the mount command
+	if err := s.mountCmd.Start(); err != nil {
+		return fmt.Errorf("error starting juicefs mount: %v", err)
+	}
+
+	// Wait for the mount command to finish in the background
 	go func() {
-		output, err := s.mountCmd.CombinedOutput()
-		if err != nil {
-			log.Error().Err(err).Str("output", string(output)).Msg("error executing juicefs mount")
+		if out, err := s.mountCmd.CombinedOutput(); err != nil {
+			log.Error().Err(err).Str("output", string(out)).Msg("error with juicefs mount command")
 		}
 	}()
 
