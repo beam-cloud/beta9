@@ -84,15 +84,16 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 			continue
 		}
 
-		// PCI bus_id is shown to be "domain:bus:device.function", but the folder in /proc/driver/nvidia/gpus is just "bus:device.function"
-		busId := strings.ToLower(
-			strings.TrimPrefix(
-				strings.TrimSpace(parts[1]), domain,
-			),
-		)
+		smiBusIdParts := strings.Split(parts[1], ":")
+		if len(smiBusIdParts) != 3 {
+			return nil, fmt.Errorf("unexpected bus id format from nvidia-smi: %s", line)
+		}
+
+		// The bus id from nvidia-smi comes as xxxxxxxx:xx:xx.x so convert it to the format xxxx:xx:xx.x
+		systemBusId := strings.Join([]string{domain, smiBusIdParts[1], smiBusIdParts[2]}, ":")
 		gpuIndex := strings.TrimSpace(parts[2])
 
-		if exists, err := checkGPUExists(busId); err == nil && exists {
+		if exists, err := checkGPUExists(systemBusId); err == nil && exists {
 			index, err := strconv.Atoi(strings.TrimSpace(gpuIndex))
 			if err != nil {
 				return nil, err
