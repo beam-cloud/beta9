@@ -34,7 +34,7 @@ type container struct {
 
 type connection struct {
 	ctx  echo.Context
-	done chan bool
+	done chan struct{}
 }
 
 type PodProxyBuffer struct {
@@ -94,19 +94,19 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	pb.incrementTotalConnections()
 	defer pb.decrementTotalConnections()
 
-	done := make(chan bool)
-	req := &connection{
+	done := make(chan struct{})
+	conn := &connection{
 		ctx:  ctx,
 		done: done,
 	}
 
-	pb.buffer.Push(req, false)
+	pb.buffer.Push(conn, false)
 
 	for {
 		select {
 		case <-pb.ctx.Done():
 			return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
-		case <-req.done:
+		case <-conn.done:
 			return nil
 		case <-ctx.Request().Context().Done():
 			return nil
@@ -184,6 +184,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	defer containerConn.Close()
 
 	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval)
+	abstractions.SetConnOptions(clientConn, true, connectionKeepAliveInterval)
 
 	err = pb.incrementContainerConnections(container.id)
 	if err != nil {
@@ -217,6 +218,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	closeConnections := func() {
 		clientConn.Close()
 		containerConn.Close()
+		close(conn.done)
 	}
 
 	// Proxy the connection in both directions
@@ -235,7 +237,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	}
 
 	wg.Wait()
-
 	select {
 	case <-conn.done:
 		return

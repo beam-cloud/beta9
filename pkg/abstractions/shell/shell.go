@@ -296,7 +296,7 @@ func (ss *SSHShellService) genContainerId(stubId string) string {
 	return fmt.Sprintf("%s-%s-%s", shellContainerPrefix, stubId, uuid.New().String()[:8])
 }
 
-func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, done <-chan bool) {
+func (ss *SSHShellService) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
 	ticker := time.NewTicker(containerKeepAliveIntervalS)
 	defer ticker.Stop()
 

@@ -6,11 +6,12 @@ import (
 	"time"
 )
 
-func ProxyConn(dst io.Writer, src io.Reader, done chan bool, bufferSize int) error {
+const (
+	proxyReadTimeout = 10 * time.Second
+)
+
+func ProxyConn(dst io.Writer, src io.Reader, done <-chan struct{}, bufferSize int) error {
 	buf := make([]byte, bufferSize)
-	defer func() {
-		done <- true
-	}()
 
 	for {
 		select {
@@ -36,5 +37,6 @@ func SetConnOptions(conn net.Conn, keepAlive bool, keepAliveInterval time.Durati
 		tcpConn.SetKeepAlive(keepAlive)
 		tcpConn.SetKeepAlivePeriod(keepAliveInterval)
 		tcpConn.SetDeadline(time.Time{})
+		tcpConn.SetReadDeadline(time.Now().Add(proxyReadTimeout))
 	}
 }

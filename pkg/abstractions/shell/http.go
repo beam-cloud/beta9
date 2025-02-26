@@ -45,7 +45,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	}
 
 	// Channel to signal when either connection is closed
-	done := make(chan bool)
+	done := make(chan struct{})
 
 	go g.ss.keepAlive(ctx.Request().Context(), containerId, done)
 
