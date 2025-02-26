@@ -16,7 +16,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -191,12 +190,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		pb.buffer.Push(conn, true)
 		return
 	}
-	defer func() {
-		err = pb.decrementContainerConnections(container.id)
-		if err != nil {
-			log.Error().Str("workspace", pb.workspace.Name).Str("stubId", pb.stubId).Err(err).Msg("failed to decrement container connections")
-		}
-	}()
+	defer pb.decrementContainerConnections(container.id)
 
 	// Ensure the request URL is correctly formatted
 	// by setting the container.address to the Host and subPath into the Path field

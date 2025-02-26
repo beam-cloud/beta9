@@ -4,7 +4,6 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 )
 
 type podAutoscalerSample struct {
@@ -33,8 +32,6 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 		CurrentContainers: currentContainers,
 		TotalConnections:  totalConnections,
 	}
-
-	log.Info().Interface("sample", sample).Msg("pod autoscaler sample")
 
 	return sample, nil
 }
