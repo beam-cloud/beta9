@@ -82,7 +82,7 @@ class Pod(RunnerAbstraction):
             A dictionary of environment variables to be injected into the container. Default is {}.
         keep_warm_seconds (int):
             The number of seconds to keep the container up the last request. -1 means never scale down to zero.
-            Default is -1. (only applies to deployments)
+            Default is 600 seconds (10 minutes).
         authorized (bool):
             If false, allows the pod to be accessed without an auth token.
             Default is False.
@@ -113,7 +113,7 @@ class Pod(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
-        keep_warm_seconds: int = -1,
+        keep_warm_seconds: int = 600,
         authorized: bool = False,
     ) -> None:
         super().__init__(
