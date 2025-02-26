@@ -29,6 +29,7 @@ const (
 	requestProcessingInterval time.Duration = time.Millisecond * 100
 	readyCheckInterval        time.Duration = 500 * time.Millisecond
 	httpConnectionTimeout     time.Duration = 2 * time.Second
+	connectToHostTimeout      time.Duration = 2 * time.Second
 )
 
 type request struct {
@@ -350,8 +351,7 @@ func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
 		return rb.httpClient, nil
 	}
 
-	ctx := context.WithValue(rb.ctx, "caller", "RequestBuffer.getHttpClient")
-	conn, err := network.ConnectToHost(ctx, address, 15*time.Second, rb.tailscale, rb.tsConfig)
+	conn, err := network.ConnectToHost(rb.ctx, address, connectToHostTimeout, rb.tailscale, rb.tsConfig)
 	if err != nil {
 		return nil, err
 	}

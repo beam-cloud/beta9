@@ -25,6 +25,7 @@ const (
 	connectionBufferSize          int           = 1024 * 4 // 4KB
 	connectionKeepAliveInterval   time.Duration = time.Second * 1
 	connectionReadTimeout         time.Duration = time.Second * 10
+	containerAvailableTimeout     time.Duration = time.Second * 2
 )
 
 type container struct {
@@ -177,8 +178,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		return
 	}
 
-	ctx := context.WithValue(request.Context(), "caller", "PodProxyBuffer.handleConnection")
-	containerConn, err := network.ConnectToHost(ctx, container.addressMap[int32(port)], containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	containerConn, err := network.ConnectToHost(request.Context(), container.addressMap[int32(port)], containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
 	if err != nil {
 		conn.ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
 		return
@@ -323,7 +323,7 @@ func (pb *PodProxyBuffer) discoverContainers() {
 
 // checkContainerAvailable checks if a container is available (meaning you can connect to it via a TCP dial)
 func (pb *PodProxyBuffer) checkContainerAvailable(containerAddress string) bool {
-	conn, err := network.ConnectToHost(pb.ctx, containerAddress, 3*time.Second, pb.tailscale, pb.tsConfig)
+	conn, err := network.ConnectToHost(pb.ctx, containerAddress, containerAvailableTimeout, pb.tailscale, pb.tsConfig)
 	if err != nil {
 		return false
 	}
