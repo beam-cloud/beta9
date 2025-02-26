@@ -671,24 +671,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 	}()
 
-	// Handle checkpoint creation & restore if applicable
-	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		exitCode, containerId, err = s.attemptCheckpointOrRestore(ctx, request, outputWriter, checkpointPIDChan, configPath)
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("C/R failed: %v", err)
-		}
-	} else {
-		// Invoke runc process (launch the container)
-		bundlePath := filepath.Dir(configPath)
-
-		exitCode, err = s.runcHandle.Run(s.ctx, containerId, bundlePath, &runc.CreateOpts{
-			OutputWriter: outputWriter,
-			Started:      startedChan,
-		})
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to run container: %v", err)
-			return
-		}
+	exitCode, containerId, err = s.runContainer(ctx, request, configPath, outputWriter, startedChan, checkpointPIDChan)
+	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to run container: %v", err)
+		return
 	}
 
 	if isOOMKilled.Load() {
@@ -707,6 +693,24 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
 		}
 	}
+}
+
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, configPath string, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
+	// Handle checkpoint creation & restore if applicable
+	if s.IsCRIUAvailable() && request.CheckpointEnabled {
+		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, checkpointPIDChan, configPath)
+		if err == nil {
+			return exitCode, containerId, nil
+		}
+		log.Error().Str("container_id", request.ContainerId).Msgf("checkpoint/restore failed with exit code %d: %v, attempting to run container from bundle", exitCode, err)
+	}
+
+	bundlePath := filepath.Dir(configPath)
+	exitCode, err := s.runcHandle.Run(ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
+		OutputWriter: outputWriter,
+		Started:      startedChan,
+	})
+	return exitCode, request.ContainerId, err
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {

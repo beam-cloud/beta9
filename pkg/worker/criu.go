@@ -94,9 +94,15 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		}
 
 		return exitCode, request.ContainerId, nil
-	} else if state.Status == types.CheckpointStatusAvailable {
+	}
+
+	if state.Status == types.CheckpointStatusAvailable {
 		log.Info().Str("container_id", request.ContainerId).Msg("attempting to restore checkpoint")
-		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
+		f, err := os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
+		if err != nil {
+			return -1, "", fmt.Errorf("failed to create checkpoint signal directory: %v", err)
+		}
+		defer f.Close()
 
 		exitCode, err := s.criuManager.RestoreCheckpoint(ctx, &RestoreOpts{
 			request: request,
@@ -108,18 +114,11 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			configPath: configPath,
 		})
 		if err != nil {
-			s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
-				ContainerId:   request.ContainerId,
-				CheckpointId:  request.StubId,
-				WorkspaceName: request.Workspace.Name,
-				CheckpointState: &pb.CheckpointState{
-					Status:      string(types.CheckpointStatusRestoreFailed),
-					ContainerId: request.ContainerId,
-					StubId:      request.StubId,
-				},
-			})
-
-			return -1, "", err
+			updateStateErr := s.updateCheckpointState(ctx, request, types.CheckpointStatusRestoreFailed)
+			if updateStateErr != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+			}
+			return exitCode, "", err
 		}
 
 		log.Info().Str("container_id", request.ContainerId).Msg("checkpoint found and restored")
@@ -184,16 +183,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		// Proceed to create the checkpoint
 		checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, request)
 		if err != nil {
-			_, updateStateErr := s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
-				ContainerId:   request.ContainerId,
-				CheckpointId:  request.StubId,
-				WorkspaceName: request.Workspace.Name,
-				CheckpointState: &pb.CheckpointState{
-					Status:      string(types.CheckpointStatusCheckpointFailed),
-					ContainerId: request.ContainerId,
-					StubId:      request.StubId,
-				},
-			})
+			updateStateErr := s.updateCheckpointState(ctx, request, types.CheckpointStatusCheckpointFailed)
 			if updateStateErr != nil {
 				log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 			}
@@ -214,19 +204,9 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 		log.Info().Str("container_id", request.ContainerId).Msg("checkpoint created successfully")
 
-		_, err = handleGRPCResponse(s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
-			ContainerId:   request.ContainerId,
-			CheckpointId:  request.StubId,
-			WorkspaceName: request.Workspace.Name,
-			CheckpointState: &pb.CheckpointState{
-				Status:      string(types.CheckpointStatusAvailable),
-				ContainerId: request.ContainerId, // We store this as a reference to the container that we initially checkpointed
-				StubId:      request.StubId,
-				RemoteKey:   checkpointPath,
-			},
-		}))
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", err)
+		updateStateErr := s.updateCheckpointState(ctx, request, types.CheckpointStatusAvailable)
+		if updateStateErr != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 		}
 	}()
 
@@ -296,4 +276,19 @@ func (s *Worker) IsCRIUAvailable() bool {
 	}
 
 	return pool.CRIUEnabled
+}
+
+func (s *Worker) updateCheckpointState(ctx context.Context, request *types.ContainerRequest, status types.CheckpointStatus) error {
+	_, err := handleGRPCResponse(s.containerRepoClient.UpdateCheckpointState(ctx, &pb.UpdateCheckpointStateRequest{
+		ContainerId:   request.ContainerId,
+		CheckpointId:  request.StubId,
+		WorkspaceName: request.Workspace.Name,
+		CheckpointState: &pb.CheckpointState{
+			Status:      string(status),
+			ContainerId: request.ContainerId,
+			StubId:      request.StubId,
+		},
+	}))
+
+	return err
 }
