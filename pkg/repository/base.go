@@ -208,7 +208,7 @@ type EventRepository interface {
 	PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState)
 }
 
-type MetricsRepository interface {
+type UsageRepository interface {
 	Init(source string) error
 	IncrementCounter(name string, metadata map[string]interface{}, value float64) error
 	SetGauge(name string, metadata map[string]interface{}, value float64) error

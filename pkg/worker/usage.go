@@ -5,36 +5,36 @@ import (
 	"time"
 
 	repo "github.com/beam-cloud/beta9/pkg/repository"
-	metrics "github.com/beam-cloud/beta9/pkg/repository/metrics"
+	usage "github.com/beam-cloud/beta9/pkg/repository/usage"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
-type WorkerMetrics struct {
-	workerId    string
-	metricsRepo repo.MetricsRepository
-	ctx         context.Context
+type WorkerUsage struct {
+	workerId  string
+	usageRepo repo.UsageRepository
+	ctx       context.Context
 }
 
-func NewWorkerMetrics(
+func NewWorkerUsage(
 	ctx context.Context,
 	workerId string,
 	config types.MonitoringConfig,
-) (*WorkerMetrics, error) {
-	metricsRepo, err := metrics.NewMetrics(config, string(metrics.MetricsSourceWorker))
+) (*WorkerUsage, error) {
+	metricsRepo, err := usage.NewUsage(config, string(usage.MetricsSourceWorker))
 	if err != nil {
 		return nil, err
 	}
 
-	return &WorkerMetrics{
-		ctx:         ctx,
-		workerId:    workerId,
-		metricsRepo: metricsRepo,
+	return &WorkerUsage{
+		ctx:       ctx,
+		workerId:  workerId,
+		usageRepo: metricsRepo,
 	}, nil
 }
 
-func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerRequest, duration time.Duration) {
-	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
+func (wm *WorkerUsage) usageContainerDuration(request *types.ContainerRequest, duration time.Duration) {
+	wm.usageRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
 		"container_id":   request.ContainerId,
 		"worker_id":      wm.workerId,
 		"stub_id":        request.StubId,
@@ -47,8 +47,8 @@ func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerReques
 	}, float64(duration.Milliseconds()))
 }
 
-// Periodically send metrics to track container duration
-func (wm *WorkerMetrics) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
+// Periodically send usage to track container duration
+func (wm *WorkerUsage) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
 	cursorTime := time.Now()
 	ticker := time.NewTicker(types.ContainerDurationEmissionInterval)
 	defer ticker.Stop()
@@ -56,11 +56,11 @@ func (wm *WorkerMetrics) EmitContainerUsage(ctx context.Context, request *types.
 	for {
 		select {
 		case <-ticker.C:
-			go wm.metricsContainerDuration(request, time.Since(cursorTime))
+			go wm.usageContainerDuration(request, time.Since(cursorTime))
 			cursorTime = time.Now()
 		case <-ctx.Done():
 			// Consolidate any remaining time
-			go wm.metricsContainerDuration(request, time.Since(cursorTime))
+			go wm.usageContainerDuration(request, time.Since(cursorTime))
 			return
 		}
 	}

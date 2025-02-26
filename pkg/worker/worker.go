@@ -56,7 +56,7 @@ type Worker struct {
 	containerLock           sync.Mutex
 	containerWg             sync.WaitGroup
 	containerLogger         *ContainerLogger
-	workerMetrics           *WorkerMetrics
+	workerMetrics           *WorkerUsage
 	completedRequests       chan *types.ContainerRequest
 	stopContainerChan       chan stopContainerEvent
 	workerRepoClient        pb.WorkerRepositoryServiceClient
@@ -216,7 +216,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	workerMetrics, err := NewWorkerMetrics(ctx, workerId, config.Monitoring)
+	workerMetrics, err := NewWorkerUsage(ctx, workerId, config.Monitoring)
 	if err != nil {
 		cancel()
 		return nil, err

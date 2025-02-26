@@ -40,7 +40,7 @@ import (
 	repositoryservices "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
-	metrics "github.com/beam-cloud/beta9/pkg/repository/metrics"
+	usage "github.com/beam-cloud/beta9/pkg/repository/usage"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/task"
@@ -68,7 +68,7 @@ type Gateway struct {
 	WorkerPoolRepo repository.WorkerPoolRepository
 	EventRepo      repository.EventRepository
 	Tailscale      *network.Tailscale
-	metricsRepo    repository.MetricsRepository
+	metricsRepo    repository.UsageRepository
 	workerRepo     repository.WorkerRepository
 	Storage        storage.Storage
 	Scheduler      *scheduler.Scheduler
@@ -90,7 +90,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	metricsRepo, err := metrics.NewMetrics(config.Monitoring, string(metrics.MetricsSourceGateway))
+	metricsRepo, err := usage.NewUsage(config.Monitoring, string(usage.MetricsSourceGateway))
 	if err != nil {
 		return nil, err
 	}

@@ -6,10 +6,10 @@ import (
 )
 
 type SchedulerMetrics struct {
-	metricsRepo repository.MetricsRepository
+	metricsRepo repository.UsageRepository
 }
 
-func NewSchedulerMetrics(metricsRepo repository.MetricsRepository) SchedulerMetrics {
+func NewSchedulerMetrics(metricsRepo repository.UsageRepository) SchedulerMetrics {
 	return SchedulerMetrics{
 		metricsRepo: metricsRepo,
 	}
