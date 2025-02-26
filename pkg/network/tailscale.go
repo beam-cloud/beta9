@@ -119,7 +119,12 @@ func (t *Tailscale) Dial(ctx context.Context, network, addr string) (net.Conn, e
 		t.mu.Unlock()
 	}
 
-	return t.server.Dial(ctx, network, addr)
+	conn, err := t.server.Dial(ctx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, nil
 }
 
 // DialTimeout attempts to establish a TCP connection to a tailscale service with the specified timeout duration

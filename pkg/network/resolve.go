@@ -12,17 +12,20 @@ import (
 )
 
 func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tailscale *Tailscale, tsConfig types.TailscaleConfig) (net.Conn, error) {
+	var conn net.Conn = nil
+
 	if tsConfig.Enabled && strings.Contains(host, tsConfig.HostName) {
 		conn, err := tailscale.DialTimeout("tcp", host, timeout)
 		if err != nil {
 			return nil, err
 		}
-		return conn, nil
+
+		return conn, err
 	}
 
 	conn, err := net.DialTimeout("tcp", host, timeout)
 	if err != nil {
-		return nil, err
+		return conn, err
 	}
 	return conn, nil
 }
