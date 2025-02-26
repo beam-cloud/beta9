@@ -6,6 +6,10 @@ import (
 	"time"
 )
 
+const (
+	proxyReadTimeout = 10 * time.Second
+)
+
 func ProxyConn(dst io.Writer, src io.Reader, done <-chan struct{}, bufferSize int) error {
 	buf := make([]byte, bufferSize)
 
@@ -33,5 +37,6 @@ func SetConnOptions(conn net.Conn, keepAlive bool, keepAliveInterval time.Durati
 		tcpConn.SetKeepAlive(keepAlive)
 		tcpConn.SetKeepAlivePeriod(keepAliveInterval)
 		tcpConn.SetDeadline(time.Time{})
+		tcpConn.SetReadDeadline(time.Now().Add(proxyReadTimeout))
 	}
 }

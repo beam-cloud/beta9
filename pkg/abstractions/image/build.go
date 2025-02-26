@@ -391,7 +391,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 
 		setupCommands = append(setupCommands, installCmd)
-	} else if opts.IgnorePython {
+	} else if opts.IgnorePython && resp != nil && !resp.Ok {
 		opts.PythonVersion = ""
 	}
 
