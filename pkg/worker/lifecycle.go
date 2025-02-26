@@ -657,9 +657,20 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
 
+	defer func() {
+		// Close in reverse order of dependency
+		close(checkpointPIDChan)
+		close(monitorPIDChan)
+		close(startedChan)
+	}()
+
 	go func() {
 		// When the process starts monitor it and potentially checkpoint it
-		pid := <-startedChan
+		pid, ok := <-startedChan
+		if !ok {
+			return
+		}
+
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 	}()
@@ -673,7 +684,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	exitCode, containerId, err = s.runContainer(ctx, request, configPath, outputWriter, startedChan, checkpointPIDChan)
 	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to run container: %v", err)
 		return
 	}
 
@@ -698,11 +708,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, configPath string, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {
-		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, checkpointPIDChan, configPath)
+		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, startedChan, checkpointPIDChan, configPath)
 		if err == nil {
-			return exitCode, containerId, nil
+			return exitCode, containerId, err
 		}
-		log.Error().Str("container_id", request.ContainerId).Msgf("checkpoint/restore failed with exit code %d: %v, attempting to run container from bundle", exitCode, err)
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to run container with checkpoint/restore got exit code %d: %v, attempting to run container from bundle", exitCode, err)
 	}
 
 	bundlePath := filepath.Dir(configPath)
@@ -710,6 +720,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		OutputWriter: outputWriter,
 		Started:      startedChan,
 	})
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to run container: %v", err)
+	}
 	return exitCode, request.ContainerId, err
 }
 

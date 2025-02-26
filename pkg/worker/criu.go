@@ -82,13 +82,13 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, fileCac
 	return criuManager, nil
 }
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, checkpointPIDChan chan int, configPath string) (int, string, error) {
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, string, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
 	if createCheckpoint {
 		log.Info().Str("container_id", request.ContainerId).Msg("attempting to create checkpoint")
-		exitCode, err := s.createCheckpoint(ctx, request, outputWriter, checkpointPIDChan, configPath)
+		exitCode, err := s.createCheckpoint(ctx, request, outputWriter, startedChan, checkpointPIDChan, configPath)
 		if err != nil {
 			return -1, "", err
 		}
@@ -109,7 +109,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			state:   state,
 			runcOpts: &runc.CreateOpts{
 				OutputWriter: outputWriter,
-				Started:      checkpointPIDChan,
+				Started:      startedChan,
 			},
 			configPath: configPath,
 		})
@@ -130,7 +130,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 
 	exitCode, err := s.runcHandle.Run(s.ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
 		OutputWriter: outputWriter,
-		Started:      checkpointPIDChan,
+		Started:      startedChan,
 	})
 
 	return exitCode, request.ContainerId, err
@@ -138,7 +138,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
-func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, checkpointPIDChan chan int, configPath string) (int, error) {
+func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, error) {
 	wg := sync.WaitGroup{}
 	bundlePath := filepath.Dir(configPath)
 
@@ -212,7 +212,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 
 	exitCode, err := s.criuManager.Run(ctx, request, bundlePath, &runc.CreateOpts{
 		OutputWriter: outputWriter,
-		Started:      checkpointPIDChan,
+		Started:      startedChan,
 	})
 
 	wg.Wait()
