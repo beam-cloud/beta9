@@ -184,6 +184,14 @@ class Pod(RunnerAbstraction):
         url = ""
         if create_response.ok:
             terminal.header(f"Container created successfully ===> {create_response.container_id}")
+
+            if self.keep_warm_seconds < 0:
+                terminal.header("This container has no timeout, it will run until it completes.")
+            else:
+                terminal.header(
+                    f"This container will timeout after {self.keep_warm_seconds} seconds."
+                )
+
             url_res = self.print_invocation_snippet()
             url = url_res.url
 
