@@ -51,12 +51,7 @@ func (s *JuiceFsStorage) Mount(localPath string) error {
 		"--no-usage-report",
 	)
 
-	// Start the mount command
-	if err := s.mountCmd.Start(); err != nil {
-		return fmt.Errorf("error starting juicefs mount: %v", err)
-	}
-
-	// Wait for the mount command to finish in the background
+	// Start command in the background
 	go func() {
 		if out, err := s.mountCmd.CombinedOutput(); err != nil {
 			log.Error().Err(err).Str("output", string(out)).Msg("error with juicefs mount command")
