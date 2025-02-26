@@ -82,7 +82,7 @@ class Pod(RunnerAbstraction):
             A dictionary of environment variables to be injected into the container. Default is {}.
         keep_warm_seconds (int):
             The number of seconds to keep the container up the last request. -1 means never scale down to zero.
-            Default is -1. (only applies to deployments)
+            Default is 600 seconds (10 minutes).
         authorized (bool):
             If false, allows the pod to be accessed without an auth token.
             Default is False.
@@ -113,7 +113,7 @@ class Pod(RunnerAbstraction):
         volumes: Optional[List[Volume]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
-        keep_warm_seconds: int = -1,
+        keep_warm_seconds: int = 600,
         authorized: bool = False,
     ) -> None:
         super().__init__(
@@ -184,6 +184,14 @@ class Pod(RunnerAbstraction):
         url = ""
         if create_response.ok:
             terminal.header(f"Container created successfully ===> {create_response.container_id}")
+
+            if self.keep_warm_seconds < 0:
+                terminal.header("This container has no timeout, it will run until it completes.")
+            else:
+                terminal.header(
+                    f"This container will timeout after {self.keep_warm_seconds} seconds."
+                )
+
             url_res = self.print_invocation_snippet()
             url = url_res.url
 
