@@ -16,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -34,7 +35,7 @@ type container struct {
 
 type connection struct {
 	ctx  echo.Context
-	done chan struct{}
+	done chan bool
 }
 
 type PodProxyBuffer struct {
@@ -94,7 +95,7 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	pb.incrementTotalConnections()
 	defer pb.decrementTotalConnections()
 
-	done := make(chan struct{})
+	done := make(chan bool)
 	req := &connection{
 		ctx:  ctx,
 		done: done,
@@ -106,6 +107,8 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 		select {
 		case <-pb.ctx.Done():
 			return ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
+		case <-req.done:
+			return nil
 		case <-ctx.Request().Context().Done():
 			return nil
 		}
@@ -188,7 +191,12 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		pb.buffer.Push(conn, true)
 		return
 	}
-	defer pb.decrementContainerConnections(container.id)
+	defer func() {
+		err = pb.decrementContainerConnections(container.id)
+		if err != nil {
+			log.Error().Str("workspace", pb.workspace.Name).Str("stubId", pb.stubId).Err(err).Msg("failed to decrement container connections")
+		}
+	}()
 
 	// Ensure the request URL is correctly formatted
 	// by setting the container.address to the Host and subPath into the Path field

@@ -6,8 +6,11 @@ import (
 	"time"
 )
 
-func ProxyConn(dst io.Writer, src io.Reader, done <-chan struct{}, bufferSize int) error {
+func ProxyConn(dst io.Writer, src io.Reader, done chan bool, bufferSize int) error {
 	buf := make([]byte, bufferSize)
+	defer func() {
+		done <- true
+	}()
 
 	for {
 		select {
