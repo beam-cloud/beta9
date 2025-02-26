@@ -308,13 +308,15 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		CheckpointEnabled: checkpointEnabled,
 	}
 
-	// Set container timeout
-	s.rdb.SetEx(
-		context.Background(),
-		Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId),
-		1,
-		time.Duration(stubConfig.KeepWarmSeconds)*time.Second,
-	)
+	// Set container timeout if keepwarm is > 0
+	if stubConfig.KeepWarmSeconds > 0 {
+		s.rdb.SetEx(
+			context.Background(),
+			Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId),
+			1,
+			time.Duration(stubConfig.KeepWarmSeconds)*time.Second,
+		)
+	}
 
 	err = s.scheduler.Run(containerRequest)
 	if err != nil {
