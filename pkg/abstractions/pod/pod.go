@@ -321,8 +321,8 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	err = s.scheduler.Run(containerRequest)
 	if err != nil {
 		return &pb.CreatePodResponse{
-			Ok:          false,
-			ContainerId: containerId,
+			Ok:       false,
+			ErrorMsg: err.Error(),
 		}, nil
 	}
 
