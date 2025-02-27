@@ -31,7 +31,7 @@ const (
 	requestProcessingInterval      time.Duration = time.Millisecond * 100
 	httpConnectionTimeout          time.Duration = 2 * time.Second
 	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
-	handleHttpRequestClientTimeout time.Duration = 30 * time.Second
+	handleHttpRequestClientTimeout time.Duration = 175 * time.Second
 )
 
 type request struct {
