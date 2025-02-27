@@ -711,7 +711,6 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 		if err := netns.Set(containerNS); err != nil {
 			log.Warn().Err(err).Msgf("failed to switch to container namespace %s, skipping local redirect rule", containerId)
 		} else {
-			// Execute iptables command inside container namespace
 			args := []string{
 				"-t", "nat",
 				"-A", "PREROUTING",
@@ -726,6 +725,25 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 			output, err := exec.Command("iptables", args...).CombinedOutput()
 			if err != nil {
 				log.Warn().Err(err).Msgf("failed to add iptables redirect rule in container namespace: %s", string(output))
+			}
+
+			// IPv6 redirect rule inside container namespace
+			if m.ipt6 != nil {
+				args6 := []string{
+					"-t", "nat",
+					"-A", "PREROUTING",
+					"-d", containerIp_IPv6,
+					"-p", "tcp",
+					"--dport", fmt.Sprintf("%d", containerPort),
+					"-j", "DNAT",
+					"--to-destination", fmt.Sprintf("[::1]:%d", containerPort),
+					"-m", "comment",
+					"--comment", comment,
+				}
+				output6, err := exec.Command("ip6tables", args6...).CombinedOutput()
+				if err != nil {
+					log.Warn().Err(err).Msgf("failed to add ip6tables redirect rule in container namespace: %s", string(output6))
+				}
 			}
 
 			// Switch back to the original namespace
