@@ -74,10 +74,10 @@ func (g *WorkspaceGroup) ExportWorkspaceConfig(ctx echo.Context) error {
 
 	config := WorkspaceConfigExport{
 		GatewayHTTPHost: g.config.GatewayService.HTTP.ExternalHost,
-		GatewayHTTPPort: g.config.GatewayService.HTTP.Port,
+		GatewayHTTPPort: g.config.GatewayService.HTTP.ExternalPort,
 		GatewayHTTPTLS:  g.config.GatewayService.HTTP.TLS,
 		GatewayGRPCHost: g.config.GatewayService.GRPC.ExternalHost,
-		GatewayGRPCPort: g.config.GatewayService.GRPC.Port,
+		GatewayGRPCPort: g.config.GatewayService.GRPC.ExternalPort,
 		GatewayGRPCTLS:  g.config.GatewayService.GRPC.TLS,
 		WorkspaceID:     workspaceId,
 	}
