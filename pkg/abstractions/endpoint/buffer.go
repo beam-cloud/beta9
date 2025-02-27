@@ -27,13 +27,14 @@ import (
 
 const (
 	requestProcessingInterval time.Duration = time.Millisecond * 100
+	readyCheckInterval        time.Duration = 500 * time.Millisecond
 	httpConnectionTimeout     time.Duration = 2 * time.Second
 )
 
 type request struct {
 	ctx       echo.Context
 	task      *EndpointTask
-	done      chan bool
+	done      chan struct{}
 	processed bool
 }
 
@@ -133,7 +134,7 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
 	ctx.Set("stubId", rb.stubId)
 
-	done := make(chan bool)
+	done := make(chan struct{})
 	req := &request{
 		ctx:  ctx,
 		done: done,
@@ -273,7 +274,7 @@ func (rb *RequestBuffer) discoverContainers() {
 			rb.availableContainers = availableContainers
 			rb.availableContainersLock.Unlock()
 
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(readyCheckInterval)
 		}
 	}
 }
@@ -543,6 +544,8 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 			return
 		case <-rb.ctx.Done():
 			return
+		case <-req.done:
+			return
 		case <-ticker.C:
 			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId), 1, endpointRequestHeartbeatKeepAlive)
 		}
@@ -551,7 +554,7 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 
 func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 	defer func() {
-		req.done <- true
+		close(req.done)
 	}()
 
 	defer rb.releaseRequestToken(containerId, req.task.msg.TaskId)
@@ -599,7 +602,9 @@ func (rb *RequestBuffer) proxyWebsocketConnection(r *request, c container, diale
 
 	go rb.heartBeat(r, c.id) // Send heartbeat via redis for duration of request
 	go forwardWSConn(wsSrc.NetConn(), wsDst.NetConn())
+
 	forwardWSConn(wsDst.NetConn(), wsSrc.NetConn())
+
 	return nil
 }
 
