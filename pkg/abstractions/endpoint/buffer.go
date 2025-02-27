@@ -26,14 +26,18 @@ import (
 )
 
 const (
-	requestProcessingInterval time.Duration = time.Millisecond * 100
-	httpConnectionTimeout     time.Duration = 2 * time.Second
+	readyCheckInterval             time.Duration = 500 * time.Millisecond
+	connectToHostTimeout           time.Duration = 2 * time.Second
+	requestProcessingInterval      time.Duration = time.Millisecond * 100
+	httpConnectionTimeout          time.Duration = 2 * time.Second
+	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
+	handleHttpRequestClientTimeout time.Duration = 175 * time.Second
 )
 
 type request struct {
 	ctx       echo.Context
 	task      *EndpointTask
-	done      chan bool
+	done      chan struct{}
 	processed bool
 }
 
@@ -133,7 +137,7 @@ func (rb *RequestBuffer) handleHeartbeatEvents() {
 func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) error {
 	ctx.Set("stubId", rb.stubId)
 
-	done := make(chan bool)
+	done := make(chan struct{})
 	req := &request{
 		ctx:  ctx,
 		done: done,
@@ -184,7 +188,7 @@ func (rb *RequestBuffer) processRequests() {
 }
 
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
-	httpClient, err := rb.getHttpClient(address)
+	httpClient, err := rb.getHttpClient(address, checkAddressIsReadyTimeout)
 	if err != nil {
 		return false
 	}
@@ -273,7 +277,7 @@ func (rb *RequestBuffer) discoverContainers() {
 			rb.availableContainers = availableContainers
 			rb.availableContainersLock.Unlock()
 
-			time.Sleep(500 * time.Millisecond)
+			time.Sleep(readyCheckInterval)
 		}
 	}
 }
@@ -343,13 +347,13 @@ func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
 	return rb.rdb.Del(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, taskId, containerId)).Err()
 }
 
-func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
+func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*http.Client, error) {
 	// If it isn't an tailnet address, just return the standard http client
 	if !rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName) {
 		return rb.httpClient, nil
 	}
 
-	conn, err := network.ConnectToHost(rb.ctx, address, types.RequestTimeoutDurationS, rb.tailscale, rb.tsConfig)
+	conn, err := network.ConnectToHost(rb.ctx, address, timeout, rb.tailscale, rb.tsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +448,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		requestBody = io.NopCloser(bytes.NewReader(payloadBytes))
 	}
 
-	httpClient, err := rb.getHttpClient(c.address)
+	httpClient, err := rb.getHttpClient(c.address, handleHttpRequestClientTimeout)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
@@ -543,6 +547,8 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 			return
 		case <-rb.ctx.Done():
 			return
+		case <-req.done:
+			return
 		case <-ticker.C:
 			rb.rdb.Set(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, req.task.msg.TaskId, containerId), 1, endpointRequestHeartbeatKeepAlive)
 		}
@@ -551,7 +557,7 @@ func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
 
 func (rb *RequestBuffer) afterRequest(req *request, containerId string) {
 	defer func() {
-		req.done <- true
+		close(req.done)
 	}()
 
 	defer rb.releaseRequestToken(containerId, req.task.msg.TaskId)
@@ -599,7 +605,9 @@ func (rb *RequestBuffer) proxyWebsocketConnection(r *request, c container, diale
 
 	go rb.heartBeat(r, c.id) // Send heartbeat via redis for duration of request
 	go forwardWSConn(wsSrc.NetConn(), wsDst.NetConn())
+
 	forwardWSConn(wsDst.NetConn(), wsSrc.NetConn())
+
 	return nil
 }
 

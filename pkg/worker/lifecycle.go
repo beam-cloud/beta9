@@ -569,7 +569,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		_, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+		resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
 		if err != nil {
 			notFoundErr := &types.ErrContainerStateNotFound{}
 
@@ -577,6 +577,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}
+		} else if err == nil && resp.State.Status == string(types.ContainerStatusStopping) {
+			log.Info().Str("container_id", containerId).Msg("container should be stopping, force killing")
+			s.stopContainer(containerId, true)
+			return
 		}
 
 		// Update container status to running

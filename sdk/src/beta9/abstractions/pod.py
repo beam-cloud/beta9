@@ -1,7 +1,7 @@
 import os
 import urllib.parse
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 from .. import terminal
@@ -17,8 +17,11 @@ from ..channel import with_grpc_error_handling
 from ..clients.gateway import (
     DeployStubRequest,
     DeployStubResponse,
+    GatewayServiceStub,
     GetUrlRequest,
     GetUrlResponse,
+    StopContainerRequest,
+    StopContainerResponse,
 )
 from ..clients.pod import (
     CreatePodRequest,
@@ -30,22 +33,38 @@ from ..config import ConfigContext, get_settings
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
 from ..utils import get_init_args_kwargs
+from .base import BaseAbstraction
 from .shell import SSHShell
 
 
 @dataclass
-class CreatePodResult:
+class PodInstance(BaseAbstraction):
     """
-    Stores the result of creating a Pod container.
+    Stores the result of creating a Pod.
 
     Attributes:
         container_id: The unique ID of the created container.
         url: The URL for accessing the container over HTTP (if ports were exposed).
     """
 
-    ok: bool
     container_id: str
     url: str
+    ok: bool = field(default=False)
+    error_msg: str = field(default="")
+    gateway_stub: "GatewayServiceStub" = field(init=False)
+
+    def __post_init__(self):
+        super().__init__()
+        self.gateway_stub = GatewayServiceStub(self.channel)
+
+    def terminate(self) -> bool:
+        """
+        Terminate the container associated with this pod instance. Returns True if the container was terminated, False otherwise.
+        """
+        res: "StopContainerResponse" = self.gateway_stub.stop_container(
+            StopContainerRequest(container_id=self.container_id)
+        )
+        return res.ok
 
 
 class Pod(RunnerAbstraction):
@@ -154,9 +173,9 @@ class Pod(RunnerAbstraction):
         image.ignore_python = True
         return image
 
-    def create(self, entrypoint: List[str] = []) -> CreatePodResult:
+    def create(self, entrypoint: List[str] = []) -> PodInstance:
         """
-        Create a new container that will run until either it completes normally, or is killed.
+        Create a new container that will run until either it completes normally, or times out.
 
         Args:
             entrypoint (List[str]): The command to run in the pod container (overrides the entrypoint specified in the Pod constructor).
@@ -168,10 +187,11 @@ class Pod(RunnerAbstraction):
             terminal.error("You must specify an entrypoint.")
 
         if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
-            return CreatePodResult(
+            return PodInstance(
                 container_id="",
                 url="",
                 ok=False,
+                error_msg="Failed to prepare runtime",
             )
 
         terminal.header("Creating container")
@@ -195,10 +215,11 @@ class Pod(RunnerAbstraction):
             url_res = self.print_invocation_snippet()
             url = url_res.url
 
-        return CreatePodResult(
+        return PodInstance(
             container_id=create_response.container_id,
             url=url,
             ok=create_response.ok,
+            error_msg=create_response.error_msg,
         )
 
     def deploy(

@@ -2,7 +2,9 @@ package shell
 
 import (
 	"fmt"
+	"net"
 	"net/http"
+	"sync"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
@@ -55,30 +57,55 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
 	}
 
-	conn, _, err := hijacker.Hijack()
+	clientConn, _, err := hijacker.Hijack()
 	if err != nil {
 		return ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
 	}
-	defer conn.Close()
-	abstractions.SetConnOptions(conn, true, shellKeepAliveIntervalS)
+	defer clientConn.Close()
 
 	// Dial ssh server in the container
 	containerConn, err := network.ConnectToHost(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale)
 	if err != nil {
-		fmt.Fprintf(conn, "ERROR: %s", err.Error())
+		fmt.Fprintf(clientConn, "ERROR: %s", err.Error())
 		return err
 	}
 	defer containerConn.Close()
-	abstractions.SetConnOptions(containerConn, true, shellKeepAliveIntervalS)
+
+	abstractions.SetConnOptions(clientConn, true, shellKeepAliveIntervalS, -1)
+	abstractions.SetConnOptions(containerConn, true, shellKeepAliveIntervalS, -1)
 
 	// Tell the client to proceed now that everything is set up
-	if _, err = conn.Write([]byte("OK")); err != nil {
+	if _, err = clientConn.Write([]byte("OK")); err != nil {
 		return err
 	}
 
-	// Start bidirectional proxy
-	go abstractions.ProxyConn(containerConn, conn, done, shellProxyBufferSizeKb)
-	go abstractions.ProxyConn(conn, containerConn, done, shellProxyBufferSizeKb)
+	// Start proxying data
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	var once sync.Once
+	closeConnections := func() {
+		clientConn.Close()
+		containerConn.Close()
+		close(done)
+	}
+
+	// Proxy the connection in both directions
+	for _, pair := range []struct {
+		src net.Conn
+		dst net.Conn
+	}{
+		{containerConn, clientConn},
+		{clientConn, containerConn},
+	} {
+		go func(src, dst net.Conn) {
+			defer wg.Done()
+			abstractions.ProxyConn(src, dst, done, shellProxyBufferSizeKb)
+			once.Do(closeConnections)
+		}(pair.src, pair.dst)
+	}
+
+	wg.Wait()
 
 	select {
 	case <-done:

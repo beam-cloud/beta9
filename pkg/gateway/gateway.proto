@@ -513,9 +513,11 @@ message DrainWorkerResponse {
 message ExportWorkspaceConfigRequest {}
 
 message ExportWorkspaceConfigResponse {
-  string gateway_http_url = 1;
+  string gateway_http_host = 1;
   int32 gateway_http_port = 2;
-  string gateway_grpc_url = 3;
-  int32 gateway_grpc_port = 4;
-  string workspace_id = 5;
+  bool gateway_http_tls = 3;
+  string gateway_grpc_host = 4;
+  int32 gateway_grpc_port = 5;
+  bool gateway_grpc_tls = 6;
+  string workspace_id = 7;
 }

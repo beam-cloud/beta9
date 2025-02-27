@@ -31,6 +31,7 @@ class CreatePodRequest(betterproto.Message):
 class CreatePodResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     container_id: str = betterproto.string_field(2)
+    error_msg: str = betterproto.string_field(3)
 
 
 class PodServiceStub(SyncServiceStub):

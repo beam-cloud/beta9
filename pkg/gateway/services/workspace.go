@@ -11,10 +11,12 @@ func (gws *GatewayService) ExportWorkspaceConfig(ctx context.Context, in *pb.Exp
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	return &pb.ExportWorkspaceConfigResponse{
-		GatewayHttpUrl:  gws.appConfig.GatewayService.HTTP.ExternalHost,
+		GatewayHttpHost: gws.appConfig.GatewayService.HTTP.ExternalHost,
 		GatewayHttpPort: int32(gws.appConfig.GatewayService.HTTP.ExternalPort),
-		GatewayGrpcUrl:  gws.appConfig.GatewayService.GRPC.ExternalHost,
+		GatewayHttpTls:  gws.appConfig.GatewayService.HTTP.TLS,
+		GatewayGrpcHost: gws.appConfig.GatewayService.GRPC.ExternalHost,
 		GatewayGrpcPort: int32(gws.appConfig.GatewayService.GRPC.ExternalPort),
+		GatewayGrpcTls:  gws.appConfig.GatewayService.GRPC.TLS,
 		WorkspaceId:     authInfo.Workspace.ExternalId,
 	}, nil
 }
