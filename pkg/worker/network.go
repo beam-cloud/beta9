@@ -660,12 +660,19 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
 	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
 
-	// Insert NAT PREROUTING rule at the top of the chain
+	// Insert NAT PREROUTING rules at the top of the chain
 	// IPv4
 	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort), "-m", "comment", "--comment", comment)
 	if err != nil {
 		return err
 	}
+
+	err = m.ipt.InsertUnique("nat", "PREROUTING", 1,
+		"-p", "tcp",
+		"--dport", fmt.Sprintf("%d", hostPort),
+		"-j", "DNAT",
+		"--to-destination", fmt.Sprintf("127.0.0.1:%d", containerPort),
+		"-m", "comment", "--comment", comment)
 
 	// IPv6
 	if m.ipt6 != nil {
