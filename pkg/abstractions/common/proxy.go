@@ -22,16 +22,21 @@ func ProxyConn(dst io.Writer, src io.Reader, done <-chan struct{}, bufferSize in
 				return err
 			}
 		}
+
 		if err != nil {
 			return err
 		}
 	}
 }
 
-func SetConnOptions(conn net.Conn, keepAlive bool, keepAliveInterval time.Duration) {
+func SetConnOptions(conn net.Conn, keepAlive bool, keepAliveInterval time.Duration, readDeadline time.Duration) {
 	if tcpConn, ok := conn.(*net.TCPConn); ok {
 		tcpConn.SetKeepAlive(keepAlive)
 		tcpConn.SetKeepAlivePeriod(keepAliveInterval)
 		tcpConn.SetDeadline(time.Time{})
+
+		if readDeadline != -1 {
+			tcpConn.SetReadDeadline(time.Now().Add(readDeadline))
+		}
 	}
 }
