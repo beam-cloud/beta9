@@ -13,4 +13,5 @@ message CreatePodRequest { string stub_id = 1; }
 message CreatePodResponse {
   bool ok = 1;
   string container_id = 2;
+  string error_msg = 3;
 }

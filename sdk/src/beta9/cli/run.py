@@ -3,7 +3,7 @@ import inspect
 import click
 
 from .. import terminal
-from ..abstractions.pod import CreatePodResult, Pod
+from ..abstractions.pod import Pod, PodInstance
 from ..channel import ServiceClient
 from ..utils import load_module_spec
 from .container import _attach_to_container
@@ -66,7 +66,7 @@ def run(
     if not handle_config_override(pod_spec, kwargs):
         return
 
-    result: CreatePodResult = pod_spec.create()
+    result: PodInstance = pod_spec.create()
     if not result.ok:
         terminal.error("Failed to create container.")
         return
