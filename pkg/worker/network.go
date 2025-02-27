@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -356,7 +357,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
-	// Retrieve allocated IP addresses
+	// See what IP addresses are already allocated
 	getContainerIpsResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIps(m.ctx, &pb.GetContainerIpsRequest{
 		NetworkPrefix: m.networkPrefix,
 	}))
@@ -370,9 +371,9 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		allocatedSet[ip] = true
 	}
 
-	// Choose an address from containerSubnet
+	// Choose an address that lies in containerSubnet
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
-	var ipAddr *netlink.Addr
+	var ipAddr *netlink.Addr = nil
 	var ipv4LastOctet int
 	for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
 		ipStr := ip.String()
@@ -381,16 +382,19 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
 			continue
 		}
+
 		if _, allocated := allocatedSet[ipStr]; allocated {
 			continue
 		}
+
 		ipAddr = &netlink.Addr{
 			IPNet: &net.IPNet{
 				IP:   ip,
 				Mask: ipNet.Mask,
 			},
 		}
-		// Extract last octet for later IPv6 configuration
+
+		// Extract the last octet of the IPv4 address
 		ipv4LastOctet = int(ip.To4()[3])
 		break
 	}
@@ -398,25 +402,11 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return errors.New("unable to assign IP address to container")
 	}
 
-	// Assign the chosen IP to the container's veth interface
 	if err := netlink.AddrAdd(containerVeth, ipAddr); err != nil {
 		return err
 	}
 
-	// Add a loopback alias -- this makes the container's external IP also available on the loopback interface.
-	alias := &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   ipAddr.IP,
-			Mask: net.CIDRMask(32, 32),
-		},
-	}
-
-	// NOTE: If the alias already exists, log and continue
-	if err := netlink.AddrAdd(lo, alias); err != nil {
-		log.Warn().Err(err).Msg("failed to add loopback alias for container external IP")
-	}
-
-	// Add a default IPv4 route
+	// Add a default route (IPv4)
 	defaultRoute := &netlink.Route{
 		LinkIndex: containerVeth.Attrs().Index,
 		Gw:        net.ParseIP(containerGatewayAddress),
@@ -425,10 +415,12 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
-	// IPv6 configuration (if enabled)
 	if m.ipt6 != nil {
+		// Parse the IPv6 subnet
 		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
 		ipv6Prefix := ipv6Net.IP.String()
+
+		// Allocate an IPv6 address using the last octet of the IPv4 address
 		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
 		ipv6Addr := &netlink.Addr{
 			IPNet: &net.IPNet{
@@ -436,9 +428,12 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 				Mask: ipv6Net.Mask,
 			},
 		}
+
 		if err := netlink.AddrAdd(containerVeth, ipv6Addr); err != nil {
 			return err
 		}
+
+		// Add a default route (IPv6)
 		defaultIPv6Route := &netlink.Route{
 			LinkIndex: containerVeth.Attrs().Index,
 			Gw:        net.ParseIP(containerGatewayAddressIPv6),
@@ -693,6 +688,50 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
 		if err != nil {
 			return err
+		}
+	}
+
+	// --- Add an extra rule inside the container's network namespace ---
+	// This rule redirects traffic destined for containerIp:containerPort to 127.0.0.1:containerPort.
+	// This only affects traffic arriving at the external IP, leaving applications bound to 0.0.0.0 or [::] untouched.
+	origNS, err := netns.Get()
+	if err != nil {
+		return err
+	}
+	defer origNS.Close()
+
+	containerNS, err := netns.GetFromName(containerId)
+	if err != nil {
+		// Log a warning if we can't get the container namespace, but don't fail the function
+		log.Warn().Err(err).Msgf("could not get network namespace for container %s, skipping local redirect rule", containerId)
+	} else {
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+
+		if err := netns.Set(containerNS); err != nil {
+			log.Warn().Err(err).Msgf("failed to switch to container namespace %s, skipping local redirect rule", containerId)
+		} else {
+			// Execute iptables command inside container namespace
+			args := []string{
+				"-t", "nat",
+				"-A", "PREROUTING",
+				"-d", containerIp,
+				"-p", "tcp",
+				"--dport", fmt.Sprintf("%d", containerPort),
+				"-j", "DNAT",
+				"--to-destination", fmt.Sprintf("127.0.0.1:%d", containerPort),
+				"-m", "comment",
+				"--comment", comment,
+			}
+			output, err := exec.Command("iptables", args...).CombinedOutput()
+			if err != nil {
+				log.Warn().Err(err).Msgf("failed to add iptables redirect rule in container namespace: %s", string(output))
+			}
+
+			// Switch back to the original namespace
+			if err := netns.Set(origNS); err != nil {
+				return err
+			}
 		}
 	}
 
