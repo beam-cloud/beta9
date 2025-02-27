@@ -49,7 +49,11 @@ runner:
 	done
 
 start:
-	cd hack && okteto up --file okteto.yaml
+	@if [ -f config.yaml ]; then \
+		cd hack && okteto up --file okteto.yaml --env CONFIG_PATH=/workspace/config.yaml; \
+	else \
+		cd hack && okteto up --file okteto.yaml; \
+	fi
 
 stop:
 	cd hack && okteto down --file okteto.yaml
