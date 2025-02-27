@@ -93,6 +93,8 @@ github.com/beam-cloud/blobcache-v2 v0.0.0-20250204202524-80d61da9a0f8 h1:lwuVDUF
 github.com/beam-cloud/blobcache-v2 v0.0.0-20250204202524-80d61da9a0f8/go.mod h1:6cJ/j/kpxdVnpZaLri99cg/7QRmRQ8d6yvv6UFBBOUE=
 github.com/beam-cloud/clip v0.0.0-20250109221532-5d9d7744594d h1:EEWoW32RCi3i9/PWkvrPMDIo4j2attsKkMXxwZQRKt4=
 github.com/beam-cloud/clip v0.0.0-20250109221532-5d9d7744594d/go.mod h1:FO7taXHUAqgx33PjeB6LbSLpKob3Ceyo9Po64nq5TR0=
+github.com/beam-cloud/clip v0.0.0-20250226231934-32af21a743cd h1:UU7oR8KdNUn0cBplumOYjvwjmtMrWMnl9leO/aLMfDo=
+github.com/beam-cloud/clip v0.0.0-20250226231934-32af21a743cd/go.mod h1:FO7taXHUAqgx33PjeB6LbSLpKob3Ceyo9Po64nq5TR0=
 github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170 h1:KYVz18kobBGU8URM9Srn++2tcL9e0PcwYyH0Z4GYicM=
 github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324 h1:2BWf8G8CaZ8vN0rST9uu5BL8P/bDUBwXJYVLwWwaLVU=

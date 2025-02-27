@@ -161,11 +161,12 @@ type DockerImageRegistryConfig struct {
 }
 
 type S3ImageRegistryConfig struct {
-	BucketName string `key:"bucketName" json:"bucket_name"`
-	AccessKey  string `key:"accessKey" json:"access_key"`
-	SecretKey  string `key:"secretKey" json:"secret_key"`
-	Region     string `key:"region" json:"region"`
-	Endpoint   string `key:"endpoint" json:"endpoint"`
+	BucketName     string `key:"bucketName" json:"bucket_name"`
+	AccessKey      string `key:"accessKey" json:"access_key"`
+	SecretKey      string `key:"secretKey" json:"secret_key"`
+	Region         string `key:"region" json:"region"`
+	Endpoint       string `key:"endpoint" json:"endpoint"`
+	ForcePathStyle bool   `key:"forcePathStyle" json:"force_path_style"`
 }
 
 type RunnerConfig struct {

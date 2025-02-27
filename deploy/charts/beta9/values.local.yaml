@@ -46,6 +46,7 @@ manifests:
           #!/bin/bash
           awslocal s3 mb s3://juicefs
           awslocal s3 mb s3://logs
+          awslocal s3 mb s3://beta9-images
         persistence:
           enabled: true
           storageClass: local-path
