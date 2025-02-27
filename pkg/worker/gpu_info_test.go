@@ -2,6 +2,7 @@ package worker
 
 import (
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -67,4 +68,35 @@ func TestAvailableGPUDevicesAllVisibleDevices(t *testing.T) {
 	devices, err := client.AvailableGPUDevices()
 	assert.NoError(t, err)
 	assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7}, devices)
+}
+
+func TestAvailableGPUDevicesWithNonZeroPCIDomain(t *testing.T) {
+	originalQueryDevices := queryDevices
+	defer func() { queryDevices = originalQueryDevices }()
+
+	originalCheckGPUExists := checkGPUExists
+	defer func() { checkGPUExists = originalCheckGPUExists }()
+
+	queryDevices = func() ([]byte, error) {
+		mockOutput := `0x0001, 00000001:23:00.0, 0, GPU-afb8c77a-62ef-a631-48d0-edc9670fef25`
+		return []byte(mockOutput), nil
+	}
+
+	checkGPUExists = func(busId string) (bool, error) {
+		// check format matches xxxx:xx:xx.x
+		parts := strings.Split(busId, ":")
+		assert.Equal(t, 3, len(parts))
+		assert.Equal(t, 4, len(parts[0]))
+		assert.Equal(t, 2, len(parts[1]))
+		assert.Equal(t, 4, len(parts[2]))
+		assert.Contains(t, parts[2], ".")
+		return true, nil
+	}
+
+	client := &NvidiaInfoClient{}
+	os.Setenv("NVIDIA_VISIBLE_DEVICES", "all")
+
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Equal(t, []int{0}, devices)
 }
