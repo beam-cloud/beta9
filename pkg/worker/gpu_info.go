@@ -90,7 +90,7 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 		}
 
 		// The bus id from nvidia-smi comes as xxxxxxxx:xx:xx.x so convert it to the format xxxx:xx:xx.x
-		systemBusId := strings.Join([]string{domain, smiBusIdParts[1], smiBusIdParts[2]}, ":")
+		systemBusId := strings.ToLower(strings.Join([]string{domain, smiBusIdParts[1], smiBusIdParts[2]}, ":"))
 		gpuIndex := strings.TrimSpace(parts[2])
 
 		if exists, err := checkGPUExists(systemBusId); err == nil && exists {

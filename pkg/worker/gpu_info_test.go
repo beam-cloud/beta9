@@ -2,7 +2,6 @@ package worker
 
 import (
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,7 +69,7 @@ func TestAvailableGPUDevicesAllVisibleDevices(t *testing.T) {
 	assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7}, devices)
 }
 
-func TestAvailableGPUDevicesWithNonZeroPCIDomain(t *testing.T) {
+func TestAvailableGPUDevicesWithNonZeroPCIDomains(t *testing.T) {
 	originalQueryDevices := queryDevices
 	defer func() { queryDevices = originalQueryDevices }()
 
@@ -78,18 +77,13 @@ func TestAvailableGPUDevicesWithNonZeroPCIDomain(t *testing.T) {
 	defer func() { checkGPUExists = originalCheckGPUExists }()
 
 	queryDevices = func() ([]byte, error) {
-		mockOutput := `0x0001, 00000001:23:00.0, 0, GPU-afb8c77a-62ef-a631-48d0-edc9670fef25`
+		mockOutput := `0x0001, 00000001:00:1E.0, 0, GPU-afcdd0c4-4e05-0d70-b751-6ffb42883041`
 		return []byte(mockOutput), nil
 	}
 
 	checkGPUExists = func(busId string) (bool, error) {
 		// check format matches xxxx:xx:xx.x
-		parts := strings.Split(busId, ":")
-		assert.Equal(t, 3, len(parts))
-		assert.Equal(t, 4, len(parts[0]))
-		assert.Equal(t, 2, len(parts[1]))
-		assert.Equal(t, 4, len(parts[2]))
-		assert.Contains(t, parts[2], ".")
+		assert.Equal(t, "0001:00:1e.0", busId)
 		return true, nil
 	}
 
