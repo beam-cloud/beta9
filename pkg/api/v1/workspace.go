@@ -59,10 +59,12 @@ func (g *WorkspaceGroup) CurrentWorkspace(ctx echo.Context) error {
 }
 
 type WorkspaceConfigExport struct {
-	GatewayHTTPURL  string `json:"gateway_http_url"`
+	GatewayHTTPHost string `json:"gateway_http_host"`
 	GatewayHTTPPort int    `json:"gateway_http_port"`
-	GatewayGRPCURL  string `json:"gateway_grpc_url"`
+	GatewayHTTPTLS  bool   `json:"gateway_http_tls"`
+	GatewayGRPCHost string `json:"gateway_grpc_host"`
 	GatewayGRPCPort int    `json:"gateway_grpc_port"`
+	GatewayGRPCTLS  bool   `json:"gateway_grpc_tls"`
 	WorkspaceID     string `json:"workspace_id"`
 	Token           string `json:"token"`
 }
@@ -71,10 +73,12 @@ func (g *WorkspaceGroup) ExportWorkspaceConfig(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 
 	config := WorkspaceConfigExport{
-		GatewayHTTPURL:  g.config.GatewayService.HTTP.ExternalHost,
+		GatewayHTTPHost: g.config.GatewayService.HTTP.ExternalHost,
 		GatewayHTTPPort: g.config.GatewayService.HTTP.Port,
-		GatewayGRPCURL:  g.config.GatewayService.GRPC.ExternalHost,
+		GatewayHTTPTLS:  g.config.GatewayService.HTTP.TLS,
+		GatewayGRPCHost: g.config.GatewayService.GRPC.ExternalHost,
 		GatewayGRPCPort: g.config.GatewayService.GRPC.Port,
+		GatewayGRPCTLS:  g.config.GatewayService.GRPC.TLS,
 		WorkspaceID:     workspaceId,
 	}
 
