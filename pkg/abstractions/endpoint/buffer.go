@@ -26,9 +26,12 @@ import (
 )
 
 const (
-	requestProcessingInterval time.Duration = time.Millisecond * 100
-	readyCheckInterval        time.Duration = 500 * time.Millisecond
-	httpConnectionTimeout     time.Duration = 2 * time.Second
+	readyCheckInterval             time.Duration = 500 * time.Millisecond
+	connectToHostTimeout           time.Duration = 2 * time.Second
+	requestProcessingInterval      time.Duration = time.Millisecond * 100
+	httpConnectionTimeout          time.Duration = 2 * time.Second
+	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
+	handleHttpRequestClientTimeout time.Duration = 175 * time.Second
 )
 
 type request struct {
@@ -185,7 +188,7 @@ func (rb *RequestBuffer) processRequests() {
 }
 
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
-	httpClient, err := rb.getHttpClient(address)
+	httpClient, err := rb.getHttpClient(address, checkAddressIsReadyTimeout)
 	if err != nil {
 		return false
 	}
@@ -344,13 +347,13 @@ func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
 	return rb.rdb.Del(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, taskId, containerId)).Err()
 }
 
-func (rb *RequestBuffer) getHttpClient(address string) (*http.Client, error) {
+func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*http.Client, error) {
 	// If it isn't an tailnet address, just return the standard http client
 	if !rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName) {
 		return rb.httpClient, nil
 	}
 
-	conn, err := network.ConnectToHost(rb.ctx, address, types.RequestTimeoutDurationS, rb.tailscale, rb.tsConfig)
+	conn, err := network.ConnectToHost(rb.ctx, address, timeout, rb.tailscale, rb.tsConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -445,7 +448,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		requestBody = io.NopCloser(bytes.NewReader(payloadBytes))
 	}
 
-	httpClient, err := rb.getHttpClient(c.address)
+	httpClient, err := rb.getHttpClient(c.address, handleHttpRequestClientTimeout)
 	if err != nil {
 		req.ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": "Internal server error",
