@@ -85,7 +85,11 @@ func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
 	}
 
 	return &S3Store{
-		client: s3.NewFromConfig(cfg),
+		client: s3.NewFromConfig(cfg, func(o *s3.Options) {
+			if config.ForcePathStyle {
+				o.UsePathStyle = true
+			}
+		}),
 		config: config,
 	}, nil
 }
