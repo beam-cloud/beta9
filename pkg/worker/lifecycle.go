@@ -377,9 +377,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Linux.Sysctl = make(map[string]string)
-	if s.config.Worker.IPv6BindV6Only {
-		spec.Linux.Sysctl["net.ipv6.bindv6only"] = "1"
-	}
+	spec.Linux.Sysctl["net.ipv6.bindv6only"] = "1"
 
 	// We need to modify the spec to support Cedana C/R if enabled
 	if s.IsCRIUAvailable() && request.CheckpointEnabled {

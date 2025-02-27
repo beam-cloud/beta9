@@ -246,7 +246,6 @@ type WorkerConfig struct {
 	HostNetwork                  bool                        `key:"hostNetwork" json:"host_network"`
 	UseGatewayServiceHostname    bool                        `key:"useGatewayServiceHostname" json:"use_gateway_service_hostname"`
 	UseHostResolvConf            bool                        `key:"useHostResolvConf" json:"use_host_resolv_conf"`
-	IPv6BindV6Only               bool                        `key:"ipv6BindV6Only" json:"ipv6_bind_v6_only"`
 	ImageTag                     string                      `key:"imageTag" json:"image_tag"`
 	ImageName                    string                      `key:"imageName" json:"image_name"`
 	ImageRegistry                string                      `key:"imageRegistry" json:"image_registry"`
