@@ -356,7 +356,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
-	// See what IP addresses are already allocated
+	// Retrieve allocated IP addresses
 	getContainerIpsResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIps(m.ctx, &pb.GetContainerIpsRequest{
 		NetworkPrefix: m.networkPrefix,
 	}))
@@ -370,9 +370,9 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		allocatedSet[ip] = true
 	}
 
-	// Choose a few address that lies in containerSubnet
+	// Choose an address from containerSubnet
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
-	var ipAddr *netlink.Addr = nil
+	var ipAddr *netlink.Addr
 	var ipv4LastOctet int
 	for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
 		ipStr := ip.String()
@@ -381,19 +381,16 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
 			continue
 		}
-
 		if _, allocated := allocatedSet[ipStr]; allocated {
 			continue
 		}
-
 		ipAddr = &netlink.Addr{
 			IPNet: &net.IPNet{
 				IP:   ip,
 				Mask: ipNet.Mask,
 			},
 		}
-
-		// Extract the last octet of the IPv4 address
+		// Extract last octet for later IPv6 configuration
 		ipv4LastOctet = int(ip.To4()[3])
 		break
 	}
@@ -401,11 +398,25 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return errors.New("unable to assign IP address to container")
 	}
 
+	// Assign the chosen IP to the container's veth interface
 	if err := netlink.AddrAdd(containerVeth, ipAddr); err != nil {
 		return err
 	}
 
-	// Add a default route (IPv4)
+	// Add a loopback alias -- this makes the container's external IP also available on the loopback interface.
+	alias := &netlink.Addr{
+		IPNet: &net.IPNet{
+			IP:   ipAddr.IP,
+			Mask: net.CIDRMask(32, 32),
+		},
+	}
+
+	// NOTE: If the alias already exists, log and continue
+	if err := netlink.AddrAdd(lo, alias); err != nil {
+		log.Warn().Err(err).Msg("failed to add loopback alias for container external IP")
+	}
+
+	// Add a default IPv4 route
 	defaultRoute := &netlink.Route{
 		LinkIndex: containerVeth.Attrs().Index,
 		Gw:        net.ParseIP(containerGatewayAddress),
@@ -414,12 +425,10 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
+	// IPv6 configuration (if enabled)
 	if m.ipt6 != nil {
-		// Parse the IPv6 subnet
 		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
 		ipv6Prefix := ipv6Net.IP.String()
-
-		// Allocate an IPv6 address using the last octet of the IPv4 address
 		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
 		ipv6Addr := &netlink.Addr{
 			IPNet: &net.IPNet{
@@ -427,12 +436,9 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 				Mask: ipv6Net.Mask,
 			},
 		}
-
 		if err := netlink.AddrAdd(containerVeth, ipv6Addr); err != nil {
 			return err
 		}
-
-		// Add a default route (IPv6)
 		defaultIPv6Route := &netlink.Route{
 			LinkIndex: containerVeth.Attrs().Index,
 			Gw:        net.ParseIP(containerGatewayAddressIPv6),
@@ -660,19 +666,12 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
 	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
 
-	// Insert NAT PREROUTING rules at the top of the chain
+	// Insert NAT PREROUTING rule at the top of the chain
 	// IPv4
 	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort), "-m", "comment", "--comment", comment)
 	if err != nil {
 		return err
 	}
-
-	err = m.ipt.InsertUnique("nat", "PREROUTING", 1,
-		"-p", "tcp",
-		"--dport", fmt.Sprintf("%d", hostPort),
-		"-j", "DNAT",
-		"--to-destination", fmt.Sprintf("127.0.0.1:%d", containerPort),
-		"-m", "comment", "--comment", comment)
 
 	// IPv6
 	if m.ipt6 != nil {
