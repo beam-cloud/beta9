@@ -15,6 +15,8 @@ import (
 	"gvisor.dev/gvisor/pkg/sync"
 )
 
+const nvidiaDeviceKindPrefix string = "nvidia.com/gpu"
+
 var (
 	defaultContainerCudaVersion string   = "12.4"
 	defaultContainerPath        []string = []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"}

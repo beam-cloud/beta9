@@ -29,7 +29,6 @@ const (
 	defaultContainerDirectory string        = "/mnt/code"
 	specBaseName              string        = "config.json"
 	initialSpecBaseName       string        = "initial_config.json"
-	nvidiaDeviceKindPrefix    string        = "nvidia.com/gpu"
 	runcEventsInterval        time.Duration = 5 * time.Second
 	containerInnerPort        int           = 8001 // Use a fixed port inside the container
 )
@@ -114,7 +113,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 	// De-allocate GPU devices so they are available for new containers
 	if request.Gpu != "" {
-		s.containerCudaManager.UnassignGPUDevices(containerId)
+		s.containerGPUManager.UnassignGPUDevices(containerId)
 	}
 
 	// Tear down container network components
@@ -357,7 +356,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	env := s.getContainerEnvironment(request, options)
 	if request.Gpu != "" {
-		env = s.containerCudaManager.InjectEnvVars(env)
+		env = s.containerGPUManager.InjectEnvVars(env)
 	}
 	spec.Process.Env = append(spec.Process.Env, env...)
 
@@ -435,7 +434,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	// If volume caching is enabled, set it up and add proper mounts to spec
-	if !request.CheckpointEnabled && s.fileCacheManager.CacheAvailable() && request.Workspace.VolumeCacheEnabled && !request.IsBuildRequest() {
+	if request.VolumeCacheCompatible() && s.fileCacheManager.CacheAvailable() {
 		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to setup volume caching: %v", err)
@@ -599,7 +598,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	if request.RequiresGPU() {
 		// Assign n-number of GPUs to a container
-		assignedDevices, err := s.containerCudaManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
+		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to assign GPUs: %v", err)
 			return
