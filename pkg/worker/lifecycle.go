@@ -577,7 +577,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}
-		} else if resp.State.Status == string(types.ContainerStatusStopping) {
+		} else if err == nil && resp.State.Status == string(types.ContainerStatusStopping) {
 			log.Info().Str("container_id", containerId).Msg("container should be stopping, force killing")
 			s.stopContainer(containerId, true)
 			return
