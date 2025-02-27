@@ -321,6 +321,12 @@ def override_config_options(func: click.Command):
         multiple=True,
         help="Environment variables to pass to the container (e.g. --env VAR1=value --env VAR2=value).",
     )(f)
+    f = click.option(
+        "--keep-warm-seconds",
+        type=click.INT,
+        help="The number of seconds to keep the container up after the last request (e.g. --keep-warm-seconds 600).",
+        required=False,
+    )(f)
     return f
 
 

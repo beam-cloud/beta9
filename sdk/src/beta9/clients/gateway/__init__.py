@@ -613,11 +613,13 @@ class ExportWorkspaceConfigRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class ExportWorkspaceConfigResponse(betterproto.Message):
-    gateway_http_url: str = betterproto.string_field(1)
+    gateway_http_host: str = betterproto.string_field(1)
     gateway_http_port: int = betterproto.int32_field(2)
-    gateway_grpc_url: str = betterproto.string_field(3)
-    gateway_grpc_port: int = betterproto.int32_field(4)
-    workspace_id: str = betterproto.string_field(5)
+    gateway_http_tls: bool = betterproto.bool_field(3)
+    gateway_grpc_host: str = betterproto.string_field(4)
+    gateway_grpc_port: int = betterproto.int32_field(5)
+    gateway_grpc_tls: bool = betterproto.bool_field(6)
+    workspace_id: str = betterproto.string_field(7)
 
 
 class GatewayServiceStub(SyncServiceStub):

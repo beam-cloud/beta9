@@ -43,6 +43,8 @@ func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.Autoscal
 	if i.Stub.Type == types.StubType(types.StubTypePodRun) {
 		if s.CurrentContainers == 0 {
 			desiredContainers = 0
+		} else if s.CurrentContainers > 0 && i.StubConfig.KeepWarmSeconds > 0 {
+			desiredContainers = 0
 		}
 	}
 

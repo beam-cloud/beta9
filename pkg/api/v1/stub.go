@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -114,8 +115,16 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 	}
 
 	// Get URL for Serves
-	if stub.Type.IsServe() {
+	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell {
 		invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub)
+		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
+	} else if stub.Type.Kind() == types.StubTypePod {
+		stubConfig := &types.StubConfigV1{}
+		if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+			return HTTPInternalServerError("Failed to decode stub config")
+		}
+
+		invokeUrl := common.BuildPodURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub, stubConfig)
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
 

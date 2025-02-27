@@ -430,10 +430,11 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 			},
 			ProgressChan: progressChan,
 		}, &clipCommon.S3StorageInfo{
-			Bucket:   c.config.ImageService.Registries.S3.BucketName,
-			Region:   c.config.ImageService.Registries.S3.Region,
-			Endpoint: c.config.ImageService.Registries.S3.Endpoint,
-			Key:      fmt.Sprintf("%s.clip", imageId),
+			Bucket:         c.config.ImageService.Registries.S3.BucketName,
+			Region:         c.config.ImageService.Registries.S3.Region,
+			Endpoint:       c.config.ImageService.Registries.S3.Endpoint,
+			Key:            fmt.Sprintf("%s.clip", imageId),
+			ForcePathStyle: c.config.ImageService.Registries.S3.ForcePathStyle,
 		})
 	case common.LocalImageRegistryStore:
 		err = clip.CreateArchive(clip.CreateOptions{
