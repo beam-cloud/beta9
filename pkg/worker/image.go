@@ -13,6 +13,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/registry"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -63,7 +64,7 @@ func getImageMountPath(workerId string) string {
 }
 
 type ImageClient struct {
-	registry           *common.ImageRegistry
+	registry           *registry.ImageRegistry
 	cacheClient        *blobcache.BlobCacheClient
 	imageCachePath     string
 	imageMountPath     string
@@ -78,7 +79,7 @@ type ImageClient struct {
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
-	registry, err := common.NewImageRegistry(config)
+	registry, err := registry.NewImageRegistry(config)
 	if err != nil {
 		return nil, err
 	}
@@ -453,7 +454,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 
 	var err error = nil
 	switch c.config.ImageService.RegistryStore {
-	case common.S3ImageRegistryStore:
+	case registry.S3ImageRegistryStore:
 		err = clip.CreateAndUploadArchive(ctx, clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
@@ -471,7 +472,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 			Key:            fmt.Sprintf("%s.clip", imageId),
 			ForcePathStyle: c.config.ImageService.Registries.S3.ForcePathStyle,
 		})
-	case common.LocalImageRegistryStore:
+	case registry.LocalImageRegistryStore:
 		err = clip.CreateArchive(clip.CreateOptions{
 			InputPath:  bundlePath,
 			OutputPath: archivePath,
