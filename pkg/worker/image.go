@@ -104,7 +104,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 	return c, nil
 }
 
-func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
+func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) error {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
@@ -126,7 +126,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 
 		// If the image archive is already cached in memory (in blobcache), then we can use that as the local cache path
 		baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
+		if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
 			localCachePath = baseBlobFsContentPath
 		} else {
 			c.logger.Log(request.ContainerId, request.StubId, "image <%s> not found in cache, caching nearby", imageId)
