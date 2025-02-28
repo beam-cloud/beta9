@@ -20,6 +20,8 @@ const (
 	metricImageCopySpeed            = "worker_image_copy_speed_mbps"
 	metricImageArchiveSpeed         = "worker_image_archive_speed_mbps"
 	metricImagePushSpeed            = "worker_image_push_speed_mbps"
+	metricS3PutSpeed                = "s3_put_speed_mbps"
+	metricS3GetSpeed                = "s3_get_speed_mbps"
 )
 
 type MetricsRepository struct {
@@ -107,4 +109,12 @@ func (m *MetricsRepository) RecordImageArchiveSpeed(sizeInMB float64, duration t
 
 func (m *MetricsRepository) RecordImagePushSpeed(sizeInMB float64, duration time.Duration) {
 	m.set.GetOrCreateHistogram(metricImagePushSpeed).Update(sizeInMB / duration.Seconds())
+}
+
+func (m *MetricsRepository) RecordS3PutSpeed(sizeInMB float64, duration time.Duration) {
+	m.set.GetOrCreateHistogram(metricS3PutSpeed).Update(sizeInMB / duration.Seconds())
+}
+
+func (m *MetricsRepository) RecordS3GetSpeed(sizeInMB float64, duration time.Duration) {
+	m.set.GetOrCreateHistogram(metricS3GetSpeed).Update(sizeInMB / duration.Seconds())
 }

@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/beam-cloud/beta9/pkg/common"
+	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -80,8 +82,9 @@ type ObjectStore interface {
 }
 
 type S3Store struct {
-	client *s3.Client
-	config types.S3ImageRegistryConfig
+	client  *s3.Client
+	config  types.S3ImageRegistryConfig
+	metrics *repo.MetricsRepository
 }
 
 func NewS3Store(config types.AppConfig) (*S3Store, error) {
@@ -96,11 +99,13 @@ func NewS3Store(config types.AppConfig) (*S3Store, error) {
 				o.UsePathStyle = true
 			}
 		}),
-		config: config.ImageService.Registries.S3,
+		config:  config.ImageService.Registries.S3,
+		metrics: repo.NewMetricsRepository(config.Monitoring.VictoriaMetrics),
 	}, nil
 }
 
 func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
+	start := time.Now()
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
@@ -118,10 +123,19 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 		return err
 	}
 
+	info, err := os.Stat(localPath)
+	if err != nil {
+		log.Error().Str("key", key).Err(err).Msg("error getting file size")
+		return err
+	}
+	sizeMB := float64(info.Size()) / 1024 / 1024
+
+	s.metrics.RecordS3PutSpeed(sizeMB, time.Since(start))
 	return nil
 }
 
 func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
+	start := time.Now()
 	tmpLocalPath := fmt.Sprintf("%s.%s", localPath, uuid.New().String()[:6])
 
 	f, err := os.Create(tmpLocalPath)
@@ -151,6 +165,14 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 	if err != nil {
 		return err
 	}
+
+	info, err := os.Stat(localPath)
+	if err != nil {
+		log.Error().Str("key", key).Err(err).Msg("error getting file size")
+		return err
+	}
+	sizeMB := float64(info.Size()) / 1024 / 1024
+	s.metrics.RecordS3GetSpeed(sizeMB, time.Since(start))
 
 	return nil
 }
