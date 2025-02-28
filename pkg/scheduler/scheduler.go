@@ -29,11 +29,12 @@ type Scheduler struct {
 	containerRepo     repo.ContainerRepository
 	workspaceRepo     repo.WorkspaceRepository
 	eventRepo         repo.EventRepository
-	schedulerMetrics  SchedulerMetrics
+	schedulerUsage    SchedulerUsage
+	schedulerMetrics  *SchedulerMetrics
 	eventBus          *common.EventBus
 }
 
-func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.UsageRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
+func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
 	providerRepo := repo.NewProviderRedisRepository(redisClient)
@@ -41,7 +42,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 
-	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
+	schedulerUsage := NewSchedulerUsage(usageRepo)
+	schedulerMetrics := NewSchedulerMetrics(config.Monitoring.VictoriaMetrics)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	// Load worker pools
@@ -99,6 +101,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		workerPoolManager: workerPoolManager,
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
+		schedulerUsage:    schedulerUsage,
 		schedulerMetrics:  schedulerMetrics,
 		eventRepo:         eventRepo,
 		workspaceRepo:     workspaceRepo,
@@ -120,7 +123,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	go s.schedulerMetrics.CounterIncContainerRequested(request)
+	go s.schedulerUsage.CounterIncContainerRequested(request)
 	go s.eventRepo.PushContainerRequestedEvent(request)
 
 	quota, err := s.getConcurrencyLimit(request)
@@ -298,7 +301,12 @@ func (s *Scheduler) StartProcessingRequests() {
 		err = s.scheduleRequest(worker, request)
 		if err != nil {
 			s.addRequestToBacklog(request)
+			continue
 		}
+
+		// Record the request processing duration
+		schedulingDuration := time.Since(request.Timestamp)
+		s.schedulerMetrics.RecordRequestSchedulingDuration(schedulingDuration, request)
 	}
 }
 
@@ -309,7 +317,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	request.Gpu = worker.Gpu
 
-	go s.schedulerMetrics.CounterIncContainerScheduled(request)
+	go s.schedulerUsage.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
@@ -464,6 +472,8 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		request.RetryCount++
 		return s.requestBacklog.Push(request)
 	}
+
+	go s.schedulerMetrics.RecordRequestRetry(request)
 
 	// TODO: add some sort of signaling mechanism to alert the caller if the request failed to be pushed to the requestBacklog
 	go func() {

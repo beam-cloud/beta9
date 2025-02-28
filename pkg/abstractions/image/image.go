@@ -48,7 +48,7 @@ func NewRuncImageService(
 	ctx context.Context,
 	opts ImageServiceOpts,
 ) (ImageService, error) {
-	registry, err := common.NewImageRegistry(opts.Config.ImageService)
+	registry, err := common.NewImageRegistry(opts.Config)
 	if err != nil {
 		return nil, err
 	}

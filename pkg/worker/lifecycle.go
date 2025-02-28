@@ -192,7 +192,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Attempt to pull image
 	log.Info().Str("container_id", containerId).Msgf("lazy-pulling image: %s", request.ImageId)
-	if err := s.imageClient.PullLazy(request); err != nil {
+	if err := s.imageClient.PullLazy(ctx, request); err != nil {
 		if !request.IsBuildRequest() {
 			return err
 		}
@@ -305,7 +305,7 @@ func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.Contai
 	}
 
 	// Try pull again after building or pulling the source image
-	return s.imageClient.PullLazy(request)
+	return s.imageClient.PullLazy(ctx, request)
 }
 
 func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.Spec, error) {

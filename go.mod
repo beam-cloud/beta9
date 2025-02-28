@@ -7,6 +7,7 @@ require (
 	buf.build/gen/go/cedana/task/protocolbuffers/go v1.35.2-20241203191352-12c25eb032cd.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
+	github.com/VictoriaMetrics/metrics v1.35.2
 	github.com/alicebob/miniredis/v2 v2.30.5
 	github.com/aws/aws-sdk-go-v2 v1.30.1
 	github.com/aws/aws-sdk-go-v2/config v1.27.24
@@ -15,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.51.4
-	github.com/beam-cloud/blobcache-v2 v0.0.0-20250204202524-80d61da9a0f8
+	github.com/beam-cloud/blobcache-v2 v0.0.0-20250228205214-56d9a36849c3
 	github.com/beam-cloud/clip v0.0.0-20250227144326-ae5059cbff20
 	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -255,7 +256,9 @@ require (
 	github.com/ulikunitz/xz v0.5.12 // indirect
 	github.com/urfave/cli v1.22.14 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
+	github.com/valyala/histogram v1.2.0 // indirect
 	github.com/vbatts/go-mtree v0.5.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xeonx/timeago v1.0.0-rc5 // indirect

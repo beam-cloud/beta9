@@ -13,6 +13,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
@@ -29,8 +30,9 @@ import (
 )
 
 const (
-	imageBundlePath string = "/dev/shm/images"
-	imageTmpDir     string = "/tmp"
+	imageBundlePath    string = "/dev/shm/images"
+	imageTmpDir        string = "/tmp"
+	metricsSourceLabel        = "image_client"
 )
 
 var (
@@ -72,10 +74,11 @@ type ImageClient struct {
 	workerId           string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
+	metrics            *metrics.MetricsRegistry
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
-	registry, err := common.NewImageRegistry(config.ImageService)
+	registry, err := common.NewImageRegistry(config)
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +97,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
+		metrics: metrics.NewMetricsRegistry(config.Monitoring.VictoriaMetrics, metricsSourceLabel),
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
@@ -104,7 +108,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 	return c, nil
 }
 
-func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
+func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) error {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
@@ -126,7 +130,7 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 
 		// If the image archive is already cached in memory (in blobcache), then we can use that as the local cache path
 		baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-		if _, err := os.Stat(baseBlobFsContentPath); err == nil {
+		if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.PathContentLocal(ctx, "/"+sourcePath) {
 			localCachePath = baseBlobFsContentPath
 		} else {
 			c.logger.Log(request.ContainerId, request.StubId, "image <%s> not found in cache, caching nearby", imageId)
@@ -140,9 +144,11 @@ func (c *ImageClient) PullLazy(request *types.ContainerRequest) error {
 			}
 		}
 	}
+	log.Info().Str("local_cache_path", localCachePath).Msg("local cache path")
 
 	elapsed := time.Since(startTime)
 	c.logger.Log(request.ContainerId, request.StubId, "Loaded image <%s>, took: %s", imageId, elapsed)
+	c.metrics.GetOrCreateHistogram("image_pull_time").Update(elapsed.Seconds())
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 	if _, err := os.Stat(remoteArchivePath); err != nil {
@@ -252,6 +258,7 @@ func (c *ExecWriter) Write(p []byte) (n int, err error) {
 
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	outputLogger.Info("Building image from Dockerfile\n")
+	startTime := time.Now()
 
 	buildCtxPath, err := getBuildContext(request)
 	if err != nil {
@@ -293,7 +300,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if err != nil {
 		return err
 	}
+	ociImageInfo, err := os.Stat(ociPath)
+	if err != nil {
+		log.Warn().Err(err).Msg("unable to inspect image size")
+	}
+	ociImageMB := float64(ociImageInfo.Size()) / 1024 / 1024
+	c.metrics.GetOrCreateHistogram("image_build_speed_mbps").Update(ociImageMB / float64(time.Since(startTime).Seconds()))
 
+	startTime = time.Now()
 	engine, err := dir.Open(ociPath)
 	if err != nil {
 		return err
@@ -318,7 +332,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 	}
 
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
+	bundleInfo, err := os.Stat(tmpBundlePath)
+	if err != nil {
+		log.Warn().Err(err).Msg("unable to inspect image size")
+	}
+	bundleMB := float64(bundleInfo.Size()) / 1024 / 1024
+	c.metrics.GetOrCreateHistogram("image_unpack_speed_mbps").Update(bundleMB / float64(time.Since(startTime).Seconds()))
+
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, bundleMB)
 	if err != nil {
 		return err
 	}
@@ -345,30 +366,43 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
 
-	outputLogger.Info("Copying image...\n")
+	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
+	if err != nil {
+		log.Warn().Err(err).Msg("unable to inspect image size")
+	}
+	imageMB := float64(imageBytes) / 1024 / 1024
+
+	outputLogger.Info(fmt.Sprintf("Copying image (size: %.2f MB)...\n", imageMB))
+	startTime := time.Now()
 	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds)
 	if err != nil {
 		return err
 	}
+	c.metrics.GetOrCreateHistogram("image_copy_speed_mbps").Update(imageMB / float64(time.Since(startTime).Seconds()))
 
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := filepath.Join(baseTmpBundlePath, request.ImageId)
-	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
+	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath, imageMB)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
-
 	defer os.RemoveAll(baseTmpBundlePath)
 	defer os.RemoveAll(copyDir)
 
 	outputLogger.Info("Archiving base image...\n")
-	return c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, imageMB)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImageTag string, bundlePath string) error {
+func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImageTag string, bundlePath string, imageMB float64) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	startTime := time.Now()
 
 	unpackOptions := umociUnpackOptions()
 
@@ -398,11 +432,12 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 		return os.Rename(tmpBundlePath, bundlePath)
 	}
 
+	c.metrics.GetOrCreateHistogram("image_unpack_speed_mbps").Update(imageMB / float64(time.Since(startTime).Seconds()))
 	return err
 }
 
 // Generate and upload archived version of the image for distribution
-func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string, progressChan chan int) error {
+func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string, progressChan chan int, imageMB float64) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -448,6 +483,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 		return err
 	}
 	log.Info().Str("container_id", imageId).Dur("duration", time.Since(startTime)).Msg("container archive took")
+	c.metrics.GetOrCreateHistogram("image_archive_speed_mbps").Update(imageMB / float64(time.Since(startTime).Seconds()))
 
 	// Push the archive to a registry
 	startTime = time.Now()
@@ -458,6 +494,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}
 
 	log.Info().Str("image_id", imageId).Dur("duration", time.Since(startTime)).Msg("image push took")
+	c.metrics.GetOrCreateHistogram("image_push_speed_mbps").Update(imageMB / float64(time.Since(startTime).Seconds()))
 	return nil
 }
 

@@ -6,10 +6,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -28,15 +30,15 @@ type ImageRegistry struct {
 	ImageFileExtension string
 }
 
-func NewImageRegistry(config types.ImageServiceConfig) (*ImageRegistry, error) {
+func NewImageRegistry(config types.AppConfig) (*ImageRegistry, error) {
 	var err error
 	var store ObjectStore
 
 	var imageFileExtension string = localImageFileExtension
-	switch config.RegistryStore {
+	switch config.ImageService.RegistryStore {
 	case S3ImageRegistryStore:
 		imageFileExtension = remoteImageFileExtension
-		store, err = NewS3Store(config.Registries.S3)
+		store, err = NewS3Store(config)
 		if err != nil {
 			return nil, err
 		}
@@ -50,7 +52,7 @@ func NewImageRegistry(config types.ImageServiceConfig) (*ImageRegistry, error) {
 
 	return &ImageRegistry{
 		store:              store,
-		config:             config,
+		config:             config.ImageService,
 		ImageFileExtension: imageFileExtension,
 	}, nil
 }
@@ -78,28 +80,33 @@ type ObjectStore interface {
 	Size(ctx context.Context, key string) (int64, error)
 }
 
-func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
-	cfg, err := GetAWSConfig(config.AccessKey, config.SecretKey, config.Region, config.Endpoint)
+func NewS3Store(config types.AppConfig) (*S3Store, error) {
+	cfg, err := GetAWSConfig(config.ImageService.Registries.S3.AccessKey, config.ImageService.Registries.S3.SecretKey, config.ImageService.Registries.S3.Region, config.ImageService.Registries.S3.Endpoint)
 	if err != nil {
 		return nil, err
 	}
 
+	metricsRegistry := metrics.NewMetricsRegistry(config.Monitoring.VictoriaMetrics, "object_store")
+
 	return &S3Store{
 		client: s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if config.ForcePathStyle {
+			if config.ImageService.Registries.S3.ForcePathStyle {
 				o.UsePathStyle = true
 			}
 		}),
-		config: config,
+		config:          config.ImageService.Registries.S3,
+		metricsRegistry: metricsRegistry,
 	}, nil
 }
 
 type S3Store struct {
-	client *s3.Client
-	config types.S3ImageRegistryConfig
+	client          *s3.Client
+	config          types.S3ImageRegistryConfig
+	metricsRegistry *metrics.MetricsRegistry
 }
 
 func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
+	start := time.Now()
 	f, err := os.Open(localPath)
 	if err != nil {
 		return err
@@ -116,6 +123,16 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 		log.Error().Str("key", key).Err(err).Msg("error uploading image to registry")
 		return err
 	}
+
+	go func() {
+		info, err := os.Stat(localPath)
+		if err != nil {
+			log.Error().Str("key", key).Err(err).Msg("error getting file size")
+			return
+		}
+		sizeMB := float64(info.Size()) / 1024 / 1024
+		s.metricsRegistry.GetOrCreateHistogram("s3_upload_speed_mbps").Update(sizeMB / time.Since(start).Seconds())
+	}()
 
 	return nil
 }

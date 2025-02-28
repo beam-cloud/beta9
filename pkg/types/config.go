@@ -412,13 +412,21 @@ var (
 )
 
 type MonitoringConfig struct {
-	MetricsCollector         string           `key:"metricsCollector" json:"metrics_collector"`
-	Prometheus               PrometheusConfig `key:"prometheus" json:"prometheus"`
-	OpenMeter                OpenMeterConfig  `key:"openmeter" json:"openmeter"`
-	FluentBit                FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
-	Telemetry                TelemetryConfig  `key:"telemetry" json:"telemetry"`
-	ContainerMetricsInterval time.Duration    `key:"containerMetricsInterval" json:"container_metrics_interval"`
+	MetricsCollector         string                `key:"metricsCollector" json:"metrics_collector"`
+	Prometheus               PrometheusConfig      `key:"prometheus" json:"prometheus"`
+	OpenMeter                OpenMeterConfig       `key:"openmeter" json:"openmeter"`
+	FluentBit                FluentBitConfig       `key:"fluentbit" json:"fluentbit"`
+	Telemetry                TelemetryConfig       `key:"telemetry" json:"telemetry"`
+	ContainerMetricsInterval time.Duration         `key:"containerMetricsInterval" json:"container_metrics_interval"`
+	VictoriaMetrics          VictoriaMetricsConfig `key:"victoriametrics" json:"victoriametrics"`
 }
+
+type VictoriaMetricsConfig struct {
+	PushURL   string `key:"pushURL" json:"push_url"`
+	AuthToken string `key:"authToken" json:"auth_token"`
+	PushSecs  int    `key:"pushSecs" json:"push_secs"`
+}
+
 type PrometheusConfig struct {
 	AgentUrl      string `key:"agentUrl" json:"agent_url"`
 	AgentUsername string `key:"agentUsername" json:"agent_username"`
