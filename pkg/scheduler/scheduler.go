@@ -30,7 +30,7 @@ type Scheduler struct {
 	workspaceRepo     repo.WorkspaceRepository
 	eventRepo         repo.EventRepository
 	schedulerUsage    SchedulerUsage
-	schedulerMetrics  *SchedulerMetrics
+	metrics           *repo.MetricsRepository
 	eventBus          *common.EventBus
 }
 
@@ -43,7 +43,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 
 	schedulerUsage := NewSchedulerUsage(usageRepo)
-	schedulerMetrics := NewSchedulerMetrics(config.Monitoring.VictoriaMetrics)
+	metrics := repo.NewMetricsRepository(config.Monitoring.VictoriaMetrics)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	// Load worker pools
@@ -102,7 +102,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
 		schedulerUsage:    schedulerUsage,
-		schedulerMetrics:  schedulerMetrics,
+		metrics:           metrics,
 		eventRepo:         eventRepo,
 		workspaceRepo:     workspaceRepo,
 	}, nil
@@ -306,7 +306,7 @@ func (s *Scheduler) StartProcessingRequests() {
 
 		// Record the request processing duration
 		schedulingDuration := time.Since(request.Timestamp)
-		s.schedulerMetrics.RecordRequestSchedulingDuration(schedulingDuration, request)
+		s.metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
 	}
 }
 
@@ -473,7 +473,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		return s.requestBacklog.Push(request)
 	}
 
-	go s.schedulerMetrics.RecordRequestRetry(request)
+	go s.metrics.RecordRequestRetry(request)
 
 	// TODO: add some sort of signaling mechanism to alert the caller if the request failed to be pushed to the requestBacklog
 	go func() {
