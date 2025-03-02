@@ -438,9 +438,18 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 
 		if m.LinkPath != "" {
-			err = forceSymlink(m.MountPath, m.LinkPath)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("unable to symlink volume: %v", err)
+			if !strings.HasPrefix(m.LinkPath, types.DefaultExtractedObjectPath) {
+				spec.Mounts = append(spec.Mounts, specs.Mount{
+					Type:        "none",
+					Source:      m.LocalPath,
+					Destination: m.LinkPath,
+					Options:     []string{"rbind", mode},
+				})
+			} else {
+				err = forceSymlink(m.MountPath, m.LinkPath)
+				if err != nil {
+					log.Error().Str("container_id", request.ContainerId).Msgf("unable to symlink volume: %v", err)
+				}
 			}
 		}
 
