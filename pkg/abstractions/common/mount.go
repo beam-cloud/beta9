@@ -30,9 +30,16 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 	}
 
 	for _, v := range config.Volumes {
+		var linkPath string
+		if path.IsAbs(v.MountPath) {
+			linkPath = v.MountPath
+		} else {
+			linkPath = path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath)
+		}
+
 		mount := types.Mount{
 			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
-			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath),
+			LinkPath:  linkPath,
 			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
 			ReadOnly:  false,
 		}

@@ -15,7 +15,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
-from ..abstractions.volume import Volume
+from ..abstractions.volume import CloudBucket, Volume
 from ..channel import with_grpc_error_handling
 from ..clients.function import (
     FunctionInvokeRequest,
@@ -56,8 +56,8 @@ class Function(RunnerAbstraction):
             The maximum number of times a task will be retried if the container crashes. Default is 3.
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
-        volumes (Optional[List[Volume]]):
-            A list of storage volumes to be associated with the function. Default is [].
+        volumes (Optional[List[Union[Volume, CloudBucket]]]):
+            A list of volumes to be mounted to the function. Default is [].
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
         env (Optional[Dict[str, str]]):
@@ -99,7 +99,7 @@ class Function(RunnerAbstraction):
         timeout: int = 3600,
         retries: int = 3,
         callback_url: Optional[str] = None,
-        volumes: Optional[List[Volume]] = None,
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
@@ -284,7 +284,7 @@ class ScheduleWrapper(_CallableWrapper):
             next_run_utc = cron_utc.get_next(datetime)
             terminal.print(
                 (
-                    f"  [bright_white]{i+1}.[/bright_white] {next_run_utc:%Y-%m-%d %H:%M:%S %Z} "
+                    f"  [bright_white]{i + 1}.[/bright_white] {next_run_utc:%Y-%m-%d %H:%M:%S %Z} "
                     f"({next_run:%Y-%m-%d %H:%M:%S} {local_tz})"
                 )
             )
@@ -318,8 +318,8 @@ class Schedule(Function):
             The maximum number of times a task will be retried if the container crashes. Default is 3.
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
-        volumes (Optional[List[Volume]]):
-            A list of storage volumes to be associated with the function. Default is [].
+        volumes (Optional[List[Union[Volume, CloudBucket]]]):
+            A list of volumes to be mounted to the function. Default is [].
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
         env (Optional[Dict[str, str]]):
@@ -359,7 +359,7 @@ class Schedule(Function):
         timeout: int = 3600,
         retries: int = 3,
         callback_url: Optional[str] = None,
-        volumes: Optional[List[Volume]] = None,
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,

@@ -12,7 +12,7 @@ from watchdog.observers import Observer
 from ... import terminal
 from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
-from ...abstractions.volume import Volume
+from ...abstractions.volume import CloudBucket, Volume
 from ...clients.gateway import Autoscaler as AutoscalerProto
 from ...clients.gateway import (
     GatewayServiceStub,
@@ -94,7 +94,7 @@ class RunnerAbstraction(BaseAbstraction):
         max_pending_tasks: int = 100,
         retries: int = 3,
         timeout: int = 3600,
-        volumes: Optional[List[Volume]] = None,
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         on_start: Optional[Callable] = None,

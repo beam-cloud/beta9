@@ -12,7 +12,7 @@ from ..abstractions.base.runner import (
     RunnerAbstraction,
 )
 from ..abstractions.image import Image
-from ..abstractions.volume import Volume
+from ..abstractions.volume import CloudBucket, Volume
 from ..channel import with_grpc_error_handling
 from ..clients.taskqueue import (
     StartTaskQueueServeRequest,
@@ -73,8 +73,8 @@ class TaskQueue(RunnerAbstraction):
             loading models, or anything else computationally expensive.
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
-        volumes (Optional[List[Volume]]):
-            A list of storage volumes to be associated with the taskqueue. Default is [].
+        volumes (Optional[List[Union[Volume, CloudBucket]]]):
+            A list of volumes to be mounted to the taskqueue. Default is None.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
         env (Optional[Dict[str, str]]):
@@ -127,7 +127,7 @@ class TaskQueue(RunnerAbstraction):
         on_start: Optional[Callable] = None,
         on_deploy: Optional[AbstractCallableWrapper] = None,
         callback_url: Optional[str] = None,
-        volumes: Optional[List[Volume]] = None,
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,

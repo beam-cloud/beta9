@@ -14,6 +14,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
@@ -59,7 +60,8 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 	return nil
 }
 
-func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.LogRecord) error {
+func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan chan common.LogRecord) error {
+	containerId := request.ContainerId
 	logFile, err := openLogFile(containerId)
 	if err != nil {
 		return err
@@ -80,9 +82,10 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 
 	limiter := rate.NewLimiter(rate.Limit(float64(r.logLinesPerHour)/3600.0), r.logLinesPerHour)
 	rateLimitMessageLogged := false
+	isBuildRequest := request.IsBuildRequest()
 
 	for o := range logChan {
-		if !limiter.Allow() {
+		if !isBuildRequest && !limiter.Allow() {
 			if !rateLimitMessageLogged {
 				log.Info().Str("container_id", containerId).Msg(rateLimitMsg)
 				f.WithFields(logrus.Fields{
