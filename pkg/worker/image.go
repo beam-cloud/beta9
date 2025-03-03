@@ -13,8 +13,8 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/registry"
-	repo "github.com/beam-cloud/beta9/pkg/repository"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
@@ -75,7 +75,6 @@ type ImageClient struct {
 	workerId           string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
-	workerMetrics      *repo.MetricsRepository
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
@@ -98,7 +97,6 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
-		workerMetrics: repo.NewMetricsRepository(config.Monitoring.VictoriaMetrics),
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
@@ -149,7 +147,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	elapsed := time.Since(startTime)
 	c.logger.Log(request.ContainerId, request.StubId, "Loaded image <%s>, took: %s", imageId, elapsed)
-	c.workerMetrics.RecordImagePullTime(elapsed)
+	metrics.RecordImagePullTime(elapsed)
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 	if _, err := os.Stat(remoteArchivePath); err != nil {
@@ -306,7 +304,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		log.Warn().Err(err).Msg("unable to inspect image size")
 	}
 	ociImageMB := float64(ociImageInfo.Size()) / 1024 / 1024
-	c.workerMetrics.RecordImageBuildSpeed(ociImageMB, time.Since(startTime))
+	metrics.RecordImageBuildSpeed(ociImageMB, time.Since(startTime))
 
 	startTime = time.Now()
 	engine, err := dir.Open(ociPath)
@@ -338,7 +336,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		log.Warn().Err(err).Msg("unable to inspect image size")
 	}
 	bundleMB := float64(bundleInfo.Size()) / 1024 / 1024
-	c.workerMetrics.RecordImageUnpackSpeed(bundleMB, time.Since(startTime))
+	metrics.RecordImageUnpackSpeed(bundleMB, time.Since(startTime))
 
 	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, bundleMB)
 	if err != nil {
@@ -379,7 +377,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	if err != nil {
 		return err
 	}
-	c.workerMetrics.RecordImageCopySpeed(imageMB, time.Since(startTime))
+	metrics.RecordImageCopySpeed(imageMB, time.Since(startTime))
 
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := filepath.Join(baseTmpBundlePath, request.ImageId)
@@ -433,7 +431,7 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 		return os.Rename(tmpBundlePath, bundlePath)
 	}
 
-	c.workerMetrics.RecordImageUnpackSpeed(imageMB, time.Since(startTime))
+	metrics.RecordImageUnpackSpeed(imageMB, time.Since(startTime))
 	return err
 }
 
@@ -484,7 +482,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 		return err
 	}
 	log.Info().Str("container_id", imageId).Dur("duration", time.Since(startTime)).Msg("container archive took")
-	c.workerMetrics.RecordImageArchiveSpeed(imageMB, time.Since(startTime))
+	metrics.RecordImageArchiveSpeed(imageMB, time.Since(startTime))
 
 	// Push the archive to a registry
 	startTime = time.Now()
@@ -495,7 +493,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}
 
 	log.Info().Str("image_id", imageId).Dur("duration", time.Since(startTime)).Msg("image push took")
-	c.workerMetrics.RecordImagePushSpeed(imageMB, time.Since(startTime))
+	metrics.RecordImagePushSpeed(imageMB, time.Since(startTime))
 	return nil
 }
 

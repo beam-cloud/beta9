@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -30,7 +31,6 @@ type Scheduler struct {
 	workspaceRepo     repo.WorkspaceRepository
 	eventRepo         repo.EventRepository
 	schedulerUsage    SchedulerUsage
-	metrics           *repo.MetricsRepository
 	eventBus          *common.EventBus
 }
 
@@ -43,7 +43,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 
 	schedulerUsage := NewSchedulerUsage(usageRepo)
-	metrics := repo.NewMetricsRepository(config.Monitoring.VictoriaMetrics)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	// Load worker pools
@@ -102,7 +101,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		requestBacklog:    requestBacklog,
 		containerRepo:     containerRepo,
 		schedulerUsage:    schedulerUsage,
-		metrics:           metrics,
 		eventRepo:         eventRepo,
 		workspaceRepo:     workspaceRepo,
 	}, nil
@@ -306,7 +304,7 @@ func (s *Scheduler) StartProcessingRequests() {
 
 		// Record the request processing duration
 		schedulingDuration := time.Since(request.Timestamp)
-		s.metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
+		metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
 	}
 }
 
@@ -473,7 +471,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		return s.requestBacklog.Push(request)
 	}
 
-	go s.metrics.RecordRequestRetry(request)
+	go metrics.RecordRequestRetry(request)
 
 	// TODO: add some sort of signaling mechanism to alert the caller if the request failed to be pushed to the requestBacklog
 	go func() {

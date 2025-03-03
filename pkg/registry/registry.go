@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/beam-cloud/beta9/pkg/common"
-	repo "github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -82,9 +82,8 @@ type ObjectStore interface {
 }
 
 type S3Store struct {
-	client  *s3.Client
-	config  types.S3ImageRegistryConfig
-	metrics *repo.MetricsRepository
+	client *s3.Client
+	config types.S3ImageRegistryConfig
 }
 
 func NewS3Store(config types.AppConfig) (*S3Store, error) {
@@ -99,8 +98,7 @@ func NewS3Store(config types.AppConfig) (*S3Store, error) {
 				o.UsePathStyle = true
 			}
 		}),
-		config:  config.ImageService.Registries.S3,
-		metrics: repo.NewMetricsRepository(config.Monitoring.VictoriaMetrics),
+		config: config.ImageService.Registries.S3,
 	}, nil
 }
 
@@ -130,7 +128,7 @@ func (s *S3Store) Put(ctx context.Context, localPath string, key string) error {
 	}
 	sizeMB := float64(info.Size()) / 1024 / 1024
 
-	s.metrics.RecordS3PutSpeed(sizeMB, time.Since(start))
+	metrics.RecordS3PutSpeed(sizeMB, time.Since(start))
 	return nil
 }
 
@@ -172,7 +170,7 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 		return err
 	}
 	sizeMB := float64(info.Size()) / 1024 / 1024
-	s.metrics.RecordS3GetSpeed(sizeMB, time.Since(start))
+	metrics.RecordS3GetSpeed(sizeMB, time.Since(start))
 
 	return nil
 }
