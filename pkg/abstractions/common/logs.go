@@ -12,6 +12,10 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+const (
+	flushTimeout = 1 * time.Second
+)
+
 type LogStreamOpts struct {
 	SendCallback    func(o common.OutputMsg) error
 	ExitCallback    func(exitCode int32) error
@@ -95,6 +99,25 @@ _stream:
 			exitCode, err := l.containerRepo.GetContainerExitCode(containerId)
 			if err != nil {
 				exitCode = -1
+			}
+
+			// After the container exits, flush remaining logs for up to flushTimeout seconds
+			flushLogsTimer := time.NewTimer(flushTimeout)
+			defer flushLogsTimer.Stop()
+
+		_flush:
+			for {
+				select {
+				case o, ok := <-outputChan:
+					if !ok {
+						break _flush
+					}
+					if err := l.sendCallback(o); err != nil {
+						break
+					}
+				case <-flushLogsTimer.C:
+					break _flush
+				}
 			}
 
 			if err := l.exitCallback(int32(exitCode)); err != nil {
