@@ -132,6 +132,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
 			localCachePath = baseBlobFsContentPath
 		} else {
+			pullStartTime := time.Now()
 			c.logger.Log(request.ContainerId, request.StubId, "image <%s> not found in cache, caching nearby", imageId)
 
 			// Otherwise, lets cache it in a nearby blobcache host
@@ -141,13 +142,13 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			} else {
 				c.logger.Log(request.ContainerId, request.StubId, "unable to cache image nearby <%s>: %v\n", imageId, err)
 			}
+			metrics.RecordImagePullTime(time.Since(pullStartTime))
 		}
 	}
 	log.Info().Str("local_cache_path", localCachePath).Msg("local cache path")
 
 	elapsed := time.Since(startTime)
 	c.logger.Log(request.ContainerId, request.StubId, "Loaded image <%s>, took: %s", imageId, elapsed)
-	metrics.RecordImagePullTime(elapsed)
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 	if _, err := os.Stat(remoteArchivePath); err != nil {
