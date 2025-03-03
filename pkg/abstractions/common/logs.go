@@ -113,7 +113,7 @@ _stream:
 						break _flush
 					}
 					if err := l.sendCallback(o); err != nil {
-						break
+						break _flush
 					}
 				case <-flushLogsTimer.C:
 					break _flush
