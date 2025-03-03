@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	flushTimeout = 1 * time.Second
+	flushLogsTimeout = 1 * time.Second
 )
 
 type LogStreamOpts struct {
@@ -101,8 +101,8 @@ _stream:
 				exitCode = -1
 			}
 
-			// After the container exits, flush remaining logs for up to flushTimeout seconds
-			flushLogsTimer := time.NewTimer(flushTimeout)
+			// After the container exits, flush remaining logs for up to flushLogsTimeout seconds
+			flushLogsTimer := time.NewTimer(flushLogsTimeout)
 			defer flushLogsTimer.Stop()
 
 		_flush:
