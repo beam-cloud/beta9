@@ -93,7 +93,7 @@ class Pod(RunnerAbstraction):
             specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
-        volumes (Optional[List[Volume, CloudBucket]]):
+        volumes (Optional[List[Union[Volume, CloudBucket]]]):
             A list of volumes and/or cloud buckets to be mounted to the pod. Default is None.
         secrets (Optional[List[str]):
             A list of secrets that are injected into the pod as environment variables. Default is [].
@@ -129,7 +129,7 @@ class Pod(RunnerAbstraction):
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(),
-        volumes: Optional[List[Volume, CloudBucket]] = None,
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         keep_warm_seconds: int = 600,

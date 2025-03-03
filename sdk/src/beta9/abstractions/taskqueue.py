@@ -73,7 +73,7 @@ class TaskQueue(RunnerAbstraction):
             loading models, or anything else computationally expensive.
         callback_url (Optional[str]):
             An optional URL to send a callback to when a task is completed, timed out, or cancelled.
-        volumes (Optional[List[Volume, CloudBucket]]):
+        volumes (Optional[List[Union[Volume, CloudBucket]]]):
             A list of storage volumes and/or cloud buckets to be associated with the taskqueue. Default is [].
         secrets (Optional[List[str]):
             A list of secrets that are injected into the container as environment variables. Default is [].
@@ -127,7 +127,7 @@ class TaskQueue(RunnerAbstraction):
         on_start: Optional[Callable] = None,
         on_deploy: Optional[AbstractCallableWrapper] = None,
         callback_url: Optional[str] = None,
-        volumes: Optional[List[Volume, CloudBucket]] = None,
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,

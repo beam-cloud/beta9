@@ -52,7 +52,7 @@ class Endpoint(RunnerAbstraction):
             specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
-        volumes (Optional[List[Volume, CloudBucket]]):
+        volumes (Optional[List[Union[Volume, CloudBucket]]]):
             A list of volumes and/or cloud buckets to be mounted to the endpoint. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
@@ -127,7 +127,7 @@ class Endpoint(RunnerAbstraction):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         on_deploy: Optional[AbstractCallableWrapper] = None,
-        volumes: Optional[List[Volume, CloudBucket]] = None,
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
@@ -192,7 +192,7 @@ class ASGI(Endpoint):
             specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
-        volumes (Optional[List[Volume, CloudBucket]]):
+        volumes (Optional[List[Union[Volume, CloudBucket]]]):
             A list of volumes and/or cloud buckets to be mounted to the ASGI application. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
@@ -283,7 +283,7 @@ class ASGI(Endpoint):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         on_deploy: Optional[AbstractCallableWrapper] = None,
-        volumes: Optional[List[Volume, CloudBucket]] = None,
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
@@ -341,7 +341,7 @@ class RealtimeASGI(ASGI):
             specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
-        volumes (Optional[List[Volume, CloudBucket]]):
+        volumes (Optional[List[Union[Volume, CloudBucket]]]):
             A list of volumes and/or cloud buckets to be mounted to the ASGI application. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
@@ -418,7 +418,7 @@ class RealtimeASGI(ASGI):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         on_deploy: Optional[AbstractCallableWrapper] = None,
-        volumes: Optional[List[Volume, CloudBucket]] = None,
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,

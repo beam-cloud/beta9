@@ -172,7 +172,7 @@ class VLLM(ASGI):
             Whether the endpoints require authorization. Default is True.
         name (str):
             The name of the container. Default is none, which means you must provide it during deployment.
-        volumes (List[Volume, CloudBucket]):
+        volumes (List[Union[Volume, CloudBucket]]):
             The volumes and/or cloud buckets to mount into the container. Default is a single volume named "vllm_cache" mounted to "./vllm_cache".
             It is used as the download directory for vLLM models.
         secrets (List[str]):
@@ -208,7 +208,7 @@ class VLLM(ASGI):
         timeout: int = 3600,
         authorized: bool = True,
         name: Optional[str] = None,
-        volumes: Optional[List[Volume, CloudBucket]] = [],
+        volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         vllm_args: VLLMArgs = VLLMArgs(),
