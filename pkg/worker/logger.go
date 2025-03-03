@@ -59,7 +59,7 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 	return nil
 }
 
-func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.LogRecord) error {
+func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.LogRecord, isBuildRequest bool) error {
 	logFile, err := openLogFile(containerId)
 	if err != nil {
 		return err
@@ -82,7 +82,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 	rateLimitMessageLogged := false
 
 	for o := range logChan {
-		if !limiter.Allow() {
+		if !isBuildRequest && !limiter.Allow() {
 			if !rateLimitMessageLogged {
 				log.Info().Str("container_id", containerId).Msg(rateLimitMsg)
 				f.WithFields(logrus.Fields{
