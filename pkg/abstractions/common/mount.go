@@ -30,12 +30,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 	}
 
 	for _, v := range config.Volumes {
-		var linkPath string
-		if path.IsAbs(v.MountPath) {
-			linkPath = v.MountPath
-		} else {
-			linkPath = path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath)
-		}
+		linkPath := path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath)
 
 		mount := types.Mount{
 			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
@@ -61,6 +56,19 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 			}
 			mount.LocalPath = path.Join(defaultExternalVolumesPath, workspace.Name, v.Id)
 			mount.MountType = storage.StorageModeMountPoint
+		}
+
+		// NOTE: This is a hack to support the case where the mount path is an absolute path.
+		// Currently, if a user specifies a mount path like '/my-mount-path', we're mounting it
+		// to <WORKDIR>/my-mount-path. This is not the desired behavior, so here we're adding an
+		// extra mount where the user would expect the mount path to be. For existing users, we will
+		// keep the existing behavior, but for new users that expect the mount path to be an absolute
+		// path, we will add an extra mount where would expect it to be.
+		if path.IsAbs(v.MountPath) {
+			rootMount := mount
+			rootMount.LinkPath = ""
+			rootMount.MountPath = v.MountPath
+			mounts = append(mounts, rootMount)
 		}
 
 		mounts = append(mounts, mount)
