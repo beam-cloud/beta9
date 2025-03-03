@@ -85,9 +85,9 @@ class CloudBucketConfig:
         read_only (bool):
             Whether the volume is read-only.
         access_key (str):
-            The S3 access key for the external provider.
+            The name of the beam secret containing the S3 access key for the external provider.
         secret_key (str):
-            The S3 secret key for the external provider.
+            The name of the beam secret containing the S3 secret key for the external provider.
         endpoint (Optional[str]):
             The S3 endpoint for the external provider.
         region (Optional[str]):
