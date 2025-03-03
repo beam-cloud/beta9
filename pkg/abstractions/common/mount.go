@@ -61,7 +61,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 		// to <WORKDIR>/my-mount-path. This is not the desired behavior, so here we're adding an
 		// extra mount where the user would expect the mount path to be. For existing users, we will
 		// keep the existing behavior, but for new users that expect the mount path to be an absolute
-		// path, we will add an extra mount where would expect it to be.
+		// path, we will add an extra mount where they would expect it to be.
 		if path.IsAbs(v.MountPath) {
 			rootMount := mount
 			rootMount.LinkPath = ""
