@@ -188,7 +188,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	outputLogger := slog.New(common.NewChannelHandler(logChan))
 
 	// Handle stdout/stderr
-	go s.containerLogger.CaptureLogs(containerId, logChan, request.IsBuildRequest())
+	go s.containerLogger.CaptureLogs(request, logChan)
 
 	// Attempt to pull image
 	log.Info().Str("container_id", containerId).Msgf("lazy-pulling image: %s", request.ImageId)

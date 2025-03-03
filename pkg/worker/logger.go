@@ -14,6 +14,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
@@ -59,8 +60,8 @@ func (r *ContainerLogger) Log(containerId, stubId string, format string, args ..
 	return nil
 }
 
-func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.LogRecord, isBuildRequest bool) error {
-	logFile, err := openLogFile(containerId)
+func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan chan common.LogRecord) error {
+	logFile, err := openLogFile(request.ContainerId)
 	if err != nil {
 		return err
 	}
@@ -73,7 +74,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 		TimestampFormat: time.RFC3339Nano,
 	})
 
-	instance, exists := r.containerInstances.Get(containerId)
+	instance, exists := r.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return errors.New("container not found")
 	}
@@ -82,11 +83,11 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 	rateLimitMessageLogged := false
 
 	for o := range logChan {
-		if !isBuildRequest && !limiter.Allow() {
+		if !request.IsBuildRequest() && !limiter.Allow() {
 			if !rateLimitMessageLogged {
-				log.Info().Str("container_id", containerId).Msg(rateLimitMsg)
+				log.Info().Str("container_id", request.ContainerId).Msg(rateLimitMsg)
 				f.WithFields(logrus.Fields{
-					"container_id": containerId,
+					"container_id": request.ContainerId,
 					"stub_id":      instance.StubId,
 				}).Info(rateLimitMsg)
 				instance.LogBuffer.Write([]byte(rateLimitMsg + "\n"))
@@ -117,7 +118,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 			msgDecoded = true
 
 			f.WithFields(logrus.Fields{
-				"container_id": containerId,
+				"container_id": request.ContainerId,
 				"task_id":      msg.TaskID,
 				"stub_id":      instance.StubId,
 			}).Info(msg.Message)
@@ -133,9 +134,9 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 				}
 
 				if msg.TaskID != nil {
-					log.Info().Str("container_id", containerId).Str("task_id", *msg.TaskID).Msg(line)
+					log.Info().Str("container_id", request.ContainerId).Str("task_id", *msg.TaskID).Msg(line)
 				} else {
-					log.Info().Str("container_id", containerId).Msg(line)
+					log.Info().Str("container_id", request.ContainerId).Msg(line)
 				}
 			}
 		}
@@ -143,7 +144,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 		// Fallback in case the message was not JSON
 		if !msgDecoded && o.Message != "" {
 			f.WithFields(logrus.Fields{
-				"container_id": containerId,
+				"container_id": request.ContainerId,
 				"stub_id":      instance.StubId,
 			}).Info(o.Message)
 
@@ -152,7 +153,7 @@ func (r *ContainerLogger) CaptureLogs(containerId string, logChan chan common.Lo
 					continue
 				}
 
-				log.Info().Str("container_id", containerId).Msg(line)
+				log.Info().Str("container_id", request.ContainerId).Msg(line)
 			}
 
 			// Write logs to in-memory log buffer as well
