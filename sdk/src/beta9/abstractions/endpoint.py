@@ -192,8 +192,8 @@ class ASGI(Endpoint):
             specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
-        volumes (Optional[List[Volume]]):
-            A list of volumes to be mounted to the ASGI application. Default is None.
+        volumes (Optional[List[Volume, CloudBucket]]):
+            A list of volumes and/or cloud buckets to be mounted to the ASGI application. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
             Default is 3600. Set it to -1 to disable the timeout.
@@ -283,7 +283,7 @@ class ASGI(Endpoint):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         on_deploy: Optional[AbstractCallableWrapper] = None,
-        volumes: Optional[List[Volume]] = None,
+        volumes: Optional[List[Volume, CloudBucket]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,
@@ -341,8 +341,8 @@ class RealtimeASGI(ASGI):
             specified but this value is set to 0, it will be automatically updated to 1.
         image (Union[Image, dict]):
             The container image used for the task execution. Default is [Image](#image).
-        volumes (Optional[List[Volume]]):
-            A list of volumes to be mounted to the ASGI application. Default is None.
+        volumes (Optional[List[Volume, CloudBucket]]):
+            A list of volumes and/or cloud buckets to be mounted to the ASGI application. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
             Default is 3600. Set it to -1 to disable the timeout.
@@ -418,7 +418,7 @@ class RealtimeASGI(ASGI):
         max_pending_tasks: int = 100,
         on_start: Optional[Callable] = None,
         on_deploy: Optional[AbstractCallableWrapper] = None,
-        volumes: Optional[List[Volume]] = None,
+        volumes: Optional[List[Volume, CloudBucket]] = None,
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         name: Optional[str] = None,

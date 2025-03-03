@@ -8,7 +8,7 @@ from ... import terminal
 from ...abstractions.base.runner import ASGI_DEPLOYMENT_STUB_TYPE, ASGI_SERVE_STUB_TYPE
 from ...abstractions.endpoint import ASGI
 from ...abstractions.image import Image
-from ...abstractions.volume import Volume
+from ...abstractions.volume import CloudBucket, Volume
 from ...channel import with_grpc_error_handling
 from ...clients.endpoint import (
     EndpointServeKeepAliveRequest,
@@ -172,8 +172,8 @@ class VLLM(ASGI):
             Whether the endpoints require authorization. Default is True.
         name (str):
             The name of the container. Default is none, which means you must provide it during deployment.
-        volumes (List[Volume]):
-            The volumes to mount into the container. Default is a single volume named "vllm_cache" mounted to "./vllm_cache".
+        volumes (List[Volume, CloudBucket]):
+            The volumes and/or cloud buckets to mount into the container. Default is a single volume named "vllm_cache" mounted to "./vllm_cache".
             It is used as the download directory for vLLM models.
         secrets (List[str]):
             The secrets to pass to the container. If you need huggingface authentication to download models, you should set HF_TOKEN in the secrets.
@@ -208,7 +208,7 @@ class VLLM(ASGI):
         timeout: int = 3600,
         authorized: bool = True,
         name: Optional[str] = None,
-        volumes: Optional[List[Volume]] = [],
+        volumes: Optional[List[Volume, CloudBucket]] = [],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         vllm_args: VLLMArgs = VLLMArgs(),
