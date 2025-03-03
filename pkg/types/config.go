@@ -17,7 +17,7 @@ type AppConfig struct {
 	Database       DatabaseConfig            `key:"database" json:"database"`
 	GatewayService GatewayServiceConfig      `key:"gateway" json:"gateway_service"`
 	FileService    FileServiceConfig         `key:"fileService" json:"file_service"`
-	ImageService   ImageServiceConfig        `key:"imageservice" json:"image_service"`
+	ImageService   ImageServiceConfig        `key:"imageService" json:"image_service"`
 	Storage        StorageConfig             `key:"storage" json:"storage"`
 	Worker         WorkerConfig              `key:"worker" json:"worker"`
 	Providers      ProviderConfig            `key:"providers" json:"providers"`
