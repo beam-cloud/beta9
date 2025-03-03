@@ -125,8 +125,8 @@ class CloudBucket(Volume):
                 name="other_model_weights",
                 mount_path="./other-weights",
                 config=CloudBucketConfig(
-                    access_key="my-access-key",
-                    secret_key="my-secret-key",
+                    access_key="MY_ACCESS_KEY_SECRET",
+                    secret_key="MY_SECRET_KEY_SECRET",
                     endpoint="https://s3-endpoint.com",
                 ),
             )
