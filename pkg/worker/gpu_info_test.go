@@ -68,3 +68,29 @@ func TestAvailableGPUDevicesAllVisibleDevices(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []int{0, 1, 2, 3, 4, 5, 6, 7}, devices)
 }
+
+func TestAvailableGPUDevicesWithNonZeroPCIDomains(t *testing.T) {
+	originalQueryDevices := queryDevices
+	defer func() { queryDevices = originalQueryDevices }()
+
+	originalCheckGPUExists := checkGPUExists
+	defer func() { checkGPUExists = originalCheckGPUExists }()
+
+	queryDevices = func() ([]byte, error) {
+		mockOutput := `0x0001, 00000001:00:1E.0, 0, GPU-afcdd0c4-4e05-0d70-b751-6ffb42883041`
+		return []byte(mockOutput), nil
+	}
+
+	checkGPUExists = func(busId string) (bool, error) {
+		// check format matches xxxx:xx:xx.x
+		assert.Equal(t, "0001:00:1e.0", busId)
+		return true, nil
+	}
+
+	client := &NvidiaInfoClient{}
+	os.Setenv("NVIDIA_VISIBLE_DEVICES", "all")
+
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Equal(t, []int{0}, devices)
+}
