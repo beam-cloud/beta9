@@ -191,7 +191,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	go s.containerLogger.CaptureLogs(request, logChan)
 
 	// Attempt to pull image
-	log.Info().Str("container_id", containerId).Msgf("lazy-pulling image: %s", request.ImageId)
+	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
 	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
 	if err != nil {
 		if !request.IsBuildRequest() {
