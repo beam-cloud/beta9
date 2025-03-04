@@ -309,7 +309,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}()
 	defer client.Kill(containerId) // Kill and remove container after the build completes
 
-	outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: "Waiting for build container to start...\n"}
+	outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: "Setting up build container...\n"}
 	start := time.Now()
 	buildContainerRunning := false
 
@@ -854,7 +854,7 @@ func tagOrDigest(digest string, tag string) string {
 
 func (b *Builder) calculateImageArchiveDuration(ctx context.Context, opts *BuildOpts) time.Duration {
 	sourceImage := getSourceImage(opts)
-	imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds)
+	imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to inspect image")
 		return defaultContainerSpinupTimeout
