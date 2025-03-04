@@ -224,6 +224,14 @@ func (c *ContainerRequest) IsBuildRequest() bool {
 	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil
 }
 
+func (c *ContainerRequest) VolumeCacheCompatible() bool {
+	if c.IsBuildRequest() || c.CheckpointEnabled {
+		return false
+	}
+	return c.Workspace.VolumeCacheEnabled
+
+}
+
 func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 	mounts := make([]*pb.Mount, len(c.Mounts))
 	for i, m := range c.Mounts {
