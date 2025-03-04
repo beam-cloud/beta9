@@ -145,7 +145,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			metrics.RecordImagePullTime(time.Since(pullStartTime))
 		}
 	}
-	log.Info().Str("local_cache_path", localCachePath).Msg("local cache path")
 
 	elapsed := time.Since(startTime)
 	c.logger.Log(request.ContainerId, request.StubId, "Loaded image <%s>, took: %s", imageId, elapsed)
@@ -301,11 +300,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 	ociImageInfo, err := os.Stat(ociPath)
-	if err != nil {
-		log.Warn().Err(err).Msg("unable to inspect image size")
+	if err == nil {
+		ociImageMB := float64(ociImageInfo.Size()) / 1024 / 1024
+		metrics.RecordImageBuildSpeed(ociImageMB, time.Since(startTime))
+	} else {
+		log.Warn().Err(err).Str("path", ociPath).Msg("unable to inspect image size")
 	}
-	ociImageMB := float64(ociImageInfo.Size()) / 1024 / 1024
-	metrics.RecordImageBuildSpeed(ociImageMB, time.Since(startTime))
 
 	startTime = time.Now()
 	engine, err := dir.Open(ociPath)
@@ -332,12 +332,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 	}
 
+	bundleMB := float64(0)
 	bundleInfo, err := os.Stat(tmpBundlePath)
-	if err != nil {
-		log.Warn().Err(err).Msg("unable to inspect image size")
+	if err == nil {
+		bundleMB = float64(bundleInfo.Size()) / 1024 / 1024
+		metrics.RecordImageUnpackSpeed(bundleMB, time.Since(startTime))
+	} else {
+		log.Warn().Err(err).Str("path", tmpBundlePath).Msg("unable to inspect image size")
 	}
-	bundleMB := float64(bundleInfo.Size()) / 1024 / 1024
-	metrics.RecordImageUnpackSpeed(bundleMB, time.Since(startTime))
 
 	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, bundleMB)
 	if err != nil {
@@ -370,19 +372,19 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	if err != nil {
 		log.Warn().Err(err).Msg("unable to inspect image size")
 	}
-	imageMB := float64(imageBytes) / 1024 / 1024
+	imageSizeMB := float64(imageBytes) / 1024 / 1024
 
-	outputLogger.Info(fmt.Sprintf("Copying image (size: %.2f MB)...\n", imageMB))
+	outputLogger.Info(fmt.Sprintf("Copying image (size: %.2f MB)...\n", imageSizeMB))
 	startTime := time.Now()
 	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds)
 	if err != nil {
 		return err
 	}
-	metrics.RecordImageCopySpeed(imageMB, time.Since(startTime))
+	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := filepath.Join(baseTmpBundlePath, request.ImageId)
-	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath, imageMB)
+	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath, imageSizeMB)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
@@ -390,7 +392,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	defer os.RemoveAll(copyDir)
 
 	outputLogger.Info("Archiving base image...\n")
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, imageMB)
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, imageSizeMB)
 	if err != nil {
 		return err
 	}

@@ -12,8 +12,8 @@ var (
 	MetricsSourceWorker  MetricsSource = "worker"
 )
 
-func NewUsage(config types.MonitoringConfig, source string) (repository.UsageRepository, error) {
-	var metricsRepo repository.UsageRepository
+func NewUsage(config types.MonitoringConfig, source string) (repository.UsageMetricsRepository, error) {
+	var metricsRepo repository.UsageMetricsRepository
 
 	switch config.MetricsCollector {
 	case string(types.MetricsCollectorPrometheus):

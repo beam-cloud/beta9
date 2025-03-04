@@ -10,30 +10,30 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
-type WorkerUsage struct {
+type WorkerUsageMetrics struct {
 	workerId  string
-	usageRepo repo.UsageRepository
+	usageRepo repo.UsageMetricsRepository
 	ctx       context.Context
 }
 
-func NewWorkerUsage(
+func NewWorkerUsageMetrics(
 	ctx context.Context,
 	workerId string,
 	config types.MonitoringConfig,
-) (*WorkerUsage, error) {
+) (*WorkerUsageMetrics, error) {
 	metricsRepo, err := usage.NewUsage(config, string(usage.MetricsSourceWorker))
 	if err != nil {
 		return nil, err
 	}
 
-	return &WorkerUsage{
+	return &WorkerUsageMetrics{
 		ctx:       ctx,
 		workerId:  workerId,
 		usageRepo: metricsRepo,
 	}, nil
 }
 
-func (wm *WorkerUsage) usageContainerDuration(request *types.ContainerRequest, duration time.Duration) {
+func (wm *WorkerUsageMetrics) usageContainerDuration(request *types.ContainerRequest, duration time.Duration) {
 	wm.usageRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
 		"container_id":   request.ContainerId,
 		"worker_id":      wm.workerId,
@@ -48,7 +48,7 @@ func (wm *WorkerUsage) usageContainerDuration(request *types.ContainerRequest, d
 }
 
 // Periodically send usage to track container duration
-func (wm *WorkerUsage) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
+func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
 	cursorTime := time.Now()
 	ticker := time.NewTicker(types.ContainerDurationEmissionInterval)
 	defer ticker.Stop()

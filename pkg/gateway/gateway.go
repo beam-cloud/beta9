@@ -55,27 +55,27 @@ import (
 
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
-	Config         types.AppConfig
-	httpServer     *http.Server
-	grpcServer     *grpc.Server
-	RedisClient    *common.RedisClient
-	TaskDispatcher *task.Dispatcher
-	TaskRepo       repository.TaskRepository
-	WorkspaceRepo  repository.WorkspaceRepository
-	ContainerRepo  repository.ContainerRepository
-	BackendRepo    repository.BackendRepository
-	ProviderRepo   repository.ProviderRepository
-	WorkerPoolRepo repository.WorkerPoolRepository
-	EventRepo      repository.EventRepository
-	Tailscale      *network.Tailscale
-	metricsRepo    repository.UsageRepository
-	workerRepo     repository.WorkerRepository
-	Storage        storage.Storage
-	Scheduler      *scheduler.Scheduler
-	ctx            context.Context
-	cancelFunc     context.CancelFunc
-	baseRouteGroup *echo.Group
-	rootRouteGroup *echo.Group
+	Config           types.AppConfig
+	httpServer       *http.Server
+	grpcServer       *grpc.Server
+	RedisClient      *common.RedisClient
+	TaskDispatcher   *task.Dispatcher
+	TaskRepo         repository.TaskRepository
+	WorkspaceRepo    repository.WorkspaceRepository
+	ContainerRepo    repository.ContainerRepository
+	BackendRepo      repository.BackendRepository
+	ProviderRepo     repository.ProviderRepository
+	WorkerPoolRepo   repository.WorkerPoolRepository
+	EventRepo        repository.EventRepository
+	Tailscale        *network.Tailscale
+	usageMetricsRepo repository.UsageMetricsRepository
+	workerRepo       repository.WorkerRepository
+	Storage          storage.Storage
+	Scheduler        *scheduler.Scheduler
+	ctx              context.Context
+	cancelFunc       context.CancelFunc
+	baseRouteGroup   *echo.Group
+	rootRouteGroup   *echo.Group
 }
 
 func NewGateway() (*Gateway, error) {
@@ -157,7 +157,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
 	gateway.TaskDispatcher = taskDispatcher
-	gateway.metricsRepo = metricsRepo
+	gateway.usageMetricsRepo = metricsRepo
 	gateway.EventRepo = eventRepo
 	gateway.workerRepo = workerRepo
 

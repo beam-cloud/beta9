@@ -36,7 +36,7 @@ type PrometheusMetricsRepository struct {
 	histogramVecs *common.SafeMap[*prometheus.HistogramVec]
 }
 
-func NewPrometheusMetricsRepository(promConfig types.PrometheusConfig) repository.UsageRepository {
+func NewPrometheusMetricsRepository(promConfig types.PrometheusConfig) repository.UsageMetricsRepository {
 	collectorRegistrar := prometheus.NewRegistry()
 	collectorRegistrar.MustRegister(
 		collectors.NewGoCollector(),                                       // Metrics from Go runtime.

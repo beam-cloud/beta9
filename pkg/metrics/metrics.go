@@ -91,31 +91,45 @@ func RecordImagePullTime(duration time.Duration) {
 }
 
 func RecordImageBuildSpeed(sizeInMB float64, duration time.Duration) {
-	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImageBuildSpeed).Update(sizeInMB / duration.Seconds())
+	if sizeInMB > 0 {
+		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImageBuildSpeed).Update(sizeInMB / duration.Seconds())
+	}
 }
 
 func RecordImageUnpackSpeed(sizeInMB float64, duration time.Duration) {
-	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImageUnpackSpeed).Update(sizeInMB / duration.Seconds())
+	if sizeInMB > 0 {
+		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImageUnpackSpeed).Update(sizeInMB / duration.Seconds())
+	}
 }
 
 func RecordImageCopySpeed(sizeInMB float64, duration time.Duration) {
-	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImageCopySpeed).Update(sizeInMB / duration.Seconds())
+	if sizeInMB > 0 {
+		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImageCopySpeed).Update(sizeInMB / duration.Seconds())
+	}
 }
 
 func RecordImageArchiveSpeed(sizeInMB float64, duration time.Duration) {
-	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImageArchiveSpeed).Update(sizeInMB / duration.Seconds())
+	if sizeInMB > 0 {
+		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImageArchiveSpeed).Update(sizeInMB / duration.Seconds())
+	}
 }
 
 func RecordImagePushSpeed(sizeInMB float64, duration time.Duration) {
-	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImagePushSpeed).Update(sizeInMB / duration.Seconds())
+	if sizeInMB > 0 {
+		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricImagePushSpeed).Update(sizeInMB / duration.Seconds())
+	}
 }
 
 func RecordS3PutSpeed(sizeInMB float64, duration time.Duration) {
-	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricS3PutSpeed).Update(sizeInMB / duration.Seconds())
+	if sizeInMB > 0 {
+		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricS3PutSpeed).Update(sizeInMB / duration.Seconds())
+	}
 }
 
 func RecordS3GetSpeed(sizeInMB float64, duration time.Duration) {
-	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricS3GetSpeed).Update(sizeInMB / duration.Seconds())
+	if sizeInMB > 0 {
+		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricS3GetSpeed).Update(sizeInMB / duration.Seconds())
+	}
 }
 
 func RecordDialTime(duration time.Duration) {

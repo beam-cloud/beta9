@@ -19,7 +19,7 @@ type OpenMeterUsageRepository struct {
 	source string
 }
 
-func NewOpenMeterUsageRepository(omConfig types.OpenMeterConfig) repository.UsageRepository {
+func NewOpenMeterUsageRepository(omConfig types.OpenMeterConfig) repository.UsageMetricsRepository {
 	return &OpenMeterUsageRepository{
 		config: omConfig,
 		source: "",
