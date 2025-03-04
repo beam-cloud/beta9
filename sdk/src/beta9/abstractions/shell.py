@@ -55,6 +55,9 @@ def wait_for_ok(sock: socket.socket, max_retries: int = 5, delay: float = 0.25):
     raise ConnectionError(f"Failed to setup socket after {max_retries} retries")
 
 
+EXIT_STATUS_CTRL_C = 130
+
+
 @dataclass
 class SSHShell:
     """Interactive ssh shell that can be used as a context manager - for use with 'shell' command"""
@@ -136,7 +139,7 @@ class SSHShell:
 
             # Check the exit status after the shell session ends
             exit_status = self.channel.recv_exit_status()
-            if exit_status != 0:
+            if exit_status != 0 and exit_status != EXIT_STATUS_CTRL_C:
                 terminal.warn("Lost connection to shell, attempting to reconnect in 5 seconds...")
                 time.sleep(5)
 

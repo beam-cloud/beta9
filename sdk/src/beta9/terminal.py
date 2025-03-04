@@ -197,7 +197,7 @@ def reset_terminal() -> None:
 def progress_description(name: str, max_width: Optional[int] = None):
     max_desc_width = max_width or len(name)
     if len(name) > max_desc_width:
-        text = f"...{name[-(max_desc_width - 3):]}"
+        text = f"...{name[-(max_desc_width - 3) :]}"
     else:
         text = name.ljust(max_desc_width)
 

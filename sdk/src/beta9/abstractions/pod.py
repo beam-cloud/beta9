@@ -299,6 +299,7 @@ app = Pod(
 
     @with_grpc_error_handling
     def shell(self, url_type: str = ""):
+        self.authorized = True
         stub_type = SHELL_STUB_TYPE
 
         if not self.prepare_runtime(stub_type=stub_type, force_create_stub=True):
