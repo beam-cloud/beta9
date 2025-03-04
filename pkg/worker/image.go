@@ -63,6 +63,26 @@ func getImageMountPath(workerId string) string {
 	return path
 }
 
+type PathInfo struct {
+	Path string
+	Size float64
+}
+
+func NewPathInfo(path string) *PathInfo {
+	size := float64(0)
+	info, err := os.Stat(path)
+	if err == nil {
+		size = float64(info.Size()) / 1024 / 1024
+	} else {
+		log.Warn().Err(err).Str("path", path).Msg("unable to get bundle path size")
+	}
+
+	return &PathInfo{
+		Path: path,
+		Size: size,
+	}
+}
+
 type ImageClient struct {
 	registry           *registry.ImageRegistry
 	cacheClient        *blobcache.BlobCacheClient
@@ -279,8 +299,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
-	tmpBundlePath := filepath.Join(c.imageBundlePath, request.ImageId)
-	defer os.RemoveAll(tmpBundlePath)
+	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
+	defer os.RemoveAll(tmpBundlePath.Path)
 	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
 
@@ -319,29 +339,20 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	engineExt := casext.NewEngine(engine)
 	defer engineExt.Close()
 
-	err = umoci.Unpack(engineExt, "latest", tmpBundlePath, unpackOptions)
+	err = umoci.Unpack(engineExt, "latest", tmpBundlePath.Path, unpackOptions)
 	if err != nil {
 		return err
 	}
 
 	for _, dir := range requiredContainerDirectories {
-		fullPath := filepath.Join(tmpBundlePath, "rootfs", dir)
+		fullPath := filepath.Join(tmpBundlePath.Path, "rootfs", dir)
 		err := os.MkdirAll(fullPath, 0755)
 		if err != nil {
 			return err
 		}
 	}
 
-	bundleMB := float64(0)
-	bundleInfo, err := os.Stat(tmpBundlePath)
-	if err == nil {
-		bundleMB = float64(bundleInfo.Size()) / 1024 / 1024
-		metrics.RecordImageUnpackSpeed(bundleMB, time.Since(startTime))
-	} else {
-		log.Warn().Err(err).Str("path", tmpBundlePath).Msg("unable to inspect image size")
-	}
-
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, bundleMB)
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
 	if err != nil {
 		return err
 	}
@@ -383,8 +394,8 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
 	outputLogger.Info("Unpacking image...\n")
-	tmpBundlePath := filepath.Join(baseTmpBundlePath, request.ImageId)
-	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath, imageSizeMB)
+	tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
+	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
@@ -392,7 +403,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	defer os.RemoveAll(copyDir)
 
 	outputLogger.Info("Archiving base image...\n")
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil, imageSizeMB)
+	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
 	if err != nil {
 		return err
 	}
@@ -400,7 +411,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	return nil
 }
 
-func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImageTag string, bundlePath string, imageMB float64) error {
+func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImageTag string, bundlePath *PathInfo) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -419,7 +430,7 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 	engineExt := casext.NewEngine(engine)
 	defer engineExt.Close()
 
-	tmpBundlePath := filepath.Join(bundlePath + "_")
+	tmpBundlePath := filepath.Join(bundlePath.Path + "_")
 	err = umoci.Unpack(engineExt, baseImageTag, tmpBundlePath, unpackOptions)
 	if err == nil {
 		for _, dir := range requiredContainerDirectories {
@@ -431,15 +442,15 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 			}
 		}
 
-		return os.Rename(tmpBundlePath, bundlePath)
+		return os.Rename(tmpBundlePath, bundlePath.Path)
 	}
 
-	metrics.RecordImageUnpackSpeed(imageMB, time.Since(startTime))
+	metrics.RecordImageUnpackSpeed(bundlePath.Size, time.Since(startTime))
 	return err
 }
 
 // Generate and upload archived version of the image for distribution
-func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId string, progressChan chan int, imageMB float64) error {
+func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId string, progressChan chan int) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -457,7 +468,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	switch c.config.ImageService.RegistryStore {
 	case registry.S3ImageRegistryStore:
 		err = clip.CreateAndUploadArchive(ctx, clip.CreateOptions{
-			InputPath:  bundlePath,
+			InputPath:  bundlePath.Path,
 			OutputPath: archivePath,
 			Credentials: storage.ClipStorageCredentials{
 				S3: &storage.S3ClipStorageCredentials{
@@ -475,7 +486,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 		})
 	case registry.LocalImageRegistryStore:
 		err = clip.CreateArchive(clip.CreateOptions{
-			InputPath:  bundlePath,
+			InputPath:  bundlePath.Path,
 			OutputPath: archivePath,
 		})
 	}
@@ -485,7 +496,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 		return err
 	}
 	log.Info().Str("container_id", imageId).Dur("duration", time.Since(startTime)).Msg("container archive took")
-	metrics.RecordImageArchiveSpeed(imageMB, time.Since(startTime))
+	metrics.RecordImageArchiveSpeed(bundlePath.Size, time.Since(startTime))
 
 	// Push the archive to a registry
 	startTime = time.Now()
@@ -496,7 +507,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath string, imageId st
 	}
 
 	log.Info().Str("image_id", imageId).Dur("duration", time.Since(startTime)).Msg("image push took")
-	metrics.RecordImagePushSpeed(imageMB, time.Since(startTime))
+	metrics.RecordImagePushSpeed(bundlePath.Size, time.Since(startTime))
 	return nil
 }
 

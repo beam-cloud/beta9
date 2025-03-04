@@ -270,14 +270,9 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 		wg.Wait()
 	}()
 
-	topLayerInfo, err := os.Stat(instance.Overlay.TopLayerPath())
-	if err != nil {
-		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
-	}
-	topLayerMB := float64(topLayerInfo.Size()) / 1024 / 1024
-
+	topLayerPath := NewPathInfo(instance.Overlay.TopLayerPath())
 	err = stream.Send(&pb.RunCArchiveResponse{
-		Done: true, Success: s.imageClient.Archive(ctx, instance.Overlay.TopLayerPath(), req.ImageId, progressChan, topLayerMB) == nil,
+		Done: true, Success: s.imageClient.Archive(ctx, topLayerPath, req.ImageId, progressChan) == nil,
 	})
 
 	close(doneChan)
