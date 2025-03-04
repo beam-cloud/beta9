@@ -211,7 +211,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 			}
 		}
 	}
-	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed), "header", true)
+	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
 
 	// Determine how many ports we need to expose
 	portsToExpose := len(request.Ports)

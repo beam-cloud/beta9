@@ -322,7 +322,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		return err
 	}
 
-	outputLogger.Info("Inspecting image name and verifying architecture...\n", "header", true)
+	outputLogger.Info("Inspecting image name and verifying architecture...\n")
 	if err := c.inspectAndVerifyImage(ctx, request); err != nil {
 		return err
 	}
@@ -335,13 +335,13 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
 
-	outputLogger.Info("Pulling image...\n", "header", true)
+	outputLogger.Info("Pulling image...\n")
 	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds, outputLogger)
 	if err != nil {
 		return err
 	}
 
-	outputLogger.Info("Unpacking image...\n", "header", true)
+	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := filepath.Join(baseTmpBundlePath, request.ImageId)
 	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
 	if err != nil {
@@ -351,7 +351,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	defer os.RemoveAll(baseTmpBundlePath)
 	defer os.RemoveAll(copyDir)
 
-	outputLogger.Info("Archiving base image...\n", "header", true)
+	outputLogger.Info("Archiving base image...\n")
 	return c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
 }
 
