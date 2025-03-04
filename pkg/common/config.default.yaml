@@ -75,7 +75,7 @@ imageService:
   pythonVersion: python3.10
   registries:
     docker:
-      username: beamcloud
+      username:
       password:
     s3:
       bucketName: beta9-images
