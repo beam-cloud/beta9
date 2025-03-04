@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -150,6 +151,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 			}
 
 			latency := time.Unix(container.StartedAt, 0).Sub(time.Unix(container.ScheduledAt, 0))
+			metrics.RecordContainerStartLatency(latency)
 			schedulingLatencies = append(schedulingLatencies, latency)
 		}
 	}
