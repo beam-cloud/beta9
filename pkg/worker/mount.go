@@ -2,6 +2,7 @@ package worker
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path"
 
@@ -25,7 +26,7 @@ func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 }
 
 // SetupContainerMounts initializes any external storage for a container
-func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest) error {
+func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	// Create local workspace path so we can symlink volumes before the container starts
 	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
 
@@ -49,6 +50,7 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 
 			err := c.setupMountPointS3(request.ContainerId, m)
 			if err != nil {
+				outputLogger.Info(fmt.Sprintf("failed to setup mount point s3 error: %w\n", err))
 				return err
 			}
 		}

@@ -240,7 +240,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		InitialSpec: initialBundleSpec,
 	}
 
-	err = s.containerMountManager.SetupContainerMounts(request)
+	err = s.containerMountManager.SetupContainerMounts(request, outputLogger)
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, fmt.Sprintf("failed to setup container mounts: %v", err))
 	}
