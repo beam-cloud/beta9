@@ -42,8 +42,9 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 		}
 
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
+			log.Info().Interface("mount", m).Interface("config", m.MountPointConfig).Msg("setting up container mounts")
 			// Add containerId to local mount path for mountpoint storage
-			m.LocalPath = path.Join(m.LocalPath, request.ContainerId)
+			m.LocalPath = path.Join(m.LocalPath, request.ContainerId, m.MountPointConfig.BucketName)
 			request.Mounts[i].LocalPath = m.LocalPath
 
 			err := c.setupMountPointS3(request.ContainerId, m)

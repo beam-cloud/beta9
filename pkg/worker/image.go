@@ -128,15 +128,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
 			localCachePath = baseBlobFsContentPath
 		} else {
-			outputLogger.Info(fmt.Sprintf("Image <%s> not found in worker region, caching nearby", imageId))
+			outputLogger.Info(fmt.Sprintf("Image <%s> not found in worker region, caching nearby\n", imageId))
 
 			// Otherwise, lets cache it in a nearby blobcache host
 			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
 			if err == nil {
 				localCachePath = baseBlobFsContentPath
-				outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker's region", imageId))
+				outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
 			} else {
-				outputLogger.Info(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v", imageId, err))
+				outputLogger.Info(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
 			}
 		}
 	}
