@@ -56,6 +56,9 @@ gateway:
     memory: 32768
     maxReplicas: 10
     maxGpuCount: 2
+  containerCostHook:
+    endpoint: http://localhost:8000/cost
+    token: ""
 fileService:
   enabled: true
   endpointUrl: http://juicefs-s3-gateway.beta9.svc.cluster.local:9900

@@ -47,6 +47,20 @@ func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerReques
 	}, float64(duration.Milliseconds()))
 }
 
+func (wm *WorkerMetrics) metricsContainerCost(request *types.ContainerRequest) {
+	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
+		"container_id":   request.ContainerId,
+		"worker_id":      wm.workerId,
+		"stub_id":        request.StubId,
+		"workspace_id":   request.WorkspaceId,
+		"cpu_millicores": request.Cpu,
+		"mem_mb":         request.Memory,
+		"gpu":            request.Gpu,
+		"gpu_count":      request.GpuCount,
+		"cost_per_ms":    request.CostPerMs,
+	}, float64(request.CostPerMs))
+}
+
 // Periodically send metrics to track container duration
 func (wm *WorkerMetrics) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
 	cursorTime := time.Now()

@@ -115,13 +115,19 @@ type StubLimits struct {
 	MaxGpuCount uint32 `key:"maxGpuCount" json:"max_gpu_count"`
 }
 
+type ContainerCostHookConfig struct {
+	Endpoint string `key:"endpoint" json:"endpoint"`
+	Token    string `key:"token" json:"token"`
+}
+
 type GatewayServiceConfig struct {
-	Host            string        `key:"host" json:"host"`
-	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
-	HTTP            HTTPConfig    `key:"http" json:"http"`
-	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
+	Host              string                  `key:"host" json:"host"`
+	InvokeURLType     string                  `key:"invokeURLType" json:"invoke_url_type"`
+	GRPC              GRPCConfig              `key:"grpc" json:"grpc"`
+	HTTP              HTTPConfig              `key:"http" json:"http"`
+	ShutdownTimeout   time.Duration           `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits        StubLimits              `key:"stubLimits" json:"stub_limits"`
+	ContainerCostHook ContainerCostHookConfig `key:"containerCostHook" json:"container_cost_hook"`
 }
 
 type FileServiceConfig struct {
