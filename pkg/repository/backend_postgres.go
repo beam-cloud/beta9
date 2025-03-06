@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -891,6 +892,10 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 		return &types.StubWithRelated{}, err
 	}
 
+	if err := r.decryptFields(&stub.Storage); err != nil {
+		return nil, err
+	}
+
 	return &stub, nil
 }
 
@@ -1385,8 +1390,11 @@ func (r *PostgresBackendRepository) GetWorkspaceStorage(ctx context.Context, wor
 	var storage types.WorkspaceStorage
 
 	query := `SELECT bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at FROM workspace_storage WHERE id = $1;`
-	err := r.client.GetContext(ctx, &storage, query, workspaceId)
-	if err != nil {
+	if err := r.client.GetContext(ctx, &storage, query, workspaceId); err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptFields(&storage); err != nil {
 		return nil, err
 	}
 
@@ -1399,6 +1407,10 @@ func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, 
 	VALUES ($1, $2, $3, $4, $5)
 	RETURNING id, bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at;
 	`
+
+	if err := r.encryptFields(&storage); err != nil {
+		return nil, err
+	}
 
 	var created types.WorkspaceStorage
 	if err := r.client.GetContext(ctx, &created, query, storage.BucketName, storage.AccessKey, storage.SecretKey, storage.EndpointURL, storage.Region); err != nil {
@@ -1514,12 +1526,12 @@ func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace 
 		return nil, err
 	}
 
-	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	encryptedValue, err := pkgCommon.Encrypt(signingKey, value)
+	encryptedValue, err := pkgCommon.Encrypt(secretKey, value)
 	if err != nil {
 		return nil, err
 	}
@@ -1562,12 +1574,12 @@ func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context
 		return nil, err
 	}
 
-	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	decryptedSecret, err := pkgCommon.Decrypt(signingKey, secret.Value)
+	decryptedSecret, err := pkgCommon.Decrypt(secretKey, secret.Value)
 	if err != nil {
 		return nil, err
 	}
@@ -1583,13 +1595,13 @@ func (r *PostgresBackendRepository) GetSecretsByNameDecrypted(ctx context.Contex
 		return nil, err
 	}
 
-	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
 	for i, secret := range secrets {
-		decryptedSecret, err := pkgCommon.Decrypt(signingKey, secret.Value)
+		decryptedSecret, err := pkgCommon.Decrypt(secretKey, secret.Value)
 		if err != nil {
 			return nil, err
 		}
@@ -1629,12 +1641,12 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
-	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	encryptedValue, err := pkgCommon.Encrypt(signingKey, value)
+	encryptedValue, err := pkgCommon.Encrypt(secretKey, value)
 	if err != nil {
 		return nil, err
 	}
@@ -1799,4 +1811,46 @@ func (r *PostgresBackendRepository) GetTaskMetrics(ctx context.Context, periodSt
 	}
 
 	return metrics, nil
+}
+
+// decryptFields decrypts fields of a struct using AES-GCM
+func (r *PostgresBackendRepository) decryptFields(row interface{}) error {
+	secretKey, err := pkgCommon.ParseSecretKey(r.config.EncryptionKey)
+	if err != nil {
+		return err
+	}
+
+	v := reflect.ValueOf(row).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		if v.Type().Field(i).Tag.Get("encrypt") == "true" {
+			if decryptedValue, err := pkgCommon.Decrypt(secretKey, v.Field(i).String()); err == nil {
+				v.Field(i).SetString(decryptedValue)
+			} else {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// encryptFields encrypts fields of a struct using AES-GCM
+func (r *PostgresBackendRepository) encryptFields(row interface{}) error {
+	secretKey, err := pkgCommon.ParseSecretKey(r.config.EncryptionKey)
+	if err != nil {
+		return err
+	}
+
+	v := reflect.ValueOf(row).Elem()
+	for i := 0; i < v.NumField(); i++ {
+		if v.Type().Field(i).Tag.Get("encrypt") == "true" {
+			if encryptedValue, err := pkgCommon.Encrypt(secretKey, v.Field(i).String()); err == nil {
+				v.Field(i).SetString(encryptedValue)
+			} else {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
