@@ -48,7 +48,7 @@ func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerReques
 }
 
 func (wm *WorkerMetrics) metricsContainerCost(request *types.ContainerRequest, duration time.Duration) {
-	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
+	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerCost, map[string]interface{}{
 		"container_id":   request.ContainerId,
 		"worker_id":      wm.workerId,
 		"stub_id":        request.StubId,
