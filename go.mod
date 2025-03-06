@@ -3,8 +3,8 @@ module github.com/beam-cloud/beta9
 go 1.22.10
 
 require (
-	buf.build/gen/go/cedana/task/grpc/go v1.5.1-20241203191352-12c25eb032cd.1
-	buf.build/gen/go/cedana/task/protocolbuffers/go v1.35.2-20241203191352-12c25eb032cd.1
+	buf.build/gen/go/cedana/cedana/protocolbuffers/go v1.36.3-20250123222419-64bf8384f939.1
+	buf.build/gen/go/cedana/criu/protocolbuffers/go v1.36.3-20250123222419-6ed7871347d0.1
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/alicebob/miniredis/v2 v2.30.5
@@ -17,7 +17,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.51.4
 	github.com/beam-cloud/blobcache-v2 v0.0.0-20250228212315-d1ce0d5702fc
 	github.com/beam-cloud/clip v0.0.0-20250227144326-ae5059cbff20
-	github.com/beam-cloud/go-runc v0.0.0-20231222221338-b89899f33170
+	github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
 	github.com/cedana/cedana v0.9.240
 	github.com/cenkalti/backoff v2.2.1+incompatible
@@ -30,6 +30,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hanwen/go-fuse/v2 v2.5.1
+	github.com/hashicorp/go-multierror v1.1.1
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/json-iterator/go v1.1.12
 	github.com/knadh/koanf/parsers/json v0.1.0
@@ -48,6 +49,7 @@ require (
 	github.com/opencontainers/umoci v0.4.7
 	github.com/openmeterio/openmeter v1.0.0-beta.47
 	github.com/oracle/oci-go-sdk v24.3.0+incompatible
+	github.com/panjf2000/ants/v2 v2.11.1
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.21.1
 	github.com/prometheus/client_golang v1.19.1
@@ -87,10 +89,10 @@ require (
 	tailscale.com v1.72.1
 )
 
+require github.com/hashicorp/errwrap v1.1.0 // indirect
+
 require (
-	buf.build/gen/go/cedana/cedana/protocolbuffers/go v1.36.3-00000000000000-4d54deb59aa0.1 // indirect
-	buf.build/gen/go/cedana/criu/protocolbuffers/go v1.36.3-20250123205248-8e8bdecabee9.1 // indirect
-	buf.build/gen/go/cedana/gpu/protocolbuffers/go v1.35.2-20241203191352-2167379de17d.1 // indirect
+	buf.build/gen/go/cedana/cedana/grpc/go v1.5.1-20250123222419-64bf8384f939.2 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/AdamKorcz/go-fuzz-headers v0.0.0-20210312213058-32f4d319f0d2 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
@@ -214,6 +216,7 @@ require (
 	github.com/onsi/gomega v1.34.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.0 // indirect
+	github.com/opencontainers/runtime-tools v0.9.1-0.20230914150019-408c51e934dc // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
@@ -238,6 +241,7 @@ require (
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/spf13/viper v1.19.0 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
+	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635 // indirect
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e // indirect
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 // indirect
 	github.com/tailscale/golang-x-crypto v0.0.0-20240604161659-3fde5e568aa4 // indirect
@@ -263,6 +267,7 @@ require (
 	github.com/yuin/gopher-lua v1.1.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.33.0 // indirect
 	go.opentelemetry.io/otel/metric v1.33.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.4.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
@@ -288,4 +293,6 @@ require (
 	sigs.k8s.io/json v0.0.0-20221116044647-bc3834ca7abd // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 	sigs.k8s.io/yaml v1.4.0 // indirect
+	tags.cncf.io/container-device-interface v0.8.0
+	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )

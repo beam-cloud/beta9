@@ -44,10 +44,10 @@ type Worker struct {
 	imageMountPath          string
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
-	cedanaClient            *CedanaClient
 	fileCacheManager        *FileCacheManager
+	criuManager             CRIUManager
 	containerNetworkManager *ContainerNetworkManager
-	containerCudaManager    GPUManager
+	containerGPUManager     GPUManager
 	containerMountManager   *ContainerMountManager
 	redisClient             *common.RedisClient
 	imageClient             *ImageClient
@@ -84,9 +84,10 @@ type ContainerInstance struct {
 }
 
 type ContainerOptions struct {
-	BundlePath  string
-	BindPorts   []int
-	InitialSpec *specs.Spec
+	BundlePath   string
+	HostBindPort int
+	BindPorts    []int
+	InitialSpec  *specs.Spec
 }
 
 type stopContainerEvent struct {
@@ -171,32 +172,12 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	var cedanaClient *CedanaClient = nil
+	var criuManager CRIUManager = nil
 	var checkpointStorage storage.Storage = nil
 	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
-		cedanaClient, err = NewCedanaClient(context.Background(), config.Worker.CRIU.Cedana, gpuType != "")
+		criuManager, err = InitializeCRIUManager(context.Background(), config.Worker.CRIU, fileCacheManager)
 		if err != nil {
-			log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create cedana client: %v", err)
-		}
-
-		os.MkdirAll(config.Worker.CRIU.Storage.MountPath, os.ModePerm)
-
-		// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
-		if config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeS3) {
-			checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
-				BucketName:  config.Worker.CRIU.Storage.ObjectStore.BucketName,
-				AccessKey:   config.Worker.CRIU.Storage.ObjectStore.AccessKey,
-				SecretKey:   config.Worker.CRIU.Storage.ObjectStore.SecretKey,
-				EndpointURL: config.Worker.CRIU.Storage.ObjectStore.EndpointURL,
-				Region:      config.Worker.CRIU.Storage.ObjectStore.Region,
-				ReadOnly:    false,
-			})
-
-			err := checkpointStorage.Mount(config.Worker.CRIU.Storage.MountPath)
-			if err != nil {
-				log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, unable to mount checkpoint storage: %v", err)
-				cedanaClient = nil
-			}
+			log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create CRIU manager: %v", err)
 		}
 	}
 
@@ -236,13 +217,13 @@ func NewWorker() (*Worker, error) {
 		runcHandle:              runc.Runc{Debug: config.DebugMode},
 		runcServer:              runcServer,
 		fileCacheManager:        fileCacheManager,
-		containerCudaManager:    NewContainerNvidiaManager(uint32(gpuCount)),
+		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config),
 		redisClient:             redisClient,
 		podAddr:                 podAddr,
 		imageClient:             imageClient,
-		cedanaClient:            cedanaClient,
+		criuManager:             criuManager,
 		podHostName:             podHostName,
 		eventBus:                nil,
 		containerInstances:      containerInstances,

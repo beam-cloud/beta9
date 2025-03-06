@@ -190,6 +190,7 @@ worker:
     maxSchedulingLatencyMs: 300000 # 5 minutes
     minMachinesAvailable: 1 # minMachinesAvailable only applies to external pools
   criu:
+    mode: nvidia
     storage:
       mountPath: /data/checkpoints
       mode: local
@@ -198,14 +199,34 @@ worker:
         accessKey: test
         secretKey: test
         endpointURL: http://localstack:4566
-    cedana: # defaults
-      client:
-        leaveRunning: true
-      sharedStorage:
-        dumpStorageDir: /tmp/dump
+    cedana:
+      # Can be unix, tcp, vsock
+      protocol: unix
+      address: /run/cedana.sock
+      log_level: debug
+      # Connection details to your cedana endpoint
       connection:
-        cedanaUrl:
-        cedanaAuthToken:
+        url: ""
+        auth_token: ""
+      checkpoint:
+        # Default dir to write/stream checkpoints to
+        dir: /data/checkpoints
+        # Can be one of: none, tar, lz4, gzip, zlib
+        compression: lz4
+        # Number of parallel streams for streaming checkpoints (0 = off)
+        # TODO: usable only in next release
+        # stream: 4
+      db:
+        # Use remote DB on the cedana endpoint
+        remote: true
+      profiling:
+        # Receive profiling info in the gRPC trailer
+        enabled: false
+        precision: auto
+      criu:
+        # Keep the job running after checkpoint
+        leave_running: true
+
 providers:
   ec2:
     accessKey:

@@ -107,5 +107,5 @@ const (
 )
 
 func checkpointSignalDir(containerId string) string {
-	return fmt.Sprintf("/tmp/%s/cedana", containerId)
+	return fmt.Sprintf("/tmp/%s/criu", containerId)
 }
