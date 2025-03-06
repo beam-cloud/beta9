@@ -259,6 +259,9 @@ func (s *Scheduler) StartProcessingRequests() {
 			continue
 		}
 
+		// Add the container cost per ms to the request if a cost endpoint is provided
+		s.addContainerCostPerMs(request)
+
 		// Find a worker to schedule ContainerRequests on
 		worker, err := s.selectWorker(request)
 		if err != nil || worker == nil {
@@ -294,7 +297,6 @@ func (s *Scheduler) StartProcessingRequests() {
 					}
 				}
 
-				s.addContainerCostPerMs(request)
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to add worker")
 				s.addRequestToBacklog(request)
 			}()
