@@ -138,6 +138,7 @@ class StubWithRelated(betterproto.Message):
     stub: "Stub" = betterproto.message_field(1)
     workspace: "Workspace" = betterproto.message_field(2)
     object: "Object" = betterproto.message_field(3)
+    storage: "WorkspaceStorage" = betterproto.message_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -188,18 +189,21 @@ class Workspace(betterproto.Message):
     multi_gpu_enabled: bool = betterproto.bool_field(8)
     concurrency_limit_id: int = betterproto.uint32_field(9)
     concurrency_limit: "ConcurrencyLimit" = betterproto.message_field(10)
-    storage: "WorkspaceStorage" = betterproto.message_field(11)
+    storage_id: int = betterproto.uint32_field(11)
+    storage: "WorkspaceStorage" = betterproto.message_field(12)
 
 
 @dataclass(eq=False, repr=False)
 class WorkspaceStorage(betterproto.Message):
-    bucket_name: str = betterproto.string_field(1)
-    access_key: str = betterproto.string_field(2)
-    secret_key: str = betterproto.string_field(3)
-    endpoint_url: str = betterproto.string_field(4)
-    region: str = betterproto.string_field(5)
-    created_at: datetime = betterproto.message_field(6)
-    updated_at: datetime = betterproto.message_field(7)
+    id: int = betterproto.uint32_field(1)
+    external_id: str = betterproto.string_field(2)
+    bucket_name: str = betterproto.string_field(3)
+    access_key: str = betterproto.string_field(4)
+    secret_key: str = betterproto.string_field(5)
+    endpoint_url: str = betterproto.string_field(6)
+    region: str = betterproto.string_field(7)
+    created_at: datetime = betterproto.message_field(8)
+    updated_at: datetime = betterproto.message_field(9)
 
 
 @dataclass(eq=False, repr=False)

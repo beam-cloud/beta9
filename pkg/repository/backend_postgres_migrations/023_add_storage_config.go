@@ -15,6 +15,7 @@ func upAddWorkspaceStorage(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.Exec(`
 		CREATE TABLE workspace_storage (
 			id SERIAL PRIMARY KEY,
+			external_id TEXT NOT NULL,
 			bucket_name TEXT NOT NULL,
 			access_key TEXT NOT NULL,
 			secret_key TEXT NOT NULL,

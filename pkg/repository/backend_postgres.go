@@ -154,7 +154,7 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error) {
 	var workspace types.Workspace
 
-	query := `SELECT id, name, created_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled FROM workspace WHERE external_id = $1;`
+	query := `SELECT id, name, created_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled, storage_id FROM workspace WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &workspace, query, externalId)
 	if err != nil {
 		return types.Workspace{}, err
@@ -253,7 +253,7 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	query := `
 	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at",
-		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled"
+		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled", w.storage_id "workspace.storage_id"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
 	WHERE t.key = $1 AND t.active = TRUE;
@@ -861,12 +861,14 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	var stub types.StubWithRelated
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at,
-	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
-	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"`,
+	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled", w.storage_id AS "workspace.storage_id",
+	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at",
+		ws.id AS "storage.id", ws.external_id AS "storage.external_id", ws.access_key AS "storage.access_key", ws.secret_key AS "storage.secret_key", ws.endpoint_url AS "storage.endpoint_url", ws.region AS "storage.region", ws.created_at AS "storage.created_at", ws.updated_at AS "storage.updated_at"`,
 	).
 		From("stub s").
 		Join("workspace w ON s.workspace_id = w.id").
 		LeftJoin("object o ON s.object_id = o.id").
+		LeftJoin("workspace_storage ws ON w.storage_id = ws.id").
 		Where(squirrel.Eq{"s.external_id": externalId})
 
 	var stubFilters types.StubFilter
