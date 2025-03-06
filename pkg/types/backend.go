@@ -24,6 +24,7 @@ type Workspace struct {
 	MultiGpuEnabled    bool              `db:"multi_gpu_enabled" json:"multi_gpu_enabled"`
 	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`
 	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
+	StorageId          *uint             `db:"storage_id" json:"storage_id,omitempty"`
 	Storage            *WorkspaceStorage `db:"storage" json:"storage"`
 }
 
@@ -90,6 +91,8 @@ func NewWorkspaceFromProto(in *pb.Workspace) *Workspace {
 
 // @go2proto
 type WorkspaceStorage struct {
+	Id          uint      `db:"id" json:"id"`
+	ExternalId  string    `db:"external_id" json:"external_id"`
 	BucketName  string    `db:"bucket_name" json:"bucket_name"`
 	AccessKey   string    `db:"access_key" json:"access_key"`
 	SecretKey   string    `db:"secret_key" json:"secret_key"`
@@ -101,6 +104,8 @@ type WorkspaceStorage struct {
 
 func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
 	return &WorkspaceStorage{
+		Id:          uint(in.Id),
+		ExternalId:  in.ExternalId,
 		BucketName:  in.BucketName,
 		AccessKey:   in.AccessKey,
 		SecretKey:   in.SecretKey,
@@ -113,6 +118,8 @@ func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
 
 func (w *WorkspaceStorage) ToProto() *pb.WorkspaceStorage {
 	return &pb.WorkspaceStorage{
+		Id:          uint32(w.Id),
+		ExternalId:  w.ExternalId,
 		BucketName:  w.BucketName,
 		AccessKey:   w.AccessKey,
 		SecretKey:   w.SecretKey,
@@ -454,8 +461,9 @@ func NewStubFromProto(in *pb.Stub) *Stub {
 // @go2proto
 type StubWithRelated struct {
 	Stub
-	Workspace Workspace `db:"workspace" json:"workspace"`
-	Object    Object    `db:"object" json:"object"`
+	Workspace Workspace        `db:"workspace" json:"workspace"`
+	Object    Object           `db:"object" json:"object"`
+	Storage   WorkspaceStorage `db:"storage" json:"storage"`
 }
 
 func (s *StubWithRelated) ToProto() *pb.StubWithRelated {
