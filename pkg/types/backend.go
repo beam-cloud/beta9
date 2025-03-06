@@ -94,8 +94,8 @@ type WorkspaceStorage struct {
 	Id          uint      `db:"id" json:"id"`
 	ExternalId  string    `db:"external_id" json:"external_id"`
 	BucketName  string    `db:"bucket_name" json:"bucket_name"`
-	AccessKey   string    `db:"access_key" json:"access_key"`
-	SecretKey   string    `db:"secret_key" json:"secret_key"`
+	AccessKey   string    `db:"access_key" json:"access_key" encrypt:"true"`
+	SecretKey   string    `db:"secret_key" json:"secret_key" encrypt:"true"`
 	EndpointURL string    `db:"endpoint_url" json:"endpoint_url"`
 	Region      string    `db:"region" json:"region"`
 	CreatedAt   time.Time `db:"created_at" json:"created_at,omitempty"`
@@ -471,6 +471,7 @@ func (s *StubWithRelated) ToProto() *pb.StubWithRelated {
 		Stub:      s.Stub.ToProto(),
 		Workspace: s.Workspace.ToProto(),
 		Object:    s.Object.ToProto(),
+		Storage:   s.Storage.ToProto(),
 	}
 }
 
@@ -479,6 +480,7 @@ func NewStubWithRelatedFromProto(in *pb.StubWithRelated) *StubWithRelated {
 		Stub:      *NewStubFromProto(in.Stub),
 		Workspace: *NewWorkspaceFromProto(in.Workspace),
 		Object:    *NewObjectFromProto(in.Object),
+		Storage:   *NewWorkspaceStorageFromProto(in.Storage),
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 const defaultExternalVolumesPath string = "/tmp/external-volumes"
 
 func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
-	signingKey, err := common.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 
 		if v.Config != nil {
 			secrets := []string{v.Config.AccessKey, v.Config.SecretKey}
-			decryptedSecrets, err := common.DecryptAllSecrets(signingKey, secrets)
+			decryptedSecrets, err := common.DecryptAllSecrets(secretKey, secrets)
 			if err != nil {
 				return nil, err
 			}

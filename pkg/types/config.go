@@ -62,13 +62,14 @@ type RedisConfig struct {
 }
 
 type PostgresConfig struct {
-	Host      string `key:"host" json:"host"`
-	Port      int    `key:"port" json:"port"`
-	Name      string `key:"name" json:"name"`
-	Username  string `key:"username" json:"username"`
-	Password  string `key:"password" json:"password"`
-	TimeZone  string `key:"timezone" json:"timezone"`
-	EnableTLS bool   `key:"enableTLS" json:"enable_tls"`
+	Host          string `key:"host" json:"host"`
+	Port          int    `key:"port" json:"port"`
+	Name          string `key:"name" json:"name"`
+	Username      string `key:"username" json:"username"`
+	Password      string `key:"password" json:"password"`
+	TimeZone      string `key:"timezone" json:"timezone"`
+	EnableTLS     bool   `key:"enableTLS" json:"enable_tls"`
+	EncryptionKey string `key:"encryptionKey" json:"encryption_key"`
 }
 
 type GRPCConfig struct {
