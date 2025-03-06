@@ -47,7 +47,7 @@ func (wm *WorkerMetrics) metricsContainerDuration(request *types.ContainerReques
 	}, float64(duration.Milliseconds()))
 }
 
-func (wm *WorkerMetrics) metricsContainerCost(request *types.ContainerRequest) {
+func (wm *WorkerMetrics) metricsContainerCost(request *types.ContainerRequest, duration time.Duration) {
 	wm.metricsRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
 		"container_id":   request.ContainerId,
 		"worker_id":      wm.workerId,
@@ -58,7 +58,8 @@ func (wm *WorkerMetrics) metricsContainerCost(request *types.ContainerRequest) {
 		"gpu":            request.Gpu,
 		"gpu_count":      request.GpuCount,
 		"cost_per_ms":    request.CostPerMs,
-	}, float64(request.CostPerMs))
+		"duration_ms":    duration.Milliseconds(),
+	}, request.CostPerMs*float64(duration.Milliseconds()))
 }
 
 // Periodically send metrics to track container duration
@@ -71,10 +72,12 @@ func (wm *WorkerMetrics) EmitContainerUsage(ctx context.Context, request *types.
 		select {
 		case <-ticker.C:
 			go wm.metricsContainerDuration(request, time.Since(cursorTime))
+			go wm.metricsContainerCost(request, time.Since(cursorTime))
 			cursorTime = time.Now()
 		case <-ctx.Done():
 			// Consolidate any remaining time
 			go wm.metricsContainerDuration(request, time.Since(cursorTime))
+			go wm.metricsContainerCost(request, time.Since(cursorTime))
 			return
 		}
 	}
