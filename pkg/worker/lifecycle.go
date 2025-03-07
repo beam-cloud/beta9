@@ -366,7 +366,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Env = append(spec.Process.Env, env...)
 
 	// We need to include the checkpoint signal files in the container spec
-	if s.IsCRIUAvailable() && request.CheckpointEnabled {
+	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
 		err = os.MkdirAll(checkpointSignalDir(request.ContainerId), os.ModePerm) // Add a mount point for the checkpoint signal file
 		if err != nil {
 			return nil, err
@@ -487,7 +487,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable()),
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)),
 		"PYTHONUNBUFFERED=1",
 	}
 
@@ -715,7 +715,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, configPath string, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
 	// Handle checkpoint creation & restore if applicable
-	if s.IsCRIUAvailable() && request.CheckpointEnabled {
+	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
 		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, startedChan, checkpointPIDChan, configPath)
 		if err == nil {
 			return exitCode, containerId, err

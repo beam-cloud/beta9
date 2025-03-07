@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	gpuCntEnvKey              = "GPU_COUNT"
 	defaultCheckpointDeadline = 10 * time.Minute
 	readyLogRate              = 10
 )
@@ -222,7 +223,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
 // NOTE: this currently only works for deployments since functions can run multiple containers
 func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.CheckpointState, bool) {
-	if !s.IsCRIUAvailable() || !request.CheckpointEnabled {
+	if !s.IsCRIUAvailable(request.GpuCount) || !request.CheckpointEnabled {
 		return types.CheckpointState{}, false
 	}
 
@@ -252,7 +253,7 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 	return state, false
 }
 
-func (s *Worker) IsCRIUAvailable() bool {
+func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 	if s.criuManager == nil {
 		log.Info().Msg("manager not initialized")
 		return false

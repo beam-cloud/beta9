@@ -99,11 +99,7 @@ func InitializeCedanaCRIU(
 }
 
 func (c *CedanaCRIUManager) Available() bool {
-	if c.client == nil {
-		return false
-	}
-
-	return true
+	return c.client != nil
 }
 
 // Spawn a runc container using cedana, creating a 'job' in cedana
