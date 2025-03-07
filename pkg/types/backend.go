@@ -96,7 +96,7 @@ type WorkspaceStorage struct {
 	BucketName  string    `db:"bucket_name" json:"bucket_name"`
 	AccessKey   string    `db:"access_key" json:"access_key" encrypt:"true"`
 	SecretKey   string    `db:"secret_key" json:"secret_key" encrypt:"true"`
-	EndpointURL string    `db:"endpoint_url" json:"endpoint_url"`
+	EndpointUrl string    `db:"endpoint_url" json:"endpoint_url"`
 	Region      string    `db:"region" json:"region"`
 	CreatedAt   time.Time `db:"created_at" json:"created_at,omitempty"`
 	UpdatedAt   time.Time `db:"updated_at" json:"updated_at,omitempty"`
@@ -109,7 +109,7 @@ func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
 		BucketName:  in.BucketName,
 		AccessKey:   in.AccessKey,
 		SecretKey:   in.SecretKey,
-		EndpointURL: in.EndpointUrl,
+		EndpointUrl: in.EndpointUrl,
 		Region:      in.Region,
 		CreatedAt:   in.CreatedAt.AsTime(),
 		UpdatedAt:   in.UpdatedAt.AsTime(),
@@ -124,7 +124,7 @@ func (w *WorkspaceStorage) ToProto() *pb.WorkspaceStorage {
 		AccessKey:   w.AccessKey,
 		SecretKey:   w.SecretKey,
 		Region:      w.Region,
-		EndpointUrl: w.EndpointURL,
+		EndpointUrl: w.EndpointUrl,
 		CreatedAt:   timestamppb.New(w.CreatedAt),
 		UpdatedAt:   timestamppb.New(w.UpdatedAt),
 	}

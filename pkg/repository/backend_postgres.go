@@ -1413,7 +1413,7 @@ func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, 
 	}
 
 	var created types.WorkspaceStorage
-	if err := r.client.GetContext(ctx, &created, query, storage.BucketName, storage.AccessKey, storage.SecretKey, storage.EndpointURL, storage.Region); err != nil {
+	if err := r.client.GetContext(ctx, &created, query, storage.BucketName, storage.AccessKey, storage.SecretKey, storage.EndpointUrl, storage.Region); err != nil {
 		return nil, err
 	}
 
