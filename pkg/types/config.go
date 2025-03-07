@@ -121,13 +121,12 @@ type ContainerCostHookConfig struct {
 }
 
 type GatewayServiceConfig struct {
-	Host              string                  `key:"host" json:"host"`
-	InvokeURLType     string                  `key:"invokeURLType" json:"invoke_url_type"`
-	GRPC              GRPCConfig              `key:"grpc" json:"grpc"`
-	HTTP              HTTPConfig              `key:"http" json:"http"`
-	ShutdownTimeout   time.Duration           `key:"shutdownTimeout" json:"shutdown_timeout"`
-	StubLimits        StubLimits              `key:"stubLimits" json:"stub_limits"`
-	ContainerCostHook ContainerCostHookConfig `key:"containerCostHook" json:"container_cost_hook"`
+	Host            string        `key:"host" json:"host"`
+	InvokeURLType   string        `key:"invokeURLType" json:"invoke_url_type"`
+	GRPC            GRPCConfig    `key:"grpc" json:"grpc"`
+	HTTP            HTTPConfig    `key:"http" json:"http"`
+	ShutdownTimeout time.Duration `key:"shutdownTimeout" json:"shutdown_timeout"`
+	StubLimits      StubLimits    `key:"stubLimits" json:"stub_limits"`
 }
 
 type FileServiceConfig struct {
@@ -418,12 +417,13 @@ var (
 )
 
 type MonitoringConfig struct {
-	MetricsCollector         string           `key:"metricsCollector" json:"metrics_collector"`
-	Prometheus               PrometheusConfig `key:"prometheus" json:"prometheus"`
-	OpenMeter                OpenMeterConfig  `key:"openmeter" json:"openmeter"`
-	FluentBit                FluentBitConfig  `key:"fluentbit" json:"fluentbit"`
-	Telemetry                TelemetryConfig  `key:"telemetry" json:"telemetry"`
-	ContainerMetricsInterval time.Duration    `key:"containerMetricsInterval" json:"container_metrics_interval"`
+	MetricsCollector         string                  `key:"metricsCollector" json:"metrics_collector"`
+	Prometheus               PrometheusConfig        `key:"prometheus" json:"prometheus"`
+	OpenMeter                OpenMeterConfig         `key:"openmeter" json:"openmeter"`
+	FluentBit                FluentBitConfig         `key:"fluentbit" json:"fluentbit"`
+	Telemetry                TelemetryConfig         `key:"telemetry" json:"telemetry"`
+	ContainerMetricsInterval time.Duration           `key:"containerMetricsInterval" json:"container_metrics_interval"`
+	ContainerCostHookConfig  ContainerCostHookConfig `key:"containerCostHook" json:"container_cost_hook"`
 }
 type PrometheusConfig struct {
 	AgentUrl      string `key:"agentUrl" json:"agent_url"`

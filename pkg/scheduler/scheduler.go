@@ -9,7 +9,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
@@ -22,17 +21,16 @@ const (
 )
 
 type Scheduler struct {
-	ctx                 context.Context
-	backendRepo         repo.BackendRepository
-	workerRepo          repo.WorkerRepository
-	workerPoolManager   *WorkerPoolManager
-	requestBacklog      *RequestBacklog
-	containerRepo       repo.ContainerRepository
-	workspaceRepo       repo.WorkspaceRepository
-	eventRepo           repo.EventRepository
-	schedulerMetrics    SchedulerMetrics
-	eventBus            *common.EventBus
-	containerCostClient *clients.ContainerCostClient
+	ctx               context.Context
+	backendRepo       repo.BackendRepository
+	workerRepo        repo.WorkerRepository
+	workerPoolManager *WorkerPoolManager
+	requestBacklog    *RequestBacklog
+	containerRepo     repo.ContainerRepository
+	workspaceRepo     repo.WorkspaceRepository
+	eventRepo         repo.EventRepository
+	schedulerMetrics  SchedulerMetrics
+	eventBus          *common.EventBus
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, metricsRepo repo.MetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
@@ -45,11 +43,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 	schedulerMetrics := NewSchedulerMetrics(metricsRepo)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
-
-	var containerCostClient *clients.ContainerCostClient = nil
-	if config.GatewayService.ContainerCostHook.Endpoint != "" {
-		containerCostClient = clients.NewContainerCostClient(config.GatewayService.ContainerCostHook)
-	}
 
 	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
@@ -99,17 +92,16 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	}
 
 	return &Scheduler{
-		ctx:                 ctx,
-		eventBus:            eventBus,
-		backendRepo:         backendRepo,
-		workerRepo:          workerRepo,
-		workerPoolManager:   workerPoolManager,
-		requestBacklog:      requestBacklog,
-		containerRepo:       containerRepo,
-		schedulerMetrics:    schedulerMetrics,
-		eventRepo:           eventRepo,
-		workspaceRepo:       workspaceRepo,
-		containerCostClient: containerCostClient,
+		ctx:               ctx,
+		eventBus:          eventBus,
+		backendRepo:       backendRepo,
+		workerRepo:        workerRepo,
+		workerPoolManager: workerPoolManager,
+		requestBacklog:    requestBacklog,
+		containerRepo:     containerRepo,
+		schedulerMetrics:  schedulerMetrics,
+		eventRepo:         eventRepo,
+		workspaceRepo:     workspaceRepo,
 	}, nil
 }
 
@@ -258,9 +250,6 @@ func (s *Scheduler) StartProcessingRequests() {
 			time.Sleep(requestProcessingInterval)
 			continue
 		}
-
-		// Add the container cost per ms to the request if a cost endpoint is provided
-		s.addContainerCostPerMs(request)
 
 		// Find a worker to schedule ContainerRequests on
 		worker, err := s.selectWorker(request)
@@ -505,19 +494,4 @@ func calculateBackoffDelay(retryCount int) time.Duration {
 		delay = maxDelay
 	}
 	return delay
-}
-
-// addContainerCostPerMs adds the container cost per ms to the request if the config provided
-// a container cost hook endpoint.
-func (s *Scheduler) addContainerCostPerMs(request *types.ContainerRequest) {
-	if s.containerCostClient == nil {
-		return
-	}
-
-	costPerMs, err := s.containerCostClient.GetContainerCostPerMs(request)
-	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to get container cost per ms")
-	}
-
-	request.CostPerMs = costPerMs
 }

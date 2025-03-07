@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 type ContainerCostResponse struct {
-	CostPerMs float64 `json:"cost_per_ms"`
+	CostPerMs string `json:"cost_per_ms"`
 }
 
 type ContainerCostClient struct {
@@ -45,11 +46,17 @@ func (c *ContainerCostClient) GetContainerCostPerMs(request *types.ContainerRequ
 	if err != nil {
 		return 0, err
 	}
+	defer resp.Body.Close()
 
 	var response ContainerCostResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to decode response: %v", err)
 	}
 
-	return response.CostPerMs, nil
+	costPerMs, err := strconv.ParseFloat(response.CostPerMs, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse cost_per_ms as float: %v", err)
+	}
+
+	return costPerMs, nil
 }
