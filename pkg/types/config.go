@@ -183,13 +183,19 @@ type PythonStandaloneConfig struct {
 }
 
 type StorageConfig struct {
-	Mode           string           `key:"mode" json:"mode"`
-	FilesystemName string           `key:"fsName" json:"filesystem_name"`
-	FilesystemPath string           `key:"fsPath" json:"filesystem_path"`
-	ObjectPath     string           `key:"objectPath" json:"object_path"`
-	JuiceFS        JuiceFSConfig    `key:"juicefs" json:"juicefs"`
-	Geese          GeeseConfig      `key:"geese" json:"geese"`
-	MountPoint     MountPointConfig `key:"mountpoint" json:"mountpoint"`
+	Mode             string                 `key:"mode" json:"mode"`
+	FilesystemName   string                 `key:"fsName" json:"filesystem_name"`
+	FilesystemPath   string                 `key:"fsPath" json:"filesystem_path"`
+	ObjectPath       string                 `key:"objectPath" json:"object_path"`
+	JuiceFS          JuiceFSConfig          `key:"juicefs" json:"juicefs"`
+	Geese            GeeseConfig            `key:"geese" json:"geese"`
+	MountPoint       MountPointConfig       `key:"mountpoint" json:"mountpoint"`
+	WorkspaceStorage WorkspaceStorageConfig `key:"workspaceStorage" json:"workspace_storage"`
+}
+
+type WorkspaceStorageConfig struct {
+	Mode  string      `key:"mode" json:"mode"`
+	Geese GeeseConfig `key:"geese" json:"geese"`
 }
 
 type JuiceFSConfig struct {
@@ -218,6 +224,7 @@ type GeeseConfig struct {
 	SecretKey        string `key:"secretKey" json:"secret_key"`
 	EndpointUrl      string `key:"endpointURL" json:"endpoint_url"` // --endpoint
 	BucketName       string `key:"bucketName" json:"bucket_name"`
+	Region           string `key:"region" json:"region"`
 }
 
 // @go2proto
