@@ -772,7 +772,10 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 		}
 	}
 
-	maxTries, tries := 5, 0 // Used for re-opening the channel if it's closed
+	maxTries, tries := 10, 0
+	baseBackoff := time.Second
+	maxBackoff := time.Minute
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -781,16 +784,21 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 			seenEvents = make(map[string]struct{})
 		case event, ok := <-ch:
 			if !ok { // If the channel is closed, try to re-open it
-				if tries == maxTries-1 {
-					log.Error().Str("container_id", containerId).Msg("failed to watch for OOM events")
+				if tries == maxTries {
 					return
 				}
 
+				backoff := baseBackoff * time.Duration(1<<uint(tries))
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+
 				tries++
+
 				select {
 				case <-ctx.Done():
 					return
-				case <-time.After(time.Second):
+				case <-time.After(backoff):
 					ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
 					if err != nil {
 						log.Error().Str("container_id", containerId).Msgf("failed to open runc events channel: %v", err)
