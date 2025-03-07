@@ -318,7 +318,7 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 		if request.Stub.Storage.Id > 0 {
 			log.Info().Str("container_id", containerId).Msg("mounting storage")
 
-			_, err := s.storageManager.Mount(request.Stub.Workspace.ExternalId, &request.Stub.Storage)
+			_, err := s.storageManager.Mount(request.Stub.Workspace.Name, &request.Stub.Storage)
 			if err != nil {
 				log.Error().Str("container_id", containerId).Err(err).Msg("unable to mount storage")
 			}
