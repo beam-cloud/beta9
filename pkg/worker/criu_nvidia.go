@@ -27,11 +27,25 @@ type NvidiaCRIUManager struct {
 	runcHandle       runc.Runc
 	cpStorageConfig  types.CheckpointStorageConfig
 	fileCacheManager *FileCacheManager
+	gpuCnt           int
+	available        bool
 }
 
 func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig, fileCacheManager *FileCacheManager) (CRIUManager, error) {
+	gpuCnt := 0
+	var err error
+	gpuCntEnv := os.Getenv(gpuCntEnvKey)
+	if gpuCntEnv != "" {
+		gpuCnt, err = strconv.Atoi(gpuCntEnv)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse GPU_COUNT: %v", err)
+		}
+	}
+
+	available := crCompatible(gpuCnt)
+
 	runcHandle := runc.Runc{}
-	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, fileCacheManager: fileCacheManager}, nil
+	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, fileCacheManager: fileCacheManager, gpuCnt: gpuCnt, available: available}, nil
 }
 
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
@@ -81,24 +95,8 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	return exitCode, nil
 }
 
-func (c *NvidiaCRIUManager) Available(gpuCount uint32) bool {
-	if gpuCount == 0 {
-		return true
-	}
-
-	// Check NVIDIA driver version is >= 570
-	driverVersion, err := getNvidiaDriverVersion()
-	if err != nil {
-		log.Error().Msgf("Failed to get NVIDIA driver version: %v", err)
-		return false
-	}
-
-	if driverVersion < minNvidiaDriverVersion {
-		log.Error().Msgf("NVIDIA driver version %d is less than required version 570", driverVersion)
-		return false
-	}
-
-	return true
+func (c *NvidiaCRIUManager) Available() bool {
+	return c.available
 }
 
 func (c *NvidiaCRIUManager) Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error) {
@@ -205,4 +203,24 @@ func getNvidiaDriverVersion() (int, error) {
 	}
 
 	return majorVersion, nil
+}
+
+func crCompatible(gpuCnt int) bool {
+	if gpuCnt == 0 {
+		return true
+	}
+
+	// Check NVIDIA driver version is >= 570
+	driverVersion, err := getNvidiaDriverVersion()
+	if err != nil {
+		log.Error().Msgf("Failed to get NVIDIA driver version: %v", err)
+		return false
+	}
+
+	if driverVersion < minNvidiaDriverVersion {
+		log.Error().Msgf("NVIDIA driver version %d is less than required version 570", driverVersion)
+		return false
+	}
+
+	return true
 }

@@ -19,6 +19,7 @@ import (
 )
 
 const (
+	gpuCntEnvKey              = "GPU_COUNT"
 	defaultCheckpointDeadline = 10 * time.Minute
 	readyLogRate              = 10
 )
@@ -31,7 +32,7 @@ type RestoreOpts struct {
 }
 
 type CRIUManager interface {
-	Available(gpuCount uint32) bool
+	Available() bool
 	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error)
 	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
 	RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error)
@@ -258,7 +259,7 @@ func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 		return false
 	}
 
-	if !s.criuManager.Available(gpuCount) {
+	if !s.criuManager.Available() {
 		log.Info().Msg("manager not available")
 		return false
 	}
