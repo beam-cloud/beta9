@@ -36,7 +36,8 @@ RUN apt-get install -y libseccomp-dev
 
 RUN <<EOT
 set -eux
-git clone -b dlm/add-container-cost-endpoint https://github.com/beam-cloud/runc.git .
+git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git .
+
 make
 make install
 /usr/local/sbin/runc --version
