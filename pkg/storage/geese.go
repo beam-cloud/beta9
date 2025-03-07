@@ -47,10 +47,10 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		args = append(args, fmt.Sprintf("--part-sizes=%d", s.config.PartSizes))
 	}
 	if s.config.DirMode != "" {
-		args = append(args, fmt.Sprintf("--dir-mode=%s", s.config.DirMode))
+		args = append(args, fmt.Sprintf("--dir-mode=%d", s.config.DirMode))
 	}
 	if s.config.FileMode != "" {
-		args = append(args, fmt.Sprintf("--file-mode=%s", s.config.FileMode))
+		args = append(args, fmt.Sprintf("--file-mode=%d", s.config.FileMode))
 	}
 	if s.config.ListType > 0 {
 		args = append(args, fmt.Sprintf("--list-type=%d", s.config.ListType))

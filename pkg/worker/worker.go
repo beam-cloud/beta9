@@ -322,8 +322,6 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 			if err != nil {
 				log.Error().Str("container_id", containerId).Err(err).Msg("unable to mount storage")
 			}
-
-			// defer storage.Unmount()
 		}
 
 		if err := s.RunContainer(ctx, request); err != nil {
@@ -581,6 +579,11 @@ func (s *Worker) shutdown() error {
 	err = s.imageClient.Cleanup()
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to cleanup fuse mounts: %v", err))
+	}
+
+	err = s.storageManager.Cleanup()
+	if err != nil {
+		errs = errors.Join(errs, fmt.Errorf("failed to cleanup workspace storage: %v", err))
 	}
 
 	err = os.RemoveAll(s.imageMountPath)
