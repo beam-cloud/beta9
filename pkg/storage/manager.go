@@ -23,28 +23,28 @@ func NewStorageManager(config types.StorageConfig) (*StorageManager, error) {
 	}, nil
 }
 
-func (s *StorageManager) Create(name string, storage Storage) {
+func (s *StorageManager) Create(workspaceName string, storage Storage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.mounts.Set(name, storage)
+	s.mounts.Set(workspaceName, storage)
 }
 
-func (s *StorageManager) Mount(workspaceId string, workspaceStorage *types.WorkspaceStorage) (Storage, error) {
+func (s *StorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (Storage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	mount, ok := s.mounts.Get(workspaceId)
+	mount, ok := s.mounts.Get(workspaceName)
 	if ok {
 		return mount, nil
 	}
 
-	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceId)
+	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 	os.MkdirAll(mountPath, 0755)
 
 	mount, err := NewStorage(types.StorageConfig{
 		Mode:           StorageModeGeese,
-		FilesystemName: workspaceId,
+		FilesystemName: workspaceName,
 		FilesystemPath: mountPath,
 		Geese: types.GeeseConfig{
 			// Workspace specific config
@@ -76,27 +76,27 @@ func (s *StorageManager) Mount(workspaceId string, workspaceStorage *types.Works
 		return nil, err
 	}
 
-	s.mounts.Set(workspaceId, mount)
+	s.mounts.Set(workspaceName, mount)
 
 	return mount, nil
 }
 
-func (s *StorageManager) Unmount(workspaceId string, workspaceStorage *types.WorkspaceStorage) error {
+func (s *StorageManager) Unmount(workspaceName string, workspaceStorage *types.WorkspaceStorage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	mount, ok := s.mounts.Get(workspaceId)
+	mount, ok := s.mounts.Get(workspaceName)
 	if !ok {
 		return nil
 	}
 
-	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceId)
+	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 	err := mount.Unmount(mountPath)
 	if err != nil {
 		return err
 	}
 
-	s.mounts.Delete(workspaceId)
+	s.mounts.Delete(workspaceName)
 
 	return nil
 }
