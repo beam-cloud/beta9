@@ -28,11 +28,12 @@ EOT
 
 # runc
 # ========================
-FROM golang AS runc
+# FIXME: once we upgrade to 1.23, we can just use "FROM golang"
+FROM golang:1.23-bookworm AS runc
 
 WORKDIR /workspace
 
-RUN apt-get install -y libseccomp-dev
+RUN apt-get update && apt-get install -y libseccomp-dev
 
 RUN <<EOT
 set -eux
