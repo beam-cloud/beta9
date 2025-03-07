@@ -42,14 +42,14 @@ func (s *StorageManager) Mount(workspaceId string, workspaceStorage *types.Works
 		FilesystemName: workspaceId,
 		FilesystemPath: mountPath,
 		Geese: types.GeeseConfig{
-			// Workspace settings
+			// Workspace specific config
 			EndpointUrl: workspaceStorage.EndpointUrl,
 			BucketName:  workspaceStorage.BucketName,
 			AccessKey:   workspaceStorage.AccessKey,
 			SecretKey:   workspaceStorage.SecretKey,
 			Region:      workspaceStorage.Region,
 
-			// Global settings
+			// Global config
 			Debug:            s.config.WorkspaceStorage.Geese.Debug,
 			Force:            s.config.WorkspaceStorage.Geese.Force,
 			FsyncOnClose:     s.config.WorkspaceStorage.Geese.FsyncOnClose,
@@ -87,6 +87,15 @@ func (s *StorageManager) Unmount(workspaceId string, workspaceStorage *types.Wor
 	}
 
 	s.storage.Delete(workspaceId)
+
+	return nil
+}
+
+func (s *StorageManager) Cleanup() error {
+	s.storage.Range(func(key string, value Storage) bool {
+		value.Unmount(path.Join(rootMountPath, key))
+		return true
+	})
 
 	return nil
 }
