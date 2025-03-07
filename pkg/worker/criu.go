@@ -31,7 +31,7 @@ type RestoreOpts struct {
 }
 
 type CRIUManager interface {
-	Available() bool
+	Available(gpuCount uint32) bool
 	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error)
 	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
 	RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error)
@@ -222,7 +222,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
 // NOTE: this currently only works for deployments since functions can run multiple containers
 func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.CheckpointState, bool) {
-	if !s.IsCRIUAvailable() || !request.CheckpointEnabled {
+	if !s.IsCRIUAvailable(request.GpuCount) || !request.CheckpointEnabled {
 		return types.CheckpointState{}, false
 	}
 
@@ -252,13 +252,13 @@ func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.
 	return state, false
 }
 
-func (s *Worker) IsCRIUAvailable() bool {
+func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 	if s.criuManager == nil {
 		log.Info().Msg("manager not initialized")
 		return false
 	}
 
-	if !s.criuManager.Available() {
+	if !s.criuManager.Available(gpuCount) {
 		log.Info().Msg("manager not available")
 		return false
 	}

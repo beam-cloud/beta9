@@ -81,7 +81,11 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	return exitCode, nil
 }
 
-func (c *NvidiaCRIUManager) Available() bool {
+func (c *NvidiaCRIUManager) Available(gpuCount uint32) bool {
+	if gpuCount == 0 {
+		return true
+	}
+
 	// Check NVIDIA driver version is >= 570
 	driverVersion, err := getNvidiaDriverVersion()
 	if err != nil {

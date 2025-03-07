@@ -98,9 +98,13 @@ func InitializeCedanaCRIU(
 	return &CedanaCRIUManager{client: client, fileCacheManager: fileCacheManager}, nil
 }
 
-func (c *CedanaCRIUManager) Available() bool {
+func (c *CedanaCRIUManager) Available(gpuCount uint32) bool {
 	if c.client == nil {
 		return false
+	}
+
+	if gpuCount == 0 {
+		return true
 	}
 
 	return true
