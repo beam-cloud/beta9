@@ -416,7 +416,7 @@ class Image(BaseAbstraction):
         if is_notebook_env():
             if LOCAL_PYTHON_VERSION != self.python_version:
                 terminal.warn(
-                    f"Local version {LOCAL_PYTHON_VERSION.value} differs from image version {self.python_version}. This may cause issues in your remote environment."
+                    f"Local version {LOCAL_PYTHON_VERSION} differs from image version {self.python_version}. This may cause issues in your remote environment."
                 )
 
         if self.base_image != "" and self.dockerfile != "":
