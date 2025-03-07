@@ -194,8 +194,9 @@ type StorageConfig struct {
 }
 
 type WorkspaceStorageConfig struct {
-	Mode  string      `key:"mode" json:"mode"`
-	Geese GeeseConfig `key:"geese" json:"geese"`
+	Mode          string      `key:"mode" json:"mode"`
+	BaseMountPath string      `key:"baseMountPath" json:"base_mount_path"`
+	Geese         GeeseConfig `key:"geese" json:"geese"`
 }
 
 type JuiceFSConfig struct {

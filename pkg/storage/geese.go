@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/cenkalti/backoff"
 	"github.com/rs/zerolog/log"
 )
 
@@ -47,10 +46,10 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		args = append(args, fmt.Sprintf("--part-sizes=%d", s.config.PartSizes))
 	}
 	if s.config.DirMode != "" {
-		args = append(args, fmt.Sprintf("--dir-mode=%d", s.config.DirMode))
+		args = append(args, fmt.Sprintf("--dir-mode=%s", s.config.DirMode))
 	}
 	if s.config.FileMode != "" {
-		args = append(args, fmt.Sprintf("--file-mode=%d", s.config.FileMode))
+		args = append(args, fmt.Sprintf("--file-mode=%s", s.config.FileMode))
 	}
 	if s.config.ListType > 0 {
 		args = append(args, fmt.Sprintf("--list-type=%d", s.config.ListType))
@@ -113,29 +112,29 @@ func (s *GeeseStorage) Format(fsName string) error {
 }
 
 func (s *GeeseStorage) Unmount(localPath string) error {
-	geeseFsUmount := func() error {
-		cmd := exec.Command("geesefs", "umount", localPath)
+	// geeseFsUmount := func() error {
+	// 	cmd := exec.Command("geesefs", "umount", localPath)
 
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			log.Error().Err(err).Str("output", string(output)).Msg("error executing geesefs umount")
-			return err
-		}
+	// 	output, err := cmd.CombinedOutput()
+	// 	if err != nil {
+	// 		log.Error().Err(err).Str("output", string(output)).Msg("error executing geesefs umount")
+	// 		return err
+	// 	}
 
-		log.Info().Str("local_path", localPath).Msg("geesefs filesystem unmounted")
-		return nil
-	}
+	// 	log.Info().Str("local_path", localPath).Msg("geesefs filesystem unmounted")
+	// 	return nil
+	// }
 
-	err := backoff.Retry(geeseFsUmount, backoff.WithMaxRetries(backoff.NewConstantBackOff(1*time.Second), 10))
-	if err == nil {
-		return nil
-	}
+	// err := backoff.Retry(geeseFsUmount, backoff.WithMaxRetries(backoff.NewConstantBackOff(1*time.Second), 10))
+	// if err == nil {
+	// 	return nil
+	// }
 
-	// Forcefully kill the fuse mount devices
-	err = exec.Command("fuser", "-k", "/dev/fuse").Run()
-	if err != nil {
-		return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
-	}
+	// // Forcefully kill the fuse mount devices
+	// err = exec.Command("fuser", "-k", "/dev/fuse").Run()
+	// if err != nil {
+	// 	return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
+	// }
 
 	return nil
 }

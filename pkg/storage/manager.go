@@ -3,41 +3,46 @@ package storage
 import (
 	"os"
 	"path"
+	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-const (
-	rootMountPath = "/userdata"
-)
-
 type StorageManager struct {
-	storage *common.SafeMap[Storage]
-	config  types.StorageConfig
+	mounts *common.SafeMap[Storage]
+	config types.StorageConfig
+	mu     sync.Mutex
 }
 
 func NewStorageManager(config types.StorageConfig) (*StorageManager, error) {
 	return &StorageManager{
-		storage: common.NewSafeMap[Storage](),
-		config:  config,
+		mounts: common.NewSafeMap[Storage](),
+		config: config,
+		mu:     sync.Mutex{},
 	}, nil
 }
 
 func (s *StorageManager) Create(name string, storage Storage) {
-	s.storage.Set(name, storage)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.mounts.Set(name, storage)
 }
 
 func (s *StorageManager) Mount(workspaceId string, workspaceStorage *types.WorkspaceStorage) (Storage, error) {
-	storage, ok := s.storage.Get(workspaceId)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mount, ok := s.mounts.Get(workspaceId)
 	if ok {
-		return storage, nil
+		return mount, nil
 	}
 
-	mountPath := path.Join(rootMountPath, workspaceId)
+	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceId)
 	os.MkdirAll(mountPath, 0755)
 
-	storage, err := NewStorage(types.StorageConfig{
+	mount, err := NewStorage(types.StorageConfig{
 		Mode:           StorageModeGeese,
 		FilesystemName: workspaceId,
 		FilesystemPath: mountPath,
@@ -66,34 +71,39 @@ func (s *StorageManager) Mount(workspaceId string, workspaceStorage *types.Works
 		return nil, err
 	}
 
-	err = storage.Mount(mountPath)
+	err = mount.Mount(mountPath)
 	if err != nil {
 		return nil, err
 	}
 
-	return storage, nil
+	s.mounts.Set(workspaceId, mount)
+
+	return mount, nil
 }
 
 func (s *StorageManager) Unmount(workspaceId string, workspaceStorage *types.WorkspaceStorage) error {
-	storage, ok := s.storage.Get(workspaceId)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	mount, ok := s.mounts.Get(workspaceId)
 	if !ok {
 		return nil
 	}
 
-	mountPath := path.Join(rootMountPath, workspaceId)
-	err := storage.Unmount(mountPath)
+	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceId)
+	err := mount.Unmount(mountPath)
 	if err != nil {
 		return err
 	}
 
-	s.storage.Delete(workspaceId)
+	s.mounts.Delete(workspaceId)
 
 	return nil
 }
 
 func (s *StorageManager) Cleanup() error {
-	s.storage.Range(func(key string, value Storage) bool {
-		value.Unmount(path.Join(rootMountPath, key))
+	s.mounts.Range(func(key string, value Storage) bool {
+		value.Unmount(path.Join(s.config.WorkspaceStorage.BaseMountPath, key))
 		return true
 	})
 
