@@ -31,10 +31,15 @@ func (s *StorageManager) Create(workspaceName string, storage Storage) {
 }
 
 func (s *StorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (Storage, error) {
+	mount, ok := s.mounts.Get(workspaceName)
+	if ok {
+		return mount, nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	mount, ok := s.mounts.Get(workspaceName)
+	mount, ok = s.mounts.Get(workspaceName)
 	if ok {
 		return mount, nil
 	}
@@ -82,10 +87,15 @@ func (s *StorageManager) Mount(workspaceName string, workspaceStorage *types.Wor
 }
 
 func (s *StorageManager) Unmount(workspaceName string, workspaceStorage *types.WorkspaceStorage) error {
+	mount, ok := s.mounts.Get(workspaceName)
+	if !ok {
+		return nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	mount, ok := s.mounts.Get(workspaceName)
+	mount, ok = s.mounts.Get(workspaceName)
 	if !ok {
 		return nil
 	}

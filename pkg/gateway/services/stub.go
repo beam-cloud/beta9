@@ -183,13 +183,6 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	err = common.ExtractObjectFile(ctx, object.ExternalId, authInfo.Workspace.Name)
-	if err != nil {
-		return &pb.GetOrCreateStubResponse{
-			Ok: false,
-		}, nil
-	}
-
 	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id, in.ForceCreate)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{

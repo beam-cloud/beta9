@@ -254,17 +254,26 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	query := `
 	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at",
-		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled", w.storage_id "workspace.storage_id"
+		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled", w.storage_id "workspace.storage_id",
+		   ws.id AS "storage.id", ws.external_id AS "storage.external_id", ws.bucket_name AS "storage.bucket_name", ws.access_key AS "storage.access_key", ws.secret_key AS "storage.secret_key", ws.endpoint_url AS "storage.endpoint_url", ws.region AS "storage.region", ws.created_at AS "storage.created_at", ws.updated_at AS "storage.updated_at"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
+	INNER JOIN workspace_storage ws ON w.storage_id = ws.id
 	WHERE t.key = $1 AND t.active = TRUE;
 	`
 
 	var token types.Token
 	var workspace types.Workspace
+	var workspaceStorage types.WorkspaceStorage
+
 	token.Workspace = &workspace
+	token.Storage = &workspaceStorage
 
 	if err := r.client.GetContext(ctx, &token, query, tokenKey); err != nil {
+		return nil, nil, err
+	}
+
+	if err := r.decryptFields(&workspaceStorage); err != nil {
 		return nil, nil, err
 	}
 

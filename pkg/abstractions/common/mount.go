@@ -1,6 +1,7 @@
 package abstractions
 
 import (
+	"fmt"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -16,17 +17,35 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 		return nil, err
 	}
 
-	mounts := []types.Mount{
-		{
-			LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
-			MountPath: types.WorkerUserCodeVolume,
-			ReadOnly:  true,
-		},
-		{
-			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
-			MountPath: types.WorkerUserOutputVolume,
-			ReadOnly:  false,
-		},
+	var mounts []types.Mount
+	if workspace.StorageId != nil && *workspace.StorageId > 0 {
+		// TODO: This is a hack to support legacy storage. Once all workspaces have migrated to the new storage,
+		// we should remove this.
+		mounts = []types.Mount{
+			{
+				LocalPath: path.Join(fmt.Sprintf("/workspace/data/%s/objects/%s", workspace.Name, stubObjectId)),
+				MountPath: types.WorkerUserCodeVolume,
+				ReadOnly:  true,
+			},
+			{
+				LocalPath: path.Join(fmt.Sprintf("/workspace/data/%s/outputs/%s", workspace.Name, stubId)),
+				MountPath: types.WorkerUserOutputVolume,
+				ReadOnly:  false,
+			},
+		}
+	} else {
+		mounts = []types.Mount{
+			{
+				LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
+				MountPath: types.WorkerUserCodeVolume,
+				ReadOnly:  true,
+			},
+			{
+				LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
+				MountPath: types.WorkerUserOutputVolume,
+				ReadOnly:  false,
+			},
+		}
 	}
 
 	for _, v := range config.Volumes {

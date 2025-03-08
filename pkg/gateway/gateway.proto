@@ -13,7 +13,7 @@ service GatewayService {
 
   // Objects
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
-  rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
+  rpc CreateObject(CreateObjectRequest) returns (CreateObjectResponse) {}
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
   rpc ReplaceObjectContent(ReplaceObjectContentRequest)
       returns (ReplaceObjectContentResponse) {}
@@ -99,6 +99,20 @@ message HeadObjectResponse {
   string object_id = 3;
   ObjectMetadata object_metadata = 4;
   string error_msg = 5;
+}
+
+message CreateObjectRequest {
+  ObjectMetadata object_metadata = 1;
+  string hash = 2;
+  int64 size = 3;
+  bool overwrite = 4;
+}
+
+message CreateObjectResponse {
+  bool ok = 1;
+  string object_id = 2;
+  string presigned_url = 3;
+  string error_msg = 4;
 }
 
 message PutObjectRequest {
