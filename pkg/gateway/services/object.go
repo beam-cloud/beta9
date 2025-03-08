@@ -2,13 +2,12 @@ package gatewayservices
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"os"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -35,42 +34,47 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 	}, nil
 }
 
-func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectRequest) (*pb.PutObjectResponse, error) {
+func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObjectRequest) (*pb.CreateObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)
 
+	storageClient, err := storage.NewStorageClient(ctx, authInfo.Token.Workspace.Name, authInfo.Token.Storage)
+	if err != nil {
+		return &pb.CreateObjectResponse{
+			Ok:       false,
+			ErrorMsg: "Unable to create storage client",
+		}, nil
+	}
+
 	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil && !in.Overwrite {
-		return &pb.PutObjectResponse{
+		return &pb.CreateObjectResponse{
 			Ok:       true,
 			ObjectId: existingObject.ExternalId,
 		}, nil
 	}
 
-	hash := sha256.Sum256(in.ObjectContent)
-	hashStr := hex.EncodeToString(hash[:])
-
-	newObject, err := gws.backendRepo.CreateObject(ctx, hashStr, int64(len(in.ObjectContent)), authInfo.Workspace.Id)
+	newObject, err := gws.backendRepo.CreateObject(ctx, in.Hash, in.Size, authInfo.Workspace.Id)
 	if err != nil {
-		return &pb.PutObjectResponse{
+		return &pb.CreateObjectResponse{
 			Ok:       false,
 			ErrorMsg: "Unable to create object",
 		}, nil
 	}
 
-	filePath := path.Join(objectPath, newObject.ExternalId)
-	err = os.WriteFile(filePath, in.ObjectContent, 0644)
+	presignedURL, err := storageClient.GeneratePresignedURL(ctx, "objects/"+newObject.ExternalId, 60*60*24)
 	if err != nil {
-		return &pb.PutObjectResponse{
+		return &pb.CreateObjectResponse{
 			Ok:       false,
-			ErrorMsg: "Unable to write file",
+			ErrorMsg: "Unable to generate presigned URL",
 		}, nil
 	}
 
-	return &pb.PutObjectResponse{
-		Ok:       true,
-		ObjectId: newObject.ExternalId,
+	return &pb.CreateObjectResponse{
+		Ok:           true,
+		ObjectId:     newObject.ExternalId,
+		PresignedUrl: presignedURL,
 	}, nil
 }
 

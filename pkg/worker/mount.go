@@ -40,6 +40,23 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 			} else {
 				request.Mounts[i].LocalPath = localUserSource
 			}
+		} else if m.MountPath == types.WorkerUserCodeVolume && request.Stub.Storage.Id > 0 {
+			log.Info().Interface("mount", m).Msg("using new storage path")
+
+			objectPath := request.Mounts[i].LocalPath
+			localUserSource := tempUserCodeDir(request.ContainerId)
+			// extractedObjectPath := path.Join(fmt.Sprintf("/workspace/data/%s/unpacked", request.Workspace.Name), request.Stub.Object.ExternalId)
+
+			if _, err := os.Stat(localUserSource); os.IsNotExist(err) {
+				unzipErr := extractZip(objectPath, localUserSource)
+				if unzipErr != nil {
+					log.Error().Str("container_id", request.ContainerId).Err(unzipErr).Msg("failed to unzip object")
+					os.RemoveAll(localUserSource)
+				}
+			}
+
+			request.Mounts[i].LocalPath = localUserSource
+
 		}
 
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
