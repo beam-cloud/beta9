@@ -20,6 +20,13 @@ type ContainerCostClient struct {
 	token    string
 }
 
+type ContainerCostRequest struct {
+	Cpu      int64  `json:"cpu"`
+	Memory   int64  `json:"memory"`
+	Gpu      string `json:"gpu"`
+	GpuCount uint32 `json:"gpu_count"`
+}
+
 func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCostClient {
 	return &ContainerCostClient{
 		client:   &http.Client{},
@@ -29,8 +36,15 @@ func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCost
 }
 
 func (c *ContainerCostClient) GetContainerCostPerMs(request *types.ContainerRequest) (float64, error) {
+	containerCostRequest := &ContainerCostRequest{
+		Cpu:      request.Cpu,
+		Memory:   request.Memory,
+		Gpu:      request.Gpu,
+		GpuCount: request.GpuCount,
+	}
+
 	var requestBody bytes.Buffer
-	if err := json.NewEncoder(&requestBody).Encode(request); err != nil {
+	if err := json.NewEncoder(&requestBody).Encode(containerCostRequest); err != nil {
 		return 0, err
 	}
 
