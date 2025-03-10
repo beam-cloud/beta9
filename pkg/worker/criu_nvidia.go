@@ -66,8 +66,12 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
-	imagePath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, opts.request.StubId)
-	originalImagePath := imagePath
+	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.request.StubId)
+	workDir := filepath.Join("/tmp", imagePath)
+	err := c.setupRestoreWorkDir(workDir)
+	if err != nil {
+		return -1, err
+	}
 
 	if c.fileCacheManager.CacheAvailable() {
 		cachedCheckpointPath := filepath.Join(baseFileCachePath, imagePath)
@@ -82,7 +86,9 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
 			AllowOpenTCP: true,
-			WorkDir:      originalImagePath,
+			// Logs, irmap cache, sockets for lazy server and other go to working dir
+			// must be overriden bc blobcache is read-only
+			WorkDir:      workDir,
 			ImagePath:    imagePath,
 			OutputWriter: opts.runcOpts.OutputWriter,
 		},
@@ -180,7 +186,13 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 	}))
 
 	wg.Wait() // Wait for all tasks to finish
-	return storeContentErr.ErrorOrNil()
+	err = storeContentErr.ErrorOrNil()
+	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("error caching checkpoint: %v", err)
+	} else {
+		log.Info().Str("container_id", containerId).Msgf("cached checkpoint: %s", checkpointPath)
+	}
+	return err
 }
 
 // getNvidiaDriverVersion returns the NVIDIA driver version as an integer
@@ -223,4 +235,15 @@ func crCompatible(gpuCnt int) bool {
 	}
 
 	return true
+}
+
+func (c *NvidiaCRIUManager) setupRestoreWorkDir(workDir string) error {
+	if _, err := os.Stat(workDir); os.IsNotExist(err) {
+		err := os.MkdirAll(workDir, 0755)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
