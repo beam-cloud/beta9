@@ -471,7 +471,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		return s.requestBacklog.Push(request)
 	}
 
-	go metrics.RecordRequestRetry(request)
+	metrics.RecordRequestRetry(request)
 
 	// TODO: add some sort of signaling mechanism to alert the caller if the request failed to be pushed to the requestBacklog
 	go func() {
