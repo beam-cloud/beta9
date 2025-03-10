@@ -24,12 +24,34 @@ type Workspace struct {
 	MultiGpuEnabled    bool              `db:"multi_gpu_enabled" json:"multi_gpu_enabled"`
 	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`
 	ConcurrencyLimit   *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
+	StorageId          *uint             `db:"storage_id" json:"storage_id,omitempty"`
+	Storage            *WorkspaceStorage `db:"storage" json:"storage"`
+}
+
+// @go2proto
+type WorkspaceWithRelated struct {
+	Workspace
+	ConcurrencyLimit *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit"`
+	Storage          *WorkspaceStorage `db:"storage" json:"storage"`
+}
+
+func (w *WorkspaceWithRelated) ToProto() *pb.WorkspaceWithRelated {
+	return &pb.WorkspaceWithRelated{
+		Workspace:        w.Workspace.ToProto(),
+		Storage:          w.Storage.ToProto(),
+		ConcurrencyLimit: w.ConcurrencyLimit.ToProto(),
+	}
 }
 
 func (w *Workspace) ToProto() *pb.Workspace {
 	concurrencyLimit := &pb.ConcurrencyLimit{}
 	if w.ConcurrencyLimit != nil {
 		concurrencyLimit = w.ConcurrencyLimit.ToProto()
+	}
+
+	storage := &pb.WorkspaceStorage{}
+	if w.Storage != nil {
+		storage = w.Storage.ToProto()
 	}
 
 	return &pb.Workspace{
@@ -40,6 +62,7 @@ func (w *Workspace) ToProto() *pb.Workspace {
 		VolumeCacheEnabled: w.VolumeCacheEnabled,
 		MultiGpuEnabled:    w.MultiGpuEnabled,
 		ConcurrencyLimit:   concurrencyLimit,
+		Storage:            storage,
 	}
 }
 
@@ -47,6 +70,11 @@ func NewWorkspaceFromProto(in *pb.Workspace) *Workspace {
 	concurrencyLimit := &ConcurrencyLimit{}
 	if in.ConcurrencyLimit != nil {
 		concurrencyLimit = NewConcurrencyLimitFromProto(in.ConcurrencyLimit)
+	}
+
+	storage := &WorkspaceStorage{}
+	if in.Storage != nil {
+		storage = NewWorkspaceStorageFromProto(in.Storage)
 	}
 
 	return &Workspace{
@@ -57,6 +85,48 @@ func NewWorkspaceFromProto(in *pb.Workspace) *Workspace {
 		VolumeCacheEnabled: in.VolumeCacheEnabled,
 		MultiGpuEnabled:    in.MultiGpuEnabled,
 		ConcurrencyLimit:   concurrencyLimit,
+		Storage:            storage,
+	}
+}
+
+// @go2proto
+type WorkspaceStorage struct {
+	Id          uint      `db:"id" json:"id"`
+	ExternalId  string    `db:"external_id" json:"external_id"`
+	BucketName  string    `db:"bucket_name" json:"bucket_name"`
+	AccessKey   string    `db:"access_key" json:"access_key" encrypt:"true"`
+	SecretKey   string    `db:"secret_key" json:"secret_key" encrypt:"true"`
+	EndpointUrl string    `db:"endpoint_url" json:"endpoint_url"`
+	Region      string    `db:"region" json:"region"`
+	CreatedAt   time.Time `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at,omitempty"`
+}
+
+func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
+	return &WorkspaceStorage{
+		Id:          uint(in.Id),
+		ExternalId:  in.ExternalId,
+		BucketName:  in.BucketName,
+		AccessKey:   in.AccessKey,
+		SecretKey:   in.SecretKey,
+		EndpointUrl: in.EndpointUrl,
+		Region:      in.Region,
+		CreatedAt:   in.CreatedAt.AsTime(),
+		UpdatedAt:   in.UpdatedAt.AsTime(),
+	}
+}
+
+func (w *WorkspaceStorage) ToProto() *pb.WorkspaceStorage {
+	return &pb.WorkspaceStorage{
+		Id:          uint32(w.Id),
+		ExternalId:  w.ExternalId,
+		BucketName:  w.BucketName,
+		AccessKey:   w.AccessKey,
+		SecretKey:   w.SecretKey,
+		Region:      w.Region,
+		EndpointUrl: w.EndpointUrl,
+		CreatedAt:   timestamppb.New(w.CreatedAt),
+		UpdatedAt:   timestamppb.New(w.UpdatedAt),
 	}
 }
 
@@ -68,16 +138,18 @@ const (
 )
 
 type Token struct {
-	Id          uint       `db:"id" json:"id"`
-	ExternalId  string     `db:"external_id" json:"external_id"`
-	Key         string     `db:"key" json:"key"`
-	Active      bool       `db:"active" json:"active"`
-	Reusable    bool       `db:"reusable" json:"reusable"`
-	WorkspaceId *uint      `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
-	Workspace   *Workspace `db:"workspace" json:"workspace,omitempty"`       // Pointer to associated Workspace
-	TokenType   string     `db:"token_type" json:"token_type"`
-	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+	Id          uint              `db:"id" json:"id"`
+	ExternalId  string            `db:"external_id" json:"external_id"`
+	Key         string            `db:"key" json:"key"`
+	Active      bool              `db:"active" json:"active"`
+	Reusable    bool              `db:"reusable" json:"reusable"`
+	WorkspaceId *uint             `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
+	Workspace   *Workspace        `db:"workspace" json:"workspace,omitempty"`       // Pointer to associated Workspace
+	StorageId   *uint             `db:"storage_id" json:"storage_id,omitempty"`     // Foreign key to WorkspaceStorage
+	Storage     *WorkspaceStorage `db:"storage" json:"storage,omitempty"`           // Pointer to associated WorkspaceStorage
+	TokenType   string            `db:"token_type" json:"token_type"`
+	CreatedAt   time.Time         `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time         `db:"updated_at" json:"updated_at"`
 
 	DisabledByClusterAdmin bool `db:"disabled_by_cluster_admin" json:"disabled_by_cluster_admin"`
 }
@@ -391,8 +463,9 @@ func NewStubFromProto(in *pb.Stub) *Stub {
 // @go2proto
 type StubWithRelated struct {
 	Stub
-	Workspace Workspace `db:"workspace" json:"workspace"`
-	Object    Object    `db:"object" json:"object"`
+	Workspace Workspace        `db:"workspace" json:"workspace"`
+	Object    Object           `db:"object" json:"object"`
+	Storage   WorkspaceStorage `db:"storage" json:"storage"`
 }
 
 func (s *StubWithRelated) ToProto() *pb.StubWithRelated {
@@ -400,6 +473,7 @@ func (s *StubWithRelated) ToProto() *pb.StubWithRelated {
 		Stub:      s.Stub.ToProto(),
 		Workspace: s.Workspace.ToProto(),
 		Object:    s.Object.ToProto(),
+		Storage:   s.Storage.ToProto(),
 	}
 }
 
@@ -408,6 +482,7 @@ func NewStubWithRelatedFromProto(in *pb.StubWithRelated) *StubWithRelated {
 		Stub:      *NewStubFromProto(in.Stub),
 		Workspace: *NewWorkspaceFromProto(in.Workspace),
 		Object:    *NewObjectFromProto(in.Object),
+		Storage:   *NewWorkspaceStorageFromProto(in.Storage),
 	}
 }
 

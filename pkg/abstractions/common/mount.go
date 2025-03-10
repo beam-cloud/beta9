@@ -1,6 +1,7 @@
 package abstractions
 
 import (
+	"fmt"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -11,22 +12,40 @@ import (
 const defaultExternalVolumesPath string = "/tmp/external-volumes"
 
 func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
-	signingKey, err := common.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	mounts := []types.Mount{
-		{
-			LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
-			MountPath: types.WorkerUserCodeVolume,
-			ReadOnly:  true,
-		},
-		{
-			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
-			MountPath: types.WorkerUserOutputVolume,
-			ReadOnly:  false,
-		},
+	var mounts []types.Mount
+	if workspace.StorageId != nil && *workspace.StorageId > 0 {
+		// TODO: This is a hack to support legacy storage. Once all workspaces have migrated to the new storage,
+		// we should remove this.
+		mounts = []types.Mount{
+			{
+				LocalPath: path.Join(fmt.Sprintf("/workspace/data/%s/objects/%s", workspace.Name, stubObjectId)),
+				MountPath: types.WorkerUserCodeVolume,
+				ReadOnly:  true,
+			},
+			{
+				LocalPath: path.Join(fmt.Sprintf("/workspace/data/%s/outputs/%s", workspace.Name, stubId)),
+				MountPath: types.WorkerUserOutputVolume,
+				ReadOnly:  false,
+			},
+		}
+	} else {
+		mounts = []types.Mount{
+			{
+				LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
+				MountPath: types.WorkerUserCodeVolume,
+				ReadOnly:  true,
+			},
+			{
+				LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
+				MountPath: types.WorkerUserOutputVolume,
+				ReadOnly:  false,
+			},
+		}
 	}
 
 	for _, v := range config.Volumes {
@@ -39,7 +58,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 
 		if v.Config != nil {
 			secrets := []string{v.Config.AccessKey, v.Config.SecretKey}
-			decryptedSecrets, err := common.DecryptAllSecrets(signingKey, secrets)
+			decryptedSecrets, err := common.DecryptAllSecrets(secretKey, secrets)
 			if err != nil {
 				return nil, err
 			}

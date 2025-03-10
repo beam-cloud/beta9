@@ -84,6 +84,22 @@ class HeadObjectResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class CreateObjectRequest(betterproto.Message):
+    object_metadata: "ObjectMetadata" = betterproto.message_field(1)
+    hash: str = betterproto.string_field(2)
+    size: int = betterproto.int64_field(3)
+    overwrite: bool = betterproto.bool_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class CreateObjectResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    object_id: str = betterproto.string_field(2)
+    presigned_url: str = betterproto.string_field(3)
+    error_msg: str = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
 class PutObjectRequest(betterproto.Message):
     object_content: bytes = betterproto.bytes_field(1)
     object_metadata: "ObjectMetadata" = betterproto.message_field(2)
@@ -648,12 +664,14 @@ class GatewayServiceStub(SyncServiceStub):
             HeadObjectResponse,
         )(head_object_request)
 
-    def put_object(self, put_object_request: "PutObjectRequest") -> "PutObjectResponse":
+    def create_object(
+        self, create_object_request: "CreateObjectRequest"
+    ) -> "CreateObjectResponse":
         return self._unary_unary(
-            "/gateway.GatewayService/PutObject",
-            PutObjectRequest,
-            PutObjectResponse,
-        )(put_object_request)
+            "/gateway.GatewayService/CreateObject",
+            CreateObjectRequest,
+            CreateObjectResponse,
+        )(create_object_request)
 
     def put_object_stream(
         self, put_object_request_iterator: Iterable["PutObjectRequest"]

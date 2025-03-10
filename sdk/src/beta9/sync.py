@@ -3,22 +3,24 @@ import os
 import tempfile
 import threading
 import zipfile
+from http import HTTPStatus
 from pathlib import Path
 from queue import Queue
-from typing import Generator, NamedTuple, Optional
+from typing import Generator, NamedTuple
 
+import requests
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 
 from beta9.vendor.pathspec import PathSpec
 
 from . import terminal
 from .clients.gateway import (
+    CreateObjectRequest,
+    CreateObjectResponse,
     GatewayServiceStub,
     HeadObjectRequest,
     HeadObjectResponse,
     ObjectMetadata,
-    PutObjectRequest,
-    PutObjectResponse,
     ReplaceObjectContentOperation,
 )
 from .config import get_settings
@@ -181,33 +183,45 @@ class FileSyncer:
             HeadObjectRequest(hash=hash)
         )
 
-        put_response: Optional[PutObjectResponse] = None
+        object_id = None
         if not head_response.exists:
             metadata = ObjectMetadata(name=hash, size=size)
 
-            def stream_requests():
+            def _upload_object() -> requests.Response:
                 with terminal.progress_open(temp_zip_name, "rb", description=None) as file:
-                    while chunk := file.read(CHUNK_SIZE):
-                        yield PutObjectRequest(chunk, metadata, hash, False)
+                    response = requests.put(presigned_url, data=file)
+                return response
 
             terminal.header("Uploading")
-            put_response = self.gateway_stub.put_object_stream(stream_requests())
-            if put_response.ok and self.is_workspace_dir:
-                set_workspace_object_id(put_response.object_id)
+            create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
+                CreateObjectRequest(object_metadata=metadata, hash=hash, size=size, overwrite=False)
+            )
+            if create_object_response.ok and self.is_workspace_dir:
+                presigned_url = create_object_response.presigned_url
+                response = _upload_object()
+                if response.status_code == HTTPStatus.OK:
+                    set_workspace_object_id(create_object_response.object_id)
+                    object_id = create_object_response.object_id
+                else:
+                    terminal.error("File sync failed ☠️")
 
         elif head_response.exists and head_response.ok:
             terminal.header("Files already synced")
+
             if self.is_workspace_dir:
                 set_workspace_object_id(head_response.object_id)
+                object_id = head_response.object_id
+
             return FileSyncResult(success=True, object_id=head_response.object_id)
 
         os.remove(temp_zip_name)
 
-        if put_response is None or not put_response.ok:
+        if object_id is None:
             terminal.error("File sync failed ☠️")
+            return FileSyncResult(success=False, object_id="")
 
         terminal.header("Files synced")
-        return FileSyncResult(success=True, object_id=put_response.object_id)  # pyright: ignore[reportOptionalMemberAccess]
+        return FileSyncResult(success=True, object_id=object_id)
 
 
 class SyncEventHandler(FileSystemEventHandler):
