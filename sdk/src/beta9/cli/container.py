@@ -13,6 +13,8 @@ from ..clients.gateway import (
     AttachToContainerRequest,
     ContainerStreamMessage,
     ListContainersRequest,
+    ReplaceObjectContentOperation,
+    ReplaceObjectContentRequest,
     StopContainerRequest,
     StopContainerResponse,
 )
@@ -156,27 +158,17 @@ def _attach_to_container(service: ServiceClient, container_id: str):
         )
 
         while True:
+            yield ContainerStreamMessage(
+                replace_object_content=ReplaceObjectContentRequest(
+                    object_id="myown",
+                    path="TEST",
+                    new_path="TEST",
+                    is_dir=False,
+                    data=b"somebin",
+                    op=ReplaceObjectContentOperation.WRITE,
+                )
+            )
             time.sleep(1)
-        #     command = input(
-        #         "Enter additional command ([r]eplace to send replace command, [q]uit to exit additional messaging): "
-        #     )
-        #     if command.lower() == "q":
-        #         break
-        #     elif command.lower() == "r":
-        #         object_id = input("Enter object_id: ")
-        #         path = input("Enter current path: ")
-        #         new_path = input("Enter new path: ")
-
-        #         yield ContainerStreamMessage(
-        #             replace_object_content=ReplaceObjectContentRequest(
-        #                 object_id=object_id,
-        #                 path=path,
-        #                 new_path=new_path,
-        #                 is_dir=False,
-        #                 data=b"",
-        #                 op=ReplaceObjectContentOperation.WRITE,
-        #             )
-        #         )
 
     # Connect to the remote container and stream messages back and forth
     stream = service.gateway.attach_to_container(_container_stream_generator())

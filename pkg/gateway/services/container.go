@@ -180,6 +180,8 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	ctx, cancel := common.MergeContexts(gws.ctx, ctx)
 	defer cancel()
 
+	objectQueue := make(chan *pb.ReplaceObjectContentRequest)
+
 	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
 		SendCallback:    sendCallback,
 		ExitCallback:    exitCallback,
@@ -187,6 +189,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 		Config:          gws.appConfig,
 		Tailscale:       gws.tailscale,
 		KeyEventManager: gws.keyEventManager,
+		ObjectQueue:     objectQueue,
 	})
 	if err != nil {
 		return err
@@ -214,9 +217,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 
 			switch payload := inMsg.Payload.(type) {
 			case *pb.ContainerStreamMessage_ReplaceObjectContent:
-				if err := gws.handleReplaceObjectContent(ctx, container, payload.ReplaceObjectContent); err != nil {
-					log.Printf("Error handling ReplaceObjectContent: %v", err)
-				}
+				objectQueue <- payload.ReplaceObjectContent
 			default:
 			}
 		}
@@ -230,9 +231,4 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 		cancel()
 		return err
 	}
-}
-
-func (gws *GatewayService) handleReplaceObjectContent(ctx context.Context, container *types.ContainerState, req *pb.ReplaceObjectContentRequest) error {
-	log.Printf("Received ReplaceObjectContentRequest for object: %s", req.ObjectId)
-	return nil
 }

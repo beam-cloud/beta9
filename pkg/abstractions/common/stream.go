@@ -10,6 +10,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -23,6 +25,7 @@ type ContainerStreamOpts struct {
 	Tailscale       *network.Tailscale
 	Config          types.AppConfig
 	KeyEventManager *common.KeyEventManager
+	ObjectQueue     chan *pb.ReplaceObjectContentRequest
 }
 
 func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
@@ -33,6 +36,7 @@ func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
 		tailscale:       opts.Tailscale,
 		config:          opts.Config,
 		keyEventManager: opts.KeyEventManager,
+		objectQueue:     opts.ObjectQueue,
 	}, nil
 }
 
@@ -43,6 +47,7 @@ type ContainerStream struct {
 	tailscale       *network.Tailscale
 	config          types.AppConfig
 	keyEventManager *common.KeyEventManager
+	objectQueue     chan *pb.ReplaceObjectContentRequest
 }
 
 func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
@@ -85,6 +90,8 @@ func (l *ContainerStream) handleStreams(
 _stream:
 	for {
 		select {
+		case req := <-l.objectQueue:
+			log.Info().Msgf("Received object request: %v", req)
 		case o := <-outputChan:
 			if err := l.sendCallback(o); err != nil {
 				lastMessage = o
