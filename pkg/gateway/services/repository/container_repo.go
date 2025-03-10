@@ -121,7 +121,7 @@ func (s *ContainerRepositoryService) UpdateCheckpointState(ctx context.Context, 
 		Status:      types.CheckpointStatus(req.CheckpointState.Status),
 		RemoteKey:   req.CheckpointState.RemoteKey,
 	}
-	err := s.containerRepo.UpdateCheckpointState(req.ContainerId, req.CheckpointId, &checkpointState)
+	err := s.containerRepo.UpdateCheckpointState(req.WorkspaceName, req.CheckpointId, &checkpointState)
 	if err != nil {
 		return &pb.UpdateCheckpointStateResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}

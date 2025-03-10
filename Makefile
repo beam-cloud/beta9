@@ -2,7 +2,7 @@ SHELL := /bin/bash
 tag := latest
 workerTag := latest
 runnerTag := latest
-runnerPlatform := linux/arm64
+runnerPlatform := linux/amd64
 
 setup:
 	bash bin/setup.sh
@@ -54,6 +54,10 @@ start:
 	else \
 		cd hack && okteto up --file okteto.yaml; \
 	fi
+
+clear-ports:
+	@echo "Killing processes on ports 1993, 1994, and 8008..."
+	@lsof -t -i :1993,1994,8008 | xargs -r sudo kill -9 2>/dev/null || true
 
 stop:
 	cd hack && okteto down --file okteto.yaml

@@ -38,6 +38,8 @@ const (
 	pipCommandType        string = "pip"
 	shellCommandType      string = "shell"
 	micromambaCommandType string = "micromamba"
+
+	dockerHubRegistry string = "docker.io"
 )
 
 type Builder struct {
@@ -245,6 +247,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		containerSpinupTimeout = b.calculateImageArchiveDuration(ctx, opts)
 	}
 
+	if creds, err := b.shouldUseDefaultDockerCreds(opts); err == nil {
+		opts.BaseImageCreds = creds
+	}
+
 	containerId := b.genContainerId()
 
 	containerRequest, err := b.generateContainerRequest(opts, dockerfile, containerId, authInfo.Workspace)
@@ -304,7 +310,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}()
 	defer client.Kill(containerId) // Kill and remove container after the build completes
 
-	outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: "Waiting for build container to start...\n"}
+	outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: "Setting up build container...\n"}
 	start := time.Now()
 	buildContainerRunning := false
 
@@ -441,6 +447,20 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	return nil
 }
 
+func (b *Builder) shouldUseDefaultDockerCreds(opts *BuildOpts) (string, error) {
+	isDockerHub := opts.BaseImageRegistry == dockerHubRegistry
+	credsNotSet := opts.BaseImageCreds == ""
+
+	if isDockerHub && credsNotSet {
+		username := b.config.ImageService.Registries.Docker.Username
+		password := b.config.ImageService.Registries.Docker.Password
+		if username != "" && password != "" {
+			return fmt.Sprintf("%s:%s", username, password), nil
+		}
+	}
+	return "", errors.New("docker creds not set in config")
+}
+
 // generateContainerRequest generates a container request for the build container
 func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, containerId string, workspace *types.Workspace) (*types.ContainerRequest, error) {
 	baseImageId, err := b.GetImageId(&BuildOpts{
@@ -570,7 +590,7 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 
 	registry := result["Registry"]
 	if registry == "" {
-		registry = "docker.io"
+		registry = dockerHubRegistry
 	}
 
 	repo := result["Repo"]
@@ -835,7 +855,7 @@ func tagOrDigest(digest string, tag string) string {
 
 func (b *Builder) calculateImageArchiveDuration(ctx context.Context, opts *BuildOpts) time.Duration {
 	sourceImage := getSourceImage(opts)
-	imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds)
+	imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to inspect image")
 		return defaultContainerSpinupTimeout

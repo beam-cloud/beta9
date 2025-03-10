@@ -90,3 +90,12 @@ func (w *ZerologIOWriter) Write(p []byte) (n int, err error) {
 	w.LogFn().Msg(strings.TrimSpace(string(p)))
 	return len(p), nil
 }
+
+type ExecWriter struct {
+	*slog.Logger
+}
+
+func (c *ExecWriter) Write(p []byte) (n int, err error) {
+	c.Info(string(p))
+	return len(p), nil
+}

@@ -17,7 +17,7 @@ type AppConfig struct {
 	Database       DatabaseConfig            `key:"database" json:"database"`
 	GatewayService GatewayServiceConfig      `key:"gateway" json:"gateway_service"`
 	FileService    FileServiceConfig         `key:"fileService" json:"file_service"`
-	ImageService   ImageServiceConfig        `key:"imageservice" json:"image_service"`
+	ImageService   ImageServiceConfig        `key:"imageService" json:"image_service"`
 	Storage        StorageConfig             `key:"storage" json:"storage"`
 	Worker         WorkerConfig              `key:"worker" json:"worker"`
 	Providers      ProviderConfig            `key:"providers" json:"providers"`
@@ -496,9 +496,21 @@ type FluentBitEventConfig struct {
 	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
 }
 
+type CRIUConfigMode string
+
+var (
+	CRIUConfigModeCedana CRIUConfigMode = "cedana"
+	CRIUConfigModeNvidia CRIUConfigMode = "nvidia"
+)
+
 type CRIUConfig struct {
+	Mode    CRIUConfigMode          `key:"mode" json:"mode"`
 	Storage CheckpointStorageConfig `key:"storage" json:"storage"`
 	Cedana  cedana.Config           `key:"cedana" json:"cedana"`
+	Nvidia  NvidiaCRIUConfig        `key:"nvidia" json:"nvidia"`
+}
+
+type NvidiaCRIUConfig struct {
 }
 
 type CheckpointStorageConfig struct {

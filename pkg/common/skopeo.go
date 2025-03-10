@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"syscall"
@@ -21,9 +22,9 @@ const (
 )
 
 type SkopeoClient interface {
-	Inspect(ctx context.Context, sourceImage string, creds string) (ImageMetadata, error)
+	Inspect(ctx context.Context, sourceImage string, creds string, overrideLogger *slog.Logger) (ImageMetadata, error)
 	InspectSizeInBytes(ctx context.Context, sourceImage string, creds string) (int64, error)
-	Copy(ctx context.Context, sourceImage string, dest string, creds string) error
+	Copy(ctx context.Context, sourceImage string, dest string, creds string, overrideLogger *slog.Logger) error
 }
 
 type skopeoClient struct {
@@ -65,7 +66,7 @@ func NewSkopeoClient(config types.AppConfig) SkopeoClient {
 	}
 }
 
-func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds string) (ImageMetadata, error) {
+func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds string, overrideLogger *slog.Logger) (ImageMetadata, error) {
 	var imageMetadata ImageMetadata
 	args := []string{"inspect", fmt.Sprintf("docker://%s", sourceImage)}
 
@@ -73,6 +74,10 @@ func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds st
 	cmd := exec.CommandContext(ctx, p.pullCommand, args...)
 	cmd.Stdout = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s inspect", p.pullCommand)) }}
 	cmd.Stderr = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s inspect", p.pullCommand)) }}
+	if overrideLogger != nil {
+		cmd.Stdout = &ExecWriter{Logger: overrideLogger}
+		cmd.Stderr = &ExecWriter{Logger: overrideLogger}
+	}
 
 	output, err := exec.CommandContext(ctx, p.pullCommand, args...).Output()
 	if err != nil {
@@ -90,7 +95,7 @@ func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds st
 }
 
 func (p *skopeoClient) InspectSizeInBytes(ctx context.Context, sourceImage string, creds string) (int64, error) {
-	imageMetadata, err := p.Inspect(ctx, sourceImage, creds)
+	imageMetadata, err := p.Inspect(ctx, sourceImage, creds, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -103,7 +108,7 @@ func (p *skopeoClient) InspectSizeInBytes(ctx context.Context, sourceImage strin
 	return size, nil
 }
 
-func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string, creds string) error {
+func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string, creds string, overrideLogger *slog.Logger) error {
 	args := []string{"copy", fmt.Sprintf("docker://%s", sourceImage), dest}
 
 	args = append(args, p.copyArgs(creds)...)
@@ -112,6 +117,10 @@ func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string
 	cmd.Dir = imageTmpDir
 	cmd.Stdout = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", p.pullCommand)) }}
 	cmd.Stderr = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", p.pullCommand)) }}
+	if overrideLogger != nil {
+		cmd.Stdout = &ExecWriter{Logger: overrideLogger}
+		cmd.Stderr = &ExecWriter{Logger: overrideLogger}
+	}
 
 	ec, err := p.startCommand(cmd)
 	if err != nil {

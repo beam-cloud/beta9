@@ -28,15 +28,17 @@ EOT
 
 # runc
 # ========================
-FROM golang AS runc
+# FIXME: once we upgrade to 1.23, we can just use "FROM golang"
+FROM golang:1.23-bookworm AS runc
 
 WORKDIR /workspace
 
-RUN apt-get install -y libseccomp-dev
+RUN apt-get update && apt-get install -y libseccomp-dev
 
 RUN <<EOT
 set -eux
-git clone -b config-path-option https://github.com/beam-cloud/runc.git .
+git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git .
+
 make
 make install
 /usr/local/sbin/runc --version
@@ -94,7 +96,7 @@ RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
 # final image
 # ========================
-FROM nvidia/cuda:12.4.1-base-ubuntu22.04 AS release
+FROM nvidia/cuda:12.8.0-base-ubuntu22.04 AS release
 FROM release AS dev
 
 FROM ${BASE_STAGE} AS final
@@ -112,7 +114,6 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
-RUN apt-get install -y cuda-nvcc-12-4=12.4.99-1 cuda-nvvm-12-4=12.4.99-1 cuda-crt-12-4=12.4.99-1 libnvidia-encode-550=550.90.12-0ubuntu1 libnvidia-decode-550=550.90.12-0ubuntu1 libnvidia-compute-550=550.90.12-0ubuntu1
 RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
 RUN apt-get install -y libbtrfs-dev libgpgme11-dev
@@ -120,30 +121,9 @@ RUN mkdir -p /etc/containers/registries.conf.d
 RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/main/shortnames.conf \
     -o /etc/containers/registries.conf.d/shortnames.conf
 
-# XXX: Remove once cedana starts shipping with a compatible binary
-RUN <<EOT
-set -eux
-if [ "$(uname -m)" = "x86_64" ]; then
-    apt-get install -y python3-protobuf libnet1 libnftables1 libnl-3-200 libprotobuf-c1 iptables
-    curl -L -o criu.deb https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_22.04/amd64/criu_4.0-3_amd64.deb
-    dpkg -i criu.deb
-    rm criu.deb
-fi
-EOT
-
-ARG CEDANA_VERSION=0.9.234
-RUN <<EOT
-set -eux
-if [ "$(uname -m)" = "x86_64" ]; then
-    apt-get install -y libgpgme11
-    curl -L -o cedana_amd64.deb https://github.com/cedana/cedana/releases/download/v${CEDANA_VERSION}/cedana_${CEDANA_VERSION}_amd64.deb
-    dpkg -i cedana_amd64.deb
-    rm cedana_amd64.deb
-fi
-EOT
-
-ARG CEDANA_TOKEN
-ARG CEDANA_BASE_URL
+ARG CEDANA_VERSION=0.9.240
+ARG CEDANA_BASE_URL=""
+ARG CEDANA_TOKEN=""
 
 RUN if [ -n "${CEDANA_TOKEN}" ]; then \
     curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/gpucontroller -o /usr/local/bin/cedana-gpu-controller && \
@@ -151,6 +131,35 @@ RUN if [ -n "${CEDANA_TOKEN}" ]; then \
     curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/libcedana -o /usr/local/lib/libcedana-gpu.so && \
     chmod +x /usr/local/lib/libcedana-gpu.so; \
     fi
+
+RUN <<EOT
+set -eux
+if [ "$(uname -m)" = "x86_64" ]; then
+    apt-get update && apt-get install -y \
+        gcc \
+        make \
+        python3-protobuf \
+        libbsd-dev \
+        libdrm-dev \
+        libnet1-dev \
+        libnl-3-dev \
+        libcap-dev \
+        uuid-dev \
+        gnutls-dev \
+        libnftables-dev \
+        pkg-config \
+        protobuf-c-compiler \
+        protobuf-compiler \
+        libprotobuf-c-dev \
+        git
+    git clone https://github.com/checkpoint-restore/criu.git
+    cd criu
+    make install-lib install-criu install-compel install-amdgpu_plugin install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
+    criu --version
+    stat /usr/lib/criu/cuda_plugin.so 
+    cd .. && rm -rf criu
+fi
+EOT
 
 ARG TARGETARCH
 
@@ -165,6 +174,8 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
     mv mount-s3/bin/mount-s3 /usr/local/bin/ms3 && chmod +x /usr/local/bin/ms3 && \
     rm -rf mount-s3 $TARBALL
 
+RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint && \
+    chmod +x /usr/local/bin/cuda-checkpoint
 
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
     curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /tmp/cuno_1.2.6_amd64_glibc.deb && \
@@ -189,6 +200,12 @@ COPY --from=buildah /usr/local/bin/buildah /usr/local/bin/buildah
 
 VOLUME "/usr/lib/x86_64-linux-gnu"
 VOLUME "/usr/lib/aarch64-linux-gnu"
+
+RUN mkdir -p /etc/criu
+RUN touch /etc/criu/default.conf
+# add the following options to the default.conf file on new lines
+RUN echo "verbosity=4" >> /etc/criu/default.conf
+RUN echo "display-stats" >> /etc/criu/default.conf
 
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,ngx,video
 ENV _BUILDAH_STARTED_IN_USERNS="" \

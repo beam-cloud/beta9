@@ -127,12 +127,11 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 	return c, nil
 }
 
-func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest) error {
+func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, error) {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
 	c.logger.Log(request.ContainerId, request.StubId, "Loading image: %s", imageId)
-
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
@@ -153,27 +152,27 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			localCachePath = baseBlobFsContentPath
 		} else {
 			pullStartTime := time.Now()
-			c.logger.Log(request.ContainerId, request.StubId, "image <%s> not found in cache, caching nearby", imageId)
+			outputLogger.Info(fmt.Sprintf("Image <%s> not found in worker region, caching nearby\n", imageId))
 
 			// Otherwise, lets cache it in a nearby blobcache host
 			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
 			if err == nil {
 				localCachePath = baseBlobFsContentPath
+				outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
 			} else {
-				c.logger.Log(request.ContainerId, request.StubId, "unable to cache image nearby <%s>: %v\n", imageId, err)
+				outputLogger.Info(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
 			}
 			metrics.RecordImagePullTime(time.Since(pullStartTime))
 		}
 	}
 
 	elapsed := time.Since(startTime)
-	c.logger.Log(request.ContainerId, request.StubId, "Loaded image <%s>, took: %s", imageId, elapsed)
 
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 	if _, err := os.Stat(remoteArchivePath); err != nil {
 		err = c.registry.Pull(context.TODO(), remoteArchivePath, imageId)
 		if err != nil {
-			return err
+			return elapsed, err
 		}
 	}
 
@@ -195,7 +194,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	// Check if a fuse server exists for this imageId
 	_, mounted := c.mountedFuseServers.Get(imageId)
 	if mounted {
-		return nil
+		return elapsed, nil
 	}
 
 	// Get lock on image mount
@@ -204,7 +203,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		ImageId:  imageId,
 	}))
 	if err != nil {
-		return err
+		return elapsed, err
 	}
 	defer handleGRPCResponse(c.workerRepoClient.RemoveImagePullLock(context.Background(), &pb.RemoveImagePullLockRequest{
 		WorkerId: c.workerId,
@@ -214,16 +213,16 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	startServer, _, server, err := clip.MountArchive(*mountOptions)
 	if err != nil {
-		return err
+		return elapsed, err
 	}
 
 	err = startServer()
 	if err != nil {
-		return err
+		return elapsed, err
 	}
 
 	c.mountedFuseServers.Set(imageId, server)
-	return nil
+	return elapsed, nil
 }
 
 func (c *ImageClient) Cleanup() error {
@@ -245,7 +244,7 @@ func (c *ImageClient) Cleanup() error {
 }
 
 func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) error {
-	imageMetadata, err := c.skopeoClient.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
+	imageMetadata, err := c.skopeoClient.Inspect(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds, nil)
 	if err != nil {
 		return err
 	}
@@ -263,16 +262,6 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 	}
 
 	return nil
-}
-
-// Will be replaced when structured logging is merged
-type ExecWriter struct {
-	outputLogger *slog.Logger
-}
-
-func (c *ExecWriter) Write(p []byte) (n int, err error) {
-	c.outputLogger.Info(string(p))
-	return len(p), nil
 }
 
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
@@ -305,16 +294,16 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	os.MkdirAll(ociPath, 0755)
 
 	cmd := exec.CommandContext(ctx, "buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
-	cmd.Stdout = &ExecWriter{outputLogger: outputLogger}
-	cmd.Stderr = &ExecWriter{outputLogger: outputLogger}
+	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 	err = cmd.Run()
 	if err != nil {
 		return err
 	}
 
 	cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "push", request.ImageId+":latest", "oci:"+ociPath+":latest")
-	cmd.Stdout = &ExecWriter{outputLogger: outputLogger}
-	cmd.Stderr = &ExecWriter{outputLogger: outputLogger}
+	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 	err = cmd.Run()
 	if err != nil {
 		return err
@@ -387,7 +376,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	outputLogger.Info(fmt.Sprintf("Copying image (size: %.2f MB)...\n", imageSizeMB))
 	startTime := time.Now()
-	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds)
+	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds, outputLogger)
 	if err != nil {
 		return err
 	}
