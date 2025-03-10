@@ -186,8 +186,13 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 	}))
 
 	wg.Wait() // Wait for all tasks to finish
-	log.Info().Str("container_id", containerId).Msgf("cached checkpoint: %s", checkpointPath)
-	return storeContentErr.ErrorOrNil()
+	err = storeContentErr.ErrorOrNil()
+	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("error caching checkpoint: %v", err)
+	} else {
+		log.Info().Str("container_id", containerId).Msgf("cached checkpoint: %s", checkpointPath)
+	}
+	return err
 }
 
 // getNvidiaDriverVersion returns the NVIDIA driver version as an integer
