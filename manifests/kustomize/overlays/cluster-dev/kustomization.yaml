@@ -38,28 +38,35 @@ patches:
       path: /spec/template/spec/initContainers/0/resources
     - op: remove
       path: /spec/template/spec/containers/0/resources
-# Disable unused monitoring components
 - target:
     kind: Deployment
     name: victoria-metrics-agent
   patch: |-
     - op: replace
       path: /spec/replicas
-      value: 0
+      value: 1
 - target:
     kind: StatefulSet
     name: victoria-metrics-single
   patch: |-
     - op: replace
       path: /spec/replicas
-      value: 0
+      value: 1
 - target:
     kind: StatefulSet
     name: victoria-logs-single
   patch: |-
     - op: replace
       path: /spec/replicas
-      value: 0
+      value: 1
+- target:
+    kind: Deployment
+    name: grafana
+  patch: |-
+    - op: replace
+      path: /spec/replicas
+      value: 1
+
 # Replace RollingUpdate with Recreate for all Deployments in this overlay
 - target:
     kind: Deployment
@@ -68,3 +75,18 @@ patches:
       path: /spec/strategy
       value:
         type: Recreate
+
+- target:
+    kind: Service
+    name: grafana
+  patch: |-
+    - op: replace
+      path: /spec/type
+      value: LoadBalancer
+    - op: replace
+      path: /spec/ports
+      value:
+        - name: service
+          port: 3000
+          targetPort: 3000
+          protocol: TCP

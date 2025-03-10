@@ -23,6 +23,7 @@ const (
 
 type SkopeoClient interface {
 	Inspect(ctx context.Context, sourceImage string, creds string, overrideLogger *slog.Logger) (ImageMetadata, error)
+	InspectSizeInBytes(ctx context.Context, sourceImage string, creds string) (int64, error)
 	Copy(ctx context.Context, sourceImage string, dest string, creds string, overrideLogger *slog.Logger) error
 }
 
@@ -91,6 +92,20 @@ func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds st
 	}
 
 	return imageMetadata, nil
+}
+
+func (p *skopeoClient) InspectSizeInBytes(ctx context.Context, sourceImage string, creds string) (int64, error) {
+	imageMetadata, err := p.Inspect(ctx, sourceImage, creds, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	size := int64(0)
+	for _, layer := range imageMetadata.LayersData {
+		size += int64(layer.Size)
+	}
+
+	return size, nil
 }
 
 func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string, creds string, overrideLogger *slog.Logger) error {
