@@ -50,7 +50,7 @@ func (c *ContainerCostClient) GetContainerCostPerMs(request *types.ContainerRequ
 
 	var response ContainerCostResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return 0, fmt.Errorf("failed to decode response: %v", err)
+		return 0, err
 	}
 
 	costPerMs, err := strconv.ParseFloat(response.CostPerMs, 64)

@@ -79,13 +79,15 @@ func (wm *WorkerMetrics) EmitContainerUsage(ctx context.Context, request *types.
 	for {
 		select {
 		case <-ticker.C:
-			go wm.metricsContainerDuration(request, time.Since(cursorTime))
-			go wm.metricsContainerCost(request, time.Since(cursorTime))
+			duration := time.Since(cursorTime)
+			wm.metricsContainerDuration(request, duration)
+			wm.metricsContainerCost(request, duration)
 			cursorTime = time.Now()
 		case <-ctx.Done():
 			// Consolidate any remaining time
-			go wm.metricsContainerDuration(request, time.Since(cursorTime))
-			go wm.metricsContainerCost(request, time.Since(cursorTime))
+			duration := time.Since(cursorTime)
+			wm.metricsContainerDuration(request, duration)
+			wm.metricsContainerCost(request, duration)
 			return
 		}
 	}
