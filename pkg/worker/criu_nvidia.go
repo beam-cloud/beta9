@@ -67,7 +67,6 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.request.StubId)
-	originalImagePath := imagePath
 	workDir := filepath.Join("/tmp", imagePath)
 	err := c.setupRestoreWorkDir(workDir)
 	if err != nil {
