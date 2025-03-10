@@ -5,22 +5,22 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-type SchedulerUsage struct {
+type SchedulerUsageMetrics struct {
 	UsageRepo repository.UsageMetricsRepository
 }
 
-func NewSchedulerUsage(usageRepo repository.UsageMetricsRepository) SchedulerUsage {
-	return SchedulerUsage{
-		UsageRepo: usageRepo,
+func NewSchedulerUsageMetrics(usageMetricsRepo repository.UsageMetricsRepository) SchedulerUsageMetrics {
+	return SchedulerUsageMetrics{
+		UsageRepo: usageMetricsRepo,
 	}
 }
 
-func (sm *SchedulerUsage) CounterIncContainerScheduled(request *types.ContainerRequest) {
+func (sm *SchedulerUsageMetrics) CounterIncContainerScheduled(request *types.ContainerRequest) {
 	if sm.UsageRepo == nil {
 		return
 	}
 
-	sm.UsageRepo.IncrementCounter(types.MetricsSchedulerContainerScheduled, map[string]interface{}{
+	sm.UsageRepo.IncrementCounter(types.UsageMetricsSchedulerContainerScheduled, map[string]interface{}{
 		"value":        1,
 		"workspace_id": request.WorkspaceId,
 		"stub_id":      request.StubId,
@@ -28,12 +28,12 @@ func (sm *SchedulerUsage) CounterIncContainerScheduled(request *types.ContainerR
 	}, 1.0)
 }
 
-func (sm *SchedulerUsage) CounterIncContainerRequested(request *types.ContainerRequest) {
+func (sm *SchedulerUsageMetrics) CounterIncContainerRequested(request *types.ContainerRequest) {
 	if sm.UsageRepo == nil {
 		return
 	}
 
-	sm.UsageRepo.IncrementCounter(types.MetricsSchedulerContainerRequested, map[string]interface{}{
+	sm.UsageRepo.IncrementCounter(types.UsageMetricsSchedulerContainerRequested, map[string]interface{}{
 		"value":        1,
 		"workspace_id": request.WorkspaceId,
 		"stub_id":      request.StubId,

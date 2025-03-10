@@ -34,7 +34,7 @@ func NewWorkerUsageMetrics(
 }
 
 func (wm *WorkerUsageMetrics) usageContainerDuration(request *types.ContainerRequest, duration time.Duration) {
-	wm.usageRepo.IncrementCounter(types.MetricsWorkerContainerDuration, map[string]interface{}{
+	wm.usageRepo.IncrementCounter(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{
 		"container_id":   request.ContainerId,
 		"worker_id":      wm.workerId,
 		"stub_id":        request.StubId,

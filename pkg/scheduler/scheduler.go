@@ -22,16 +22,16 @@ const (
 )
 
 type Scheduler struct {
-	ctx               context.Context
-	backendRepo       repo.BackendRepository
-	workerRepo        repo.WorkerRepository
-	workerPoolManager *WorkerPoolManager
-	requestBacklog    *RequestBacklog
-	containerRepo     repo.ContainerRepository
-	workspaceRepo     repo.WorkspaceRepository
-	eventRepo         repo.EventRepository
-	schedulerUsage    SchedulerUsage
-	eventBus          *common.EventBus
+	ctx                   context.Context
+	backendRepo           repo.BackendRepository
+	workerRepo            repo.WorkerRepository
+	workerPoolManager     *WorkerPoolManager
+	requestBacklog        *RequestBacklog
+	containerRepo         repo.ContainerRepository
+	workspaceRepo         repo.WorkspaceRepository
+	eventRepo             repo.EventRepository
+	schedulerUsageMetrics SchedulerUsageMetrics
+	eventBus              *common.EventBus
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
@@ -42,7 +42,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
 
-	schedulerUsage := NewSchedulerUsage(usageRepo)
+	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
 	// Load worker pools
@@ -93,16 +93,16 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	}
 
 	return &Scheduler{
-		ctx:               ctx,
-		eventBus:          eventBus,
-		backendRepo:       backendRepo,
-		workerRepo:        workerRepo,
-		workerPoolManager: workerPoolManager,
-		requestBacklog:    requestBacklog,
-		containerRepo:     containerRepo,
-		schedulerUsage:    schedulerUsage,
-		eventRepo:         eventRepo,
-		workspaceRepo:     workspaceRepo,
+		ctx:                   ctx,
+		eventBus:              eventBus,
+		backendRepo:           backendRepo,
+		workerRepo:            workerRepo,
+		workerPoolManager:     workerPoolManager,
+		requestBacklog:        requestBacklog,
+		containerRepo:         containerRepo,
+		schedulerUsageMetrics: schedulerUsage,
+		eventRepo:             eventRepo,
+		workspaceRepo:         workspaceRepo,
 	}, nil
 }
 
@@ -121,7 +121,7 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	go s.schedulerUsage.CounterIncContainerRequested(request)
+	go s.schedulerUsageMetrics.CounterIncContainerRequested(request)
 	go s.eventRepo.PushContainerRequestedEvent(request)
 
 	quota, err := s.getConcurrencyLimit(request)
@@ -315,7 +315,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	request.Gpu = worker.Gpu
 
-	go s.schedulerUsage.CounterIncContainerScheduled(request)
+	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }

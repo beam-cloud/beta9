@@ -12,6 +12,12 @@ import (
 	"tailscale.com/tstime/rate"
 )
 
+const (
+	// Rate limiter that allows 2 records per second
+	dialMetricLimiterRate  = 2
+	dialMetricLimiterBurst = 2
+)
+
 var (
 	dialMetricLimiter *rate.Limiter
 )
@@ -32,7 +38,6 @@ const (
 )
 
 func InitializeMetricsRepository(config types.VictoriaMetricsConfig) {
-	// ENV to collect for default labels
 	workerPoolName := os.Getenv("WORKER_POOL_NAME")
 	gpuType := os.Getenv("GPU_TYPE")
 	podHostname := os.Getenv("POD_HOSTNAME")
@@ -58,7 +63,7 @@ func InitializeMetricsRepository(config types.VictoriaMetricsConfig) {
 		opts,
 	)
 
-	dialMetricLimiter = rate.NewLimiter(2, 1)
+	dialMetricLimiter = rate.NewLimiter(dialMetricLimiterRate, dialMetricLimiterBurst)
 }
 
 func RecordRequestSchedulingDuration(duration time.Duration, request *types.ContainerRequest) {

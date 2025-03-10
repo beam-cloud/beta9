@@ -167,7 +167,7 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		log.Error().Str("key", key).Err(err).Msg("error getting file size")
-		return err
+		return nil
 	}
 	sizeMB := float64(info.Size()) / 1024 / 1024
 	metrics.RecordS3GetSpeed(sizeMB, time.Since(start))
