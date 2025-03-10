@@ -67,7 +67,11 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, opts.request.StubId)
-	originalImagePath := imagePath
+
+	err := c.setupRestoreWorkDir(imagePath)
+	if err != nil {
+		return -1, err
+	}
 
 	if c.fileCacheManager.CacheAvailable() {
 		cachedCheckpointPath := filepath.Join(baseFileCachePath, imagePath)
@@ -82,7 +86,9 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
 			AllowOpenTCP: true,
-			WorkDir:      originalImagePath,
+			// Logs, irmap cache, sockets for lazy server and other go to working dir
+			// must be overriden bc blobcache is read-only
+			WorkDir:      fmt.Sprintf("/tmp%s", imagePath),
 			ImagePath:    imagePath,
 			OutputWriter: opts.runcOpts.OutputWriter,
 		},
@@ -180,6 +186,7 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 	}))
 
 	wg.Wait() // Wait for all tasks to finish
+	log.Info().Str("container_id", containerId).Msgf("cached checkpoint: %s", checkpointPath)
 	return storeContentErr.ErrorOrNil()
 }
 
@@ -223,4 +230,15 @@ func crCompatible(gpuCnt int) bool {
 	}
 
 	return true
+}
+
+func (c *NvidiaCRIUManager) setupRestoreWorkDir(imagePath string) error {
+	if _, err := os.Stat(fmt.Sprintf("/tmp%s", imagePath)); os.IsNotExist(err) {
+		err := os.MkdirAll(fmt.Sprintf("/tmp%s", imagePath), 0755)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
