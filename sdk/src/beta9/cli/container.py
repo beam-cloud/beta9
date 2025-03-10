@@ -1,4 +1,5 @@
 import datetime
+import time
 from typing import List
 
 import click
@@ -10,6 +11,7 @@ from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
     AttachToContainerRequest,
+    ContainerStreamMessage,
     ListContainersRequest,
     StopContainerRequest,
     StopContainerResponse,
@@ -148,15 +150,40 @@ def stop_container(service: ServiceClient, container_ids: List[str]):
 def _attach_to_container(service: ServiceClient, container_id: str):
     terminal.header(f"Connecting to {container_id}...")
 
-    stream = service.gateway.attach_to_container(
-        AttachToContainerRequest(
-            container_id=container_id,
+    def _container_stream_generator():
+        yield ContainerStreamMessage(
+            attach_request=AttachToContainerRequest(container_id=container_id)
         )
-    )
+
+        while True:
+            time.sleep(1)
+        #     command = input(
+        #         "Enter additional command ([r]eplace to send replace command, [q]uit to exit additional messaging): "
+        #     )
+        #     if command.lower() == "q":
+        #         break
+        #     elif command.lower() == "r":
+        #         object_id = input("Enter object_id: ")
+        #         path = input("Enter current path: ")
+        #         new_path = input("Enter new path: ")
+
+        #         yield ContainerStreamMessage(
+        #             replace_object_content=ReplaceObjectContentRequest(
+        #                 object_id=object_id,
+        #                 path=path,
+        #                 new_path=new_path,
+        #                 is_dir=False,
+        #                 data=b"",
+        #                 op=ReplaceObjectContentOperation.WRITE,
+        #             )
+        #         )
+
+    # Connect to the remote container and stream messages back and forth
+    stream = service.gateway.attach_to_container(_container_stream_generator())
 
     r = None
     for r in stream:
-        if r.output != "":
+        if r.output:
             terminal.detail(r.output, end="")
 
         if r.done or r.exit_code != 0:

@@ -198,7 +198,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 		streamErrCh <- containerStream.Stream(ctx, authInfo, container.ContainerId)
 	}()
 
-	// Process additional client messages at the same time
+	// RX incoming client messages
 	clientMsgErrCh := make(chan error, 1)
 	go func() {
 		for {
@@ -214,13 +214,10 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 
 			switch payload := inMsg.Payload.(type) {
 			case *pb.ContainerStreamMessage_ReplaceObjectContent:
-				// Now handling a ReplaceObjectContent message.
-				// You can add your business logic in a separate handler.
 				if err := gws.handleReplaceObjectContent(ctx, container, payload.ReplaceObjectContent); err != nil {
 					log.Printf("Error handling ReplaceObjectContent: %v", err)
 				}
 			default:
-				log.Printf("Received unknown message type in container stream")
 			}
 		}
 	}()
