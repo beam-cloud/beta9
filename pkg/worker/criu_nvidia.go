@@ -66,9 +66,10 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
-	imagePath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, opts.request.StubId)
-
-	err := c.setupRestoreWorkDir(imagePath)
+	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.request.StubId)
+	originalImagePath := imagePath
+	workDir := filepath.Join("/tmp", imagePath)
+	err := c.setupRestoreWorkDir(workDir)
 	if err != nil {
 		return -1, err
 	}
@@ -88,7 +89,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 			AllowOpenTCP: true,
 			// Logs, irmap cache, sockets for lazy server and other go to working dir
 			// must be overriden bc blobcache is read-only
-			WorkDir:      fmt.Sprintf("/tmp%s", imagePath),
+			WorkDir:      workDir,
 			ImagePath:    imagePath,
 			OutputWriter: opts.runcOpts.OutputWriter,
 		},
@@ -237,9 +238,9 @@ func crCompatible(gpuCnt int) bool {
 	return true
 }
 
-func (c *NvidiaCRIUManager) setupRestoreWorkDir(imagePath string) error {
-	if _, err := os.Stat(fmt.Sprintf("/tmp%s", imagePath)); os.IsNotExist(err) {
-		err := os.MkdirAll(fmt.Sprintf("/tmp%s", imagePath), 0755)
+func (c *NvidiaCRIUManager) setupRestoreWorkDir(workDir string) error {
+	if _, err := os.Stat(workDir); os.IsNotExist(err) {
+		err := os.MkdirAll(workDir, 0755)
 		if err != nil {
 			return err
 		}
