@@ -137,6 +137,16 @@ class StopContainerResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class ContainerStreamMessage(betterproto.Message):
+    attach_request: "AttachToContainerRequest" = betterproto.message_field(
+        1, group="payload"
+    )
+    replace_object_content: "ReplaceObjectContentRequest" = betterproto.message_field(
+        2, group="payload"
+    )
+
+
+@dataclass(eq=False, repr=False)
 class AttachToContainerRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
 
@@ -696,13 +706,13 @@ class GatewayServiceStub(SyncServiceStub):
         )(stop_container_request)
 
     def attach_to_container(
-        self, attach_to_container_request: "AttachToContainerRequest"
+        self, container_stream_message_iterator: Iterable["ContainerStreamMessage"]
     ) -> Iterator["AttachToContainerResponse"]:
-        for response in self._unary_stream(
+        for response in self._stream_stream(
             "/gateway.GatewayService/AttachToContainer",
-            AttachToContainerRequest,
+            ContainerStreamMessage,
             AttachToContainerResponse,
-        )(attach_to_container_request):
+        )(container_stream_message_iterator):
             yield response
 
     def start_task(self, start_task_request: "StartTaskRequest") -> "StartTaskResponse":

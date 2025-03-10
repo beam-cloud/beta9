@@ -21,7 +21,7 @@ service GatewayService {
   // Containers
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {}
   rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
-  rpc AttachToContainer(AttachToContainerRequest)
+  rpc AttachToContainer(stream ContainerStreamMessage)
       returns (stream AttachToContainerResponse) {}
 
   // Tasks
@@ -146,6 +146,13 @@ message StopContainerRequest { string container_id = 1; }
 message StopContainerResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message ContainerStreamMessage {
+  oneof payload {
+    AttachToContainerRequest attach_request = 1;
+    ReplaceObjectContentRequest replace_object_content = 2;
+  }
 }
 
 message AttachToContainerRequest { string container_id = 1; }

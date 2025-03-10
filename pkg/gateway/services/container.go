@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -127,39 +128,51 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 	}, nil
 }
 
-func (gws *GatewayService) AttachToContainer(in *pb.AttachToContainerRequest, stream pb.GatewayService_AttachToContainerServer) error {
+func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToContainerServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	container, err := gws.containerRepo.GetContainerState(in.ContainerId)
+	initMsg, err := stream.Recv()
 	if err != nil {
-		return stream.Send(&pb.AttachToContainerResponse{
+		return err
+	}
+	attachReq := initMsg.GetAttachRequest()
+	if attachReq == nil {
+		_ = stream.Send(&pb.AttachToContainerResponse{
 			Done:     true,
 			ExitCode: 1,
 			Output:   "Container not found",
 		})
-	}
-
-	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.AttachToContainerResponse{Output: o.Msg}); err != nil {
-			return err
-		}
-
 		return nil
 	}
 
+	container, err := gws.containerRepo.GetContainerState(attachReq.ContainerId)
+	if err != nil {
+		_ = stream.Send(&pb.AttachToContainerResponse{
+			Done:     true,
+			ExitCode: 1,
+			Output:   "Container not found",
+		})
+		return nil
+	}
+
+	sendCallback := func(o common.OutputMsg) error {
+		return stream.Send(&pb.AttachToContainerResponse{
+			Output: o.Msg,
+		})
+	}
 	exitCallback := func(exitCode int32) error {
 		output := "\nContainer was stopped."
 		if exitCode != 0 {
-			output = fmt.Sprintf("Container failed with exit code %d", exitCode)
 			if exitCode == types.WorkerContainerExitCodeOomKill {
 				output = "Container was killed due to an out-of-memory error"
+			} else {
+				output = fmt.Sprintf("Container failed with exit code %d", exitCode)
 			}
 		}
-
 		return stream.Send(&pb.AttachToContainerResponse{
 			Done:     true,
-			ExitCode: int32(exitCode),
+			ExitCode: exitCode,
 			Output:   output,
 		})
 	}
@@ -179,5 +192,50 @@ func (gws *GatewayService) AttachToContainer(in *pb.AttachToContainerRequest, st
 		return err
 	}
 
-	return containerStream.Stream(ctx, authInfo, container.ContainerId)
+	// Run the container stream async
+	streamErrCh := make(chan error, 1)
+	go func() {
+		streamErrCh <- containerStream.Stream(ctx, authInfo, container.ContainerId)
+	}()
+
+	// Process additional client messages at the same time
+	clientMsgErrCh := make(chan error, 1)
+	go func() {
+		for {
+			inMsg, err := stream.Recv()
+			if err != nil {
+				if err == io.EOF {
+					clientMsgErrCh <- nil
+				} else {
+					clientMsgErrCh <- err
+				}
+				return
+			}
+
+			switch payload := inMsg.Payload.(type) {
+			case *pb.ContainerStreamMessage_ReplaceObjectContent:
+				// Now handling a ReplaceObjectContent message.
+				// You can add your business logic in a separate handler.
+				if err := gws.handleReplaceObjectContent(ctx, container, payload.ReplaceObjectContent); err != nil {
+					log.Printf("Error handling ReplaceObjectContent: %v", err)
+				}
+			default:
+				log.Printf("Received unknown message type in container stream")
+			}
+		}
+	}()
+
+	// Wait for the container stream or the client message loop to finish
+	select {
+	case err := <-streamErrCh:
+		return err
+	case err := <-clientMsgErrCh:
+		cancel()
+		return err
+	}
+}
+
+func (gws *GatewayService) handleReplaceObjectContent(ctx context.Context, container *types.ContainerState, req *pb.ReplaceObjectContentRequest) error {
+	log.Printf("Received ReplaceObjectContentRequest for object: %s", req.ObjectId)
+	return nil
 }

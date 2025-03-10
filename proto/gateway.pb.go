@@ -949,6 +949,87 @@ func (x *StopContainerResponse) GetErrorMsg() string {
 	return ""
 }
 
+type ContainerStreamMessage struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// Types that are assignable to Payload:
+	//
+	//	*ContainerStreamMessage_AttachRequest
+	//	*ContainerStreamMessage_ReplaceObjectContent
+	Payload isContainerStreamMessage_Payload `protobuf_oneof:"payload"`
+}
+
+func (x *ContainerStreamMessage) Reset() {
+	*x = ContainerStreamMessage{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_gateway_proto_msgTypes[15]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ContainerStreamMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ContainerStreamMessage) ProtoMessage() {}
+
+func (x *ContainerStreamMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_gateway_proto_msgTypes[15]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ContainerStreamMessage.ProtoReflect.Descriptor instead.
+func (*ContainerStreamMessage) Descriptor() ([]byte, []int) {
+	return file_gateway_proto_rawDescGZIP(), []int{15}
+}
+
+func (m *ContainerStreamMessage) GetPayload() isContainerStreamMessage_Payload {
+	if m != nil {
+		return m.Payload
+	}
+	return nil
+}
+
+func (x *ContainerStreamMessage) GetAttachRequest() *AttachToContainerRequest {
+	if x, ok := x.GetPayload().(*ContainerStreamMessage_AttachRequest); ok {
+		return x.AttachRequest
+	}
+	return nil
+}
+
+func (x *ContainerStreamMessage) GetReplaceObjectContent() *ReplaceObjectContentRequest {
+	if x, ok := x.GetPayload().(*ContainerStreamMessage_ReplaceObjectContent); ok {
+		return x.ReplaceObjectContent
+	}
+	return nil
+}
+
+type isContainerStreamMessage_Payload interface {
+	isContainerStreamMessage_Payload()
+}
+
+type ContainerStreamMessage_AttachRequest struct {
+	AttachRequest *AttachToContainerRequest `protobuf:"bytes,1,opt,name=attach_request,json=attachRequest,proto3,oneof"`
+}
+
+type ContainerStreamMessage_ReplaceObjectContent struct {
+	ReplaceObjectContent *ReplaceObjectContentRequest `protobuf:"bytes,2,opt,name=replace_object_content,json=replaceObjectContent,proto3,oneof"`
+}
+
+func (*ContainerStreamMessage_AttachRequest) isContainerStreamMessage_Payload() {}
+
+func (*ContainerStreamMessage_ReplaceObjectContent) isContainerStreamMessage_Payload() {}
+
 type AttachToContainerRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -960,7 +1041,7 @@ type AttachToContainerRequest struct {
 func (x *AttachToContainerRequest) Reset() {
 	*x = AttachToContainerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[15]
+		mi := &file_gateway_proto_msgTypes[16]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -973,7 +1054,7 @@ func (x *AttachToContainerRequest) String() string {
 func (*AttachToContainerRequest) ProtoMessage() {}
 
 func (x *AttachToContainerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[15]
+	mi := &file_gateway_proto_msgTypes[16]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -986,7 +1067,7 @@ func (x *AttachToContainerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachToContainerRequest.ProtoReflect.Descriptor instead.
 func (*AttachToContainerRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{15}
+	return file_gateway_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AttachToContainerRequest) GetContainerId() string {
@@ -1009,7 +1090,7 @@ type AttachToContainerResponse struct {
 func (x *AttachToContainerResponse) Reset() {
 	*x = AttachToContainerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[16]
+		mi := &file_gateway_proto_msgTypes[17]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1022,7 +1103,7 @@ func (x *AttachToContainerResponse) String() string {
 func (*AttachToContainerResponse) ProtoMessage() {}
 
 func (x *AttachToContainerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[16]
+	mi := &file_gateway_proto_msgTypes[17]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1035,7 +1116,7 @@ func (x *AttachToContainerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachToContainerResponse.ProtoReflect.Descriptor instead.
 func (*AttachToContainerResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{16}
+	return file_gateway_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *AttachToContainerResponse) GetOutput() string {
@@ -1072,7 +1153,7 @@ type StartTaskRequest struct {
 func (x *StartTaskRequest) Reset() {
 	*x = StartTaskRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[17]
+		mi := &file_gateway_proto_msgTypes[18]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1085,7 +1166,7 @@ func (x *StartTaskRequest) String() string {
 func (*StartTaskRequest) ProtoMessage() {}
 
 func (x *StartTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[17]
+	mi := &file_gateway_proto_msgTypes[18]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1098,7 +1179,7 @@ func (x *StartTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartTaskRequest.ProtoReflect.Descriptor instead.
 func (*StartTaskRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{17}
+	return file_gateway_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *StartTaskRequest) GetTaskId() string {
@@ -1126,7 +1207,7 @@ type StartTaskResponse struct {
 func (x *StartTaskResponse) Reset() {
 	*x = StartTaskResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[18]
+		mi := &file_gateway_proto_msgTypes[19]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1139,7 +1220,7 @@ func (x *StartTaskResponse) String() string {
 func (*StartTaskResponse) ProtoMessage() {}
 
 func (x *StartTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[18]
+	mi := &file_gateway_proto_msgTypes[19]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1152,7 +1233,7 @@ func (x *StartTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartTaskResponse.ProtoReflect.Descriptor instead.
 func (*StartTaskResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{18}
+	return file_gateway_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *StartTaskResponse) GetOk() bool {
@@ -1178,7 +1259,7 @@ type EndTaskRequest struct {
 func (x *EndTaskRequest) Reset() {
 	*x = EndTaskRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[19]
+		mi := &file_gateway_proto_msgTypes[20]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1191,7 +1272,7 @@ func (x *EndTaskRequest) String() string {
 func (*EndTaskRequest) ProtoMessage() {}
 
 func (x *EndTaskRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[19]
+	mi := &file_gateway_proto_msgTypes[20]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1204,7 +1285,7 @@ func (x *EndTaskRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndTaskRequest.ProtoReflect.Descriptor instead.
 func (*EndTaskRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{19}
+	return file_gateway_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *EndTaskRequest) GetTaskId() string {
@@ -1260,7 +1341,7 @@ type EndTaskResponse struct {
 func (x *EndTaskResponse) Reset() {
 	*x = EndTaskResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[20]
+		mi := &file_gateway_proto_msgTypes[21]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1273,7 +1354,7 @@ func (x *EndTaskResponse) String() string {
 func (*EndTaskResponse) ProtoMessage() {}
 
 func (x *EndTaskResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[20]
+	mi := &file_gateway_proto_msgTypes[21]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1286,7 +1367,7 @@ func (x *EndTaskResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EndTaskResponse.ProtoReflect.Descriptor instead.
 func (*EndTaskResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{20}
+	return file_gateway_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *EndTaskResponse) GetOk() bool {
@@ -1307,7 +1388,7 @@ type StringList struct {
 func (x *StringList) Reset() {
 	*x = StringList{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[21]
+		mi := &file_gateway_proto_msgTypes[22]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1320,7 +1401,7 @@ func (x *StringList) String() string {
 func (*StringList) ProtoMessage() {}
 
 func (x *StringList) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[21]
+	mi := &file_gateway_proto_msgTypes[22]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1333,7 +1414,7 @@ func (x *StringList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StringList.ProtoReflect.Descriptor instead.
 func (*StringList) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{21}
+	return file_gateway_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *StringList) GetValues() []string {
@@ -1355,7 +1436,7 @@ type ListTasksRequest struct {
 func (x *ListTasksRequest) Reset() {
 	*x = ListTasksRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[22]
+		mi := &file_gateway_proto_msgTypes[23]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1368,7 +1449,7 @@ func (x *ListTasksRequest) String() string {
 func (*ListTasksRequest) ProtoMessage() {}
 
 func (x *ListTasksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[22]
+	mi := &file_gateway_proto_msgTypes[23]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1381,7 +1462,7 @@ func (x *ListTasksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTasksRequest.ProtoReflect.Descriptor instead.
 func (*ListTasksRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{22}
+	return file_gateway_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListTasksRequest) GetFilters() map[string]*StringList {
@@ -1419,7 +1500,7 @@ type Task struct {
 func (x *Task) Reset() {
 	*x = Task{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[23]
+		mi := &file_gateway_proto_msgTypes[24]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1432,7 +1513,7 @@ func (x *Task) String() string {
 func (*Task) ProtoMessage() {}
 
 func (x *Task) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[23]
+	mi := &file_gateway_proto_msgTypes[24]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1445,7 +1526,7 @@ func (x *Task) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Task.ProtoReflect.Descriptor instead.
 func (*Task) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{23}
+	return file_gateway_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *Task) GetId() string {
@@ -1539,7 +1620,7 @@ type ListTasksResponse struct {
 func (x *ListTasksResponse) Reset() {
 	*x = ListTasksResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[24]
+		mi := &file_gateway_proto_msgTypes[25]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1552,7 +1633,7 @@ func (x *ListTasksResponse) String() string {
 func (*ListTasksResponse) ProtoMessage() {}
 
 func (x *ListTasksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[24]
+	mi := &file_gateway_proto_msgTypes[25]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1565,7 +1646,7 @@ func (x *ListTasksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTasksResponse.ProtoReflect.Descriptor instead.
 func (*ListTasksResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{24}
+	return file_gateway_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ListTasksResponse) GetOk() bool {
@@ -1607,7 +1688,7 @@ type StopTasksRequest struct {
 func (x *StopTasksRequest) Reset() {
 	*x = StopTasksRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[25]
+		mi := &file_gateway_proto_msgTypes[26]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1620,7 +1701,7 @@ func (x *StopTasksRequest) String() string {
 func (*StopTasksRequest) ProtoMessage() {}
 
 func (x *StopTasksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[25]
+	mi := &file_gateway_proto_msgTypes[26]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1633,7 +1714,7 @@ func (x *StopTasksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopTasksRequest.ProtoReflect.Descriptor instead.
 func (*StopTasksRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{25}
+	return file_gateway_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *StopTasksRequest) GetTaskIds() []string {
@@ -1655,7 +1736,7 @@ type StopTasksResponse struct {
 func (x *StopTasksResponse) Reset() {
 	*x = StopTasksResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[26]
+		mi := &file_gateway_proto_msgTypes[27]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1668,7 +1749,7 @@ func (x *StopTasksResponse) String() string {
 func (*StopTasksResponse) ProtoMessage() {}
 
 func (x *StopTasksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[26]
+	mi := &file_gateway_proto_msgTypes[27]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1681,7 +1762,7 @@ func (x *StopTasksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopTasksResponse.ProtoReflect.Descriptor instead.
 func (*StopTasksResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{26}
+	return file_gateway_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *StopTasksResponse) GetOk() bool {
@@ -1711,7 +1792,7 @@ type Volume struct {
 func (x *Volume) Reset() {
 	*x = Volume{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[27]
+		mi := &file_gateway_proto_msgTypes[28]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1724,7 +1805,7 @@ func (x *Volume) String() string {
 func (*Volume) ProtoMessage() {}
 
 func (x *Volume) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[27]
+	mi := &file_gateway_proto_msgTypes[28]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1737,7 +1818,7 @@ func (x *Volume) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Volume.ProtoReflect.Descriptor instead.
 func (*Volume) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{27}
+	return file_gateway_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *Volume) GetId() string {
@@ -1772,7 +1853,7 @@ type SecretVar struct {
 func (x *SecretVar) Reset() {
 	*x = SecretVar{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[28]
+		mi := &file_gateway_proto_msgTypes[29]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1785,7 +1866,7 @@ func (x *SecretVar) String() string {
 func (*SecretVar) ProtoMessage() {}
 
 func (x *SecretVar) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[28]
+	mi := &file_gateway_proto_msgTypes[29]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1798,7 +1879,7 @@ func (x *SecretVar) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretVar.ProtoReflect.Descriptor instead.
 func (*SecretVar) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{28}
+	return file_gateway_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SecretVar) GetName() string {
@@ -1822,7 +1903,7 @@ type Autoscaler struct {
 func (x *Autoscaler) Reset() {
 	*x = Autoscaler{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[29]
+		mi := &file_gateway_proto_msgTypes[30]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1835,7 +1916,7 @@ func (x *Autoscaler) String() string {
 func (*Autoscaler) ProtoMessage() {}
 
 func (x *Autoscaler) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[29]
+	mi := &file_gateway_proto_msgTypes[30]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1848,7 +1929,7 @@ func (x *Autoscaler) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Autoscaler.ProtoReflect.Descriptor instead.
 func (*Autoscaler) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{29}
+	return file_gateway_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *Autoscaler) GetType() string {
@@ -1892,7 +1973,7 @@ type TaskPolicy struct {
 func (x *TaskPolicy) Reset() {
 	*x = TaskPolicy{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[30]
+		mi := &file_gateway_proto_msgTypes[31]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1905,7 +1986,7 @@ func (x *TaskPolicy) String() string {
 func (*TaskPolicy) ProtoMessage() {}
 
 func (x *TaskPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[30]
+	mi := &file_gateway_proto_msgTypes[31]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1918,7 +1999,7 @@ func (x *TaskPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskPolicy.ProtoReflect.Descriptor instead.
 func (*TaskPolicy) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{30}
+	return file_gateway_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *TaskPolicy) GetTimeout() int64 {
@@ -1983,7 +2064,7 @@ type GetOrCreateStubRequest struct {
 func (x *GetOrCreateStubRequest) Reset() {
 	*x = GetOrCreateStubRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[31]
+		mi := &file_gateway_proto_msgTypes[32]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1996,7 +2077,7 @@ func (x *GetOrCreateStubRequest) String() string {
 func (*GetOrCreateStubRequest) ProtoMessage() {}
 
 func (x *GetOrCreateStubRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[31]
+	mi := &file_gateway_proto_msgTypes[32]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2009,7 +2090,7 @@ func (x *GetOrCreateStubRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrCreateStubRequest.ProtoReflect.Descriptor instead.
 func (*GetOrCreateStubRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{31}
+	return file_gateway_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GetOrCreateStubRequest) GetObjectId() string {
@@ -2243,7 +2324,7 @@ type GetOrCreateStubResponse struct {
 func (x *GetOrCreateStubResponse) Reset() {
 	*x = GetOrCreateStubResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[32]
+		mi := &file_gateway_proto_msgTypes[33]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2256,7 +2337,7 @@ func (x *GetOrCreateStubResponse) String() string {
 func (*GetOrCreateStubResponse) ProtoMessage() {}
 
 func (x *GetOrCreateStubResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[32]
+	mi := &file_gateway_proto_msgTypes[33]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2269,7 +2350,7 @@ func (x *GetOrCreateStubResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetOrCreateStubResponse.ProtoReflect.Descriptor instead.
 func (*GetOrCreateStubResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{32}
+	return file_gateway_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *GetOrCreateStubResponse) GetOk() bool {
@@ -2312,7 +2393,7 @@ type DeployStubRequest struct {
 func (x *DeployStubRequest) Reset() {
 	*x = DeployStubRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[33]
+		mi := &file_gateway_proto_msgTypes[34]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2325,7 +2406,7 @@ func (x *DeployStubRequest) String() string {
 func (*DeployStubRequest) ProtoMessage() {}
 
 func (x *DeployStubRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[33]
+	mi := &file_gateway_proto_msgTypes[34]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2338,7 +2419,7 @@ func (x *DeployStubRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployStubRequest.ProtoReflect.Descriptor instead.
 func (*DeployStubRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{33}
+	return file_gateway_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *DeployStubRequest) GetStubId() string {
@@ -2369,7 +2450,7 @@ type DeployStubResponse struct {
 func (x *DeployStubResponse) Reset() {
 	*x = DeployStubResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[34]
+		mi := &file_gateway_proto_msgTypes[35]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2382,7 +2463,7 @@ func (x *DeployStubResponse) String() string {
 func (*DeployStubResponse) ProtoMessage() {}
 
 func (x *DeployStubResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[34]
+	mi := &file_gateway_proto_msgTypes[35]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2395,7 +2476,7 @@ func (x *DeployStubResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeployStubResponse.ProtoReflect.Descriptor instead.
 func (*DeployStubResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{34}
+	return file_gateway_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *DeployStubResponse) GetOk() bool {
@@ -2447,7 +2528,7 @@ type Deployment struct {
 func (x *Deployment) Reset() {
 	*x = Deployment{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[35]
+		mi := &file_gateway_proto_msgTypes[36]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2460,7 +2541,7 @@ func (x *Deployment) String() string {
 func (*Deployment) ProtoMessage() {}
 
 func (x *Deployment) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[35]
+	mi := &file_gateway_proto_msgTypes[36]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2473,7 +2554,7 @@ func (x *Deployment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Deployment.ProtoReflect.Descriptor instead.
 func (*Deployment) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{35}
+	return file_gateway_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *Deployment) GetId() string {
@@ -2565,7 +2646,7 @@ type ListDeploymentsRequest struct {
 func (x *ListDeploymentsRequest) Reset() {
 	*x = ListDeploymentsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[36]
+		mi := &file_gateway_proto_msgTypes[37]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2578,7 +2659,7 @@ func (x *ListDeploymentsRequest) String() string {
 func (*ListDeploymentsRequest) ProtoMessage() {}
 
 func (x *ListDeploymentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[36]
+	mi := &file_gateway_proto_msgTypes[37]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2591,7 +2672,7 @@ func (x *ListDeploymentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDeploymentsRequest.ProtoReflect.Descriptor instead.
 func (*ListDeploymentsRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{36}
+	return file_gateway_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *ListDeploymentsRequest) GetFilters() map[string]*StringList {
@@ -2621,7 +2702,7 @@ type ListDeploymentsResponse struct {
 func (x *ListDeploymentsResponse) Reset() {
 	*x = ListDeploymentsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[37]
+		mi := &file_gateway_proto_msgTypes[38]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2634,7 +2715,7 @@ func (x *ListDeploymentsResponse) String() string {
 func (*ListDeploymentsResponse) ProtoMessage() {}
 
 func (x *ListDeploymentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[37]
+	mi := &file_gateway_proto_msgTypes[38]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2647,7 +2728,7 @@ func (x *ListDeploymentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDeploymentsResponse.ProtoReflect.Descriptor instead.
 func (*ListDeploymentsResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{37}
+	return file_gateway_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ListDeploymentsResponse) GetOk() bool {
@@ -2682,7 +2763,7 @@ type StopDeploymentRequest struct {
 func (x *StopDeploymentRequest) Reset() {
 	*x = StopDeploymentRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[38]
+		mi := &file_gateway_proto_msgTypes[39]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2695,7 +2776,7 @@ func (x *StopDeploymentRequest) String() string {
 func (*StopDeploymentRequest) ProtoMessage() {}
 
 func (x *StopDeploymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[38]
+	mi := &file_gateway_proto_msgTypes[39]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2708,7 +2789,7 @@ func (x *StopDeploymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopDeploymentRequest.ProtoReflect.Descriptor instead.
 func (*StopDeploymentRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{38}
+	return file_gateway_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *StopDeploymentRequest) GetId() string {
@@ -2730,7 +2811,7 @@ type StopDeploymentResponse struct {
 func (x *StopDeploymentResponse) Reset() {
 	*x = StopDeploymentResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[39]
+		mi := &file_gateway_proto_msgTypes[40]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2743,7 +2824,7 @@ func (x *StopDeploymentResponse) String() string {
 func (*StopDeploymentResponse) ProtoMessage() {}
 
 func (x *StopDeploymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[39]
+	mi := &file_gateway_proto_msgTypes[40]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2756,7 +2837,7 @@ func (x *StopDeploymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopDeploymentResponse.ProtoReflect.Descriptor instead.
 func (*StopDeploymentResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{39}
+	return file_gateway_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *StopDeploymentResponse) GetOk() bool {
@@ -2784,7 +2865,7 @@ type StartDeploymentRequest struct {
 func (x *StartDeploymentRequest) Reset() {
 	*x = StartDeploymentRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[40]
+		mi := &file_gateway_proto_msgTypes[41]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2797,7 +2878,7 @@ func (x *StartDeploymentRequest) String() string {
 func (*StartDeploymentRequest) ProtoMessage() {}
 
 func (x *StartDeploymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[40]
+	mi := &file_gateway_proto_msgTypes[41]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2810,7 +2891,7 @@ func (x *StartDeploymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDeploymentRequest.ProtoReflect.Descriptor instead.
 func (*StartDeploymentRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{40}
+	return file_gateway_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *StartDeploymentRequest) GetId() string {
@@ -2832,7 +2913,7 @@ type StartDeploymentResponse struct {
 func (x *StartDeploymentResponse) Reset() {
 	*x = StartDeploymentResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[41]
+		mi := &file_gateway_proto_msgTypes[42]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2845,7 +2926,7 @@ func (x *StartDeploymentResponse) String() string {
 func (*StartDeploymentResponse) ProtoMessage() {}
 
 func (x *StartDeploymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[41]
+	mi := &file_gateway_proto_msgTypes[42]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2858,7 +2939,7 @@ func (x *StartDeploymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartDeploymentResponse.ProtoReflect.Descriptor instead.
 func (*StartDeploymentResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{41}
+	return file_gateway_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *StartDeploymentResponse) GetOk() bool {
@@ -2887,7 +2968,7 @@ type ScaleDeploymentRequest struct {
 func (x *ScaleDeploymentRequest) Reset() {
 	*x = ScaleDeploymentRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[42]
+		mi := &file_gateway_proto_msgTypes[43]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2900,7 +2981,7 @@ func (x *ScaleDeploymentRequest) String() string {
 func (*ScaleDeploymentRequest) ProtoMessage() {}
 
 func (x *ScaleDeploymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[42]
+	mi := &file_gateway_proto_msgTypes[43]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2913,7 +2994,7 @@ func (x *ScaleDeploymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScaleDeploymentRequest.ProtoReflect.Descriptor instead.
 func (*ScaleDeploymentRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{42}
+	return file_gateway_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *ScaleDeploymentRequest) GetId() string {
@@ -2942,7 +3023,7 @@ type ScaleDeploymentResponse struct {
 func (x *ScaleDeploymentResponse) Reset() {
 	*x = ScaleDeploymentResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[43]
+		mi := &file_gateway_proto_msgTypes[44]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2955,7 +3036,7 @@ func (x *ScaleDeploymentResponse) String() string {
 func (*ScaleDeploymentResponse) ProtoMessage() {}
 
 func (x *ScaleDeploymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[43]
+	mi := &file_gateway_proto_msgTypes[44]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2968,7 +3049,7 @@ func (x *ScaleDeploymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScaleDeploymentResponse.ProtoReflect.Descriptor instead.
 func (*ScaleDeploymentResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{43}
+	return file_gateway_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *ScaleDeploymentResponse) GetOk() bool {
@@ -2996,7 +3077,7 @@ type DeleteDeploymentRequest struct {
 func (x *DeleteDeploymentRequest) Reset() {
 	*x = DeleteDeploymentRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[44]
+		mi := &file_gateway_proto_msgTypes[45]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3009,7 +3090,7 @@ func (x *DeleteDeploymentRequest) String() string {
 func (*DeleteDeploymentRequest) ProtoMessage() {}
 
 func (x *DeleteDeploymentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[44]
+	mi := &file_gateway_proto_msgTypes[45]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3022,7 +3103,7 @@ func (x *DeleteDeploymentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDeploymentRequest.ProtoReflect.Descriptor instead.
 func (*DeleteDeploymentRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{44}
+	return file_gateway_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *DeleteDeploymentRequest) GetId() string {
@@ -3044,7 +3125,7 @@ type DeleteDeploymentResponse struct {
 func (x *DeleteDeploymentResponse) Reset() {
 	*x = DeleteDeploymentResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[45]
+		mi := &file_gateway_proto_msgTypes[46]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3057,7 +3138,7 @@ func (x *DeleteDeploymentResponse) String() string {
 func (*DeleteDeploymentResponse) ProtoMessage() {}
 
 func (x *DeleteDeploymentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[45]
+	mi := &file_gateway_proto_msgTypes[46]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3070,7 +3151,7 @@ func (x *DeleteDeploymentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDeploymentResponse.ProtoReflect.Descriptor instead.
 func (*DeleteDeploymentResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{45}
+	return file_gateway_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *DeleteDeploymentResponse) GetOk() bool {
@@ -3107,7 +3188,7 @@ type Pool struct {
 func (x *Pool) Reset() {
 	*x = Pool{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[46]
+		mi := &file_gateway_proto_msgTypes[47]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3120,7 +3201,7 @@ func (x *Pool) String() string {
 func (*Pool) ProtoMessage() {}
 
 func (x *Pool) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[46]
+	mi := &file_gateway_proto_msgTypes[47]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3133,7 +3214,7 @@ func (x *Pool) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pool.ProtoReflect.Descriptor instead.
 func (*Pool) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{46}
+	return file_gateway_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *Pool) GetName() string {
@@ -3218,7 +3299,7 @@ type ListPoolsRequest struct {
 func (x *ListPoolsRequest) Reset() {
 	*x = ListPoolsRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[47]
+		mi := &file_gateway_proto_msgTypes[48]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3231,7 +3312,7 @@ func (x *ListPoolsRequest) String() string {
 func (*ListPoolsRequest) ProtoMessage() {}
 
 func (x *ListPoolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[47]
+	mi := &file_gateway_proto_msgTypes[48]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3244,7 +3325,7 @@ func (x *ListPoolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPoolsRequest.ProtoReflect.Descriptor instead.
 func (*ListPoolsRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{47}
+	return file_gateway_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *ListPoolsRequest) GetFilters() map[string]*StringList {
@@ -3274,7 +3355,7 @@ type ListPoolsResponse struct {
 func (x *ListPoolsResponse) Reset() {
 	*x = ListPoolsResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[48]
+		mi := &file_gateway_proto_msgTypes[49]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3287,7 +3368,7 @@ func (x *ListPoolsResponse) String() string {
 func (*ListPoolsResponse) ProtoMessage() {}
 
 func (x *ListPoolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[48]
+	mi := &file_gateway_proto_msgTypes[49]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3300,7 +3381,7 @@ func (x *ListPoolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPoolsResponse.ProtoReflect.Descriptor instead.
 func (*ListPoolsResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{48}
+	return file_gateway_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *ListPoolsResponse) GetOk() bool {
@@ -3350,7 +3431,7 @@ type Machine struct {
 func (x *Machine) Reset() {
 	*x = Machine{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[49]
+		mi := &file_gateway_proto_msgTypes[50]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3363,7 +3444,7 @@ func (x *Machine) String() string {
 func (*Machine) ProtoMessage() {}
 
 func (x *Machine) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[49]
+	mi := &file_gateway_proto_msgTypes[50]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3376,7 +3457,7 @@ func (x *Machine) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Machine.ProtoReflect.Descriptor instead.
 func (*Machine) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{49}
+	return file_gateway_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *Machine) GetId() string {
@@ -3512,7 +3593,7 @@ type MachineMetrics struct {
 func (x *MachineMetrics) Reset() {
 	*x = MachineMetrics{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[50]
+		mi := &file_gateway_proto_msgTypes[51]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3525,7 +3606,7 @@ func (x *MachineMetrics) String() string {
 func (*MachineMetrics) ProtoMessage() {}
 
 func (x *MachineMetrics) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[50]
+	mi := &file_gateway_proto_msgTypes[51]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3538,7 +3619,7 @@ func (x *MachineMetrics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MachineMetrics.ProtoReflect.Descriptor instead.
 func (*MachineMetrics) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{50}
+	return file_gateway_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *MachineMetrics) GetTotalCpuAvailable() int32 {
@@ -3630,7 +3711,7 @@ type ListMachinesRequest struct {
 func (x *ListMachinesRequest) Reset() {
 	*x = ListMachinesRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[51]
+		mi := &file_gateway_proto_msgTypes[52]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3643,7 +3724,7 @@ func (x *ListMachinesRequest) String() string {
 func (*ListMachinesRequest) ProtoMessage() {}
 
 func (x *ListMachinesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[51]
+	mi := &file_gateway_proto_msgTypes[52]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3656,7 +3737,7 @@ func (x *ListMachinesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMachinesRequest.ProtoReflect.Descriptor instead.
 func (*ListMachinesRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{51}
+	return file_gateway_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ListMachinesRequest) GetPoolName() string {
@@ -3687,7 +3768,7 @@ type ListMachinesResponse struct {
 func (x *ListMachinesResponse) Reset() {
 	*x = ListMachinesResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[52]
+		mi := &file_gateway_proto_msgTypes[53]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3700,7 +3781,7 @@ func (x *ListMachinesResponse) String() string {
 func (*ListMachinesResponse) ProtoMessage() {}
 
 func (x *ListMachinesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[52]
+	mi := &file_gateway_proto_msgTypes[53]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3713,7 +3794,7 @@ func (x *ListMachinesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMachinesResponse.ProtoReflect.Descriptor instead.
 func (*ListMachinesResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{52}
+	return file_gateway_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *ListMachinesResponse) GetOk() bool {
@@ -3755,7 +3836,7 @@ type CreateMachineRequest struct {
 func (x *CreateMachineRequest) Reset() {
 	*x = CreateMachineRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[53]
+		mi := &file_gateway_proto_msgTypes[54]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3768,7 +3849,7 @@ func (x *CreateMachineRequest) String() string {
 func (*CreateMachineRequest) ProtoMessage() {}
 
 func (x *CreateMachineRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[53]
+	mi := &file_gateway_proto_msgTypes[54]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3781,7 +3862,7 @@ func (x *CreateMachineRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMachineRequest.ProtoReflect.Descriptor instead.
 func (*CreateMachineRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{53}
+	return file_gateway_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *CreateMachineRequest) GetPoolName() string {
@@ -3804,7 +3885,7 @@ type CreateMachineResponse struct {
 func (x *CreateMachineResponse) Reset() {
 	*x = CreateMachineResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[54]
+		mi := &file_gateway_proto_msgTypes[55]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3817,7 +3898,7 @@ func (x *CreateMachineResponse) String() string {
 func (*CreateMachineResponse) ProtoMessage() {}
 
 func (x *CreateMachineResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[54]
+	mi := &file_gateway_proto_msgTypes[55]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3830,7 +3911,7 @@ func (x *CreateMachineResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateMachineResponse.ProtoReflect.Descriptor instead.
 func (*CreateMachineResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{54}
+	return file_gateway_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *CreateMachineResponse) GetOk() bool {
@@ -3866,7 +3947,7 @@ type DeleteMachineRequest struct {
 func (x *DeleteMachineRequest) Reset() {
 	*x = DeleteMachineRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[55]
+		mi := &file_gateway_proto_msgTypes[56]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3879,7 +3960,7 @@ func (x *DeleteMachineRequest) String() string {
 func (*DeleteMachineRequest) ProtoMessage() {}
 
 func (x *DeleteMachineRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[55]
+	mi := &file_gateway_proto_msgTypes[56]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3892,7 +3973,7 @@ func (x *DeleteMachineRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteMachineRequest.ProtoReflect.Descriptor instead.
 func (*DeleteMachineRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{55}
+	return file_gateway_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *DeleteMachineRequest) GetMachineId() string {
@@ -3921,7 +4002,7 @@ type DeleteMachineResponse struct {
 func (x *DeleteMachineResponse) Reset() {
 	*x = DeleteMachineResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[56]
+		mi := &file_gateway_proto_msgTypes[57]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3934,7 +4015,7 @@ func (x *DeleteMachineResponse) String() string {
 func (*DeleteMachineResponse) ProtoMessage() {}
 
 func (x *DeleteMachineResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[56]
+	mi := &file_gateway_proto_msgTypes[57]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3947,7 +4028,7 @@ func (x *DeleteMachineResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteMachineResponse.ProtoReflect.Descriptor instead.
 func (*DeleteMachineResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{56}
+	return file_gateway_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *DeleteMachineResponse) GetOk() bool {
@@ -3982,7 +4063,7 @@ type Token struct {
 func (x *Token) Reset() {
 	*x = Token{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[57]
+		mi := &file_gateway_proto_msgTypes[58]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -3995,7 +4076,7 @@ func (x *Token) String() string {
 func (*Token) ProtoMessage() {}
 
 func (x *Token) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[57]
+	mi := &file_gateway_proto_msgTypes[58]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4008,7 +4089,7 @@ func (x *Token) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Token.ProtoReflect.Descriptor instead.
 func (*Token) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{57}
+	return file_gateway_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *Token) GetTokenId() string {
@@ -4076,7 +4157,7 @@ type ListTokensRequest struct {
 func (x *ListTokensRequest) Reset() {
 	*x = ListTokensRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[58]
+		mi := &file_gateway_proto_msgTypes[59]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4089,7 +4170,7 @@ func (x *ListTokensRequest) String() string {
 func (*ListTokensRequest) ProtoMessage() {}
 
 func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[58]
+	mi := &file_gateway_proto_msgTypes[59]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4102,7 +4183,7 @@ func (x *ListTokensRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTokensRequest.ProtoReflect.Descriptor instead.
 func (*ListTokensRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{58}
+	return file_gateway_proto_rawDescGZIP(), []int{59}
 }
 
 type ListTokensResponse struct {
@@ -4118,7 +4199,7 @@ type ListTokensResponse struct {
 func (x *ListTokensResponse) Reset() {
 	*x = ListTokensResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[59]
+		mi := &file_gateway_proto_msgTypes[60]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4131,7 +4212,7 @@ func (x *ListTokensResponse) String() string {
 func (*ListTokensResponse) ProtoMessage() {}
 
 func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[59]
+	mi := &file_gateway_proto_msgTypes[60]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4144,7 +4225,7 @@ func (x *ListTokensResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListTokensResponse.ProtoReflect.Descriptor instead.
 func (*ListTokensResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{59}
+	return file_gateway_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ListTokensResponse) GetOk() bool {
@@ -4177,7 +4258,7 @@ type CreateTokenRequest struct {
 func (x *CreateTokenRequest) Reset() {
 	*x = CreateTokenRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[60]
+		mi := &file_gateway_proto_msgTypes[61]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4190,7 +4271,7 @@ func (x *CreateTokenRequest) String() string {
 func (*CreateTokenRequest) ProtoMessage() {}
 
 func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[60]
+	mi := &file_gateway_proto_msgTypes[61]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4203,7 +4284,7 @@ func (x *CreateTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTokenRequest.ProtoReflect.Descriptor instead.
 func (*CreateTokenRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{60}
+	return file_gateway_proto_rawDescGZIP(), []int{61}
 }
 
 type CreateTokenResponse struct {
@@ -4219,7 +4300,7 @@ type CreateTokenResponse struct {
 func (x *CreateTokenResponse) Reset() {
 	*x = CreateTokenResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[61]
+		mi := &file_gateway_proto_msgTypes[62]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4232,7 +4313,7 @@ func (x *CreateTokenResponse) String() string {
 func (*CreateTokenResponse) ProtoMessage() {}
 
 func (x *CreateTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[61]
+	mi := &file_gateway_proto_msgTypes[62]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4245,7 +4326,7 @@ func (x *CreateTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateTokenResponse.ProtoReflect.Descriptor instead.
 func (*CreateTokenResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{61}
+	return file_gateway_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *CreateTokenResponse) GetOk() bool {
@@ -4280,7 +4361,7 @@ type ToggleTokenRequest struct {
 func (x *ToggleTokenRequest) Reset() {
 	*x = ToggleTokenRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[62]
+		mi := &file_gateway_proto_msgTypes[63]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4293,7 +4374,7 @@ func (x *ToggleTokenRequest) String() string {
 func (*ToggleTokenRequest) ProtoMessage() {}
 
 func (x *ToggleTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[62]
+	mi := &file_gateway_proto_msgTypes[63]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4306,7 +4387,7 @@ func (x *ToggleTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToggleTokenRequest.ProtoReflect.Descriptor instead.
 func (*ToggleTokenRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{62}
+	return file_gateway_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *ToggleTokenRequest) GetTokenId() string {
@@ -4329,7 +4410,7 @@ type ToggleTokenResponse struct {
 func (x *ToggleTokenResponse) Reset() {
 	*x = ToggleTokenResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[63]
+		mi := &file_gateway_proto_msgTypes[64]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4342,7 +4423,7 @@ func (x *ToggleTokenResponse) String() string {
 func (*ToggleTokenResponse) ProtoMessage() {}
 
 func (x *ToggleTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[63]
+	mi := &file_gateway_proto_msgTypes[64]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4355,7 +4436,7 @@ func (x *ToggleTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToggleTokenResponse.ProtoReflect.Descriptor instead.
 func (*ToggleTokenResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{63}
+	return file_gateway_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ToggleTokenResponse) GetOk() bool {
@@ -4390,7 +4471,7 @@ type DeleteTokenRequest struct {
 func (x *DeleteTokenRequest) Reset() {
 	*x = DeleteTokenRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[64]
+		mi := &file_gateway_proto_msgTypes[65]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4403,7 +4484,7 @@ func (x *DeleteTokenRequest) String() string {
 func (*DeleteTokenRequest) ProtoMessage() {}
 
 func (x *DeleteTokenRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[64]
+	mi := &file_gateway_proto_msgTypes[65]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4416,7 +4497,7 @@ func (x *DeleteTokenRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTokenRequest.ProtoReflect.Descriptor instead.
 func (*DeleteTokenRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{64}
+	return file_gateway_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *DeleteTokenRequest) GetTokenId() string {
@@ -4438,7 +4519,7 @@ type DeleteTokenResponse struct {
 func (x *DeleteTokenResponse) Reset() {
 	*x = DeleteTokenResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[65]
+		mi := &file_gateway_proto_msgTypes[66]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4451,7 +4532,7 @@ func (x *DeleteTokenResponse) String() string {
 func (*DeleteTokenResponse) ProtoMessage() {}
 
 func (x *DeleteTokenResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[65]
+	mi := &file_gateway_proto_msgTypes[66]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4464,7 +4545,7 @@ func (x *DeleteTokenResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteTokenResponse.ProtoReflect.Descriptor instead.
 func (*DeleteTokenResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{65}
+	return file_gateway_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *DeleteTokenResponse) GetOk() bool {
@@ -4494,7 +4575,7 @@ type GetURLRequest struct {
 func (x *GetURLRequest) Reset() {
 	*x = GetURLRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[66]
+		mi := &file_gateway_proto_msgTypes[67]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4507,7 +4588,7 @@ func (x *GetURLRequest) String() string {
 func (*GetURLRequest) ProtoMessage() {}
 
 func (x *GetURLRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[66]
+	mi := &file_gateway_proto_msgTypes[67]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4520,7 +4601,7 @@ func (x *GetURLRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetURLRequest.ProtoReflect.Descriptor instead.
 func (*GetURLRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{66}
+	return file_gateway_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *GetURLRequest) GetStubId() string {
@@ -4557,7 +4638,7 @@ type GetURLResponse struct {
 func (x *GetURLResponse) Reset() {
 	*x = GetURLResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[67]
+		mi := &file_gateway_proto_msgTypes[68]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4570,7 +4651,7 @@ func (x *GetURLResponse) String() string {
 func (*GetURLResponse) ProtoMessage() {}
 
 func (x *GetURLResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[67]
+	mi := &file_gateway_proto_msgTypes[68]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4583,7 +4664,7 @@ func (x *GetURLResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetURLResponse.ProtoReflect.Descriptor instead.
 func (*GetURLResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{67}
+	return file_gateway_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *GetURLResponse) GetOk() bool {
@@ -4616,7 +4697,7 @@ type ListWorkersRequest struct {
 func (x *ListWorkersRequest) Reset() {
 	*x = ListWorkersRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[68]
+		mi := &file_gateway_proto_msgTypes[69]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4629,7 +4710,7 @@ func (x *ListWorkersRequest) String() string {
 func (*ListWorkersRequest) ProtoMessage() {}
 
 func (x *ListWorkersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[68]
+	mi := &file_gateway_proto_msgTypes[69]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4642,7 +4723,7 @@ func (x *ListWorkersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkersRequest.ProtoReflect.Descriptor instead.
 func (*ListWorkersRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{68}
+	return file_gateway_proto_rawDescGZIP(), []int{69}
 }
 
 type ListWorkersResponse struct {
@@ -4658,7 +4739,7 @@ type ListWorkersResponse struct {
 func (x *ListWorkersResponse) Reset() {
 	*x = ListWorkersResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[69]
+		mi := &file_gateway_proto_msgTypes[70]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4671,7 +4752,7 @@ func (x *ListWorkersResponse) String() string {
 func (*ListWorkersResponse) ProtoMessage() {}
 
 func (x *ListWorkersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[69]
+	mi := &file_gateway_proto_msgTypes[70]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4684,7 +4765,7 @@ func (x *ListWorkersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkersResponse.ProtoReflect.Descriptor instead.
 func (*ListWorkersResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{69}
+	return file_gateway_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ListWorkersResponse) GetOk() bool {
@@ -4719,7 +4800,7 @@ type CordonWorkerRequest struct {
 func (x *CordonWorkerRequest) Reset() {
 	*x = CordonWorkerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[70]
+		mi := &file_gateway_proto_msgTypes[71]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4732,7 +4813,7 @@ func (x *CordonWorkerRequest) String() string {
 func (*CordonWorkerRequest) ProtoMessage() {}
 
 func (x *CordonWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[70]
+	mi := &file_gateway_proto_msgTypes[71]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4745,7 +4826,7 @@ func (x *CordonWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CordonWorkerRequest.ProtoReflect.Descriptor instead.
 func (*CordonWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{70}
+	return file_gateway_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *CordonWorkerRequest) GetWorkerId() string {
@@ -4767,7 +4848,7 @@ type CordonWorkerResponse struct {
 func (x *CordonWorkerResponse) Reset() {
 	*x = CordonWorkerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[71]
+		mi := &file_gateway_proto_msgTypes[72]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4780,7 +4861,7 @@ func (x *CordonWorkerResponse) String() string {
 func (*CordonWorkerResponse) ProtoMessage() {}
 
 func (x *CordonWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[71]
+	mi := &file_gateway_proto_msgTypes[72]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4793,7 +4874,7 @@ func (x *CordonWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CordonWorkerResponse.ProtoReflect.Descriptor instead.
 func (*CordonWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{71}
+	return file_gateway_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *CordonWorkerResponse) GetOk() bool {
@@ -4821,7 +4902,7 @@ type UncordonWorkerRequest struct {
 func (x *UncordonWorkerRequest) Reset() {
 	*x = UncordonWorkerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[72]
+		mi := &file_gateway_proto_msgTypes[73]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4834,7 +4915,7 @@ func (x *UncordonWorkerRequest) String() string {
 func (*UncordonWorkerRequest) ProtoMessage() {}
 
 func (x *UncordonWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[72]
+	mi := &file_gateway_proto_msgTypes[73]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4847,7 +4928,7 @@ func (x *UncordonWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UncordonWorkerRequest.ProtoReflect.Descriptor instead.
 func (*UncordonWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{72}
+	return file_gateway_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *UncordonWorkerRequest) GetWorkerId() string {
@@ -4869,7 +4950,7 @@ type UncordonWorkerResponse struct {
 func (x *UncordonWorkerResponse) Reset() {
 	*x = UncordonWorkerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[73]
+		mi := &file_gateway_proto_msgTypes[74]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4882,7 +4963,7 @@ func (x *UncordonWorkerResponse) String() string {
 func (*UncordonWorkerResponse) ProtoMessage() {}
 
 func (x *UncordonWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[73]
+	mi := &file_gateway_proto_msgTypes[74]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4895,7 +4976,7 @@ func (x *UncordonWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UncordonWorkerResponse.ProtoReflect.Descriptor instead.
 func (*UncordonWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{73}
+	return file_gateway_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *UncordonWorkerResponse) GetOk() bool {
@@ -4923,7 +5004,7 @@ type DrainWorkerRequest struct {
 func (x *DrainWorkerRequest) Reset() {
 	*x = DrainWorkerRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[74]
+		mi := &file_gateway_proto_msgTypes[75]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4936,7 +5017,7 @@ func (x *DrainWorkerRequest) String() string {
 func (*DrainWorkerRequest) ProtoMessage() {}
 
 func (x *DrainWorkerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[74]
+	mi := &file_gateway_proto_msgTypes[75]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4949,7 +5030,7 @@ func (x *DrainWorkerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainWorkerRequest.ProtoReflect.Descriptor instead.
 func (*DrainWorkerRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{74}
+	return file_gateway_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *DrainWorkerRequest) GetWorkerId() string {
@@ -4971,7 +5052,7 @@ type DrainWorkerResponse struct {
 func (x *DrainWorkerResponse) Reset() {
 	*x = DrainWorkerResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[75]
+		mi := &file_gateway_proto_msgTypes[76]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -4984,7 +5065,7 @@ func (x *DrainWorkerResponse) String() string {
 func (*DrainWorkerResponse) ProtoMessage() {}
 
 func (x *DrainWorkerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[75]
+	mi := &file_gateway_proto_msgTypes[76]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4997,7 +5078,7 @@ func (x *DrainWorkerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainWorkerResponse.ProtoReflect.Descriptor instead.
 func (*DrainWorkerResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{75}
+	return file_gateway_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *DrainWorkerResponse) GetOk() bool {
@@ -5023,7 +5104,7 @@ type ExportWorkspaceConfigRequest struct {
 func (x *ExportWorkspaceConfigRequest) Reset() {
 	*x = ExportWorkspaceConfigRequest{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[76]
+		mi := &file_gateway_proto_msgTypes[77]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5036,7 +5117,7 @@ func (x *ExportWorkspaceConfigRequest) String() string {
 func (*ExportWorkspaceConfigRequest) ProtoMessage() {}
 
 func (x *ExportWorkspaceConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[76]
+	mi := &file_gateway_proto_msgTypes[77]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5049,7 +5130,7 @@ func (x *ExportWorkspaceConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportWorkspaceConfigRequest.ProtoReflect.Descriptor instead.
 func (*ExportWorkspaceConfigRequest) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{76}
+	return file_gateway_proto_rawDescGZIP(), []int{77}
 }
 
 type ExportWorkspaceConfigResponse struct {
@@ -5069,7 +5150,7 @@ type ExportWorkspaceConfigResponse struct {
 func (x *ExportWorkspaceConfigResponse) Reset() {
 	*x = ExportWorkspaceConfigResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_gateway_proto_msgTypes[77]
+		mi := &file_gateway_proto_msgTypes[78]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -5082,7 +5163,7 @@ func (x *ExportWorkspaceConfigResponse) String() string {
 func (*ExportWorkspaceConfigResponse) ProtoMessage() {}
 
 func (x *ExportWorkspaceConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_gateway_proto_msgTypes[77]
+	mi := &file_gateway_proto_msgTypes[78]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5095,7 +5176,7 @@ func (x *ExportWorkspaceConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExportWorkspaceConfigResponse.ProtoReflect.Descriptor instead.
 func (*ExportWorkspaceConfigResponse) Descriptor() ([]byte, []int) {
-	return file_gateway_proto_rawDescGZIP(), []int{77}
+	return file_gateway_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ExportWorkspaceConfigResponse) GetGatewayHttpHost() string {
@@ -5242,7 +5323,20 @@ var file_gateway_proto_rawDesc = []byte{
 	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
 	0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12,
 	0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01,
-	0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22, 0x3d, 0x0a, 0x18,
+	0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x22, 0xcd, 0x01, 0x0a,
+	0x16, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
+	0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x12, 0x4a, 0x0a, 0x0e, 0x61, 0x74, 0x74, 0x61, 0x63,
+	0x68, 0x5f, 0x72, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32,
+	0x21, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x74, 0x74, 0x61, 0x63, 0x68,
+	0x54, 0x6f, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65,
+	0x73, 0x74, 0x48, 0x00, 0x52, 0x0d, 0x61, 0x74, 0x74, 0x61, 0x63, 0x68, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x12, 0x5c, 0x0a, 0x16, 0x72, 0x65, 0x70, 0x6c, 0x61, 0x63, 0x65, 0x5f, 0x6f,
+	0x62, 0x6a, 0x65, 0x63, 0x74, 0x5f, 0x63, 0x6f, 0x6e, 0x74, 0x65, 0x6e, 0x74, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x0b, 0x32, 0x24, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x52, 0x65,
+	0x70, 0x6c, 0x61, 0x63, 0x65, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x65,
+	0x6e, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x48, 0x00, 0x52, 0x14, 0x72, 0x65, 0x70,
+	0x6c, 0x61, 0x63, 0x65, 0x4f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x6e,
+	0x74, 0x42, 0x09, 0x0a, 0x07, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x22, 0x3d, 0x0a, 0x18,
 	0x41, 0x74, 0x74, 0x61, 0x63, 0x68, 0x54, 0x6f, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65,
 	0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x21, 0x0a, 0x0c, 0x63, 0x6f, 0x6e, 0x74,
 	0x61, 0x69, 0x6e, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b,
@@ -5823,12 +5917,12 @@ var file_gateway_proto_rawDesc = []byte{
 	0x74, 0x1a, 0x1e, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x53, 0x74, 0x6f, 0x70,
 	0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
 	0x65, 0x22, 0x00, 0x12, 0x5e, 0x0a, 0x11, 0x41, 0x74, 0x74, 0x61, 0x63, 0x68, 0x54, 0x6f, 0x43,
-	0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x12, 0x21, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
-	0x61, 0x79, 0x2e, 0x41, 0x74, 0x74, 0x61, 0x63, 0x68, 0x54, 0x6f, 0x43, 0x6f, 0x6e, 0x74, 0x61,
-	0x69, 0x6e, 0x65, 0x72, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x22, 0x2e, 0x67, 0x61,
-	0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x41, 0x74, 0x74, 0x61, 0x63, 0x68, 0x54, 0x6f, 0x43, 0x6f,
-	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22,
-	0x00, 0x30, 0x01, 0x12, 0x42, 0x0a, 0x09, 0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x61, 0x73, 0x6b,
+	0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x12, 0x1f, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77,
+	0x61, 0x79, 0x2e, 0x43, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x53, 0x74, 0x72, 0x65,
+	0x61, 0x6d, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x1a, 0x22, 0x2e, 0x67, 0x61, 0x74, 0x65,
+	0x77, 0x61, 0x79, 0x2e, 0x41, 0x74, 0x74, 0x61, 0x63, 0x68, 0x54, 0x6f, 0x43, 0x6f, 0x6e, 0x74,
+	0x61, 0x69, 0x6e, 0x65, 0x72, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x28,
+	0x01, 0x30, 0x01, 0x12, 0x42, 0x0a, 0x09, 0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x61, 0x73, 0x6b,
 	0x12, 0x19, 0x2e, 0x67, 0x61, 0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x53, 0x74, 0x61, 0x72, 0x74,
 	0x54, 0x61, 0x73, 0x6b, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x1a, 0x2e, 0x67, 0x61,
 	0x74, 0x65, 0x77, 0x61, 0x79, 0x2e, 0x53, 0x74, 0x61, 0x72, 0x74, 0x54, 0x61, 0x73, 0x6b, 0x52,
@@ -5967,7 +6061,7 @@ func file_gateway_proto_rawDescGZIP() []byte {
 }
 
 var file_gateway_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 82)
+var file_gateway_proto_msgTypes = make([]protoimpl.MessageInfo, 83)
 var file_gateway_proto_goTypes = []interface{}{
 	(ReplaceObjectContentOperation)(0),    // 0: gateway.ReplaceObjectContentOperation
 	(*AuthorizeRequest)(nil),              // 1: gateway.AuthorizeRequest
@@ -5985,188 +6079,191 @@ var file_gateway_proto_goTypes = []interface{}{
 	(*ListContainersResponse)(nil),        // 13: gateway.ListContainersResponse
 	(*StopContainerRequest)(nil),          // 14: gateway.StopContainerRequest
 	(*StopContainerResponse)(nil),         // 15: gateway.StopContainerResponse
-	(*AttachToContainerRequest)(nil),      // 16: gateway.AttachToContainerRequest
-	(*AttachToContainerResponse)(nil),     // 17: gateway.AttachToContainerResponse
-	(*StartTaskRequest)(nil),              // 18: gateway.StartTaskRequest
-	(*StartTaskResponse)(nil),             // 19: gateway.StartTaskResponse
-	(*EndTaskRequest)(nil),                // 20: gateway.EndTaskRequest
-	(*EndTaskResponse)(nil),               // 21: gateway.EndTaskResponse
-	(*StringList)(nil),                    // 22: gateway.StringList
-	(*ListTasksRequest)(nil),              // 23: gateway.ListTasksRequest
-	(*Task)(nil),                          // 24: gateway.Task
-	(*ListTasksResponse)(nil),             // 25: gateway.ListTasksResponse
-	(*StopTasksRequest)(nil),              // 26: gateway.StopTasksRequest
-	(*StopTasksResponse)(nil),             // 27: gateway.StopTasksResponse
-	(*Volume)(nil),                        // 28: gateway.Volume
-	(*SecretVar)(nil),                     // 29: gateway.SecretVar
-	(*Autoscaler)(nil),                    // 30: gateway.Autoscaler
-	(*TaskPolicy)(nil),                    // 31: gateway.TaskPolicy
-	(*GetOrCreateStubRequest)(nil),        // 32: gateway.GetOrCreateStubRequest
-	(*GetOrCreateStubResponse)(nil),       // 33: gateway.GetOrCreateStubResponse
-	(*DeployStubRequest)(nil),             // 34: gateway.DeployStubRequest
-	(*DeployStubResponse)(nil),            // 35: gateway.DeployStubResponse
-	(*Deployment)(nil),                    // 36: gateway.Deployment
-	(*ListDeploymentsRequest)(nil),        // 37: gateway.ListDeploymentsRequest
-	(*ListDeploymentsResponse)(nil),       // 38: gateway.ListDeploymentsResponse
-	(*StopDeploymentRequest)(nil),         // 39: gateway.StopDeploymentRequest
-	(*StopDeploymentResponse)(nil),        // 40: gateway.StopDeploymentResponse
-	(*StartDeploymentRequest)(nil),        // 41: gateway.StartDeploymentRequest
-	(*StartDeploymentResponse)(nil),       // 42: gateway.StartDeploymentResponse
-	(*ScaleDeploymentRequest)(nil),        // 43: gateway.ScaleDeploymentRequest
-	(*ScaleDeploymentResponse)(nil),       // 44: gateway.ScaleDeploymentResponse
-	(*DeleteDeploymentRequest)(nil),       // 45: gateway.DeleteDeploymentRequest
-	(*DeleteDeploymentResponse)(nil),      // 46: gateway.DeleteDeploymentResponse
-	(*Pool)(nil),                          // 47: gateway.Pool
-	(*ListPoolsRequest)(nil),              // 48: gateway.ListPoolsRequest
-	(*ListPoolsResponse)(nil),             // 49: gateway.ListPoolsResponse
-	(*Machine)(nil),                       // 50: gateway.Machine
-	(*MachineMetrics)(nil),                // 51: gateway.MachineMetrics
-	(*ListMachinesRequest)(nil),           // 52: gateway.ListMachinesRequest
-	(*ListMachinesResponse)(nil),          // 53: gateway.ListMachinesResponse
-	(*CreateMachineRequest)(nil),          // 54: gateway.CreateMachineRequest
-	(*CreateMachineResponse)(nil),         // 55: gateway.CreateMachineResponse
-	(*DeleteMachineRequest)(nil),          // 56: gateway.DeleteMachineRequest
-	(*DeleteMachineResponse)(nil),         // 57: gateway.DeleteMachineResponse
-	(*Token)(nil),                         // 58: gateway.Token
-	(*ListTokensRequest)(nil),             // 59: gateway.ListTokensRequest
-	(*ListTokensResponse)(nil),            // 60: gateway.ListTokensResponse
-	(*CreateTokenRequest)(nil),            // 61: gateway.CreateTokenRequest
-	(*CreateTokenResponse)(nil),           // 62: gateway.CreateTokenResponse
-	(*ToggleTokenRequest)(nil),            // 63: gateway.ToggleTokenRequest
-	(*ToggleTokenResponse)(nil),           // 64: gateway.ToggleTokenResponse
-	(*DeleteTokenRequest)(nil),            // 65: gateway.DeleteTokenRequest
-	(*DeleteTokenResponse)(nil),           // 66: gateway.DeleteTokenResponse
-	(*GetURLRequest)(nil),                 // 67: gateway.GetURLRequest
-	(*GetURLResponse)(nil),                // 68: gateway.GetURLResponse
-	(*ListWorkersRequest)(nil),            // 69: gateway.ListWorkersRequest
-	(*ListWorkersResponse)(nil),           // 70: gateway.ListWorkersResponse
-	(*CordonWorkerRequest)(nil),           // 71: gateway.CordonWorkerRequest
-	(*CordonWorkerResponse)(nil),          // 72: gateway.CordonWorkerResponse
-	(*UncordonWorkerRequest)(nil),         // 73: gateway.UncordonWorkerRequest
-	(*UncordonWorkerResponse)(nil),        // 74: gateway.UncordonWorkerResponse
-	(*DrainWorkerRequest)(nil),            // 75: gateway.DrainWorkerRequest
-	(*DrainWorkerResponse)(nil),           // 76: gateway.DrainWorkerResponse
-	(*ExportWorkspaceConfigRequest)(nil),  // 77: gateway.ExportWorkspaceConfigRequest
-	(*ExportWorkspaceConfigResponse)(nil), // 78: gateway.ExportWorkspaceConfigResponse
-	nil,                                   // 79: gateway.ListTasksRequest.FiltersEntry
-	nil,                                   // 80: gateway.ListDeploymentsRequest.FiltersEntry
-	nil,                                   // 81: gateway.ListPoolsRequest.FiltersEntry
-	nil,                                   // 82: gateway.ListMachinesResponse.GpusEntry
-	(*Container)(nil),                     // 83: types.Container
-	(*timestamppb.Timestamp)(nil),         // 84: google.protobuf.Timestamp
-	(*MountPointConfig)(nil),              // 85: types.MountPointConfig
-	(*WorkerPoolState)(nil),               // 86: types.WorkerPoolState
-	(*Worker)(nil),                        // 87: types.Worker
+	(*ContainerStreamMessage)(nil),        // 16: gateway.ContainerStreamMessage
+	(*AttachToContainerRequest)(nil),      // 17: gateway.AttachToContainerRequest
+	(*AttachToContainerResponse)(nil),     // 18: gateway.AttachToContainerResponse
+	(*StartTaskRequest)(nil),              // 19: gateway.StartTaskRequest
+	(*StartTaskResponse)(nil),             // 20: gateway.StartTaskResponse
+	(*EndTaskRequest)(nil),                // 21: gateway.EndTaskRequest
+	(*EndTaskResponse)(nil),               // 22: gateway.EndTaskResponse
+	(*StringList)(nil),                    // 23: gateway.StringList
+	(*ListTasksRequest)(nil),              // 24: gateway.ListTasksRequest
+	(*Task)(nil),                          // 25: gateway.Task
+	(*ListTasksResponse)(nil),             // 26: gateway.ListTasksResponse
+	(*StopTasksRequest)(nil),              // 27: gateway.StopTasksRequest
+	(*StopTasksResponse)(nil),             // 28: gateway.StopTasksResponse
+	(*Volume)(nil),                        // 29: gateway.Volume
+	(*SecretVar)(nil),                     // 30: gateway.SecretVar
+	(*Autoscaler)(nil),                    // 31: gateway.Autoscaler
+	(*TaskPolicy)(nil),                    // 32: gateway.TaskPolicy
+	(*GetOrCreateStubRequest)(nil),        // 33: gateway.GetOrCreateStubRequest
+	(*GetOrCreateStubResponse)(nil),       // 34: gateway.GetOrCreateStubResponse
+	(*DeployStubRequest)(nil),             // 35: gateway.DeployStubRequest
+	(*DeployStubResponse)(nil),            // 36: gateway.DeployStubResponse
+	(*Deployment)(nil),                    // 37: gateway.Deployment
+	(*ListDeploymentsRequest)(nil),        // 38: gateway.ListDeploymentsRequest
+	(*ListDeploymentsResponse)(nil),       // 39: gateway.ListDeploymentsResponse
+	(*StopDeploymentRequest)(nil),         // 40: gateway.StopDeploymentRequest
+	(*StopDeploymentResponse)(nil),        // 41: gateway.StopDeploymentResponse
+	(*StartDeploymentRequest)(nil),        // 42: gateway.StartDeploymentRequest
+	(*StartDeploymentResponse)(nil),       // 43: gateway.StartDeploymentResponse
+	(*ScaleDeploymentRequest)(nil),        // 44: gateway.ScaleDeploymentRequest
+	(*ScaleDeploymentResponse)(nil),       // 45: gateway.ScaleDeploymentResponse
+	(*DeleteDeploymentRequest)(nil),       // 46: gateway.DeleteDeploymentRequest
+	(*DeleteDeploymentResponse)(nil),      // 47: gateway.DeleteDeploymentResponse
+	(*Pool)(nil),                          // 48: gateway.Pool
+	(*ListPoolsRequest)(nil),              // 49: gateway.ListPoolsRequest
+	(*ListPoolsResponse)(nil),             // 50: gateway.ListPoolsResponse
+	(*Machine)(nil),                       // 51: gateway.Machine
+	(*MachineMetrics)(nil),                // 52: gateway.MachineMetrics
+	(*ListMachinesRequest)(nil),           // 53: gateway.ListMachinesRequest
+	(*ListMachinesResponse)(nil),          // 54: gateway.ListMachinesResponse
+	(*CreateMachineRequest)(nil),          // 55: gateway.CreateMachineRequest
+	(*CreateMachineResponse)(nil),         // 56: gateway.CreateMachineResponse
+	(*DeleteMachineRequest)(nil),          // 57: gateway.DeleteMachineRequest
+	(*DeleteMachineResponse)(nil),         // 58: gateway.DeleteMachineResponse
+	(*Token)(nil),                         // 59: gateway.Token
+	(*ListTokensRequest)(nil),             // 60: gateway.ListTokensRequest
+	(*ListTokensResponse)(nil),            // 61: gateway.ListTokensResponse
+	(*CreateTokenRequest)(nil),            // 62: gateway.CreateTokenRequest
+	(*CreateTokenResponse)(nil),           // 63: gateway.CreateTokenResponse
+	(*ToggleTokenRequest)(nil),            // 64: gateway.ToggleTokenRequest
+	(*ToggleTokenResponse)(nil),           // 65: gateway.ToggleTokenResponse
+	(*DeleteTokenRequest)(nil),            // 66: gateway.DeleteTokenRequest
+	(*DeleteTokenResponse)(nil),           // 67: gateway.DeleteTokenResponse
+	(*GetURLRequest)(nil),                 // 68: gateway.GetURLRequest
+	(*GetURLResponse)(nil),                // 69: gateway.GetURLResponse
+	(*ListWorkersRequest)(nil),            // 70: gateway.ListWorkersRequest
+	(*ListWorkersResponse)(nil),           // 71: gateway.ListWorkersResponse
+	(*CordonWorkerRequest)(nil),           // 72: gateway.CordonWorkerRequest
+	(*CordonWorkerResponse)(nil),          // 73: gateway.CordonWorkerResponse
+	(*UncordonWorkerRequest)(nil),         // 74: gateway.UncordonWorkerRequest
+	(*UncordonWorkerResponse)(nil),        // 75: gateway.UncordonWorkerResponse
+	(*DrainWorkerRequest)(nil),            // 76: gateway.DrainWorkerRequest
+	(*DrainWorkerResponse)(nil),           // 77: gateway.DrainWorkerResponse
+	(*ExportWorkspaceConfigRequest)(nil),  // 78: gateway.ExportWorkspaceConfigRequest
+	(*ExportWorkspaceConfigResponse)(nil), // 79: gateway.ExportWorkspaceConfigResponse
+	nil,                                   // 80: gateway.ListTasksRequest.FiltersEntry
+	nil,                                   // 81: gateway.ListDeploymentsRequest.FiltersEntry
+	nil,                                   // 82: gateway.ListPoolsRequest.FiltersEntry
+	nil,                                   // 83: gateway.ListMachinesResponse.GpusEntry
+	(*Container)(nil),                     // 84: types.Container
+	(*timestamppb.Timestamp)(nil),         // 85: google.protobuf.Timestamp
+	(*MountPointConfig)(nil),              // 86: types.MountPointConfig
+	(*WorkerPoolState)(nil),               // 87: types.WorkerPoolState
+	(*Worker)(nil),                        // 88: types.Worker
 }
 var file_gateway_proto_depIdxs = []int32{
 	5,  // 0: gateway.HeadObjectResponse.object_metadata:type_name -> gateway.ObjectMetadata
 	5,  // 1: gateway.PutObjectRequest.object_metadata:type_name -> gateway.ObjectMetadata
 	0,  // 2: gateway.ReplaceObjectContentRequest.op:type_name -> gateway.ReplaceObjectContentOperation
-	83, // 3: gateway.ListContainersResponse.containers:type_name -> types.Container
-	79, // 4: gateway.ListTasksRequest.filters:type_name -> gateway.ListTasksRequest.FiltersEntry
-	84, // 5: gateway.Task.started_at:type_name -> google.protobuf.Timestamp
-	84, // 6: gateway.Task.ended_at:type_name -> google.protobuf.Timestamp
-	84, // 7: gateway.Task.created_at:type_name -> google.protobuf.Timestamp
-	84, // 8: gateway.Task.updated_at:type_name -> google.protobuf.Timestamp
-	24, // 9: gateway.ListTasksResponse.tasks:type_name -> gateway.Task
-	85, // 10: gateway.Volume.config:type_name -> types.MountPointConfig
-	28, // 11: gateway.GetOrCreateStubRequest.volumes:type_name -> gateway.Volume
-	29, // 12: gateway.GetOrCreateStubRequest.secrets:type_name -> gateway.SecretVar
-	30, // 13: gateway.GetOrCreateStubRequest.autoscaler:type_name -> gateway.Autoscaler
-	31, // 14: gateway.GetOrCreateStubRequest.task_policy:type_name -> gateway.TaskPolicy
-	84, // 15: gateway.Deployment.created_at:type_name -> google.protobuf.Timestamp
-	84, // 16: gateway.Deployment.updated_at:type_name -> google.protobuf.Timestamp
-	80, // 17: gateway.ListDeploymentsRequest.filters:type_name -> gateway.ListDeploymentsRequest.FiltersEntry
-	36, // 18: gateway.ListDeploymentsResponse.deployments:type_name -> gateway.Deployment
-	86, // 19: gateway.Pool.state:type_name -> types.WorkerPoolState
-	81, // 20: gateway.ListPoolsRequest.filters:type_name -> gateway.ListPoolsRequest.FiltersEntry
-	47, // 21: gateway.ListPoolsResponse.pools:type_name -> gateway.Pool
-	51, // 22: gateway.Machine.machine_metrics:type_name -> gateway.MachineMetrics
-	50, // 23: gateway.ListMachinesResponse.machines:type_name -> gateway.Machine
-	82, // 24: gateway.ListMachinesResponse.gpus:type_name -> gateway.ListMachinesResponse.GpusEntry
-	50, // 25: gateway.CreateMachineResponse.machine:type_name -> gateway.Machine
-	84, // 26: gateway.Token.created_at:type_name -> google.protobuf.Timestamp
-	84, // 27: gateway.Token.updated_at:type_name -> google.protobuf.Timestamp
-	58, // 28: gateway.ListTokensResponse.tokens:type_name -> gateway.Token
-	58, // 29: gateway.CreateTokenResponse.token:type_name -> gateway.Token
-	58, // 30: gateway.ToggleTokenResponse.token:type_name -> gateway.Token
-	87, // 31: gateway.ListWorkersResponse.workers:type_name -> types.Worker
-	22, // 32: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
-	22, // 33: gateway.ListDeploymentsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	22, // 34: gateway.ListPoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	1,  // 35: gateway.GatewayService.Authorize:input_type -> gateway.AuthorizeRequest
-	3,  // 36: gateway.GatewayService.SignPayload:input_type -> gateway.SignPayloadRequest
-	6,  // 37: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
-	8,  // 38: gateway.GatewayService.PutObject:input_type -> gateway.PutObjectRequest
-	8,  // 39: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
-	10, // 40: gateway.GatewayService.ReplaceObjectContent:input_type -> gateway.ReplaceObjectContentRequest
-	12, // 41: gateway.GatewayService.ListContainers:input_type -> gateway.ListContainersRequest
-	14, // 42: gateway.GatewayService.StopContainer:input_type -> gateway.StopContainerRequest
-	16, // 43: gateway.GatewayService.AttachToContainer:input_type -> gateway.AttachToContainerRequest
-	18, // 44: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
-	20, // 45: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
-	26, // 46: gateway.GatewayService.StopTasks:input_type -> gateway.StopTasksRequest
-	23, // 47: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
-	32, // 48: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
-	34, // 49: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
-	67, // 50: gateway.GatewayService.GetURL:input_type -> gateway.GetURLRequest
-	37, // 51: gateway.GatewayService.ListDeployments:input_type -> gateway.ListDeploymentsRequest
-	39, // 52: gateway.GatewayService.StopDeployment:input_type -> gateway.StopDeploymentRequest
-	41, // 53: gateway.GatewayService.StartDeployment:input_type -> gateway.StartDeploymentRequest
-	43, // 54: gateway.GatewayService.ScaleDeployment:input_type -> gateway.ScaleDeploymentRequest
-	45, // 55: gateway.GatewayService.DeleteDeployment:input_type -> gateway.DeleteDeploymentRequest
-	48, // 56: gateway.GatewayService.ListPools:input_type -> gateway.ListPoolsRequest
-	52, // 57: gateway.GatewayService.ListMachines:input_type -> gateway.ListMachinesRequest
-	54, // 58: gateway.GatewayService.CreateMachine:input_type -> gateway.CreateMachineRequest
-	56, // 59: gateway.GatewayService.DeleteMachine:input_type -> gateway.DeleteMachineRequest
-	59, // 60: gateway.GatewayService.ListTokens:input_type -> gateway.ListTokensRequest
-	61, // 61: gateway.GatewayService.CreateToken:input_type -> gateway.CreateTokenRequest
-	63, // 62: gateway.GatewayService.ToggleToken:input_type -> gateway.ToggleTokenRequest
-	65, // 63: gateway.GatewayService.DeleteToken:input_type -> gateway.DeleteTokenRequest
-	69, // 64: gateway.GatewayService.ListWorkers:input_type -> gateway.ListWorkersRequest
-	71, // 65: gateway.GatewayService.CordonWorker:input_type -> gateway.CordonWorkerRequest
-	73, // 66: gateway.GatewayService.UncordonWorker:input_type -> gateway.UncordonWorkerRequest
-	75, // 67: gateway.GatewayService.DrainWorker:input_type -> gateway.DrainWorkerRequest
-	77, // 68: gateway.GatewayService.ExportWorkspaceConfig:input_type -> gateway.ExportWorkspaceConfigRequest
-	2,  // 69: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
-	4,  // 70: gateway.GatewayService.SignPayload:output_type -> gateway.SignPayloadResponse
-	7,  // 71: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
-	9,  // 72: gateway.GatewayService.PutObject:output_type -> gateway.PutObjectResponse
-	9,  // 73: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
-	11, // 74: gateway.GatewayService.ReplaceObjectContent:output_type -> gateway.ReplaceObjectContentResponse
-	13, // 75: gateway.GatewayService.ListContainers:output_type -> gateway.ListContainersResponse
-	15, // 76: gateway.GatewayService.StopContainer:output_type -> gateway.StopContainerResponse
-	17, // 77: gateway.GatewayService.AttachToContainer:output_type -> gateway.AttachToContainerResponse
-	19, // 78: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
-	21, // 79: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
-	27, // 80: gateway.GatewayService.StopTasks:output_type -> gateway.StopTasksResponse
-	25, // 81: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
-	33, // 82: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
-	35, // 83: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
-	68, // 84: gateway.GatewayService.GetURL:output_type -> gateway.GetURLResponse
-	38, // 85: gateway.GatewayService.ListDeployments:output_type -> gateway.ListDeploymentsResponse
-	40, // 86: gateway.GatewayService.StopDeployment:output_type -> gateway.StopDeploymentResponse
-	42, // 87: gateway.GatewayService.StartDeployment:output_type -> gateway.StartDeploymentResponse
-	44, // 88: gateway.GatewayService.ScaleDeployment:output_type -> gateway.ScaleDeploymentResponse
-	46, // 89: gateway.GatewayService.DeleteDeployment:output_type -> gateway.DeleteDeploymentResponse
-	49, // 90: gateway.GatewayService.ListPools:output_type -> gateway.ListPoolsResponse
-	53, // 91: gateway.GatewayService.ListMachines:output_type -> gateway.ListMachinesResponse
-	55, // 92: gateway.GatewayService.CreateMachine:output_type -> gateway.CreateMachineResponse
-	57, // 93: gateway.GatewayService.DeleteMachine:output_type -> gateway.DeleteMachineResponse
-	60, // 94: gateway.GatewayService.ListTokens:output_type -> gateway.ListTokensResponse
-	62, // 95: gateway.GatewayService.CreateToken:output_type -> gateway.CreateTokenResponse
-	64, // 96: gateway.GatewayService.ToggleToken:output_type -> gateway.ToggleTokenResponse
-	66, // 97: gateway.GatewayService.DeleteToken:output_type -> gateway.DeleteTokenResponse
-	70, // 98: gateway.GatewayService.ListWorkers:output_type -> gateway.ListWorkersResponse
-	72, // 99: gateway.GatewayService.CordonWorker:output_type -> gateway.CordonWorkerResponse
-	74, // 100: gateway.GatewayService.UncordonWorker:output_type -> gateway.UncordonWorkerResponse
-	76, // 101: gateway.GatewayService.DrainWorker:output_type -> gateway.DrainWorkerResponse
-	78, // 102: gateway.GatewayService.ExportWorkspaceConfig:output_type -> gateway.ExportWorkspaceConfigResponse
-	69, // [69:103] is the sub-list for method output_type
-	35, // [35:69] is the sub-list for method input_type
-	35, // [35:35] is the sub-list for extension type_name
-	35, // [35:35] is the sub-list for extension extendee
-	0,  // [0:35] is the sub-list for field type_name
+	84, // 3: gateway.ListContainersResponse.containers:type_name -> types.Container
+	17, // 4: gateway.ContainerStreamMessage.attach_request:type_name -> gateway.AttachToContainerRequest
+	10, // 5: gateway.ContainerStreamMessage.replace_object_content:type_name -> gateway.ReplaceObjectContentRequest
+	80, // 6: gateway.ListTasksRequest.filters:type_name -> gateway.ListTasksRequest.FiltersEntry
+	85, // 7: gateway.Task.started_at:type_name -> google.protobuf.Timestamp
+	85, // 8: gateway.Task.ended_at:type_name -> google.protobuf.Timestamp
+	85, // 9: gateway.Task.created_at:type_name -> google.protobuf.Timestamp
+	85, // 10: gateway.Task.updated_at:type_name -> google.protobuf.Timestamp
+	25, // 11: gateway.ListTasksResponse.tasks:type_name -> gateway.Task
+	86, // 12: gateway.Volume.config:type_name -> types.MountPointConfig
+	29, // 13: gateway.GetOrCreateStubRequest.volumes:type_name -> gateway.Volume
+	30, // 14: gateway.GetOrCreateStubRequest.secrets:type_name -> gateway.SecretVar
+	31, // 15: gateway.GetOrCreateStubRequest.autoscaler:type_name -> gateway.Autoscaler
+	32, // 16: gateway.GetOrCreateStubRequest.task_policy:type_name -> gateway.TaskPolicy
+	85, // 17: gateway.Deployment.created_at:type_name -> google.protobuf.Timestamp
+	85, // 18: gateway.Deployment.updated_at:type_name -> google.protobuf.Timestamp
+	81, // 19: gateway.ListDeploymentsRequest.filters:type_name -> gateway.ListDeploymentsRequest.FiltersEntry
+	37, // 20: gateway.ListDeploymentsResponse.deployments:type_name -> gateway.Deployment
+	87, // 21: gateway.Pool.state:type_name -> types.WorkerPoolState
+	82, // 22: gateway.ListPoolsRequest.filters:type_name -> gateway.ListPoolsRequest.FiltersEntry
+	48, // 23: gateway.ListPoolsResponse.pools:type_name -> gateway.Pool
+	52, // 24: gateway.Machine.machine_metrics:type_name -> gateway.MachineMetrics
+	51, // 25: gateway.ListMachinesResponse.machines:type_name -> gateway.Machine
+	83, // 26: gateway.ListMachinesResponse.gpus:type_name -> gateway.ListMachinesResponse.GpusEntry
+	51, // 27: gateway.CreateMachineResponse.machine:type_name -> gateway.Machine
+	85, // 28: gateway.Token.created_at:type_name -> google.protobuf.Timestamp
+	85, // 29: gateway.Token.updated_at:type_name -> google.protobuf.Timestamp
+	59, // 30: gateway.ListTokensResponse.tokens:type_name -> gateway.Token
+	59, // 31: gateway.CreateTokenResponse.token:type_name -> gateway.Token
+	59, // 32: gateway.ToggleTokenResponse.token:type_name -> gateway.Token
+	88, // 33: gateway.ListWorkersResponse.workers:type_name -> types.Worker
+	23, // 34: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
+	23, // 35: gateway.ListDeploymentsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	23, // 36: gateway.ListPoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	1,  // 37: gateway.GatewayService.Authorize:input_type -> gateway.AuthorizeRequest
+	3,  // 38: gateway.GatewayService.SignPayload:input_type -> gateway.SignPayloadRequest
+	6,  // 39: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
+	8,  // 40: gateway.GatewayService.PutObject:input_type -> gateway.PutObjectRequest
+	8,  // 41: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
+	10, // 42: gateway.GatewayService.ReplaceObjectContent:input_type -> gateway.ReplaceObjectContentRequest
+	12, // 43: gateway.GatewayService.ListContainers:input_type -> gateway.ListContainersRequest
+	14, // 44: gateway.GatewayService.StopContainer:input_type -> gateway.StopContainerRequest
+	16, // 45: gateway.GatewayService.AttachToContainer:input_type -> gateway.ContainerStreamMessage
+	19, // 46: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
+	21, // 47: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
+	27, // 48: gateway.GatewayService.StopTasks:input_type -> gateway.StopTasksRequest
+	24, // 49: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
+	33, // 50: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
+	35, // 51: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
+	68, // 52: gateway.GatewayService.GetURL:input_type -> gateway.GetURLRequest
+	38, // 53: gateway.GatewayService.ListDeployments:input_type -> gateway.ListDeploymentsRequest
+	40, // 54: gateway.GatewayService.StopDeployment:input_type -> gateway.StopDeploymentRequest
+	42, // 55: gateway.GatewayService.StartDeployment:input_type -> gateway.StartDeploymentRequest
+	44, // 56: gateway.GatewayService.ScaleDeployment:input_type -> gateway.ScaleDeploymentRequest
+	46, // 57: gateway.GatewayService.DeleteDeployment:input_type -> gateway.DeleteDeploymentRequest
+	49, // 58: gateway.GatewayService.ListPools:input_type -> gateway.ListPoolsRequest
+	53, // 59: gateway.GatewayService.ListMachines:input_type -> gateway.ListMachinesRequest
+	55, // 60: gateway.GatewayService.CreateMachine:input_type -> gateway.CreateMachineRequest
+	57, // 61: gateway.GatewayService.DeleteMachine:input_type -> gateway.DeleteMachineRequest
+	60, // 62: gateway.GatewayService.ListTokens:input_type -> gateway.ListTokensRequest
+	62, // 63: gateway.GatewayService.CreateToken:input_type -> gateway.CreateTokenRequest
+	64, // 64: gateway.GatewayService.ToggleToken:input_type -> gateway.ToggleTokenRequest
+	66, // 65: gateway.GatewayService.DeleteToken:input_type -> gateway.DeleteTokenRequest
+	70, // 66: gateway.GatewayService.ListWorkers:input_type -> gateway.ListWorkersRequest
+	72, // 67: gateway.GatewayService.CordonWorker:input_type -> gateway.CordonWorkerRequest
+	74, // 68: gateway.GatewayService.UncordonWorker:input_type -> gateway.UncordonWorkerRequest
+	76, // 69: gateway.GatewayService.DrainWorker:input_type -> gateway.DrainWorkerRequest
+	78, // 70: gateway.GatewayService.ExportWorkspaceConfig:input_type -> gateway.ExportWorkspaceConfigRequest
+	2,  // 71: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
+	4,  // 72: gateway.GatewayService.SignPayload:output_type -> gateway.SignPayloadResponse
+	7,  // 73: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
+	9,  // 74: gateway.GatewayService.PutObject:output_type -> gateway.PutObjectResponse
+	9,  // 75: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
+	11, // 76: gateway.GatewayService.ReplaceObjectContent:output_type -> gateway.ReplaceObjectContentResponse
+	13, // 77: gateway.GatewayService.ListContainers:output_type -> gateway.ListContainersResponse
+	15, // 78: gateway.GatewayService.StopContainer:output_type -> gateway.StopContainerResponse
+	18, // 79: gateway.GatewayService.AttachToContainer:output_type -> gateway.AttachToContainerResponse
+	20, // 80: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
+	22, // 81: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
+	28, // 82: gateway.GatewayService.StopTasks:output_type -> gateway.StopTasksResponse
+	26, // 83: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
+	34, // 84: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
+	36, // 85: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
+	69, // 86: gateway.GatewayService.GetURL:output_type -> gateway.GetURLResponse
+	39, // 87: gateway.GatewayService.ListDeployments:output_type -> gateway.ListDeploymentsResponse
+	41, // 88: gateway.GatewayService.StopDeployment:output_type -> gateway.StopDeploymentResponse
+	43, // 89: gateway.GatewayService.StartDeployment:output_type -> gateway.StartDeploymentResponse
+	45, // 90: gateway.GatewayService.ScaleDeployment:output_type -> gateway.ScaleDeploymentResponse
+	47, // 91: gateway.GatewayService.DeleteDeployment:output_type -> gateway.DeleteDeploymentResponse
+	50, // 92: gateway.GatewayService.ListPools:output_type -> gateway.ListPoolsResponse
+	54, // 93: gateway.GatewayService.ListMachines:output_type -> gateway.ListMachinesResponse
+	56, // 94: gateway.GatewayService.CreateMachine:output_type -> gateway.CreateMachineResponse
+	58, // 95: gateway.GatewayService.DeleteMachine:output_type -> gateway.DeleteMachineResponse
+	61, // 96: gateway.GatewayService.ListTokens:output_type -> gateway.ListTokensResponse
+	63, // 97: gateway.GatewayService.CreateToken:output_type -> gateway.CreateTokenResponse
+	65, // 98: gateway.GatewayService.ToggleToken:output_type -> gateway.ToggleTokenResponse
+	67, // 99: gateway.GatewayService.DeleteToken:output_type -> gateway.DeleteTokenResponse
+	71, // 100: gateway.GatewayService.ListWorkers:output_type -> gateway.ListWorkersResponse
+	73, // 101: gateway.GatewayService.CordonWorker:output_type -> gateway.CordonWorkerResponse
+	75, // 102: gateway.GatewayService.UncordonWorker:output_type -> gateway.UncordonWorkerResponse
+	77, // 103: gateway.GatewayService.DrainWorker:output_type -> gateway.DrainWorkerResponse
+	79, // 104: gateway.GatewayService.ExportWorkspaceConfig:output_type -> gateway.ExportWorkspaceConfigResponse
+	71, // [71:105] is the sub-list for method output_type
+	37, // [37:71] is the sub-list for method input_type
+	37, // [37:37] is the sub-list for extension type_name
+	37, // [37:37] is the sub-list for extension extendee
+	0,  // [0:37] is the sub-list for field type_name
 }
 
 func init() { file_gateway_proto_init() }
@@ -6357,7 +6454,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[15].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AttachToContainerRequest); i {
+			switch v := v.(*ContainerStreamMessage); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6369,7 +6466,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[16].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AttachToContainerResponse); i {
+			switch v := v.(*AttachToContainerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6381,7 +6478,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[17].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StartTaskRequest); i {
+			switch v := v.(*AttachToContainerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6393,7 +6490,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StartTaskResponse); i {
+			switch v := v.(*StartTaskRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6405,7 +6502,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EndTaskRequest); i {
+			switch v := v.(*StartTaskResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6417,7 +6514,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EndTaskResponse); i {
+			switch v := v.(*EndTaskRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6429,7 +6526,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StringList); i {
+			switch v := v.(*EndTaskResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6441,7 +6538,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[22].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListTasksRequest); i {
+			switch v := v.(*StringList); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6453,7 +6550,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[23].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Task); i {
+			switch v := v.(*ListTasksRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6465,7 +6562,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[24].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListTasksResponse); i {
+			switch v := v.(*Task); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6477,7 +6574,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[25].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StopTasksRequest); i {
+			switch v := v.(*ListTasksResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6489,7 +6586,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[26].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StopTasksResponse); i {
+			switch v := v.(*StopTasksRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6501,7 +6598,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[27].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Volume); i {
+			switch v := v.(*StopTasksResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6513,7 +6610,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[28].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*SecretVar); i {
+			switch v := v.(*Volume); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6525,7 +6622,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[29].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Autoscaler); i {
+			switch v := v.(*SecretVar); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6537,7 +6634,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[30].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*TaskPolicy); i {
+			switch v := v.(*Autoscaler); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6549,7 +6646,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[31].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetOrCreateStubRequest); i {
+			switch v := v.(*TaskPolicy); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6561,7 +6658,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[32].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetOrCreateStubResponse); i {
+			switch v := v.(*GetOrCreateStubRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6573,7 +6670,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[33].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeployStubRequest); i {
+			switch v := v.(*GetOrCreateStubResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6585,7 +6682,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[34].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeployStubResponse); i {
+			switch v := v.(*DeployStubRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6597,7 +6694,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[35].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Deployment); i {
+			switch v := v.(*DeployStubResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6609,7 +6706,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[36].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListDeploymentsRequest); i {
+			switch v := v.(*Deployment); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6621,7 +6718,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[37].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListDeploymentsResponse); i {
+			switch v := v.(*ListDeploymentsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6633,7 +6730,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[38].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StopDeploymentRequest); i {
+			switch v := v.(*ListDeploymentsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6645,7 +6742,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[39].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StopDeploymentResponse); i {
+			switch v := v.(*StopDeploymentRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6657,7 +6754,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[40].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StartDeploymentRequest); i {
+			switch v := v.(*StopDeploymentResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6669,7 +6766,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[41].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StartDeploymentResponse); i {
+			switch v := v.(*StartDeploymentRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6681,7 +6778,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[42].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ScaleDeploymentRequest); i {
+			switch v := v.(*StartDeploymentResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6693,7 +6790,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[43].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ScaleDeploymentResponse); i {
+			switch v := v.(*ScaleDeploymentRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6705,7 +6802,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[44].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteDeploymentRequest); i {
+			switch v := v.(*ScaleDeploymentResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6717,7 +6814,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[45].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteDeploymentResponse); i {
+			switch v := v.(*DeleteDeploymentRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6729,7 +6826,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[46].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Pool); i {
+			switch v := v.(*DeleteDeploymentResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6741,7 +6838,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[47].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListPoolsRequest); i {
+			switch v := v.(*Pool); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6753,7 +6850,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[48].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListPoolsResponse); i {
+			switch v := v.(*ListPoolsRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6765,7 +6862,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[49].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Machine); i {
+			switch v := v.(*ListPoolsResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6777,7 +6874,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[50].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*MachineMetrics); i {
+			switch v := v.(*Machine); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6789,7 +6886,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[51].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListMachinesRequest); i {
+			switch v := v.(*MachineMetrics); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6801,7 +6898,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[52].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListMachinesResponse); i {
+			switch v := v.(*ListMachinesRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6813,7 +6910,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[53].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateMachineRequest); i {
+			switch v := v.(*ListMachinesResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6825,7 +6922,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[54].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateMachineResponse); i {
+			switch v := v.(*CreateMachineRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6837,7 +6934,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[55].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteMachineRequest); i {
+			switch v := v.(*CreateMachineResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6849,7 +6946,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[56].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteMachineResponse); i {
+			switch v := v.(*DeleteMachineRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6861,7 +6958,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[57].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Token); i {
+			switch v := v.(*DeleteMachineResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6873,7 +6970,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[58].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListTokensRequest); i {
+			switch v := v.(*Token); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6885,7 +6982,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[59].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListTokensResponse); i {
+			switch v := v.(*ListTokensRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6897,7 +6994,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[60].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateTokenRequest); i {
+			switch v := v.(*ListTokensResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6909,7 +7006,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[61].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateTokenResponse); i {
+			switch v := v.(*CreateTokenRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6921,7 +7018,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[62].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ToggleTokenRequest); i {
+			switch v := v.(*CreateTokenResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6933,7 +7030,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[63].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ToggleTokenResponse); i {
+			switch v := v.(*ToggleTokenRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6945,7 +7042,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[64].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteTokenRequest); i {
+			switch v := v.(*ToggleTokenResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6957,7 +7054,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[65].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteTokenResponse); i {
+			switch v := v.(*DeleteTokenRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6969,7 +7066,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[66].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetURLRequest); i {
+			switch v := v.(*DeleteTokenResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6981,7 +7078,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[67].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetURLResponse); i {
+			switch v := v.(*GetURLRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -6993,7 +7090,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[68].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListWorkersRequest); i {
+			switch v := v.(*GetURLResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7005,7 +7102,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[69].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListWorkersResponse); i {
+			switch v := v.(*ListWorkersRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7017,7 +7114,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[70].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CordonWorkerRequest); i {
+			switch v := v.(*ListWorkersResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7029,7 +7126,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[71].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CordonWorkerResponse); i {
+			switch v := v.(*CordonWorkerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7041,7 +7138,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[72].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UncordonWorkerRequest); i {
+			switch v := v.(*CordonWorkerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7053,7 +7150,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[73].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UncordonWorkerResponse); i {
+			switch v := v.(*UncordonWorkerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7065,7 +7162,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[74].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DrainWorkerRequest); i {
+			switch v := v.(*UncordonWorkerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7077,7 +7174,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[75].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DrainWorkerResponse); i {
+			switch v := v.(*DrainWorkerRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7089,7 +7186,7 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[76].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ExportWorkspaceConfigRequest); i {
+			switch v := v.(*DrainWorkerResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -7101,6 +7198,18 @@ func file_gateway_proto_init() {
 			}
 		}
 		file_gateway_proto_msgTypes[77].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*ExportWorkspaceConfigRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_gateway_proto_msgTypes[78].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*ExportWorkspaceConfigResponse); i {
 			case 0:
 				return &v.state
@@ -7113,15 +7222,19 @@ func file_gateway_proto_init() {
 			}
 		}
 	}
-	file_gateway_proto_msgTypes[27].OneofWrappers = []interface{}{}
-	file_gateway_proto_msgTypes[57].OneofWrappers = []interface{}{}
+	file_gateway_proto_msgTypes[15].OneofWrappers = []interface{}{
+		(*ContainerStreamMessage_AttachRequest)(nil),
+		(*ContainerStreamMessage_ReplaceObjectContent)(nil),
+	}
+	file_gateway_proto_msgTypes[28].OneofWrappers = []interface{}{}
+	file_gateway_proto_msgTypes[58].OneofWrappers = []interface{}{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_gateway_proto_rawDesc,
 			NumEnums:      1,
-			NumMessages:   82,
+			NumMessages:   83,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
