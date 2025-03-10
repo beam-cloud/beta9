@@ -108,7 +108,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		}()
 	}
 
-	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
+	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
 		SendCallback:    sendCallback,
 		ExitCallback:    exitCallback,
 		ContainerRepo:   es.containerRepo,
@@ -120,7 +120,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		return err
 	}
 
-	return logStream.Stream(ctx, authInfo, container.ContainerId)
+	return containerStream.Stream(ctx, authInfo, container.ContainerId)
 }
 
 func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error) {

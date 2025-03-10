@@ -167,7 +167,7 @@ func (gws *GatewayService) AttachToContainer(in *pb.AttachToContainerRequest, st
 	ctx, cancel := common.MergeContexts(gws.ctx, ctx)
 	defer cancel()
 
-	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
+	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
 		SendCallback:    sendCallback,
 		ExitCallback:    exitCallback,
 		ContainerRepo:   gws.containerRepo,
@@ -179,5 +179,5 @@ func (gws *GatewayService) AttachToContainer(in *pb.AttachToContainerRequest, st
 		return err
 	}
 
-	return logStream.Stream(ctx, authInfo, container.ContainerId)
+	return containerStream.Stream(ctx, authInfo, container.ContainerId)
 }

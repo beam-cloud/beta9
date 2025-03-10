@@ -99,7 +99,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		}()
 	}
 
-	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
+	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
 		SendCallback:    sendCallback,
 		ExitCallback:    exitCallback,
 		ContainerRepo:   tq.containerRepo,
@@ -111,7 +111,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		return err
 	}
 
-	return logStream.Stream(ctx, authInfo, container.ContainerId)
+	return containerStream.Stream(ctx, authInfo, container.ContainerId)
 }
 
 func (tq *RedisTaskQueue) StopTaskQueueServe(ctx context.Context, in *pb.StopTaskQueueServeRequest) (*pb.StopTaskQueueServeResponse, error) {

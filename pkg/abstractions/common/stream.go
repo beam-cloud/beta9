@@ -16,7 +16,7 @@ const (
 	flushLogsTimeout = 500 * time.Millisecond
 )
 
-type LogStreamOpts struct {
+type ContainerStreamOpts struct {
 	SendCallback    func(o common.OutputMsg) error
 	ExitCallback    func(exitCode int32) error
 	ContainerRepo   repository.ContainerRepository
@@ -25,8 +25,8 @@ type LogStreamOpts struct {
 	KeyEventManager *common.KeyEventManager
 }
 
-func NewLogStream(opts LogStreamOpts) (*LogStream, error) {
-	return &LogStream{
+func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
+	return &ContainerStream{
 		sendCallback:    opts.SendCallback,
 		exitCallback:    opts.ExitCallback,
 		containerRepo:   opts.ContainerRepo,
@@ -36,7 +36,7 @@ func NewLogStream(opts LogStreamOpts) (*LogStream, error) {
 	}, nil
 }
 
-type LogStream struct {
+type ContainerStream struct {
 	sendCallback    func(o common.OutputMsg) error
 	exitCallback    func(exitCode int32) error
 	containerRepo   repository.ContainerRepository
@@ -45,7 +45,7 @@ type LogStream struct {
 	keyEventManager *common.KeyEventManager
 }
 
-func (l *LogStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
+func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
 	hostname, err := l.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
 		return err
@@ -73,7 +73,7 @@ func (l *LogStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, contain
 	return l.handleStreams(ctx, containerId, outputChan, keyEventChan)
 }
 
-func (l *LogStream) handleStreams(
+func (l *ContainerStream) handleStreams(
 	ctx context.Context,
 	containerId string,
 	outputChan chan common.OutputMsg,
