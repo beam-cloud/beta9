@@ -293,7 +293,7 @@ func (s *Scheduler) StartProcessingRequests() {
 			continue
 		}
 
-		// We found a worker with that met the ContainerRequest's requirements. Schedule the request
+		// We found a worker that met the ContainerRequest's requirements. Schedule the request
 		// on that worker.
 		err = s.scheduleRequest(worker, request)
 		if err != nil {
@@ -465,7 +465,6 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		return s.requestBacklog.Push(request)
 	}
 
-	// TODO: add some sort of signaling mechanism to alert the caller if the request failed to be pushed to the requestBacklog
 	go func() {
 		if request.RetryCount < maxScheduleRetryCount && time.Since(request.Timestamp) < maxScheduleRetryDuration {
 			delay := calculateBackoffDelay(request.RetryCount)
@@ -477,6 +476,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 
 		log.Error().Str("container_id", request.ContainerId).Int("retry_count", request.RetryCount).Msg("giving up on request")
 		s.containerRepo.DeleteContainerState(request.ContainerId)
+		s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed)
 	}()
 
 	return nil
