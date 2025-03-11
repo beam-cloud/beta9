@@ -13,10 +13,10 @@ from ..clients.gateway import (
     AttachToContainerRequest,
     ContainerStreamMessage,
     ListContainersRequest,
-    ReplaceObjectContentOperation,
-    ReplaceObjectContentRequest,
     StopContainerRequest,
     StopContainerResponse,
+    SyncContainerContentOperation,
+    SyncContainerContentRequest,
 )
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
@@ -159,13 +159,13 @@ def _attach_to_container(service: ServiceClient, container_id: str):
 
         while True:
             yield ContainerStreamMessage(
-                replace_object_content=ReplaceObjectContentRequest(
-                    object_id="myown",
+                sync_container_content=SyncContainerContentRequest(
+                    container_id=container_id,
                     path="TEST",
                     new_path="TEST",
                     is_dir=False,
                     data=b"somebin",
-                    op=ReplaceObjectContentOperation.WRITE,
+                    op=SyncContainerContentOperation.WRITE,
                 )
             )
             time.sleep(1)

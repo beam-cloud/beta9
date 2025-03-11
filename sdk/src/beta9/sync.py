@@ -19,7 +19,7 @@ from .clients.gateway import (
     ObjectMetadata,
     PutObjectRequest,
     PutObjectResponse,
-    ReplaceObjectContentOperation,
+    SyncContainerContentOperation,
 )
 from .config import get_settings
 from .env import is_local, is_notebook_env
@@ -220,13 +220,13 @@ class SyncEventHandler(FileSystemEventHandler):
             terminal.warn(f"Detected changes in '{event.src_path}'. Reloading...")
 
     def on_created(self, event) -> None:
-        self.queue.put((ReplaceObjectContentOperation.WRITE, event.src_path, None))
+        self.queue.put((SyncContainerContentOperation.WRITE, event.src_path, None))
 
     def on_modified(self, event: FileSystemEvent) -> None:
         self.on_created(event)
 
     def on_deleted(self, event: FileSystemEvent) -> None:
-        self.queue.put((ReplaceObjectContentOperation.DELETE, event.src_path, None))
+        self.queue.put((SyncContainerContentOperation.DELETE, event.src_path, None))
 
     def on_moved(self, event: FileSystemEvent) -> None:
-        self.queue.put((ReplaceObjectContentOperation.MOVED, event.src_path, event.dest_path))
+        self.queue.put((SyncContainerContentOperation.MOVED, event.src_path, event.dest_path))
