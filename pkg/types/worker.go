@@ -94,9 +94,18 @@ const (
 	WorkerContainerExitCodeAdmin              = 561
 )
 
+var AllowedExitCodes = []int{
+	WorkerContainerExitCodeSuccess,
+	WorkerContainerExitCodeOomKill,
+	WorkerContainerExitCodeScheduler,
+	WorkerContainerExitCodeTtl,
+	WorkerContainerExitCodeUser,
+	WorkerContainerExitCodeAdmin,
+}
+
 const (
 	WorkerContainerExitCodeOomKillMessage   = "Container killed due to an out-of-memory error"
-	WorkerContainerExitCodeSchedulerMessage = "Container stopped by scheduler"
+	WorkerContainerExitCodeSchedulerMessage = "Container stopped"
 	WorkerContainerExitCodeTtlMessage       = "Container stopped due to TTL expiration"
 	WorkerContainerExitCodeUserMessage      = "Container stopped by user"
 	WorkerContainerExitCodeAdminMessage     = "Container stopped by admin"

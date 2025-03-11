@@ -735,12 +735,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if err == nil {
 			return exitCode, containerId, err
 		}
-
-		if exitCode == types.WorkerContainerExitCodeOomKill {
-			log.Warn().Str("container_id", request.ContainerId).Msg("container was killed")
-		} else {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to run container with checkpoint/restore got exit code %d: %v, attempting to run container from bundle", exitCode, err)
-		}
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from checkpoint/restore, exit code %d", exitCode)
 	}
 
 	bundlePath := filepath.Dir(configPath)
@@ -749,11 +744,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		Started:      startedChan,
 	})
 	if err != nil {
-		if exitCode == types.WorkerContainerExitCodeOomKill {
-			log.Warn().Str("container_id", request.ContainerId).Msg("container was killed")
-		} else {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to run container: %v", err)
-		}
+		log.Warn().Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}
 	return exitCode, request.ContainerId, err
 }
