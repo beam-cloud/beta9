@@ -359,7 +359,6 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*
 	if err != nil {
 		return nil, err
 	}
-	// Use goroutine to avoid potential blocking from rate limiter's internal mutex
 	metrics.RecordDialTime(time.Since(start))
 
 	// Create a custom transport that uses the established connection

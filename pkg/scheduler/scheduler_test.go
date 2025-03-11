@@ -45,7 +45,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	config := configManager.GetConfig()
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	schedulerUsage := SchedulerUsageMetrics{
+	schedulerUsageMetrics := SchedulerUsageMetrics{
 		UsageRepo: nil,
 	}
 
@@ -66,7 +66,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workerPoolManager:     workerPoolManager,
 		requestBacklog:        requestBacklog,
 		containerRepo:         containerRepo,
-		schedulerUsageMetrics: schedulerUsage,
+		schedulerUsageMetrics: schedulerUsageMetrics,
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
 	}, nil
