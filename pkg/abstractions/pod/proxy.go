@@ -185,7 +185,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		conn.ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
 		return
 	}
-	metrics.RecordDialTime(time.Since(start))
+	metrics.RecordDialTime(time.Since(start), container.addressMap[int32(port)])
 	defer containerConn.Close()
 
 	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval, connectionReadTimeout)
