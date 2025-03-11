@@ -13,6 +13,8 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
+const containerRequestStatusTTL = 10 * time.Minute
+
 type ContainerRedisRepository struct {
 	rdb  *common.RedisClient
 	lock *common.RedisLock
@@ -546,7 +548,7 @@ func (cr *ContainerRedisRepository) DeleteStubState(stubId string) error {
 }
 
 func (cr *ContainerRedisRepository) SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error {
-	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerRequestStatus(containerId), status, 0).Err()
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerRequestStatus(containerId), status, containerRequestStatusTTL).Err()
 }
 
 func (cr *ContainerRedisRepository) GetContainerRequestStatus(containerId string) (types.ContainerRequestStatus, error) {
