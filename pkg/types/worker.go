@@ -95,11 +95,11 @@ const (
 )
 
 const (
-	WorkerContainerExitCodeOomKillMessage   = "Container was killed due to an out-of-memory error"
-	WorkerContainerExitCodeSchedulerMessage = "Container was stopped by the scheduler"
-	WorkerContainerExitCodeTtlMessage       = "Container was stopped due to TTL expiration"
-	WorkerContainerExitCodeUserMessage      = "Container was stopped by the user"
-	WorkerContainerExitCodeAdminMessage     = "Container was stopped by the admin"
+	WorkerContainerExitCodeOomKillMessage   = "Container killed due to an out-of-memory error"
+	WorkerContainerExitCodeSchedulerMessage = "Container stopped by scheduler"
+	WorkerContainerExitCodeTtlMessage       = "Container stopped due to TTL expiration"
+	WorkerContainerExitCodeUserMessage      = "Container stopped by user"
+	WorkerContainerExitCodeAdminMessage     = "Container stopped by admin"
 )
 
 var ExitCodeMessages = map[int32]string{
