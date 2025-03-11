@@ -11,7 +11,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -92,13 +91,10 @@ _stream:
 	for {
 		select {
 		case req := <-l.syncQueue:
-			resp, err := client.SyncWorkspace(ctx, req)
+			_, err := client.SyncWorkspace(ctx, req)
 			if err != nil {
-				log.Error().Msgf("Error syncing content: %v", err)
 				continue
 			}
-
-			log.Info().Msgf("Sync response: %v", resp)
 		case o := <-outputChan:
 			if err := l.sendCallback(o); err != nil {
 				lastMessage = o

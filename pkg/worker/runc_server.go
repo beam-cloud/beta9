@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -317,6 +318,31 @@ func (s *RunCServer) RunCSyncWorkspace(ctx context.Context, in *pb.SyncContainer
 	log.Info().Msgf("Overlay: %+v", instance.Overlay)
 	log.Info().Msgf("Cwd: %s", instance.Spec.Process.Cwd)
 	log.Info().Msgf("TopLayerPath: %s", instance.Overlay.TopLayerPath())
+
+	workspacePath := tempContainerWorkspace(in.ContainerId)
+	destPath := path.Join(workspacePath, in.Path)
+	destNewPath := path.Join(workspacePath, in.NewPath)
+
+	switch in.Op {
+	case pb.SyncContainerWorkspaceOperation_DELETE:
+		if err := os.RemoveAll(destPath); err != nil {
+			return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
+		}
+	case pb.SyncContainerWorkspaceOperation_WRITE:
+		if in.IsDir {
+			os.MkdirAll(destPath, 0755)
+		} else {
+			os.MkdirAll(path.Dir(destPath), 0755)
+			if err := os.WriteFile(destPath, in.Data, 0644); err != nil {
+				return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
+			}
+		}
+	case pb.SyncContainerWorkspaceOperation_MOVED:
+		os.MkdirAll(path.Dir(destNewPath), 0755)
+		if err := os.Rename(destPath, destNewPath); err != nil {
+			return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
+		}
+	}
 
 	return &pb.SyncContainerWorkspaceResponse{Ok: true}, nil
 }
