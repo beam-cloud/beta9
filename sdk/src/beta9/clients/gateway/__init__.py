@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from grpclib.metadata import Deadline
 
 
-class ReplaceObjectContentOperation(betterproto.Enum):
+class SyncContainerContentOperation(betterproto.Enum):
     WRITE = 0
     DELETE = 1
     MOVED = 2
@@ -99,17 +99,17 @@ class PutObjectResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class ReplaceObjectContentRequest(betterproto.Message):
-    object_id: str = betterproto.string_field(1)
+class SyncContainerContentRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
     path: str = betterproto.string_field(2)
     new_path: str = betterproto.string_field(3)
     is_dir: bool = betterproto.bool_field(4)
     data: bytes = betterproto.bytes_field(5)
-    op: "ReplaceObjectContentOperation" = betterproto.enum_field(6)
+    op: "SyncContainerContentOperation" = betterproto.enum_field(6)
 
 
 @dataclass(eq=False, repr=False)
-class ReplaceObjectContentResponse(betterproto.Message):
+class SyncContainerContentResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
@@ -141,7 +141,7 @@ class ContainerStreamMessage(betterproto.Message):
     attach_request: "AttachToContainerRequest" = betterproto.message_field(
         1, group="payload"
     )
-    replace_object_content: "ReplaceObjectContentRequest" = betterproto.message_field(
+    sync_container_content: "SyncContainerContentRequest" = betterproto.message_field(
         2, group="payload"
     )
 
@@ -677,15 +677,6 @@ class GatewayServiceStub(SyncServiceStub):
             .future(put_object_request_iterator)
             .result()
         )
-
-    def replace_object_content(
-        self, replace_object_content_request: "ReplaceObjectContentRequest"
-    ) -> "ReplaceObjectContentResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/ReplaceObjectContent",
-            ReplaceObjectContentRequest,
-            ReplaceObjectContentResponse,
-        )(replace_object_content_request)
 
     def list_containers(
         self, list_containers_request: "ListContainersRequest"

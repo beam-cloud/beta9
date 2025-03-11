@@ -24,7 +24,6 @@ const (
 	GatewayService_HeadObject_FullMethodName            = "/gateway.GatewayService/HeadObject"
 	GatewayService_PutObject_FullMethodName             = "/gateway.GatewayService/PutObject"
 	GatewayService_PutObjectStream_FullMethodName       = "/gateway.GatewayService/PutObjectStream"
-	GatewayService_ReplaceObjectContent_FullMethodName  = "/gateway.GatewayService/ReplaceObjectContent"
 	GatewayService_ListContainers_FullMethodName        = "/gateway.GatewayService/ListContainers"
 	GatewayService_StopContainer_FullMethodName         = "/gateway.GatewayService/StopContainer"
 	GatewayService_AttachToContainer_FullMethodName     = "/gateway.GatewayService/AttachToContainer"
@@ -66,7 +65,6 @@ type GatewayServiceClient interface {
 	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
 	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
 	PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error)
-	ReplaceObjectContent(ctx context.Context, in *ReplaceObjectContentRequest, opts ...grpc.CallOption) (*ReplaceObjectContentResponse, error)
 	// Containers
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
 	StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error)
@@ -182,15 +180,6 @@ func (x *gatewayServicePutObjectStreamClient) CloseAndRecv() (*PutObjectResponse
 		return nil, err
 	}
 	return m, nil
-}
-
-func (c *gatewayServiceClient) ReplaceObjectContent(ctx context.Context, in *ReplaceObjectContentRequest, opts ...grpc.CallOption) (*ReplaceObjectContentResponse, error) {
-	out := new(ReplaceObjectContentResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ReplaceObjectContent_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *gatewayServiceClient) ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error) {
@@ -478,7 +467,6 @@ type GatewayServiceServer interface {
 	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
 	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
 	PutObjectStream(GatewayService_PutObjectStreamServer) error
-	ReplaceObjectContent(context.Context, *ReplaceObjectContentRequest) (*ReplaceObjectContentResponse, error)
 	// Containers
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
 	StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error)
@@ -537,9 +525,6 @@ func (UnimplementedGatewayServiceServer) PutObject(context.Context, *PutObjectRe
 }
 func (UnimplementedGatewayServiceServer) PutObjectStream(GatewayService_PutObjectStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method PutObjectStream not implemented")
-}
-func (UnimplementedGatewayServiceServer) ReplaceObjectContent(context.Context, *ReplaceObjectContentRequest) (*ReplaceObjectContentResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ReplaceObjectContent not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListContainers not implemented")
@@ -734,24 +719,6 @@ func (x *gatewayServicePutObjectStreamServer) Recv() (*PutObjectRequest, error) 
 		return nil, err
 	}
 	return m, nil
-}
-
-func _GatewayService_ReplaceObjectContent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ReplaceObjectContentRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(GatewayServiceServer).ReplaceObjectContent(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: GatewayService_ReplaceObjectContent_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).ReplaceObjectContent(ctx, req.(*ReplaceObjectContentRequest))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _GatewayService_ListContainers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1288,10 +1255,6 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PutObject",
 			Handler:    _GatewayService_PutObject_Handler,
-		},
-		{
-			MethodName: "ReplaceObjectContent",
-			Handler:    _GatewayService_ReplaceObjectContent_Handler,
 		},
 		{
 			MethodName: "ListContainers",

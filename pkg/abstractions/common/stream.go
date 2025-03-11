@@ -25,7 +25,7 @@ type ContainerStreamOpts struct {
 	Tailscale       *network.Tailscale
 	Config          types.AppConfig
 	KeyEventManager *common.KeyEventManager
-	ObjectQueue     chan *pb.ReplaceObjectContentRequest
+	SyncQueue       chan *pb.SyncContainerContentRequest
 }
 
 func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
@@ -36,7 +36,7 @@ func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
 		tailscale:       opts.Tailscale,
 		config:          opts.Config,
 		keyEventManager: opts.KeyEventManager,
-		objectQueue:     opts.ObjectQueue,
+		syncQueue:       opts.SyncQueue,
 	}, nil
 }
 
@@ -47,7 +47,7 @@ type ContainerStream struct {
 	tailscale       *network.Tailscale
 	config          types.AppConfig
 	keyEventManager *common.KeyEventManager
-	objectQueue     chan *pb.ReplaceObjectContentRequest
+	syncQueue       chan *pb.SyncContainerContentRequest
 }
 
 func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
@@ -75,11 +75,12 @@ func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, c
 	}
 
 	go client.StreamLogs(ctx, containerId, outputChan)
-	return l.handleStreams(ctx, containerId, outputChan, keyEventChan)
+	return l.handleStreams(ctx, client, containerId, outputChan, keyEventChan)
 }
 
 func (l *ContainerStream) handleStreams(
 	ctx context.Context,
+	client *common.RunCClient,
 	containerId string,
 	outputChan chan common.OutputMsg,
 	keyEventChan chan common.KeyEvent,
@@ -90,8 +91,17 @@ func (l *ContainerStream) handleStreams(
 _stream:
 	for {
 		select {
-		case req := <-l.objectQueue:
-			log.Info().Msgf("Received object request: %v", req)
+		case req := <-l.syncQueue:
+			log.Info().Msgf("Received sync request: %v", req)
+
+			// TODO: do the actual sync?
+			status, err := client.Status(containerId)
+			if err != nil {
+				log.Error().Msgf("Error getting status: %v", err)
+				break _stream
+			}
+
+			log.Info().Msgf("Status: %v", status)
 		case o := <-outputChan:
 			if err := l.sendCallback(o); err != nil {
 				lastMessage = o
