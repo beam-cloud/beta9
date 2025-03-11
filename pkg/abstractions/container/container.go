@@ -126,6 +126,7 @@ func (cs *CmdContainerService) ExecuteCommand(in *pb.CommandExecutionRequest, st
 	}
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		containerId,
 		stub.Object.ExternalId,
 		authInfo.Workspace,
 		stubConfig,

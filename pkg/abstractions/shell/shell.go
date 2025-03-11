@@ -171,6 +171,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 	}
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		containerId,
 		stub.Object.ExternalId,
 		authInfo.Workspace,
 		stubConfig,

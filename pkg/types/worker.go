@@ -21,6 +21,10 @@ const (
 	BuildContainerPrefix string = "build-"
 )
 
+func TempContainerWorkspace(containerId string) string {
+	return fmt.Sprintf("/tmp/%s/workspace", containerId)
+}
+
 type ContainerResourceUsage struct {
 	ContainerID       string `json:"ContainerID"`
 	CpuMillicoresUsed int64  `json:"CpuMillicoresUsed"`

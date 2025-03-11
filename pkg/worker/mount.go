@@ -27,12 +27,12 @@ func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	for i, m := range request.Mounts {
 		if m.MountPath == types.WorkerUserCodeVolume {
-			err := common.ExtractObjectFile(context.TODO(), request.Stub.Object.ExternalId, request.Workspace.Name, tempContainerWorkspace(request.ContainerId))
+			err := common.ExtractObjectFile(context.TODO(), request.Stub.Object.ExternalId, request.Workspace.Name, types.TempContainerWorkspace(request.ContainerId))
 			if err != nil {
 				return err
 			}
 
-			m.LocalPath = tempContainerWorkspace(request.ContainerId)
+			m.LocalPath = types.TempContainerWorkspace(request.ContainerId)
 			request.Mounts[i].LocalPath = m.LocalPath
 		}
 
@@ -89,10 +89,6 @@ func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mo
 	c.mountPointPaths.Set(containerId, mountPointPaths)
 
 	return nil
-}
-
-func tempContainerWorkspace(containerId string) string {
-	return fmt.Sprintf("/tmp/%s/workspace", containerId)
 }
 
 const (

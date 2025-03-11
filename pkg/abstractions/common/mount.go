@@ -10,7 +10,7 @@ import (
 
 const defaultExternalVolumesPath string = "/tmp/external-volumes"
 
-func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
+func ConfigureContainerRequestMounts(containerId string, stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
 	signingKey, err := common.ParseSigningKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
@@ -32,7 +32,7 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 	for _, v := range config.Volumes {
 		mount := types.Mount{
 			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
-			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath),
+			LinkPath:  path.Join(types.TempContainerWorkspace(containerId), v.MountPath),
 			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
 			ReadOnly:  false,
 		}

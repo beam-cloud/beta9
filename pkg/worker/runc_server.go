@@ -312,7 +312,7 @@ func (s *RunCServer) RunCSyncWorkspace(ctx context.Context, in *pb.SyncContainer
 		return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
 	}
 
-	workspacePath := tempContainerWorkspace(in.ContainerId)
+	workspacePath := types.TempContainerWorkspace(in.ContainerId)
 	destPath := path.Join(workspacePath, in.Path)
 	destNewPath := path.Join(workspacePath, in.NewPath)
 
