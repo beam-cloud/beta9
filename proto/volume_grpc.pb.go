@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	VolumeService_GetOrCreateVolume_FullMethodName       = "/volume.VolumeService/GetOrCreateVolume"
@@ -63,8 +63,9 @@ func NewVolumeServiceClient(cc grpc.ClientConnInterface) VolumeServiceClient {
 }
 
 func (c *volumeServiceClient) GetOrCreateVolume(ctx context.Context, in *GetOrCreateVolumeRequest, opts ...grpc.CallOption) (*GetOrCreateVolumeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetOrCreateVolumeResponse)
-	err := c.cc.Invoke(ctx, VolumeService_GetOrCreateVolume_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_GetOrCreateVolume_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +73,9 @@ func (c *volumeServiceClient) GetOrCreateVolume(ctx context.Context, in *GetOrCr
 }
 
 func (c *volumeServiceClient) DeleteVolume(ctx context.Context, in *DeleteVolumeRequest, opts ...grpc.CallOption) (*DeleteVolumeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteVolumeResponse)
-	err := c.cc.Invoke(ctx, VolumeService_DeleteVolume_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_DeleteVolume_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -81,8 +83,9 @@ func (c *volumeServiceClient) DeleteVolume(ctx context.Context, in *DeleteVolume
 }
 
 func (c *volumeServiceClient) ListVolumes(ctx context.Context, in *ListVolumesRequest, opts ...grpc.CallOption) (*ListVolumesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListVolumesResponse)
-	err := c.cc.Invoke(ctx, VolumeService_ListVolumes_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_ListVolumes_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -90,8 +93,9 @@ func (c *volumeServiceClient) ListVolumes(ctx context.Context, in *ListVolumesRe
 }
 
 func (c *volumeServiceClient) ListPath(ctx context.Context, in *ListPathRequest, opts ...grpc.CallOption) (*ListPathResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListPathResponse)
-	err := c.cc.Invoke(ctx, VolumeService_ListPath_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_ListPath_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -99,8 +103,9 @@ func (c *volumeServiceClient) ListPath(ctx context.Context, in *ListPathRequest,
 }
 
 func (c *volumeServiceClient) DeletePath(ctx context.Context, in *DeletePathRequest, opts ...grpc.CallOption) (*DeletePathResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeletePathResponse)
-	err := c.cc.Invoke(ctx, VolumeService_DeletePath_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_DeletePath_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -108,11 +113,12 @@ func (c *volumeServiceClient) DeletePath(ctx context.Context, in *DeletePathRequ
 }
 
 func (c *volumeServiceClient) CopyPathStream(ctx context.Context, opts ...grpc.CallOption) (VolumeService_CopyPathStreamClient, error) {
-	stream, err := c.cc.NewStream(ctx, &VolumeService_ServiceDesc.Streams[0], VolumeService_CopyPathStream_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &VolumeService_ServiceDesc.Streams[0], VolumeService_CopyPathStream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &volumeServiceCopyPathStreamClient{stream}
+	x := &volumeServiceCopyPathStreamClient{ClientStream: stream}
 	return x, nil
 }
 
@@ -142,8 +148,9 @@ func (x *volumeServiceCopyPathStreamClient) CloseAndRecv() (*CopyPathResponse, e
 }
 
 func (c *volumeServiceClient) MovePath(ctx context.Context, in *MovePathRequest, opts ...grpc.CallOption) (*MovePathResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MovePathResponse)
-	err := c.cc.Invoke(ctx, VolumeService_MovePath_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_MovePath_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -151,8 +158,9 @@ func (c *volumeServiceClient) MovePath(ctx context.Context, in *MovePathRequest,
 }
 
 func (c *volumeServiceClient) StatPath(ctx context.Context, in *StatPathRequest, opts ...grpc.CallOption) (*StatPathResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StatPathResponse)
-	err := c.cc.Invoke(ctx, VolumeService_StatPath_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_StatPath_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +168,9 @@ func (c *volumeServiceClient) StatPath(ctx context.Context, in *StatPathRequest,
 }
 
 func (c *volumeServiceClient) GetFileServiceInfo(ctx context.Context, in *GetFileServiceInfoRequest, opts ...grpc.CallOption) (*GetFileServiceInfoResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetFileServiceInfoResponse)
-	err := c.cc.Invoke(ctx, VolumeService_GetFileServiceInfo_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_GetFileServiceInfo_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +178,9 @@ func (c *volumeServiceClient) GetFileServiceInfo(ctx context.Context, in *GetFil
 }
 
 func (c *volumeServiceClient) CreatePresignedURL(ctx context.Context, in *CreatePresignedURLRequest, opts ...grpc.CallOption) (*CreatePresignedURLResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreatePresignedURLResponse)
-	err := c.cc.Invoke(ctx, VolumeService_CreatePresignedURL_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_CreatePresignedURL_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -178,8 +188,9 @@ func (c *volumeServiceClient) CreatePresignedURL(ctx context.Context, in *Create
 }
 
 func (c *volumeServiceClient) CreateMultipartUpload(ctx context.Context, in *CreateMultipartUploadRequest, opts ...grpc.CallOption) (*CreateMultipartUploadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateMultipartUploadResponse)
-	err := c.cc.Invoke(ctx, VolumeService_CreateMultipartUpload_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_CreateMultipartUpload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +198,9 @@ func (c *volumeServiceClient) CreateMultipartUpload(ctx context.Context, in *Cre
 }
 
 func (c *volumeServiceClient) CompleteMultipartUpload(ctx context.Context, in *CompleteMultipartUploadRequest, opts ...grpc.CallOption) (*CompleteMultipartUploadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CompleteMultipartUploadResponse)
-	err := c.cc.Invoke(ctx, VolumeService_CompleteMultipartUpload_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_CompleteMultipartUpload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -196,8 +208,9 @@ func (c *volumeServiceClient) CompleteMultipartUpload(ctx context.Context, in *C
 }
 
 func (c *volumeServiceClient) AbortMultipartUpload(ctx context.Context, in *AbortMultipartUploadRequest, opts ...grpc.CallOption) (*AbortMultipartUploadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AbortMultipartUploadResponse)
-	err := c.cc.Invoke(ctx, VolumeService_AbortMultipartUpload_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, VolumeService_AbortMultipartUpload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -372,7 +385,7 @@ func _VolumeService_DeletePath_Handler(srv interface{}, ctx context.Context, dec
 }
 
 func _VolumeService_CopyPathStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(VolumeServiceServer).CopyPathStream(&volumeServiceCopyPathStreamServer{stream})
+	return srv.(VolumeServiceServer).CopyPathStream(&volumeServiceCopyPathStreamServer{ServerStream: stream})
 }
 
 type VolumeService_CopyPathStreamServer interface {

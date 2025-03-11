@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	RunCService_RunCKill_FullMethodName       = "/runc.RunCService/RunCKill"
@@ -46,8 +46,9 @@ func NewRunCServiceClient(cc grpc.ClientConnInterface) RunCServiceClient {
 }
 
 func (c *runCServiceClient) RunCKill(ctx context.Context, in *RunCKillRequest, opts ...grpc.CallOption) (*RunCKillResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunCKillResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCKill_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, RunCService_RunCKill_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +56,9 @@ func (c *runCServiceClient) RunCKill(ctx context.Context, in *RunCKillRequest, o
 }
 
 func (c *runCServiceClient) RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunCExecResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCExec_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, RunCService_RunCExec_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -64,8 +66,9 @@ func (c *runCServiceClient) RunCExec(ctx context.Context, in *RunCExecRequest, o
 }
 
 func (c *runCServiceClient) RunCStatus(ctx context.Context, in *RunCStatusRequest, opts ...grpc.CallOption) (*RunCStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunCStatusResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCStatus_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, RunCService_RunCStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -73,11 +76,12 @@ func (c *runCServiceClient) RunCStatus(ctx context.Context, in *RunCStatusReques
 }
 
 func (c *runCServiceClient) RunCStreamLogs(ctx context.Context, in *RunCStreamLogsRequest, opts ...grpc.CallOption) (RunCService_RunCStreamLogsClient, error) {
-	stream, err := c.cc.NewStream(ctx, &RunCService_ServiceDesc.Streams[0], RunCService_RunCStreamLogs_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &RunCService_ServiceDesc.Streams[0], RunCService_RunCStreamLogs_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &runCServiceRunCStreamLogsClient{stream}
+	x := &runCServiceRunCStreamLogsClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -105,11 +109,12 @@ func (x *runCServiceRunCStreamLogsClient) Recv() (*RunCLogEntry, error) {
 }
 
 func (c *runCServiceClient) RunCArchive(ctx context.Context, in *RunCArchiveRequest, opts ...grpc.CallOption) (RunCService_RunCArchiveClient, error) {
-	stream, err := c.cc.NewStream(ctx, &RunCService_ServiceDesc.Streams[1], RunCService_RunCArchive_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &RunCService_ServiceDesc.Streams[1], RunCService_RunCArchive_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &runCServiceRunCArchiveClient{stream}
+	x := &runCServiceRunCArchiveClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -239,7 +244,7 @@ func _RunCService_RunCStreamLogs_Handler(srv interface{}, stream grpc.ServerStre
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(RunCServiceServer).RunCStreamLogs(m, &runCServiceRunCStreamLogsServer{stream})
+	return srv.(RunCServiceServer).RunCStreamLogs(m, &runCServiceRunCStreamLogsServer{ServerStream: stream})
 }
 
 type RunCService_RunCStreamLogsServer interface {
@@ -260,7 +265,7 @@ func _RunCService_RunCArchive_Handler(srv interface{}, stream grpc.ServerStream)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(RunCServiceServer).RunCArchive(m, &runCServiceRunCArchiveServer{stream})
+	return srv.(RunCServiceServer).RunCArchive(m, &runCServiceRunCArchiveServer{ServerStream: stream})
 }
 
 type RunCService_RunCArchiveServer interface {

@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	ContainerService_ExecuteCommand_FullMethodName = "/container.ContainerService/ExecuteCommand"
@@ -38,11 +38,12 @@ func NewContainerServiceClient(cc grpc.ClientConnInterface) ContainerServiceClie
 }
 
 func (c *containerServiceClient) ExecuteCommand(ctx context.Context, in *CommandExecutionRequest, opts ...grpc.CallOption) (ContainerService_ExecuteCommandClient, error) {
-	stream, err := c.cc.NewStream(ctx, &ContainerService_ServiceDesc.Streams[0], ContainerService_ExecuteCommand_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ContainerService_ServiceDesc.Streams[0], ContainerService_ExecuteCommand_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &containerServiceExecuteCommandClient{stream}
+	x := &containerServiceExecuteCommandClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -102,7 +103,7 @@ func _ContainerService_ExecuteCommand_Handler(srv interface{}, stream grpc.Serve
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(ContainerServiceServer).ExecuteCommand(m, &containerServiceExecuteCommandServer{stream})
+	return srv.(ContainerServiceServer).ExecuteCommand(m, &containerServiceExecuteCommandServer{ServerStream: stream})
 }
 
 type ContainerService_ExecuteCommandServer interface {

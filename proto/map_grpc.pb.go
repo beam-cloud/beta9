@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	MapService_MapSet_FullMethodName    = "/map.MapService/MapSet"
@@ -46,8 +46,9 @@ func NewMapServiceClient(cc grpc.ClientConnInterface) MapServiceClient {
 }
 
 func (c *mapServiceClient) MapSet(ctx context.Context, in *MapSetRequest, opts ...grpc.CallOption) (*MapSetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MapSetResponse)
-	err := c.cc.Invoke(ctx, MapService_MapSet_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, MapService_MapSet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +56,9 @@ func (c *mapServiceClient) MapSet(ctx context.Context, in *MapSetRequest, opts .
 }
 
 func (c *mapServiceClient) MapGet(ctx context.Context, in *MapGetRequest, opts ...grpc.CallOption) (*MapGetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MapGetResponse)
-	err := c.cc.Invoke(ctx, MapService_MapGet_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, MapService_MapGet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -64,8 +66,9 @@ func (c *mapServiceClient) MapGet(ctx context.Context, in *MapGetRequest, opts .
 }
 
 func (c *mapServiceClient) MapDelete(ctx context.Context, in *MapDeleteRequest, opts ...grpc.CallOption) (*MapDeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MapDeleteResponse)
-	err := c.cc.Invoke(ctx, MapService_MapDelete_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, MapService_MapDelete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -73,8 +76,9 @@ func (c *mapServiceClient) MapDelete(ctx context.Context, in *MapDeleteRequest, 
 }
 
 func (c *mapServiceClient) MapCount(ctx context.Context, in *MapCountRequest, opts ...grpc.CallOption) (*MapCountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MapCountResponse)
-	err := c.cc.Invoke(ctx, MapService_MapCount_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, MapService_MapCount_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +86,9 @@ func (c *mapServiceClient) MapCount(ctx context.Context, in *MapCountRequest, op
 }
 
 func (c *mapServiceClient) MapKeys(ctx context.Context, in *MapKeysRequest, opts ...grpc.CallOption) (*MapKeysResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(MapKeysResponse)
-	err := c.cc.Invoke(ctx, MapService_MapKeys_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, MapService_MapKeys_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}

@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	SecretService_CreateSecret_FullMethodName = "/secret.SecretService/CreateSecret"
@@ -46,8 +46,9 @@ func NewSecretServiceClient(cc grpc.ClientConnInterface) SecretServiceClient {
 }
 
 func (c *secretServiceClient) CreateSecret(ctx context.Context, in *CreateSecretRequest, opts ...grpc.CallOption) (*CreateSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateSecretResponse)
-	err := c.cc.Invoke(ctx, SecretService_CreateSecret_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SecretService_CreateSecret_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +56,9 @@ func (c *secretServiceClient) CreateSecret(ctx context.Context, in *CreateSecret
 }
 
 func (c *secretServiceClient) DeleteSecret(ctx context.Context, in *DeleteSecretRequest, opts ...grpc.CallOption) (*DeleteSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteSecretResponse)
-	err := c.cc.Invoke(ctx, SecretService_DeleteSecret_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SecretService_DeleteSecret_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -64,8 +66,9 @@ func (c *secretServiceClient) DeleteSecret(ctx context.Context, in *DeleteSecret
 }
 
 func (c *secretServiceClient) UpdateSecret(ctx context.Context, in *UpdateSecretRequest, opts ...grpc.CallOption) (*UpdateSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateSecretResponse)
-	err := c.cc.Invoke(ctx, SecretService_UpdateSecret_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SecretService_UpdateSecret_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -73,8 +76,9 @@ func (c *secretServiceClient) UpdateSecret(ctx context.Context, in *UpdateSecret
 }
 
 func (c *secretServiceClient) GetSecret(ctx context.Context, in *GetSecretRequest, opts ...grpc.CallOption) (*GetSecretResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetSecretResponse)
-	err := c.cc.Invoke(ctx, SecretService_GetSecret_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SecretService_GetSecret_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +86,9 @@ func (c *secretServiceClient) GetSecret(ctx context.Context, in *GetSecretReques
 }
 
 func (c *secretServiceClient) ListSecrets(ctx context.Context, in *ListSecretsRequest, opts ...grpc.CallOption) (*ListSecretsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListSecretsResponse)
-	err := c.cc.Invoke(ctx, SecretService_ListSecrets_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SecretService_ListSecrets_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}

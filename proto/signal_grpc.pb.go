@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	SignalService_SignalSet_FullMethodName     = "/signal.SignalService/SignalSet"
@@ -42,8 +42,9 @@ func NewSignalServiceClient(cc grpc.ClientConnInterface) SignalServiceClient {
 }
 
 func (c *signalServiceClient) SignalSet(ctx context.Context, in *SignalSetRequest, opts ...grpc.CallOption) (*SignalSetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SignalSetResponse)
-	err := c.cc.Invoke(ctx, SignalService_SignalSet_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SignalService_SignalSet_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -51,8 +52,9 @@ func (c *signalServiceClient) SignalSet(ctx context.Context, in *SignalSetReques
 }
 
 func (c *signalServiceClient) SignalClear(ctx context.Context, in *SignalClearRequest, opts ...grpc.CallOption) (*SignalClearResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SignalClearResponse)
-	err := c.cc.Invoke(ctx, SignalService_SignalClear_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SignalService_SignalClear_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -60,11 +62,12 @@ func (c *signalServiceClient) SignalClear(ctx context.Context, in *SignalClearRe
 }
 
 func (c *signalServiceClient) SignalMonitor(ctx context.Context, in *SignalMonitorRequest, opts ...grpc.CallOption) (SignalService_SignalMonitorClient, error) {
-	stream, err := c.cc.NewStream(ctx, &SignalService_ServiceDesc.Streams[0], SignalService_SignalMonitor_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &SignalService_ServiceDesc.Streams[0], SignalService_SignalMonitor_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &signalServiceSignalMonitorClient{stream}
+	x := &signalServiceSignalMonitorClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -168,7 +171,7 @@ func _SignalService_SignalMonitor_Handler(srv interface{}, stream grpc.ServerStr
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(SignalServiceServer).SignalMonitor(m, &signalServiceSignalMonitorServer{stream})
+	return srv.(SignalServiceServer).SignalMonitor(m, &signalServiceSignalMonitorServer{ServerStream: stream})
 }
 
 type SignalService_SignalMonitorServer interface {

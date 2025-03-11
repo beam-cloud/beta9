@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	BotService_PopBotTask_FullMethodName           = "/bot.BotService/PopBotTask"
@@ -44,8 +44,9 @@ func NewBotServiceClient(cc grpc.ClientConnInterface) BotServiceClient {
 }
 
 func (c *botServiceClient) PopBotTask(ctx context.Context, in *PopBotTaskRequest, opts ...grpc.CallOption) (*PopBotTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PopBotTaskResponse)
-	err := c.cc.Invoke(ctx, BotService_PopBotTask_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, BotService_PopBotTask_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -53,8 +54,9 @@ func (c *botServiceClient) PopBotTask(ctx context.Context, in *PopBotTaskRequest
 }
 
 func (c *botServiceClient) PushBotMarkers(ctx context.Context, in *PushBotMarkersRequest, opts ...grpc.CallOption) (*PushBotMarkersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PushBotMarkersResponse)
-	err := c.cc.Invoke(ctx, BotService_PushBotMarkers_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, BotService_PushBotMarkers_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +64,9 @@ func (c *botServiceClient) PushBotMarkers(ctx context.Context, in *PushBotMarker
 }
 
 func (c *botServiceClient) PushBotEvent(ctx context.Context, in *PushBotEventRequest, opts ...grpc.CallOption) (*PushBotEventResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PushBotEventResponse)
-	err := c.cc.Invoke(ctx, BotService_PushBotEvent_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, BotService_PushBotEvent_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -71,8 +74,9 @@ func (c *botServiceClient) PushBotEvent(ctx context.Context, in *PushBotEventReq
 }
 
 func (c *botServiceClient) PushBotEventBlocking(ctx context.Context, in *PushBotEventBlockingRequest, opts ...grpc.CallOption) (*PushBotEventBlockingResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PushBotEventBlockingResponse)
-	err := c.cc.Invoke(ctx, BotService_PushBotEventBlocking_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, BotService_PushBotEventBlocking_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}

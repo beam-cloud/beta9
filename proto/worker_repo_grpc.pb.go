@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	WorkerRepositoryService_GetNextContainerRequest_FullMethodName   = "/WorkerRepositoryService/GetNextContainerRequest"
@@ -68,11 +68,12 @@ func NewWorkerRepositoryServiceClient(cc grpc.ClientConnInterface) WorkerReposit
 }
 
 func (c *workerRepositoryServiceClient) GetNextContainerRequest(ctx context.Context, in *GetNextContainerRequestRequest, opts ...grpc.CallOption) (WorkerRepositoryService_GetNextContainerRequestClient, error) {
-	stream, err := c.cc.NewStream(ctx, &WorkerRepositoryService_ServiceDesc.Streams[0], WorkerRepositoryService_GetNextContainerRequest_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &WorkerRepositoryService_ServiceDesc.Streams[0], WorkerRepositoryService_GetNextContainerRequest_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &workerRepositoryServiceGetNextContainerRequestClient{stream}
+	x := &workerRepositoryServiceGetNextContainerRequestClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -100,8 +101,9 @@ func (x *workerRepositoryServiceGetNextContainerRequestClient) Recv() (*GetNextC
 }
 
 func (c *workerRepositoryServiceClient) SetImagePullLock(ctx context.Context, in *SetImagePullLockRequest, opts ...grpc.CallOption) (*SetImagePullLockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetImagePullLockResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetImagePullLock_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetImagePullLock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -109,8 +111,9 @@ func (c *workerRepositoryServiceClient) SetImagePullLock(ctx context.Context, in
 }
 
 func (c *workerRepositoryServiceClient) RemoveImagePullLock(ctx context.Context, in *RemoveImagePullLockRequest, opts ...grpc.CallOption) (*RemoveImagePullLockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RemoveImagePullLockResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveImagePullLock_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveImagePullLock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -118,8 +121,9 @@ func (c *workerRepositoryServiceClient) RemoveImagePullLock(ctx context.Context,
 }
 
 func (c *workerRepositoryServiceClient) AddContainerToWorker(ctx context.Context, in *AddContainerToWorkerRequest, opts ...grpc.CallOption) (*AddContainerToWorkerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AddContainerToWorkerResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_AddContainerToWorker_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_AddContainerToWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -127,8 +131,9 @@ func (c *workerRepositoryServiceClient) AddContainerToWorker(ctx context.Context
 }
 
 func (c *workerRepositoryServiceClient) RemoveContainerFromWorker(ctx context.Context, in *RemoveContainerFromWorkerRequest, opts ...grpc.CallOption) (*RemoveContainerFromWorkerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RemoveContainerFromWorkerResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveContainerFromWorker_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveContainerFromWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -136,8 +141,9 @@ func (c *workerRepositoryServiceClient) RemoveContainerFromWorker(ctx context.Co
 }
 
 func (c *workerRepositoryServiceClient) GetWorkerById(ctx context.Context, in *GetWorkerByIdRequest, opts ...grpc.CallOption) (*GetWorkerByIdResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetWorkerByIdResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetWorkerById_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetWorkerById_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -145,8 +151,9 @@ func (c *workerRepositoryServiceClient) GetWorkerById(ctx context.Context, in *G
 }
 
 func (c *workerRepositoryServiceClient) ToggleWorkerAvailable(ctx context.Context, in *ToggleWorkerAvailableRequest, opts ...grpc.CallOption) (*ToggleWorkerAvailableResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ToggleWorkerAvailableResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_ToggleWorkerAvailable_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_ToggleWorkerAvailable_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -154,8 +161,9 @@ func (c *workerRepositoryServiceClient) ToggleWorkerAvailable(ctx context.Contex
 }
 
 func (c *workerRepositoryServiceClient) RemoveWorker(ctx context.Context, in *RemoveWorkerRequest, opts ...grpc.CallOption) (*RemoveWorkerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RemoveWorkerResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveWorker_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -163,8 +171,9 @@ func (c *workerRepositoryServiceClient) RemoveWorker(ctx context.Context, in *Re
 }
 
 func (c *workerRepositoryServiceClient) UpdateWorkerCapacity(ctx context.Context, in *UpdateWorkerCapacityRequest, opts ...grpc.CallOption) (*UpdateWorkerCapacityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateWorkerCapacityResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_UpdateWorkerCapacity_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_UpdateWorkerCapacity_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +181,9 @@ func (c *workerRepositoryServiceClient) UpdateWorkerCapacity(ctx context.Context
 }
 
 func (c *workerRepositoryServiceClient) SetWorkerKeepAlive(ctx context.Context, in *SetWorkerKeepAliveRequest, opts ...grpc.CallOption) (*SetWorkerKeepAliveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetWorkerKeepAliveResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetWorkerKeepAlive_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetWorkerKeepAlive_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -181,8 +191,9 @@ func (c *workerRepositoryServiceClient) SetWorkerKeepAlive(ctx context.Context, 
 }
 
 func (c *workerRepositoryServiceClient) SetNetworkLock(ctx context.Context, in *SetNetworkLockRequest, opts ...grpc.CallOption) (*SetNetworkLockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetNetworkLockResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetNetworkLock_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetNetworkLock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -190,8 +201,9 @@ func (c *workerRepositoryServiceClient) SetNetworkLock(ctx context.Context, in *
 }
 
 func (c *workerRepositoryServiceClient) RemoveNetworkLock(ctx context.Context, in *RemoveNetworkLockRequest, opts ...grpc.CallOption) (*RemoveNetworkLockResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RemoveNetworkLockResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveNetworkLock_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveNetworkLock_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -199,8 +211,9 @@ func (c *workerRepositoryServiceClient) RemoveNetworkLock(ctx context.Context, i
 }
 
 func (c *workerRepositoryServiceClient) SetContainerIp(ctx context.Context, in *SetContainerIpRequest, opts ...grpc.CallOption) (*SetContainerIpResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetContainerIpResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetContainerIp_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetContainerIp_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -208,8 +221,9 @@ func (c *workerRepositoryServiceClient) SetContainerIp(ctx context.Context, in *
 }
 
 func (c *workerRepositoryServiceClient) GetContainerIp(ctx context.Context, in *GetContainerIpRequest, opts ...grpc.CallOption) (*GetContainerIpResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetContainerIpResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetContainerIp_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetContainerIp_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -217,8 +231,9 @@ func (c *workerRepositoryServiceClient) GetContainerIp(ctx context.Context, in *
 }
 
 func (c *workerRepositoryServiceClient) GetContainerIps(ctx context.Context, in *GetContainerIpsRequest, opts ...grpc.CallOption) (*GetContainerIpsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetContainerIpsResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetContainerIps_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetContainerIps_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -226,8 +241,9 @@ func (c *workerRepositoryServiceClient) GetContainerIps(ctx context.Context, in 
 }
 
 func (c *workerRepositoryServiceClient) RemoveContainerIp(ctx context.Context, in *RemoveContainerIpRequest, opts ...grpc.CallOption) (*RemoveContainerIpResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RemoveContainerIpResponse)
-	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveContainerIp_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_RemoveContainerIp_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +344,7 @@ func _WorkerRepositoryService_GetNextContainerRequest_Handler(srv interface{}, s
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(WorkerRepositoryServiceServer).GetNextContainerRequest(m, &workerRepositoryServiceGetNextContainerRequestServer{stream})
+	return srv.(WorkerRepositoryServiceServer).GetNextContainerRequest(m, &workerRepositoryServiceGetNextContainerRequestServer{ServerStream: stream})
 }
 
 type WorkerRepositoryService_GetNextContainerRequestServer interface {

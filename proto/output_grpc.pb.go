@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	OutputService_OutputSaveStream_FullMethodName = "/output.OutputService/OutputSaveStream"
@@ -42,11 +42,12 @@ func NewOutputServiceClient(cc grpc.ClientConnInterface) OutputServiceClient {
 }
 
 func (c *outputServiceClient) OutputSaveStream(ctx context.Context, opts ...grpc.CallOption) (OutputService_OutputSaveStreamClient, error) {
-	stream, err := c.cc.NewStream(ctx, &OutputService_ServiceDesc.Streams[0], OutputService_OutputSaveStream_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &OutputService_ServiceDesc.Streams[0], OutputService_OutputSaveStream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &outputServiceOutputSaveStreamClient{stream}
+	x := &outputServiceOutputSaveStreamClient{ClientStream: stream}
 	return x, nil
 }
 
@@ -76,8 +77,9 @@ func (x *outputServiceOutputSaveStreamClient) CloseAndRecv() (*OutputSaveRespons
 }
 
 func (c *outputServiceClient) OutputStat(ctx context.Context, in *OutputStatRequest, opts ...grpc.CallOption) (*OutputStatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OutputStatResponse)
-	err := c.cc.Invoke(ctx, OutputService_OutputStat_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, OutputService_OutputStat_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -85,8 +87,9 @@ func (c *outputServiceClient) OutputStat(ctx context.Context, in *OutputStatRequ
 }
 
 func (c *outputServiceClient) OutputPublicURL(ctx context.Context, in *OutputPublicURLRequest, opts ...grpc.CallOption) (*OutputPublicURLResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OutputPublicURLResponse)
-	err := c.cc.Invoke(ctx, OutputService_OutputPublicURL_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, OutputService_OutputPublicURL_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +133,7 @@ func RegisterOutputServiceServer(s grpc.ServiceRegistrar, srv OutputServiceServe
 }
 
 func _OutputService_OutputSaveStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(OutputServiceServer).OutputSaveStream(&outputServiceOutputSaveStreamServer{stream})
+	return srv.(OutputServiceServer).OutputSaveStream(&outputServiceOutputSaveStreamServer{ServerStream: stream})
 }
 
 type OutputService_OutputSaveStreamServer interface {

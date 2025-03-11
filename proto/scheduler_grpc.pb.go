@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	Scheduler_GetVersion_FullMethodName   = "/scheduler.Scheduler/GetVersion"
@@ -40,8 +40,9 @@ func NewSchedulerClient(cc grpc.ClientConnInterface) SchedulerClient {
 }
 
 func (c *schedulerClient) GetVersion(ctx context.Context, in *VersionRequest, opts ...grpc.CallOption) (*VersionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(VersionResponse)
-	err := c.cc.Invoke(ctx, Scheduler_GetVersion_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, Scheduler_GetVersion_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -49,8 +50,9 @@ func (c *schedulerClient) GetVersion(ctx context.Context, in *VersionRequest, op
 }
 
 func (c *schedulerClient) RunContainer(ctx context.Context, in *RunContainerRequest, opts ...grpc.CallOption) (*RunContainerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RunContainerResponse)
-	err := c.cc.Invoke(ctx, Scheduler_RunContainer_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, Scheduler_RunContainer_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}

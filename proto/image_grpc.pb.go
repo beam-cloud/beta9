@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	ImageService_VerifyImageBuild_FullMethodName = "/image.ImageService/VerifyImageBuild"
@@ -40,8 +40,9 @@ func NewImageServiceClient(cc grpc.ClientConnInterface) ImageServiceClient {
 }
 
 func (c *imageServiceClient) VerifyImageBuild(ctx context.Context, in *VerifyImageBuildRequest, opts ...grpc.CallOption) (*VerifyImageBuildResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(VerifyImageBuildResponse)
-	err := c.cc.Invoke(ctx, ImageService_VerifyImageBuild_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ImageService_VerifyImageBuild_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -49,11 +50,12 @@ func (c *imageServiceClient) VerifyImageBuild(ctx context.Context, in *VerifyIma
 }
 
 func (c *imageServiceClient) BuildImage(ctx context.Context, in *BuildImageRequest, opts ...grpc.CallOption) (ImageService_BuildImageClient, error) {
-	stream, err := c.cc.NewStream(ctx, &ImageService_ServiceDesc.Streams[0], ImageService_BuildImage_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ImageService_ServiceDesc.Streams[0], ImageService_BuildImage_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &imageServiceBuildImageClient{stream}
+	x := &imageServiceBuildImageClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -135,7 +137,7 @@ func _ImageService_BuildImage_Handler(srv interface{}, stream grpc.ServerStream)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(ImageServiceServer).BuildImage(m, &imageServiceBuildImageServer{stream})
+	return srv.(ImageServiceServer).BuildImage(m, &imageServiceBuildImageServer{ServerStream: stream})
 }
 
 type ImageService_BuildImageServer interface {

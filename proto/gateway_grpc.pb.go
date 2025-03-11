@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	GatewayService_Authorize_FullMethodName             = "/gateway.GatewayService/Authorize"
@@ -115,8 +115,9 @@ func NewGatewayServiceClient(cc grpc.ClientConnInterface) GatewayServiceClient {
 }
 
 func (c *gatewayServiceClient) Authorize(ctx context.Context, in *AuthorizeRequest, opts ...grpc.CallOption) (*AuthorizeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AuthorizeResponse)
-	err := c.cc.Invoke(ctx, GatewayService_Authorize_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_Authorize_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -124,8 +125,9 @@ func (c *gatewayServiceClient) Authorize(ctx context.Context, in *AuthorizeReque
 }
 
 func (c *gatewayServiceClient) SignPayload(ctx context.Context, in *SignPayloadRequest, opts ...grpc.CallOption) (*SignPayloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SignPayloadResponse)
-	err := c.cc.Invoke(ctx, GatewayService_SignPayload_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_SignPayload_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +135,9 @@ func (c *gatewayServiceClient) SignPayload(ctx context.Context, in *SignPayloadR
 }
 
 func (c *gatewayServiceClient) HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HeadObjectResponse)
-	err := c.cc.Invoke(ctx, GatewayService_HeadObject_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_HeadObject_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -142,8 +145,9 @@ func (c *gatewayServiceClient) HeadObject(ctx context.Context, in *HeadObjectReq
 }
 
 func (c *gatewayServiceClient) PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PutObjectResponse)
-	err := c.cc.Invoke(ctx, GatewayService_PutObject_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_PutObject_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -151,11 +155,12 @@ func (c *gatewayServiceClient) PutObject(ctx context.Context, in *PutObjectReque
 }
 
 func (c *gatewayServiceClient) PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error) {
-	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[0], GatewayService_PutObjectStream_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[0], GatewayService_PutObjectStream_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &gatewayServicePutObjectStreamClient{stream}
+	x := &gatewayServicePutObjectStreamClient{ClientStream: stream}
 	return x, nil
 }
 
@@ -185,8 +190,9 @@ func (x *gatewayServicePutObjectStreamClient) CloseAndRecv() (*PutObjectResponse
 }
 
 func (c *gatewayServiceClient) ReplaceObjectContent(ctx context.Context, in *ReplaceObjectContentRequest, opts ...grpc.CallOption) (*ReplaceObjectContentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReplaceObjectContentResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ReplaceObjectContent_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ReplaceObjectContent_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -194,8 +200,9 @@ func (c *gatewayServiceClient) ReplaceObjectContent(ctx context.Context, in *Rep
 }
 
 func (c *gatewayServiceClient) ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListContainersResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ListContainers_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ListContainers_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -203,8 +210,9 @@ func (c *gatewayServiceClient) ListContainers(ctx context.Context, in *ListConta
 }
 
 func (c *gatewayServiceClient) StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StopContainerResponse)
-	err := c.cc.Invoke(ctx, GatewayService_StopContainer_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_StopContainer_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -212,11 +220,12 @@ func (c *gatewayServiceClient) StopContainer(ctx context.Context, in *StopContai
 }
 
 func (c *gatewayServiceClient) AttachToContainer(ctx context.Context, in *AttachToContainerRequest, opts ...grpc.CallOption) (GatewayService_AttachToContainerClient, error) {
-	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[1], GatewayService_AttachToContainer_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &GatewayService_ServiceDesc.Streams[1], GatewayService_AttachToContainer_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &gatewayServiceAttachToContainerClient{stream}
+	x := &gatewayServiceAttachToContainerClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -244,8 +253,9 @@ func (x *gatewayServiceAttachToContainerClient) Recv() (*AttachToContainerRespon
 }
 
 func (c *gatewayServiceClient) StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*StartTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StartTaskResponse)
-	err := c.cc.Invoke(ctx, GatewayService_StartTask_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_StartTask_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -253,8 +263,9 @@ func (c *gatewayServiceClient) StartTask(ctx context.Context, in *StartTaskReque
 }
 
 func (c *gatewayServiceClient) EndTask(ctx context.Context, in *EndTaskRequest, opts ...grpc.CallOption) (*EndTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EndTaskResponse)
-	err := c.cc.Invoke(ctx, GatewayService_EndTask_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_EndTask_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -262,8 +273,9 @@ func (c *gatewayServiceClient) EndTask(ctx context.Context, in *EndTaskRequest, 
 }
 
 func (c *gatewayServiceClient) StopTasks(ctx context.Context, in *StopTasksRequest, opts ...grpc.CallOption) (*StopTasksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StopTasksResponse)
-	err := c.cc.Invoke(ctx, GatewayService_StopTasks_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_StopTasks_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -271,8 +283,9 @@ func (c *gatewayServiceClient) StopTasks(ctx context.Context, in *StopTasksReque
 }
 
 func (c *gatewayServiceClient) ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListTasksResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ListTasks_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ListTasks_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -280,8 +293,9 @@ func (c *gatewayServiceClient) ListTasks(ctx context.Context, in *ListTasksReque
 }
 
 func (c *gatewayServiceClient) GetOrCreateStub(ctx context.Context, in *GetOrCreateStubRequest, opts ...grpc.CallOption) (*GetOrCreateStubResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetOrCreateStubResponse)
-	err := c.cc.Invoke(ctx, GatewayService_GetOrCreateStub_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_GetOrCreateStub_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -289,8 +303,9 @@ func (c *gatewayServiceClient) GetOrCreateStub(ctx context.Context, in *GetOrCre
 }
 
 func (c *gatewayServiceClient) DeployStub(ctx context.Context, in *DeployStubRequest, opts ...grpc.CallOption) (*DeployStubResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeployStubResponse)
-	err := c.cc.Invoke(ctx, GatewayService_DeployStub_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_DeployStub_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -298,8 +313,9 @@ func (c *gatewayServiceClient) DeployStub(ctx context.Context, in *DeployStubReq
 }
 
 func (c *gatewayServiceClient) GetURL(ctx context.Context, in *GetURLRequest, opts ...grpc.CallOption) (*GetURLResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetURLResponse)
-	err := c.cc.Invoke(ctx, GatewayService_GetURL_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_GetURL_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -307,8 +323,9 @@ func (c *gatewayServiceClient) GetURL(ctx context.Context, in *GetURLRequest, op
 }
 
 func (c *gatewayServiceClient) ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (*ListDeploymentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListDeploymentsResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ListDeployments_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ListDeployments_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -316,8 +333,9 @@ func (c *gatewayServiceClient) ListDeployments(ctx context.Context, in *ListDepl
 }
 
 func (c *gatewayServiceClient) StopDeployment(ctx context.Context, in *StopDeploymentRequest, opts ...grpc.CallOption) (*StopDeploymentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StopDeploymentResponse)
-	err := c.cc.Invoke(ctx, GatewayService_StopDeployment_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_StopDeployment_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -325,8 +343,9 @@ func (c *gatewayServiceClient) StopDeployment(ctx context.Context, in *StopDeplo
 }
 
 func (c *gatewayServiceClient) StartDeployment(ctx context.Context, in *StartDeploymentRequest, opts ...grpc.CallOption) (*StartDeploymentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StartDeploymentResponse)
-	err := c.cc.Invoke(ctx, GatewayService_StartDeployment_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_StartDeployment_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -334,8 +353,9 @@ func (c *gatewayServiceClient) StartDeployment(ctx context.Context, in *StartDep
 }
 
 func (c *gatewayServiceClient) ScaleDeployment(ctx context.Context, in *ScaleDeploymentRequest, opts ...grpc.CallOption) (*ScaleDeploymentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ScaleDeploymentResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ScaleDeployment_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ScaleDeployment_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -343,8 +363,9 @@ func (c *gatewayServiceClient) ScaleDeployment(ctx context.Context, in *ScaleDep
 }
 
 func (c *gatewayServiceClient) DeleteDeployment(ctx context.Context, in *DeleteDeploymentRequest, opts ...grpc.CallOption) (*DeleteDeploymentResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteDeploymentResponse)
-	err := c.cc.Invoke(ctx, GatewayService_DeleteDeployment_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_DeleteDeployment_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -352,8 +373,9 @@ func (c *gatewayServiceClient) DeleteDeployment(ctx context.Context, in *DeleteD
 }
 
 func (c *gatewayServiceClient) ListPools(ctx context.Context, in *ListPoolsRequest, opts ...grpc.CallOption) (*ListPoolsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListPoolsResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ListPools_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ListPools_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -361,8 +383,9 @@ func (c *gatewayServiceClient) ListPools(ctx context.Context, in *ListPoolsReque
 }
 
 func (c *gatewayServiceClient) ListMachines(ctx context.Context, in *ListMachinesRequest, opts ...grpc.CallOption) (*ListMachinesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListMachinesResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ListMachines_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ListMachines_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -370,8 +393,9 @@ func (c *gatewayServiceClient) ListMachines(ctx context.Context, in *ListMachine
 }
 
 func (c *gatewayServiceClient) CreateMachine(ctx context.Context, in *CreateMachineRequest, opts ...grpc.CallOption) (*CreateMachineResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateMachineResponse)
-	err := c.cc.Invoke(ctx, GatewayService_CreateMachine_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_CreateMachine_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -379,8 +403,9 @@ func (c *gatewayServiceClient) CreateMachine(ctx context.Context, in *CreateMach
 }
 
 func (c *gatewayServiceClient) DeleteMachine(ctx context.Context, in *DeleteMachineRequest, opts ...grpc.CallOption) (*DeleteMachineResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteMachineResponse)
-	err := c.cc.Invoke(ctx, GatewayService_DeleteMachine_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_DeleteMachine_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -388,8 +413,9 @@ func (c *gatewayServiceClient) DeleteMachine(ctx context.Context, in *DeleteMach
 }
 
 func (c *gatewayServiceClient) ListTokens(ctx context.Context, in *ListTokensRequest, opts ...grpc.CallOption) (*ListTokensResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListTokensResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ListTokens_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ListTokens_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -397,8 +423,9 @@ func (c *gatewayServiceClient) ListTokens(ctx context.Context, in *ListTokensReq
 }
 
 func (c *gatewayServiceClient) CreateToken(ctx context.Context, in *CreateTokenRequest, opts ...grpc.CallOption) (*CreateTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateTokenResponse)
-	err := c.cc.Invoke(ctx, GatewayService_CreateToken_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_CreateToken_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -406,8 +433,9 @@ func (c *gatewayServiceClient) CreateToken(ctx context.Context, in *CreateTokenR
 }
 
 func (c *gatewayServiceClient) ToggleToken(ctx context.Context, in *ToggleTokenRequest, opts ...grpc.CallOption) (*ToggleTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ToggleTokenResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ToggleToken_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ToggleToken_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -415,8 +443,9 @@ func (c *gatewayServiceClient) ToggleToken(ctx context.Context, in *ToggleTokenR
 }
 
 func (c *gatewayServiceClient) DeleteToken(ctx context.Context, in *DeleteTokenRequest, opts ...grpc.CallOption) (*DeleteTokenResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteTokenResponse)
-	err := c.cc.Invoke(ctx, GatewayService_DeleteToken_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_DeleteToken_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -424,8 +453,9 @@ func (c *gatewayServiceClient) DeleteToken(ctx context.Context, in *DeleteTokenR
 }
 
 func (c *gatewayServiceClient) ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListWorkersResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ListWorkers_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ListWorkers_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -433,8 +463,9 @@ func (c *gatewayServiceClient) ListWorkers(ctx context.Context, in *ListWorkersR
 }
 
 func (c *gatewayServiceClient) CordonWorker(ctx context.Context, in *CordonWorkerRequest, opts ...grpc.CallOption) (*CordonWorkerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CordonWorkerResponse)
-	err := c.cc.Invoke(ctx, GatewayService_CordonWorker_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_CordonWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -442,8 +473,9 @@ func (c *gatewayServiceClient) CordonWorker(ctx context.Context, in *CordonWorke
 }
 
 func (c *gatewayServiceClient) UncordonWorker(ctx context.Context, in *UncordonWorkerRequest, opts ...grpc.CallOption) (*UncordonWorkerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UncordonWorkerResponse)
-	err := c.cc.Invoke(ctx, GatewayService_UncordonWorker_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_UncordonWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -451,8 +483,9 @@ func (c *gatewayServiceClient) UncordonWorker(ctx context.Context, in *UncordonW
 }
 
 func (c *gatewayServiceClient) DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*DrainWorkerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DrainWorkerResponse)
-	err := c.cc.Invoke(ctx, GatewayService_DrainWorker_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_DrainWorker_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -460,8 +493,9 @@ func (c *gatewayServiceClient) DrainWorker(ctx context.Context, in *DrainWorkerR
 }
 
 func (c *gatewayServiceClient) ExportWorkspaceConfig(ctx context.Context, in *ExportWorkspaceConfigRequest, opts ...grpc.CallOption) (*ExportWorkspaceConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ExportWorkspaceConfigResponse)
-	err := c.cc.Invoke(ctx, GatewayService_ExportWorkspaceConfig_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, GatewayService_ExportWorkspaceConfig_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -712,7 +746,7 @@ func _GatewayService_PutObject_Handler(srv interface{}, ctx context.Context, dec
 }
 
 func _GatewayService_PutObjectStream_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(GatewayServiceServer).PutObjectStream(&gatewayServicePutObjectStreamServer{stream})
+	return srv.(GatewayServiceServer).PutObjectStream(&gatewayServicePutObjectStreamServer{ServerStream: stream})
 }
 
 type GatewayService_PutObjectStreamServer interface {
@@ -796,7 +830,7 @@ func _GatewayService_AttachToContainer_Handler(srv interface{}, stream grpc.Serv
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(GatewayServiceServer).AttachToContainer(m, &gatewayServiceAttachToContainerServer{stream})
+	return srv.(GatewayServiceServer).AttachToContainer(m, &gatewayServiceAttachToContainerServer{ServerStream: stream})
 }
 
 type GatewayService_AttachToContainerServer interface {

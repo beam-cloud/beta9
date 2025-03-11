@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	FunctionService_FunctionInvoke_FullMethodName    = "/function.FunctionService/FunctionInvoke"
@@ -46,11 +46,12 @@ func NewFunctionServiceClient(cc grpc.ClientConnInterface) FunctionServiceClient
 }
 
 func (c *functionServiceClient) FunctionInvoke(ctx context.Context, in *FunctionInvokeRequest, opts ...grpc.CallOption) (FunctionService_FunctionInvokeClient, error) {
-	stream, err := c.cc.NewStream(ctx, &FunctionService_ServiceDesc.Streams[0], FunctionService_FunctionInvoke_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FunctionService_ServiceDesc.Streams[0], FunctionService_FunctionInvoke_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &functionServiceFunctionInvokeClient{stream}
+	x := &functionServiceFunctionInvokeClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -78,8 +79,9 @@ func (x *functionServiceFunctionInvokeClient) Recv() (*FunctionInvokeResponse, e
 }
 
 func (c *functionServiceClient) FunctionGetArgs(ctx context.Context, in *FunctionGetArgsRequest, opts ...grpc.CallOption) (*FunctionGetArgsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FunctionGetArgsResponse)
-	err := c.cc.Invoke(ctx, FunctionService_FunctionGetArgs_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, FunctionService_FunctionGetArgs_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -87,8 +89,9 @@ func (c *functionServiceClient) FunctionGetArgs(ctx context.Context, in *Functio
 }
 
 func (c *functionServiceClient) FunctionSetResult(ctx context.Context, in *FunctionSetResultRequest, opts ...grpc.CallOption) (*FunctionSetResultResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FunctionSetResultResponse)
-	err := c.cc.Invoke(ctx, FunctionService_FunctionSetResult_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, FunctionService_FunctionSetResult_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -96,11 +99,12 @@ func (c *functionServiceClient) FunctionSetResult(ctx context.Context, in *Funct
 }
 
 func (c *functionServiceClient) FunctionMonitor(ctx context.Context, in *FunctionMonitorRequest, opts ...grpc.CallOption) (FunctionService_FunctionMonitorClient, error) {
-	stream, err := c.cc.NewStream(ctx, &FunctionService_ServiceDesc.Streams[1], FunctionService_FunctionMonitor_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &FunctionService_ServiceDesc.Streams[1], FunctionService_FunctionMonitor_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &functionServiceFunctionMonitorClient{stream}
+	x := &functionServiceFunctionMonitorClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -128,8 +132,9 @@ func (x *functionServiceFunctionMonitorClient) Recv() (*FunctionMonitorResponse,
 }
 
 func (c *functionServiceClient) FunctionSchedule(ctx context.Context, in *FunctionScheduleRequest, opts ...grpc.CallOption) (*FunctionScheduleResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FunctionScheduleResponse)
-	err := c.cc.Invoke(ctx, FunctionService_FunctionSchedule_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, FunctionService_FunctionSchedule_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +190,7 @@ func _FunctionService_FunctionInvoke_Handler(srv interface{}, stream grpc.Server
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(FunctionServiceServer).FunctionInvoke(m, &functionServiceFunctionInvokeServer{stream})
+	return srv.(FunctionServiceServer).FunctionInvoke(m, &functionServiceFunctionInvokeServer{ServerStream: stream})
 }
 
 type FunctionService_FunctionInvokeServer interface {
@@ -242,7 +247,7 @@ func _FunctionService_FunctionMonitor_Handler(srv interface{}, stream grpc.Serve
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(FunctionServiceServer).FunctionMonitor(m, &functionServiceFunctionMonitorServer{stream})
+	return srv.(FunctionServiceServer).FunctionMonitor(m, &functionServiceFunctionMonitorServer{ServerStream: stream})
 }
 
 type FunctionService_FunctionMonitorServer interface {

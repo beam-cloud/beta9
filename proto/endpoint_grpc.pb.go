@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	EndpointService_StartEndpointServe_FullMethodName     = "/endpoint.EndpointService/StartEndpointServe"
@@ -42,11 +42,12 @@ func NewEndpointServiceClient(cc grpc.ClientConnInterface) EndpointServiceClient
 }
 
 func (c *endpointServiceClient) StartEndpointServe(ctx context.Context, in *StartEndpointServeRequest, opts ...grpc.CallOption) (EndpointService_StartEndpointServeClient, error) {
-	stream, err := c.cc.NewStream(ctx, &EndpointService_ServiceDesc.Streams[0], EndpointService_StartEndpointServe_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EndpointService_ServiceDesc.Streams[0], EndpointService_StartEndpointServe_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &endpointServiceStartEndpointServeClient{stream}
+	x := &endpointServiceStartEndpointServeClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -74,8 +75,9 @@ func (x *endpointServiceStartEndpointServeClient) Recv() (*StartEndpointServeRes
 }
 
 func (c *endpointServiceClient) StopEndpointServe(ctx context.Context, in *StopEndpointServeRequest, opts ...grpc.CallOption) (*StopEndpointServeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StopEndpointServeResponse)
-	err := c.cc.Invoke(ctx, EndpointService_StopEndpointServe_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, EndpointService_StopEndpointServe_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -83,8 +85,9 @@ func (c *endpointServiceClient) StopEndpointServe(ctx context.Context, in *StopE
 }
 
 func (c *endpointServiceClient) EndpointServeKeepAlive(ctx context.Context, in *EndpointServeKeepAliveRequest, opts ...grpc.CallOption) (*EndpointServeKeepAliveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EndpointServeKeepAliveResponse)
-	err := c.cc.Invoke(ctx, EndpointService_EndpointServeKeepAlive_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, EndpointService_EndpointServeKeepAlive_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +135,7 @@ func _EndpointService_StartEndpointServe_Handler(srv interface{}, stream grpc.Se
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(EndpointServiceServer).StartEndpointServe(m, &endpointServiceStartEndpointServeServer{stream})
+	return srv.(EndpointServiceServer).StartEndpointServe(m, &endpointServiceStartEndpointServeServer{ServerStream: stream})
 }
 
 type EndpointService_StartEndpointServeServer interface {

@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	ContainerRepositoryService_GetContainerState_FullMethodName      = "/ContainerRepositoryService/GetContainerState"
@@ -56,8 +56,9 @@ func NewContainerRepositoryServiceClient(cc grpc.ClientConnInterface) ContainerR
 }
 
 func (c *containerRepositoryServiceClient) GetContainerState(ctx context.Context, in *GetContainerStateRequest, opts ...grpc.CallOption) (*GetContainerStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetContainerStateResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetContainerState_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetContainerState_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,8 +66,9 @@ func (c *containerRepositoryServiceClient) GetContainerState(ctx context.Context
 }
 
 func (c *containerRepositoryServiceClient) DeleteContainerState(ctx context.Context, in *DeleteContainerStateRequest, opts ...grpc.CallOption) (*DeleteContainerStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteContainerStateResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_DeleteContainerState_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_DeleteContainerState_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -74,8 +76,9 @@ func (c *containerRepositoryServiceClient) DeleteContainerState(ctx context.Cont
 }
 
 func (c *containerRepositoryServiceClient) UpdateContainerStatus(ctx context.Context, in *UpdateContainerStatusRequest, opts ...grpc.CallOption) (*UpdateContainerStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateContainerStatusResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_UpdateContainerStatus_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_UpdateContainerStatus_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -83,8 +86,9 @@ func (c *containerRepositoryServiceClient) UpdateContainerStatus(ctx context.Con
 }
 
 func (c *containerRepositoryServiceClient) SetContainerExitCode(ctx context.Context, in *SetContainerExitCodeRequest, opts ...grpc.CallOption) (*SetContainerExitCodeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetContainerExitCodeResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerExitCode_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerExitCode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -92,8 +96,9 @@ func (c *containerRepositoryServiceClient) SetContainerExitCode(ctx context.Cont
 }
 
 func (c *containerRepositoryServiceClient) SetContainerAddress(ctx context.Context, in *SetContainerAddressRequest, opts ...grpc.CallOption) (*SetContainerAddressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetContainerAddressResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerAddress_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerAddress_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -101,8 +106,9 @@ func (c *containerRepositoryServiceClient) SetContainerAddress(ctx context.Conte
 }
 
 func (c *containerRepositoryServiceClient) SetContainerAddressMap(ctx context.Context, in *SetContainerAddressMapRequest, opts ...grpc.CallOption) (*SetContainerAddressMapResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetContainerAddressMapResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerAddressMap_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetContainerAddressMap_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -110,8 +116,9 @@ func (c *containerRepositoryServiceClient) SetContainerAddressMap(ctx context.Co
 }
 
 func (c *containerRepositoryServiceClient) GetContainerAddressMap(ctx context.Context, in *GetContainerAddressMapRequest, opts ...grpc.CallOption) (*GetContainerAddressMapResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetContainerAddressMapResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetContainerAddressMap_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetContainerAddressMap_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -119,8 +126,9 @@ func (c *containerRepositoryServiceClient) GetContainerAddressMap(ctx context.Co
 }
 
 func (c *containerRepositoryServiceClient) SetWorkerAddress(ctx context.Context, in *SetWorkerAddressRequest, opts ...grpc.CallOption) (*SetWorkerAddressResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SetWorkerAddressResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetWorkerAddress_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_SetWorkerAddress_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -128,8 +136,9 @@ func (c *containerRepositoryServiceClient) SetWorkerAddress(ctx context.Context,
 }
 
 func (c *containerRepositoryServiceClient) UpdateCheckpointState(ctx context.Context, in *UpdateCheckpointStateRequest, opts ...grpc.CallOption) (*UpdateCheckpointStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(UpdateCheckpointStateResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_UpdateCheckpointState_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_UpdateCheckpointState_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -137,8 +146,9 @@ func (c *containerRepositoryServiceClient) UpdateCheckpointState(ctx context.Con
 }
 
 func (c *containerRepositoryServiceClient) GetCheckpointState(ctx context.Context, in *GetCheckpointStateRequest, opts ...grpc.CallOption) (*GetCheckpointStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetCheckpointStateResponse)
-	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetCheckpointState_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerRepositoryService_GetCheckpointState_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}

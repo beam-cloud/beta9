@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	SimpleQueueService_SimpleQueuePut_FullMethodName   = "/simplequeue.SimpleQueueService/SimpleQueuePut"
@@ -46,8 +46,9 @@ func NewSimpleQueueServiceClient(cc grpc.ClientConnInterface) SimpleQueueService
 }
 
 func (c *simpleQueueServiceClient) SimpleQueuePut(ctx context.Context, in *SimpleQueuePutRequest, opts ...grpc.CallOption) (*SimpleQueuePutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SimpleQueuePutResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueuePut_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueuePut_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +56,9 @@ func (c *simpleQueueServiceClient) SimpleQueuePut(ctx context.Context, in *Simpl
 }
 
 func (c *simpleQueueServiceClient) SimpleQueuePop(ctx context.Context, in *SimpleQueuePopRequest, opts ...grpc.CallOption) (*SimpleQueuePopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SimpleQueuePopResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueuePop_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueuePop_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -64,8 +66,9 @@ func (c *simpleQueueServiceClient) SimpleQueuePop(ctx context.Context, in *Simpl
 }
 
 func (c *simpleQueueServiceClient) SimpleQueuePeek(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueuePeekResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SimpleQueuePeekResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueuePeek_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueuePeek_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -73,8 +76,9 @@ func (c *simpleQueueServiceClient) SimpleQueuePeek(ctx context.Context, in *Simp
 }
 
 func (c *simpleQueueServiceClient) SimpleQueueEmpty(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueEmptyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SimpleQueueEmptyResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueueEmpty_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueueEmpty_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -82,8 +86,9 @@ func (c *simpleQueueServiceClient) SimpleQueueEmpty(ctx context.Context, in *Sim
 }
 
 func (c *simpleQueueServiceClient) SimpleQueueSize(ctx context.Context, in *SimpleQueueRequest, opts ...grpc.CallOption) (*SimpleQueueSizeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SimpleQueueSizeResponse)
-	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueueSize_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, SimpleQueueService_SimpleQueueSize_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}

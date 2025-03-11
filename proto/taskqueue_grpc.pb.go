@@ -15,8 +15,8 @@ import (
 
 // This is a compile-time assertion to ensure that this generated file
 // is compatible with the grpc package it is being compiled against.
-// Requires gRPC-Go v1.32.0 or later.
-const _ = grpc.SupportPackageIsVersion7
+// Requires gRPC-Go v1.62.0 or later.
+const _ = grpc.SupportPackageIsVersion8
 
 const (
 	TaskQueueService_TaskQueuePut_FullMethodName            = "/taskqueue.TaskQueueService/TaskQueuePut"
@@ -52,8 +52,9 @@ func NewTaskQueueServiceClient(cc grpc.ClientConnInterface) TaskQueueServiceClie
 }
 
 func (c *taskQueueServiceClient) TaskQueuePut(ctx context.Context, in *TaskQueuePutRequest, opts ...grpc.CallOption) (*TaskQueuePutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TaskQueuePutResponse)
-	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueuePut_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueuePut_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -61,8 +62,9 @@ func (c *taskQueueServiceClient) TaskQueuePut(ctx context.Context, in *TaskQueue
 }
 
 func (c *taskQueueServiceClient) TaskQueuePop(ctx context.Context, in *TaskQueuePopRequest, opts ...grpc.CallOption) (*TaskQueuePopResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TaskQueuePopResponse)
-	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueuePop_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueuePop_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -70,11 +72,12 @@ func (c *taskQueueServiceClient) TaskQueuePop(ctx context.Context, in *TaskQueue
 }
 
 func (c *taskQueueServiceClient) TaskQueueMonitor(ctx context.Context, in *TaskQueueMonitorRequest, opts ...grpc.CallOption) (TaskQueueService_TaskQueueMonitorClient, error) {
-	stream, err := c.cc.NewStream(ctx, &TaskQueueService_ServiceDesc.Streams[0], TaskQueueService_TaskQueueMonitor_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &TaskQueueService_ServiceDesc.Streams[0], TaskQueueService_TaskQueueMonitor_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &taskQueueServiceTaskQueueMonitorClient{stream}
+	x := &taskQueueServiceTaskQueueMonitorClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -102,8 +105,9 @@ func (x *taskQueueServiceTaskQueueMonitorClient) Recv() (*TaskQueueMonitorRespon
 }
 
 func (c *taskQueueServiceClient) TaskQueueComplete(ctx context.Context, in *TaskQueueCompleteRequest, opts ...grpc.CallOption) (*TaskQueueCompleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TaskQueueCompleteResponse)
-	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueComplete_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueComplete_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,8 +115,9 @@ func (c *taskQueueServiceClient) TaskQueueComplete(ctx context.Context, in *Task
 }
 
 func (c *taskQueueServiceClient) TaskQueueLength(ctx context.Context, in *TaskQueueLengthRequest, opts ...grpc.CallOption) (*TaskQueueLengthResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TaskQueueLengthResponse)
-	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueLength_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueLength_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +125,12 @@ func (c *taskQueueServiceClient) TaskQueueLength(ctx context.Context, in *TaskQu
 }
 
 func (c *taskQueueServiceClient) StartTaskQueueServe(ctx context.Context, in *StartTaskQueueServeRequest, opts ...grpc.CallOption) (TaskQueueService_StartTaskQueueServeClient, error) {
-	stream, err := c.cc.NewStream(ctx, &TaskQueueService_ServiceDesc.Streams[1], TaskQueueService_StartTaskQueueServe_FullMethodName, opts...)
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &TaskQueueService_ServiceDesc.Streams[1], TaskQueueService_StartTaskQueueServe_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &taskQueueServiceStartTaskQueueServeClient{stream}
+	x := &taskQueueServiceStartTaskQueueServeClient{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -152,8 +158,9 @@ func (x *taskQueueServiceStartTaskQueueServeClient) Recv() (*StartTaskQueueServe
 }
 
 func (c *taskQueueServiceClient) StopTaskQueueServe(ctx context.Context, in *StopTaskQueueServeRequest, opts ...grpc.CallOption) (*StopTaskQueueServeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(StopTaskQueueServeResponse)
-	err := c.cc.Invoke(ctx, TaskQueueService_StopTaskQueueServe_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, TaskQueueService_StopTaskQueueServe_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -161,8 +168,9 @@ func (c *taskQueueServiceClient) StopTaskQueueServe(ctx context.Context, in *Sto
 }
 
 func (c *taskQueueServiceClient) TaskQueueServeKeepAlive(ctx context.Context, in *TaskQueueServeKeepAliveRequest, opts ...grpc.CallOption) (*TaskQueueServeKeepAliveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TaskQueueServeKeepAliveResponse)
-	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueServeKeepAlive_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, TaskQueueService_TaskQueueServeKeepAlive_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +274,7 @@ func _TaskQueueService_TaskQueueMonitor_Handler(srv interface{}, stream grpc.Ser
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(TaskQueueServiceServer).TaskQueueMonitor(m, &taskQueueServiceTaskQueueMonitorServer{stream})
+	return srv.(TaskQueueServiceServer).TaskQueueMonitor(m, &taskQueueServiceTaskQueueMonitorServer{ServerStream: stream})
 }
 
 type TaskQueueService_TaskQueueMonitorServer interface {
@@ -323,7 +331,7 @@ func _TaskQueueService_StartTaskQueueServe_Handler(srv interface{}, stream grpc.
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(TaskQueueServiceServer).StartTaskQueueServe(m, &taskQueueServiceStartTaskQueueServeServer{stream})
+	return srv.(TaskQueueServiceServer).StartTaskQueueServe(m, &taskQueueServiceStartTaskQueueServeServer{ServerStream: stream})
 }
 
 type TaskQueueService_StartTaskQueueServeServer interface {
