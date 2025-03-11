@@ -137,9 +137,10 @@ func RecordS3GetSpeed(sizeInMB float64, duration time.Duration) {
 	}
 }
 
-func RecordDialTime(duration time.Duration) {
+func RecordDialTime(duration time.Duration, host string) {
 	if dialMetricLimiter.Allow() {
-		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricDialTime).Update(float64(duration.Milliseconds()))
+		metricName := fmt.Sprintf("%s{host=\"%s\"}", metricDialTime, host)
+		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
 	}
 }
 

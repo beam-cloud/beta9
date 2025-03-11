@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/beta9/pkg/worker"
 	"github.com/rs/zerolog"
@@ -20,6 +21,8 @@ func main() {
 		log.Logger = log.Logger.Level(zerolog.DebugLevel)
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
+
+	metrics.InitializeMetricsRepository(config.Monitoring.VictoriaMetrics)
 
 	notFoundErr := &types.ErrWorkerNotFound{}
 	s, err := worker.NewWorker()

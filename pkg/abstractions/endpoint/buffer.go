@@ -359,7 +359,7 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*
 	if err != nil {
 		return nil, err
 	}
-	metrics.RecordDialTime(time.Since(start))
+	metrics.RecordDialTime(time.Since(start), address)
 
 	// Create a custom transport that uses the established connection
 	// Either using tailscale or not
