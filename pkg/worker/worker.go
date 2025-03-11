@@ -81,6 +81,7 @@ type ContainerInstance struct {
 	OutputWriter *common.OutputWriter
 	LogBuffer    *common.LogBuffer
 	Request      *types.ContainerRequest
+	StopReason   string
 }
 
 type ContainerOptions struct {

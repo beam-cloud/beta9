@@ -113,7 +113,7 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 		}, nil
 	}
 
-	err = gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: in.ContainerId})
+	err = gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: in.ContainerId, Reason: types.StopContainerReasonUser})
 	if err != nil {
 		log.Error().Err(err).Msg("unable to stop container")
 		return &pb.StopContainerResponse{
@@ -151,9 +151,9 @@ func (gws *GatewayService) AttachToContainer(in *pb.AttachToContainerRequest, st
 	exitCallback := func(exitCode int32) error {
 		output := "\nContainer was stopped."
 		if exitCode != 0 {
-			output = fmt.Sprintf("Container failed with exit code %d", exitCode)
-			if exitCode == types.WorkerContainerExitCodeOomKill {
-				output = "Container was killed due to an out-of-memory error"
+			exitCodeMessage, ok := types.ExitCodeMessages[exitCode]
+			if ok {
+				output = exitCodeMessage
 			}
 		}
 

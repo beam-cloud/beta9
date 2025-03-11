@@ -525,9 +525,23 @@ func (e *ErrCheckpointNotFound) Error() string {
 	return fmt.Sprintf("checkpoint state not found: %s", e.CheckpointId)
 }
 
+const (
+	// StopContainerReasonTtl is used when a container is stopped due to some TTL expiration
+	StopContainerReasonTtl = "TTL"
+	// StopContainerReasonUser is used when a container is stopped by a user request
+	StopContainerReasonUser = "USER"
+	// StopContainerReasonScheduler is used when a container is stopped by the scheduler
+	StopContainerReasonScheduler = "SCHEDULER"
+	// StopContainerReasonAdmin is used when a container is stopped by an admin request (i.e. draining a worker)
+	StopContainerReasonAdmin = "ADMIN"
+
+	StopContainerReasonUnknown = "UNKNOWN"
+)
+
 type StopContainerArgs struct {
 	ContainerId string `json:"container_id"`
 	Force       bool   `json:"force"`
+	Reason      string `json:"reason"`
 }
 
 func (a StopContainerArgs) ToMap() (map[string]any, error) {

@@ -249,7 +249,7 @@ func (gws *GatewayService) stopDeployments(deployments []types.DeploymentWithRel
 		containers, err := gws.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
 		if err == nil {
 			for _, container := range containers {
-				gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId})
+				gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId, Reason: types.StopContainerReasonUser})
 			}
 		}
 

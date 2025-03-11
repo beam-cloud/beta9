@@ -156,11 +156,11 @@ def _attach_to_container(service: ServiceClient, container_id: str):
 
     r = None
     for r in stream:
-        if r.output != "":
-            terminal.detail(r.output, end="")
-
         if r.done or r.exit_code != 0:
             break
+
+        if r.output != "":
+            terminal.detail(r.output, end="")
 
     if r is None:
         return terminal.error("Container failed ❌")

@@ -88,7 +88,27 @@ const (
 	WorkerContainerExitCodeSuccess            = 0
 	WorkerContainerExitCodeOomKill            = 137 // 128 + 9 (base value + SIGKILL), used to indicate OOM kill
 	WorkerContainerExitCodeSigterm            = 143 // 128 + 15 (base value + SIGTERM), used to indicate a graceful termination
+	WorkerContainerExitCodeScheduler          = 558
+	WorkerContainerExitCodeTtl                = 559
+	WorkerContainerExitCodeUser               = 560
+	WorkerContainerExitCodeAdmin              = 561
 )
+
+const (
+	WorkerContainerExitCodeOomKillMessage   = "Container was killed due to an out-of-memory error"
+	WorkerContainerExitCodeSchedulerMessage = "Container was stopped by the scheduler"
+	WorkerContainerExitCodeTtlMessage       = "Container was stopped due to TTL expiration"
+	WorkerContainerExitCodeUserMessage      = "Container was stopped by the user"
+	WorkerContainerExitCodeAdminMessage     = "Container was stopped by the admin"
+)
+
+var ExitCodeMessages = map[int32]string{
+	WorkerContainerExitCodeOomKill:   WorkerContainerExitCodeOomKillMessage,
+	WorkerContainerExitCodeScheduler: WorkerContainerExitCodeSchedulerMessage,
+	WorkerContainerExitCodeTtl:       WorkerContainerExitCodeTtlMessage,
+	WorkerContainerExitCodeUser:      WorkerContainerExitCodeUserMessage,
+	WorkerContainerExitCodeAdmin:     WorkerContainerExitCodeAdminMessage,
+}
 
 var WorkerContainerExitCodes = map[int]string{
 	WorkerContainerExitCodeSuccess:            "Success",
