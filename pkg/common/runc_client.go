@@ -207,3 +207,12 @@ func (c *RunCClient) Archive(ctx context.Context, containerId, imageId string, o
 		}
 	}
 }
+
+func (c *RunCClient) SyncWorkspace(ctx context.Context, request *pb.SyncContainerWorkspaceRequest) (*pb.SyncContainerWorkspaceResponse, error) {
+	resp, err := c.client.RunCSyncWorkspace(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	return resp, nil
+}

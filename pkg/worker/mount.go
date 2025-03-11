@@ -1,9 +1,9 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path"
 
 	"github.com/rs/zerolog/log"
@@ -14,36 +14,31 @@ import (
 )
 
 type ContainerMountManager struct {
-	mountPointPaths    *common.SafeMap[[]string]
-	EagerCacheStubCode bool
+	mountPointPaths *common.SafeMap[[]string]
 }
 
 func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 	return &ContainerMountManager{
-		mountPointPaths:    common.NewSafeMap[[]string](),
-		EagerCacheStubCode: config.Worker.EagerCacheStubCode,
+		mountPointPaths: common.NewSafeMap[[]string](),
 	}
 }
 
 // SetupContainerMounts initializes any external storage for a container
 func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest, outputLogger *slog.Logger) error {
-	// Create local workspace path so we can symlink volumes before the container starts
-	os.MkdirAll(defaultContainerDirectory, os.FileMode(0755))
-
 	for i, m := range request.Mounts {
-		if c.EagerCacheStubCode && m.MountPath == defaultContainerDirectory && !request.Stub.Type.IsServe() {
-			source := m.LocalPath
-			localUserSource := tempUserCodeDir(request.ContainerId)
-			err := copyDirectory(source, localUserSource)
+		if m.MountPath == types.WorkerUserCodeVolume {
+			err := common.ExtractObjectFile(context.TODO(), request.Stub.Object.ExternalId, request.Workspace.Name, tempContainerWorkspace(request.ContainerId))
 			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to eagerly copy remote user code to local /mnt/code")
-			} else {
-				request.Mounts[i].LocalPath = localUserSource
+				return err
 			}
+
+			m.LocalPath = tempContainerWorkspace(request.ContainerId)
+			request.Mounts[i].LocalPath = m.LocalPath
 		}
 
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
 			log.Info().Interface("mount", m).Interface("config", m.MountPointConfig).Msg("setting up container mounts")
+
 			// Add containerId to local mount path for mountpoint storage
 			m.LocalPath = path.Join(m.LocalPath, request.ContainerId, m.MountPointConfig.BucketName)
 			request.Mounts[i].LocalPath = m.LocalPath
@@ -90,13 +85,14 @@ func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mo
 	} else {
 		mountPointPaths = append(mountPointPaths, m.LocalPath)
 	}
+
 	c.mountPointPaths.Set(containerId, mountPointPaths)
 
 	return nil
 }
 
-func tempUserCodeDir(containerId string) string {
-	return fmt.Sprintf("/tmp/%s/code", containerId)
+func tempContainerWorkspace(containerId string) string {
+	return fmt.Sprintf("/tmp/%s/workspace", containerId)
 }
 
 const (

@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from grpclib.metadata import Deadline
 
 
-class SyncContainerContentOperation(betterproto.Enum):
+class SyncContainerWorkspaceOperation(betterproto.Enum):
     WRITE = 0
     DELETE = 1
     MOVED = 2
@@ -99,17 +99,17 @@ class PutObjectResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class SyncContainerContentRequest(betterproto.Message):
+class SyncContainerWorkspaceRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     path: str = betterproto.string_field(2)
     new_path: str = betterproto.string_field(3)
     is_dir: bool = betterproto.bool_field(4)
     data: bytes = betterproto.bytes_field(5)
-    op: "SyncContainerContentOperation" = betterproto.enum_field(6)
+    op: "SyncContainerWorkspaceOperation" = betterproto.enum_field(6)
 
 
 @dataclass(eq=False, repr=False)
-class SyncContainerContentResponse(betterproto.Message):
+class SyncContainerWorkspaceResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
@@ -141,8 +141,8 @@ class ContainerStreamMessage(betterproto.Message):
     attach_request: "AttachToContainerRequest" = betterproto.message_field(
         1, group="payload"
     )
-    sync_container_content: "SyncContainerContentRequest" = betterproto.message_field(
-        2, group="payload"
+    sync_container_workspace: "SyncContainerWorkspaceRequest" = (
+        betterproto.message_field(2, group="payload")
     )
 
 

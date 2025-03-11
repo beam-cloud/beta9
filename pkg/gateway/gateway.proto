@@ -112,22 +112,22 @@ message PutObjectResponse {
   string error_msg = 3;
 }
 
-enum SyncContainerContentOperation {
+enum SyncContainerWorkspaceOperation {
   WRITE = 0;
   DELETE = 1;
   MOVED = 2;
 }
 
-message SyncContainerContentRequest {
+message SyncContainerWorkspaceRequest {
   string container_id = 1;
   string path = 2;
   string new_path = 3;
   bool is_dir = 4;
   bytes data = 5;
-  SyncContainerContentOperation op = 6;
+  SyncContainerWorkspaceOperation op = 6;
 }
 
-message SyncContainerContentResponse { bool ok = 1; }
+message SyncContainerWorkspaceResponse { bool ok = 1; }
 
 // Container messages
 
@@ -149,7 +149,7 @@ message StopContainerResponse {
 message ContainerStreamMessage {
   oneof payload {
     AttachToContainerRequest attach_request = 1;
-    SyncContainerContentRequest sync_container_content = 2;
+    SyncContainerWorkspaceRequest sync_container_workspace = 2;
   }
 }
 

@@ -255,7 +255,6 @@ type WorkerConfig struct {
 	ServiceAccountName           string                      `key:"serviceAccountName" json:"service_account_name"`
 	JobResourcesEnforced         bool                        `key:"jobResourcesEnforced" json:"job_resources_enforced"`
 	RunCResourcesEnforced        bool                        `key:"runcResourcesEnforced" json:"runc_resources_enforced"`
-	EagerCacheStubCode           bool                        `key:"eagerCacheStubCode" json:"eager_cache_stub_code"`
 	DefaultWorkerCPURequest      int64                       `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest   int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
 	ImagePVCName                 string                      `key:"imagePVCName" json:"image_pvc_name"`

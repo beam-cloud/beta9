@@ -18,9 +18,9 @@ func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Works
 
 	mounts := []types.Mount{
 		{
-			LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
+			LocalPath: path.Join(types.DefaultObjectPath, workspace.Name, stubObjectId),
 			MountPath: types.WorkerUserCodeVolume,
-			ReadOnly:  true,
+			ReadOnly:  false,
 		},
 		{
 			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),

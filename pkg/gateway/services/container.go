@@ -180,7 +180,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	ctx, cancel := common.MergeContexts(gws.ctx, ctx)
 	defer cancel()
 
-	syncQueue := make(chan *pb.SyncContainerContentRequest)
+	syncQueue := make(chan *pb.SyncContainerWorkspaceRequest)
 
 	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
 		SendCallback:    sendCallback,
@@ -216,8 +216,8 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 			}
 
 			switch payload := inMsg.Payload.(type) {
-			case *pb.ContainerStreamMessage_SyncContainerContent:
-				syncQueue <- payload.SyncContainerContent
+			case *pb.ContainerStreamMessage_SyncContainerWorkspace:
+				syncQueue <- payload.SyncContainerWorkspace
 			default:
 			}
 		}

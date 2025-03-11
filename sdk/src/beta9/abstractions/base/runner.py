@@ -21,9 +21,9 @@ from ...clients.gateway import (
     GetUrlRequest,
     GetUrlResponse,
     SecretVar,
-    SyncContainerContentOperation,
-    SyncContainerContentRequest,
-    SyncContainerContentResponse,
+    SyncContainerWorkspaceOperation,
+    SyncContainerWorkspaceRequest,
+    SyncContainerWorkspaceResponse,
 )
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
@@ -330,22 +330,22 @@ class RunnerAbstraction(BaseAbstraction):
             if on_event:
                 on_event(operation, path, new_path)
 
-            req = SyncContainerContentRequest(
+            req = SyncContainerWorkspaceRequest(
                 container_id=object_id,
                 path=os.path.relpath(path, start=dir),
                 is_dir=os.path.isdir(path),
                 op=operation,
             )
 
-            if operation == SyncContainerContentOperation.WRITE:
+            if operation == SyncContainerWorkspaceOperation.WRITE:
                 if not req.is_dir:
                     with open(path, "rb") as f:
                         req.data = f.read()
 
-            elif operation == SyncContainerContentOperation.DELETE:
+            elif operation == SyncContainerWorkspaceOperation.DELETE:
                 pass
 
-            elif operation == SyncContainerContentOperation.MOVED:
+            elif operation == SyncContainerWorkspaceOperation.MOVED:
                 req.new_path = os.path.relpath(new_path, start=dir)
 
             res = self.gateway_stub.replace_object_content(req)
@@ -380,7 +380,7 @@ class RunnerAbstraction(BaseAbstraction):
 
     def sync_dir_to_workspace(
         self, *, dir: str, object_id: str, on_event: Optional[Callable] = None
-    ) -> SyncContainerContentResponse:
+    ) -> SyncContainerWorkspaceResponse:
         file_update_queue = Queue()
         event_handler = SyncEventHandler(file_update_queue)
 

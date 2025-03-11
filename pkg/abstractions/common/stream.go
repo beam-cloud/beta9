@@ -25,7 +25,7 @@ type ContainerStreamOpts struct {
 	Tailscale       *network.Tailscale
 	Config          types.AppConfig
 	KeyEventManager *common.KeyEventManager
-	SyncQueue       chan *pb.SyncContainerContentRequest
+	SyncQueue       chan *pb.SyncContainerWorkspaceRequest
 }
 
 func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
@@ -47,7 +47,7 @@ type ContainerStream struct {
 	tailscale       *network.Tailscale
 	config          types.AppConfig
 	keyEventManager *common.KeyEventManager
-	syncQueue       chan *pb.SyncContainerContentRequest
+	syncQueue       chan *pb.SyncContainerWorkspaceRequest
 }
 
 func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
@@ -92,16 +92,13 @@ _stream:
 	for {
 		select {
 		case req := <-l.syncQueue:
-			log.Info().Msgf("Received sync request: %v", req)
-
-			// TODO: do the actual sync?
-			status, err := client.Status(containerId)
+			resp, err := client.SyncWorkspace(ctx, req)
 			if err != nil {
-				log.Error().Msgf("Error getting status: %v", err)
-				break _stream
+				log.Error().Msgf("Error syncing content: %v", err)
+				continue
 			}
 
-			log.Info().Msgf("Status: %v", status)
+			log.Info().Msgf("Sync response: %v", resp)
 		case o := <-outputChan:
 			if err := l.sendCallback(o); err != nil {
 				lastMessage = o

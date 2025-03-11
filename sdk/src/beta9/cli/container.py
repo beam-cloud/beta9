@@ -1,10 +1,13 @@
 import datetime
+import os
 import time
-from typing import List
+from queue import Empty, Queue
+from typing import Callable, List, Optional
 
 import click
 from betterproto import Casing
 from rich.table import Column, Table, box
+from watchdog.observers import Observer
 
 from .. import terminal
 from ..channel import ServiceClient
@@ -15,9 +18,10 @@ from ..clients.gateway import (
     ListContainersRequest,
     StopContainerRequest,
     StopContainerResponse,
-    SyncContainerContentOperation,
-    SyncContainerContentRequest,
+    SyncContainerWorkspaceOperation,
+    SyncContainerWorkspaceRequest,
 )
+from ..sync import SyncEventHandler
 from .extraclick import ClickCommonGroup, ClickManagementGroup
 
 
@@ -149,6 +153,49 @@ def stop_container(service: ServiceClient, container_ids: List[str]):
             terminal.error(f"{res.error_msg}", exit=False)
 
 
+def sync_dir_to_workspace(*, dir: str, container_id: str, on_event: Optional[Callable] = None):
+    file_update_queue = Queue()
+    event_handler = SyncEventHandler(file_update_queue)
+
+    observer = Observer()
+    observer.schedule(event_handler, dir, recursive=True)
+    observer.start()
+
+    terminal.header(f"Watching '{dir}' for changes...")
+    while True:
+        try:
+            operation, path, new_path = file_update_queue.get_nowait()
+
+            if on_event:
+                on_event(operation, path, new_path)
+
+            req = SyncContainerWorkspaceRequest(
+                container_id=container_id,
+                path=os.path.relpath(path, start=dir),
+                is_dir=os.path.isdir(path),
+                op=operation,
+            )
+
+            if operation == SyncContainerWorkspaceOperation.WRITE:
+                if not req.is_dir:
+                    with open(path, "rb") as f:
+                        req.data = f.read()
+
+            elif operation == SyncContainerWorkspaceOperation.DELETE:
+                pass
+
+            elif operation == SyncContainerWorkspaceOperation.MOVED:
+                req.new_path = os.path.relpath(new_path, start=dir)
+
+            yield ContainerStreamMessage(sync_container_workspace=req)
+
+            file_update_queue.task_done()
+        except Empty:
+            time.sleep(0.1)
+        except Exception as e:
+            terminal.warn(str(e))
+
+
 def _attach_to_container(service: ServiceClient, container_id: str):
     terminal.header(f"Connecting to {container_id}...")
 
@@ -157,18 +204,7 @@ def _attach_to_container(service: ServiceClient, container_id: str):
             attach_request=AttachToContainerRequest(container_id=container_id)
         )
 
-        while True:
-            yield ContainerStreamMessage(
-                sync_container_content=SyncContainerContentRequest(
-                    container_id=container_id,
-                    path="TEST",
-                    new_path="TEST",
-                    is_dir=False,
-                    data=b"somebin",
-                    op=SyncContainerContentOperation.WRITE,
-                )
-            )
-            time.sleep(1)
+        yield from sync_dir_to_workspace(dir="./", container_id=container_id)
 
     # Connect to the remote container and stream messages back and forth
     stream = service.gateway.attach_to_container(_container_stream_generator())
