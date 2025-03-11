@@ -307,17 +307,10 @@ func (s *RunCServer) addRequestEnvToInitialSpec(instance *ContainerInstance) err
 }
 
 func (s *RunCServer) RunCSyncWorkspace(ctx context.Context, in *pb.SyncContainerWorkspaceRequest) (*pb.SyncContainerWorkspaceResponse, error) {
-	instance, exists := s.containerInstances.Get(in.ContainerId)
+	_, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
 	}
-
-	log.Info().Msgf("Syncing workspace for container %s", in.ContainerId)
-	log.Info().Msgf("Instance: %+v", instance)
-	log.Info().Msgf("Sync request: %+v", in)
-	log.Info().Msgf("Overlay: %+v", instance.Overlay)
-	log.Info().Msgf("Cwd: %s", instance.Spec.Process.Cwd)
-	log.Info().Msgf("TopLayerPath: %s", instance.Overlay.TopLayerPath())
 
 	workspacePath := tempContainerWorkspace(in.ContainerId)
 	destPath := path.Join(workspacePath, in.Path)
