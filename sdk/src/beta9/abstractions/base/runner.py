@@ -2,12 +2,9 @@ import inspect
 import json
 import os
 import threading
-import time
-from queue import Empty, Queue
 from typing import Callable, Dict, List, Optional, Union
 
 import cloudpickle
-from watchdog.observers import Observer
 
 from ... import terminal
 from ...abstractions.base import BaseAbstraction
@@ -21,15 +18,12 @@ from ...clients.gateway import (
     GetUrlRequest,
     GetUrlResponse,
     SecretVar,
-    SyncContainerWorkspaceOperation,
-    SyncContainerWorkspaceRequest,
-    SyncContainerWorkspaceResponse,
 )
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import, is_notebook_env
-from ...sync import FileSyncer, SyncEventHandler
+from ...sync import FileSyncer
 from ...type import (
     _AUTOSCALER_TYPES,
     Autoscaler,
@@ -316,48 +310,6 @@ class RunnerAbstraction(BaseAbstraction):
         for tmp_file in self.tmp_files:
             tmp_file.close()
 
-    def _sync_content(
-        self,
-        *,
-        dir: str,
-        object_id: str,
-        file_update_queue: Queue,
-        on_event: Optional[Callable] = None,
-    ) -> None:
-        try:
-            operation, path, new_path = file_update_queue.get_nowait()
-
-            if on_event:
-                on_event(operation, path, new_path)
-
-            req = SyncContainerWorkspaceRequest(
-                container_id=object_id,
-                path=os.path.relpath(path, start=dir),
-                is_dir=os.path.isdir(path),
-                op=operation,
-            )
-
-            if operation == SyncContainerWorkspaceOperation.WRITE:
-                if not req.is_dir:
-                    with open(path, "rb") as f:
-                        req.data = f.read()
-
-            elif operation == SyncContainerWorkspaceOperation.DELETE:
-                pass
-
-            elif operation == SyncContainerWorkspaceOperation.MOVED:
-                req.new_path = os.path.relpath(new_path, start=dir)
-
-            res = self.gateway_stub.replace_object_content(req)
-            if not res.ok:
-                terminal.warn("Failed to sync content")
-
-            file_update_queue.task_done()
-        except Empty:
-            time.sleep(0.1)
-        except Exception as e:
-            terminal.warn(str(e))
-
     def parse_gpu(self, gpu: Union[GpuTypeAlias, List[GpuTypeAlias]]) -> str:
         if not isinstance(gpu, str) and not isinstance(gpu, list):
             raise ValueError("Invalid GPU type")
@@ -377,22 +329,6 @@ class RunnerAbstraction(BaseAbstraction):
             )
 
         return func
-
-    def sync_dir_to_workspace(
-        self, *, dir: str, object_id: str, on_event: Optional[Callable] = None
-    ) -> SyncContainerWorkspaceResponse:
-        file_update_queue = Queue()
-        event_handler = SyncEventHandler(file_update_queue)
-
-        observer = Observer()
-        observer.schedule(event_handler, dir, recursive=True)
-        observer.start()
-
-        terminal.header(f"Watching '{dir}' for changes...")
-        while True:
-            self._sync_content(
-                dir=dir, object_id=object_id, file_update_queue=file_update_queue, on_event=on_event
-            )
 
     def prepare_runtime(
         self,
