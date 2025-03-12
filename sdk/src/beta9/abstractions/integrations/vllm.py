@@ -403,11 +403,9 @@ class VLLM(ASGI):
             )
         )
 
-        r: Union[StartEndpointServeResponse, None] = None
-        for r in stream:
-            if not r.ok:
-                return terminal.error(r.error_msg)
+        r: StartEndpointServeResponse = stream
+        if not r.ok:
+            return terminal.error(r.error_msg)
 
-            if r.container_id:
-                container = Container(container_id=r.container_id)
-                container.attach(container_id=r.container_id, sync_dir=dir)
+        container = Container(container_id=r.container_id)
+        container.attach(container_id=r.container_id, sync_dir=dir)

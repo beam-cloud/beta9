@@ -6,9 +6,7 @@
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
-    AsyncIterator,
     Dict,
-    Iterator,
     Optional,
 )
 
@@ -40,10 +38,9 @@ class StartEndpointServeResponse(betterproto.Message):
 class EndpointServiceStub(SyncServiceStub):
     def start_endpoint_serve(
         self, start_endpoint_serve_request: "StartEndpointServeRequest"
-    ) -> Iterator["StartEndpointServeResponse"]:
-        for response in self._unary_stream(
+    ) -> "StartEndpointServeResponse":
+        return self._unary_unary(
             "/endpoint.EndpointService/StartEndpointServe",
             StartEndpointServeRequest,
             StartEndpointServeResponse,
-        )(start_endpoint_serve_request):
-            yield response
+        )(start_endpoint_serve_request)

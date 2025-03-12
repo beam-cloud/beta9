@@ -7,6 +7,7 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/common"
 
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -15,11 +16,10 @@ const (
 	serveKeepAliveInterval = 5 * time.Second
 )
 
-func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error {
-	ctx := stream.Context()
+func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, req *pb.StartEndpointServeRequest) (*pb.StartEndpointServeResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	instance, err := es.getOrCreateEndpointInstance(ctx, in.StubId,
+	instance, err := es.getOrCreateEndpointInstance(ctx, req.StubId,
 		withEntryPoint(func(instance *endpointInstance) []string {
 			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
@@ -28,37 +28,33 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		}),
 	)
 	if err != nil {
-		return stream.Send(&pb.StartEndpointServeResponse{Ok: false, ErrorMsg: err.Error()})
+		return &pb.StartEndpointServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	if authInfo.Workspace.ExternalId != instance.Workspace.ExternalId {
-		return stream.Send(&pb.StartEndpointServeResponse{Ok: false})
+		return &pb.StartEndpointServeResponse{Ok: false}, nil
 	}
 
 	go es.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
 
 	var timeoutDuration time.Duration = endpointServeContainerTimeout
-	if in.Timeout > 0 {
-		timeoutDuration = time.Duration(in.Timeout) * time.Second
+	if req.Timeout > 0 {
+		timeoutDuration = time.Duration(req.Timeout) * time.Second
 	}
 
 	// If timeout is non-negative, set the initial keepalive lock
-	if in.Timeout >= 0 {
+	if req.Timeout >= 0 {
 		instance.Rdb.SetEx(
 			context.Background(),
-			Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+			common.RedisKeys.SchedulerServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
 			1,
 			timeoutDuration,
 		)
 	}
-	defer instance.Rdb.Del(
-		context.Background(),
-		Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-	)
 
 	container, err := instance.WaitForContainer(ctx, endpointServeContainerTimeout)
 	if err != nil {
-		return stream.Send(&pb.StartEndpointServeResponse{Ok: false, ErrorMsg: err.Error()})
+		return &pb.StartEndpointServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	// Remove the container lock and rely on the serve lock to keep the container alive
@@ -72,29 +68,5 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		ContainerId: container.ContainerId,
 	}
 
-	if err := stream.Send(response); err != nil {
-		return err
-	}
-
-	// Keep the container alive
-	ticker := time.NewTicker(serveKeepAliveInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			instance.Rdb.SetEx(
-				context.Background(),
-				Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-				1,
-				timeoutDuration,
-			)
-
-			if err := stream.Send(response); err != nil {
-				return err
-			}
-		}
-	}
+	return response, nil
 }

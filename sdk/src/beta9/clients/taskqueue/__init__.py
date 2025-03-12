@@ -153,10 +153,9 @@ class TaskQueueServiceStub(SyncServiceStub):
 
     def start_task_queue_serve(
         self, start_task_queue_serve_request: "StartTaskQueueServeRequest"
-    ) -> Iterator["StartTaskQueueServeResponse"]:
-        for response in self._unary_stream(
+    ) -> "StartTaskQueueServeResponse":
+        return self._unary_unary(
             "/taskqueue.TaskQueueService/StartTaskQueueServe",
             StartTaskQueueServeRequest,
             StartTaskQueueServeResponse,
-        )(start_task_queue_serve_request):
-            yield response
+        )(start_task_queue_serve_request)

@@ -14,7 +14,7 @@ service TaskQueueService {
   rpc TaskQueueLength(TaskQueueLengthRequest)
       returns (TaskQueueLengthResponse) {}
   rpc StartTaskQueueServe(StartTaskQueueServeRequest)
-      returns (stream StartTaskQueueServeResponse) {}
+      returns (StartTaskQueueServeResponse) {}
 }
 
 message TaskQueuePutRequest {

@@ -6,7 +6,7 @@ package endpoint;
 
 service EndpointService {
   rpc StartEndpointServe(StartEndpointServeRequest)
-      returns (stream StartEndpointServeResponse) {}
+      returns (StartEndpointServeResponse) {}
 }
 
 message StartEndpointServeRequest {

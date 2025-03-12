@@ -573,18 +573,15 @@ class _CallableWrapper(DeployableMixin):
             os._exit(0)  # kills all threads immediately
 
     def _serve(self, *, dir: str, timeout: int = 0):
-        stream = self.parent.endpoint_stub.start_endpoint_serve(
+        r: StartEndpointServeResponse = self.parent.endpoint_stub.start_endpoint_serve(
             StartEndpointServeRequest(
                 stub_id=self.parent.stub_id,
                 timeout=timeout,
             )
         )
 
-        r: Union[StartEndpointServeResponse, None] = None
-        for r in stream:
-            if not r.ok:
-                return terminal.error(r.error_msg)
+        if not r.ok:
+            return terminal.error(r.error_msg)
 
-            if r.container_id:
-                container = Container(container_id=r.container_id)
-                container.attach(container_id=r.container_id, sync_dir=dir)
+        container = Container(container_id=r.container_id)
+        container.attach(container_id=r.container_id, sync_dir=dir)

@@ -5,7 +5,6 @@ import "fmt"
 // Redis keys
 var (
 	taskQueueList                 string = "taskqueue:%s:%s"
-	taskQueueServeLock            string = "taskqueue:%s:%s:serve_lock"
 	taskQueueInstanceLock         string = "taskqueue:%s:%s:instance_lock"
 	taskQueueTaskDuration         string = "taskqueue:%s:%s:task_duration"
 	taskQueueAverageTaskDuration  string = "taskqueue:%s:%s:avg_task_duration"
@@ -22,10 +21,6 @@ type keys struct{}
 
 func (k *keys) taskQueueInstanceLock(workspaceName, stubId string) string {
 	return fmt.Sprintf(taskQueueInstanceLock, workspaceName, stubId)
-}
-
-func (k *keys) taskQueueServeLock(workspaceName, stubId string) string {
-	return fmt.Sprintf(taskQueueServeLock, workspaceName, stubId)
 }
 
 func (k *keys) taskQueueList(workspaceName, stubId string) string {

@@ -4,6 +4,7 @@ import (
 	"math"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/common"
 )
 
 type taskQueueAutoscalerSample struct {
@@ -81,7 +82,7 @@ func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abs
 func taskQueueServeScaleFunc(i *taskQueueInstance, sample *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
 
-	timeoutKey := Keys.taskQueueServeLock(i.Workspace.Name, i.Stub.ExternalId)
+	timeoutKey := common.RedisKeys.SchedulerServeLock(i.Workspace.Name, i.Stub.ExternalId)
 	exists, err := i.Rdb.Exists(i.Ctx, timeoutKey).Result()
 	if err != nil {
 		return &abstractions.AutoscalerResult{

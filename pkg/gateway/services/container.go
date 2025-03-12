@@ -136,24 +136,32 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	if err != nil {
 		return err
 	}
+
+	containerNotFoundResponse := &pb.AttachToContainerResponse{
+		Done:     true,
+		ExitCode: 1,
+		Output:   "Container not found",
+	}
+
 	attachReq := initMsg.GetAttachRequest()
 	if attachReq == nil {
-		_ = stream.Send(&pb.AttachToContainerResponse{
-			Done:     true,
-			ExitCode: 1,
-			Output:   "Container not found",
-		})
-		return nil
+		return stream.Send(containerNotFoundResponse)
 	}
 
 	container, err := gws.containerRepo.GetContainerState(attachReq.ContainerId)
 	if err != nil {
-		_ = stream.Send(&pb.AttachToContainerResponse{
-			Done:     true,
-			ExitCode: 1,
-			Output:   "Container not found",
-		})
-		return nil
+		return stream.Send(containerNotFoundResponse)
+	}
+
+	stub, err := gws.backendRepo.GetStubByExternalId(ctx, container.StubId)
+	if err != nil || stub == nil {
+		return stream.Send(containerNotFoundResponse)
+	}
+
+	if types.StubType(stub.Type).IsServe() {
+		defer func() {
+			gws.redisClient.Del(context.Background(), common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId))
+		}()
 	}
 
 	sendCallback := func(o common.OutputMsg) error {
@@ -161,6 +169,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 			Output: o.Msg,
 		})
 	}
+
 	exitCallback := func(exitCode int32) error {
 		output := "\nContainer was stopped."
 		if exitCode != 0 {
@@ -217,6 +226,10 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 
 			switch payload := inMsg.Payload.(type) {
 			case *pb.ContainerStreamMessage_SyncContainerWorkspace:
+				if types.StubType(stub.Type).IsServe() {
+					gws.redisClient.Expire(ctx, common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId), time.Minute*10)
+				}
+
 				syncQueue <- payload.SyncContainerWorkspace
 			default:
 			}

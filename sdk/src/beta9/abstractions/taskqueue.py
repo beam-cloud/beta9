@@ -220,14 +220,12 @@ class _CallableWrapper(DeployableMixin):
             )
         )
 
-        r: Union[StartTaskQueueServeResponse, None] = None
-        for r in stream:
-            if not r.ok:
-                return terminal.error(r.error_msg)
+        r: StartTaskQueueServeResponse = stream
+        if not r.ok:
+            return terminal.error(r.error_msg)
 
-            if r.container_id:
-                container = Container(container_id=r.container_id)
-                container.attach(container_id=r.container_id, sync_dir=dir)
+        container = Container(container_id=r.container_id)
+        container.attach(container_id=r.container_id, sync_dir=dir)
 
     def put(self, *args, **kwargs) -> bool:
         if not self.parent.prepare_runtime(

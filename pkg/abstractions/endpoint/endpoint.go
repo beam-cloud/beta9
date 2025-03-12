@@ -27,7 +27,7 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type EndpointService interface {
 	pb.EndpointServiceServer
-	StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error
+	StartEndpointServe(ctx context.Context, req *pb.StartEndpointServeRequest) (*pb.StartEndpointServeResponse, error)
 }
 
 type HttpEndpointService struct {
@@ -308,7 +308,6 @@ var (
 	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
 	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
 	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s:%s"
-	endpointServeLock        string = "endpoint:%s:%s:serve_lock"
 )
 
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
@@ -325,8 +324,4 @@ func (k *keys) endpointRequestTokens(workspaceName, stubId, containerId string) 
 
 func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId, containerId string) string {
 	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId, containerId)
-}
-
-func (k *keys) endpointServeLock(workspaceName, stubId string) string {
-	return fmt.Sprintf(endpointServeLock, workspaceName, stubId)
 }
