@@ -2,18 +2,15 @@ package taskqueue
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest, stream pb.TaskQueueService_StartTaskQueueServeServer) error {
-	ctx := stream.Context()
+func (tq *RedisTaskQueue) StartTaskQueueServe(ctx context.Context, in *pb.StartTaskQueueServeRequest) (*pb.StartTaskQueueServeResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	instance, err := tq.getOrCreateQueueInstance(in.StubId,
@@ -25,8 +22,13 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		}),
 	)
 	if err != nil {
-		return err
+		return &pb.StartTaskQueueServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
+
+	if authInfo.Workspace.ExternalId != instance.Workspace.ExternalId {
+		return &pb.StartTaskQueueServeResponse{Ok: false}, nil
+	}
+
 	go tq.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
 
 	var timeoutDuration time.Duration = taskQueueServeContainerTimeout
@@ -41,77 +43,13 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		1,
 		timeoutDuration,
 	)
-	defer instance.Rdb.Del(context.Background(), Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId))
 
 	container, err := instance.WaitForContainer(ctx, taskQueueServeContainerTimeout)
 	if err != nil {
-		return err
+		return &pb.StartTaskQueueServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.StartTaskQueueServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	exitCallback := func(exitCode int32) error {
-		output := "\nContainer was stopped."
-		if exitCode != 0 {
-			output = fmt.Sprintf("Container failed with exit code %d", exitCode)
-			if exitCode == types.WorkerContainerExitCodeOomKill {
-				output = "Container was killed due to an out-of-memory error"
-			}
-		}
-
-		return stream.Send(&pb.StartTaskQueueServeResponse{
-			Done:     true,
-			ExitCode: int32(exitCode),
-			Output:   output,
-		})
-	}
-
-	ctx, cancel := common.MergeContexts(tq.ctx, ctx)
-	defer cancel()
-
-	// Keep serve container active for as long as user has their terminal open
-	// We can handle timeouts on the client side
-	// If timeout is set to negative, we want to keep the container alive indefinitely while the user is connected
-	if in.Timeout < 0 {
-		go func() {
-			ticker := time.NewTicker(taskQueueServeContainerKeepaliveInterval)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					instance.Rdb.SetEx(
-						context.Background(),
-						Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-						1,
-						timeoutDuration,
-					)
-				}
-			}
-		}()
-	}
-
-	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
-		SendCallback:    sendCallback,
-		ExitCallback:    exitCallback,
-		ContainerRepo:   tq.containerRepo,
-		Config:          tq.config,
-		Tailscale:       tq.tailscale,
-		KeyEventManager: tq.keyEventManager,
-	})
-	if err != nil {
-		return err
-	}
-
-	return containerStream.Stream(ctx, authInfo, container.ContainerId)
+	return &pb.StartTaskQueueServeResponse{Ok: true, ContainerId: container.ContainerId}, nil
 }
 
 func (tq *RedisTaskQueue) StopTaskQueueServe(ctx context.Context, in *pb.StopTaskQueueServeRequest) (*pb.StopTaskQueueServeResponse, error) {

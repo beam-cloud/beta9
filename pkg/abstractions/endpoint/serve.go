@@ -8,7 +8,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/common"
 
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -57,9 +56,6 @@ func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, in *pb.St
 		context.Background(),
 		Keys.endpointKeepWarmLock(instance.Workspace.Name, instance.Stub.ExternalId, container.ContainerId),
 	)
-
-	ctx, cancel := common.MergeContexts(es.ctx, ctx)
-	defer cancel()
 
 	return &pb.StartEndpointServeResponse{Ok: true, ContainerId: container.ContainerId}, nil
 }

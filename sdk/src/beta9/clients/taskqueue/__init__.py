@@ -99,9 +99,9 @@ class StartTaskQueueServeRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StartTaskQueueServeResponse(betterproto.Message):
-    output: str = betterproto.string_field(1)
-    done: bool = betterproto.bool_field(2)
-    exit_code: int = betterproto.int32_field(3)
+    ok: bool = betterproto.bool_field(1)
+    container_id: str = betterproto.string_field(2)
+    error_msg: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -174,13 +174,12 @@ class TaskQueueServiceStub(SyncServiceStub):
 
     def start_task_queue_serve(
         self, start_task_queue_serve_request: "StartTaskQueueServeRequest"
-    ) -> Iterator["StartTaskQueueServeResponse"]:
-        for response in self._unary_stream(
+    ) -> "StartTaskQueueServeResponse":
+        return self._unary_unary(
             "/taskqueue.TaskQueueService/StartTaskQueueServe",
             StartTaskQueueServeRequest,
             StartTaskQueueServeResponse,
-        )(start_task_queue_serve_request):
-            yield response
+        )(start_task_queue_serve_request)
 
     def stop_task_queue_serve(
         self, stop_task_queue_serve_request: "StopTaskQueueServeRequest"

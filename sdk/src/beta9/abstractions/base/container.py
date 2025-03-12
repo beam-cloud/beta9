@@ -107,5 +107,5 @@ class Container(BaseAbstraction):
                 file_update_queue.task_done()
             except Empty:
                 time.sleep(DEFAULT_SYNC_INTERVAL)
-            except Exception as e:
+            except BaseException as e:
                 terminal.warn(str(e))

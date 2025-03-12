@@ -14,7 +14,7 @@ service TaskQueueService {
   rpc TaskQueueLength(TaskQueueLengthRequest)
       returns (TaskQueueLengthResponse) {}
   rpc StartTaskQueueServe(StartTaskQueueServeRequest)
-      returns (stream StartTaskQueueServeResponse) {}
+      returns (StartTaskQueueServeResponse) {}
   rpc StopTaskQueueServe(StopTaskQueueServeRequest)
       returns (StopTaskQueueServeResponse) {}
   rpc TaskQueueServeKeepAlive(TaskQueueServeKeepAliveRequest)
@@ -58,8 +58,8 @@ message TaskQueueCompleteRequest {
   float keep_warm_seconds = 7;
 }
 
-message TaskQueueCompleteResponse { 
-  bool ok = 1; 
+message TaskQueueCompleteResponse {
+  bool ok = 1;
   string message = 2;
 }
 
@@ -76,16 +76,22 @@ message TaskQueueMonitorResponse {
   bool timed_out = 4;
 }
 
-message StartTaskQueueServeRequest { string stub_id = 1; int32 timeout = 2;}
+message StartTaskQueueServeRequest {
+  string stub_id = 1;
+  int32 timeout = 2;
+}
 
 message StartTaskQueueServeResponse {
-  string output = 1;
-  bool done = 2;
-  int32 exit_code = 3;
+  bool ok = 1;
+  string container_id = 2;
+  string error_msg = 3;
 }
 
 message StopTaskQueueServeRequest { string stub_id = 1; }
 message StopTaskQueueServeResponse { bool ok = 1; }
 
-message TaskQueueServeKeepAliveRequest { string stub_id = 1; int32 timeout = 2;}
+message TaskQueueServeKeepAliveRequest {
+  string stub_id = 1;
+  int32 timeout = 2;
+}
 message TaskQueueServeKeepAliveResponse { bool ok = 1; }

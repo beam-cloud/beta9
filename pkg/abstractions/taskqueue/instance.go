@@ -36,19 +36,21 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		return err
 	}
 
-	env := []string{
+	env := []string{}
+	env = append(i.StubConfig.Env, env...)
+	env = append(secrets, env...)
+	env = append(env, []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 		fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
 		fmt.Sprintf("ON_START=%s", i.StubConfig.OnStart),
-		fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
 		fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
 		fmt.Sprintf("WORKERS=%d", i.StubConfig.Workers),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
 		fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
-	}
-
-	env = append(secrets, env...)
+		fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
+		fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),
+	}...)
 
 	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
 	if i.StubConfig.Runtime.Gpu != "" {
