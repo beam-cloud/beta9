@@ -44,7 +44,6 @@ func InitializeMetricsRepository(config types.VictoriaMetricsConfig) {
 	gpuType := os.Getenv("GPU_TYPE")
 	podHostname := os.Getenv("POD_HOSTNAME")
 
-	log.Info().Interface("config", config).Msg("initializing metrics repository")
 	creds := fmt.Sprintf("vmagent:%s", config.AuthToken)
 	encodedCreds := base64.StdEncoding.EncodeToString([]byte(creds))
 	opts := &vmetrics.PushOptions{
