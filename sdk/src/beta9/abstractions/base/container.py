@@ -9,21 +9,22 @@ from ... import terminal
 from ...clients.gateway import (
     AttachToContainerRequest,
     ContainerStreamMessage,
+    GatewayServiceStub,
     SyncContainerWorkspaceOperation,
     SyncContainerWorkspaceRequest,
 )
 from ...sync import SyncEventHandler
-from .runner import (
-    RunnerAbstraction,
-)
+from .runner import BaseAbstraction
 
 
-class Container(RunnerAbstraction):
+class Container(BaseAbstraction):
     def __init__(
         self,
         container_id: str,
     ) -> None:
         super().__init__()
+        self.gateway_stub = GatewayServiceStub(self.channel)
+        self.container_id = container_id
 
     def attach(self, *, container_id: str):
         terminal.header(f"Connecting to {container_id}...")
