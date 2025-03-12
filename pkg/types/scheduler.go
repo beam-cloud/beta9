@@ -29,6 +29,13 @@ const (
 	StubStateHealthy  = "healthy"
 )
 
+type ContainerRequestStatus string
+
+const (
+	ContainerRequestStatusFailed ContainerRequestStatus = "failed"
+	ContainerRequestStatusTTL                           = 10 * time.Minute
+)
+
 // @go2proto
 type Worker struct {
 	Id                   string       `json:"id" redis:"id"`

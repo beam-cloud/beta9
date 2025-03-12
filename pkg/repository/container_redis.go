@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -294,13 +293,17 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(ctx context.Context, contai
 		select {
 		case <-ctx.Done():
 			if ctx.Err() == context.DeadlineExceeded {
-				return "", errors.New("timeout reached while trying to get worker addr")
+				return "", fmt.Errorf("failed to schedule container, container id: %s", containerId)
 			}
-			return "", errors.New("context cancelled while trying to get worker addr")
+			return "", fmt.Errorf("context cancelled while trying to get worker addr, container id: %s", containerId)
 		case <-ticker.C:
 			hostname, err = cr.rdb.Get(ctx, common.RedisKeys.SchedulerWorkerAddress(containerId)).Result()
 			if err == nil {
 				return hostname, nil
+			}
+
+			if requestStatus, err := cr.GetContainerRequestStatus(containerId); err == nil && requestStatus == types.ContainerRequestStatusFailed {
+				return "", fmt.Errorf("failed to schedule container, container id: %s", containerId)
 			}
 		}
 	}
@@ -537,4 +540,17 @@ func (cr *ContainerRedisRepository) SetStubState(stubId, state string) error {
 func (cr *ContainerRedisRepository) DeleteStubState(stubId string) error {
 	stateKey := common.RedisKeys.SchedulerStubState(stubId)
 	return cr.rdb.Del(context.TODO(), stateKey).Err()
+}
+
+func (cr *ContainerRedisRepository) SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error {
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerRequestStatus(containerId), status, types.ContainerRequestStatusTTL).Err()
+}
+
+func (cr *ContainerRedisRepository) GetContainerRequestStatus(containerId string) (types.ContainerRequestStatus, error) {
+	status, err := cr.rdb.Get(context.TODO(), common.RedisKeys.SchedulerContainerRequestStatus(containerId)).Result()
+	if err != nil {
+		return "", err
+	}
+
+	return types.ContainerRequestStatus(status), nil
 }
