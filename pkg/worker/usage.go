@@ -24,7 +24,7 @@ func NewWorkerUsageMetrics(
 	workerId string,
 	config types.MonitoringConfig,
 ) (*WorkerUsageMetrics, error) {
-	metricsRepo, err := usage.NewMetrics(config, string(usage.MetricsSourceWorker))
+	metricsRepo, err := usage.NewUsageMetricsRepository(config, string(usage.MetricsSourceWorker))
 	if err != nil {
 		return nil, err
 	}
