@@ -6,6 +6,8 @@ import (
 	"os"
 	"time"
 
+	"encoding/base64"
+
 	vmetrics "github.com/VictoriaMetrics/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -42,9 +44,12 @@ func InitializeMetricsRepository(config types.VictoriaMetricsConfig) {
 	gpuType := os.Getenv("GPU_TYPE")
 	podHostname := os.Getenv("POD_HOSTNAME")
 
+	log.Info().Interface("config", config).Msg("initializing metrics repository")
+	creds := fmt.Sprintf("vmagent:%s", config.AuthToken)
+	encodedCreds := base64.StdEncoding.EncodeToString([]byte(creds))
 	opts := &vmetrics.PushOptions{
 		Headers: []string{
-			fmt.Sprintf("Authorization: Bearer %s", config.AuthToken),
+			fmt.Sprintf("Authorization: Basic %s", encodedCreds),
 		},
 	}
 
