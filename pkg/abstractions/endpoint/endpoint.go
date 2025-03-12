@@ -27,7 +27,7 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type EndpointService interface {
 	pb.EndpointServiceServer
-	StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error
+	StartEndpointServe(ctx context.Context, in *pb.StartEndpointServeRequest) (*pb.StartEndpointServeResponse, error)
 	StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error)
 }
 

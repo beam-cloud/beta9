@@ -1,5 +1,4 @@
 import os
-import threading
 import traceback
 import types
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -591,31 +590,20 @@ class _CallableWrapper(DeployableMixin):
                 )
             )
 
-        threading.Thread(
-            target=self.parent.sync_dir_to_workspace,
-            kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
-            daemon=True,
-        ).start()
+        # threading.Thread(
+        #     target=self.parent.sync_dir_to_workspace,
+        #     kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
+        #     daemon=True,
+        # ).start()
 
-        stream = self.parent.endpoint_stub.start_endpoint_serve(
+        resp = self.parent.endpoint_stub.start_endpoint_serve(
             StartEndpointServeRequest(
                 stub_id=self.parent.stub_id,
                 timeout=timeout,
             )
         )
 
-        r = None
-        for r in stream:
-            if r.output != "":
-                terminal.detail(r.output, end="")
+        if not resp.ok:
+            return terminal.error(resp.error_msg)
 
-            if r.done or r.exit_code != 0:
-                break
-
-        if r is None:
-            return terminal.error("Serve failed ❌")
-
-        if not r.done or r.exit_code != 0:
-            return terminal.error(f"{r.output} ❌")
-
-        terminal.success(r.output)
+        terminal.success("Serve started successfully")

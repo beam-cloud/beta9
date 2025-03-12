@@ -2,7 +2,6 @@ package endpoint
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -14,8 +13,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error {
-	ctx := stream.Context()
+func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, in *pb.StartEndpointServeRequest) (*pb.StartEndpointServeResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	instance, err := es.getOrCreateEndpointInstance(ctx, in.StubId,
@@ -27,7 +25,11 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		}),
 	)
 	if err != nil {
-		return err
+		return &pb.StartEndpointServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	if authInfo.Workspace.ExternalId != instance.Workspace.ExternalId {
+		return &pb.StartEndpointServeResponse{Ok: false}, nil
 	}
 
 	go es.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
@@ -48,7 +50,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 
 	container, err := instance.WaitForContainer(ctx, endpointServeContainerTimeout)
 	if err != nil {
-		return err
+		return &pb.StartEndpointServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	// Remove the container lock and rely on the serve lock to keep container alive
@@ -57,70 +59,10 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 		Keys.endpointKeepWarmLock(instance.Workspace.Name, instance.Stub.ExternalId, container.ContainerId),
 	)
 
-	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.StartEndpointServeResponse{Output: o.Msg, Done: o.Done}); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	exitCallback := func(exitCode int32) error {
-		output := "\nContainer was stopped."
-		if exitCode != 0 {
-			output = fmt.Sprintf("Container failed with exit code %d", exitCode)
-			if exitCode == types.WorkerContainerExitCodeOomKill {
-				output = "Container was killed due to an out-of-memory error"
-			}
-		}
-
-		return stream.Send(&pb.StartEndpointServeResponse{
-			Done:     true,
-			ExitCode: int32(exitCode),
-			Output:   output,
-		})
-	}
-
 	ctx, cancel := common.MergeContexts(es.ctx, ctx)
 	defer cancel()
 
-	// Keep serve container active for as long as user has their terminal open
-	// We can handle timeouts on the client side
-	// If timeout is set to negative, we want to keep the container alive indefinitely while the user is connected
-	if in.Timeout < 0 {
-		go func() {
-			ticker := time.NewTicker(endpointServeContainerKeepaliveInterval)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					instance.Rdb.SetEx(
-						context.Background(),
-						Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-						1,
-						timeoutDuration,
-					)
-				}
-			}
-		}()
-	}
-
-	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
-		SendCallback:    sendCallback,
-		ExitCallback:    exitCallback,
-		ContainerRepo:   es.containerRepo,
-		Config:          es.config,
-		Tailscale:       es.tailscale,
-		KeyEventManager: es.keyEventManager,
-	})
-	if err != nil {
-		return err
-	}
-
-	return containerStream.Stream(ctx, authInfo, container.ContainerId)
+	return &pb.StartEndpointServeResponse{Ok: true}, nil
 }
 
 func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error) {
