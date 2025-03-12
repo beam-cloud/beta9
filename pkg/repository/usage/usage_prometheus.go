@@ -21,7 +21,7 @@ import (
 	"golang.org/x/net/http2/h2c"
 )
 
-type PrometheusMetricsRepository struct {
+type PrometheusUsageMetricsRepository struct {
 	collectorRegistrar *prometheus.Registry
 	port               int
 	source             string
@@ -36,14 +36,14 @@ type PrometheusMetricsRepository struct {
 	histogramVecs *common.SafeMap[*prometheus.HistogramVec]
 }
 
-func NewPrometheusMetricsRepository(promConfig types.PrometheusConfig) repository.UsageMetricsRepository {
+func NewPrometheusUsageMetricsRepository(promConfig types.PrometheusConfig) repository.UsageMetricsRepository {
 	collectorRegistrar := prometheus.NewRegistry()
 	collectorRegistrar.MustRegister(
 		collectors.NewGoCollector(),                                       // Metrics from Go runtime.
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}), // Metrics about the current UNIX process.
 	)
 
-	return &PrometheusMetricsRepository{
+	return &PrometheusUsageMetricsRepository{
 		collectorRegistrar: collectorRegistrar,
 		port:               promConfig.Port,
 		source:             "",
@@ -58,7 +58,7 @@ func NewPrometheusMetricsRepository(promConfig types.PrometheusConfig) repositor
 	}
 }
 
-func (r *PrometheusMetricsRepository) Init(source string) error {
+func (r *PrometheusUsageMetricsRepository) Init(source string) error {
 	r.source = source
 
 	go func() {
@@ -71,7 +71,7 @@ func (r *PrometheusMetricsRepository) Init(source string) error {
 	return nil
 }
 
-func (pr *PrometheusMetricsRepository) IncrementCounter(name string, metadata map[string]interface{}, value float64) error {
+func (pr *PrometheusUsageMetricsRepository) IncrementCounter(name string, metadata map[string]interface{}, value float64) error {
 	keys, values := pr.parseMetadata(metadata)
 
 	handler := pr.getCounterVec(
@@ -85,7 +85,7 @@ func (pr *PrometheusMetricsRepository) IncrementCounter(name string, metadata ma
 	return nil
 }
 
-func (pr *PrometheusMetricsRepository) SetGauge(name string, metadata map[string]interface{}, value float64) error {
+func (pr *PrometheusUsageMetricsRepository) SetGauge(name string, metadata map[string]interface{}, value float64) error {
 	keys, values := pr.parseMetadata(metadata)
 
 	handler := pr.getGaugeVec(
@@ -101,7 +101,7 @@ func (pr *PrometheusMetricsRepository) SetGauge(name string, metadata map[string
 
 // Internal methods
 
-func (r *PrometheusMetricsRepository) listenAndServe() error {
+func (r *PrometheusUsageMetricsRepository) listenAndServe() error {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -122,7 +122,7 @@ func (r *PrometheusMetricsRepository) listenAndServe() error {
 // getCounter registers and returns a new counter metric handler
 //
 //lint:ignore U1000 This function is reserved for future use.
-func (pr *PrometheusMetricsRepository) getCounter(opts prometheus.CounterOpts) prometheus.Counter {
+func (pr *PrometheusUsageMetricsRepository) getCounter(opts prometheus.CounterOpts) prometheus.Counter {
 	metricName := opts.Name
 	if handler, exists := pr.counters.Get(metricName); exists {
 		return handler
@@ -137,7 +137,7 @@ func (pr *PrometheusMetricsRepository) getCounter(opts prometheus.CounterOpts) p
 }
 
 // getCounterVec registers and returns a new counter vector metric
-func (pr *PrometheusMetricsRepository) getCounterVec(opts prometheus.CounterOpts, labels []string) *prometheus.CounterVec {
+func (pr *PrometheusUsageMetricsRepository) getCounterVec(opts prometheus.CounterOpts, labels []string) *prometheus.CounterVec {
 	metricName := opts.Name
 	if handler, exists := pr.counterVecs.Get(metricName); exists {
 		return handler
@@ -156,7 +156,7 @@ func (pr *PrometheusMetricsRepository) getCounterVec(opts prometheus.CounterOpts
 // getGauge registers and returns a new gauge metric handler
 //
 //lint:ignore U1000 This function is reserved for future use.
-func (pr *PrometheusMetricsRepository) getGauge(opts prometheus.GaugeOpts) prometheus.Gauge {
+func (pr *PrometheusUsageMetricsRepository) getGauge(opts prometheus.GaugeOpts) prometheus.Gauge {
 	metricName := opts.Name
 	if handler, exists := pr.gauges.Get(metricName); exists {
 		return handler
@@ -170,7 +170,7 @@ func (pr *PrometheusMetricsRepository) getGauge(opts prometheus.GaugeOpts) prome
 }
 
 // getGaugeVec registers and returns a new gauge vector metric handler
-func (pr *PrometheusMetricsRepository) getGaugeVec(opts prometheus.GaugeOpts, labels []string) *prometheus.GaugeVec {
+func (pr *PrometheusUsageMetricsRepository) getGaugeVec(opts prometheus.GaugeOpts, labels []string) *prometheus.GaugeVec {
 	metricName := opts.Name
 	if handler, exists := pr.gaugeVecs.Get(metricName); exists {
 		return handler
@@ -186,7 +186,7 @@ func (pr *PrometheusMetricsRepository) getGaugeVec(opts prometheus.GaugeOpts, la
 // getSummary registers and returns a new summary metric handler
 //
 //lint:ignore U1000 This function is reserved for future use.
-func (pr *PrometheusMetricsRepository) getSummary(opts prometheus.SummaryOpts) prometheus.Summary {
+func (pr *PrometheusUsageMetricsRepository) getSummary(opts prometheus.SummaryOpts) prometheus.Summary {
 	metricName := opts.Name
 	if handler, exists := pr.summaries.Get(metricName); exists {
 		return handler
@@ -202,7 +202,7 @@ func (pr *PrometheusMetricsRepository) getSummary(opts prometheus.SummaryOpts) p
 // getSummaryVec registers and returns a new summary vector metric handler
 //
 //lint:ignore U1000 This function is reserved for future use.
-func (pr *PrometheusMetricsRepository) getSummaryVec(opts prometheus.SummaryOpts, labels []string) *prometheus.SummaryVec {
+func (pr *PrometheusUsageMetricsRepository) getSummaryVec(opts prometheus.SummaryOpts, labels []string) *prometheus.SummaryVec {
 	metricName := opts.Name
 	if handler, exists := pr.summaryVecs.Get(metricName); exists {
 		return handler
@@ -218,7 +218,7 @@ func (pr *PrometheusMetricsRepository) getSummaryVec(opts prometheus.SummaryOpts
 // getHistogram registers and returns a new histogram metric handler
 //
 //lint:ignore U1000 This function is reserved for future use.
-func (pr *PrometheusMetricsRepository) getHistogram(opts prometheus.HistogramOpts) prometheus.Histogram {
+func (pr *PrometheusUsageMetricsRepository) getHistogram(opts prometheus.HistogramOpts) prometheus.Histogram {
 	metricName := opts.Name
 	if handler, exists := pr.histograms.Get(metricName); exists {
 		return handler
@@ -234,7 +234,7 @@ func (pr *PrometheusMetricsRepository) getHistogram(opts prometheus.HistogramOpt
 // getHistogramVec registers and returns a new histogram vector metric handler
 //
 //lint:ignore U1000 This function is reserved for future use.
-func (pr *PrometheusMetricsRepository) getHistogramVec(opts prometheus.HistogramOpts, labels []string) *prometheus.HistogramVec {
+func (pr *PrometheusUsageMetricsRepository) getHistogramVec(opts prometheus.HistogramOpts, labels []string) *prometheus.HistogramVec {
 	metricName := opts.Name
 	if handler, exists := pr.histogramVecs.Get(metricName); exists {
 		return handler
@@ -247,7 +247,7 @@ func (pr *PrometheusMetricsRepository) getHistogramVec(opts prometheus.Histogram
 	return handler
 }
 
-func (pr *PrometheusMetricsRepository) parseMetadata(metadata map[string]interface{}) (keys []string, values []string) {
+func (pr *PrometheusUsageMetricsRepository) parseMetadata(metadata map[string]interface{}) (keys []string, values []string) {
 	keys = maps.Keys(metadata)
 	values = []string{}
 	sort.Strings(keys)

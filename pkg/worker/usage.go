@@ -4,16 +4,19 @@ import (
 	"context"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/clients"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	usage "github.com/beam-cloud/beta9/pkg/repository/usage"
+	"github.com/rs/zerolog/log"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 type WorkerUsageMetrics struct {
-	workerId  string
-	usageRepo repo.UsageMetricsRepository
-	ctx       context.Context
+	workerId            string
+	metricsRepo         repo.UsageMetricsRepository
+	ctx                 context.Context
+	containerCostClient *clients.ContainerCostClient
 }
 
 func NewWorkerUsageMetrics(
@@ -21,20 +24,23 @@ func NewWorkerUsageMetrics(
 	workerId string,
 	config types.MonitoringConfig,
 ) (*WorkerUsageMetrics, error) {
-	metricsRepo, err := usage.NewUsage(config, string(usage.MetricsSourceWorker))
+	metricsRepo, err := usage.NewMetrics(config, string(usage.MetricsSourceWorker))
 	if err != nil {
 		return nil, err
 	}
 
+	containerCostClient := clients.NewContainerCostClient(config.ContainerCostHookConfig)
+
 	return &WorkerUsageMetrics{
-		ctx:       ctx,
-		workerId:  workerId,
-		usageRepo: metricsRepo,
+		ctx:                 ctx,
+		workerId:            workerId,
+		metricsRepo:         metricsRepo,
+		containerCostClient: containerCostClient,
 	}, nil
 }
 
-func (wm *WorkerUsageMetrics) usageContainerDuration(request *types.ContainerRequest, duration time.Duration) {
-	wm.usageRepo.IncrementCounter(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{
+func (wm *WorkerUsageMetrics) metricsContainerDuration(request *types.ContainerRequest, duration time.Duration) {
+	wm.metricsRepo.IncrementCounter(types.UsageMetricsWorkerContainerDuration, map[string]interface{}{
 		"container_id":   request.ContainerId,
 		"worker_id":      wm.workerId,
 		"stub_id":        request.StubId,
@@ -47,21 +53,57 @@ func (wm *WorkerUsageMetrics) usageContainerDuration(request *types.ContainerReq
 	}, float64(duration.Milliseconds()))
 }
 
-// Periodically send usage to track container duration
+func (wm *WorkerUsageMetrics) metricsContainerCost(request *types.ContainerRequest, duration time.Duration) {
+	wm.metricsRepo.IncrementCounter(types.UsageMetricsWorkerContainerCost, map[string]interface{}{
+		"container_id":   request.ContainerId,
+		"worker_id":      wm.workerId,
+		"stub_id":        request.StubId,
+		"workspace_id":   request.WorkspaceId,
+		"cpu_millicores": request.Cpu,
+		"mem_mb":         request.Memory,
+		"gpu":            request.Gpu,
+		"gpu_count":      request.GpuCount,
+		"cost_per_ms":    request.CostPerMs,
+		"duration_ms":    duration.Milliseconds(),
+	}, request.CostPerMs*float64(duration.Milliseconds()))
+}
+
+// Periodically send metrics to track container duration
 func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *types.ContainerRequest) {
 	cursorTime := time.Now()
 	ticker := time.NewTicker(types.ContainerDurationEmissionInterval)
 	defer ticker.Stop()
 
+	wm.addContainerCostPerMs(request)
+
 	for {
 		select {
 		case <-ticker.C:
-			go wm.usageContainerDuration(request, time.Since(cursorTime))
+			duration := time.Since(cursorTime)
+			wm.metricsContainerDuration(request, duration)
+			wm.metricsContainerCost(request, duration)
 			cursorTime = time.Now()
 		case <-ctx.Done():
 			// Consolidate any remaining time
-			go wm.usageContainerDuration(request, time.Since(cursorTime))
+			duration := time.Since(cursorTime)
+			wm.metricsContainerDuration(request, duration)
+			wm.metricsContainerCost(request, duration)
 			return
 		}
 	}
+}
+
+// addContainerCostPerMs adds the container cost per ms to the request if the config provided
+// a container cost hook endpoint.
+func (wm *WorkerUsageMetrics) addContainerCostPerMs(request *types.ContainerRequest) {
+	if wm.containerCostClient == nil {
+		return
+	}
+
+	costPerMs, err := wm.containerCostClient.GetContainerCostPerMs(request)
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to get container cost per ms")
+	}
+
+	request.CostPerMs = costPerMs
 }

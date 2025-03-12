@@ -90,7 +90,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	metricsRepo, err := usage.NewUsage(config.Monitoring, string(usage.MetricsSourceGateway))
+	usageMetricsRepo, err := usage.NewUsageMetricsRepository(config.Monitoring, string(usage.MetricsSourceGateway))
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func NewGateway() (*Gateway, error) {
 
 	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
 
-	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo, workspaceRepo, tailscale)
+	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, usageMetricsRepo, backendRepo, workspaceRepo, tailscale)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
 	gateway.TaskDispatcher = taskDispatcher
-	gateway.usageMetricsRepo = metricsRepo
+	gateway.usageMetricsRepo = usageMetricsRepo
 	gateway.EventRepo = eventRepo
 	gateway.workerRepo = workerRepo
 

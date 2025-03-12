@@ -12,20 +12,20 @@ var (
 	MetricsSourceWorker  MetricsSource = "worker"
 )
 
-func NewUsage(config types.MonitoringConfig, source string) (repository.UsageMetricsRepository, error) {
-	var metricsRepo repository.UsageMetricsRepository
+func NewUsageMetricsRepository(config types.MonitoringConfig, source string) (repository.UsageMetricsRepository, error) {
+	var usageMetricsRepo repository.UsageMetricsRepository
 
 	switch config.MetricsCollector {
 	case string(types.MetricsCollectorPrometheus):
-		metricsRepo = NewPrometheusMetricsRepository(config.Prometheus)
+		usageMetricsRepo = NewPrometheusUsageMetricsRepository(config.Prometheus)
 	case string(types.MetricsCollectorOpenMeter):
-		metricsRepo = NewOpenMeterUsageRepository(config.OpenMeter)
+		usageMetricsRepo = NewOpenMeterUsageMetricsRepository(config.OpenMeter)
 	}
 
-	err := metricsRepo.Init(source)
+	err := usageMetricsRepo.Init(source)
 	if err != nil {
 		return nil, err
 	}
 
-	return metricsRepo, nil
+	return usageMetricsRepo, nil
 }
