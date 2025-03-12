@@ -16,6 +16,8 @@ from ...clients.gateway import (
 from ...sync import SyncEventHandler
 from .runner import BaseAbstraction
 
+DEFAULT_SYNC_INTERVAL = 0.1
+
 
 class Container(BaseAbstraction):
     def __init__(
@@ -27,6 +29,10 @@ class Container(BaseAbstraction):
         self.container_id = container_id
 
     def attach(self, *, container_id: str):
+        """
+        Attach to a running container and stream messages back and forth. Also, optionally sync a directory to the container workspace.
+        """
+
         terminal.header(f"Connecting to {container_id}...")
 
         def _container_stream_generator():
@@ -95,6 +101,6 @@ class Container(BaseAbstraction):
 
                 file_update_queue.task_done()
             except Empty:
-                time.sleep(0.1)
+                time.sleep(DEFAULT_SYNC_INTERVAL)
             except Exception as e:
                 terminal.warn(str(e))

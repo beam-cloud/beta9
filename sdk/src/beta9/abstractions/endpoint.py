@@ -1,4 +1,6 @@
 import os
+import threading
+import time
 import traceback
 import types
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -570,7 +572,6 @@ class _CallableWrapper(DeployableMixin):
                 return self._serve(
                     dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
                 )
-
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 
@@ -583,19 +584,19 @@ class _CallableWrapper(DeployableMixin):
         os._exit(0)  # kills all threads immediately
 
     def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
-        def notify(*_, **__):
-            self.parent.endpoint_stub.endpoint_serve_keep_alive(
-                EndpointServeKeepAliveRequest(
-                    stub_id=self.parent.stub_id,
-                    timeout=timeout,
-                )
-            )
+        def _keepalive(*_, **__):
+            while True:
+                try:
+                    self.parent.endpoint_stub.endpoint_serve_keep_alive(
+                        EndpointServeKeepAliveRequest(
+                            stub_id=self.parent.stub_id,
+                            timeout=timeout,
+                        )
+                    )
+                except BaseException:
+                    continue
 
-        # threading.Thread(
-        #     target=self.parent.sync_dir_to_workspace,
-        #     kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
-        #     daemon=True,
-        # ).start()
+                time.sleep(1)
 
         resp = self.parent.endpoint_stub.start_endpoint_serve(
             StartEndpointServeRequest(
@@ -603,10 +604,10 @@ class _CallableWrapper(DeployableMixin):
                 timeout=timeout,
             )
         )
-
         if not resp.ok:
             return terminal.error(resp.error_msg)
 
+        threading.Thread(target=_keepalive, daemon=True).start()
         container = Container(container_id=resp.container_id)
         if resp.ok:
             container.attach(container_id=resp.container_id)
