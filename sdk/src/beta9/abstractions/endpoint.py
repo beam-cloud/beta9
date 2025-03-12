@@ -606,6 +606,7 @@ class _CallableWrapper(DeployableMixin):
             return terminal.error(resp.error_msg)
 
         threading.Thread(target=_keepalive, daemon=True).start()
-        container = Container(container_id=resp.container_id)
+
         if resp.ok:
+            container = Container(container_id=resp.container_id)
             container.attach(container_id=resp.container_id, sync_dir=dir)
