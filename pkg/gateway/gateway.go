@@ -40,7 +40,7 @@ import (
 	repositoryservices "github.com/beam-cloud/beta9/pkg/gateway/services/repository"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
-	metrics "github.com/beam-cloud/beta9/pkg/repository/metrics"
+	usage "github.com/beam-cloud/beta9/pkg/repository/usage"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/task"
@@ -55,27 +55,27 @@ import (
 
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
-	Config         types.AppConfig
-	httpServer     *http.Server
-	grpcServer     *grpc.Server
-	RedisClient    *common.RedisClient
-	TaskDispatcher *task.Dispatcher
-	TaskRepo       repository.TaskRepository
-	WorkspaceRepo  repository.WorkspaceRepository
-	ContainerRepo  repository.ContainerRepository
-	BackendRepo    repository.BackendRepository
-	ProviderRepo   repository.ProviderRepository
-	WorkerPoolRepo repository.WorkerPoolRepository
-	EventRepo      repository.EventRepository
-	Tailscale      *network.Tailscale
-	metricsRepo    repository.MetricsRepository
-	workerRepo     repository.WorkerRepository
-	Storage        storage.Storage
-	Scheduler      *scheduler.Scheduler
-	ctx            context.Context
-	cancelFunc     context.CancelFunc
-	baseRouteGroup *echo.Group
-	rootRouteGroup *echo.Group
+	Config           types.AppConfig
+	httpServer       *http.Server
+	grpcServer       *grpc.Server
+	RedisClient      *common.RedisClient
+	TaskDispatcher   *task.Dispatcher
+	TaskRepo         repository.TaskRepository
+	WorkspaceRepo    repository.WorkspaceRepository
+	ContainerRepo    repository.ContainerRepository
+	BackendRepo      repository.BackendRepository
+	ProviderRepo     repository.ProviderRepository
+	WorkerPoolRepo   repository.WorkerPoolRepository
+	EventRepo        repository.EventRepository
+	Tailscale        *network.Tailscale
+	usageMetricsRepo repository.UsageMetricsRepository
+	workerRepo       repository.WorkerRepository
+	Storage          storage.Storage
+	Scheduler        *scheduler.Scheduler
+	ctx              context.Context
+	cancelFunc       context.CancelFunc
+	baseRouteGroup   *echo.Group
+	rootRouteGroup   *echo.Group
 }
 
 func NewGateway() (*Gateway, error) {
@@ -90,7 +90,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	metricsRepo, err := metrics.NewMetrics(config.Monitoring, string(metrics.MetricsSourceGateway))
+	usageMetricsRepo, err := usage.NewUsageMetricsRepository(config.Monitoring, string(usage.MetricsSourceGateway))
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func NewGateway() (*Gateway, error) {
 
 	workspaceRepo := repository.NewWorkspaceRedisRepository(redisClient)
 
-	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, metricsRepo, backendRepo, workspaceRepo, tailscale)
+	scheduler, err := scheduler.NewScheduler(ctx, config, redisClient, usageMetricsRepo, backendRepo, workspaceRepo, tailscale)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
 	gateway.TaskDispatcher = taskDispatcher
-	gateway.metricsRepo = metricsRepo
+	gateway.usageMetricsRepo = usageMetricsRepo
 	gateway.EventRepo = eventRepo
 	gateway.workerRepo = workerRepo
 

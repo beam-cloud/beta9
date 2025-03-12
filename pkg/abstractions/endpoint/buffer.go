@@ -19,6 +19,7 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/task"
@@ -353,10 +354,12 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*
 		return rb.httpClient, nil
 	}
 
+	start := time.Now()
 	conn, err := network.ConnectToHost(rb.ctx, address, timeout, rb.tailscale, rb.tsConfig)
 	if err != nil {
 		return nil, err
 	}
+	metrics.RecordDialTime(time.Since(start), address)
 
 	// Create a custom transport that uses the established connection
 	// Either using tailscale or not

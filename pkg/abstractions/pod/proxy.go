@@ -11,6 +11,7 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -178,11 +179,13 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		return
 	}
 
+	start := time.Now()
 	containerConn, err := network.ConnectToHost(request.Context(), container.addressMap[int32(port)], containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
 	if err != nil {
 		conn.ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
 		return
 	}
+	metrics.RecordDialTime(time.Since(start), container.addressMap[int32(port)])
 	defer containerConn.Close()
 
 	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval, connectionReadTimeout)

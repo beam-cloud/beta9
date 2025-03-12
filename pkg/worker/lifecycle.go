@@ -657,7 +657,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	outputWriter := containerInstance.OutputWriter
 
 	// Log metrics
-	go s.workerMetrics.EmitContainerUsage(ctx, request)
+	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
