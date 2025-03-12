@@ -1,6 +1,4 @@
 import os
-import threading
-import time
 import traceback
 import types
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -23,10 +21,9 @@ from ..abstractions.image import Image
 from ..abstractions.volume import CloudBucket, Volume
 from ..channel import with_grpc_error_handling
 from ..clients.endpoint import (
-    EndpointServeKeepAliveRequest,
     EndpointServiceStub,
     StartEndpointServeRequest,
-    StopEndpointServeRequest,
+    StartEndpointServeResponse,
 )
 from ..env import is_local
 from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
@@ -571,42 +568,23 @@ class _CallableWrapper(DeployableMixin):
 
                 return self._serve(dir=os.getcwd(), timeout=timeout)
         except KeyboardInterrupt:
-            self._handle_serve_interrupt()
-
-    def _handle_serve_interrupt(self) -> None:
-        terminal.header("Stopping serve container")
-        self.parent.endpoint_stub.stop_endpoint_serve(
-            StopEndpointServeRequest(stub_id=self.parent.stub_id)
-        )
-        terminal.print("Goodbye 👋")
-        os._exit(0)  # kills all threads immediately
+            terminal.header("Stopping serve container")
+            terminal.print("Goodbye 👋")
+            os._exit(0)  # kills all threads immediately
 
     def _serve(self, *, dir: str, timeout: int = 0):
-        def _keepalive(*_, **__):
-            while True:
-                try:
-                    self.parent.endpoint_stub.endpoint_serve_keep_alive(
-                        EndpointServeKeepAliveRequest(
-                            stub_id=self.parent.stub_id,
-                            timeout=timeout,
-                        )
-                    )
-                except BaseException:
-                    continue
-
-                time.sleep(1)
-
-        resp = self.parent.endpoint_stub.start_endpoint_serve(
+        stream = self.parent.endpoint_stub.start_endpoint_serve(
             StartEndpointServeRequest(
                 stub_id=self.parent.stub_id,
                 timeout=timeout,
             )
         )
-        if not resp.ok:
-            return terminal.error(resp.error_msg)
 
-        threading.Thread(target=_keepalive, daemon=True).start()
+        r: Union[StartEndpointServeResponse, None] = None
+        for r in stream:
+            if not r.ok:
+                return terminal.error(r.error_msg)
 
-        if resp.ok:
-            container = Container(container_id=resp.container_id)
-            container.attach(container_id=resp.container_id, sync_dir=dir)
+            if r.container_id:
+                container = Container(container_id=r.container_id)
+                container.attach(container_id=r.container_id, sync_dir=dir)

@@ -19,18 +19,14 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	EndpointService_StartEndpointServe_FullMethodName     = "/endpoint.EndpointService/StartEndpointServe"
-	EndpointService_StopEndpointServe_FullMethodName      = "/endpoint.EndpointService/StopEndpointServe"
-	EndpointService_EndpointServeKeepAlive_FullMethodName = "/endpoint.EndpointService/EndpointServeKeepAlive"
+	EndpointService_StartEndpointServe_FullMethodName = "/endpoint.EndpointService/StartEndpointServe"
 )
 
 // EndpointServiceClient is the client API for EndpointService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type EndpointServiceClient interface {
-	StartEndpointServe(ctx context.Context, in *StartEndpointServeRequest, opts ...grpc.CallOption) (*StartEndpointServeResponse, error)
-	StopEndpointServe(ctx context.Context, in *StopEndpointServeRequest, opts ...grpc.CallOption) (*StopEndpointServeResponse, error)
-	EndpointServeKeepAlive(ctx context.Context, in *EndpointServeKeepAliveRequest, opts ...grpc.CallOption) (*EndpointServeKeepAliveResponse, error)
+	StartEndpointServe(ctx context.Context, in *StartEndpointServeRequest, opts ...grpc.CallOption) (EndpointService_StartEndpointServeClient, error)
 }
 
 type endpointServiceClient struct {
@@ -41,40 +37,43 @@ func NewEndpointServiceClient(cc grpc.ClientConnInterface) EndpointServiceClient
 	return &endpointServiceClient{cc}
 }
 
-func (c *endpointServiceClient) StartEndpointServe(ctx context.Context, in *StartEndpointServeRequest, opts ...grpc.CallOption) (*StartEndpointServeResponse, error) {
-	out := new(StartEndpointServeResponse)
-	err := c.cc.Invoke(ctx, EndpointService_StartEndpointServe_FullMethodName, in, out, opts...)
+func (c *endpointServiceClient) StartEndpointServe(ctx context.Context, in *StartEndpointServeRequest, opts ...grpc.CallOption) (EndpointService_StartEndpointServeClient, error) {
+	stream, err := c.cc.NewStream(ctx, &EndpointService_ServiceDesc.Streams[0], EndpointService_StartEndpointServe_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &endpointServiceStartEndpointServeClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
 }
 
-func (c *endpointServiceClient) StopEndpointServe(ctx context.Context, in *StopEndpointServeRequest, opts ...grpc.CallOption) (*StopEndpointServeResponse, error) {
-	out := new(StopEndpointServeResponse)
-	err := c.cc.Invoke(ctx, EndpointService_StopEndpointServe_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+type EndpointService_StartEndpointServeClient interface {
+	Recv() (*StartEndpointServeResponse, error)
+	grpc.ClientStream
 }
 
-func (c *endpointServiceClient) EndpointServeKeepAlive(ctx context.Context, in *EndpointServeKeepAliveRequest, opts ...grpc.CallOption) (*EndpointServeKeepAliveResponse, error) {
-	out := new(EndpointServeKeepAliveResponse)
-	err := c.cc.Invoke(ctx, EndpointService_EndpointServeKeepAlive_FullMethodName, in, out, opts...)
-	if err != nil {
+type endpointServiceStartEndpointServeClient struct {
+	grpc.ClientStream
+}
+
+func (x *endpointServiceStartEndpointServeClient) Recv() (*StartEndpointServeResponse, error) {
+	m := new(StartEndpointServeResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return m, nil
 }
 
 // EndpointServiceServer is the server API for EndpointService service.
 // All implementations must embed UnimplementedEndpointServiceServer
 // for forward compatibility
 type EndpointServiceServer interface {
-	StartEndpointServe(context.Context, *StartEndpointServeRequest) (*StartEndpointServeResponse, error)
-	StopEndpointServe(context.Context, *StopEndpointServeRequest) (*StopEndpointServeResponse, error)
-	EndpointServeKeepAlive(context.Context, *EndpointServeKeepAliveRequest) (*EndpointServeKeepAliveResponse, error)
+	StartEndpointServe(*StartEndpointServeRequest, EndpointService_StartEndpointServeServer) error
 	mustEmbedUnimplementedEndpointServiceServer()
 }
 
@@ -82,14 +81,8 @@ type EndpointServiceServer interface {
 type UnimplementedEndpointServiceServer struct {
 }
 
-func (UnimplementedEndpointServiceServer) StartEndpointServe(context.Context, *StartEndpointServeRequest) (*StartEndpointServeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StartEndpointServe not implemented")
-}
-func (UnimplementedEndpointServiceServer) StopEndpointServe(context.Context, *StopEndpointServeRequest) (*StopEndpointServeResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method StopEndpointServe not implemented")
-}
-func (UnimplementedEndpointServiceServer) EndpointServeKeepAlive(context.Context, *EndpointServeKeepAliveRequest) (*EndpointServeKeepAliveResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method EndpointServeKeepAlive not implemented")
+func (UnimplementedEndpointServiceServer) StartEndpointServe(*StartEndpointServeRequest, EndpointService_StartEndpointServeServer) error {
+	return status.Errorf(codes.Unimplemented, "method StartEndpointServe not implemented")
 }
 func (UnimplementedEndpointServiceServer) mustEmbedUnimplementedEndpointServiceServer() {}
 
@@ -104,58 +97,25 @@ func RegisterEndpointServiceServer(s grpc.ServiceRegistrar, srv EndpointServiceS
 	s.RegisterService(&EndpointService_ServiceDesc, srv)
 }
 
-func _EndpointService_StartEndpointServe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StartEndpointServeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
+func _EndpointService_StartEndpointServe_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StartEndpointServeRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
 	}
-	if interceptor == nil {
-		return srv.(EndpointServiceServer).StartEndpointServe(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointService_StartEndpointServe_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointServiceServer).StartEndpointServe(ctx, req.(*StartEndpointServeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return srv.(EndpointServiceServer).StartEndpointServe(m, &endpointServiceStartEndpointServeServer{stream})
 }
 
-func _EndpointService_StopEndpointServe_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StopEndpointServeRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointServiceServer).StopEndpointServe(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointService_StopEndpointServe_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointServiceServer).StopEndpointServe(ctx, req.(*StopEndpointServeRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+type EndpointService_StartEndpointServeServer interface {
+	Send(*StartEndpointServeResponse) error
+	grpc.ServerStream
 }
 
-func _EndpointService_EndpointServeKeepAlive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(EndpointServeKeepAliveRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(EndpointServiceServer).EndpointServeKeepAlive(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: EndpointService_EndpointServeKeepAlive_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(EndpointServiceServer).EndpointServeKeepAlive(ctx, req.(*EndpointServeKeepAliveRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+type endpointServiceStartEndpointServeServer struct {
+	grpc.ServerStream
+}
+
+func (x *endpointServiceStartEndpointServeServer) Send(m *StartEndpointServeResponse) error {
+	return x.ServerStream.SendMsg(m)
 }
 
 // EndpointService_ServiceDesc is the grpc.ServiceDesc for EndpointService service.
@@ -164,20 +124,13 @@ func _EndpointService_EndpointServeKeepAlive_Handler(srv interface{}, ctx contex
 var EndpointService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "endpoint.EndpointService",
 	HandlerType: (*EndpointServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "StartEndpointServe",
-			Handler:    _EndpointService_StartEndpointServe_Handler,
-		},
-		{
-			MethodName: "StopEndpointServe",
-			Handler:    _EndpointService_StopEndpointServe_Handler,
-		},
-		{
-			MethodName: "EndpointServeKeepAlive",
-			Handler:    _EndpointService_EndpointServeKeepAlive_Handler,
+			StreamName:    "StartEndpointServe",
+			Handler:       _EndpointService_StartEndpointServe_Handler,
+			ServerStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "endpoint.proto",
 }
