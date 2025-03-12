@@ -11,6 +11,10 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+const (
+	serveKeepAliveInterval = 5 * time.Second
+)
+
 func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
@@ -73,7 +77,7 @@ func (es *HttpEndpointService) StartEndpointServe(in *pb.StartEndpointServeReque
 	}
 
 	// Keep the container alive
-	ticker := time.NewTicker(timeoutDuration / 2)
+	ticker := time.NewTicker(serveKeepAliveInterval)
 	defer ticker.Stop()
 
 	for {

@@ -9,6 +9,10 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+const (
+	serveKeepAliveInterval = 5 * time.Second
+)
+
 func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest, stream pb.TaskQueueService_StartTaskQueueServeServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
@@ -69,7 +73,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 	}
 
 	// Keep the container alive
-	ticker := time.NewTicker(timeoutDuration / 2)
+	ticker := time.NewTicker(serveKeepAliveInterval)
 	defer ticker.Stop()
 
 	for {
