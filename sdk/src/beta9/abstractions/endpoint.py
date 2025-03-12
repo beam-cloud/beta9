@@ -569,9 +569,7 @@ class _CallableWrapper(DeployableMixin):
             with terminal.progress("Serving endpoint..."):
                 self.parent.print_invocation_snippet(url_type=url_type)
 
-                return self._serve(
-                    dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
-                )
+                return self._serve(dir=os.getcwd(), timeout=timeout)
         except KeyboardInterrupt:
             self._handle_serve_interrupt()
 
@@ -583,7 +581,7 @@ class _CallableWrapper(DeployableMixin):
         terminal.print("Goodbye 👋")
         os._exit(0)  # kills all threads immediately
 
-    def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
+    def _serve(self, *, dir: str, timeout: int = 0):
         def _keepalive(*_, **__):
             while True:
                 try:

@@ -154,6 +154,6 @@ def stop_container(service: ServiceClient, container_ids: List[str]):
     required=True,
 )
 @extraclick.pass_service_client
-def attach_to_container(service: ServiceClient, container_id: str):
+def attach_to_container(_: ServiceClient, container_id: str):
     container = Container(container_id=container_id)
-    container.attach(service, container_id)
+    container.attach(container_id=container_id)

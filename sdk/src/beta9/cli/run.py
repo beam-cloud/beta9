@@ -45,7 +45,7 @@ def common(**_):
 @override_config_options
 @pass_service_client
 def run(
-    service: ServiceClient,
+    _: ServiceClient,
     handler: str,
     **kwargs,
 ):
@@ -72,4 +72,4 @@ def run(
         return
 
     container = Container(container_id=result.container_id)
-    container.attach(service, result.container_id)
+    container.attach(container_id=result.container_id)
