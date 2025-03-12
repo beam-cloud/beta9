@@ -26,6 +26,7 @@ var (
 const (
 	metricRequestSchedulingDuration = "scheduler_request_scheduling_duration_ms"
 	metricRequestRetries            = "scheduler_request_retries"
+	metricRequestScheduleFailure    = "scheduler_request_schedule_failure"
 	metricImagePullTime             = "worker_image_pull_time_seconds"
 	metricImageBuildSpeed           = "worker_image_build_speed_mbps"
 	metricImageUnpackSpeed          = "worker_image_unpack_speed_mbps"
@@ -83,6 +84,19 @@ func RecordRequestSchedulingDuration(duration time.Duration, request *types.Cont
 func RecordRequestRetry(request *types.ContainerRequest) {
 	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
 		metricRequestRetries,
+		request.ContainerId,
+		request.Gpu,
+		request.GpuCount,
+		request.Cpu,
+		request.Memory,
+		request.RetryCount)
+
+	vmetrics.GetDefaultSet().GetOrCreateCounter(metricName).Inc()
+}
+
+func RecordRequestScheduleFailure(request *types.ContainerRequest) {
+	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
+		metricRequestScheduleFailure,
 		request.ContainerId,
 		request.Gpu,
 		request.GpuCount,
