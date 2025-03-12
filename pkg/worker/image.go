@@ -64,23 +64,53 @@ func getImageMountPath(workerId string) string {
 }
 
 type PathInfo struct {
-	Path string
-	Size float64
+	Path           string
+	cachedSize     float64
+	lastModifiedAt time.Time
+}
+
+func (p *PathInfo) GetSize() float64 {
+	info, err := os.Stat(p.Path)
+	if err != nil {
+		return p.calculateSize()
+	}
+
+	modTime := info.ModTime()
+
+	// Use cached size if directory hasn't been modified since our last calculation
+	if !p.lastModifiedAt.IsZero() && !modTime.After(p.lastModifiedAt) {
+		return p.cachedSize
+	}
+
+	return p.calculateSize()
+}
+
+func (p *PathInfo) calculateSize() float64 {
+	var size int64
+
+	filepath.Walk(p.Path, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+
+	p.cachedSize = float64(size) / 1024 / 1024
+
+	// Update last modified time
+	if info, err := os.Stat(p.Path); err == nil {
+		p.lastModifiedAt = info.ModTime()
+	}
+
+	return p.cachedSize
 }
 
 func NewPathInfo(path string) *PathInfo {
-	size := float64(0)
-	info, err := os.Stat(path)
-	if err == nil {
-		size = float64(info.Size()) / 1024 / 1024
-	} else {
-		log.Warn().Err(err).Str("path", path).Msg("unable to get bundle path size")
-	}
-
-	return &PathInfo{
+	p := &PathInfo{
 		Path: path,
-		Size: size,
 	}
+	p.calculateSize()
+	return p
 }
 
 type ImageClient struct {
@@ -316,7 +346,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		log.Warn().Err(err).Str("path", ociPath).Msg("unable to inspect image size")
 	}
 
-	startTime = time.Now()
 	engine, err := dir.Open(ociPath)
 	if err != nil {
 		return err
@@ -434,7 +463,7 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 		return os.Rename(tmpBundlePath, bundlePath.Path)
 	}
 
-	metrics.RecordImageUnpackSpeed(bundlePath.Size, time.Since(startTime))
+	metrics.RecordImageUnpackSpeed(bundlePath.GetSize(), time.Since(startTime))
 	return err
 }
 
@@ -484,8 +513,9 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 		log.Error().Err(err).Msg("unable to create archive")
 		return err
 	}
-	log.Info().Str("container_id", imageId).Dur("duration", time.Since(startTime)).Msg("container archive took")
-	metrics.RecordImageArchiveSpeed(bundlePath.Size, time.Since(startTime))
+	elapsed := time.Since(startTime)
+	log.Info().Str("container_id", imageId).Dur("seconds", time.Duration(elapsed.Seconds())).Float64("size", bundlePath.GetSize()).Msg("container archive took")
+	metrics.RecordImageArchiveSpeed(bundlePath.GetSize(), elapsed)
 
 	// Push the archive to a registry
 	startTime = time.Now()
@@ -495,8 +525,9 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 		return err
 	}
 
-	log.Info().Str("image_id", imageId).Dur("duration", time.Since(startTime)).Msg("image push took")
-	metrics.RecordImagePushSpeed(bundlePath.Size, time.Since(startTime))
+	elapsed = time.Since(startTime)
+	log.Info().Str("image_id", imageId).Dur("seconds", time.Duration(elapsed.Seconds())).Float64("size", bundlePath.GetSize()).Msg("image push took")
+	metrics.RecordImagePushSpeed(bundlePath.GetSize(), elapsed)
 	return nil
 }
 
