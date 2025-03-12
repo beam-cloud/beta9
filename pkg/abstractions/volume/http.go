@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/labstack/echo/v4"
@@ -156,7 +157,7 @@ func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to download file %v", err))
 	} else {
-		return ctx.File(path)
+		return ctx.Attachment(path, filepath.Base(decodedVolumePath))
 	}
 }
 
@@ -180,7 +181,7 @@ func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to download file %v", err))
 	} else {
-		return ctx.File(path)
+		return ctx.Attachment(path, filepath.Base(decodedVolumePath))
 	}
 }
 
