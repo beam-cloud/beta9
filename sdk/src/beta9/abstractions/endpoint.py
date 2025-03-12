@@ -608,4 +608,4 @@ class _CallableWrapper(DeployableMixin):
         threading.Thread(target=_keepalive, daemon=True).start()
         container = Container(container_id=resp.container_id)
         if resp.ok:
-            container.attach(container_id=resp.container_id)
+            container.attach(container_id=resp.container_id, sync_dir=dir)

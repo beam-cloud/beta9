@@ -28,7 +28,7 @@ class Container(BaseAbstraction):
         self.gateway_stub = GatewayServiceStub(self.channel)
         self.container_id = container_id
 
-    def attach(self, *, container_id: str):
+    def attach(self, *, container_id: str, sync_dir: Optional[str] = None):
         """
         Attach to a running container and stream messages back and forth. Also, optionally sync a directory to the container workspace.
         """
@@ -40,7 +40,12 @@ class Container(BaseAbstraction):
                 attach_request=AttachToContainerRequest(container_id=container_id)
             )
 
-            yield from self._sync_dir_to_workspace(dir="./", container_id=container_id)
+            if sync_dir:
+                yield from self._sync_dir_to_workspace(dir=sync_dir, container_id=container_id)
+            else:
+                while True:
+                    time.sleep(DEFAULT_SYNC_INTERVAL)
+                    yield ContainerStreamMessage()
 
         # Connect to the remote container and stream messages back and forth
         stream = self.gateway_stub.attach_to_container(_container_stream_generator())
