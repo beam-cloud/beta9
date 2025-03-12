@@ -39,15 +39,12 @@ func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, req *pb.S
 		timeout = time.Duration(req.Timeout) * time.Second
 	}
 
-	// If timeout is non-negative, set the initial keepalive lock
-	if req.Timeout >= 0 {
-		instance.Rdb.SetEx(
-			context.Background(),
-			common.RedisKeys.SchedulerServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-			timeout.String(),
-			timeout,
-		)
-	}
+	instance.Rdb.SetEx(
+		context.Background(),
+		common.RedisKeys.SchedulerServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+		timeout.String(),
+		timeout,
+	)
 
 	container, err := instance.WaitForContainer(ctx, timeout)
 	if err != nil {
