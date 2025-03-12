@@ -10,7 +10,6 @@ import (
 
 	vmetrics "github.com/VictoriaMetrics/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/rs/zerolog/log"
 	"tailscale.com/tstime/rate"
 )
 
@@ -71,7 +70,6 @@ func InitializeMetricsRepository(config types.VictoriaMetricsConfig) {
 }
 
 func RecordRequestSchedulingDuration(duration time.Duration, request *types.ContainerRequest) {
-	log.Info().Interface("request", request).Msg("recording request scheduling duration")
 	metricName := fmt.Sprintf("%s{gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\"}",
 		metricRequestSchedulingDuration,
 		request.Gpu,
