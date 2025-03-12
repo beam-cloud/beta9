@@ -54,13 +54,11 @@ var (
 	DefaultEndpointRequestTTL      uint32 = 600 // 10 minutes
 	ASGIRoutePrefix                string = "/asgi"
 
-	endpointContainerPrefix                 string        = "endpoint"
-	endpointRoutePrefix                     string        = "/endpoint"
-	endpointServeContainerTimeout           time.Duration = 10 * time.Minute
-	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
-	endpointRequestHeartbeatInterval        time.Duration = 5 * time.Second
-	endpointRequestHeartbeatKeepAlive       time.Duration = 30 * time.Second
-	endpointMinRequestBufferSize            int           = 10
+	endpointContainerPrefix           string        = "endpoint"
+	endpointRoutePrefix               string        = "/endpoint"
+	endpointRequestHeartbeatInterval  time.Duration = 5 * time.Second
+	endpointRequestHeartbeatKeepAlive time.Duration = 30 * time.Second
+	endpointMinRequestBufferSize      int           = 10
 )
 
 type EndpointServiceOpts struct {

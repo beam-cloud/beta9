@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	DefaultCPUWorkerPoolName = "default"
+	DefaultServeContainerTimeout = time.Minute * 10
+	DefaultCPUWorkerPoolName     = "default"
 )
 
 type WorkerStatus string

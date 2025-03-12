@@ -82,8 +82,8 @@ func taskQueueScaleFunc(i *taskQueueInstance, s *taskQueueAutoscalerSample) *abs
 func taskQueueServeScaleFunc(i *taskQueueInstance, sample *taskQueueAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
 
-	timeoutKey := common.RedisKeys.SchedulerServeLock(i.Workspace.Name, i.Stub.ExternalId)
-	exists, err := i.Rdb.Exists(i.Ctx, timeoutKey).Result()
+	lockKey := common.RedisKeys.SchedulerServeLock(i.Workspace.Name, i.Stub.ExternalId)
+	exists, err := i.Rdb.Exists(i.Ctx, lockKey).Result()
 	if err != nil {
 		return &abstractions.AutoscalerResult{
 			ResultValid: false,

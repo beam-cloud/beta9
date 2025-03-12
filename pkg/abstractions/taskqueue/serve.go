@@ -7,6 +7,7 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -31,20 +32,20 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(ctx context.Context, in *pb.StartT
 
 	go tq.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
 
-	var timeoutDuration time.Duration = taskQueueServeContainerTimeout
+	timeout := types.DefaultServeContainerTimeout
 	if in.Timeout > 0 {
-		timeoutDuration = time.Duration(in.Timeout) * time.Second
+		timeout = time.Duration(in.Timeout) * time.Second
 	}
 
 	// Set lock (used by autoscaler to scale up the single serve container)
 	instance.Rdb.SetEx(
 		context.Background(),
 		common.RedisKeys.SchedulerServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-		1,
-		timeoutDuration,
+		timeout,
+		timeout,
 	)
 
-	container, err := instance.WaitForContainer(ctx, taskQueueServeContainerTimeout)
+	container, err := instance.WaitForContainer(ctx, timeout)
 	if err != nil {
 		return &pb.StartTaskQueueServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}

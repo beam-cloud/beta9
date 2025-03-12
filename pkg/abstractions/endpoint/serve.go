@@ -5,15 +5,12 @@ import (
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 
 	pb "github.com/beam-cloud/beta9/proto"
-)
-
-const (
-	serveKeepAliveInterval = 5 * time.Second
 )
 
 func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, req *pb.StartEndpointServeRequest) (*pb.StartEndpointServeResponse, error) {
@@ -37,9 +34,9 @@ func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, req *pb.S
 
 	go es.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
 
-	var timeoutDuration time.Duration = endpointServeContainerTimeout
+	timeout := types.DefaultServeContainerTimeout
 	if req.Timeout > 0 {
-		timeoutDuration = time.Duration(req.Timeout) * time.Second
+		timeout = time.Duration(req.Timeout) * time.Second
 	}
 
 	// If timeout is non-negative, set the initial keepalive lock
@@ -47,12 +44,12 @@ func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, req *pb.S
 		instance.Rdb.SetEx(
 			context.Background(),
 			common.RedisKeys.SchedulerServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-			1,
-			timeoutDuration,
+			timeout,
+			timeout,
 		)
 	}
 
-	container, err := instance.WaitForContainer(ctx, endpointServeContainerTimeout)
+	container, err := instance.WaitForContainer(ctx, timeout)
 	if err != nil {
 		return &pb.StartEndpointServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
