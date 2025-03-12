@@ -281,13 +281,13 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 
 	if imageMetadata.Architecture != runtime.GOARCH {
 		return &types.ExitCodeError{
-			ExitCode: types.WorkerContainerExitCodeIncorrectImageArch,
+			ExitCode: types.ContainerExitCodeIncorrectImageArch,
 		}
 	}
 
 	if imageMetadata.Os != runtime.GOOS {
 		return &types.ExitCodeError{
-			ExitCode: types.WorkerContainerExitCodeIncorrectImageOs,
+			ExitCode: types.ContainerExitCodeIncorrectImageOs,
 		}
 	}
 

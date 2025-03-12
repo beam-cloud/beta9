@@ -233,6 +233,7 @@ func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
 						is.builder.scheduler.Stop(&types.StopContainerArgs{
 							ContainerId: containerId,
 							Force:       true,
+							Reason:      types.StopContainerReasonTtl,
 						})
 					}
 				}
@@ -242,6 +243,7 @@ func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
 					is.builder.scheduler.Stop(&types.StopContainerArgs{
 						ContainerId: containerId,
 						Force:       true,
+						Reason:      types.StopContainerReasonTtl,
 					})
 				}
 			}

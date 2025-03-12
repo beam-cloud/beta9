@@ -185,7 +185,7 @@ func (gws *GatewayService) DrainWorker(ctx context.Context, in *pb.DrainWorkerRe
 	var group errgroup.Group
 	for _, container := range containers {
 		group.Go(func() error {
-			return gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId})
+			return gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId, Reason: types.StopContainerReasonAdmin})
 		})
 	}
 	if err := group.Wait(); err != nil {
