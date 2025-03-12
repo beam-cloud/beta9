@@ -13,8 +13,6 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
-const containerRequestStatusTTL = 10 * time.Minute
-
 type ContainerRedisRepository struct {
 	rdb  *common.RedisClient
 	lock *common.RedisLock
@@ -304,11 +302,8 @@ func (cr *ContainerRedisRepository) GetWorkerAddress(ctx context.Context, contai
 				return hostname, nil
 			}
 
-			requestStatus, err := cr.GetContainerRequestStatus(containerId)
-			if err == nil {
-				if requestStatus == types.ContainerRequestStatusFailed {
-					return "", fmt.Errorf("failed to schedule container, container id: %s", containerId)
-				}
+			if requestStatus, err := cr.GetContainerRequestStatus(containerId); err == nil && requestStatus == types.ContainerRequestStatusFailed {
+				return "", fmt.Errorf("failed to schedule container, container id: %s", containerId)
 			}
 		}
 	}
@@ -548,7 +543,7 @@ func (cr *ContainerRedisRepository) DeleteStubState(stubId string) error {
 }
 
 func (cr *ContainerRedisRepository) SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error {
-	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerRequestStatus(containerId), status, containerRequestStatusTTL).Err()
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerRequestStatus(containerId), status, types.ContainerRequestStatusTTL).Err()
 }
 
 func (cr *ContainerRedisRepository) GetContainerRequestStatus(containerId string) (types.ContainerRequestStatus, error) {

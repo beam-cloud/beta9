@@ -33,6 +33,7 @@ type ContainerRequestStatus string
 
 const (
 	ContainerRequestStatusFailed ContainerRequestStatus = "failed"
+	ContainerRequestStatusTTL                           = 10 * time.Minute
 )
 
 // @go2proto
