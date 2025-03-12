@@ -22,6 +22,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
+	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -44,7 +45,7 @@ const (
 type Builder struct {
 	config        types.AppConfig
 	scheduler     *scheduler.Scheduler
-	registry      *common.ImageRegistry
+	registry      *registry.ImageRegistry
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
@@ -144,7 +145,7 @@ func (o *BuildOpts) addPythonRequirements() {
 	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 }
 
-func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
+func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
 	return &Builder{
 		config:        config,
 		scheduler:     scheduler,
