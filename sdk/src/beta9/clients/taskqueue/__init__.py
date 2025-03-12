@@ -104,27 +104,6 @@ class StartTaskQueueServeResponse(betterproto.Message):
     error_msg: str = betterproto.string_field(3)
 
 
-@dataclass(eq=False, repr=False)
-class StopTaskQueueServeRequest(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class StopTaskQueueServeResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class TaskQueueServeKeepAliveRequest(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-    timeout: int = betterproto.int32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class TaskQueueServeKeepAliveResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-
-
 class TaskQueueServiceStub(SyncServiceStub):
     def task_queue_put(
         self, task_queue_put_request: "TaskQueuePutRequest"
@@ -174,27 +153,10 @@ class TaskQueueServiceStub(SyncServiceStub):
 
     def start_task_queue_serve(
         self, start_task_queue_serve_request: "StartTaskQueueServeRequest"
-    ) -> "StartTaskQueueServeResponse":
-        return self._unary_unary(
+    ) -> Iterator["StartTaskQueueServeResponse"]:
+        for response in self._unary_stream(
             "/taskqueue.TaskQueueService/StartTaskQueueServe",
             StartTaskQueueServeRequest,
             StartTaskQueueServeResponse,
-        )(start_task_queue_serve_request)
-
-    def stop_task_queue_serve(
-        self, stop_task_queue_serve_request: "StopTaskQueueServeRequest"
-    ) -> "StopTaskQueueServeResponse":
-        return self._unary_unary(
-            "/taskqueue.TaskQueueService/StopTaskQueueServe",
-            StopTaskQueueServeRequest,
-            StopTaskQueueServeResponse,
-        )(stop_task_queue_serve_request)
-
-    def task_queue_serve_keep_alive(
-        self, task_queue_serve_keep_alive_request: "TaskQueueServeKeepAliveRequest"
-    ) -> "TaskQueueServeKeepAliveResponse":
-        return self._unary_unary(
-            "/taskqueue.TaskQueueService/TaskQueueServeKeepAlive",
-            TaskQueueServeKeepAliveRequest,
-            TaskQueueServeKeepAliveResponse,
-        )(task_queue_serve_keep_alive_request)
+        )(start_task_queue_serve_request):
+            yield response

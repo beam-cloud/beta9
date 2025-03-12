@@ -6,11 +6,11 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func (tq *RedisTaskQueue) StartTaskQueueServe(ctx context.Context, in *pb.StartTaskQueueServeRequest) (*pb.StartTaskQueueServeResponse, error) {
+func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest, stream pb.TaskQueueService_StartTaskQueueServeServer) error {
+	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	instance, err := tq.getOrCreateQueueInstance(in.StubId,
@@ -22,11 +22,11 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(ctx context.Context, in *pb.StartT
 		}),
 	)
 	if err != nil {
-		return &pb.StartTaskQueueServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return stream.Send(&pb.StartTaskQueueServeResponse{Ok: false, ErrorMsg: err.Error()})
 	}
 
 	if authInfo.Workspace.ExternalId != instance.Workspace.ExternalId {
-		return &pb.StartTaskQueueServeResponse{Ok: false}, nil
+		return stream.Send(&pb.StartTaskQueueServeResponse{Ok: false})
 	}
 
 	go tq.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
@@ -43,79 +43,50 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(ctx context.Context, in *pb.StartT
 		1,
 		timeoutDuration,
 	)
+	defer instance.Rdb.Del(
+		context.Background(),
+		Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+	)
 
 	container, err := instance.WaitForContainer(ctx, taskQueueServeContainerTimeout)
 	if err != nil {
-		return &pb.StartTaskQueueServeResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return stream.Send(&pb.StartTaskQueueServeResponse{Ok: false, ErrorMsg: err.Error()})
 	}
 
-	return &pb.StartTaskQueueServeResponse{Ok: true, ContainerId: container.ContainerId}, nil
-}
-
-func (tq *RedisTaskQueue) StopTaskQueueServe(ctx context.Context, in *pb.StopTaskQueueServeRequest) (*pb.StopTaskQueueServeResponse, error) {
-	instance, err := tq.getOrCreateQueueInstance(in.StubId,
-		withEntryPoint(func(instance *taskQueueInstance) []string {
-			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
-		}),
-		withAutoscaler(func(instance *taskQueueInstance) *abstractions.Autoscaler[*taskQueueInstance, *taskQueueAutoscalerSample] {
-			return abstractions.NewAutoscaler(instance, taskQueueAutoscalerSampleFunc, taskQueueServeScaleFunc)
-		}),
-	)
-	if err != nil {
-		return &pb.StopTaskQueueServeResponse{Ok: false}, nil
-	}
-
-	// Delete serve timeout lock
+	// Remove the container lock and rely on the serve lock to keep the container alive
 	instance.Rdb.Del(
 		context.Background(),
-		Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+		Keys.taskQueueKeepWarmLock(instance.Workspace.Name, instance.Stub.ExternalId, container.ContainerId),
 	)
 
-	// Delete all keep warms
-	// With serves, there should only ever be one container running, but this is the easiest way to find that container
-	containers, err := instance.ContainerRepo.GetActiveContainersByStubId(instance.Stub.ExternalId)
-	if err != nil {
-		return nil, err
+	response := &pb.StartTaskQueueServeResponse{
+		Ok:          true,
+		ContainerId: container.ContainerId,
 	}
 
-	for _, container := range containers {
-		if container.Status == types.ContainerStatusStopping || container.Status == types.ContainerStatusPending {
-			continue
+	if err := stream.Send(response); err != nil {
+		return err
+	}
+
+	// Keep the container alive
+	ticker := time.NewTicker(timeoutDuration / 2)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			instance.Rdb.SetEx(
+				context.Background(),
+				Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
+				1,
+				timeoutDuration,
+			)
+
+			if err := stream.Send(response); err != nil {
+				return err
+			}
 		}
-
-		instance.Rdb.Del(
-			context.Background(),
-			Keys.taskQueueKeepWarmLock(instance.Workspace.Name, instance.Stub.ExternalId, container.ContainerId),
-		)
-
 	}
-
-	return &pb.StopTaskQueueServeResponse{Ok: true}, nil
-}
-
-func (tq *RedisTaskQueue) TaskQueueServeKeepAlive(ctx context.Context, in *pb.TaskQueueServeKeepAliveRequest) (*pb.TaskQueueServeKeepAliveResponse, error) {
-	instance, exists := tq.queueInstances.Get(in.StubId)
-	if !exists {
-		return &pb.TaskQueueServeKeepAliveResponse{Ok: false}, nil
-	}
-
-	var timeoutDuration time.Duration = taskQueueServeContainerTimeout
-	if in.Timeout != 0 {
-		timeoutDuration = time.Duration(in.Timeout) * time.Second
-	}
-
-	if in.Timeout < 0 {
-		// There is no timeout, so we can just return
-		return &pb.TaskQueueServeKeepAliveResponse{Ok: true}, nil
-	}
-
-	// Update lock expiration
-	instance.Rdb.SetEx(
-		context.Background(),
-		Keys.taskQueueServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-		1,
-		timeoutDuration,
-	)
-
-	return &pb.TaskQueueServeKeepAliveResponse{Ok: true}, nil
 }

@@ -14,11 +14,7 @@ service TaskQueueService {
   rpc TaskQueueLength(TaskQueueLengthRequest)
       returns (TaskQueueLengthResponse) {}
   rpc StartTaskQueueServe(StartTaskQueueServeRequest)
-      returns (StartTaskQueueServeResponse) {}
-  rpc StopTaskQueueServe(StopTaskQueueServeRequest)
-      returns (StopTaskQueueServeResponse) {}
-  rpc TaskQueueServeKeepAlive(TaskQueueServeKeepAliveRequest)
-      returns (TaskQueueServeKeepAliveResponse) {}
+      returns (stream StartTaskQueueServeResponse) {}
 }
 
 message TaskQueuePutRequest {
@@ -86,12 +82,3 @@ message StartTaskQueueServeResponse {
   string container_id = 2;
   string error_msg = 3;
 }
-
-message StopTaskQueueServeRequest { string stub_id = 1; }
-message StopTaskQueueServeResponse { bool ok = 1; }
-
-message TaskQueueServeKeepAliveRequest {
-  string stub_id = 1;
-  int32 timeout = 2;
-}
-message TaskQueueServeKeepAliveResponse { bool ok = 1; }
