@@ -11,10 +11,10 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
-func (tq *RedisTaskQueue) StartTaskQueueServe(ctx context.Context, in *pb.StartTaskQueueServeRequest) (*pb.StartTaskQueueServeResponse, error) {
+func (tq *RedisTaskQueue) StartTaskQueueServe(ctx context.Context, req *pb.StartTaskQueueServeRequest) (*pb.StartTaskQueueServeResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	instance, err := tq.getOrCreateQueueInstance(in.StubId,
+	instance, err := tq.getOrCreateQueueInstance(req.StubId,
 		withEntryPoint(func(instance *taskQueueInstance) []string {
 			return []string{instance.StubConfig.PythonVersion, "-m", "beta9.runner.serve"}
 		}),
@@ -33,8 +33,8 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(ctx context.Context, in *pb.StartT
 	go tq.eventRepo.PushServeStubEvent(instance.Workspace.ExternalId, &instance.Stub.Stub)
 
 	timeout := types.DefaultServeContainerTimeout
-	if in.Timeout > 0 {
-		timeout = time.Duration(in.Timeout) * time.Second
+	if req.Timeout > 0 {
+		timeout = time.Duration(req.Timeout) * time.Second
 	}
 
 	// Set lock (used by autoscaler to scale up the single serve container)
