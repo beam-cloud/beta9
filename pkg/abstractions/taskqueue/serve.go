@@ -41,7 +41,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(ctx context.Context, in *pb.StartT
 	instance.Rdb.SetEx(
 		context.Background(),
 		common.RedisKeys.SchedulerServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-		timeout,
+		timeout.String(),
 		timeout,
 	)
 

@@ -44,7 +44,7 @@ func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, req *pb.S
 		instance.Rdb.SetEx(
 			context.Background(),
 			common.RedisKeys.SchedulerServeLock(instance.Workspace.Name, instance.Stub.ExternalId),
-			timeout,
+			timeout.String(),
 			timeout,
 		)
 	}

@@ -163,17 +163,14 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	if types.StubType(stub.Type).IsServe() {
 		lockKey := common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId)
 		timeoutValue, err := gws.redisClient.Get(context.Background(), lockKey).Result()
-
 		if err == nil {
-			serveTimeout, err = time.ParseDuration(timeoutValue)
-			if err != nil {
-				log.Error().Err(err).Msg("unable to parse timeout")
+			serveTimeout, _ = time.ParseDuration(timeoutValue)
+			if serveTimeout <= 0 {
+				serveTimeout = types.DefaultServeContainerTimeout
 			}
-
-			log.Info().Msgf("serve timeout: %s", serveTimeout)
 		}
 
-		// Delete the serve lock key when the container is detached
+		// Delete the serve lock key when we detach from the container
 		defer func() {
 			gws.redisClient.Del(context.Background(), lockKey)
 		}()
