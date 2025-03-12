@@ -483,6 +483,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		log.Error().Str("container_id", request.ContainerId).Int("retry_count", request.RetryCount).Msg("giving up on request")
 		s.containerRepo.DeleteContainerState(request.ContainerId)
 		s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed)
+		metrics.RecordRequestScheduleFailure(request)
 	}()
 
 	return nil
