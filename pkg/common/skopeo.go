@@ -81,7 +81,7 @@ func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds st
 	output, err := exec.CommandContext(ctx, p.pullCommand, args...).Output()
 	if err != nil {
 		return imageMetadata, &types.ExitCodeError{
-			ExitCode: types.WorkerContainerExitCodeInvalidCustomImage,
+			ExitCode: types.ContainerExitCodeInvalidCustomImage,
 		}
 	}
 

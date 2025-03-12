@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -406,7 +405,7 @@ func (cr *ContainerRedisRepository) GetFailedContainersByStubId(stubId string) (
 		}
 
 		// Check if the exit code is non-zero
-		if !slices.Contains(types.AllowedExitCodes, exitCode) {
+		if types.ContainerExitCode(exitCode).IsFailed() {
 			failedContainerIds = append(failedContainerIds, containerId)
 		}
 	}

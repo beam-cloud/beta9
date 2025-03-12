@@ -95,7 +95,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 	if *exitCode < 0 {
 		*exitCode = 1
-	} else if *exitCode == types.WorkerContainerExitCodeSigterm {
+	} else if *exitCode == int(types.ContainerExitCodeSigterm) {
 		*exitCode = 0
 	}
 
@@ -697,22 +697,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
 	if exists {
-		stopReason = containerInstance.StopReason
+		stopReason = types.StopContainerReason(containerInstance.StopReason)
 	}
 
 	switch stopReason {
 	case types.StopContainerReasonScheduler:
-		exitCode = types.WorkerContainerExitCodeScheduler
+		exitCode = int(types.ContainerExitCodeScheduler)
 	case types.StopContainerReasonTtl:
-		exitCode = types.WorkerContainerExitCodeTtl
+		exitCode = int(types.ContainerExitCodeTtl)
 	case types.StopContainerReasonUser:
-		exitCode = types.WorkerContainerExitCodeUser
+		exitCode = int(types.ContainerExitCodeUser)
 	case types.StopContainerReasonAdmin:
-		exitCode = types.WorkerContainerExitCodeAdmin
+		exitCode = int(types.ContainerExitCodeAdmin)
 	default:
 		if isOOMKilled.Load() {
-			exitCode = types.WorkerContainerExitCodeOomKill
-		} else if exitCode == types.WorkerContainerExitCodeOomKill || exitCode == -1 {
+			exitCode = int(types.ContainerExitCodeOomKill)
+		} else if exitCode == int(types.ContainerExitCodeOomKill) || exitCode == -1 {
 			// Exit code will match OOM kill exit code, but container was not OOM killed so override it
 			exitCode = 0
 		}

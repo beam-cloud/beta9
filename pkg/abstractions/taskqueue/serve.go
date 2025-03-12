@@ -60,7 +60,7 @@ func (tq *RedisTaskQueue) StartTaskQueueServe(in *pb.StartTaskQueueServeRequest,
 		output := "\nContainer was stopped."
 		if exitCode != 0 {
 			output = fmt.Sprintf("Container failed with exit code %d", exitCode)
-			if exitCode == types.WorkerContainerExitCodeOomKill {
+			if types.ContainerExitCode(exitCode) == types.ContainerExitCodeOomKill {
 				output = "Container was killed due to an out-of-memory error"
 			}
 		}

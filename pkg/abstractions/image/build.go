@@ -334,9 +334,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 			exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
 			if err == nil && exitCode != 0 {
-				msg, ok := types.WorkerContainerExitCodes[exitCode]
+				msg, ok := types.WorkerContainerExitCodes[types.ContainerExitCode(exitCode)]
 				if !ok {
-					msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+					msg = types.WorkerContainerExitCodes[types.ContainerExitCodeUnknownError]
 				}
 
 				// Wait for any final logs to get sent before returning

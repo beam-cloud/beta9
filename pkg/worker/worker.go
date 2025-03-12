@@ -81,7 +81,7 @@ type ContainerInstance struct {
 	OutputWriter *common.OutputWriter
 	LogBuffer    *common.LogBuffer
 	Request      *types.ContainerRequest
-	StopReason   string
+	StopReason   types.StopContainerReason
 }
 
 type ContainerOptions struct {
@@ -318,7 +318,7 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 
 			serr, ok := err.(*types.ExitCodeError)
 			if ok {
-				exitCode = serr.ExitCode
+				exitCode = int(serr.ExitCode)
 			}
 
 			_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
