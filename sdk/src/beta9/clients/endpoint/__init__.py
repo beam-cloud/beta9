@@ -31,7 +31,8 @@ class StartEndpointServeRequest(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class StartEndpointServeResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-    error_msg: str = betterproto.string_field(2)
+    container_id: str = betterproto.string_field(2)
+    error_msg: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)

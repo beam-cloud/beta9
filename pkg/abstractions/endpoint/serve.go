@@ -46,7 +46,6 @@ func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, in *pb.St
 		1,
 		timeoutDuration,
 	)
-	defer instance.Rdb.Del(context.Background(), Keys.endpointServeLock(instance.Workspace.Name, instance.Stub.ExternalId))
 
 	container, err := instance.WaitForContainer(ctx, endpointServeContainerTimeout)
 	if err != nil {
@@ -62,7 +61,7 @@ func (es *HttpEndpointService) StartEndpointServe(ctx context.Context, in *pb.St
 	ctx, cancel := common.MergeContexts(es.ctx, ctx)
 	defer cancel()
 
-	return &pb.StartEndpointServeResponse{Ok: true}, nil
+	return &pb.StartEndpointServeResponse{Ok: true, ContainerId: container.ContainerId}, nil
 }
 
 func (es *HttpEndpointService) StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error) {

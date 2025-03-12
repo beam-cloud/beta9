@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from uvicorn.protocols.utils import ClientDisconnected
 
 from .. import terminal
+from ..abstractions.base.container import Container
 from ..abstractions.base.runner import (
     ASGI_DEPLOYMENT_STUB_TYPE,
     ASGI_SERVE_STUB_TYPE,
@@ -606,4 +607,6 @@ class _CallableWrapper(DeployableMixin):
         if not resp.ok:
             return terminal.error(resp.error_msg)
 
-        terminal.success("Serve started successfully")
+        container = Container(container_id=resp.container_id)
+        if resp.ok:
+            container.attach(container_id=resp.container_id)

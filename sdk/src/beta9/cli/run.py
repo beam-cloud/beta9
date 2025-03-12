@@ -3,10 +3,10 @@ import inspect
 import click
 
 from .. import terminal
+from ..abstractions.base.container import Container
 from ..abstractions.pod import Pod, PodInstance
 from ..channel import ServiceClient
 from ..utils import load_module_spec
-from .container import _attach_to_container
 from .extraclick import (
     ClickCommonGroup,
     handle_config_override,
@@ -71,4 +71,5 @@ def run(
         terminal.error("Failed to create container.")
         return
 
-    _attach_to_container(service, result.container_id)
+    container = Container(container_id=result.container_id)
+    container.attach(service, result.container_id)

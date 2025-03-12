@@ -2,7 +2,7 @@ from unittest import TestCase
 from unittest.mock import MagicMock
 
 from beta9 import Image
-from beta9.abstractions.container import Container
+from beta9.abstractions.base.container import Container
 from beta9.clients.container import CommandExecutionRequest, CommandExecutionResponse
 
 

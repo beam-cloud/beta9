@@ -20,7 +20,8 @@ message StartEndpointServeRequest {
 
 message StartEndpointServeResponse {
   bool ok = 1;
-  string error_msg = 2;
+  string container_id = 2;
+  string error_msg = 3;
 }
 
 message StopEndpointServeRequest { string stub_id = 1; }
