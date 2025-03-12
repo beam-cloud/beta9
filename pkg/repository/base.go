@@ -48,6 +48,7 @@ type ContainerRepository interface {
 	UpdateContainerStatus(string, types.ContainerStatus, int64) error
 	UpdateAssignedContainerGPU(string, string) error
 	DeleteContainerState(containerId string) error
+	SetContainerRequestStatus(containerId string, status types.ContainerRequestStatus) error
 	SetWorkerAddress(containerId string, addr string) error
 	GetWorkerAddress(ctx context.Context, containerId string) (string, error)
 	SetContainerAddressMap(containerId string, addressMap map[int32]string) error
@@ -208,7 +209,7 @@ type EventRepository interface {
 	PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState)
 }
 
-type MetricsRepository interface {
+type UsageMetricsRepository interface {
 	Init(source string) error
 	IncrementCounter(name string, metadata map[string]interface{}, value float64) error
 	SetGauge(name string, metadata map[string]interface{}, value float64) error

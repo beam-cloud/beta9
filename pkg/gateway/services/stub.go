@@ -133,6 +133,21 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			}, nil
 		}
 
+		if types.StubType(in.GetStubType()).IsServe() {
+			gpuNames := []string{}
+			for _, gpu := range gpus {
+				if gpuCounts[gpu.String()] > 0 {
+					break
+				}
+				gpuNames = append(gpuNames, gpu.String())
+			}
+
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: fmt.Sprintf("There is currently no GPU capacity for %s.", strings.Join(gpuNames, ", ")),
+			}, nil
+		}
+
 		// T4s are currently in a different pool than other GPUs and won't show up in gpu counts
 		lowGpus := []string{}
 

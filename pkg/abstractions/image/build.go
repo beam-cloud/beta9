@@ -22,6 +22,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
+	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -44,7 +45,7 @@ const (
 type Builder struct {
 	config        types.AppConfig
 	scheduler     *scheduler.Scheduler
-	registry      *common.ImageRegistry
+	registry      *registry.ImageRegistry
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
@@ -144,7 +145,7 @@ func (o *BuildOpts) addPythonRequirements() {
 	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 }
 
-func NewBuilder(config types.AppConfig, registry *common.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
+func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
 	return &Builder{
 		config:        config,
 		scheduler:     scheduler,
@@ -334,9 +335,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 			exitCode, err := b.containerRepo.GetContainerExitCode(containerId)
 			if err == nil && exitCode != 0 {
-				msg, ok := types.WorkerContainerExitCodes[exitCode]
+				msg, ok := types.WorkerContainerExitCodes[types.ContainerExitCode(exitCode)]
 				if !ok {
-					msg = types.WorkerContainerExitCodes[types.WorkerContainerExitCodeUnknownError]
+					msg = types.WorkerContainerExitCodes[types.ContainerExitCodeUnknownError]
 				}
 
 				// Wait for any final logs to get sent before returning

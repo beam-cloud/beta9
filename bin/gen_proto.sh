@@ -1,5 +1,19 @@
 #!/bin/bash
 
+if [ -z "$PROTOC_INCLUDE_PATH" ]; then
+    PROTOC_INCLUDE_PATH="/usr/local/include"
+fi
+
+GRPC_PATH=$(which protoc-gen-go-grpc)
+if [[ "$GRPC_PATH" == *"/go/bin/"*  ]]; then
+    echo "protoc-gen-go-grpc is a go install"
+elif [ -f "$GRPC_PATH" ]; then
+    echo "WARNING: protoc-gen-go-grpc is a system install and there might be version conflicts"
+else
+    echo "protoc-gen-go-grpc is not installed"
+    exit 1
+fi
+
 go2proto -f ./pkg/types/types.proto -p ./pkg/types -n github.com/beam-cloud/beta9/proto -t types
 
 # Generate code for gateway services

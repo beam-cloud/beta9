@@ -54,8 +54,10 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 		return false
 	}
 
-	if _, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
+	if containerInstance, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
 		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
+		containerInstance.StopReason = stopArgs.Reason
+		s.containerInstances.Set(stopArgs.ContainerId, containerInstance)
 		s.stopContainerChan <- stopContainerEvent{ContainerId: stopArgs.ContainerId, Kill: stopArgs.Force}
 	}
 
@@ -93,7 +95,7 @@ func (s *Worker) finalizeContainer(containerId string, request *types.ContainerR
 
 	if *exitCode < 0 {
 		*exitCode = 1
-	} else if *exitCode == types.WorkerContainerExitCodeSigterm {
+	} else if *exitCode == int(types.ContainerExitCodeSigterm) {
 		*exitCode = 0
 	}
 
@@ -564,7 +566,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}
-		} else if err == nil && resp.State.Status == string(types.ContainerStatusStopping) {
+		} else if resp.State.Status == string(types.ContainerStatusStopping) {
 			log.Info().Str("container_id", containerId).Msg("container should be stopping, force killing")
 			s.stopContainer(containerId, true)
 			return
@@ -657,7 +659,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	outputWriter := containerInstance.OutputWriter
 
 	// Log metrics
-	go s.workerMetrics.EmitContainerUsage(ctx, request)
+	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
 
@@ -690,20 +692,33 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 	}()
 
-	exitCode, containerId, err = s.runContainer(ctx, request, configPath, outputWriter, startedChan, checkpointPIDChan)
-	if err != nil {
-		return
+	exitCode, containerId, _ = s.runContainer(ctx, request, configPath, outputWriter, startedChan, checkpointPIDChan)
+
+	stopReason := types.StopContainerReasonUnknown
+	containerInstance, exists = s.containerInstances.Get(containerId)
+	if exists {
+		stopReason = types.StopContainerReason(containerInstance.StopReason)
 	}
 
-	if isOOMKilled.Load() {
-		exitCode = types.WorkerContainerExitCodeOomKill
-	} else if exitCode == -1 {
-		// If the container exited with a code of -1 and was not OOM killed, set the exit code to 0
-		// since the container was likely terminated by a SIGTERM/SIGKILL
-		exitCode = 0
+	switch stopReason {
+	case types.StopContainerReasonScheduler:
+		exitCode = int(types.ContainerExitCodeScheduler)
+	case types.StopContainerReasonTtl:
+		exitCode = int(types.ContainerExitCodeTtl)
+	case types.StopContainerReasonUser:
+		exitCode = int(types.ContainerExitCodeUser)
+	case types.StopContainerReasonAdmin:
+		exitCode = int(types.ContainerExitCodeAdmin)
+	default:
+		if isOOMKilled.Load() {
+			exitCode = int(types.ContainerExitCodeOomKill)
+		} else if exitCode == int(types.ContainerExitCodeOomKill) || exitCode == -1 {
+			// Exit code will match OOM kill exit code, but container was not OOM killed so override it
+			exitCode = 0
+		}
 	}
 
-	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d", exitCode)
+	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d, stop reason: %s", exitCode, stopReason)
 	outputLogger.Info("", "done", true, "success", exitCode == 0)
 	if containerId != "" {
 		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
@@ -720,7 +735,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if err == nil {
 			return exitCode, containerId, err
 		}
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to run container with checkpoint/restore got exit code %d: %v, attempting to run container from bundle", exitCode, err)
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from checkpoint/restore, exit code %d", exitCode)
 	}
 
 	bundlePath := filepath.Dir(configPath)
@@ -729,7 +744,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		Started:      startedChan,
 	})
 	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to run container: %v", err)
+		log.Warn().Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}
 	return exitCode, request.ContainerId, err
 }

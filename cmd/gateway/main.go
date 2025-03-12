@@ -5,6 +5,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/gateway"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -21,6 +22,7 @@ func main() {
 		log.Logger = log.Logger.Level(zerolog.DebugLevel)
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 	}
+	metrics.InitializeMetricsRepository(config.Monitoring.VictoriaMetrics)
 
 	gw, err := gateway.NewGateway()
 	if err != nil {

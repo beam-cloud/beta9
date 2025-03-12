@@ -120,6 +120,7 @@ func (ss *SSHShellService) handleTTLEvents() {
 						ss.scheduler.Stop(&types.StopContainerArgs{
 							ContainerId: containerId,
 							Force:       true,
+							Reason:      types.StopContainerReasonTtl,
 						})
 					}
 				}
@@ -131,6 +132,7 @@ func (ss *SSHShellService) handleTTLEvents() {
 				ss.scheduler.Stop(&types.StopContainerArgs{
 					ContainerId: containerId,
 					Force:       true,
+					Reason:      types.StopContainerReasonTtl,
 				})
 			}
 		case <-ss.ctx.Done():
@@ -278,6 +280,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		ss.scheduler.Stop(&types.StopContainerArgs{
 			ContainerId: containerId,
 			Force:       true,
+			Reason:      types.StopContainerReasonTtl,
 		})
 
 		return &pb.CreateShellResponse{

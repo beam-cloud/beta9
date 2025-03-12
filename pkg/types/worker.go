@@ -3,6 +3,7 @@ package types
 import (
 	"fmt"
 	"runtime"
+	"slices"
 	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
@@ -77,29 +78,65 @@ func NewMountFromProto(in *pb.Mount) *Mount {
 }
 
 type ExitCodeError struct {
-	ExitCode int
+	ExitCode ContainerExitCode
 }
 
 func (e *ExitCodeError) Error() string {
 	return fmt.Sprintf("exit code error: %s", WorkerContainerExitCodes[e.ExitCode])
 }
 
+type ContainerExitCode int
+
+func (c ContainerExitCode) IsFailed() bool {
+	return !slices.Contains(
+		[]ContainerExitCode{
+			ContainerExitCodeSuccess,
+			ContainerExitCodeOomKill,
+			ContainerExitCodeScheduler,
+			ContainerExitCodeTtl,
+			ContainerExitCodeUser,
+			ContainerExitCodeAdmin,
+		},
+		c,
+	)
+}
+
 const (
-	WorkerContainerExitCodeInvalidCustomImage = 555
-	WorkerContainerExitCodeIncorrectImageArch = 556
-	WorkerContainerExitCodeIncorrectImageOs   = 557
-	WorkerContainerExitCodeUnknownError       = 1
-	WorkerContainerExitCodeSuccess            = 0
-	WorkerContainerExitCodeOomKill            = 137 // 128 + 9 (base value + SIGKILL), used to indicate OOM kill
-	WorkerContainerExitCodeSigterm            = 143 // 128 + 15 (base value + SIGTERM), used to indicate a graceful termination
+	ContainerExitCodeInvalidCustomImage ContainerExitCode = 555
+	ContainerExitCodeIncorrectImageArch ContainerExitCode = 556
+	ContainerExitCodeIncorrectImageOs   ContainerExitCode = 557
+	ContainerExitCodeUnknownError       ContainerExitCode = 1
+	ContainerExitCodeSuccess            ContainerExitCode = 0
+	ContainerExitCodeOomKill            ContainerExitCode = 137 // 128 + 9 (base value + SIGKILL), used to indicate OOM kill
+	ContainerExitCodeSigterm            ContainerExitCode = 143 // 128 + 15 (base value + SIGTERM), used to indicate a graceful termination
+	ContainerExitCodeScheduler          ContainerExitCode = 558
+	ContainerExitCodeTtl                ContainerExitCode = 559
+	ContainerExitCodeUser               ContainerExitCode = 560
+	ContainerExitCodeAdmin              ContainerExitCode = 561
 )
 
-var WorkerContainerExitCodes = map[int]string{
-	WorkerContainerExitCodeSuccess:            "Success",
-	WorkerContainerExitCodeUnknownError:       "UnknownError: An unknown error occurred.",
-	WorkerContainerExitCodeIncorrectImageArch: "InvalidArch: Image must be built for the " + runtime.GOARCH + " architecture.",
-	WorkerContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Custom image not found. Check your image reference and registry credentials.",
-	WorkerContainerExitCodeIncorrectImageOs:   "InvalidOS: Image must be built for Linux.",
+const (
+	WorkerContainerExitCodeOomKillMessage   = "Container killed due to an out-of-memory error"
+	WorkerContainerExitCodeSchedulerMessage = "Container stopped"
+	WorkerContainerExitCodeTtlMessage       = "Container stopped due to TTL expiration"
+	WorkerContainerExitCodeUserMessage      = "Container stopped by user"
+	WorkerContainerExitCodeAdminMessage     = "Container stopped by admin"
+)
+
+var ExitCodeMessages = map[ContainerExitCode]string{
+	ContainerExitCodeOomKill:   WorkerContainerExitCodeOomKillMessage,
+	ContainerExitCodeScheduler: WorkerContainerExitCodeSchedulerMessage,
+	ContainerExitCodeTtl:       WorkerContainerExitCodeTtlMessage,
+	ContainerExitCodeUser:      WorkerContainerExitCodeUserMessage,
+	ContainerExitCodeAdmin:     WorkerContainerExitCodeAdminMessage,
+}
+
+var WorkerContainerExitCodes = map[ContainerExitCode]string{
+	ContainerExitCodeSuccess:            "Success",
+	ContainerExitCodeUnknownError:       "UnknownError: An unknown error occurred.",
+	ContainerExitCodeIncorrectImageArch: "InvalidArch: Image must be built for the " + runtime.GOARCH + " architecture.",
+	ContainerExitCodeInvalidCustomImage: "InvalidCustomImage: Custom image not found. Check your image reference and registry credentials.",
+	ContainerExitCodeIncorrectImageOs:   "InvalidOS: Image must be built for Linux.",
 }
 
 const (
