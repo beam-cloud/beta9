@@ -744,7 +744,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		Started:      startedChan,
 	})
 	if err != nil {
-		log.Warn().Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}
 	return exitCode, request.ContainerId, err
 }
