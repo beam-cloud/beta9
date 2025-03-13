@@ -6,10 +6,10 @@ from betterproto import Casing
 from rich.table import Column, Table, box
 
 from .. import terminal
+from ..abstractions.base.container import Container
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
-    AttachToContainerRequest,
     ListContainersRequest,
     StopContainerRequest,
     StopContainerResponse,
@@ -145,32 +145,6 @@ def stop_container(service: ServiceClient, container_ids: List[str]):
             terminal.error(f"{res.error_msg}", exit=False)
 
 
-def _attach_to_container(service: ServiceClient, container_id: str):
-    terminal.header(f"Connecting to {container_id}...")
-
-    stream = service.gateway.attach_to_container(
-        AttachToContainerRequest(
-            container_id=container_id,
-        )
-    )
-
-    r = None
-    for r in stream:
-        if r.done or r.exit_code != 0:
-            break
-
-        if r.output != "":
-            terminal.detail(r.output, end="")
-
-    if r is None:
-        return terminal.error("Container failed ❌")
-
-    if not r.done or r.exit_code != 0:
-        return terminal.error(f"\n{r.output} ❌")
-
-    terminal.success(r.output)
-
-
 @management.command(
     name="attach",
     help="Attach to a running container.",
@@ -180,5 +154,6 @@ def _attach_to_container(service: ServiceClient, container_id: str):
     required=True,
 )
 @extraclick.pass_service_client
-def attach_to_container(service: ServiceClient, container_id: str):
-    _attach_to_container(service, container_id)
+def attach_to_container(_: ServiceClient, container_id: str):
+    container = Container(container_id=container_id)
+    container.attach(container_id=container_id)

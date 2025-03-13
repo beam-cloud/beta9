@@ -21,7 +21,7 @@ protoc -I ./pkg/types/ --go_out=./proto --go_opt=paths=source_relative --go-grpc
 protoc -I ./pkg/types/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/types/types.proto
 
 protoc -I ./pkg/scheduler/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/scheduler/scheduler.proto
-protoc -I ./pkg/worker/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/worker/worker.proto
+protoc -I ./pkg/types -I ./pkg/gateway/ -I ./pkg/worker/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/worker/worker.proto
 protoc -I ./pkg/types -I ./pkg/gateway/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/gateway.proto
 protoc -I ./pkg/types -I ./pkg/gateway/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/gateway/gateway.proto
 
@@ -50,9 +50,6 @@ protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/taskqueue/ --python_betterp
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/endpoint/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/endpoint/endpoint.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/endpoint/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/endpoint/endpoint.proto
-
-protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/container/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/container/container.proto
-protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/container/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/container/container.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/pod/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/pod/pod.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/pod/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/pod/pod.proto

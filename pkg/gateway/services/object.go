@@ -143,36 +143,3 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 		ObjectId: newObject.ExternalId,
 	})
 }
-
-// ReplaceObjectContent modifies files in an extracted object directory
-func (gws *GatewayService) ReplaceObjectContent(ctx context.Context, in *pb.ReplaceObjectContentRequest) (*pb.ReplaceObjectContentResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-	extractedObjectPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name)
-	os.MkdirAll(extractedObjectPath, 0644)
-
-	destPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId, in.Path)
-	destNewPath := path.Join(types.DefaultExtractedObjectPath, authInfo.Workspace.Name, in.ObjectId, in.NewPath)
-
-	switch in.Op {
-	case pb.ReplaceObjectContentOperation_DELETE:
-		if err := os.RemoveAll(destPath); err != nil {
-			return &pb.ReplaceObjectContentResponse{Ok: false}, nil
-		}
-	case pb.ReplaceObjectContentOperation_WRITE:
-		if in.IsDir {
-			os.MkdirAll(destPath, 0755)
-		} else {
-			os.MkdirAll(path.Dir(destPath), 0755)
-			if err := os.WriteFile(destPath, in.Data, 0644); err != nil {
-				return &pb.ReplaceObjectContentResponse{Ok: false}, nil
-			}
-		}
-	case pb.ReplaceObjectContentOperation_MOVED:
-		os.MkdirAll(path.Dir(destNewPath), 0755)
-		if err := os.Rename(destPath, destNewPath); err != nil {
-			return &pb.ReplaceObjectContentResponse{Ok: false}, nil
-		}
-	}
-
-	return &pb.ReplaceObjectContentResponse{Ok: true}, nil
-}

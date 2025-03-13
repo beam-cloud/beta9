@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	RunCService_RunCKill_FullMethodName       = "/runc.RunCService/RunCKill"
-	RunCService_RunCExec_FullMethodName       = "/runc.RunCService/RunCExec"
-	RunCService_RunCStatus_FullMethodName     = "/runc.RunCService/RunCStatus"
-	RunCService_RunCStreamLogs_FullMethodName = "/runc.RunCService/RunCStreamLogs"
-	RunCService_RunCArchive_FullMethodName    = "/runc.RunCService/RunCArchive"
+	RunCService_RunCKill_FullMethodName          = "/runc.RunCService/RunCKill"
+	RunCService_RunCExec_FullMethodName          = "/runc.RunCService/RunCExec"
+	RunCService_RunCStatus_FullMethodName        = "/runc.RunCService/RunCStatus"
+	RunCService_RunCStreamLogs_FullMethodName    = "/runc.RunCService/RunCStreamLogs"
+	RunCService_RunCArchive_FullMethodName       = "/runc.RunCService/RunCArchive"
+	RunCService_RunCSyncWorkspace_FullMethodName = "/runc.RunCService/RunCSyncWorkspace"
 )
 
 // RunCServiceClient is the client API for RunCService service.
@@ -35,6 +36,7 @@ type RunCServiceClient interface {
 	RunCStatus(ctx context.Context, in *RunCStatusRequest, opts ...grpc.CallOption) (*RunCStatusResponse, error)
 	RunCStreamLogs(ctx context.Context, in *RunCStreamLogsRequest, opts ...grpc.CallOption) (RunCService_RunCStreamLogsClient, error)
 	RunCArchive(ctx context.Context, in *RunCArchiveRequest, opts ...grpc.CallOption) (RunCService_RunCArchiveClient, error)
+	RunCSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error)
 }
 
 type runCServiceClient struct {
@@ -136,6 +138,15 @@ func (x *runCServiceRunCArchiveClient) Recv() (*RunCArchiveResponse, error) {
 	return m, nil
 }
 
+func (c *runCServiceClient) RunCSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error) {
+	out := new(SyncContainerWorkspaceResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSyncWorkspace_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunCServiceServer is the server API for RunCService service.
 // All implementations must embed UnimplementedRunCServiceServer
 // for forward compatibility
@@ -145,6 +156,7 @@ type RunCServiceServer interface {
 	RunCStatus(context.Context, *RunCStatusRequest) (*RunCStatusResponse, error)
 	RunCStreamLogs(*RunCStreamLogsRequest, RunCService_RunCStreamLogsServer) error
 	RunCArchive(*RunCArchiveRequest, RunCService_RunCArchiveServer) error
+	RunCSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error)
 	mustEmbedUnimplementedRunCServiceServer()
 }
 
@@ -166,6 +178,9 @@ func (UnimplementedRunCServiceServer) RunCStreamLogs(*RunCStreamLogsRequest, Run
 }
 func (UnimplementedRunCServiceServer) RunCArchive(*RunCArchiveRequest, RunCService_RunCArchiveServer) error {
 	return status.Errorf(codes.Unimplemented, "method RunCArchive not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSyncWorkspace not implemented")
 }
 func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
 
@@ -276,6 +291,24 @@ func (x *runCServiceRunCArchiveServer) Send(m *RunCArchiveResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
+func _RunCService_RunCSyncWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SyncContainerWorkspaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSyncWorkspace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSyncWorkspace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSyncWorkspace(ctx, req.(*SyncContainerWorkspaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RunCService_ServiceDesc is the grpc.ServiceDesc for RunCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -294,6 +327,10 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunCStatus",
 			Handler:    _RunCService_RunCStatus_Handler,
+		},
+		{
+			MethodName: "RunCSyncWorkspace",
+			Handler:    _RunCService_RunCSyncWorkspace_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

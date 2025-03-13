@@ -9,15 +9,13 @@ import (
 	"github.com/mholt/archiver/v3"
 )
 
-func ExtractObjectFile(ctx context.Context, objectId string, workspaceName string) error {
-	extractedObjectPath := path.Join(types.DefaultExtractedObjectPath, workspaceName)
-	os.MkdirAll(extractedObjectPath, 0644)
-
-	destPath := path.Join(types.DefaultExtractedObjectPath, workspaceName, objectId)
+func ExtractObjectFile(ctx context.Context, objectId, workspaceName, destPath string) error {
 	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
 		// Folder already exists, so skip extraction
 		return nil
 	}
+
+	os.MkdirAll(destPath, 0644)
 
 	// Check if the object file exists
 	objectFilePath := path.Join(types.DefaultObjectPath, workspaceName, objectId)

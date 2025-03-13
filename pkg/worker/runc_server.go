@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -25,10 +26,6 @@ import (
 	"github.com/google/shlex"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc"
-)
-
-const (
-	defaultWorkingDirectory string = "/mnt/code"
 )
 
 type RunCServer struct {
@@ -102,14 +99,14 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 		return &pb.RunCExecResponse{}, err
 	}
 
-	process := s.baseConfigSpec.Process
-	process.Args = parsedCmd
-	process.Cwd = defaultWorkingDirectory
-
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.RunCExecResponse{Ok: false}, nil
 	}
+
+	process := s.baseConfigSpec.Process
+	process.Args = parsedCmd
+	process.Cwd = instance.Spec.Process.Cwd
 
 	instanceSpec := instance.Spec.Process
 	process.Env = append(instanceSpec.Env, "DEBIAN_FRONTEND=noninteractive")
@@ -308,4 +305,38 @@ func (s *RunCServer) addRequestEnvToInitialSpec(instance *ContainerInstance) err
 	}
 
 	return nil
+}
+
+func (s *RunCServer) RunCSyncWorkspace(ctx context.Context, in *pb.SyncContainerWorkspaceRequest) (*pb.SyncContainerWorkspaceResponse, error) {
+	_, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
+	}
+
+	workspacePath := types.TempContainerWorkspace(in.ContainerId)
+	destPath := path.Join(workspacePath, in.Path)
+	destNewPath := path.Join(workspacePath, in.NewPath)
+
+	switch in.Op {
+	case pb.SyncContainerWorkspaceOperation_DELETE:
+		if err := os.RemoveAll(destPath); err != nil {
+			return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
+		}
+	case pb.SyncContainerWorkspaceOperation_WRITE:
+		if in.IsDir {
+			os.MkdirAll(destPath, 0755)
+		} else {
+			os.MkdirAll(path.Dir(destPath), 0755)
+			if err := os.WriteFile(destPath, in.Data, 0644); err != nil {
+				return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
+			}
+		}
+	case pb.SyncContainerWorkspaceOperation_MOVED:
+		os.MkdirAll(path.Dir(destNewPath), 0755)
+		if err := os.Rename(destPath, destNewPath); err != nil {
+			return &pb.SyncContainerWorkspaceResponse{Ok: false}, nil
+		}
+	}
+
+	return &pb.SyncContainerWorkspaceResponse{Ok: true}, nil
 }

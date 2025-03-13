@@ -10,42 +10,46 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const (
 	flushLogsTimeout = 500 * time.Millisecond
 )
 
-type LogStreamOpts struct {
+type ContainerStreamOpts struct {
 	SendCallback    func(o common.OutputMsg) error
 	ExitCallback    func(exitCode int32) error
 	ContainerRepo   repository.ContainerRepository
 	Tailscale       *network.Tailscale
 	Config          types.AppConfig
 	KeyEventManager *common.KeyEventManager
+	SyncQueue       chan *pb.SyncContainerWorkspaceRequest
 }
 
-func NewLogStream(opts LogStreamOpts) (*LogStream, error) {
-	return &LogStream{
+func NewContainerStream(opts ContainerStreamOpts) (*ContainerStream, error) {
+	return &ContainerStream{
 		sendCallback:    opts.SendCallback,
 		exitCallback:    opts.ExitCallback,
 		containerRepo:   opts.ContainerRepo,
 		tailscale:       opts.Tailscale,
 		config:          opts.Config,
 		keyEventManager: opts.KeyEventManager,
+		syncQueue:       opts.SyncQueue,
 	}, nil
 }
 
-type LogStream struct {
+type ContainerStream struct {
 	sendCallback    func(o common.OutputMsg) error
 	exitCallback    func(exitCode int32) error
 	containerRepo   repository.ContainerRepository
 	tailscale       *network.Tailscale
 	config          types.AppConfig
 	keyEventManager *common.KeyEventManager
+	syncQueue       chan *pb.SyncContainerWorkspaceRequest
 }
 
-func (l *LogStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
+func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, containerId string) error {
 	hostname, err := l.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
 		return err
@@ -70,11 +74,12 @@ func (l *LogStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, contain
 	}
 
 	go client.StreamLogs(ctx, containerId, outputChan)
-	return l.handleStreams(ctx, containerId, outputChan, keyEventChan)
+	return l.handleStreams(ctx, client, containerId, outputChan, keyEventChan)
 }
 
-func (l *LogStream) handleStreams(
+func (l *ContainerStream) handleStreams(
 	ctx context.Context,
+	client *common.RunCClient,
 	containerId string,
 	outputChan chan common.OutputMsg,
 	keyEventChan chan common.KeyEvent,
@@ -85,6 +90,11 @@ func (l *LogStream) handleStreams(
 _stream:
 	for {
 		select {
+		case req := <-l.syncQueue:
+			_, err := client.SyncWorkspace(ctx, req)
+			if err != nil {
+				continue
+			}
 		case o := <-outputChan:
 			if err := l.sendCallback(o); err != nil {
 				lastMessage = o

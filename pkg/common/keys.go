@@ -23,6 +23,7 @@ var (
 	schedulerContainerLock           string = "scheduler:container:lock:%s"
 	schedulerContainerExitCode       string = "scheduler:container:exit_code:%s"
 	schedulerCheckpointState         string = "scheduler:checkpoint_state:%s:%s"
+	schedulerServeLock               string = "scheduler:serve:lock:%s:%s"
 	schedulerStubState               string = "scheduler:stub:state:%s"
 )
 
@@ -118,6 +119,10 @@ func (rk *redisKeys) SchedulerWorkerState(workerId string) string {
 
 func (rk *redisKeys) SchedulerContainerLock(containerId string) string {
 	return fmt.Sprintf(schedulerContainerLock, containerId)
+}
+
+func (rk *redisKeys) SchedulerServeLock(workspaceName, stubId string) string {
+	return fmt.Sprintf(schedulerServeLock, workspaceName, stubId)
 }
 
 func (rk *redisKeys) SchedulerContainerState(containerId string) string {

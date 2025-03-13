@@ -27,8 +27,7 @@ var json = jsoniter.ConfigCompatibleWithStandardLibrary
 
 type EndpointService interface {
 	pb.EndpointServiceServer
-	StartEndpointServe(in *pb.StartEndpointServeRequest, stream pb.EndpointService_StartEndpointServeServer) error
-	StopEndpointServe(ctx context.Context, in *pb.StopEndpointServeRequest) (*pb.StopEndpointServeResponse, error)
+	StartEndpointServe(ctx context.Context, req *pb.StartEndpointServeRequest) (*pb.StartEndpointServeResponse, error)
 }
 
 type HttpEndpointService struct {
@@ -55,13 +54,11 @@ var (
 	DefaultEndpointRequestTTL      uint32 = 600 // 10 minutes
 	ASGIRoutePrefix                string = "/asgi"
 
-	endpointContainerPrefix                 string        = "endpoint"
-	endpointRoutePrefix                     string        = "/endpoint"
-	endpointServeContainerTimeout           time.Duration = 10 * time.Minute
-	endpointServeContainerKeepaliveInterval time.Duration = 30 * time.Second
-	endpointRequestHeartbeatInterval        time.Duration = 5 * time.Second
-	endpointRequestHeartbeatKeepAlive       time.Duration = 30 * time.Second
-	endpointMinRequestBufferSize            int           = 10
+	endpointContainerPrefix           string        = "endpoint"
+	endpointRoutePrefix               string        = "/endpoint"
+	endpointRequestHeartbeatInterval  time.Duration = 5 * time.Second
+	endpointRequestHeartbeatKeepAlive time.Duration = 30 * time.Second
+	endpointMinRequestBufferSize      int           = 10
 )
 
 type EndpointServiceOpts struct {
@@ -309,7 +306,6 @@ var (
 	endpointInstanceLock     string = "endpoint:%s:%s:instance_lock"
 	endpointRequestTokens    string = "endpoint:%s:%s:request_tokens:%s"
 	endpointRequestHeartbeat string = "endpoint:%s:%s:request_heartbeat:%s:%s"
-	endpointServeLock        string = "endpoint:%s:%s:serve_lock"
 )
 
 func (k *keys) endpointKeepWarmLock(workspaceName, stubId, containerId string) string {
@@ -326,8 +322,4 @@ func (k *keys) endpointRequestTokens(workspaceName, stubId, containerId string) 
 
 func (k *keys) endpointRequestHeartbeat(workspaceName, stubId, taskId, containerId string) string {
 	return fmt.Sprintf(endpointRequestHeartbeat, workspaceName, stubId, taskId, containerId)
-}
-
-func (k *keys) endpointServeLock(workspaceName, stubId string) string {
-	return fmt.Sprintf(endpointServeLock, workspaceName, stubId)
 }

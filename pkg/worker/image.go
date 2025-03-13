@@ -543,11 +543,13 @@ func umociUnpackOptions() layer.UnpackOptions {
 func getBuildContext(request *types.ContainerRequest) (string, error) {
 	buildCtxPath := "."
 	if request.BuildOptions.BuildCtxObject != nil {
-		err := common.ExtractObjectFile(context.TODO(), *request.BuildOptions.BuildCtxObject, request.Workspace.Name)
+		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
+
+		err := common.ExtractObjectFile(context.TODO(), *request.BuildOptions.BuildCtxObject, request.Workspace.Name, buildCtxPath)
 		if err != nil {
 			return "", err
 		}
-		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
 	}
+
 	return buildCtxPath, nil
 }

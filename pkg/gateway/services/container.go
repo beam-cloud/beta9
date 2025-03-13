@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -127,25 +128,58 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 	}, nil
 }
 
-func (gws *GatewayService) AttachToContainer(in *pb.AttachToContainerRequest, stream pb.GatewayService_AttachToContainerServer) error {
+func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToContainerServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	container, err := gws.containerRepo.GetContainerState(in.ContainerId)
+	initMsg, err := stream.Recv()
 	if err != nil {
-		return stream.Send(&pb.AttachToContainerResponse{
-			Done:     true,
-			ExitCode: 1,
-			Output:   "Container not found",
-		})
+		return err
+	}
+
+	containerNotFoundResponse := &pb.AttachToContainerResponse{
+		Done:     true,
+		ExitCode: 1,
+		Output:   "Container not found",
+	}
+
+	attachReq := initMsg.GetAttachRequest()
+	if attachReq == nil {
+		return stream.Send(containerNotFoundResponse)
+	}
+
+	container, err := gws.containerRepo.GetContainerState(attachReq.ContainerId)
+	if err != nil {
+		return stream.Send(containerNotFoundResponse)
+	}
+
+	stub, err := gws.backendRepo.GetStubByExternalId(ctx, container.StubId)
+	if err != nil || stub == nil {
+		return stream.Send(containerNotFoundResponse)
+	}
+
+	serveTimeout := types.DefaultServeContainerTimeout
+
+	if types.StubType(stub.Type).IsServe() {
+		lockKey := common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId)
+		timeoutValue, err := gws.redisClient.Get(context.Background(), lockKey).Result()
+		if err == nil {
+			serveTimeout, _ = time.ParseDuration(timeoutValue)
+			if serveTimeout <= 0 {
+				serveTimeout = types.DefaultServeContainerTimeout
+			}
+		}
+
+		// Delete the serve lock key when we detach from the container
+		defer func() {
+			gws.redisClient.Del(context.Background(), lockKey)
+		}()
 	}
 
 	sendCallback := func(o common.OutputMsg) error {
-		if err := stream.Send(&pb.AttachToContainerResponse{Output: o.Msg}); err != nil {
-			return err
-		}
-
-		return nil
+		return stream.Send(&pb.AttachToContainerResponse{
+			Output: o.Msg,
+		})
 	}
 
 	exitCallback := func(exitCode int32) error {
@@ -156,10 +190,9 @@ func (gws *GatewayService) AttachToContainer(in *pb.AttachToContainerRequest, st
 				output = exitCodeMessage
 			}
 		}
-
 		return stream.Send(&pb.AttachToContainerResponse{
 			Done:     true,
-			ExitCode: int32(exitCode),
+			ExitCode: exitCode,
 			Output:   output,
 		})
 	}
@@ -167,17 +200,59 @@ func (gws *GatewayService) AttachToContainer(in *pb.AttachToContainerRequest, st
 	ctx, cancel := common.MergeContexts(gws.ctx, ctx)
 	defer cancel()
 
-	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
+	syncQueue := make(chan *pb.SyncContainerWorkspaceRequest)
+
+	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
 		SendCallback:    sendCallback,
 		ExitCallback:    exitCallback,
 		ContainerRepo:   gws.containerRepo,
 		Config:          gws.appConfig,
 		Tailscale:       gws.tailscale,
 		KeyEventManager: gws.keyEventManager,
+		SyncQueue:       syncQueue,
 	})
 	if err != nil {
 		return err
 	}
 
-	return logStream.Stream(ctx, authInfo, container.ContainerId)
+	// Run the container stream async
+	streamErrCh := make(chan error, 1)
+	go func() {
+		streamErrCh <- containerStream.Stream(ctx, authInfo, container.ContainerId)
+	}()
+
+	// RX incoming client messages
+	clientMsgErrCh := make(chan error, 1)
+	go func() {
+		for {
+			inMsg, err := stream.Recv()
+			if err != nil {
+				if err == io.EOF {
+					clientMsgErrCh <- nil
+				} else {
+					clientMsgErrCh <- err
+				}
+				return
+			}
+
+			switch payload := inMsg.Payload.(type) {
+			case *pb.ContainerStreamMessage_SyncContainerWorkspace:
+				if types.StubType(stub.Type).IsServe() {
+					gws.redisClient.Expire(ctx, common.RedisKeys.SchedulerServeLock(stub.Workspace.Name, stub.ExternalId), serveTimeout)
+				}
+
+				syncQueue <- payload.SyncContainerWorkspace
+			default:
+			}
+		}
+	}()
+
+	// Wait for the container stream or the client message loop to finish
+	select {
+	case err := <-streamErrCh:
+		return err
+	case err := <-clientMsgErrCh:
+		cancel()
+		return err
+	}
 }

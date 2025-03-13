@@ -17,7 +17,6 @@ import (
 	"golang.org/x/net/http2/h2c"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/beam-cloud/beta9/pkg/abstractions/container"
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	bot "github.com/beam-cloud/beta9/pkg/abstractions/experimental/bot"
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
@@ -345,24 +344,6 @@ func (g *Gateway) registerServices() error {
 		return err
 	}
 	pb.RegisterVolumeServiceServer(g.grpcServer, vs)
-
-	// Register container service
-	cs, err := container.NewContainerService(
-		g.ctx,
-		container.ContainerServiceOpts{
-			Config:        g.Config,
-			BackendRepo:   g.BackendRepo,
-			ContainerRepo: g.ContainerRepo,
-			Tailscale:     g.Tailscale,
-			Scheduler:     g.Scheduler,
-			RedisClient:   g.RedisClient,
-			EventRepo:     g.EventRepo,
-		},
-	)
-	if err != nil {
-		return err
-	}
-	pb.RegisterContainerServiceServer(g.grpcServer, cs)
 
 	// Register pod service
 	ps, err := pod.NewPodService(

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beta9/proto";
 
+import "gateway.proto";
+
 package runc;
 
 service RunCService {
@@ -10,6 +12,8 @@ service RunCService {
   rpc RunCStatus(RunCStatusRequest) returns (RunCStatusResponse) {}
   rpc RunCStreamLogs(RunCStreamLogsRequest) returns (stream RunCLogEntry) {}
   rpc RunCArchive(RunCArchiveRequest) returns (stream RunCArchiveResponse) {}
+  rpc RunCSyncWorkspace(gateway.SyncContainerWorkspaceRequest)
+      returns (gateway.SyncContainerWorkspaceResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }

@@ -6,9 +6,7 @@
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
-    AsyncIterator,
     Dict,
-    Iterator,
     Optional,
 )
 
@@ -32,57 +30,17 @@ class StartEndpointServeRequest(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class StartEndpointServeResponse(betterproto.Message):
-    output: str = betterproto.string_field(1)
-    done: bool = betterproto.bool_field(2)
-    exit_code: int = betterproto.int32_field(3)
-
-
-@dataclass(eq=False, repr=False)
-class StopEndpointServeRequest(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class StopEndpointServeResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class EndpointServeKeepAliveRequest(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-    timeout: int = betterproto.int32_field(2)
-
-
-@dataclass(eq=False, repr=False)
-class EndpointServeKeepAliveResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
+    container_id: str = betterproto.string_field(2)
+    error_msg: str = betterproto.string_field(3)
 
 
 class EndpointServiceStub(SyncServiceStub):
     def start_endpoint_serve(
         self, start_endpoint_serve_request: "StartEndpointServeRequest"
-    ) -> Iterator["StartEndpointServeResponse"]:
-        for response in self._unary_stream(
+    ) -> "StartEndpointServeResponse":
+        return self._unary_unary(
             "/endpoint.EndpointService/StartEndpointServe",
             StartEndpointServeRequest,
             StartEndpointServeResponse,
-        )(start_endpoint_serve_request):
-            yield response
-
-    def stop_endpoint_serve(
-        self, stop_endpoint_serve_request: "StopEndpointServeRequest"
-    ) -> "StopEndpointServeResponse":
-        return self._unary_unary(
-            "/endpoint.EndpointService/StopEndpointServe",
-            StopEndpointServeRequest,
-            StopEndpointServeResponse,
-        )(stop_endpoint_serve_request)
-
-    def endpoint_serve_keep_alive(
-        self, endpoint_serve_keep_alive_request: "EndpointServeKeepAliveRequest"
-    ) -> "EndpointServeKeepAliveResponse":
-        return self._unary_unary(
-            "/endpoint.EndpointService/EndpointServeKeepAlive",
-            EndpointServeKeepAliveRequest,
-            EndpointServeKeepAliveResponse,
-        )(endpoint_serve_keep_alive_request)
+        )(start_endpoint_serve_request)

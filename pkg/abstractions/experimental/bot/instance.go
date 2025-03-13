@@ -487,7 +487,10 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		MountPath: botVolumeMountPath,
 	})
 
+	containerId := i.genContainerId(botContainerTypeTransition, sessionId)
+
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		containerId,
 		i.stub.Object.ExternalId,
 		i.authInfo.Workspace,
 		*i.stubConfig,
@@ -509,7 +512,7 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 
 	log.Info().Str("stub_id", i.stub.ExternalId).Str("transition_name", transitionName).Msg("running transition")
 	err = i.scheduler.Run(&types.ContainerRequest{
-		ContainerId: i.genContainerId(botContainerTypeTransition, sessionId),
+		ContainerId: containerId,
 		Env:         env,
 		Cpu:         transitionConfig.Cpu,
 		Memory:      transitionConfig.Memory,
