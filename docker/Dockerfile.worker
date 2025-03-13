@@ -33,37 +33,6 @@ FROM golang:1.23-bookworm AS runc
 
 WORKDIR /workspace
 
-RUN apt-get update && apt-get install -y libseccomp-dev
-
-RUN <<EOT
-set -eux
-git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git .
-
-make
-make install
-/usr/local/sbin/runc --version
-EOT
-
-
-# nvidia-container-toolkit
-# ========================
-FROM golang AS nvidia-container-toolkit
-
-WORKDIR /workspace
-
-RUN apt-get update && apt-get install -y build-essential
-
-RUN <<EOT
-git clone https://github.com/beam-cloud/nvidia-container-toolkit.git .
-make build
-make binaries
-EOT
-
-
-# buildah build stage
-FROM golang AS buildah
-
-WORKDIR /workspace
 RUN apt-get update && apt-get install -y \
     make \
     btrfs-progs \
@@ -78,9 +47,34 @@ RUN apt-get update && apt-get install -y \
     libbtrfs-dev \
     pkg-config
 
-RUN git clone https://github.com/containers/buildah.git . && \
-    make BUILDTAGS="cni" && \
-    make install
+RUN <<EOT
+set -eux
+git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git /workspace/runc
+cd /workspace/runc
+make
+make install
+/usr/local/sbin/runc --version
+cd ..
+
+git clone https://github.com/containers/buildah.git /workspace/buildah
+cd /workspace/buildah
+make BUILDTAGS="cni"
+make install
+EOT
+
+# nvidia-container-toolkit
+# ========================
+FROM golang AS nvidia-container-toolkit
+
+WORKDIR /workspace
+
+RUN apt-get update && apt-get install -y build-essential
+
+RUN <<EOT
+git clone https://github.com/beam-cloud/nvidia-container-toolkit.git .
+make build
+make binaries
+EOT
 
 # beta9 worker
 # ========================
@@ -190,13 +184,13 @@ RUN apt-get remove -y curl && \
 ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
 RUN echo "nameserver 8.8.8.8" > /workspace/resolv.conf
 COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
+COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 COPY ./bin/volume_cache.so /usr/local/lib/volume_cache.so
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
 COPY ./sdk/src/beta9 /workspace/sdk
-COPY --from=buildah /usr/local/bin/buildah /usr/local/bin/buildah
 
 VOLUME "/usr/lib/x86_64-linux-gnu"
 VOLUME "/usr/lib/aarch64-linux-gnu"
