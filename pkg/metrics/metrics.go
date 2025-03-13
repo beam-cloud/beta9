@@ -71,9 +71,13 @@ func InitializeMetricsRepository(config types.VictoriaMetricsConfig) {
 }
 
 func RecordRequestSchedulingDuration(duration time.Duration, request *types.ContainerRequest) {
+	gpu := request.Gpu
+	if gpu == "" {
+		gpu = "none"
+	}
 	metricName := fmt.Sprintf("%s{gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\"}",
 		metricRequestSchedulingDuration,
-		request.Gpu,
+		gpu,
 		request.GpuCount,
 		request.Cpu,
 		request.Memory)
@@ -82,10 +86,14 @@ func RecordRequestSchedulingDuration(duration time.Duration, request *types.Cont
 }
 
 func RecordRequestRetry(request *types.ContainerRequest) {
+	gpu := request.Gpu
+	if gpu == "" {
+		gpu = "none"
+	}
 	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
 		metricRequestRetries,
 		request.ContainerId,
-		request.Gpu,
+		gpu,
 		request.GpuCount,
 		request.Cpu,
 		request.Memory,
@@ -95,10 +103,14 @@ func RecordRequestRetry(request *types.ContainerRequest) {
 }
 
 func RecordRequestScheduleFailure(request *types.ContainerRequest) {
+	gpu := request.Gpu
+	if gpu == "" {
+		gpu = "none"
+	}
 	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
 		metricRequestScheduleFailure,
 		request.ContainerId,
-		request.Gpu,
+		gpu,
 		request.GpuCount,
 		request.Cpu,
 		request.Memory,
