@@ -194,7 +194,7 @@ worker:
     storage:
       mountPath: /data/checkpoints
       mode: local
-      objectStoreConfig:
+      objectStore:
         bucketName: beta9-checkpoints
         accessKey: test
         secretKey: test

@@ -521,7 +521,7 @@ type NvidiaCRIUConfig struct {
 type CheckpointStorageConfig struct {
 	MountPath   string            `key:"mountPath" json:"mount_path"`
 	Mode        string            `key:"mode" json:"mode"`
-	ObjectStore ObjectStoreConfig `key:"objectStoreConfig" json:"object_store_config"`
+	ObjectStore ObjectStoreConfig `key:"objectStore" json:"object_store"`
 }
 
 type CheckpointStorageMode string
