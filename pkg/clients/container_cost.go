@@ -28,6 +28,10 @@ type ContainerCostRequest struct {
 }
 
 func NewContainerCostClient(config types.ContainerCostHookConfig) *ContainerCostClient {
+	if config.Endpoint == "" || config.Token == "" {
+		return nil
+	}
+
 	return &ContainerCostClient{
 		client:   &http.Client{},
 		endpoint: config.Endpoint,
