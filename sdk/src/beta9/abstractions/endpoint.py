@@ -579,7 +579,6 @@ class _CallableWrapper(DeployableMixin):
                 timeout=timeout,
             )
         )
-
         if not r.ok:
             return terminal.error(r.error_msg)
 

@@ -61,10 +61,10 @@ class Container(BaseAbstraction):
         if r is None:
             return terminal.error("Container failed ❌")
 
-        if not r.done or r.exit_code != 0:
+        if not r.done:
             return terminal.error(f"\n{r.output} ❌")
 
-        terminal.success(r.output)
+        terminal.header(r.output)
 
     def _sync_dir_to_workspace(
         self, *, dir: str, container_id: str, on_event: Optional[Callable] = None
