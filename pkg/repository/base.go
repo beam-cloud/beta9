@@ -36,6 +36,8 @@ type WorkerRepository interface {
 	GetContainerIps(networkPrefix string) ([]string, error)
 	SetNetworkLock(networkPrefix string, ttl, retries int) (string, error)
 	RemoveNetworkLock(networkPrefix string, token string) error
+	GetGpuCounts() (map[string]int, error)
+	GetFreeGpuCounts() (map[string]int, error)
 }
 
 type ContainerRepository interface {

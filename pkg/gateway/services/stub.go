@@ -126,7 +126,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			}, nil
 		}
 
-		gpuCounts, err := gws.providerRepo.GetGPUCounts(gws.appConfig.Worker.Pools)
+		gpuCounts, err := gws.workerRepo.GetFreeGpuCounts()
 		if err != nil {
 			return &pb.GetOrCreateStubResponse{
 				Ok:     false,

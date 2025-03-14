@@ -20,13 +20,15 @@ type MachineGroup struct {
 	tailscale    *network.Tailscale
 	routerGroup  *echo.Group
 	config       types.AppConfig
+	workerRepo   repository.WorkerRepository
 }
 
-func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, tailscale *network.Tailscale, config types.AppConfig) *MachineGroup {
+func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, tailscale *network.Tailscale, config types.AppConfig, workerRepo repository.WorkerRepository) *MachineGroup {
 	group := &MachineGroup{routerGroup: g,
 		providerRepo: providerRepo,
 		tailscale:    tailscale,
 		config:       config,
+		workerRepo:   workerRepo,
 	}
 
 	g.GET("/:workspaceId/gpus", auth.WithWorkspaceAuth(group.GPUCounts))
@@ -106,7 +108,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 }
 
 func (g *MachineGroup) GPUCounts(ctx echo.Context) error {
-	gpuCounts, err := g.providerRepo.GetGPUCounts(g.config.Worker.Pools)
+	gpuCounts, err := g.workerRepo.GetGpuCounts()
 	if err != nil {
 		return HTTPInternalServerError("Unable to list GPUs")
 	}

@@ -259,6 +259,48 @@ func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, err
 	return worker, nil
 }
 
+func (r *WorkerRedisRepository) GetGpuCounts() (map[string]int, error) {
+	gpuCounts := map[string]int{}
+	gpuTypes := types.AllGPUTypes()
+	for _, gpuType := range gpuTypes {
+		gpuCounts[gpuType.String()] = 0
+	}
+
+	workers, err := r.getWorkers(false)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, w := range workers {
+		if w.Gpu != "" {
+			gpuCounts[w.Gpu] += int(w.TotalGpuCount)
+		}
+	}
+
+	return gpuCounts, nil
+}
+
+func (r *WorkerRedisRepository) GetFreeGpuCounts() (map[string]int, error) {
+	gpuCounts := map[string]int{}
+	gpuTypes := types.AllGPUTypes()
+	for _, gpuType := range gpuTypes {
+		gpuCounts[gpuType.String()] = 0
+	}
+
+	workers, err := r.getWorkers(false)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, w := range workers {
+		if w.Gpu != "" {
+			gpuCounts[w.Gpu] += int(w.FreeGpuCount)
+		}
+	}
+
+	return gpuCounts, nil
+}
+
 func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 	workers, err := r.getWorkers(true)
 	if err != nil {
