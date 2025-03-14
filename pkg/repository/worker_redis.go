@@ -304,6 +304,10 @@ func (r *WorkerRedisRepository) GetFreeGpuCounts() (map[string]int, error) {
 func (r *WorkerRedisRepository) GetSpotGpus() []string {
 	spotGpus := []string{}
 	for _, pool := range r.config.Pools {
+		if pool.GPUType == "" {
+			continue
+		}
+
 		for _, v := range pool.JobSpec.NodeSelector {
 			if strings.Contains(v, "spot") {
 				spotGpus = append(spotGpus, pool.GPUType)
