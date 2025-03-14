@@ -530,7 +530,6 @@ class RealtimeASGI(ASGI):
 
 class _CallableWrapper(DeployableMixin):
     deployment_stub_type = ENDPOINT_DEPLOYMENT_STUB_TYPE
-
     base_stub_type = ENDPOINT_STUB_TYPE
 
     def __init__(self, func: Callable, parent: Union[Endpoint, ASGI]):

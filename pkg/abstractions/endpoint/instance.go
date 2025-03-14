@@ -171,16 +171,19 @@ func (i *endpointInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
-		// Skip containers with keep warm locks
-		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.endpointKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
-		if err != nil && err != redis.Nil {
-			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")
-			continue
-		}
+		if i.Stub.Type.IsDeployment() {
 
-		keepWarm := keepWarmVal > 0
-		if keepWarm {
-			continue
+			// Skip containers with keep warm locks
+			keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.endpointKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
+			if err != nil && err != redis.Nil {
+				log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")
+				continue
+			}
+
+			keepWarm := keepWarmVal > 0
+			if keepWarm {
+				continue
+			}
 		}
 
 		keys = append(keys, container.ContainerId)
