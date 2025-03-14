@@ -318,6 +318,10 @@ func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
 	}
 
 	for gpuType, count := range gpuCounts {
+		if gpuType == types.GPU_ANY.String() {
+			continue
+		}
+
 		gpuAvailability[gpuType] = count > 0
 	}
 
