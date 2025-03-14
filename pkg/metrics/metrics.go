@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"encoding/base64"
@@ -75,9 +76,12 @@ func RecordRequestSchedulingDuration(duration time.Duration, request *types.Cont
 	if gpu == "" {
 		gpu = "none"
 	}
-	metricName := fmt.Sprintf("%s{gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\"}",
+
+	gpus := strings.Join(request.GpuRequest, ":")
+	metricName := fmt.Sprintf("%s{gpu=\"%s\",requested_gpus=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\"}",
 		metricRequestSchedulingDuration,
 		gpu,
+		gpus,
 		request.GpuCount,
 		request.Cpu,
 		request.Memory)
@@ -90,10 +94,12 @@ func RecordRequestRetry(request *types.ContainerRequest) {
 	if gpu == "" {
 		gpu = "none"
 	}
-	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
+	gpus := strings.Join(request.GpuRequest, ":")
+	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",requested_gpus=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
 		metricRequestRetries,
 		request.ContainerId,
 		gpu,
+		gpus,
 		request.GpuCount,
 		request.Cpu,
 		request.Memory,
@@ -107,10 +113,12 @@ func RecordRequestScheduleFailure(request *types.ContainerRequest) {
 	if gpu == "" {
 		gpu = "none"
 	}
-	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
+	gpus := strings.Join(request.GpuRequest, ":")
+	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",requested_gpus=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\",retry_count=\"%d\"}",
 		metricRequestScheduleFailure,
 		request.ContainerId,
 		gpu,
+		gpus,
 		request.GpuCount,
 		request.Cpu,
 		request.Memory,
@@ -167,8 +175,12 @@ func RecordS3GetSpeed(sizeInMB float64, duration time.Duration) {
 
 func RecordDialTime(duration time.Duration, host string) {
 	if dialMetricLimiter.Allow() {
-		metricName := fmt.Sprintf("%s{host=\"%s\"}", metricDialTime, host)
-		vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+		// Only want the machine-xxxxxxxx part of host (machine-xxxxxxxx.ttttttttt.ts.net:00000)
+		hostParts := strings.Split(host, ".")
+		if len(hostParts) > 0 {
+			metricName := fmt.Sprintf("%s{host=\"%s\"}", metricDialTime, hostParts[0])
+			vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+		}
 	}
 }
 
