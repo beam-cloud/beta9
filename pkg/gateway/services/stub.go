@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -137,12 +138,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			gpuNames := []string{}
 			hasCapacity := false
 
-			for _, gpu := range gpus {
-				if gpuCounts[gpu.String()] > 0 {
-					hasCapacity = true
-					break
+			if slices.Contains(gpus, types.GpuType("any")) {
+				hasCapacity = true
+			} else {
+				for _, gpu := range gpus {
+					if gpuCounts[gpu.String()] > 0 {
+						hasCapacity = true
+						break
+					}
+					gpuNames = append(gpuNames, gpu.String())
 				}
-				gpuNames = append(gpuNames, gpu.String())
 			}
 
 			if !hasCapacity {
