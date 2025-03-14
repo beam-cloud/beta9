@@ -301,6 +301,29 @@ func (r *WorkerRedisRepository) GetFreeGpuCounts() (map[string]int, error) {
 	return gpuCounts, nil
 }
 
+func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
+	gpuAvailability := map[string]bool{}
+	gpuTypes := types.AllGPUTypes()
+	for _, gpuType := range gpuTypes {
+		if gpuType == types.GPU_ANY {
+			continue
+		}
+
+		gpuAvailability[gpuType.String()] = false
+	}
+
+	gpuCounts, err := r.GetGpuCounts()
+	if err != nil {
+		return nil, err
+	}
+
+	for gpuType, count := range gpuCounts {
+		gpuAvailability[gpuType] = count > 0
+	}
+
+	return gpuAvailability, nil
+}
+
 func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 	workers, err := r.getWorkers(true)
 	if err != nil {
