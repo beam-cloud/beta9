@@ -138,7 +138,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			gpuNames := []string{}
 			hasCapacity := false
 
-			if slices.Contains(gpus, types.GpuType("any")) {
+			if slices.Contains(gpus, types.GPU_ANY) {
 				hasCapacity = true
 			} else {
 				for _, gpu := range gpus {
