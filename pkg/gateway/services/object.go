@@ -7,7 +7,7 @@ import (
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/storage"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
@@ -39,7 +39,7 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)
 
-	storageClient, err := storage.NewStorageClient(ctx, authInfo.Token.Workspace.Name, authInfo.Token.Storage)
+	storageClient, err := clients.NewStorageClient(ctx, authInfo.Token.Workspace.Name, authInfo.Token.Storage)
 	if err != nil {
 		return &pb.CreateObjectResponse{
 			Ok:       false,
