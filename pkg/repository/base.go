@@ -39,7 +39,7 @@ type WorkerRepository interface {
 	GetGpuCounts() (map[string]int, error)
 	GetGpuAvailability() (map[string]bool, error)
 	GetFreeGpuCounts() (map[string]int, error)
-	GetSpotGpus() []string
+	GetPreemptibleGpus() []string
 }
 
 type ContainerRepository interface {

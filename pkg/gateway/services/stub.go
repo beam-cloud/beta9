@@ -414,7 +414,7 @@ func (gws *GatewayService) anyGpuAvailable(gpus []types.GpuType) (bool, error) {
 }
 
 func (gws *GatewayService) getLowCapacityGpus(gpus []types.GpuType) ([]string, error) {
-	spotGpus := gws.workerRepo.GetSpotGpus()
+	preemptibleGpus := gws.workerRepo.GetPreemptibleGpus()
 	gpuCounts, err := gws.workerRepo.GetFreeGpuCounts()
 	if err != nil {
 		return nil, err
@@ -422,7 +422,7 @@ func (gws *GatewayService) getLowCapacityGpus(gpus []types.GpuType) ([]string, e
 
 	lowGpus := []string{}
 	for _, gpu := range gpus {
-		if gpuCounts[gpu.String()] <= 1 && !slices.Contains(spotGpus, gpu.String()) {
+		if gpuCounts[gpu.String()] <= 1 && !slices.Contains(preemptibleGpus, gpu.String()) {
 			lowGpus = append(lowGpus, gpu.String())
 		}
 	}
