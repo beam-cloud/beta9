@@ -301,6 +301,19 @@ func (r *WorkerRedisRepository) GetFreeGpuCounts() (map[string]int, error) {
 	return gpuCounts, nil
 }
 
+func (r *WorkerRedisRepository) GetSpotGpus() []string {
+	spotGpus := []string{}
+	for _, pool := range r.config.Pools {
+		for _, v := range pool.JobSpec.NodeSelector {
+			if strings.Contains(v, "spot") {
+				spotGpus = append(spotGpus, pool.GPUType)
+			}
+		}
+	}
+
+	return spotGpus
+}
+
 func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
 	gpuAvailability := map[string]bool{}
 	gpuTypes := types.AllGPUTypes()
@@ -323,6 +336,11 @@ func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
 		}
 
 		gpuAvailability[gpuType] = count > 0
+	}
+
+	spotGpus := r.GetSpotGpus()
+	for _, gpuType := range spotGpus {
+		gpuAvailability[gpuType] = true
 	}
 
 	return gpuAvailability, nil
