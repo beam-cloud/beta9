@@ -166,7 +166,7 @@ func TestParseGPUType(t *testing.T) {
 	tests := []struct {
 		name    string
 		gpuType interface{}
-		wantVal types.GPUType
+		wantVal types.GpuType
 		wantErr bool
 	}{
 		{
@@ -208,31 +208,31 @@ func TestParseGPUType(t *testing.T) {
 		{
 			name:    "invalid gpu a100_80 (with underscore)",
 			gpuType: "A100_80",
-			wantVal: types.GPUType(""),
+			wantVal: types.GpuType(""),
 			wantErr: true,
 		},
 		{
 			name:    "invalid gpu type 3060 (as str)",
 			gpuType: "3060",
-			wantVal: types.GPUType(""),
+			wantVal: types.GpuType(""),
 			wantErr: true,
 		},
 		{
 			name:    "invalid gpu type 4090 (as int)",
 			gpuType: 4090,
-			wantVal: types.GPUType(""),
+			wantVal: types.GpuType(""),
 			wantErr: true,
 		},
 		{
 			name:    "invalid gpu type -4070 (as int)",
 			gpuType: -4070,
-			wantVal: types.GPUType(""),
+			wantVal: types.GpuType(""),
 			wantErr: true,
 		},
 		{
 			name:    "invalid gpu type (no gpu type provided)",
 			gpuType: "",
-			wantVal: types.GPUType(""),
+			wantVal: types.GpuType(""),
 			wantErr: true,
 		},
 	}

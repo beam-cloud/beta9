@@ -259,6 +259,95 @@ func (r *WorkerRedisRepository) getWorkerFromKey(key string) (*types.Worker, err
 	return worker, nil
 }
 
+func (r *WorkerRedisRepository) GetGpuCounts() (map[string]int, error) {
+	gpuCounts := map[string]int{}
+	gpuTypes := types.AllGPUTypes()
+	for _, gpuType := range gpuTypes {
+		gpuCounts[gpuType.String()] = 0
+	}
+
+	workers, err := r.getWorkers(false)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, w := range workers {
+		if w.Gpu != "" {
+			gpuCounts[w.Gpu] += int(w.TotalGpuCount)
+		}
+	}
+
+	return gpuCounts, nil
+}
+
+func (r *WorkerRedisRepository) GetFreeGpuCounts() (map[string]int, error) {
+	gpuCounts := map[string]int{}
+	gpuTypes := types.AllGPUTypes()
+	for _, gpuType := range gpuTypes {
+		gpuCounts[gpuType.String()] = 0
+	}
+
+	workers, err := r.getWorkers(false)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, w := range workers {
+		if w.Gpu != "" {
+			gpuCounts[w.Gpu] += int(w.FreeGpuCount)
+		}
+	}
+
+	return gpuCounts, nil
+}
+
+func (r *WorkerRedisRepository) GetPreemptibleGpus() []string {
+	preemptibleGpus := []string{}
+	for _, pool := range r.config.Pools {
+		if pool.GPUType == "" {
+			continue
+		}
+
+		if pool.Preemptable {
+			preemptibleGpus = append(preemptibleGpus, pool.GPUType)
+		}
+	}
+
+	return preemptibleGpus
+}
+
+func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
+	gpuAvailability := map[string]bool{}
+	gpuTypes := types.AllGPUTypes()
+	for _, gpuType := range gpuTypes {
+		if gpuType == types.GPU_ANY {
+			continue
+		}
+
+		gpuAvailability[gpuType.String()] = false
+	}
+
+	gpuCounts, err := r.GetGpuCounts()
+	if err != nil {
+		return nil, err
+	}
+
+	for gpuType, count := range gpuCounts {
+		if gpuType == types.GPU_ANY.String() {
+			continue
+		}
+
+		gpuAvailability[gpuType] = count > 0
+	}
+
+	preemptibleGpus := r.GetPreemptibleGpus()
+	for _, gpuType := range preemptibleGpus {
+		gpuAvailability[gpuType] = true
+	}
+
+	return gpuAvailability, nil
+}
+
 func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 	workers, err := r.getWorkers(true)
 	if err != nil {
