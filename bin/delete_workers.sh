@@ -9,10 +9,7 @@ if kubectl get sts redis-master &> /dev/null; then
   for i in $(seq 0 $((replicas-1))); do
     kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys workspace:*); do redis-cli -c del $k; done' &
     kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys provider:*); do redis-cli -c del $k; done' &
-    kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys scheduler:worker:worker_index); do redis-cli -c del $k; done' &
-    kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys scheduler:worker:state:*); do redis-cli -c del $k; done' &
-    kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys scheduler:worker:requests:*); do redis-cli -c del $k; done' &
-    kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys scheduler:container:*); do redis-cli -c del $k; done' &
+    kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys scheduler:*); do redis-cli -c del $k; done' &
     kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys worker:*); do redis-cli -c del $k; done' &
     kubectl exec redis-master-$i -- bash -c 'for k in $(redis-cli keys pod:*); do redis-cli -c del $k; done' &
   done

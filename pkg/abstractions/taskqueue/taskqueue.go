@@ -24,13 +24,12 @@ import (
 
 type TaskQueueService interface {
 	pb.TaskQueueServiceServer
-	TaskQueuePut(context.Context, *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error)
-	TaskQueuePop(context.Context, *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error)
-	TaskQueueLength(context.Context, *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error)
-	TaskQueueComplete(ctx context.Context, in *pb.TaskQueueCompleteRequest) (*pb.TaskQueueCompleteResponse, error)
+	TaskQueuePut(ctx context.Context, req *pb.TaskQueuePutRequest) (*pb.TaskQueuePutResponse, error)
+	TaskQueuePop(ctx context.Context, req *pb.TaskQueuePopRequest) (*pb.TaskQueuePopResponse, error)
+	TaskQueueLength(ctx context.Context, req *pb.TaskQueueLengthRequest) (*pb.TaskQueueLengthResponse, error)
+	TaskQueueComplete(ctx context.Context, req *pb.TaskQueueCompleteRequest) (*pb.TaskQueueCompleteResponse, error)
 	TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error
-	StartTaskQueueServe(in *pb.StartTaskQueueServeRequest, stream pb.TaskQueueService_StartTaskQueueServeServer) error
-	StopTaskQueueServe(ctx context.Context, in *pb.StopTaskQueueServeRequest) (*pb.StopTaskQueueServeResponse, error)
+	StartTaskQueueServe(ctx context.Context, req *pb.StartTaskQueueServeRequest) (*pb.StartTaskQueueServeResponse, error)
 }
 
 type TaskQueueServiceOpts struct {
@@ -50,10 +49,8 @@ type TaskQueueServiceOpts struct {
 const (
 	DefaultTaskQueueTaskTTL uint32 = 3600 * 2 // 2 hours
 
-	taskQueueContainerPrefix                 string        = "taskqueue"
-	taskQueueRoutePrefix                     string        = "/taskqueue"
-	taskQueueServeContainerKeepaliveInterval time.Duration = 30 * time.Second
-	taskQueueServeContainerTimeout           time.Duration = 10 * time.Minute
+	taskQueueContainerPrefix string = "taskqueue"
+	taskQueueRoutePrefix     string = "/taskqueue"
 )
 
 type RedisTaskQueue struct {

@@ -6,23 +6,16 @@ package endpoint;
 
 service EndpointService {
   rpc StartEndpointServe(StartEndpointServeRequest)
-      returns (stream StartEndpointServeResponse) {}
-  rpc StopEndpointServe(StopEndpointServeRequest)
-      returns (StopEndpointServeResponse) {}
-  rpc EndpointServeKeepAlive(EndpointServeKeepAliveRequest)
-      returns (EndpointServeKeepAliveResponse) {}
+      returns (StartEndpointServeResponse) {}
 }
 
-message StartEndpointServeRequest { string stub_id = 1; int32 timeout = 2;}
+message StartEndpointServeRequest {
+  string stub_id = 1;
+  int32 timeout = 2;
+}
 
 message StartEndpointServeResponse {
-  string output = 1;
-  bool done = 2;
-  int32 exit_code = 3;
+  bool ok = 1;
+  string container_id = 2;
+  string error_msg = 3;
 }
-
-message StopEndpointServeRequest { string stub_id = 1; }
-message StopEndpointServeResponse { bool ok = 1; }
-
-message EndpointServeKeepAliveRequest { string stub_id = 1; int32 timeout = 2;}
-message EndpointServeKeepAliveResponse { bool ok = 1; }

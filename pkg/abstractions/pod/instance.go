@@ -24,16 +24,6 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		return err
 	}
 
-	mounts, err := abstractions.ConfigureContainerRequestMounts(
-		i.Stub.Object.ExternalId,
-		i.Workspace,
-		*i.StubConfig,
-		i.Stub.ExternalId,
-	)
-	if err != nil {
-		return err
-	}
-
 	env := []string{}
 	env = append(i.StubConfig.Env, env...)
 	env = append(secrets, env...)
@@ -65,8 +55,20 @@ func (i *podInstance) startContainers(containersToRun int) error {
 	}
 
 	for c := 0; c < containersToRun; c++ {
+		containerId := i.genContainerId()
+		mounts, err := abstractions.ConfigureContainerRequestMounts(
+			containerId,
+			i.Stub.Object.ExternalId,
+			i.Workspace,
+			*i.StubConfig,
+			i.Stub.ExternalId,
+		)
+		if err != nil {
+			return err
+		}
+
 		runRequest := &types.ContainerRequest{
-			ContainerId:       i.genContainerId(),
+			ContainerId:       containerId,
 			Env:               env,
 			Cpu:               i.StubConfig.Runtime.Cpu,
 			Memory:            i.StubConfig.Runtime.Memory,
@@ -91,7 +93,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			time.Duration(i.StubConfig.KeepWarmSeconds)*time.Second,
 		)
 
-		err := i.Scheduler.Run(runRequest)
+		err = i.Scheduler.Run(runRequest)
 		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to run container")
 			return err
@@ -116,7 +118,7 @@ func (i *podInstance) stopContainers(containersToStop int) error {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
 
-		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: true})
+		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Force: true, Reason: types.StopContainerReasonScheduler})
 		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to stop container")
 			return err

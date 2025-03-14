@@ -177,7 +177,7 @@ func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionSer
 		return nil
 	}
 
-	logStream, err := abstractions.NewLogStream(abstractions.LogStreamOpts{
+	containerStream, err := abstractions.NewContainerStream(abstractions.ContainerStreamOpts{
 		SendCallback:    sendCallback,
 		ExitCallback:    exitCallback,
 		ContainerRepo:   fs.containerRepo,
@@ -210,7 +210,7 @@ func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionSer
 	ctx, cancel := common.MergeContexts(fs.ctx, ctx)
 	defer cancel()
 
-	return logStream.Stream(ctx, authInfo, containerId)
+	return containerStream.Stream(ctx, authInfo, containerId)
 }
 
 func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {

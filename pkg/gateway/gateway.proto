@@ -15,13 +15,11 @@ service GatewayService {
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
   rpc CreateObject(CreateObjectRequest) returns (CreateObjectResponse) {}
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
-  rpc ReplaceObjectContent(ReplaceObjectContentRequest)
-      returns (ReplaceObjectContentResponse) {}
 
   // Containers
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {}
   rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
-  rpc AttachToContainer(AttachToContainerRequest)
+  rpc AttachToContainer(stream ContainerStreamMessage)
       returns (stream AttachToContainerResponse) {}
 
   // Tasks
@@ -128,22 +126,22 @@ message PutObjectResponse {
   string error_msg = 3;
 }
 
-enum ReplaceObjectContentOperation {
+enum SyncContainerWorkspaceOperation {
   WRITE = 0;
   DELETE = 1;
   MOVED = 2;
 }
 
-message ReplaceObjectContentRequest {
-  string object_id = 1;
+message SyncContainerWorkspaceRequest {
+  string container_id = 1;
   string path = 2;
   string new_path = 3;
   bool is_dir = 4;
   bytes data = 5;
-  ReplaceObjectContentOperation op = 6;
+  SyncContainerWorkspaceOperation op = 6;
 }
 
-message ReplaceObjectContentResponse { bool ok = 1; }
+message SyncContainerWorkspaceResponse { bool ok = 1; }
 
 // Container messages
 
@@ -160,6 +158,13 @@ message StopContainerRequest { string container_id = 1; }
 message StopContainerResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message ContainerStreamMessage {
+  oneof payload {
+    AttachToContainerRequest attach_request = 1;
+    SyncContainerWorkspaceRequest sync_container_workspace = 2;
+  }
 }
 
 message AttachToContainerRequest { string container_id = 1; }

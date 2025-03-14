@@ -1,9 +1,9 @@
 package worker
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path"
 
 	"github.com/rs/zerolog/log"
@@ -26,22 +26,14 @@ func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 // SetupContainerMounts initializes any external storage for a container
 func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	for i, m := range request.Mounts {
-		if m.MountPath == types.WorkerUserCodeVolume && request.Stub.Storage.Id > 0 {
-			log.Info().Interface("mount", m).Msg("using new storage path")
-
-			objectPath := request.Mounts[i].LocalPath
-			localUserSource := tempUserCodeDir(request.ContainerId)
-
-			if _, err := os.Stat(localUserSource); os.IsNotExist(err) {
-				unzipErr := extractZip(objectPath, localUserSource)
-				if unzipErr != nil {
-					log.Error().Str("container_id", request.ContainerId).Err(unzipErr).Msg("failed to unzip object")
-
-					os.RemoveAll(localUserSource)
-				}
+		if m.MountPath == types.WorkerUserCodeVolume {
+			err := common.ExtractObjectFile(context.TODO(), request.Stub.Object.ExternalId, request.Workspace.Name, types.TempContainerWorkspace(request.ContainerId))
+			if err != nil {
+				return err
 			}
 
-			request.Mounts[i].LocalPath = localUserSource
+			m.LocalPath = types.TempContainerWorkspace(request.ContainerId)
+			request.Mounts[i].LocalPath = m.LocalPath
 		}
 
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
@@ -93,13 +85,10 @@ func (c *ContainerMountManager) setupMountPointS3(containerId string, m types.Mo
 	} else {
 		mountPointPaths = append(mountPointPaths, m.LocalPath)
 	}
+
 	c.mountPointPaths.Set(containerId, mountPointPaths)
 
 	return nil
-}
-
-func tempUserCodeDir(containerId string) string {
-	return fmt.Sprintf("/tmp/%s/code", containerId)
 }
 
 const (

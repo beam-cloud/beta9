@@ -1,7 +1,6 @@
 package abstractions
 
 import (
-	"fmt"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -11,47 +10,29 @@ import (
 
 const defaultExternalVolumesPath string = "/tmp/external-volumes"
 
-func ConfigureContainerRequestMounts(stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
+func ConfigureContainerRequestMounts(containerId, stubObjectId string, workspace *types.Workspace, config types.StubConfigV1, stubId string) ([]types.Mount, error) {
 	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	var mounts []types.Mount
-	if workspace.StorageId != nil && *workspace.StorageId > 0 {
-		// TODO: This is a hack to support legacy storage. Once all workspaces have migrated to the new storage,
-		// we should remove this.
-		mounts = []types.Mount{
-			{
-				LocalPath: path.Join(fmt.Sprintf("/workspace/data/%s/objects/%s", workspace.Name, stubObjectId)),
-				MountPath: types.WorkerUserCodeVolume,
-				ReadOnly:  true,
-			},
-			{
-				LocalPath: path.Join(fmt.Sprintf("/workspace/data/%s/outputs/%s", workspace.Name, stubId)),
-				MountPath: types.WorkerUserOutputVolume,
-				ReadOnly:  false,
-			},
-		}
-	} else {
-		mounts = []types.Mount{
-			{
-				LocalPath: path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId),
-				MountPath: types.WorkerUserCodeVolume,
-				ReadOnly:  true,
-			},
-			{
-				LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
-				MountPath: types.WorkerUserOutputVolume,
-				ReadOnly:  false,
-			},
-		}
+	mounts := []types.Mount{
+		{
+			LocalPath: path.Join(types.DefaultObjectPath, workspace.Name, stubObjectId),
+			MountPath: types.WorkerUserCodeVolume,
+			ReadOnly:  false,
+		},
+		{
+			LocalPath: path.Join(types.DefaultOutputsPath, workspace.Name, stubId),
+			MountPath: types.WorkerUserOutputVolume,
+			ReadOnly:  false,
+		},
 	}
 
 	for _, v := range config.Volumes {
 		mount := types.Mount{
 			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
-			LinkPath:  path.Join(types.DefaultExtractedObjectPath, workspace.Name, stubObjectId, v.MountPath),
+			LinkPath:  path.Join(types.TempContainerWorkspace(containerId), v.MountPath),
 			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
 			ReadOnly:  false,
 		}

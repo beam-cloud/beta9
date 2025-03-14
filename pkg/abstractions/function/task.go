@@ -110,6 +110,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 	}
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		t.containerId,
 		stub.Object.ExternalId,
 		&stub.Workspace,
 		stubConfig,

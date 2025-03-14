@@ -163,7 +163,7 @@ func (g *botGroup) BotOpenSession(ctx echo.Context) error {
 			}
 
 			for _, containerId := range containersBySessionId[sessionId] {
-				err := instance.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
+				err := instance.scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Reason: types.StopContainerReasonScheduler})
 				if err != nil {
 					log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop bot container")
 				}

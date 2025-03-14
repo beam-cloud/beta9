@@ -65,6 +65,7 @@ message ContainerRequest {
   bool checkpoint_enabled = 19;
   BuildOptions build_options = 20;
   repeated uint32 ports = 21;
+  double cost_per_ms = 22;
 }
 
 message ContainerState {

@@ -247,7 +247,10 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		}, err
 	}
 
+	containerId := s.generateContainerId(stub.ExternalId)
+
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
+		containerId,
 		stub.Object.ExternalId,
 		authInfo.Workspace,
 		stubConfig,
@@ -289,11 +292,10 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		ports = stubConfig.Ports
 	}
 
-	containerId := s.generateContainerId(stub.ExternalId)
 	containerRequest := &types.ContainerRequest{
+		ContainerId:       containerId,
 		StubId:            stub.ExternalId,
 		Env:               env,
-		ContainerId:       containerId,
 		Cpu:               stubConfig.Runtime.Cpu,
 		Memory:            stubConfig.Runtime.Memory,
 		GpuRequest:        gpuRequest,

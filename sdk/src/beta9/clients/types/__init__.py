@@ -73,6 +73,7 @@ class ContainerRequest(betterproto.Message):
     checkpoint_enabled: bool = betterproto.bool_field(19)
     build_options: "BuildOptions" = betterproto.message_field(20)
     ports: List[int] = betterproto.uint32_field(21)
+    cost_per_ms: float = betterproto.double_field(22)
 
 
 @dataclass(eq=False, repr=False)

@@ -1,5 +1,4 @@
 import os
-import threading
 import traceback
 import types
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -7,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from uvicorn.protocols.utils import ClientDisconnected
 
 from .. import terminal
+from ..abstractions.base.container import Container
 from ..abstractions.base.runner import (
     ASGI_DEPLOYMENT_STUB_TYPE,
     ASGI_SERVE_STUB_TYPE,
@@ -21,10 +21,9 @@ from ..abstractions.image import Image
 from ..abstractions.volume import CloudBucket, Volume
 from ..channel import with_grpc_error_handling
 from ..clients.endpoint import (
-    EndpointServeKeepAliveRequest,
     EndpointServiceStub,
     StartEndpointServeRequest,
-    StopEndpointServeRequest,
+    StartEndpointServeResponse,
 )
 from ..env import is_local
 from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
@@ -567,55 +566,21 @@ class _CallableWrapper(DeployableMixin):
             with terminal.progress("Serving endpoint..."):
                 self.parent.print_invocation_snippet(url_type=url_type)
 
-                return self._serve(
-                    dir=os.getcwd(), object_id=self.parent.object_id, timeout=timeout
-                )
-
+                return self._serve(dir=os.getcwd(), timeout=timeout)
         except KeyboardInterrupt:
-            self._handle_serve_interrupt()
+            terminal.header("Stopping serve container")
+            terminal.print("Goodbye 👋")
+            os._exit(0)  # kills all threads immediately
 
-    def _handle_serve_interrupt(self) -> None:
-        terminal.header("Stopping serve container")
-        self.parent.endpoint_stub.stop_endpoint_serve(
-            StopEndpointServeRequest(stub_id=self.parent.stub_id)
-        )
-        terminal.print("Goodbye 👋")
-        os._exit(0)  # kills all threads immediately
-
-    def _serve(self, *, dir: str, object_id: str, timeout: int = 0):
-        def notify(*_, **__):
-            self.parent.endpoint_stub.endpoint_serve_keep_alive(
-                EndpointServeKeepAliveRequest(
-                    stub_id=self.parent.stub_id,
-                    timeout=timeout,
-                )
-            )
-
-        threading.Thread(
-            target=self.parent.sync_dir_to_workspace,
-            kwargs={"dir": dir, "object_id": object_id, "on_event": notify},
-            daemon=True,
-        ).start()
-
-        stream = self.parent.endpoint_stub.start_endpoint_serve(
+    def _serve(self, *, dir: str, timeout: int = 0):
+        r: StartEndpointServeResponse = self.parent.endpoint_stub.start_endpoint_serve(
             StartEndpointServeRequest(
                 stub_id=self.parent.stub_id,
                 timeout=timeout,
             )
         )
+        if not r.ok:
+            return terminal.error(r.error_msg)
 
-        r = None
-        for r in stream:
-            if r.output != "":
-                terminal.detail(r.output, end="")
-
-            if r.done or r.exit_code != 0:
-                break
-
-        if r is None:
-            return terminal.error("Serve failed ❌")
-
-        if not r.done or r.exit_code != 0:
-            return terminal.error(f"{r.output} ❌")
-
-        terminal.success(r.output)
+        container = Container(container_id=r.container_id)
+        container.attach(container_id=r.container_id, sync_dir=dir)

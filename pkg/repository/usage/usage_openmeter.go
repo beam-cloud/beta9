@@ -13,20 +13,20 @@ import (
 	openmeter "github.com/openmeterio/openmeter/api/client/go"
 )
 
-type OpenMeterMetricsRepository struct {
+type OpenMeterUsageMetricsRepository struct {
 	client *openmeter.ClientWithResponses
 	config types.OpenMeterConfig
 	source string
 }
 
-func NewOpenMeterMetricsRepository(omConfig types.OpenMeterConfig) repository.MetricsRepository {
-	return &OpenMeterMetricsRepository{
+func NewOpenMeterUsageMetricsRepository(omConfig types.OpenMeterConfig) repository.UsageMetricsRepository {
+	return &OpenMeterUsageMetricsRepository{
 		config: omConfig,
 		source: "",
 	}
 }
 
-func (o *OpenMeterMetricsRepository) Init(source string) error {
+func (o *OpenMeterUsageMetricsRepository) Init(source string) error {
 	om, err := openmeter.NewAuthClientWithResponses(o.config.ServerUrl, o.config.ApiKey)
 	if err != nil {
 		return err
@@ -37,15 +37,15 @@ func (o *OpenMeterMetricsRepository) Init(source string) error {
 	return nil
 }
 
-func (o *OpenMeterMetricsRepository) SetGauge(name string, data map[string]interface{}, value float64) error {
+func (o *OpenMeterUsageMetricsRepository) SetGauge(name string, data map[string]interface{}, value float64) error {
 	return o.sendEvent(name, data)
 }
 
-func (o *OpenMeterMetricsRepository) IncrementCounter(name string, data map[string]interface{}, value float64) error {
+func (o *OpenMeterUsageMetricsRepository) IncrementCounter(name string, data map[string]interface{}, value float64) error {
 	return o.sendEvent(name, data)
 }
 
-func (o *OpenMeterMetricsRepository) sendEvent(name string, data map[string]interface{}) error {
+func (o *OpenMeterUsageMetricsRepository) sendEvent(name string, data map[string]interface{}) error {
 	// NOTE: in openmeter, meters are really just counters with different aggregation functions so you don't need
 	// separate functions defined here (i.e. gauge, counter).
 	// Events are based directly on the data payload and "value" is unused.

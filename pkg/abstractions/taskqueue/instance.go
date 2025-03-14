@@ -36,29 +36,21 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		return err
 	}
 
-	mounts, err := abstractions.ConfigureContainerRequestMounts(
-		i.Stub.Object.ExternalId,
-		i.Workspace,
-		*i.StubConfig,
-		i.Stub.ExternalId,
-	)
-	if err != nil {
-		return err
-	}
-
-	env := []string{
+	env := []string{}
+	env = append(i.StubConfig.Env, env...)
+	env = append(secrets, env...)
+	env = append(env, []string{
 		fmt.Sprintf("BETA9_TOKEN=%s", i.Token.Key),
 		fmt.Sprintf("HANDLER=%s", i.StubConfig.Handler),
 		fmt.Sprintf("ON_START=%s", i.StubConfig.OnStart),
-		fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
 		fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
 		fmt.Sprintf("WORKERS=%d", i.StubConfig.Workers),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
 		fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
-	}
-
-	env = append(secrets, env...)
+		fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
+		fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),
+	}...)
 
 	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)
 	if i.StubConfig.Runtime.Gpu != "" {
@@ -80,8 +72,21 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 	}
 
 	for c := 0; c < containersToRun; c++ {
+		containerId := i.genContainerId()
+
+		mounts, err := abstractions.ConfigureContainerRequestMounts(
+			containerId,
+			i.Stub.Object.ExternalId,
+			i.Workspace,
+			*i.StubConfig,
+			i.Stub.ExternalId,
+		)
+		if err != nil {
+			return err
+		}
+
 		runRequest := &types.ContainerRequest{
-			ContainerId:       i.genContainerId(),
+			ContainerId:       containerId,
 			Env:               env,
 			Cpu:               i.StubConfig.Runtime.Cpu,
 			Memory:            i.StubConfig.Runtime.Memory,
@@ -105,7 +110,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			time.Duration(i.StubConfig.KeepWarmSeconds)*time.Second,
 		)
 
-		err := i.Scheduler.Run(runRequest)
+		err = i.Scheduler.Run(runRequest)
 		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to run container")
 			return err
@@ -130,7 +135,7 @@ func (i *taskQueueInstance) stopContainers(containersToStop int) error {
 		idx := rnd.Intn(len(containerIds))
 		containerId := containerIds[idx]
 
-		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId})
+		err := i.Scheduler.Stop(&types.StopContainerArgs{ContainerId: containerId, Reason: types.StopContainerReasonScheduler})
 		if err != nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("unable to stop container")
 			return err

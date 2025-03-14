@@ -56,7 +56,7 @@ type Worker struct {
 	containerLock           sync.Mutex
 	containerWg             sync.WaitGroup
 	containerLogger         *ContainerLogger
-	workerMetrics           *WorkerMetrics
+	workerUsageMetrics      *WorkerUsageMetrics
 	completedRequests       chan *types.ContainerRequest
 	stopContainerChan       chan stopContainerEvent
 	workerRepoClient        pb.WorkerRepositoryServiceClient
@@ -82,6 +82,7 @@ type ContainerInstance struct {
 	OutputWriter *common.OutputWriter
 	LogBuffer    *common.LogBuffer
 	Request      *types.ContainerRequest
+	StopReason   types.StopContainerReason
 }
 
 type ContainerOptions struct {
@@ -203,7 +204,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	workerMetrics, err := NewWorkerMetrics(ctx, workerId, config.Monitoring)
+	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -240,7 +241,7 @@ func NewWorker() (*Worker, error) {
 			containerInstances: containerInstances,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
-		workerMetrics:       workerMetrics,
+		workerUsageMetrics:  workerMetrics,
 		containerRepoClient: containerRepoClient,
 		workerRepoClient:    workerRepoClient,
 		eventRepo:           eventRepo,
@@ -334,7 +335,7 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 
 			serr, ok := err.(*types.ExitCodeError)
 			if ok {
-				exitCode = serr.ExitCode
+				exitCode = int(serr.ExitCode)
 			}
 
 			_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{

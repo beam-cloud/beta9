@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from grpclib.metadata import Deadline
 
 
-class ReplaceObjectContentOperation(betterproto.Enum):
+class SyncContainerWorkspaceOperation(betterproto.Enum):
     WRITE = 0
     DELETE = 1
     MOVED = 2
@@ -115,17 +115,17 @@ class PutObjectResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class ReplaceObjectContentRequest(betterproto.Message):
-    object_id: str = betterproto.string_field(1)
+class SyncContainerWorkspaceRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
     path: str = betterproto.string_field(2)
     new_path: str = betterproto.string_field(3)
     is_dir: bool = betterproto.bool_field(4)
     data: bytes = betterproto.bytes_field(5)
-    op: "ReplaceObjectContentOperation" = betterproto.enum_field(6)
+    op: "SyncContainerWorkspaceOperation" = betterproto.enum_field(6)
 
 
 @dataclass(eq=False, repr=False)
-class ReplaceObjectContentResponse(betterproto.Message):
+class SyncContainerWorkspaceResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
 
 
@@ -150,6 +150,16 @@ class StopContainerRequest(betterproto.Message):
 class StopContainerResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class ContainerStreamMessage(betterproto.Message):
+    attach_request: "AttachToContainerRequest" = betterproto.message_field(
+        1, group="payload"
+    )
+    sync_container_workspace: "SyncContainerWorkspaceRequest" = (
+        betterproto.message_field(2, group="payload")
+    )
 
 
 @dataclass(eq=False, repr=False)
@@ -686,15 +696,6 @@ class GatewayServiceStub(SyncServiceStub):
             .result()
         )
 
-    def replace_object_content(
-        self, replace_object_content_request: "ReplaceObjectContentRequest"
-    ) -> "ReplaceObjectContentResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/ReplaceObjectContent",
-            ReplaceObjectContentRequest,
-            ReplaceObjectContentResponse,
-        )(replace_object_content_request)
-
     def list_containers(
         self, list_containers_request: "ListContainersRequest"
     ) -> "ListContainersResponse":
@@ -714,13 +715,13 @@ class GatewayServiceStub(SyncServiceStub):
         )(stop_container_request)
 
     def attach_to_container(
-        self, attach_to_container_request: "AttachToContainerRequest"
+        self, container_stream_message_iterator: Iterable["ContainerStreamMessage"]
     ) -> Iterator["AttachToContainerResponse"]:
-        for response in self._unary_stream(
+        for response in self._stream_stream(
             "/gateway.GatewayService/AttachToContainer",
-            AttachToContainerRequest,
+            ContainerStreamMessage,
             AttachToContainerResponse,
-        )(attach_to_container_request):
+        )(container_stream_message_iterator):
             yield response
 
     def start_task(self, start_task_request: "StartTaskRequest") -> "StartTaskResponse":
