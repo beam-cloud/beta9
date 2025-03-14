@@ -308,8 +308,14 @@ func (r *WorkerRedisRepository) GetPreemptibleGpus() []string {
 			continue
 		}
 
-		if pool.Preemptable {
-			preemptibleGpus = append(preemptibleGpus, pool.GPUType)
+		// FIXME: This should really use the commented out code below instead of checking the node selector
+		// if pool.Preemptable {
+		// 	preemptibleGpus = append(preemptibleGpus, pool.GPUType)
+		// }
+		for _, v := range pool.JobSpec.NodeSelector {
+			if strings.Contains(v, "spot") {
+				preemptibleGpus = append(preemptibleGpus, pool.GPUType)
+			}
 		}
 	}
 
