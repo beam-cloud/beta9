@@ -15,6 +15,7 @@ from . import (
     config,
     container,
     deployment,
+    dev,
     machine,
     pool,
     run,
@@ -107,7 +108,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(worker)
     cli.register(shell)
     cli.register(run)
-
+    cli.register(dev)
     if check_config:
         cli.check_config()
 

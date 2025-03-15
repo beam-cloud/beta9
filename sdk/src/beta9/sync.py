@@ -217,7 +217,7 @@ class SyncEventHandler(FileSystemEventHandler):
 
     def on_any_event(self, event: FileSystemEvent) -> None:
         if not event.is_directory and event.src_path.endswith(".py"):
-            terminal.warn(f"Detected changes in '{event.src_path}'. Reloading...")
+            terminal.warn(f"Detected changes in '{event.src_path}'. Reloading...\n")
 
     def on_created(self, event) -> None:
         self.queue.put((SyncContainerWorkspaceOperation.WRITE, event.src_path, None))
