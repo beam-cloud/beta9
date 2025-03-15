@@ -62,6 +62,7 @@ type Worker struct {
 	workerRepoClient        pb.WorkerRepositoryServiceClient
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	eventRepo               repo.EventRepository
+	storageManager          *storage.StorageManager
 	userDataStorage         storage.Storage
 	checkpointStorage       storage.Storage
 	ctx                     context.Context
@@ -132,6 +133,11 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 	config := configManager.GetConfig()
+
+	storageManager, err := storage.NewStorageManager(config.Storage)
+	if err != nil {
+		return nil, err
+	}
 
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
 	if err != nil {
@@ -217,6 +223,7 @@ func NewWorker() (*Worker, error) {
 		gpuCount:                uint32(gpuCount),
 		runcHandle:              runc.Runc{Debug: config.DebugMode},
 		runcServer:              runcServer,
+		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
@@ -306,6 +313,16 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 
 		if request.IsBuildRequest() {
 			go s.listenForStopBuildEvent(ctx, cancel, containerId)
+		}
+
+		// perform ad-hoc storage mounting
+		if request.Stub.Storage.Id > 0 {
+			log.Info().Str("container_id", containerId).Msg("mounting storage")
+
+			_, err := s.storageManager.Mount(request.Stub.Workspace.Name, &request.Stub.Storage)
+			if err != nil {
+				log.Error().Str("container_id", containerId).Err(err).Msg("unable to mount storage")
+			}
 		}
 
 		if err := s.RunContainer(ctx, request); err != nil {
@@ -563,6 +580,11 @@ func (s *Worker) shutdown() error {
 	err = s.imageClient.Cleanup()
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to cleanup fuse mounts: %v", err))
+	}
+
+	err = s.storageManager.Cleanup()
+	if err != nil {
+		errs = errors.Join(errs, fmt.Errorf("failed to cleanup workspace storage: %v", err))
 	}
 
 	err = os.RemoveAll(s.imageMountPath)

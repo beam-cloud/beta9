@@ -78,7 +78,7 @@ func DecryptAllSecrets(signingKey []byte, secrets []string) ([]string, error) {
 	return decrypted, nil
 }
 
-func ParseSigningKey(signingKey string) ([]byte, error) {
-	secret := signingKey[len("sk_"):]
+func ParseSecretKey(secretKey string) ([]byte, error) {
+	secret := secretKey[len("sk_"):]
 	return base64.StdEncoding.DecodeString(secret)
 }
