@@ -1,8 +1,10 @@
 import inspect
+import threading
 import urllib.parse
 from typing import Any, Callable, ClassVar, Optional
 
 from .. import terminal
+from ..abstractions.base.container import Container
 from ..abstractions.base.runner import SHELL_STUB_TYPE
 from ..channel import with_grpc_error_handling
 from ..clients.gateway import DeployStubRequest, DeployStubResponse, GetUrlRequest, GetUrlResponse
@@ -82,8 +84,17 @@ class DeployableMixin:
 
         return deploy_response.ok
 
+    def _attach_and_sync(self, container_id: str, sync_dir: str):
+        try:
+            container = Container(
+                container_id=container_id,
+            )
+            container.attach(container_id=container_id, sync_dir=sync_dir, hide_logs=True)
+        except BaseException:
+            terminal.header(f"Stopped syncing directory '{sync_dir}'")
+
     @with_grpc_error_handling
-    def shell(self, url_type: str = ""):
+    def shell(self, url_type: str = "", sync_dir: Optional[str] = None):
         stub_type = SHELL_STUB_TYPE
 
         if not self.parent.prepare_runtime(
@@ -120,6 +131,13 @@ class DeployableMixin:
 
         if not proxy_port:
             proxy_port = 443 if parsed_url.scheme == "https" else 80
+
+        if sync_dir:
+            threading.Thread(
+                target=self._attach_and_sync,
+                args=(container_id, sync_dir),
+                daemon=True,
+            ).start()
 
         with SSHShell(
             host=proxy_host,
