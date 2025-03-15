@@ -15,16 +15,17 @@ def common(**_):
 @common.command(
     name="dev",
     help="""
-    Connect to a container with the same config as your handler.
-
-    HANDLER is in the format of "file:function".
+    Spins up a remote environment to develop in. Will automatically sync the current directory to the container.
+    You can optionally specify a handler to use as the base environment, or leave it blank to use a default environment.
     """,
     epilog="""
       Examples:
 
-        {cli_name} shell app.py:handler
+        {cli_name} dev app.py:handler
 
-        {cli_name} shell app.py:my_func
+        {cli_name} dev app.py:my_func --gpu T4
+
+        {cli_name} dev --sync ./newproj
         \b
     """,
 )
