@@ -109,6 +109,7 @@ def load_cli(check_config=True, **kwargs: Any) -> CLI:
     cli.register(shell)
     cli.register(run)
     cli.register(dev)
+
     if check_config:
         cli.check_config()
 

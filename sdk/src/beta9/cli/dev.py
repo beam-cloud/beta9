@@ -57,7 +57,7 @@ def dev(
 ):
     entrypoint = kwargs["entrypoint"]
     if handler:
-        user_obj, module_name, obj_name = load_module_spec(handler, "shell")
+        user_obj, module_name, obj_name = load_module_spec(handler, "dev")
 
         if hasattr(user_obj, "set_handler"):
             user_obj.set_handler(f"{module_name}:{obj_name}")
