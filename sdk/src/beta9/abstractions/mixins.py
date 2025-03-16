@@ -112,7 +112,7 @@ class DeployableMixin:
             if not create_shell_response.ok:
                 return terminal.error(f"Failed to create shell: {create_shell_response.err_msg} ❌")
 
-        # Then, we can retrieve the URL and issue a CONNECT request / establish a tunnel
+        # Then, we can retrieve the URL and establish a tunnel
         res: GetUrlResponse = self.parent.gateway_stub.get_url(
             GetUrlRequest(
                 stub_id=self.parent.stub_id,
