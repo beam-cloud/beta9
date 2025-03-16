@@ -85,8 +85,8 @@ class SSHShell:
                 self.container_id,
                 self.auth_token,
             )
-        except BaseException as e:
-            return terminal.error(f"Failed to establish ssh tunnel: {e}")
+        except BaseException:
+            return terminal.error("Failed to establish ssh tunnel.")
 
         self.transport = paramiko.Transport(self.socket)
         self.transport.connect(username=self.username, password=self.password)
