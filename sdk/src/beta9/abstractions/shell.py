@@ -155,10 +155,10 @@ class SSHShell:
 
         except paramiko.SSHException:
             self._close()
-            terminal.error(f"SSH error occurred in shell: {traceback.format_exc()}")
+            terminal.error("SSH error occurred in shell")
         except BaseException:
             self._close()
-            terminal.error(f"Unexpected error occurred in shell: {traceback.format_exc()}")
+            terminal.error("Unexpected error occurred in shell")
 
 
 """
