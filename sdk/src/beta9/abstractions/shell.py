@@ -56,6 +56,7 @@ def wait_for_ok(sock: socket.socket, max_retries: int = 5, delay: float = 0.25):
 
 
 EXIT_STATUS_CTRL_C = 130
+EXIT_STATUS_NOT_FOUND = 127
 
 
 @dataclass
@@ -139,7 +140,11 @@ class SSHShell:
 
             # Check the exit status after the shell session ends
             exit_status = self.channel.recv_exit_status()
-            if exit_status != 0 and exit_status != EXIT_STATUS_CTRL_C:
+            if (
+                exit_status != 0
+                and exit_status != EXIT_STATUS_CTRL_C
+                and exit_status != EXIT_STATUS_NOT_FOUND
+            ):
                 terminal.warn("Lost connection to shell, attempting to reconnect in 5 seconds...")
                 time.sleep(5)
 
