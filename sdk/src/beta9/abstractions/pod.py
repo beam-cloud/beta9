@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
 from .. import terminal
-from ..abstractions.base.container import Container
 from ..abstractions.base.runner import (
     POD_DEPLOYMENT_STUB_TYPE,
     POD_RUN_STUB_TYPE,
@@ -293,15 +292,6 @@ app = Pod(
     def cleanup_deployment_artifacts(self):
         if os.path.exists(f"pod-{self._id}.py"):
             os.remove(f"pod-{self._id}.py")
-
-    def _attach_and_sync(self, container_id: str, sync_dir: str):
-        try:
-            container = Container(
-                container_id=container_id,
-            )
-            container.attach(container_id=container_id, sync_dir=sync_dir, hide_logs=True)
-        except BaseException:
-            terminal.header(f"Stopped syncing directory '{sync_dir}'")
 
     @with_grpc_error_handling
     def shell(self, url_type: str = "", sync_dir: Optional[str] = None):
