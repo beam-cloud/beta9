@@ -155,10 +155,10 @@ class SSHShell:
 
         except paramiko.SSHException:
             self._close()
-            terminal.error("SSH error occurred in shell")
+            terminal.error("SSH error occurred in shell.")
         except BaseException:
             self._close()
-            terminal.error("Unexpected error occurred in shell")
+            terminal.error("Unexpected error occurred in shell.")
 
 
 """
@@ -284,7 +284,7 @@ def posix_shell(chan: "paramiko.Channel"):  # noqa: C901
             r, w, e = select.select([chan, sys.stdin], [], [])
             if chan in r:
                 try:
-                    x = chan.recv(1024).decode()
+                    x = chan.recv(1024).decode("utf-8", errors="replace")
                     if len(x) == 0:
                         sys.stdout.write("\r\n")
                         break
