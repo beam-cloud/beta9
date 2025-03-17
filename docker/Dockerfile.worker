@@ -188,7 +188,16 @@ COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
-COPY ./bin/volume_cache.so /usr/local/lib/volume_cache.so
+
+COPY ./bin/volume_cache_x86.so /usr/local/lib/volume_cache_x86.so
+COPY ./bin/volume_cache_arm.so /usr/local/lib/volume_cache_arm.so
+
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+    cp /usr/local/lib/volume_cache_x86.so /usr/local/lib/volume_cache.so; \
+else \
+    cp /usr/local/lib/volume_cache_arm.so /usr/local/lib/volume_cache.so; \
+fi
+
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
 COPY ./sdk/src/beta9 /workspace/sdk
 
