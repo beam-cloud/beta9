@@ -33,7 +33,7 @@ func ConfigureContainerRequestMounts(containerId string, stubObjectId string, wo
 		mount := types.Mount{
 			LocalPath: path.Join(types.DefaultVolumesPath, workspace.Name, v.Id),
 			LinkPath:  path.Join(types.TempContainerWorkspace(containerId), v.MountPath),
-			MountPath: path.Join(types.ContainerVolumePath, v.MountPath),
+			MountPath: path.Join(types.WorkerContainerVolumePath, v.MountPath),
 			ReadOnly:  false,
 		}
 

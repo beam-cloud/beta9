@@ -10,7 +10,6 @@ const (
 	DefaultFilesystemPath              string = "/data"
 	FailedDeploymentContainerThreshold int    = 3
 	FailedContainerThreshold           int    = 1
-	ContainerVolumePath                string = "/volumes"
 )
 
 type ContainerEvent struct {

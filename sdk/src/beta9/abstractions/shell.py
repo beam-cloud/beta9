@@ -4,7 +4,6 @@ import ssl
 import struct
 import sys
 import time
-import traceback
 from dataclasses import dataclass
 from typing import Optional
 
@@ -56,6 +55,7 @@ def wait_for_ok(sock: socket.socket, max_retries: int = 5, delay: float = 0.25):
 
 
 EXIT_STATUS_CTRL_C = 130
+EXIT_STATUS_NOT_FOUND = 127
 
 
 @dataclass
@@ -84,8 +84,8 @@ class SSHShell:
                 self.container_id,
                 self.auth_token,
             )
-        except BaseException as e:
-            return terminal.error(f"Failed to establish ssh tunnel: {e}")
+        except BaseException:
+            return terminal.error("Failed to establish ssh tunnel.")
 
         self.transport = paramiko.Transport(self.socket)
         self.transport.connect(username=self.username, password=self.password)
@@ -122,10 +122,10 @@ class SSHShell:
                 self._open()
         except paramiko.SSHException:
             self._close()
-            terminal.error(f"SSH error occurred: {traceback.format_exc()}")
+            terminal.error("SSH error occurred.")
         except BaseException:
             self._close()
-            terminal.error(f"Unexpected error occurred: {traceback.format_exc()}")
+            terminal.error("Unexpected error occurred in shell.")
 
         return self
 
@@ -139,7 +139,11 @@ class SSHShell:
 
             # Check the exit status after the shell session ends
             exit_status = self.channel.recv_exit_status()
-            if exit_status != 0 and exit_status != EXIT_STATUS_CTRL_C:
+            if (
+                exit_status != 0
+                and exit_status != EXIT_STATUS_CTRL_C
+                and exit_status != EXIT_STATUS_NOT_FOUND
+            ):
                 terminal.warn("Lost connection to shell, attempting to reconnect in 5 seconds...")
                 time.sleep(5)
 
@@ -150,10 +154,10 @@ class SSHShell:
 
         except paramiko.SSHException:
             self._close()
-            terminal.error(f"SSH error occurred in shell: {traceback.format_exc()}")
+            terminal.error("SSH error occurred in shell.")
         except BaseException:
             self._close()
-            terminal.error(f"Unexpected error occurred in shell: {traceback.format_exc()}")
+            terminal.error("Unexpected error occurred in shell.")
 
 
 """
@@ -279,7 +283,7 @@ def posix_shell(chan: "paramiko.Channel"):  # noqa: C901
             r, w, e = select.select([chan, sys.stdin], [], [])
             if chan in r:
                 try:
-                    x = chan.recv(1024).decode()
+                    x = chan.recv(1024).decode("utf-8", errors="replace")
                     if len(x) == 0:
                         sys.stdout.write("\r\n")
                         break
