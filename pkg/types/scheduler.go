@@ -238,7 +238,6 @@ func (c *ContainerRequest) VolumeCacheCompatible() bool {
 		return false
 	}
 	return c.Workspace.VolumeCacheEnabled
-
 }
 
 func (c *ContainerRequest) ToProto() *pb.ContainerRequest {

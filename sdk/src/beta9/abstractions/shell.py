@@ -4,7 +4,6 @@ import ssl
 import struct
 import sys
 import time
-import traceback
 from dataclasses import dataclass
 from typing import Optional
 
@@ -123,10 +122,10 @@ class SSHShell:
                 self._open()
         except paramiko.SSHException:
             self._close()
-            terminal.error(f"SSH error occurred: {traceback.format_exc()}")
+            terminal.error("SSH error occurred.")
         except BaseException:
             self._close()
-            terminal.error(f"Unexpected error occurred: {traceback.format_exc()}")
+            terminal.error("Unexpected error occurred in shell.")
 
         return self
 
