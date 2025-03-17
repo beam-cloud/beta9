@@ -234,7 +234,7 @@ func (c *ContainerRequest) IsBuildRequest() bool {
 }
 
 func (c *ContainerRequest) VolumeCacheCompatible() bool {
-	if c.IsBuildRequest() || c.CheckpointEnabled || c.Stub.Type == StubType(StubTypeShell) {
+	if c.IsBuildRequest() || c.CheckpointEnabled {
 		return false
 	}
 	return c.Workspace.VolumeCacheEnabled
