@@ -151,7 +151,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 			}
 
 			latency := time.Unix(container.StartedAt, 0).Sub(time.Unix(container.ScheduledAt, 0))
-			metrics.RecordContainerStartLatency(latency)
+			metrics.RecordContainerStartLatency(&container, latency)
 			schedulingLatencies = append(schedulingLatencies, latency)
 		}
 	}
