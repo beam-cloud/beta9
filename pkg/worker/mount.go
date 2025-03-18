@@ -27,7 +27,8 @@ func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	for i, m := range request.Mounts {
 		if m.MountPath == types.WorkerUserCodeVolume {
-			err := common.ExtractObjectFile(context.TODO(), request.Stub.Object.ExternalId, request.Workspace.Name, types.TempContainerWorkspace(request.ContainerId))
+			objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
+			err := common.ExtractObjectFile(context.TODO(), objectPath, types.TempContainerWorkspace(request.ContainerId))
 			if err != nil {
 				return err
 			}
