@@ -184,6 +184,18 @@ func RecordDialTime(duration time.Duration, host string) {
 	}
 }
 
-func RecordContainerStartLatency(duration time.Duration) {
-	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricContainerStartLatency).Update(float64(duration.Milliseconds()))
+func RecordContainerStartLatency(container *types.ContainerState, duration time.Duration) {
+	gpu := container.Gpu
+	if gpu == "" {
+		gpu = "none"
+	}
+	metricName := fmt.Sprintf("%s{container_id=\"%s\",gpu=\"%s\",gpu_count=\"%d\",cpu=\"%d\",memory=\"%d\"}",
+		metricContainerStartLatency,
+		container.ContainerId,
+		gpu,
+		container.GpuCount,
+		container.Cpu,
+		container.Memory,
+	)
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
 }
