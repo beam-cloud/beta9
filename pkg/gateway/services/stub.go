@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -125,45 +126,33 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			}, nil
 		}
 
-		gpuCounts, err := gws.providerRepo.GetGPUCounts(gws.appConfig.Worker.Pools)
-		if err != nil {
-			return &pb.GetOrCreateStubResponse{
-				Ok:     false,
-				ErrMsg: "Failed to get GPU counts.",
-			}, nil
-		}
-
 		if types.StubType(in.GetStubType()).IsServe() {
-			gpuNames := []string{}
-			hasCapacity := false
-
-			for _, gpu := range gpus {
-				if gpuCounts[gpu.String()] > 0 {
-					hasCapacity = true
-					break
-				}
-				gpuNames = append(gpuNames, gpu.String())
+			hasCapacity, err := gws.anyGpuAvailable(gpus)
+			if err != nil {
+				return &pb.GetOrCreateStubResponse{
+					Ok:     false,
+					ErrMsg: "Failed to check GPU availability.",
+				}, nil
 			}
 
 			if !hasCapacity {
 				return &pb.GetOrCreateStubResponse{
 					Ok:     false,
-					ErrMsg: fmt.Sprintf("There is currently no GPU capacity for %s.", strings.Join(gpuNames, ", ")),
+					ErrMsg: fmt.Sprintf("There is currently no GPU capacity for %s.", in.Gpu),
 				}, nil
 			}
 		}
 
-		// T4s are currently in a different pool than other GPUs and won't show up in gpu counts
-		lowGpus := []string{}
-
-		for _, gpu := range gpus {
-			if gpuCounts[gpu.String()] <= 1 && gpu.String() != types.GPU_T4.String() {
-				lowGpus = append(lowGpus, gpu.String())
-			}
+		lowCapacityGpus, err := gws.getLowCapacityGpus(gpus)
+		if err != nil {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: "Failed to check GPU availability.",
+			}, nil
 		}
 
-		if len(lowGpus) > 0 {
-			warning = fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowGpus, ", "))
+		if len(lowCapacityGpus) > 0 {
+			warning = fmt.Sprintf("GPU capacity for %s is currently low.", strings.Join(lowCapacityGpus, ", "))
 		}
 	}
 
@@ -402,4 +391,40 @@ func (gws *GatewayService) configureTaskPolicy(policy *pb.TaskPolicy, stubType t
 	}
 
 	return p
+}
+
+func (gws *GatewayService) anyGpuAvailable(gpus []types.GpuType) (bool, error) {
+	gpuAvailability, err := gws.workerRepo.GetGpuAvailability()
+	if err != nil {
+		return false, err
+	}
+	hasCapacity := false
+
+	if slices.Contains(gpus, types.GPU_ANY) {
+		hasCapacity = true
+	} else {
+		for _, gpu := range gpus {
+			if gpuAvailability[gpu.String()] {
+				hasCapacity = true
+				break
+			}
+		}
+	}
+	return hasCapacity, nil
+}
+
+func (gws *GatewayService) getLowCapacityGpus(gpus []types.GpuType) ([]string, error) {
+	preemptibleGpus := gws.workerRepo.GetPreemptibleGpus()
+	gpuCounts, err := gws.workerRepo.GetFreeGpuCounts()
+	if err != nil {
+		return nil, err
+	}
+
+	lowGpus := []string{}
+	for _, gpu := range gpus {
+		if gpuCounts[gpu.String()] <= 1 && !slices.Contains(preemptibleGpus, gpu.String()) {
+			lowGpus = append(lowGpus, gpu.String())
+		}
+	}
+	return lowGpus, nil
 }

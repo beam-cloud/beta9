@@ -28,7 +28,7 @@ class Container(BaseAbstraction):
         self.gateway_stub = GatewayServiceStub(self.channel)
         self.container_id = container_id
 
-    def attach(self, *, container_id: str, sync_dir: Optional[str] = None):
+    def attach(self, *, container_id: str, sync_dir: Optional[str] = None, hide_logs: bool = False):
         """
         Attach to a running container and stream messages back and forth. Also, optionally sync a directory to the container workspace.
         """
@@ -52,7 +52,7 @@ class Container(BaseAbstraction):
 
         r = None
         for r in stream:
-            if r.output:
+            if r.output and not hide_logs:
                 terminal.detail(r.output, end="")
 
             if r.done or r.exit_code != 0:
@@ -64,7 +64,8 @@ class Container(BaseAbstraction):
         if not r.done:
             return terminal.error(f"\n{r.output} ❌")
 
-        terminal.header(r.output)
+        if not hide_logs:
+            terminal.header(r.output)
 
     def _sync_dir_to_workspace(
         self, *, dir: str, container_id: str, on_event: Optional[Callable] = None

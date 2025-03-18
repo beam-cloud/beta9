@@ -410,7 +410,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				continue
 			}
 		} else {
-			volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
+			if strings.HasPrefix(m.MountPath, types.WorkerContainerVolumePath) {
+				volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
+			}
 
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
 				err := os.MkdirAll(m.LocalPath, 0755)

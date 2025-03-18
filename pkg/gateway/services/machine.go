@@ -14,7 +14,7 @@ import (
 func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachinesRequest) (*pb.ListMachinesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	gpus, err := gws.providerRepo.GetGPUAvailability(gws.appConfig.Worker.Pools)
+	gpus, err := gws.workerRepo.GetGpuAvailability()
 	if err != nil {
 		return nil, err
 	}

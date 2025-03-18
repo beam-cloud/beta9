@@ -77,7 +77,7 @@ func ParseGPU(gpu interface{}) (uint, error) {
 	return uint(gpuValue), nil
 }
 
-func ParseGPUType(gpu interface{}) (types.GPUType, error) {
+func ParseGPUType(gpu interface{}) (types.GpuType, error) {
 	switch fmt.Sprintf("%v", gpu) {
 	case string(types.GPU_A100_40):
 		return types.GPU_A100_40, nil
@@ -96,7 +96,7 @@ func ParseGPUType(gpu interface{}) (types.GPUType, error) {
 	case string(types.GPU_RTX4090):
 		return types.GPU_RTX4090, nil
 	default:
-		return types.GPUType(""), errors.New("invalid gpu type")
+		return types.GpuType(""), errors.New("invalid gpu type")
 	}
 }
 

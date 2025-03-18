@@ -396,14 +396,12 @@ class VLLM(ASGI):
             os._exit(0)  # kills all threads immediately
 
     def _serve(self, *, dir: str, timeout: int = 0):
-        stream = self.parent.endpoint_stub.start_endpoint_serve(
+        r: StartEndpointServeResponse = self.parent.endpoint_stub.start_endpoint_serve(
             StartEndpointServeRequest(
                 stub_id=self.parent.stub_id,
                 timeout=timeout,
             )
         )
-
-        r: StartEndpointServeResponse = stream
         if not r.ok:
             return terminal.error(r.error_msg)
 
