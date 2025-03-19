@@ -11,14 +11,14 @@ func ConfigureContainerRequestSecrets(
 	workspace *types.Workspace,
 	stubConfig types.StubConfigV1,
 ) ([]string, error) {
-	signingKey, err := common.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := common.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
 	secretEnv := []string{}
 	for _, secret := range stubConfig.Secrets {
-		secretValue, err := common.Decrypt(signingKey, secret.Value)
+		secretValue, err := common.Decrypt(secretKey, secret.Value)
 		if err != nil {
 			return nil, err
 		}

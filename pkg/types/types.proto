@@ -65,6 +65,7 @@ message ContainerRequest {
   bool checkpoint_enabled = 19;
   BuildOptions build_options = 20;
   repeated uint32 ports = 21;
+  double cost_per_ms = 22;
 }
 
 message ContainerState {
@@ -124,6 +125,7 @@ message StubWithRelated {
   Stub stub = 1;
   Workspace workspace = 2;
   Object object = 3;
+  WorkspaceStorage storage = 4;
 }
 
 message Worker {
@@ -171,5 +173,25 @@ message Workspace {
   bool multi_gpu_enabled = 8;
   uint32 concurrency_limit_id = 9;
   ConcurrencyLimit concurrency_limit = 10;
+  uint32 storage_id = 11;
+  WorkspaceStorage storage = 12;
+}
+
+message WorkspaceStorage {
+  uint32 id = 1;
+  string external_id = 2;
+  string bucket_name = 3;
+  string access_key = 4;
+  string secret_key = 5;
+  string endpoint_url = 6;
+  string region = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+message WorkspaceWithRelated {
+  Workspace workspace = 1;
+  ConcurrencyLimit concurrency_limit = 2;
+  WorkspaceStorage storage = 3;
 }
 

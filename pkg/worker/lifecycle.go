@@ -26,7 +26,7 @@ import (
 
 const (
 	baseConfigPath            string        = "/tmp"
-	defaultContainerDirectory string        = "/mnt/code"
+	defaultContainerDirectory string        = types.WorkerUserCodeVolume
 	specBaseName              string        = "config.json"
 	initialSpecBaseName       string        = "initial_config.json"
 	runcEventsInterval        time.Duration = 5 * time.Second
