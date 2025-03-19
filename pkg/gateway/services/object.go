@@ -15,17 +15,28 @@ import (
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	storageClient, err := clients.NewStorageClient(ctx, authInfo.Token.Workspace.Name, authInfo.Token.Storage)
+	if err != nil {
+		return &pb.HeadObjectResponse{
+			Ok:       false,
+			ErrorMsg: "Unable to create storage client",
+		}, nil
+	}
+
 	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil {
-		return &pb.HeadObjectResponse{
-			Ok:     true,
-			Exists: true,
-			ObjectMetadata: &pb.ObjectMetadata{
-				Name: existingObject.Hash,
-				Size: existingObject.Size,
-			},
-			ObjectId: existingObject.ExternalId,
-		}, nil
+		exists, _ := storageClient.Head(ctx, existingObject.ExternalId)
+		if exists {
+			return &pb.HeadObjectResponse{
+				Ok:     true,
+				Exists: true,
+				ObjectMetadata: &pb.ObjectMetadata{
+					Name: existingObject.Hash,
+					Size: existingObject.Size,
+				},
+				ObjectId: existingObject.ExternalId,
+			}, nil
+		}
 	}
 
 	return &pb.HeadObjectResponse{
