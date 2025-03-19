@@ -2,15 +2,12 @@ package apiv1
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"path"
-	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -208,14 +205,11 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Wor
 	parentObjectPath := path.Join(types.DefaultObjectPath, stub.Workspace.Name)
 	parentObjectFilePath := path.Join(parentObjectPath, parentObject.ExternalId)
 
-	hash := sha256.Sum256([]byte(parentObject.Hash + workspace.ExternalId))
-	hashStr := hex.EncodeToString(hash[:])
-
-	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, hashStr, workspace.Id); err == nil {
+	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, parentObject.Hash, workspace.Id); err == nil {
 		return existingObject.Id, nil
 	}
 
-	newObject, err := g.backendRepo.CreateObject(ctx, hashStr, parentObject.Size, workspace.Id)
+	newObject, err := g.backendRepo.CreateObject(ctx, parentObject.Hash, parentObject.Size, workspace.Id)
 	if err != nil {
 		return 0, err
 	}
@@ -259,13 +253,10 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		}
 	}
 
-	// Get secrets
-	missingSecrets := []string{}
 	for _, secret := range parentSecrets {
 		secret, err := g.backendRepo.GetSecretByName(ctx, workspace, secret.Name)
 		if err != nil {
 			if err == sql.ErrNoRows {
-				missingSecrets = append(missingSecrets, secret.Name)
 				continue
 			}
 
@@ -280,16 +271,12 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		})
 	}
 
-	if len(missingSecrets) > 0 {
-		return nil, HTTPBadRequest("Missing secrets: " + strings.Join(missingSecrets, ", "))
-	}
-
 	err = g.configureVolumes(ctx, stubConfig.Volumes, workspace)
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to configure volumes")
 	}
 
-	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, stub.Type.Kind(), *stubConfig, objectId, workspace.Id, true)
+	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true)
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to clone stub")
 	}
