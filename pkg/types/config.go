@@ -61,6 +61,25 @@ type RedisConfig struct {
 	RouteByLatency     bool          `key:"routeByLatency" json:"route_by_latency"`
 }
 
+type ValkeyConfig struct {
+	Enabled         bool                 `json:"enabled"`
+	Password        string               `json:"password"`
+	PersistenceSize string               `json:"persistenceSize"`
+	ReplicaCount    int                  `json:"replicaCount"`
+	ExistingPrimary *ExistingPrimary     `json:"existingPrimary,omitempty"`
+	Sentinel        ValkeysentinelConfig `json:"sentinel"`
+}
+
+type ExistingPrimary struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
+
+type ValkeysentinelConfig struct {
+	Enabled bool `json:"enabled"`
+	Quorum  int  `json:"quorum"`
+}
+
 type PostgresConfig struct {
 	Host      string `key:"host" json:"host"`
 	Port      int    `key:"port" json:"port"`
