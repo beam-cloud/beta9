@@ -62,22 +62,38 @@ type RedisConfig struct {
 }
 
 type ValkeyConfig struct {
-	Enabled         bool                 `json:"enabled"`
-	Password        string               `json:"password"`
-	PersistenceSize string               `json:"persistenceSize"`
-	ReplicaCount    int                  `json:"replicaCount"`
-	ExistingPrimary *ExistingPrimary     `json:"existingPrimary,omitempty"`
-	Sentinel        ValkeysentinelConfig `json:"sentinel"`
+	Enabled         bool                   `json:"enabled"`
+	Password        string                 `json:"password"`
+	PersistenceSize string                 `json:"persistenceSize"`
+	ReplicaCount    int                    `json:"replicaCount"`
+	ExistingPrimary *ValkeyExistingPrimary `json:"existingPrimary,omitempty"`
+	Sentinel        ValkeySentinelConfig   `json:"sentinel"`
+	Monitoring      ValkeyMonitoringConfig `json:"monitoring"`
 }
 
-type ExistingPrimary struct {
+type ValkeyExistingPrimary struct {
 	Host string `json:"host"`
 	Port int    `json:"port"`
 }
 
-type ValkeysentinelConfig struct {
+type ValkeySentinelConfig struct {
 	Enabled bool `json:"enabled"`
 	Quorum  int  `json:"quorum"`
+}
+
+type ValkeyMonitoringConfig struct {
+	ServiceMonitor ServiceMonitorConfig `json:"serviceMonitor"`
+	PrometheusRule PrometheusRuleConfig `json:"prometheusRule"`
+}
+
+type ServiceMonitorConfig struct {
+	Enabled bool              `json:"enabled"`
+	Labels  map[string]string `json:"labels"`
+}
+
+type PrometheusRuleConfig struct {
+	Enabled bool              `json:"enabled"`
+	Labels  map[string]string `json:"labels"`
 }
 
 type PostgresConfig struct {
