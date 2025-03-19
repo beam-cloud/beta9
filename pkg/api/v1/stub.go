@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path"
@@ -209,8 +208,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Wor
 	parentObjectPath := path.Join(types.DefaultObjectPath, stub.Workspace.Name)
 	parentObjectFilePath := path.Join(parentObjectPath, parentObject.ExternalId)
 
-	// TODO: update
-	hash := sha256.Sum256([]byte(parentObject.Hash + "a"))
+	hash := sha256.Sum256([]byte(parentObject.Hash + workspace.ExternalId))
 	hashStr := hex.EncodeToString(hash[:])
 
 	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, hashStr, workspace.Id); err == nil {
@@ -243,7 +241,6 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Wor
 func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (*types.Stub, error) {
 	objectId, err := g.copyObjectContents(ctx, workspace, stub)
 	if err != nil {
-		log.Println(err)
 		return nil, HTTPBadRequest("Failed to clone object")
 	}
 
