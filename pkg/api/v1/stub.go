@@ -1,13 +1,23 @@
 package apiv1
 
 import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"path"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
 )
 
@@ -28,6 +38,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, confi
 	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                                  // Allows cluster admins to list all stubs
 	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))               // Allows workspace admins to get the URL of a stub
 	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL)) // Allows workspace admins to get the URL of a stub by deployment Id
+	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                         // Allows users to clone a public stub
 
 	return group
 }
@@ -145,4 +156,146 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 
 	invokeUrl := common.BuildDeploymentURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub, &deployment.Deployment)
 	return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
+}
+
+func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
+	stubID := ctx.Param("stubId")
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
+	if err != nil {
+		return HTTPInternalServerError("Failed to lookup stub")
+	}
+
+	if stub == nil || (!stub.Public && cc.AuthInfo.Workspace.Id != stub.WorkspaceId) {
+		return HTTPBadRequest("Invalid stub ID")
+	}
+
+	newStub, err := g.cloneStub(ctx.Request().Context(), cc.AuthInfo.Workspace, stub)
+	if err != nil {
+		return err
+	}
+
+	return ctx.JSON(http.StatusOK, newStub)
+}
+
+func (g StubGroup) configureVolumes(ctx context.Context, volumes []*pb.Volume, workspace *types.Workspace) error {
+	for i, volume := range volumes {
+		if volume.Config != nil {
+			// De-reference secrets
+			accessKey, err := g.backendRepo.GetSecretByName(ctx, workspace, volume.Config.AccessKey)
+			if err != nil {
+				return fmt.Errorf("Failed to get secret: %s", volume.Config.AccessKey)
+			}
+			volumes[i].Config.AccessKey = accessKey.Value
+
+			secretKey, err := g.backendRepo.GetSecretByName(ctx, workspace, volume.Config.SecretKey)
+			if err != nil {
+				return fmt.Errorf("Failed to get secret: %s", volume.Config.SecretKey)
+			}
+			volumes[i].Config.SecretKey = secretKey.Value
+		}
+	}
+
+	return nil
+}
+
+func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (uint, error) {
+	parentObject, err := g.backendRepo.GetObjectByExternalStubId(ctx, stub.ExternalId, stub.WorkspaceId)
+	if err != nil {
+		return 0, err
+	}
+
+	parentObjectPath := path.Join(types.DefaultObjectPath, stub.Workspace.Name)
+	parentObjectFilePath := path.Join(parentObjectPath, parentObject.ExternalId)
+
+	// TODO: update
+	hash := sha256.Sum256([]byte(parentObject.Hash + "a"))
+	hashStr := hex.EncodeToString(hash[:])
+
+	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, hashStr, workspace.Id); err == nil {
+		return existingObject.Id, nil
+	}
+
+	newObject, err := g.backendRepo.CreateObject(ctx, hashStr, parentObject.Size, workspace.Id)
+	if err != nil {
+		return 0, err
+	}
+
+	newObjectPath := path.Join(types.DefaultObjectPath, workspace.Name)
+	newObjectFilePath := path.Join(newObjectPath, newObject.ExternalId)
+
+	input, err := os.ReadFile(parentObjectFilePath)
+	if err != nil {
+		g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
+		return 0, err
+	}
+
+	err = os.WriteFile(newObjectFilePath, input, 0644)
+	if err != nil {
+		g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
+		return 0, err
+	}
+
+	return newObject.Id, nil
+}
+
+func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (*types.Stub, error) {
+	objectId, err := g.copyObjectContents(ctx, workspace, stub)
+	if err != nil {
+		log.Println(err)
+		return nil, HTTPBadRequest("Failed to clone object")
+	}
+
+	stubConfig := &types.StubConfigV1{}
+	if err = json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return nil, HTTPInternalServerError("Failed to decode stub config")
+	}
+
+	parentSecrets := stubConfig.Secrets
+	stubConfig.Secrets = []types.Secret{}
+
+	if stubConfig.RequiresGPU() {
+		concurrencyLimit, err := g.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, workspace.ExternalId)
+		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
+			return nil, HTTPBadRequest("GPU concurrency limit is 0.")
+		}
+	}
+
+	// Get secrets
+	missingSecrets := []string{}
+	for _, secret := range parentSecrets {
+		secret, err := g.backendRepo.GetSecretByName(ctx, workspace, secret.Name)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				missingSecrets = append(missingSecrets, secret.Name)
+				continue
+			}
+
+			return nil, HTTPInternalServerError("Failed to lookup secret")
+		}
+
+		stubConfig.Secrets = append(stubConfig.Secrets, types.Secret{
+			Name:      secret.Name,
+			Value:     secret.Value,
+			CreatedAt: secret.CreatedAt,
+			UpdatedAt: secret.UpdatedAt,
+		})
+	}
+
+	if len(missingSecrets) > 0 {
+		return nil, HTTPBadRequest("Missing secrets: " + strings.Join(missingSecrets, ", "))
+	}
+
+	err = g.configureVolumes(ctx, stubConfig.Volumes, workspace)
+	if err != nil {
+		return nil, HTTPInternalServerError("Failed to configure volumes")
+	}
+
+	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, stub.Type.Kind(), *stubConfig, objectId, workspace.Id, true)
+	if err != nil {
+		return nil, HTTPInternalServerError("Failed to clone stub")
+	}
+
+	return &newStub, nil
 }

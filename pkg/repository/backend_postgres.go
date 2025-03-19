@@ -837,7 +837,7 @@ func (r *PostgresBackendRepository) UpdateStubConfig(ctx context.Context, stubId
 func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
 	var stub types.StubWithRelated
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at,
+		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public,
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"`,
 	).
