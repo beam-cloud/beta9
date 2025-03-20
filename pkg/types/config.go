@@ -74,7 +74,6 @@ type ValkeyConfig struct {
 	PoolNodeCount   int                    `json:"poolNodeCount"`
 	ExistingPrimary *ValkeyExistingPrimary `json:"existingPrimary,omitempty"`
 	Sentinel        ValkeySentinelConfig   `json:"sentinel"`
-	Monitoring      ValkeyMonitoringConfig `json:"monitoring"`
 }
 
 type ValkeyExistingPrimary struct {
@@ -85,21 +84,6 @@ type ValkeyExistingPrimary struct {
 type ValkeySentinelConfig struct {
 	Enabled bool `json:"enabled"`
 	Quorum  int  `json:"quorum"`
-}
-
-type ValkeyMonitoringConfig struct {
-	ServiceMonitor ServiceMonitorConfig `json:"serviceMonitor"`
-	PrometheusRule PrometheusRuleConfig `json:"prometheusRule"`
-}
-
-type ServiceMonitorConfig struct {
-	Enabled bool              `json:"enabled"`
-	Labels  map[string]string `json:"labels"`
-}
-
-type PrometheusRuleConfig struct {
-	Enabled bool              `json:"enabled"`
-	Labels  map[string]string `json:"labels"`
 }
 
 type PostgresConfig struct {
