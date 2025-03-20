@@ -15,7 +15,7 @@ func ExtractObjectFile(ctx context.Context, objectId, workspaceName, destPath st
 		return nil
 	}
 
-	os.MkdirAll(destPath, 0644)
+	os.MkdirAll(destPath, 0755)
 
 	// Check if the object file exists
 	objectFilePath := path.Join(types.DefaultObjectPath, workspaceName, objectId)
