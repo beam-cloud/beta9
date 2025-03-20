@@ -67,24 +67,24 @@ type BlobCacheMetadataConfig struct {
 }
 
 type ValkeyConfig struct {
-	Enabled         bool                   `json:"enabled"`
-	Password        string                 `json:"password"`
-	TLS             bool                   `json:"tls"`
-	PersistenceSize string                 `json:"persistenceSize"`
-	ReplicaCount    int                    `json:"replicaCount"`
-	PoolNodeCount   int                    `json:"poolNodeCount"`
-	ExistingPrimary *ValkeyExistingPrimary `json:"existingPrimary,omitempty"`
-	Sentinel        ValkeySentinelConfig   `json:"sentinel"`
+	Enabled         bool                   `key:"enabled" json:"enabled"`
+	Password        string                 `key:"password" json:"password"`
+	TLS             bool                   `key:"tls" json:"tls"`
+	PersistenceSize string                 `key:"persistenceSize" json:"persistenceSize"`
+	ReplicaCount    int                    `key:"replicaCount" json:"replicaCount"`
+	PoolNodeCount   int                    `key:"poolNodeCount" json:"poolNodeCount"`
+	ExistingPrimary *ValkeyExistingPrimary `key:"existingPrimary" json:"existingPrimary,omitempty"`
+	Sentinel        ValkeySentinelConfig   `key:"sentinel" json:"sentinel"`
 }
 
 type ValkeyExistingPrimary struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Host string `key:"host" json:"host"`
+	Port int    `key:"port" json:"port"`
 }
 
 type ValkeySentinelConfig struct {
-	Enabled bool `json:"enabled"`
-	Quorum  int  `json:"quorum"`
+	Enabled bool `key:"enabled" json:"enabled"`
+	Quorum  int  `key:"quorum" json:"quorum"`
 }
 
 type PostgresConfig struct {
