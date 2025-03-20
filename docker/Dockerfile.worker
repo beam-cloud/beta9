@@ -6,26 +6,6 @@ FROM golang:1.22.10-bookworm AS golang
 RUN apt-get update && apt-get install -y curl git
 
 
-# skopeo
-# ========================
-FROM golang AS skopeo
-
-WORKDIR /workspace
-
-ENV CGO_ENABLED="0"  \
-    DISABLE_DOCS="1" \
-    GO_DYN_FLAGS=""  \
-    BUILDTAGS="containers_image_openpgp"
-
-RUN <<EOT
-set -eux
-git clone https://github.com/containers/skopeo.git .
-make
-make install
-/usr/local/bin/skopeo --version
-EOT
-
-
 # runc
 # ========================
 # FIXME: once we upgrade to 1.23, we can just use "FROM golang"
@@ -60,6 +40,20 @@ git clone https://github.com/containers/buildah.git /workspace/buildah
 cd /workspace/buildah
 make BUILDTAGS="cni"
 make install
+EOT
+
+ENV CGO_ENABLED="0"  \
+    DISABLE_DOCS="1" \
+    GO_DYN_FLAGS=""  \
+    BUILDTAGS="containers_image_openpgp"
+
+RUN <<EOT
+set -eux
+git clone https://github.com/containers/skopeo.git /workspace/skopeo
+cd /workspace/skopeo
+make
+make install
+/usr/local/bin/skopeo --version
 EOT
 
 # nvidia-container-toolkit
@@ -185,8 +179,8 @@ ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
 RUN echo "nameserver 8.8.8.8" > /workspace/resolv.conf
 COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
 COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
-COPY --from=skopeo /usr/local/bin/skopeo /usr/local/bin/skopeo
-COPY --from=skopeo /workspace/default-policy.json /etc/containers/policy.json
+COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
+COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 
 COPY ./bin/volume_cache_x86.so /usr/local/lib/volume_cache_x86.so
