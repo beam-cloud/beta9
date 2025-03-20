@@ -328,6 +328,7 @@ type Stub struct {
 	WorkspaceId   uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
+	Public        bool      `db:"public" json:"public"`
 }
 
 func (s *Stub) UnmarshalConfig() (*StubConfigV1, error) {

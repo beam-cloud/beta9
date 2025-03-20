@@ -222,29 +222,15 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 	return instance, nil
 }
 
-// CreatePod creates a new container that will run to completion, with an associated task
-func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error) {
-	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	stub, err := s.backendRepo.GetStubByExternalId(ctx, in.StubId)
-	if err != nil {
-		return &pb.CreatePodResponse{
-			Ok: false,
-		}, nil
-	}
-
+func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated) (string, error) {
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
-		return &pb.CreatePodResponse{
-			Ok: false,
-		}, nil
+		return "", err
 	}
 
 	secrets, err := abstractions.ConfigureContainerRequestSecrets(authInfo.Workspace, stubConfig)
 	if err != nil {
-		return &pb.CreatePodResponse{
-			Ok: false,
-		}, err
+		return "", err
 	}
 
 	containerId := s.generateContainerId(stub.ExternalId)
@@ -257,9 +243,7 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		stub.ExternalId,
 	)
 	if err != nil {
-		return &pb.CreatePodResponse{
-			Ok: false,
-		}, err
+		return "", err
 	}
 
 	env := []string{}
@@ -292,7 +276,17 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		ports = stubConfig.Ports
 	}
 
-	containerRequest := &types.ContainerRequest{
+	// Set container timeout if keepwarm is > 0
+	if stubConfig.KeepWarmSeconds > 0 {
+		s.rdb.SetEx(
+			context.Background(),
+			Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId),
+			1,
+			time.Duration(stubConfig.KeepWarmSeconds)*time.Second,
+		)
+	}
+
+	err = s.scheduler.Run(&types.ContainerRequest{
 		ContainerId:       containerId,
 		StubId:            stub.ExternalId,
 		Env:               env,
@@ -308,23 +302,29 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		EntryPoint:        stubConfig.EntryPoint,
 		Ports:             ports,
 		CheckpointEnabled: checkpointEnabled,
+	})
+	if err != nil {
+		return "", err
 	}
 
-	// Set container timeout if keepwarm is > 0
-	if stubConfig.KeepWarmSeconds > 0 {
-		s.rdb.SetEx(
-			context.Background(),
-			Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId),
-			1,
-			time.Duration(stubConfig.KeepWarmSeconds)*time.Second,
-		)
-	}
+	return containerId, nil
+}
 
-	err = s.scheduler.Run(containerRequest)
+// CreatePod creates a new container that will run to completion, with an associated task
+func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	stub, err := s.backendRepo.GetStubByExternalId(ctx, in.StubId)
 	if err != nil {
 		return &pb.CreatePodResponse{
-			Ok:       false,
-			ErrorMsg: err.Error(),
+			Ok: false,
+		}, nil
+	}
+
+	containerId, err := s.run(ctx, authInfo, stub)
+	if err != nil {
+		return &pb.CreatePodResponse{
+			Ok: false,
 		}, nil
 	}
 
