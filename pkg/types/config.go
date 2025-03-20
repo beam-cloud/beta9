@@ -67,14 +67,14 @@ type BlobCacheMetadataConfig struct {
 }
 
 type ValkeyConfig struct {
-	Enabled         bool                   `key:"enabled" json:"enabled"`
-	Password        string                 `key:"password" json:"password"`
-	TLS             bool                   `key:"tls" json:"tls"`
-	PersistenceSize string                 `key:"persistenceSize" json:"persistenceSize"`
-	ReplicaCount    int                    `key:"replicaCount" json:"replicaCount"`
-	PoolNodeCount   int                    `key:"poolNodeCount" json:"poolNodeCount"`
-	ExistingPrimary *ValkeyExistingPrimary `key:"existingPrimary" json:"existingPrimary,omitempty"`
-	Sentinel        ValkeySentinelConfig   `key:"sentinel" json:"sentinel"`
+	Enabled         bool                  `key:"enabled" json:"enabled"`
+	Password        string                `key:"password" json:"password"`
+	TLS             bool                  `key:"tls" json:"tls"`
+	PersistenceSize string                `key:"persistenceSize" json:"persistenceSize"`
+	ReplicaCount    int                   `key:"replicaCount" json:"replicaCount"`
+	PoolNodeCount   int                   `key:"poolNodeCount" json:"poolNodeCount"`
+	ExistingPrimary ValkeyExistingPrimary `key:"existingPrimary" json:"existingPrimary"`
+	Sentinel        ValkeySentinelConfig  `key:"sentinel" json:"sentinel"`
 }
 
 type ValkeyExistingPrimary struct {
