@@ -176,8 +176,10 @@ class RunnerAbstraction(BaseAbstraction):
 
         if "<PORT>" in res.url:
             terminal.header("Exposed endpoints\n")
+
             for port in self.ports:
                 terminal.print(f"\tPort {port}: {res.url.replace('<PORT>', str(port))}")
+
             terminal.print("")
             return res
 
