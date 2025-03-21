@@ -117,14 +117,14 @@ typecheck = ["mypy"]
 
 [[package]]
 name = "betterproto-beta9"
-version = "2.0.0b7"
+version = "2.0.1"
 description = "A better Protobuf / gRPC generator & library"
 optional = false
 python-versions = "<4.0,>=3.8"
 groups = ["main"]
 files = [
-    {file = "betterproto_beta9-2.0.0b7-py3-none-any.whl", hash = "sha256:2ee8bbbbd650d82a2b94629a8e7a3765dc793a52d5f0b156a838bbfb80aa37b8"},
-    {file = "betterproto_beta9-2.0.0b7.tar.gz", hash = "sha256:122e0f6fbf9591e782848f3d486f1eb90657e215cb8aca74886d4ba6b8fa4b9a"},
+    {file = "betterproto_beta9-2.0.1-py3-none-any.whl", hash = "sha256:8e6fb7b1ef608eb354a7f5456ad4465c089d6bb19df46dcb89d7d8b131cf9b30"},
+    {file = "betterproto_beta9-2.0.1.tar.gz", hash = "sha256:86ff723328a28fcd9081edd362112cd98edc936df0f03006000543e42e431fdc"},
 ]
 
 [package.dependencies]
@@ -1761,4 +1761,4 @@ test = ["websockets"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.8"
-content-hash = "48138fe8992c7ce53aa5abca426094d6947161d7309ec9a58d01dce00198c0fe"
+content-hash = "4038026a59aefd605cdca17f946d28c9a716b3580ab39064adfbaa5b78018fa5"

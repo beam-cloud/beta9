@@ -22,7 +22,7 @@ protobuf = "^4.25.1"
 fastapi = "^0.115.11"
 uvicorn = "^0.29.0"
 watchdog = "^4.0.0"
-betterproto-beta9 = { version = "2.0.0b7", extras = ["compiler"] }
+betterproto-beta9 = { version = "2.0.1", extras = ["compiler"] }
 croniter = "^3.0.3"
 websocket-client = "^1.8.0"
 prompt-toolkit = "^3.0.48"
