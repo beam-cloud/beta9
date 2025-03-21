@@ -221,7 +221,6 @@ type ContainerRequest struct {
 	CheckpointEnabled bool            `json:"checkpoint_enabled"`
 	BuildOptions      BuildOptions    `json:"build_options"`
 	Ports             []uint32        `json:"ports"`
-	CostPerMs         float64         `json:"cost_per_ms"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
