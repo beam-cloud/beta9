@@ -175,7 +175,7 @@ class RunnerAbstraction(BaseAbstraction):
             return terminal.error("Failed to get invocation URL", exit=False)
 
         if "<PORT>" in res.url:
-            terminal.header("Exposed services\n")
+            terminal.header("Exposed endpoints\n")
             for port in self.ports:
                 terminal.print(f"\tPort {port}: {res.url.replace('<PORT>', str(port))}")
             terminal.print("")
