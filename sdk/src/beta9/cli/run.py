@@ -46,7 +46,7 @@ def common(**_):
     "--sync",
     is_flag=True,
     default=False,
-    help="Recursively sync the current directory to the container",
+    help="Recursively sync the current directory to the container and watch for changes",
 )
 @override_config_options
 @pass_service_client
