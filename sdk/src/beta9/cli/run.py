@@ -42,11 +42,18 @@ def common(**_):
     nargs=1,
     required=False,
 )
+@click.option(
+    "--sync",
+    is_flag=True,
+    default=False,
+    help="Recursively sync the current directory to the container and watch for changes",
+)
 @override_config_options
 @pass_service_client
 def run(
     _: ServiceClient,
     handler: str,
+    sync: bool,
     **kwargs,
 ):
     entrypoint = kwargs["entrypoint"]
@@ -72,4 +79,11 @@ def run(
         return
 
     container = Container(container_id=result.container_id)
-    container.attach(container_id=result.container_id)
+
+    sync_dir = None
+    if sync:
+        sync_dir = "./"
+    else:
+        sync_dir = None
+
+    container.attach(container_id=result.container_id, sync_dir=sync_dir)

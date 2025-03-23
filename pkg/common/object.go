@@ -13,7 +13,7 @@ func ExtractObjectFile(ctx context.Context, objectPath, destPath string) error {
 		return nil
 	}
 
-	os.MkdirAll(destPath, 0644)
+	os.MkdirAll(destPath, 0755)
 
 	// Check if the object file exists
 	if _, err := os.Stat(objectPath); os.IsNotExist(err) {

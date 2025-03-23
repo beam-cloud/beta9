@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "beta9"
-version = "0.1.183"
+version = "0.1.186"
 description = ""
 authors = ["beam.cloud <support@beam.cloud>"]
 packages = [
@@ -19,10 +19,10 @@ cloudpickle = "^3.0.0"
 rich = "^13.9.4"
 click = "^8.1.7"
 protobuf = "^4.25.1"
-fastapi = "^0.110.2"
+fastapi = "^0.115.11"
 uvicorn = "^0.29.0"
 watchdog = "^4.0.0"
-betterproto-beta9 = { version = "2.0.0b7", extras = ["compiler"] }
+betterproto-beta9 = { version = "2.0.1", extras = ["compiler"] }
 croniter = "^3.0.3"
 websocket-client = "^1.8.0"
 prompt-toolkit = "^3.0.48"

@@ -119,6 +119,7 @@ message Stub {
   uint32 workspace_id = 8;
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp updated_at = 10;
+  bool public = 11;
 }
 
 message StubWithRelated {

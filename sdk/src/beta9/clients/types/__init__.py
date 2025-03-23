@@ -132,6 +132,7 @@ class Stub(betterproto.Message):
     workspace_id: int = betterproto.uint32_field(8)
     created_at: datetime = betterproto.message_field(9)
     updated_at: datetime = betterproto.message_field(10)
+    public: bool = betterproto.bool_field(11)
 
 
 @dataclass(eq=False, repr=False)
