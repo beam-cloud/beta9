@@ -174,7 +174,12 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid stub ID")
 	}
 
-	if err := g.processStubOverrides(ctx, stub); err != nil {
+	var overrideConfig OverrideStubConfig
+	if err := ctx.Bind(&overrideConfig); err != nil {
+		return HTTPBadRequest("Failed to process overrides")
+	}
+
+	if err := g.processStubOverrides(overrideConfig, stub); err != nil {
 		return err
 	}
 
@@ -186,13 +191,7 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, newStub)
 }
 
-func (g StubGroup) processStubOverrides(ctx echo.Context, stub *types.StubWithRelated) error {
-	var overrideConfig OverrideStubConfig
-
-	if err := ctx.Bind(&overrideConfig); err != nil {
-		return HTTPBadRequest("Failed to process overrides")
-	}
-
+func (g StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub *types.StubWithRelated) error {
 	var stubConfig types.StubConfigV1
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return HTTPBadRequest("Failed to process overrides")
