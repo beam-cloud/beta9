@@ -10,12 +10,16 @@ import (
 )
 
 func NewStubGroupForTest() *StubGroup {
-	backendRepo, err := repository.NewBackendPostgresRepositoryForTest()
-	if err != nil {
-		panic(err)
-	}
+	backendRepo, _ := repository.NewBackendPostgresRepositoryForTest()
 
-	config := types.AppConfig{}
+	config := types.AppConfig{
+		GatewayService: types.GatewayServiceConfig{
+			StubLimits: types.StubLimits{
+				Memory:      40000,
+				MaxGpuCount: 2,
+			},
+		},
+	}
 
 	e := echo.New()
 
@@ -42,6 +46,7 @@ func TestProcessStubOverrides(t *testing.T) {
 		memory   *int64
 		gpu      *string
 		gpuCount *uint32
+		error    bool
 	}{
 		{
 			name: "Test with CPU override",
@@ -69,6 +74,21 @@ func TestProcessStubOverrides(t *testing.T) {
 		{
 			name: "Test with no overrides",
 		},
+		{
+			name:  "Test with invalid GPU",
+			gpu:   ptr.To("invalid-gpu"),
+			error: true,
+		},
+		{
+			name:     "Test with invalid GPU Count",
+			gpuCount: ptr.To(uint32(3)),
+			error:    true,
+		},
+		{
+			name:   "Test with invalid Memory",
+			memory: ptr.To(int64(50000)),
+			error:  true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -80,7 +100,13 @@ func TestProcessStubOverrides(t *testing.T) {
 				GpuCount: tt.gpuCount,
 			}, &types.StubWithRelated{Stub: *generateDefaultStubWithConfig()})
 			if err != nil {
-				t.Errorf("processStubOverrides() error = %v", err)
+				if !tt.error {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			} else {
+				if tt.error {
+					t.Errorf("Expected error but got none")
+				}
 			}
 		})
 	}
