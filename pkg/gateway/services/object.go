@@ -10,6 +10,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 )
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
@@ -25,7 +26,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 
 	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil {
-		exists, _ := storageClient.Head(ctx, existingObject.ExternalId)
+		exists, _ := storageClient.Head(ctx, "objects/"+existingObject.ExternalId)
 		if exists {
 			return &pb.HeadObjectResponse{
 				Ok:     true,
@@ -36,6 +37,11 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 				},
 				ObjectId: existingObject.ExternalId,
 			}, nil
+		} else {
+			err = gws.backendRepo.DeleteObjectByExternalId(ctx, existingObject.ExternalId)
+			if err != nil {
+				log.Error().Err(err).Msgf("Unable to delete object %s", existingObject.ExternalId)
+			}
 		}
 	}
 

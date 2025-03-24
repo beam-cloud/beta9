@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 type StorageClient struct {
@@ -61,6 +62,10 @@ func (c *StorageClient) Upload(ctx context.Context, key string, data []byte) err
 }
 
 func (c *StorageClient) Head(ctx context.Context, key string) (bool, error) {
+	log.Info().Msgf("HeadObject: %s", key)
+	log.Info().Msgf("Bucket: %s", c.WorkspaceStorage.BucketName)
+	log.Info().Msgf("Region: %s", c.WorkspaceStorage.Region)
+	log.Info().Msgf("Endpoint: %s", c.WorkspaceStorage.EndpointUrl)
 	_, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(c.WorkspaceStorage.BucketName),
 		Key:    aws.String(key),
