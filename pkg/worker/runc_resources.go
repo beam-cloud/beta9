@@ -25,8 +25,6 @@ func calculateCPUQuota(millicores int64) int64 {
 func getLinuxCPU(request *types.ContainerRequest) *specs.LinuxCPU {
 	return &specs.LinuxCPU{
 		Shares: ptr.To(calculateCPUShares(request.Cpu)),
-		Quota:  ptr.To(calculateCPUQuota(request.Cpu)),
-		Period: ptr.To(uint64(standardCPUPeriod)),
 	}
 }
 
