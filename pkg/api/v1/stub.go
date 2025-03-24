@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path"
@@ -181,7 +180,6 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 
 	newStub, err := g.cloneStub(ctx.Request().Context(), cc.AuthInfo.Workspace, stub)
 	if err != nil {
-		log.Println(err)
 		return err
 	}
 
@@ -295,7 +293,6 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Wor
 func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (*types.Stub, error) {
 	objectId, err := g.copyObjectContents(ctx, workspace, stub)
 	if err != nil {
-		log.Println(err)
 		return nil, HTTPBadRequest("Failed to clone object")
 	}
 
@@ -343,7 +340,6 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 
 	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true)
 	if err != nil {
-		log.Println(err)
 		return nil, HTTPInternalServerError("Failed to clone stub")
 	}
 
