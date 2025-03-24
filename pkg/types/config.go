@@ -11,22 +11,22 @@ import (
 )
 
 type AppConfig struct {
-	ClusterName       string                    `key:"clusterName" json:"cluster_name"`
-	DebugMode         bool                      `key:"debugMode" json:"debug_mode"`
-	PrettyLogs        bool                      `key:"prettyLogs" json:"pretty_logs"`
-	Database          DatabaseConfig            `key:"database" json:"database"`
-	GatewayService    GatewayServiceConfig      `key:"gateway" json:"gateway_service"`
-	FileService       FileServiceConfig         `key:"fileService" json:"file_service"`
-	ImageService      ImageServiceConfig        `key:"imageService" json:"image_service"`
-	Storage           StorageConfig             `key:"storage" json:"storage"`
-	Worker            WorkerConfig              `key:"worker" json:"worker"`
-	Providers         ProviderConfig            `key:"providers" json:"providers"`
-	Tailscale         TailscaleConfig           `key:"tailscale" json:"tailscale"`
-	Proxy             ProxyConfig               `key:"proxy" json:"proxy"`
-	Monitoring        MonitoringConfig          `key:"monitoring" json:"monitoring"`
-	BlobCacheMetadata BlobCacheMetadataConfig   `key:"blobcacheMetadata" json:"blobcache_metadata"`
-	BlobCache         blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
-	Abstractions      AbstractionConfig         `key:"abstractions" json:"abstractions"`
+	ClusterName       string                            `key:"clusterName" json:"cluster_name"`
+	DebugMode         bool                              `key:"debugMode" json:"debug_mode"`
+	PrettyLogs        bool                              `key:"prettyLogs" json:"pretty_logs"`
+	Database          DatabaseConfig                    `key:"database" json:"database"`
+	GatewayService    GatewayServiceConfig              `key:"gateway" json:"gateway_service"`
+	FileService       FileServiceConfig                 `key:"fileService" json:"file_service"`
+	ImageService      ImageServiceConfig                `key:"imageService" json:"image_service"`
+	Storage           StorageConfig                     `key:"storage" json:"storage"`
+	Worker            WorkerConfig                      `key:"worker" json:"worker"`
+	Providers         ProviderConfig                    `key:"providers" json:"providers"`
+	Tailscale         TailscaleConfig                   `key:"tailscale" json:"tailscale"`
+	Proxy             ProxyConfig                       `key:"proxy" json:"proxy"`
+	Monitoring        MonitoringConfig                  `key:"monitoring" json:"monitoring"`
+	BlobCacheMetadata blobcache.BlobCacheMetadataConfig `key:"blobcacheMetadata" json:"blobcache_metadata"`
+	BlobCache         blobcache.BlobCacheConfig         `key:"blobcache" json:"blobcache"`
+	Abstractions      AbstractionConfig                 `key:"abstractions" json:"abstractions"`
 }
 
 type DatabaseConfig struct {
@@ -60,31 +60,6 @@ type RedisConfig struct {
 	Username           string        `key:"username" json:"username"`
 	Password           string        `key:"password" json:"password"`
 	RouteByLatency     bool          `key:"routeByLatency" json:"route_by_latency"`
-}
-
-type BlobCacheMetadataConfig struct {
-	ValkeyConfig ValkeyConfig `key:"valkey" json:"valkey"`
-}
-
-type ValkeyConfig struct {
-	Enabled         bool                  `key:"enabled" json:"enabled"`
-	Password        string                `key:"password" json:"password"`
-	TLS             bool                  `key:"tls" json:"tls"`
-	PersistenceSize string                `key:"persistenceSize" json:"persistenceSize"`
-	ReplicaCount    int                   `key:"replicaCount" json:"replicaCount"`
-	PoolNodeCount   int                   `key:"poolNodeCount" json:"poolNodeCount"`
-	ExistingPrimary ValkeyExistingPrimary `key:"existingPrimary" json:"existingPrimary"`
-	Sentinel        ValkeySentinelConfig  `key:"sentinel" json:"sentinel"`
-}
-
-type ValkeyExistingPrimary struct {
-	Host string `key:"host" json:"host"`
-	Port int    `key:"port" json:"port"`
-}
-
-type ValkeySentinelConfig struct {
-	Enabled bool `key:"enabled" json:"enabled"`
-	Quorum  int  `key:"quorum" json:"quorum"`
 }
 
 type PostgresConfig struct {
