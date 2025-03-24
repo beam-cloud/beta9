@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -154,6 +155,13 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 }
 
+type OverrideStubConfig struct {
+	Cpu      *int64  `json:"cpu"`
+	Memory   *int64  `json:"memory"`
+	Gpu      *string `json:"gpu"`
+	GpuCount *uint32 `json:"gpu_count"`
+}
+
 func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 	stubID := ctx.Param("stubId")
 	cc, _ := ctx.(*auth.HttpAuthContext)
@@ -167,12 +175,64 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid stub ID")
 	}
 
+	if err := g.processStubOverrides(ctx, stub); err != nil {
+		return err
+	}
+
 	newStub, err := g.cloneStub(ctx.Request().Context(), cc.AuthInfo.Workspace, stub)
 	if err != nil {
+		log.Println(err)
 		return err
 	}
 
 	return ctx.JSON(http.StatusOK, newStub)
+}
+
+func (g StubGroup) processStubOverrides(ctx echo.Context, stub *types.StubWithRelated) error {
+	var overrideConfig OverrideStubConfig
+
+	if err := ctx.Bind(&overrideConfig); err != nil {
+		return HTTPBadRequest("Failed to process overrides")
+	}
+
+	var stubConfig types.StubConfigV1
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return HTTPBadRequest("Failed to process overrides")
+	}
+
+	if overrideConfig.Cpu != nil {
+		stubConfig.Runtime.Cpu = int64(*overrideConfig.Cpu)
+	}
+
+	if overrideConfig.Memory != nil {
+		if *overrideConfig.Memory > int64(g.config.GatewayService.StubLimits.Memory) {
+			return HTTPBadRequest(fmt.Sprintf("Memory must be %dGiB or less.", g.config.GatewayService.StubLimits.Memory/1024))
+		}
+		stubConfig.Runtime.Memory = int64(*overrideConfig.Memory)
+	}
+
+	if overrideConfig.Gpu != nil {
+		if _, ok := types.GPUTypesToMap(types.AllGPUTypes())[*overrideConfig.Gpu]; ok {
+			stubConfig.Runtime.Gpu = types.GpuType(*overrideConfig.Gpu)
+		} else {
+			return HTTPBadRequest("Invalid GPU type")
+		}
+	}
+
+	if overrideConfig.GpuCount != nil {
+		if *overrideConfig.GpuCount > g.config.GatewayService.StubLimits.MaxGpuCount {
+			return HTTPBadRequest(fmt.Sprintf("GPU count must be %d or less.", g.config.GatewayService.StubLimits.MaxGpuCount))
+		}
+		stubConfig.Runtime.GpuCount = uint32(*overrideConfig.GpuCount)
+	}
+
+	stubConfigBytes, err := json.Marshal(stubConfig)
+	if err != nil {
+		return HTTPBadRequest("Failed to process overrides")
+	}
+
+	stub.Config = string(stubConfigBytes)
+	return nil
 }
 
 func (g StubGroup) configureVolumes(ctx context.Context, volumes []*pb.Volume, workspace *types.Workspace) error {
@@ -235,6 +295,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Wor
 func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (*types.Stub, error) {
 	objectId, err := g.copyObjectContents(ctx, workspace, stub)
 	if err != nil {
+		log.Println(err)
 		return nil, HTTPBadRequest("Failed to clone object")
 	}
 
@@ -251,6 +312,10 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
 			return nil, HTTPBadRequest("GPU concurrency limit is 0.")
 		}
+	}
+
+	if stubConfig.Runtime.GpuCount > 1 && !workspace.MultiGpuEnabled {
+		return nil, HTTPBadRequest("Multi-GPU containers are not enabled for this workspace.")
 	}
 
 	for _, secret := range parentSecrets {
@@ -278,6 +343,7 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 
 	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true)
 	if err != nil {
+		log.Println(err)
 		return nil, HTTPInternalServerError("Failed to clone stub")
 	}
 
