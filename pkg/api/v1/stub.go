@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -209,9 +210,11 @@ func (g StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub 
 	}
 
 	if overrideConfig.Gpu != nil {
+		log.Println("GPU override:", *overrideConfig.Gpu)
 		if _, ok := types.GPUTypesToMap(types.AllGPUTypes())[*overrideConfig.Gpu]; ok {
-			stubConfig.Runtime.Gpu = types.GpuType(*overrideConfig.Gpu)
+			stubConfig.Runtime.Gpus = []types.GpuType{types.GpuType(*overrideConfig.Gpu)}
 		} else {
+
 			return HTTPBadRequest("Invalid GPU type")
 		}
 	}

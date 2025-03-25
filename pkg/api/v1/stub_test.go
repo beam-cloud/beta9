@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -93,20 +94,42 @@ func TestProcessStubOverrides(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			stub := &types.StubWithRelated{Stub: *generateDefaultStubWithConfig()}
+
 			err := stubGroup.processStubOverrides(OverrideStubConfig{
 				Cpu:      tt.cpu,
 				Memory:   tt.memory,
 				Gpu:      tt.gpu,
 				GpuCount: tt.gpuCount,
-			}, &types.StubWithRelated{Stub: *generateDefaultStubWithConfig()})
+			}, stub)
 			if err != nil {
 				if !tt.error {
 					t.Errorf("Unexpected error: %v", err)
 				}
+				return
 			} else {
 				if tt.error {
 					t.Errorf("Expected error but got none")
+					return
 				}
+			}
+
+			var stubConfig types.StubConfigV1
+			err = json.Unmarshal([]byte(stub.Config), &stubConfig)
+			if err != nil {
+				t.Errorf("Failed to unmarshal stub config: %v", err)
+			}
+			if tt.cpu != nil && *tt.cpu != stubConfig.Runtime.Cpu {
+				t.Errorf("Expected CPU %d, got %d", *tt.cpu, stubConfig.Runtime.Cpu)
+			}
+			if tt.memory != nil && *tt.memory != stubConfig.Runtime.Memory {
+				t.Errorf("Expected Memory %d, got %d", *tt.memory, stubConfig.Runtime.Memory)
+			}
+			if tt.gpu != nil && (len(stubConfig.Runtime.Gpus) == 0 || *tt.gpu != string(stubConfig.Runtime.Gpus[0])) {
+				t.Errorf("Expected GPU %s, got %s", *tt.gpu, stubConfig.Runtime.Gpu)
+			}
+			if tt.gpuCount != nil && *tt.gpuCount != stubConfig.Runtime.GpuCount {
+				t.Errorf("Expected GPU Count %d, got %d", *tt.gpuCount, stubConfig.Runtime.GpuCount)
 			}
 		})
 	}
