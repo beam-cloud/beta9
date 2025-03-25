@@ -102,10 +102,6 @@ type WorkspaceStorage struct {
 	UpdatedAt   time.Time `db:"updated_at" json:"updated_at,omitempty"`
 }
 
-func (w *WorkspaceStorage) IsAvailable() bool {
-	return w.Id > 0 && w.EndpointUrl != "" && w.AccessKey != "" && w.SecretKey != ""
-}
-
 func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
 	return &WorkspaceStorage{
 		Id:          uint(in.Id),

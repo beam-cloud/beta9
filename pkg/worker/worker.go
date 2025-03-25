@@ -315,8 +315,9 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 			go s.listenForStopBuildEvent(ctx, cancel, containerId)
 		}
 
-		if request.Stub.Storage.IsAvailable() {
-			log.Info().Str("container_id", containerId).Msg("mounting storage")
+		// If isolated workspace storage is available, mount it
+		if request.StorageAvailable() {
+			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
 
 			_, err := s.storageManager.Mount(request.Stub.Workspace.Name, &request.Stub.Storage)
 			if err != nil {

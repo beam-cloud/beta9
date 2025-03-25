@@ -5,6 +5,7 @@ const (
 	DefaultExtractedObjectPath         string = "/data/unpacked"
 	DefaultVolumesPath                 string = "/data/volumes"
 	DefaultObjectPath                  string = "/data/objects"
+	DefaultObjectPrefix                string = "objects"
 	DefaultOutputsPath                 string = "/data/outputs"
 	DefaultFilesystemName              string = "beta9-fs"
 	DefaultFilesystemPath              string = "/data"
