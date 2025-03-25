@@ -259,7 +259,7 @@ type WorkerConfig struct {
 	Namespace                    string                      `key:"namespace" json:"namespace"`
 	ServiceAccountName           string                      `key:"serviceAccountName" json:"service_account_name"`
 	JobResourcesEnforced         bool                        `key:"jobResourcesEnforced" json:"job_resources_enforced"`
-	RunCResourcesEnforced        bool                        `key:"runcResourcesEnforced" json:"runc_resources_enforced"`
+	RunCResourceLimits           RunCResourceLimitsConfig    `key:"runcResourceLimits" json:"runc_resource_limits"`
 	DefaultWorkerCPURequest      int64                       `key:"defaultWorkerCPURequest" json:"default_worker_cpu_request"`
 	DefaultWorkerMemoryRequest   int64                       `key:"defaultWorkerMemoryRequest" json:"default_worker_memory_request"`
 	ImagePVCName                 string                      `key:"imagePVCName" json:"image_pvc_name"`
@@ -271,6 +271,11 @@ type WorkerConfig struct {
 	TmpSizeLimit                 string                      `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLinesPerHour     int                         `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
 	Failover                     FailoverConfig              `key:"failover" json:"failover"`
+}
+
+type RunCResourceLimitsConfig struct {
+	CPUEnforced    bool `key:"cpuEnforced" json:"cpu_enforced"`
+	MemoryEnforced bool `key:"memoryEnforced" json:"memory_enforced"`
 }
 
 type FailoverConfig struct {
