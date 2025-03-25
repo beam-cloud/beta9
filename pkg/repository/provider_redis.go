@@ -313,7 +313,7 @@ func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machin
 		machineInfo.LastKeepalive = fmt.Sprintf("%d", time.Now().UTC().Unix())
 		machineInfo.PoolName = poolName
 		machineInfo.MachineId = machineId
-
+		machineInfo.PrivateIP = newMachineInfo.PrivateIP
 		// Add machine to index
 		machineIndexKey := common.RedisKeys.ProviderMachineIndex(providerName, poolName)
 		err = r.rdb.SAdd(context.TODO(), machineIndexKey, stateKey).Err()
@@ -328,6 +328,7 @@ func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machin
 	machineInfo.Cpu = newMachineInfo.Cpu
 	machineInfo.Memory = newMachineInfo.Memory
 	machineInfo.GpuCount = newMachineInfo.GpuCount
+	machineInfo.PrivateIP = newMachineInfo.PrivateIP
 
 	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineInfo)).Err()
 	if err != nil {
