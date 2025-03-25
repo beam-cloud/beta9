@@ -315,13 +315,13 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 			go s.listenForStopBuildEvent(ctx, cancel, containerId)
 		}
 
-		// perform ad-hoc storage mounting
-		if request.Stub.Storage.Id > 0 {
+		if request.Stub.Storage.IsAvailable() {
 			log.Info().Str("container_id", containerId).Msg("mounting storage")
 
 			_, err := s.storageManager.Mount(request.Stub.Workspace.Name, &request.Stub.Storage)
 			if err != nil {
-				log.Error().Str("container_id", containerId).Err(err).Msg("unable to mount storage")
+				log.Error().Str("container_id", containerId).Str("workspace_id", request.Stub.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
+				return
 			}
 		}
 

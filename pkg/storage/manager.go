@@ -76,11 +76,6 @@ func (s *StorageManager) Mount(workspaceName string, workspaceStorage *types.Wor
 		return nil, err
 	}
 
-	err = mount.Mount(mountPath)
-	if err != nil {
-		return nil, err
-	}
-
 	s.mounts.Set(workspaceName, mount)
 
 	return mount, nil
