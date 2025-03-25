@@ -355,10 +355,16 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Args = request.EntryPoint
 	spec.Process.Terminal = false
 
-	if s.config.Worker.RunCResourcesEnforced {
-		spec.Linux.Resources.CPU = getLinuxCPU(request)
-		spec.Linux.Resources.Memory = getLinuxMemory(request)
+	if s.config.Worker.RunCResourceLimits.CPUEnforced || s.config.Worker.RunCResourceLimits.MemoryEnforced {
 		spec.Linux.Resources.Unified = cgroupV2Parameters
+
+		if s.config.Worker.RunCResourceLimits.CPUEnforced {
+			spec.Linux.Resources.CPU = getLinuxCPU(request)
+		}
+
+		if s.config.Worker.RunCResourceLimits.MemoryEnforced {
+			spec.Linux.Resources.Memory = getLinuxMemory(request)
+		}
 	}
 
 	env := s.getContainerEnvironment(request, options)

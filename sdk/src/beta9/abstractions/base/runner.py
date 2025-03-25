@@ -174,6 +174,15 @@ class RunnerAbstraction(BaseAbstraction):
         if not res.ok:
             return terminal.error("Failed to get invocation URL", exit=False)
 
+        if "<PORT>" in res.url:
+            terminal.header("Exposed endpoints\n")
+
+            for port in self.ports:
+                terminal.print(f"\tPort {port}: {res.url.replace('<PORT>', str(port))}")
+
+            terminal.print("")
+            return res
+
         terminal.header("Invocation details")
         commands = [
             f"curl -X POST '{res.url}' \\",
@@ -199,6 +208,7 @@ class RunnerAbstraction(BaseAbstraction):
             ]
 
         terminal.print("\n".join(commands), crop=False, overflow="ignore")
+
         return res
 
     def parse_memory(self, memory_str: str) -> int:
