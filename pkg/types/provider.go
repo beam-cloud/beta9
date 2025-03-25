@@ -20,8 +20,8 @@ type ProviderComputeRequest struct {
 }
 
 type ProviderMachine struct {
-	State   *ProviderMachineState
-	Metrics *ProviderMachineMetrics
+	State   *ProviderMachineState   `json:"state"`
+	Metrics *ProviderMachineMetrics `json:"metrics"`
 }
 
 type ProviderMachineMetrics struct {
@@ -51,6 +51,7 @@ type ProviderMachineState struct {
 	Gpu               string        `json:"gpu" redis:"gpu"`
 	GpuCount          uint32        `json:"gpu_count" redis:"gpu_count"`
 	RegistrationToken string        `json:"registration_token" redis:"registration_token"`
+	PrivateIP         string        `json:"private_ip" redis:"private_ip"`
 	Created           string        `json:"created" redis:"created"`
 	LastWorkerSeen    string        `json:"last_worker_seen" redis:"last_worker_seen"`
 	LastKeepalive     string        `json:"last_keepalive" redis:"last_keepalive"`
