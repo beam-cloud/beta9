@@ -264,17 +264,19 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 
 	var token types.Token
 	var workspace types.Workspace
-	var workspaceStorage types.WorkspaceStorage
+	var workspaceStorage *types.WorkspaceStorage
 
 	token.Workspace = &workspace
-	token.Storage = &workspaceStorage
+	token.Storage = workspaceStorage
 
 	if err := r.client.GetContext(ctx, &token, query, tokenKey); err != nil {
 		return nil, nil, err
 	}
 
-	if err := r.decryptFields(&workspaceStorage); err != nil {
-		return nil, nil, err
+	if workspaceStorage != nil {
+		if err := r.decryptFields(&workspaceStorage); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// After successful authorization, check if the token is reusable.
