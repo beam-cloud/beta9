@@ -10,30 +10,27 @@ import (
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/rs/zerolog/log"
 )
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if !authInfo.Workspace.StorageAvailable() {
-		return &pb.HeadObjectResponse{
-			Ok:       false,
-			ErrorMsg: "Unable to create storage client",
-		}, nil
-	}
-
-	storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
-	if err != nil {
-		return &pb.HeadObjectResponse{
-			Ok:       false,
-			ErrorMsg: "Unable to create storage client",
-		}, nil
-	}
-
 	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil {
-		exists, _ := storageClient.Head(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
+		exists := true // TODO: actually stat the local path to ensure it exists on disk for legacy support
+
+		if authInfo.Workspace.StorageAvailable() {
+			storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+			if err != nil {
+				return &pb.HeadObjectResponse{
+					Ok:       false,
+					ErrorMsg: "Unable to create storage client",
+				}, nil
+			}
+
+			exists, _ = storageClient.Head(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
+		}
+
 		if exists {
 			return &pb.HeadObjectResponse{
 				Ok:     true,
@@ -45,10 +42,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 				ObjectId: existingObject.ExternalId,
 			}, nil
 		} else {
-			err = gws.backendRepo.DeleteObjectByExternalId(ctx, existingObject.ExternalId)
-			if err != nil {
-				log.Error().Err(err).Msgf("Unable to delete object %s", existingObject.ExternalId)
-			}
+			// TODO: mark as bad / delete object
 		}
 	}
 
@@ -118,6 +112,7 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
 			return stream.SendAndClose(&pb.PutObjectResponse{
 				Ok:       false,

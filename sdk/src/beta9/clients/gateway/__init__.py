@@ -81,6 +81,7 @@ class HeadObjectResponse(betterproto.Message):
     object_id: str = betterproto.string_field(3)
     object_metadata: "ObjectMetadata" = betterproto.message_field(4)
     error_msg: str = betterproto.string_field(5)
+    use_workspace_storage: bool = betterproto.bool_field(6)
 
 
 @dataclass(eq=False, repr=False)

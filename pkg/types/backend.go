@@ -54,7 +54,7 @@ func (w *Workspace) ToProto() *pb.Workspace {
 	}
 
 	storage := &pb.WorkspaceStorage{}
-	if w.Storage != nil {
+	if w.StorageAvailable() {
 		storage = w.Storage.ToProto()
 	}
 

@@ -21,6 +21,7 @@ from .clients.gateway import (
     HeadObjectRequest,
     HeadObjectResponse,
     ObjectMetadata,
+    PutObjectRequest,
     SyncContainerWorkspaceOperation,
 )
 from .config import get_settings
@@ -192,16 +193,32 @@ class FileSyncer:
                     response = requests.put(presigned_url, data=file)
                 return response
 
+            # TODO: remove this once all workspaces are migrated to use workspace storage
+            def stream_requests():
+                with terminal.progress_open(temp_zip_name, "rb", description=None) as file:
+                    while chunk := file.read(CHUNK_SIZE):
+                        yield PutObjectRequest(chunk, metadata, hash, False)
+
             terminal.header("Uploading")
-            create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
-                CreateObjectRequest(object_metadata=metadata, hash=hash, size=size, overwrite=False)
-            )
-            if create_object_response.ok and self.is_workspace_dir:
-                presigned_url = create_object_response.presigned_url
-                response = _upload_object()
-                if response.status_code == HTTPStatus.OK:
-                    set_workspace_object_id(create_object_response.object_id)
-                    object_id = create_object_response.object_id
+            if head_response.use_workspace_storage:
+                create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
+                    CreateObjectRequest(
+                        object_metadata=metadata, hash=hash, size=size, overwrite=False
+                    )
+                )
+                if create_object_response.ok and self.is_workspace_dir:
+                    presigned_url = create_object_response.presigned_url
+                    response = _upload_object()
+                    if response.status_code == HTTPStatus.OK:
+                        set_workspace_object_id(create_object_response.object_id)
+                        object_id = create_object_response.object_id
+                    else:
+                        terminal.error("File sync failed ☠️")
+            else:
+                put_response = self.gateway_stub.put_object_stream(stream_requests())
+                if put_response.ok and self.is_workspace_dir:
+                    set_workspace_object_id(put_response.object_id)
+                    object_id = put_response.object_id
                 else:
                     terminal.error("File sync failed ☠️")
 

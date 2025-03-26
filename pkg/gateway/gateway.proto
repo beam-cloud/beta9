@@ -97,6 +97,7 @@ message HeadObjectResponse {
   string object_id = 3;
   ObjectMetadata object_metadata = 4;
   string error_msg = 5;
+  bool use_workspace_storage = 6;
 }
 
 message CreateObjectRequest {
