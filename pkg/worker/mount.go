@@ -52,7 +52,7 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 				request.Mounts[i].LocalPath = m.LocalPath
 				os.MkdirAll(m.LocalPath, os.FileMode(0755)) // TODO: remove this hack once we're sure it's created elsewhere
 			}
-		} else if strings.HasPrefix(m.LocalPath, types.WorkerUserOutputVolume) {
+		} else if strings.HasPrefix(m.MountPath, types.WorkerUserOutputVolume) {
 			if request.StorageAvailable() {
 				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultOutputsPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultOutputsPrefix), 1)
 				request.Mounts[i].LocalPath = m.LocalPath

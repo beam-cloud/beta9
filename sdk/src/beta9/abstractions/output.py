@@ -19,6 +19,7 @@ from ..clients.output import (
     OutputStatResponse,
 )
 from ..env import is_local
+from ..runner.common import USER_OUTPUTS_DIR
 from ..sync import CHUNK_SIZE
 
 
@@ -169,6 +170,15 @@ class Output(BaseAbstraction):
         if self.path.is_dir():
             path = self.zip_dir(self.path)
 
+        storage_available = os.getenv("STORAGE_AVAILABLE", "false").lower() == "true"
+        if storage_available:
+            output_id = str(uuid.uuid4())
+            output_path = Path(USER_OUTPUTS_DIR) / self.task_id / output_id / path.name
+            output_path.parent.mkdir(mode=755, parents=True, exist_ok=True)
+            shutil.copy(path, output_path)
+            self.id = output_id
+            return self
+
         def stream_request(p: Path) -> Generator[OutputSaveRequest, None, None]:
             if p.stat().st_size == 0:
                 yield OutputSaveRequest(self.task_id, p.name, b"")
@@ -183,7 +193,6 @@ class Output(BaseAbstraction):
             raise OutputSaveError(res.err_msg)
 
         self.id = res.id
-
         return self
 
     def stat(self) -> "Stat":
