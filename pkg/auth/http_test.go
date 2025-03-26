@@ -49,12 +49,23 @@ func addTokenRow(
 
 func mockBackendWithValidToken() MockDetails {
 	backendRepo, mock := repository.NewBackendPostgresRepositoryForTest()
+
+	storageForTest := types.WorkspaceStorage{
+		Id:         1,
+		ExternalId: "test",
+		BucketName: "test",
+		AccessKey:  "test",
+		SecretKey:  "test",
+	}
+
 	workspaceForTest := types.Workspace{
 		Id:         1,
 		ExternalId: "test",
 		Name:       "test",
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
+		StorageId:  &storageForTest.Id,
+		Storage:    &storageForTest,
 	}
 
 	tokenForTest := types.Token{
