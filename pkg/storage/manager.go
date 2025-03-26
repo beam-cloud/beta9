@@ -107,11 +107,14 @@ func (s *StorageManager) Unmount(workspaceName string) error {
 		return nil
 	}
 
-	err := mount.Unmount(path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName))
+	localPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
+
+	err := mount.Unmount(localPath)
 	if err != nil {
 		return err
 	}
 
+	os.RemoveAll(localPath)
 	s.mounts.Delete(workspaceName)
 
 	return nil
