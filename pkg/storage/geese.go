@@ -85,7 +85,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	// Wait asynchronously
 	go func() {
 		if err := cmd.Wait(); err != nil {
-			log.Error().Err(err).Msgf("geesefs mount process (%d) exited with error", s.pid)
+			log.Error().Err(err).Str("local_path", localPath).Int("pid", s.pid).Msg("geesefs mount process exited with error")
 		}
 	}()
 
@@ -130,7 +130,7 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 
 			p.Signal(syscall.SIGINT)
 
-			// Wait up to 3 seconds for graceful shutdown
+			// Wait up to waitTimeSeconds seconds for graceful shutdown
 			for i := 0; i < waitTimeSeconds; i++ {
 				if p.Signal(syscall.Signal(0)) != nil {
 					break // Process exited
