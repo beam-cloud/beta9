@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path"
@@ -304,7 +303,6 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Wor
 func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (*types.Stub, error) {
 	objectId, err := g.copyObjectContents(ctx, workspace, stub)
 	if err != nil {
-		log.Println("Failed to copy object contents:", err)
 		return nil, HTTPBadRequest("Failed to clone object")
 	}
 
