@@ -16,7 +16,7 @@ import (
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if authInfo.Workspace.Storage == nil {
+	if !authInfo.Workspace.StorageAvailable() {
 		return &pb.HeadObjectResponse{
 			Ok:       false,
 			ErrorMsg: "Unable to create storage client",
