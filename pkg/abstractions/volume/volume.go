@@ -394,6 +394,7 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 	// Delete paths; both files and directories
 	deleted := make([]string, len(matches))
 	for i, fpath := range matches {
+
 		if err := os.RemoveAll(fpath); err == nil {
 			// Modify path to be relative
 			deleted[i] = strings.TrimPrefix(fpath, rootVolumePath+"/")

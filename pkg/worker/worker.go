@@ -134,7 +134,7 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	storageManager, err := storage.NewStorageManager(config.Storage)
+	storageManager, err := storage.NewStorageManager(ctx, config.Storage)
 	if err != nil {
 		return nil, err
 	}

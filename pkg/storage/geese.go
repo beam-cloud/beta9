@@ -2,7 +2,9 @@ package storage
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -11,6 +13,7 @@ import (
 
 type GeeseStorage struct {
 	config types.GeeseConfig
+	pid    int
 }
 
 func NewGeeseStorage(config types.GeeseConfig) (Storage, error) {
@@ -58,7 +61,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		args = append(args, fmt.Sprintf("--endpoint=%s", s.config.EndpointUrl))
 	}
 
-	// Add bucket and mount point
+	// Add bucket and mount path
 	args = append(args, s.config.BucketName, localPath)
 
 	cmd := exec.Command("geesefs", args...)
@@ -71,15 +74,25 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		)
 	}
 
-	// Start the mount command in the background
+	// Start the geesefs process so we can capture the PID
+	if err := cmd.Start(); err != nil {
+		log.Error().Err(err).Msg("failed to start geesefs process")
+		return err
+	}
+
+	s.pid = cmd.Process.Pid
+
+	// Wait asynchronously
 	go func() {
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			log.Error().Err(err).Str("output", string(output)).Msg("error executing geesefs mount")
+		if err := cmd.Wait(); err != nil {
+			log.Error().Err(err).Msgf("geesefs mount process (%d) exited with error", s.pid)
 		}
 	}()
 
+	// Poll until the filesystem is mounted or we timeout
 	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	timeout := time.After(30 * time.Second)
 
 	done := make(chan bool)
@@ -112,29 +125,36 @@ func (s *GeeseStorage) Format(fsName string) error {
 }
 
 func (s *GeeseStorage) Unmount(localPath string) error {
-	// geeseFsUmount := func() error {
-	// 	cmd := exec.Command("geesefs", "umount", localPath)
+	waitTimeSeconds := 5
 
-	// 	output, err := cmd.CombinedOutput()
-	// 	if err != nil {
-	// 		log.Error().Err(err).Str("output", string(output)).Msg("error executing geesefs umount")
-	// 		return err
-	// 	}
+	// Try to terminate the process w/ a SIGINT
+	if s.pid > 0 {
+		if p, err := os.FindProcess(s.pid); err == nil {
+			log.Info().Msgf("geesefs: sending SIGINT to process %d", s.pid)
+			p.Signal(syscall.SIGINT)
 
-	// 	log.Info().Str("local_path", localPath).Msg("geesefs filesystem unmounted")
-	// 	return nil
-	// }
+			// Wait up to 3 seconds for graceful shutdown
+			for i := 0; i < waitTimeSeconds; i++ {
+				if p.Signal(syscall.Signal(0)) != nil {
+					break // Process exited
+				}
 
-	// err := backoff.Retry(geeseFsUmount, backoff.WithMaxRetries(backoff.NewConstantBackOff(1*time.Second), 10))
-	// if err == nil {
-	// 	return nil
-	// }
+				time.Sleep(1 * time.Second)
+			}
 
-	// // Forcefully kill the fuse mount devices
-	// err = exec.Command("fuser", "-k", "/dev/fuse").Run()
-	// if err != nil {
-	// 	return fmt.Errorf("error executing fuser -k /dev/fuse: %v", err)
-	// }
+			// Force kill if still running
+			p.Kill()
+		}
+	}
 
+	if _, err := exec.Command("fusermount", "-u", localPath).CombinedOutput(); err != nil {
+
+		// Fallback to lazy unmount
+		if out, err := exec.Command("fusermount", "-uz", localPath).CombinedOutput(); err != nil {
+			return fmt.Errorf("unmount failed: %s", out)
+		}
+	}
+
+	s.pid = 0
 	return nil
 }

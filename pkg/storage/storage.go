@@ -16,8 +16,8 @@ const (
 
 type Storage interface {
 	Mount(localPath string) error
-	Format(fsName string) error
 	Unmount(localPath string) error
+	Format(fsName string) error
 }
 
 // isMounted uses stat to check if the specified FUSE mount point is available
@@ -58,12 +58,6 @@ func NewStorage(config types.StorageConfig) (Storage, error) {
 		s, err := NewGeeseStorage(config.Geese)
 		if err != nil {
 			return nil, err
-		}
-
-		// Setup credentials and load buckets
-		err = s.Format(config.FilesystemName)
-		if err != nil {
-			log.Fatal().Err(err).Msg("unable to format filesystem")
 		}
 
 		// Mount filesystem

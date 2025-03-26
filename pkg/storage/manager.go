@@ -1,26 +1,38 @@
 package storage
 
 import (
+	"context"
 	"os"
 	"path"
 	"sync"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+const (
+	mountCleanupInterval = 30 * time.Second
+)
+
 type StorageManager struct {
+	ctx    context.Context
 	mounts *common.SafeMap[Storage]
 	config types.StorageConfig
 	mu     sync.Mutex
 }
 
-func NewStorageManager(config types.StorageConfig) (*StorageManager, error) {
-	return &StorageManager{
+func NewStorageManager(ctx context.Context, config types.StorageConfig) (*StorageManager, error) {
+	sm := &StorageManager{
+		ctx:    ctx,
 		mounts: common.NewSafeMap[Storage](),
 		config: config,
 		mu:     sync.Mutex{},
-	}, nil
+	}
+
+	go sm.cleanupUnusedMounts()
+
+	return sm, nil
 }
 
 func (s *StorageManager) Create(workspaceName string, storage Storage) {
@@ -81,7 +93,7 @@ func (s *StorageManager) Mount(workspaceName string, workspaceStorage *types.Wor
 	return mount, nil
 }
 
-func (s *StorageManager) Unmount(workspaceName string, workspaceStorage *types.WorkspaceStorage) error {
+func (s *StorageManager) Unmount(workspaceName string) error {
 	mount, ok := s.mounts.Get(workspaceName)
 	if !ok {
 		return nil
@@ -95,8 +107,7 @@ func (s *StorageManager) Unmount(workspaceName string, workspaceStorage *types.W
 		return nil
 	}
 
-	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
-	err := mount.Unmount(mountPath)
+	err := mount.Unmount(path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName))
 	if err != nil {
 		return err
 	}
@@ -107,10 +118,33 @@ func (s *StorageManager) Unmount(workspaceName string, workspaceStorage *types.W
 }
 
 func (s *StorageManager) Cleanup() error {
-	s.mounts.Range(func(key string, value Storage) bool {
-		value.Unmount(path.Join(s.config.WorkspaceStorage.BaseMountPath, key))
+	s.mounts.Range(func(workspaceName string, value Storage) bool {
+		s.Unmount(workspaceName)
 		return true
 	})
 
 	return nil
+}
+
+func (s *StorageManager) cleanupUnusedMounts() {
+	ticker := time.NewTicker(mountCleanupInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			mountsToDelete := []string{}
+
+			s.mounts.Range(func(workspaceName string, value Storage) bool {
+				mountsToDelete = append(mountsToDelete, workspaceName)
+				return true
+			})
+
+			for _, workspaceName := range mountsToDelete {
+				s.Unmount(workspaceName)
+			}
+		}
+	}
 }

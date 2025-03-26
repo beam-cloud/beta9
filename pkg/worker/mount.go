@@ -84,8 +84,8 @@ func (c *ContainerMountManager) RemoveContainerMounts(containerId string) {
 	}
 
 	mountPointS3, _ := storage.NewMountPointStorage(types.MountPointConfig{})
-	for _, m := range mountPointPaths {
-		if err := mountPointS3.Unmount(m); err != nil {
+	for _, localPath := range mountPointPaths {
+		if err := mountPointS3.Unmount(localPath); err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to unmount external s3 bucket")
 		}
 	}
