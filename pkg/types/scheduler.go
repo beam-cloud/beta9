@@ -241,7 +241,7 @@ func (c *ContainerRequest) VolumeCacheCompatible() bool {
 }
 
 func (c *ContainerRequest) StorageAvailable() bool {
-	return c.Stub.Storage.Id > 0 && c.Stub.Storage.EndpointUrl != "" && c.Stub.Storage.AccessKey != "" && c.Stub.Storage.SecretKey != ""
+	return c.Workspace.StorageAvailable()
 }
 
 func (c *ContainerRequest) ToProto() *pb.ContainerRequest {

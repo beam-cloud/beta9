@@ -140,7 +140,6 @@ class StubWithRelated(betterproto.Message):
     stub: "Stub" = betterproto.message_field(1)
     workspace: "Workspace" = betterproto.message_field(2)
     object: "Object" = betterproto.message_field(3)
-    storage: "WorkspaceStorage" = betterproto.message_field(4)
 
 
 @dataclass(eq=False, repr=False)

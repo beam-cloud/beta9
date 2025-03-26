@@ -13,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/rs/zerolog/log"
 )
 
 type StorageClient struct {
@@ -25,10 +24,10 @@ type StorageClient struct {
 
 func NewStorageClient(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage) (*StorageClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion(workspaceStorage.Region),
+		config.WithRegion(*workspaceStorage.Region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			workspaceStorage.AccessKey,
-			workspaceStorage.SecretKey,
+			*workspaceStorage.AccessKey,
+			*workspaceStorage.SecretKey,
 			"",
 		)),
 	)
@@ -37,8 +36,8 @@ func NewStorageClient(ctx context.Context, workspaceName string, workspaceStorag
 	}
 
 	// If a custom endpoint is provided, use it
-	if workspaceStorage.EndpointUrl != "" {
-		cfg.BaseEndpoint = aws.String(workspaceStorage.EndpointUrl)
+	if workspaceStorage.EndpointUrl != nil {
+		cfg.BaseEndpoint = aws.String(*workspaceStorage.EndpointUrl)
 	}
 
 	s3Client := s3.NewFromConfig(cfg)
@@ -54,7 +53,7 @@ func NewStorageClient(ctx context.Context, workspaceName string, workspaceStorag
 
 func (c *StorageClient) Upload(ctx context.Context, key string, data []byte) error {
 	_, err := c.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
 		Key:    aws.String(key),
 		Body:   bytes.NewReader(data),
 	})
@@ -62,12 +61,8 @@ func (c *StorageClient) Upload(ctx context.Context, key string, data []byte) err
 }
 
 func (c *StorageClient) Head(ctx context.Context, key string) (bool, error) {
-	log.Info().Msgf("HeadObject: %s", key)
-	log.Info().Msgf("Bucket: %s", c.WorkspaceStorage.BucketName)
-	log.Info().Msgf("Region: %s", c.WorkspaceStorage.Region)
-	log.Info().Msgf("Endpoint: %s", c.WorkspaceStorage.EndpointUrl)
 	_, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -78,7 +73,7 @@ func (c *StorageClient) Head(ctx context.Context, key string) (bool, error) {
 
 func (c *StorageClient) Download(ctx context.Context, key string) ([]byte, error) {
 	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -91,7 +86,7 @@ func (c *StorageClient) Download(ctx context.Context, key string) ([]byte, error
 
 func (c *StorageClient) Delete(ctx context.Context, key string) error {
 	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
 		Key:    aws.String(key),
 	})
 	return err
@@ -99,7 +94,7 @@ func (c *StorageClient) Delete(ctx context.Context, key string) error {
 
 func (c *StorageClient) ListObjects(ctx context.Context, prefix string) ([]s3types.Object, error) {
 	resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket: aws.String(c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
 		Prefix: aws.String(prefix),
 	})
 	if err != nil {
@@ -110,7 +105,7 @@ func (c *StorageClient) ListObjects(ctx context.Context, prefix string) ([]s3typ
 
 func (c *StorageClient) GeneratePresignedURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
 	result, err := c.presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
 		Key:    aws.String(key),
 	}, s3.WithPresignExpires(time.Duration(expiresInSeconds)*time.Second))
 	if err != nil {

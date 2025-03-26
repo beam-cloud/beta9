@@ -53,11 +53,11 @@ func (s *StorageManager) Mount(workspaceName string, workspaceStorage *types.Wor
 		FilesystemPath: mountPath,
 		Geese: types.GeeseConfig{
 			// Workspace specific config
-			EndpointUrl: workspaceStorage.EndpointUrl,
-			BucketName:  workspaceStorage.BucketName,
-			AccessKey:   workspaceStorage.AccessKey,
-			SecretKey:   workspaceStorage.SecretKey,
-			Region:      workspaceStorage.Region,
+			EndpointUrl: *workspaceStorage.EndpointUrl,
+			BucketName:  *workspaceStorage.BucketName,
+			AccessKey:   *workspaceStorage.AccessKey,
+			SecretKey:   *workspaceStorage.SecretKey,
+			Region:      *workspaceStorage.Region,
 
 			// Global config
 			Debug:            s.config.WorkspaceStorage.Geese.Debug,

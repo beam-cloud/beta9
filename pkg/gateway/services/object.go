@@ -16,7 +16,14 @@ import (
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	storageClient, err := clients.NewStorageClient(ctx, authInfo.Token.Workspace.Name, authInfo.Token.Storage)
+	if authInfo.Workspace.Storage == nil {
+		return &pb.HeadObjectResponse{
+			Ok:       false,
+			ErrorMsg: "Unable to create storage client",
+		}, nil
+	}
+
+	storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 	if err != nil {
 		return &pb.HeadObjectResponse{
 			Ok:       false,
@@ -26,7 +33,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 
 	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil {
-		exists, _ := storageClient.Head(ctx, "objects/"+existingObject.ExternalId)
+		exists, _ := storageClient.Head(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
 		if exists {
 			return &pb.HeadObjectResponse{
 				Ok:     true,
@@ -56,7 +63,7 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)
 
-	storageClient, err := clients.NewStorageClient(ctx, authInfo.Token.Workspace.Name, authInfo.Token.Storage)
+	storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 	if err != nil {
 		return &pb.CreateObjectResponse{
 			Ok:       false,
@@ -80,7 +87,7 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		}, nil
 	}
 
-	presignedURL, err := storageClient.GeneratePresignedURL(ctx, "objects/"+newObject.ExternalId, 60*60*24)
+	presignedURL, err := storageClient.GeneratePresignedURL(ctx, path.Join(types.DefaultObjectPrefix, newObject.ExternalId), 60*60*24)
 	if err != nil {
 		return &pb.CreateObjectResponse{
 			Ok:       false,

@@ -126,7 +126,6 @@ message StubWithRelated {
   Stub stub = 1;
   Workspace workspace = 2;
   Object object = 3;
-  WorkspaceStorage storage = 4;
 }
 
 message Worker {

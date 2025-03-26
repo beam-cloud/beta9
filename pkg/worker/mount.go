@@ -44,19 +44,20 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 
 			m.LocalPath = types.TempContainerWorkspace(request.ContainerId)
 			request.Mounts[i].LocalPath = m.LocalPath
+		}
 
-			// NOTE: The following two adjustments to local paths are part of a migration to use WorkspaceStorage and can be removed once all existing workspaces are migrated.
-		} else if strings.HasPrefix(m.MountPath, types.WorkerContainerVolumePath) {
-			if request.StorageAvailable() {
+		// NOTE: The following adjustments to local paths are part of a migration to use WorkspaceStorage and can be removed once all existing workspaces are migrated.
+		if request.StorageAvailable() {
+			switch {
+			case strings.HasPrefix(m.MountPath, types.WorkerContainerVolumePath):
 				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultVolumesPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultVolumesPrefix), 1)
 				request.Mounts[i].LocalPath = m.LocalPath
-				os.MkdirAll(m.LocalPath, os.FileMode(0755)) // TODO: remove this hack once we're sure it's created elsewhere
-			}
-		} else if strings.HasPrefix(m.MountPath, types.WorkerUserOutputVolume) {
-			if request.StorageAvailable() {
+				os.MkdirAll(m.LocalPath, os.FileMode(0755))
+
+			case strings.HasPrefix(m.MountPath, types.WorkerUserOutputVolume):
 				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultOutputsPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultOutputsPrefix), 1)
 				request.Mounts[i].LocalPath = m.LocalPath
-				os.MkdirAll(m.LocalPath, os.FileMode(0755)) // TODO: remove this hack once we're sure it's created elsewhere
+				os.MkdirAll(m.LocalPath, os.FileMode(0755))
 			}
 		}
 

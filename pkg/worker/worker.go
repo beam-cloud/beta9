@@ -319,9 +319,9 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 		if request.StorageAvailable() {
 			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
 
-			_, err := s.storageManager.Mount(request.Stub.Workspace.Name, &request.Stub.Storage)
+			_, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
 			if err != nil {
-				log.Error().Str("container_id", containerId).Str("workspace_id", request.Stub.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
+				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
 				return
 			}
 		}

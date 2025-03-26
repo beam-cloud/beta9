@@ -255,26 +255,22 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at",
 		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled", w.storage_id "workspace.storage_id",
-		   ws.id AS "storage.id", ws.external_id AS "storage.external_id", ws.bucket_name AS "storage.bucket_name", ws.access_key AS "storage.access_key", ws.secret_key AS "storage.secret_key", ws.endpoint_url AS "storage.endpoint_url", ws.region AS "storage.region", ws.created_at AS "storage.created_at", ws.updated_at AS "storage.updated_at"
+		   ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", 
+		   ws.secret_key AS "workspace.storage.secret_key", ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
-	INNER JOIN workspace_storage ws ON w.storage_id = ws.id
+	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
 	WHERE t.key = $1 AND t.active = TRUE;
 	`
 
 	var token types.Token
-	var workspace types.Workspace
-	var workspaceStorage types.WorkspaceStorage
-
-	token.Workspace = &workspace
-	token.Storage = &workspaceStorage
 
 	if err := r.client.GetContext(ctx, &token, query, tokenKey); err != nil {
 		return nil, nil, err
 	}
 
-	if workspaceStorage.Id != 0 {
-		if err := r.decryptFields(&workspaceStorage); err != nil {
+	if token.Workspace.StorageAvailable() {
+		if err := r.decryptFields(token.Workspace.Storage); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -293,7 +289,7 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 		}
 	}
 
-	return &token, &workspace, nil
+	return &token, token.Workspace, nil
 }
 
 func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error) {
@@ -874,8 +870,9 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public,
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
-	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at",
-		ws.id AS "storage.id", ws.external_id AS "storage.external_id", ws.bucket_name AS "storage.bucket_name", ws.access_key AS "storage.access_key", ws.secret_key AS "storage.secret_key", ws.endpoint_url AS "storage.endpoint_url", ws.region AS "storage.region", ws.created_at AS "storage.created_at", ws.updated_at AS "storage.updated_at"`,
+	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"`,
+		`ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", ws.secret_key AS "workspace.storage.secret_key", 
+		ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"`,
 	).
 		From("stub s").
 		Join("workspace w ON s.workspace_id = w.id").
@@ -903,8 +900,10 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 		return &types.StubWithRelated{}, err
 	}
 
-	if err := r.decryptFields(&stub.Storage); err != nil {
-		return nil, err
+	if stub.Workspace.StorageAvailable() {
+		if err := r.decryptFields(stub.Workspace.Storage); err != nil {
+			return nil, err
+		}
 	}
 
 	return &stub, nil
@@ -1831,11 +1830,29 @@ func (r *PostgresBackendRepository) decryptFields(row interface{}) error {
 		return err
 	}
 
-	v := reflect.ValueOf(row).Elem()
+	v := reflect.ValueOf(row)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem() // Dereference the pointer to get the underlying struct
+	}
+
 	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
 		if v.Type().Field(i).Tag.Get("encrypt") == "true" {
-			if decryptedValue, err := pkgCommon.Decrypt(secretKey, v.Field(i).String()); err == nil {
-				v.Field(i).SetString(decryptedValue)
+			var value string
+			if field.Kind() == reflect.Ptr && !field.IsNil() {
+				value = field.Elem().String()
+			} else if field.Kind() == reflect.String {
+				value = field.String()
+			} else {
+				continue // Skip if not a string or nil pointer
+			}
+
+			if decryptedValue, err := pkgCommon.Decrypt(secretKey, value); err == nil {
+				if field.Kind() == reflect.Ptr {
+					field.Set(reflect.ValueOf(&decryptedValue))
+				} else {
+					field.SetString(decryptedValue)
+				}
 			} else {
 				return err
 			}
@@ -1852,7 +1869,11 @@ func (r *PostgresBackendRepository) encryptFields(row interface{}) error {
 		return err
 	}
 
-	v := reflect.ValueOf(row).Elem()
+	v := reflect.ValueOf(row)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem() // Dereference the pointer to get the underlying struct
+	}
+
 	for i := 0; i < v.NumField(); i++ {
 		if v.Type().Field(i).Tag.Get("encrypt") == "true" {
 			if encryptedValue, err := pkgCommon.Encrypt(secretKey, v.Field(i).String()); err == nil {

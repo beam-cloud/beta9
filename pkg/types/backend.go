@@ -28,6 +28,10 @@ type Workspace struct {
 	Storage            *WorkspaceStorage `db:"storage" json:"storage"`
 }
 
+func (w *Workspace) StorageAvailable() bool {
+	return w.Storage != nil && w.Storage.Id != nil && *w.Storage.Id > 0
+}
+
 // @go2proto
 type WorkspaceWithRelated struct {
 	Workspace
@@ -91,42 +95,46 @@ func NewWorkspaceFromProto(in *pb.Workspace) *Workspace {
 
 // @go2proto
 type WorkspaceStorage struct {
-	Id          uint      `db:"id" json:"id"`
-	ExternalId  string    `db:"external_id" json:"external_id"`
-	BucketName  string    `db:"bucket_name" json:"bucket_name"`
-	AccessKey   string    `db:"access_key" json:"access_key" encrypt:"true"`
-	SecretKey   string    `db:"secret_key" json:"secret_key" encrypt:"true"`
-	EndpointUrl string    `db:"endpoint_url" json:"endpoint_url"`
-	Region      string    `db:"region" json:"region"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at,omitempty"`
-	UpdatedAt   time.Time `db:"updated_at" json:"updated_at,omitempty"`
+	Id          *uint      `db:"id" json:"id"`
+	ExternalId  *string    `db:"external_id" json:"external_id"`
+	BucketName  *string    `db:"bucket_name" json:"bucket_name"`
+	AccessKey   *string    `db:"access_key" json:"access_key" encrypt:"true"`
+	SecretKey   *string    `db:"secret_key" json:"secret_key" encrypt:"true"`
+	EndpointUrl *string    `db:"endpoint_url" json:"endpoint_url"`
+	Region      *string    `db:"region" json:"region"`
+	CreatedAt   *time.Time `db:"created_at" json:"created_at,omitempty"`
+	UpdatedAt   *time.Time `db:"updated_at" json:"updated_at,omitempty"`
 }
 
 func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
+	id := uint(in.Id)
+	createdAt := in.CreatedAt.AsTime()
+	updatedAt := in.UpdatedAt.AsTime()
+
 	return &WorkspaceStorage{
-		Id:          uint(in.Id),
-		ExternalId:  in.ExternalId,
-		BucketName:  in.BucketName,
-		AccessKey:   in.AccessKey,
-		SecretKey:   in.SecretKey,
-		EndpointUrl: in.EndpointUrl,
-		Region:      in.Region,
-		CreatedAt:   in.CreatedAt.AsTime(),
-		UpdatedAt:   in.UpdatedAt.AsTime(),
+		Id:          &id,
+		ExternalId:  &in.ExternalId,
+		BucketName:  &in.BucketName,
+		AccessKey:   &in.AccessKey,
+		SecretKey:   &in.SecretKey,
+		EndpointUrl: &in.EndpointUrl,
+		Region:      &in.Region,
+		CreatedAt:   &createdAt,
+		UpdatedAt:   &updatedAt,
 	}
 }
 
 func (w *WorkspaceStorage) ToProto() *pb.WorkspaceStorage {
 	return &pb.WorkspaceStorage{
-		Id:          uint32(w.Id),
-		ExternalId:  w.ExternalId,
-		BucketName:  w.BucketName,
-		AccessKey:   w.AccessKey,
-		SecretKey:   w.SecretKey,
-		Region:      w.Region,
-		EndpointUrl: w.EndpointUrl,
-		CreatedAt:   timestamppb.New(w.CreatedAt),
-		UpdatedAt:   timestamppb.New(w.UpdatedAt),
+		Id:          uint32(*w.Id),
+		ExternalId:  *w.ExternalId,
+		BucketName:  *w.BucketName,
+		AccessKey:   *w.AccessKey,
+		SecretKey:   *w.SecretKey,
+		Region:      *w.Region,
+		EndpointUrl: *w.EndpointUrl,
+		CreatedAt:   timestamppb.New(*w.CreatedAt),
+		UpdatedAt:   timestamppb.New(*w.UpdatedAt),
 	}
 }
 
@@ -138,20 +146,17 @@ const (
 )
 
 type Token struct {
-	Id          uint              `db:"id" json:"id"`
-	ExternalId  string            `db:"external_id" json:"external_id"`
-	Key         string            `db:"key" json:"key"`
-	Active      bool              `db:"active" json:"active"`
-	Reusable    bool              `db:"reusable" json:"reusable"`
-	WorkspaceId *uint             `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
-	Workspace   *Workspace        `db:"workspace" json:"workspace,omitempty"`       // Pointer to associated Workspace
-	StorageId   *uint             `db:"storage_id" json:"storage_id,omitempty"`     // Foreign key to WorkspaceStorage
-	Storage     *WorkspaceStorage `db:"storage" json:"storage,omitempty"`           // Pointer to associated WorkspaceStorage
-	TokenType   string            `db:"token_type" json:"token_type"`
-	CreatedAt   time.Time         `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time         `db:"updated_at" json:"updated_at"`
-
-	DisabledByClusterAdmin bool `db:"disabled_by_cluster_admin" json:"disabled_by_cluster_admin"`
+	Id                     uint       `db:"id" json:"id"`
+	ExternalId             string     `db:"external_id" json:"external_id"`
+	Key                    string     `db:"key" json:"key"`
+	Active                 bool       `db:"active" json:"active"`
+	Reusable               bool       `db:"reusable" json:"reusable"`
+	WorkspaceId            *uint      `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
+	Workspace              *Workspace `db:"workspace" json:"workspace,omitempty"`       // Pointer to associated Workspace
+	TokenType              string     `db:"token_type" json:"token_type"`
+	CreatedAt              time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt              time.Time  `db:"updated_at" json:"updated_at"`
+	DisabledByClusterAdmin bool       `db:"disabled_by_cluster_admin" json:"disabled_by_cluster_admin"`
 }
 
 type Volume struct {
@@ -464,9 +469,8 @@ func NewStubFromProto(in *pb.Stub) *Stub {
 // @go2proto
 type StubWithRelated struct {
 	Stub
-	Workspace Workspace        `db:"workspace" json:"workspace"`
-	Object    Object           `db:"object" json:"object"`
-	Storage   WorkspaceStorage `db:"storage" json:"storage"`
+	Workspace Workspace `db:"workspace" json:"workspace"`
+	Object    Object    `db:"object" json:"object"`
 }
 
 func (s *StubWithRelated) ToProto() *pb.StubWithRelated {
@@ -474,7 +478,6 @@ func (s *StubWithRelated) ToProto() *pb.StubWithRelated {
 		Stub:      s.Stub.ToProto(),
 		Workspace: s.Workspace.ToProto(),
 		Object:    s.Object.ToProto(),
-		Storage:   s.Storage.ToProto(),
 	}
 }
 
@@ -483,7 +486,6 @@ func NewStubWithRelatedFromProto(in *pb.StubWithRelated) *StubWithRelated {
 		Stub:      *NewStubFromProto(in.Stub),
 		Workspace: *NewWorkspaceFromProto(in.Workspace),
 		Object:    *NewObjectFromProto(in.Object),
-		Storage:   *NewWorkspaceStorageFromProto(in.Storage),
 	}
 }
 
