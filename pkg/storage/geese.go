@@ -85,7 +85,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	// Wait asynchronously
 	go func() {
 		if err := cmd.Wait(); err != nil {
-			log.Error().Err(err).Str("local_path", localPath).Int("pid", s.pid).Msg("geesefs mount process exited with error")
+			log.Error().Err(err).Str("local_path", localPath).Int("pid", s.pid).Msg("geesefs: mount process exited with error")
 		}
 	}()
 
@@ -116,7 +116,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		return fmt.Errorf("failed to mount GeeseFS filesystem to: '%s'", localPath)
 	}
 
-	log.Info().Str("local_path", localPath).Msg("geesefs filesystem mounted")
+	log.Info().Str("local_path", localPath).Msg("geesefs: filesystem mounted")
 	return nil
 }
 
@@ -144,7 +144,7 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 		}
 	}
 
-	log.Info().Str("local_path", localPath).Msg("geesefs filesystem unmounted")
+	log.Info().Str("local_path", localPath).Msg("geesefs: filesystem unmounted")
 	s.pid = 0
 	return nil
 }
