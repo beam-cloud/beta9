@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -276,6 +277,13 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Wor
 	}
 
 	newObjectPath := path.Join(types.DefaultObjectPath, workspace.Name)
+
+	if _, err := os.Stat(newObjectPath); os.IsNotExist(err) {
+		if err := os.MkdirAll(newObjectPath, 0755); err != nil {
+			return 0, err
+		}
+	}
+
 	newObjectFilePath := path.Join(newObjectPath, newObject.ExternalId)
 
 	input, err := os.ReadFile(parentObjectFilePath)
@@ -296,6 +304,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Wor
 func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (*types.Stub, error) {
 	objectId, err := g.copyObjectContents(ctx, workspace, stub)
 	if err != nil {
+		log.Println("Failed to copy object contents:", err)
 		return nil, HTTPBadRequest("Failed to clone object")
 	}
 
