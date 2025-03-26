@@ -36,7 +36,6 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 	}
 
 	go sm.cleanupUnusedMounts()
-
 	return sm, nil
 }
 
@@ -69,6 +68,7 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		FilesystemName: workspaceName,
 		FilesystemPath: mountPath,
 		Geese: types.GeeseConfig{
+
 			// Workspace specific config
 			EndpointUrl: *workspaceStorage.EndpointUrl,
 			BucketName:  *workspaceStorage.BucketName,
