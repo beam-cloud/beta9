@@ -130,7 +130,8 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 	// Try to terminate the process w/ a SIGINT
 	if s.pid > 0 {
 		if p, err := os.FindProcess(s.pid); err == nil {
-			log.Info().Msgf("geesefs: sending SIGINT to process %d", s.pid)
+			log.Info().Str("local_path", localPath).Msgf("geesefs: unmounting process, pid: %d", s.pid)
+
 			p.Signal(syscall.SIGINT)
 
 			// Wait up to 3 seconds for graceful shutdown
@@ -147,14 +148,7 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 		}
 	}
 
-	if _, err := exec.Command("fusermount", "-u", localPath).CombinedOutput(); err != nil {
-
-		// Fallback to lazy unmount
-		if out, err := exec.Command("fusermount", "-uz", localPath).CombinedOutput(); err != nil {
-			return fmt.Errorf("unmount failed: %s", out)
-		}
-	}
-
+	log.Info().Str("local_path", localPath).Msg("geesefs filesystem unmounted")
 	s.pid = 0
 	return nil
 }

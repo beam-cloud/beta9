@@ -62,7 +62,7 @@ type Worker struct {
 	workerRepoClient        pb.WorkerRepositoryServiceClient
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	eventRepo               repo.EventRepository
-	storageManager          *storage.StorageManager
+	storageManager          *WorkspaceStorageManager
 	userDataStorage         storage.Storage
 	checkpointStorage       storage.Storage
 	ctx                     context.Context
@@ -134,7 +134,7 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	storageManager, err := storage.NewStorageManager(ctx, config.Storage)
+	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, containerInstances)
 	if err != nil {
 		return nil, err
 	}

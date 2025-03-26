@@ -1,33 +1,38 @@
-package storage
+package worker
 
 import (
 	"context"
 	"os"
 	"path"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 const (
 	mountCleanupInterval = 30 * time.Second
 )
 
-type StorageManager struct {
-	ctx    context.Context
-	mounts *common.SafeMap[Storage]
-	config types.StorageConfig
-	mu     sync.Mutex
+type WorkspaceStorageManager struct {
+	ctx                context.Context
+	mounts             *common.SafeMap[storage.Storage]
+	config             types.StorageConfig
+	containerInstances *common.SafeMap[*ContainerInstance]
+	mu                 sync.Mutex
 }
 
-func NewStorageManager(ctx context.Context, config types.StorageConfig) (*StorageManager, error) {
-	sm := &StorageManager{
-		ctx:    ctx,
-		mounts: common.NewSafeMap[Storage](),
-		config: config,
-		mu:     sync.Mutex{},
+func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, containerInstances *common.SafeMap[*ContainerInstance]) (*WorkspaceStorageManager, error) {
+	sm := &WorkspaceStorageManager{
+		ctx:                ctx,
+		mounts:             common.NewSafeMap[storage.Storage](),
+		config:             config,
+		containerInstances: containerInstances,
+		mu:                 sync.Mutex{},
 	}
 
 	go sm.cleanupUnusedMounts()
@@ -35,14 +40,14 @@ func NewStorageManager(ctx context.Context, config types.StorageConfig) (*Storag
 	return sm, nil
 }
 
-func (s *StorageManager) Create(workspaceName string, storage Storage) {
+func (s *WorkspaceStorageManager) Create(workspaceName string, storage storage.Storage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.mounts.Set(workspaceName, storage)
 }
 
-func (s *StorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (Storage, error) {
+func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (storage.Storage, error) {
 	mount, ok := s.mounts.Get(workspaceName)
 	if ok {
 		return mount, nil
@@ -59,8 +64,8 @@ func (s *StorageManager) Mount(workspaceName string, workspaceStorage *types.Wor
 	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 	os.MkdirAll(mountPath, 0755)
 
-	mount, err := NewStorage(types.StorageConfig{
-		Mode:           StorageModeGeese,
+	mount, err := storage.NewStorage(types.StorageConfig{
+		Mode:           storage.StorageModeGeese,
 		FilesystemName: workspaceName,
 		FilesystemPath: mountPath,
 		Geese: types.GeeseConfig{
@@ -93,7 +98,7 @@ func (s *StorageManager) Mount(workspaceName string, workspaceStorage *types.Wor
 	return mount, nil
 }
 
-func (s *StorageManager) Unmount(workspaceName string) error {
+func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 	mount, ok := s.mounts.Get(workspaceName)
 	if !ok {
 		return nil
@@ -120,8 +125,8 @@ func (s *StorageManager) Unmount(workspaceName string) error {
 	return nil
 }
 
-func (s *StorageManager) Cleanup() error {
-	s.mounts.Range(func(workspaceName string, value Storage) bool {
+func (s *WorkspaceStorageManager) Cleanup() error {
+	s.mounts.Range(func(workspaceName string, value storage.Storage) bool {
 		s.Unmount(workspaceName)
 		return true
 	})
@@ -129,7 +134,7 @@ func (s *StorageManager) Cleanup() error {
 	return nil
 }
 
-func (s *StorageManager) cleanupUnusedMounts() {
+func (s *WorkspaceStorageManager) cleanupUnusedMounts() {
 	ticker := time.NewTicker(mountCleanupInterval)
 	defer ticker.Stop()
 
@@ -139,9 +144,19 @@ func (s *StorageManager) cleanupUnusedMounts() {
 			return
 		case <-ticker.C:
 			mountsToDelete := []string{}
+			activeWorkspaceNames := []string{}
 
-			s.mounts.Range(func(workspaceName string, value Storage) bool {
-				mountsToDelete = append(mountsToDelete, workspaceName)
+			s.containerInstances.Range(func(containerInstanceId string, value *ContainerInstance) bool {
+				activeWorkspaceNames = append(activeWorkspaceNames, value.Request.Workspace.Name)
+				return true
+			})
+
+			s.mounts.Range(func(workspaceName string, value storage.Storage) bool {
+				if !slices.Contains(activeWorkspaceNames, workspaceName) {
+					log.Info().Str("workspace_name", workspaceName).Msg("unmounting storage")
+					mountsToDelete = append(mountsToDelete, workspaceName)
+				}
+
 				return true
 			})
 
