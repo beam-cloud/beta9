@@ -18,7 +18,12 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 	useWorkspaceStorage := authInfo.Workspace.StorageAvailable()
 	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil {
-		exists := true // TODO: actually stat the local path to ensure it exists on disk for legacy support
+		exists := true
+
+		objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
+		if _, err := os.Stat(objectPath); os.IsNotExist(err) {
+			exists = false
+		}
 
 		if useWorkspaceStorage {
 			storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
@@ -44,7 +49,11 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 				UseWorkspaceStorage: useWorkspaceStorage,
 			}, nil
 		} else {
-			// TODO: mark as bad / delete object
+			return &pb.HeadObjectResponse{
+				Ok:                  false,
+				Exists:              false,
+				UseWorkspaceStorage: useWorkspaceStorage,
+			}, nil
 		}
 	}
 
