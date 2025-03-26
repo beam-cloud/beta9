@@ -265,6 +265,10 @@ func (vs *GlobalVolumeService) getOrCreateVolume(ctx context.Context, workspace 
 		return nil, err
 	}
 
+	if workspace.StorageAvailable() {
+		return volume, nil
+	}
+
 	volumePath := JoinVolumePath(workspace.Name, volume.ExternalId)
 	if _, err := os.Stat(volumePath); os.IsNotExist(err) {
 		os.MkdirAll(volumePath, os.FileMode(0755))

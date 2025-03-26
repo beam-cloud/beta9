@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"path"
 	"strings"
 
@@ -52,12 +51,10 @@ func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerReq
 			case strings.HasPrefix(m.MountPath, types.WorkerContainerVolumePath):
 				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultVolumesPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultVolumesPrefix), 1)
 				request.Mounts[i].LocalPath = m.LocalPath
-				os.MkdirAll(m.LocalPath, os.FileMode(0755))
 
 			case strings.HasPrefix(m.MountPath, types.WorkerUserOutputVolume):
 				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultOutputsPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultOutputsPrefix), 1)
 				request.Mounts[i].LocalPath = m.LocalPath
-				os.MkdirAll(m.LocalPath, os.FileMode(0755))
 			}
 		}
 
