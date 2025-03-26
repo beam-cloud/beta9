@@ -120,10 +120,6 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	return nil
 }
 
-func (s *GeeseStorage) Format(fsName string) error {
-	return nil
-}
-
 func (s *GeeseStorage) Unmount(localPath string) error {
 	waitTimeSeconds := 5
 
@@ -150,5 +146,9 @@ func (s *GeeseStorage) Unmount(localPath string) error {
 
 	log.Info().Str("local_path", localPath).Msg("geesefs filesystem unmounted")
 	s.pid = 0
+	return nil
+}
+
+func (s *GeeseStorage) Format(fsName string) error {
 	return nil
 }
