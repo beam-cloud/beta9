@@ -127,7 +127,7 @@ func (s *GeeseStorage) Format(fsName string) error {
 func (s *GeeseStorage) Unmount(localPath string) error {
 	waitTimeSeconds := 5
 
-	// Try to terminate the process w/ a SIGINT
+	// Try to terminate the geesefs process w/ a SIGINT
 	if s.pid > 0 {
 		if p, err := os.FindProcess(s.pid); err == nil {
 			log.Info().Str("local_path", localPath).Msgf("geesefs: unmounting process, pid: %d", s.pid)
