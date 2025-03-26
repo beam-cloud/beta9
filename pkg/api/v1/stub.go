@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path"
@@ -88,16 +87,19 @@ func (g *StubGroup) ListStubs(ctx echo.Context) error {
 
 func (g *StubGroup) RetrieveStub(ctx echo.Context) error {
 	stubID := ctx.Param("stubId")
-	workspaceID := ctx.Param("workspaceId")
 
-	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID, types.QueryFilter{
-		Field: "workspace_id",
-		Value: workspaceID,
-	})
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
 	if err != nil {
 		return HTTPInternalServerError("Failed to retrieve stub")
 	} else if stub == nil {
 		return HTTPNotFound()
+	}
+
+	if !stub.Public {
+		cc, _ := ctx.(*auth.HttpAuthContext)
+		if cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
+			return HTTPNotFound()
+		}
 	}
 
 	return ctx.JSON(http.StatusOK, stub)
@@ -210,7 +212,6 @@ func (g StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub 
 	}
 
 	if overrideConfig.Gpu != nil {
-		log.Println("GPU override:", *overrideConfig.Gpu)
 		if _, ok := types.GPUTypesToMap(types.AllGPUTypes())[*overrideConfig.Gpu]; ok {
 			stubConfig.Runtime.Gpus = []types.GpuType{types.GpuType(*overrideConfig.Gpu)}
 		} else {
