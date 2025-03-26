@@ -180,11 +180,10 @@ class FileSyncer:
 
         terminal.detail(f"Collected object is {terminal.humanize_memory(size, base=10)}")
 
+        object_id = None
         head_response: HeadObjectResponse = self.gateway_stub.head_object(
             HeadObjectRequest(hash=hash)
         )
-
-        object_id = None
         if not head_response.exists:
             metadata = ObjectMetadata(name=hash, size=size)
 
