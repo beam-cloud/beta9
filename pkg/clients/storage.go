@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -93,15 +94,33 @@ func (c *StorageClient) Delete(ctx context.Context, key string) error {
 	return err
 }
 
-func (c *StorageClient) ListObjects(ctx context.Context, prefix string) ([]s3types.Object, error) {
+func (c *StorageClient) ListDirectory(ctx context.Context, dir string) ([]s3types.Object, []string, error) {
+	if !strings.HasSuffix(dir, "/") {
+		dir += "/"
+	}
+
 	resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
-		Prefix: aws.String(prefix),
+		Bucket:    aws.String(*c.WorkspaceStorage.BucketName),
+		Prefix:    aws.String(dir),
+		Delimiter: aws.String("/"),
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return resp.Contents, nil
+
+	var files []s3types.Object
+	for _, obj := range resp.Contents {
+		if *obj.Key != dir { // exclude the directory itself
+			files = append(files, obj)
+		}
+	}
+
+	var dirs []string
+	for _, cp := range resp.CommonPrefixes {
+		dirs = append(dirs, *cp.Prefix)
+	}
+
+	return files, dirs, nil
 }
 
 func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {

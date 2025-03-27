@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -456,20 +457,33 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 		}
 
 		volumePath = path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
-		objects, err := storageClient.ListWithPrefix(ctx, volumePath)
+		objects, dirs, err := storageClient.ListDirectory(ctx, volumePath)
 		if err != nil {
 			return nil, errors.New("unable to list files")
 		}
 
-		files = make([]FileInfo, len(objects))
-		for i, obj := range objects {
-			isDir := strings.HasSuffix(*obj.Key, "/")
-			files[i] = FileInfo{
+		log.Println("volumePath", volumePath)
+		log.Println("objects", objects)
+		log.Println("dirs", dirs)
+
+		files = make([]FileInfo, 0, len(objects)+len(dirs))
+
+		for _, dir := range dirs {
+			files = append(files, FileInfo{
+				Path:    strings.TrimPrefix(dir, volumePath),
+				Size:    0,
+				ModTime: 0,
+				IsDir:   true,
+			})
+		}
+
+		for _, obj := range objects {
+			files = append(files, FileInfo{
 				Path:    strings.TrimPrefix(*obj.Key, volumePath),
 				Size:    uint64(*obj.Size),
 				ModTime: obj.LastModified.Unix(),
-				IsDir:   isDir,
-			}
+				IsDir:   false,
+			})
 		}
 	} else {
 		// Get paths and prevent access above parent directory
