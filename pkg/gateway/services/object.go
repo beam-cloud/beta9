@@ -12,6 +12,10 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
+const (
+	defaultObjectPutExpirationS = 60 * 60 * 24
+)
+
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
@@ -93,7 +97,7 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		}, nil
 	}
 
-	presignedURL, err := storageClient.GeneratePresignedURL(ctx, path.Join(types.DefaultObjectPrefix, newObject.ExternalId), 60*60*24)
+	presignedURL, err := storageClient.GeneratePresignedPutURL(ctx, path.Join(types.DefaultObjectPrefix, newObject.ExternalId), defaultObjectPutExpirationS)
 	if err != nil {
 		return &pb.CreateObjectResponse{
 			Ok:       false,

@@ -104,7 +104,7 @@ func (c *StorageClient) ListObjects(ctx context.Context, prefix string) ([]s3typ
 	return resp.Contents, nil
 }
 
-func (c *StorageClient) GeneratePresignedURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
+func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
 	result, err := c.presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
 		Key:    aws.String(key),
@@ -116,10 +116,22 @@ func (c *StorageClient) GeneratePresignedURL(ctx context.Context, key string, ex
 	return result.URL, nil
 }
 
-func (c *StorageClient) GeneratePresignedURLs(ctx context.Context, keys []string, expiresInSeconds int64) (map[string]string, error) {
+func (c *StorageClient) GeneratePresignedGetURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
+	result, err := c.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Key:    aws.String(key),
+	}, s3.WithPresignExpires(time.Duration(expiresInSeconds)*time.Second))
+	if err != nil {
+		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
+	}
+
+	return result.URL, nil
+}
+
+func (c *StorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []string, expiresInSeconds int64) (map[string]string, error) {
 	urls := make(map[string]string)
 	for _, key := range keys {
-		url, err := c.GeneratePresignedURL(ctx, key, expiresInSeconds)
+		url, err := c.GeneratePresignedPutURL(ctx, key, expiresInSeconds)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate presigned URL for key %s: %w", key, err)
 		}
