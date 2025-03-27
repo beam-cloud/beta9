@@ -60,15 +60,16 @@ func (c *StorageClient) Upload(ctx context.Context, key string, data []byte) err
 	return err
 }
 
-func (c *StorageClient) Head(ctx context.Context, key string) (bool, error) {
-	_, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
+func (c *StorageClient) Head(ctx context.Context, key string) (bool, *s3.HeadObjectOutput, error) {
+	output, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return true, nil
+
+	return true, output, nil
 }
 
 func (c *StorageClient) Download(ctx context.Context, key string) ([]byte, error) {

@@ -174,8 +174,14 @@ class Output(BaseAbstraction):
         if storage_available:
             output_id = str(uuid.uuid4())
             output_path = Path(USER_OUTPUTS_DIR) / self.task_id / output_id / path.name
+            print("output_path", output_path)
             output_path.parent.mkdir(mode=755, parents=True, exist_ok=True)
             shutil.copy(path, output_path)
+
+            # Ensure the file is written to disk
+            with open(output_path, "rb+") as f:
+                os.fsync(f.fileno())
+
             self.id = output_id
             return self
 
@@ -216,6 +222,11 @@ class Output(BaseAbstraction):
             raise OutputNotFoundError(res.err_msg)
 
         stat = res.stat.to_pydict(casing=Casing.SNAKE)  # type:ignore
+
+        size = stat.get("size")
+        if size is None:
+            stat["size"] = 0
+
         return Stat(**stat)
 
     def exists(self) -> bool:

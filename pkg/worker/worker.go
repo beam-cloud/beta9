@@ -264,7 +264,7 @@ func (s *Worker) Run() error {
 
 	lastContainerRequest := time.Now()
 
-	// Listen for container requests for this worker
+	// Listen for container requests
 containerRequestStream:
 	for {
 		stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{

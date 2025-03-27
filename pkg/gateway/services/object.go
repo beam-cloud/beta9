@@ -34,7 +34,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 				}, nil
 			}
 
-			exists, _ = storageClient.Head(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
+			exists, _, _ = storageClient.Head(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
 		}
 
 		if exists {
