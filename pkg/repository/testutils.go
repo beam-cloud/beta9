@@ -64,5 +64,8 @@ func NewBackendPostgresRepositoryForTest() (BackendRepository, sqlmock.Sqlmock) 
 
 	return &PostgresBackendRepository{
 		client: sqlxDB,
+		config: types.PostgresConfig{
+			EncryptionKey: "sk_pKz38fK8v7lz01AneJI8MJnR70akmP2CtDNf1IufKcY=",
+		},
 	}, mock
 }

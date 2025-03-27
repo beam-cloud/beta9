@@ -166,8 +166,11 @@ RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x8
     chmod +x /usr/local/bin/cuda-checkpoint
 
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
-    curl -L https://beam-runner-python-deps.s3.amazonaws.com/cuno_1.2.6_amd64_glibc.deb -o /tmp/cuno_1.2.6_amd64_glibc.deb && \
-    apt-get install -y /tmp/cuno_1.2.6_amd64_glibc.deb && rm /tmp/cuno_1.2.6_amd64_glibc.deb; \
+    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
+    chmod +x /usr/local/bin/geesefs; \
+    elif [ "$(uname -m)" = "aarch64" ]; then \
+    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
+    chmod +x /usr/local/bin/geesefs; \
     fi
 
 RUN apt-get remove -y curl && \

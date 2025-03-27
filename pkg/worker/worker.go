@@ -62,6 +62,7 @@ type Worker struct {
 	workerRepoClient        pb.WorkerRepositoryServiceClient
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	eventRepo               repo.EventRepository
+	storageManager          *WorkspaceStorageManager
 	userDataStorage         storage.Storage
 	checkpointStorage       storage.Storage
 	ctx                     context.Context
@@ -132,6 +133,11 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 	config := configManager.GetConfig()
+
+	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, containerInstances)
+	if err != nil {
+		return nil, err
+	}
 
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
 	if err != nil {
@@ -217,6 +223,7 @@ func NewWorker() (*Worker, error) {
 		gpuCount:                uint32(gpuCount),
 		runcHandle:              runc.Runc{Debug: config.DebugMode},
 		runcServer:              runcServer,
+		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
@@ -257,7 +264,7 @@ func (s *Worker) Run() error {
 
 	lastContainerRequest := time.Now()
 
-	// Listen for container requests for this worker
+	// Listen for container requests
 containerRequestStream:
 	for {
 		stream, err := s.workerRepoClient.GetNextContainerRequest(s.ctx, &pb.GetNextContainerRequestRequest{
@@ -306,6 +313,17 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 
 		if request.IsBuildRequest() {
 			go s.listenForStopBuildEvent(ctx, cancel, containerId)
+		}
+
+		// If isolated workspace storage is available, mount it
+		if request.StorageAvailable() {
+			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
+
+			_, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
+			if err != nil {
+				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
+				return
+			}
 		}
 
 		if err := s.RunContainer(ctx, request); err != nil {
@@ -563,6 +581,11 @@ func (s *Worker) shutdown() error {
 	err = s.imageClient.Cleanup()
 	if err != nil {
 		errs = errors.Join(errs, fmt.Errorf("failed to cleanup fuse mounts: %v", err))
+	}
+
+	err = s.storageManager.Cleanup()
+	if err != nil {
+		errs = errors.Join(errs, fmt.Errorf("failed to cleanup workspace storage: %v", err))
 	}
 
 	err = os.RemoveAll(s.imageMountPath)

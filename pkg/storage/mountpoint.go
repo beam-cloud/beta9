@@ -27,6 +27,7 @@ func (s *MountPointStorage) Mount(localPath string) error {
 	// NOTE: this is called to force unmount previous mounts
 	// It seems like mountpoint doesn't clean up gracefully by itself
 	s.Unmount(localPath)
+
 	if _, err := os.Stat(localPath); os.IsNotExist(err) {
 		err := os.MkdirAll(localPath, 0755)
 		if err != nil {

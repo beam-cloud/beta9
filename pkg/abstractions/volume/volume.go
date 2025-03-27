@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -265,6 +267,10 @@ func (vs *GlobalVolumeService) getOrCreateVolume(ctx context.Context, workspace 
 		return nil, err
 	}
 
+	if workspace.StorageAvailable() {
+		return volume, nil
+	}
+
 	volumePath := JoinVolumePath(workspace.Name, volume.ExternalId)
 	if _, err := os.Stat(volumePath); os.IsNotExist(err) {
 		os.MkdirAll(volumePath, os.FileMode(0755))
@@ -277,6 +283,11 @@ func (vs *GlobalVolumeService) deleteVolume(ctx context.Context, workspace *type
 	volume, err := vs.backendRepo.GetVolume(ctx, workspace.Id, volumeName)
 	if err != nil {
 		return err
+	}
+
+	if workspace.StorageAvailable() {
+		// TODO: Delete from volume
+		return nil
 	}
 
 	volumeDir, _, err := GetVolumePaths(workspace.Name, volume.ExternalId, "")
@@ -390,6 +401,7 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 	// Delete paths; both files and directories
 	deleted := make([]string, len(matches))
 	for i, fpath := range matches {
+
 		if err := os.RemoveAll(fpath); err == nil {
 			// Modify path to be relative
 			deleted[i] = strings.TrimPrefix(fpath, rootVolumePath+"/")
@@ -437,33 +449,72 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 		return nil, errors.New("unable to find volume")
 	}
 
-	// Get paths and prevent access above parent directory
-	rootVolumePath, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
-	if err != nil {
-		return nil, err
-	}
+	var files []FileInfo = []FileInfo{}
+	if workspace.StorageAvailable() {
+		storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+		if err != nil {
+			return nil, err
+		}
 
-	// List all contents if path is a directory
-	if info, err := os.Stat(fullVolumePath); err == nil && info.IsDir() {
-		fullVolumePath += "/*"
-	}
+		volumePath = path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
+		objects, dirs, err := storageClient.ListDirectory(ctx, volumePath)
+		if err != nil {
+			return nil, errors.New("unable to list files")
+		}
 
-	// Find path matches
-	matches, err := filepath.Glob(fullVolumePath)
-	if err != nil {
-		return nil, errors.New("unable to find files on volume")
-	}
+		log.Println("volumePath", volumePath)
+		log.Println("objects", objects)
+		log.Println("dirs", dirs)
 
-	// Modify paths to be relative
-	files := make([]FileInfo, len(matches))
-	for i, p := range matches {
-		info, _ := os.Stat(p)
-		size := info.Size()
-		files[i] = FileInfo{
-			Path:    strings.TrimPrefix(p, rootVolumePath+"/"),
-			Size:    uint64(size),
-			ModTime: info.ModTime().Unix(),
-			IsDir:   info.IsDir(),
+		files = make([]FileInfo, 0, len(objects)+len(dirs))
+
+		for _, dir := range dirs {
+			files = append(files, FileInfo{
+				Path:    strings.TrimPrefix(dir, volumePath),
+				Size:    0,
+				ModTime: 0,
+				IsDir:   true,
+			})
+		}
+
+		for _, obj := range objects {
+			files = append(files, FileInfo{
+				Path:    strings.TrimPrefix(*obj.Key, volumePath),
+				Size:    uint64(*obj.Size),
+				ModTime: obj.LastModified.Unix(),
+				IsDir:   false,
+			})
+		}
+	} else {
+		// Get paths and prevent access above parent directory
+		rootVolumePath, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
+		if err != nil {
+			return nil, err
+		}
+
+		// List all contents if path is a directory
+		if info, err := os.Stat(fullVolumePath); err == nil && info.IsDir() {
+			fullVolumePath += "/*"
+		}
+
+		// Find path matches
+		matches, err := filepath.Glob(fullVolumePath)
+		if err != nil {
+			return nil, errors.New("unable to find files on volume")
+		}
+
+		files = make([]FileInfo, len(matches))
+
+		// Modify paths to be relative
+		for i, p := range matches {
+			info, _ := os.Stat(p)
+			size := info.Size()
+			files[i] = FileInfo{
+				Path:    strings.TrimPrefix(p, rootVolumePath+"/"),
+				Size:    uint64(size),
+				ModTime: info.ModTime().Unix(),
+				IsDir:   info.IsDir(),
+			}
 		}
 	}
 

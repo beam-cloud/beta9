@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 )
 
 func Encrypt(secretKey []byte, plaintext string) (string, error) {
@@ -52,6 +53,10 @@ func Decrypt(secretKey []byte, ciphertext64 string) (string, error) {
 		return "", err
 	}
 
+	if len(ciphertext) < gcm.NonceSize() {
+		return "", errors.New("ciphertext too short")
+	}
+
 	// Since we know the ciphertext is actually nonce+ciphertext
 	// And len(nonce) == NonceSize(). We can separate the two.
 	nonceSize := gcm.NonceSize()
@@ -78,7 +83,7 @@ func DecryptAllSecrets(signingKey []byte, secrets []string) ([]string, error) {
 	return decrypted, nil
 }
 
-func ParseSigningKey(signingKey string) ([]byte, error) {
-	secret := signingKey[len("sk_"):]
+func ParseSecretKey(secretKey string) ([]byte, error) {
+	secret := secretKey[len("sk_"):]
 	return base64.StdEncoding.DecodeString(secret)
 }

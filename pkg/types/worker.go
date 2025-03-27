@@ -13,7 +13,7 @@ const (
 	WorkerLifecycleStatsKey        string        = "beta9.worker.usage.spawner.lifecycle"
 	WorkerDurationStatsKey         string        = "beta9.worker.usage.spawner.duration"
 	WorkerUserCodeVolume           string        = "/mnt/code"
-	WorkerUserOutputVolume         string        = "/data/outputs"
+	WorkerUserOutputVolume         string        = "/outputs"
 	WorkerContainerVolumePath      string        = "/volumes"
 	WorkerDurationEmissionInterval time.Duration = 30 * time.Second
 	WorkerKeepAliveInterval        time.Duration = 15 * time.Second
