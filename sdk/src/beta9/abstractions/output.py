@@ -174,7 +174,6 @@ class Output(BaseAbstraction):
         if storage_available:
             output_id = str(uuid.uuid4())
             output_path = Path(USER_OUTPUTS_DIR) / self.task_id / output_id / path.name
-            print("output_path", output_path)
             output_path.parent.mkdir(mode=755, parents=True, exist_ok=True)
             shutil.copy(path, output_path)
 

@@ -140,3 +140,23 @@ func (c *StorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []str
 
 	return urls, nil
 }
+
+func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string) ([]s3types.Object, error) {
+	resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Prefix: aws.String(prefix),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Contents, nil
+}
+
+func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string) error {
+	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Key:    aws.String(prefix),
+	})
+	return err
+}
