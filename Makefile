@@ -10,13 +10,12 @@ setup:
 	# helm install beta9 deploy/charts/beta9 --create-namespace --values deploy/charts/beta9/values.local.yaml
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
-# Note: you may need https://github.com/python-poetry/poetry-plugin-shell as of poetry v2.0.0
 setup-sdk:
 	curl -sSL https://install.python-poetry.org | python3 -
 	export PATH="$$HOME/.local/bin:$$PATH"
 	poetry config virtualenvs.in-project true
 	poetry install -C sdk
-	poetry shell -C sdk
+	poetry env activate -P sdk
 
 k3d-up:
 	bash bin/k3d.sh up
