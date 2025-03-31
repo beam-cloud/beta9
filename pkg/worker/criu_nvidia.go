@@ -137,7 +137,7 @@ func (c *NvidiaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) 
 func (c *NvidiaCRIUManager) checkpointCached(cachedCheckpointPath string, containerId string) bool {
 	// If the checkpoint is already cached, we can use that path without the extra grpc call
 	if _, err := os.Stat(cachedCheckpointPath); err != nil {
-		log.Info().Str("container_id", containerId).Msgf("checkpoint already cached: %s", cachedCheckpointPath)
+		log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
 		return false
 	}
 
