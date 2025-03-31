@@ -136,11 +136,23 @@ func (c *NvidiaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) 
 
 func (c *NvidiaCRIUManager) checkpointCached(cachedCheckpointPath string, containerId string) bool {
 	// If the checkpoint is already cached, we can use that path without the extra grpc call
-	if _, err := os.Stat(cachedCheckpointPath); err == nil {
+	if _, err := os.Stat(cachedCheckpointPath); err != nil {
 		log.Info().Str("container_id", containerId).Msgf("checkpoint already cached: %s", cachedCheckpointPath)
-		return true
+		return false
 	}
-	return false
+
+	// The "/cache" prefix is added by way of mounting and is not reflected in the path that the metadata
+	// cache is tracking.
+	cachedCheckpointPath = strings.TrimPrefix(cachedCheckpointPath, "/cache")
+
+	client := c.fileCacheManager.GetClient()
+	if !client.IsDirCachedNearby(context.Background(), cachedCheckpointPath) {
+		log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
+		return false
+	}
+
+	log.Info().Str("container_id", containerId).Msgf("checkpoint cached nearby")
+	return true
 }
 
 func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
