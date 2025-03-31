@@ -348,7 +348,12 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		return nil, HTTPInternalServerError("Failed to configure volumes")
 	}
 
-	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true)
+	app, err := g.backendRepo.GetOrCreateApp(ctx, workspace.Id, stub.Name)
+	if err != nil {
+		return nil, HTTPInternalServerError("Failed to create app")
+	}
+
+	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true, app.Id)
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to clone stub")
 	}

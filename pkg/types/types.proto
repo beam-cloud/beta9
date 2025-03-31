@@ -7,6 +7,16 @@ import "google/protobuf/timestamp.proto";
 package types;
 
 
+message App {
+  uint32 id = 1;
+  string external_id = 2;
+  string name = 3;
+  string description = 4;
+  uint32 workspace_id = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
 message BuildOptions {
   string source_image = 1;
   string dockerfile = 2;
@@ -120,6 +130,7 @@ message Stub {
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp updated_at = 10;
   bool public = 11;
+  uint32 app_id = 12;
 }
 
 message StubWithRelated {

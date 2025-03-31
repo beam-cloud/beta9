@@ -110,6 +110,7 @@ type Deployment struct {
 	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at"`
 	DeletedAt   sql.NullTime `db:"deleted_at" json:"deleted_at"`
+	AppId       uint         `db:"app_id" json:"app_id,omitempty"` // Foreign key to App
 }
 
 type DeploymentWithRelated struct {
@@ -276,6 +277,17 @@ type Autoscaler struct {
 	MinContainers     uint           `json:"min_containers"`
 }
 
+// @go2proto
+type App struct {
+	Id          uint      `db:"id" json:"id"`
+	ExternalId  string    `db:"external_id" json:"external_id"`
+	Name        string    `db:"name" json:"name"`
+	Description string    `db:"description" json:"description"`
+	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+}
+
 const (
 	StubTypeFunction               string = "function"
 	StubTypeFunctionDeployment     string = "function/deployment"
@@ -329,6 +341,7 @@ type Stub struct {
 	CreatedAt     time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt     time.Time `db:"updated_at" json:"updated_at"`
 	Public        bool      `db:"public" json:"public"`
+	AppId         uint      `db:"app_id" json:"app_id,omitempty"` // Foreign key to App
 }
 
 func (s *Stub) UnmarshalConfig() (*StubConfigV1, error) {

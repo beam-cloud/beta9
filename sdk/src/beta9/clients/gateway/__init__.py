@@ -295,6 +295,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     entrypoint: List[str] = betterproto.string_field(30)
     ports: List[int] = betterproto.uint32_field(31)
     env: List[str] = betterproto.string_field(32)
+    app_name: str = betterproto.string_field(33)
 
 
 @dataclass(eq=False, repr=False)
@@ -332,6 +333,7 @@ class Deployment(betterproto.Message):
     workspace_name: str = betterproto.string_field(9)
     created_at: datetime = betterproto.message_field(10)
     updated_at: datetime = betterproto.message_field(11)
+    app_id: str = betterproto.string_field(12)
 
 
 @dataclass(eq=False, repr=False)
