@@ -157,15 +157,15 @@ func NewWorker() (*Worker, error) {
 
 	var cacheClient *blobcache.BlobCacheClient = nil
 	if config.Worker.BlobCacheEnabled {
-		if config.Cache.BlobCacheMetadata.Mode == blobcache.BlobCacheMetadataModeLocal {
-			config.Cache.BlobCache.Metadata.RedisAddr = fmt.Sprintf("%s:%s", config.Cache.BlobCacheMetadata.ValkeyConfig.Host, config.Cache.BlobCacheMetadata.ValkeyConfig.Port)
-			config.Cache.BlobCache.Metadata.RedisPasswd = config.Cache.BlobCacheMetadata.ValkeyConfig.Password
-			config.Cache.BlobCache.Metadata.RedisTLSEnabled = false
-			config.Cache.BlobCache.Metadata.RedisMode = blobcache.RedisModeSentinel
-			config.Cache.BlobCache.Metadata.RedisMasterName = config.Cache.BlobCacheMetadata.ValkeyConfig.PrimaryName
+		if config.BlobCache.Metadata.Mode == blobcache.BlobCacheMetadataModeLocal {
+			config.BlobCache.Metadata.RedisAddr = fmt.Sprintf("%s:%d", config.BlobCache.Metadata.ValkeyConfig.Host, config.BlobCache.Metadata.ValkeyConfig.Port)
+			config.BlobCache.Metadata.RedisPasswd = config.BlobCache.Metadata.ValkeyConfig.Password
+			config.BlobCache.Metadata.RedisTLSEnabled = false
+			config.BlobCache.Metadata.RedisMode = blobcache.RedisModeSentinel
+			config.BlobCache.Metadata.RedisMasterName = config.BlobCache.Metadata.ValkeyConfig.PrimaryName
 		}
 
-		cacheClient, err = blobcache.NewBlobCacheClient(ctx, config.Cache.BlobCache)
+		cacheClient, err = blobcache.NewBlobCacheClient(ctx, config.BlobCache)
 		if err == nil {
 			err = cacheClient.WaitForHosts(defaultCacheWaitTime)
 		}

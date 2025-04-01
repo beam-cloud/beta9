@@ -91,6 +91,8 @@ github.com/beam-cloud/blobcache-v2 v0.0.0-20250401152822-ba5022a5df4b h1:AOqxqmU
 github.com/beam-cloud/blobcache-v2 v0.0.0-20250401152822-ba5022a5df4b/go.mod h1:ZjQOwyxSN8Z2b25M0X7FtVCYaS1lyOuRzsMkn2NxQac=
 github.com/beam-cloud/blobcache-v2 v0.0.0-20250401160353-b502d3667fb2 h1:e1hTmHF2lmJUtJbJPXOGXJl1NppE29+sYFEHO6dKtjo=
 github.com/beam-cloud/blobcache-v2 v0.0.0-20250401160353-b502d3667fb2/go.mod h1:ZjQOwyxSN8Z2b25M0X7FtVCYaS1lyOuRzsMkn2NxQac=
+github.com/beam-cloud/blobcache-v2 v0.0.0-20250401171545-85f6ad24c5ac h1:xBPqtYNexj6sUqjSJMhbacFQvXrbNEc+pMDc1OG2HZw=
+github.com/beam-cloud/blobcache-v2 v0.0.0-20250401171545-85f6ad24c5ac/go.mod h1:ZjQOwyxSN8Z2b25M0X7FtVCYaS1lyOuRzsMkn2NxQac=
 github.com/beam-cloud/clip v0.0.0-20250314195126-c4a7a2a7f4ba h1:gkdfRwR9mhyTKspfJVTbbBgbw2PsuH3kZTS+UEhtqpk=
 github.com/beam-cloud/clip v0.0.0-20250314195126-c4a7a2a7f4ba/go.mod h1:FO7taXHUAqgx33PjeB6LbSLpKob3Ceyo9Po64nq5TR0=
 github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737 h1:9dvNZag3gegzIl5i8W861lsnhnwz4joHr40K1HPcpmw=
