@@ -60,111 +60,6 @@ type BuildStep struct {
 	Type    string
 }
 
-type BuildOpts struct {
-	BaseImageRegistry  string
-	BaseImageName      string
-	BaseImageTag       string
-	BaseImageDigest    string
-	BaseImageCreds     string
-	ExistingImageUri   string
-	ExistingImageCreds map[string]string
-	Dockerfile         string
-	BuildCtxObject     string
-	PythonVersion      string
-	PythonPackages     []string
-	Commands           []string
-	BuildSteps         []BuildStep
-	ForceRebuild       bool
-	EnvVars            []string
-	BuildSecrets       []string
-	Gpu                string
-	IgnorePython       bool
-}
-
-func (o *BuildOpts) String() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "{")
-	fmt.Fprintf(&b, "  \"BaseImageRegistry\": %q,", o.BaseImageRegistry)
-	fmt.Fprintf(&b, "  \"BaseImageName\": %q,", o.BaseImageName)
-	fmt.Fprintf(&b, "  \"BaseImageTag\": %q,", o.BaseImageTag)
-	fmt.Fprintf(&b, "  \"BaseImageDigest\": %q,", o.BaseImageDigest)
-	fmt.Fprintf(&b, "  \"BaseImageCreds\": %q,", o.BaseImageCreds)
-	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
-	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
-	fmt.Fprintf(&b, "  \"Dockerfile\": %q,", o.Dockerfile)
-	fmt.Fprintf(&b, "  \"BuildCtxObject\": %q,", o.BuildCtxObject)
-	fmt.Fprintf(&b, "  \"PythonVersion\": %q,", o.PythonVersion)
-	fmt.Fprintf(&b, "  \"PythonPackages\": %#v,", o.PythonPackages)
-	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
-	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
-	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
-	fmt.Fprintf(&b, "  \"Gpu\": %q,", o.Gpu)
-	fmt.Fprintf(&b, "  \"IgnorePython\": %v,", o.IgnorePython)
-	fmt.Fprintf(&b, "}")
-	return b.String()
-}
-
-func (o *BuildOpts) setCustomImageBuildOptions() error {
-	baseImage, err := ExtractImageNameAndTag(o.ExistingImageUri)
-	if err != nil {
-		return err
-	}
-
-	if len(o.ExistingImageCreds) > 0 && o.ExistingImageUri != "" {
-		token, err := GetRegistryToken(o)
-		if err != nil {
-			return err
-		}
-		o.BaseImageCreds = token
-	}
-
-	o.BaseImageRegistry = baseImage.Registry
-	o.BaseImageName = baseImage.Repo
-	o.BaseImageTag = baseImage.Tag
-	o.BaseImageDigest = baseImage.Digest
-
-	return nil
-}
-
-func (o *BuildOpts) addPythonRequirements() {
-	// Override any specified python packages with base requirements (to ensure we have what need in the image)
-	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")
-
-	// Create a map to track package names in baseRequirementsSlice
-	baseNames := make(map[string]bool)
-	for _, basePkg := range baseRequirementsSlice {
-		baseNames[extractPackageName(basePkg)] = true
-	}
-
-	// Filter out existing packages from opts.PythonPackages
-	filteredPythonPackages := make([]string, 0)
-	for _, optPkg := range o.PythonPackages {
-		if !baseNames[extractPackageName(optPkg)] {
-			filteredPythonPackages = append(filteredPythonPackages, optPkg)
-		}
-	}
-
-	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
-}
-
-// handleCustomBaseImage validates the custom base image and parses its details into build options
-func (o *BuildOpts) handleCustomBaseImage(outputChan chan common.OutputMsg) error {
-	if outputChan != nil {
-		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", o.ExistingImageUri)}
-	}
-
-	err := o.setCustomImageBuildOptions()
-	if err != nil {
-		if outputChan != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
-		}
-		return err
-	}
-
-	o.addPythonRequirements()
-	return nil
-}
-
 func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
 	return &Builder{
 		config:        config,
@@ -248,32 +143,18 @@ func (i *BaseImage) String() string {
 // Build user image
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	var (
-		dockerfile             *string
-		authInfo, _            = auth.AuthInfoFromContext(ctx)
-		containerSpinupTimeout = defaultContainerSpinupTimeout
-		success                = atomic.Bool{}
+		authInfo, _ = auth.AuthInfoFromContext(ctx)
+		success     = atomic.Bool{}
 	)
 
-	switch {
-	case opts.Dockerfile != "":
-		opts.addPythonRequirements()
-		dockerfile = &opts.Dockerfile
-		containerSpinupTimeout = dockerfileContainerSpinupTimeout
-	case opts.ExistingImageUri != "":
-		err := opts.handleCustomBaseImage(outputChan)
-		if err != nil {
-			return err
-		}
-		containerSpinupTimeout = b.calculateImageArchiveDuration(ctx, opts)
-	}
-
-	if creds, err := b.shouldUseDefaultDockerCreds(opts); err == nil {
-		opts.BaseImageCreds = creds
+	err := opts.initializeBuildConfiguration(b.config, outputChan)
+	if err != nil {
+		return err
 	}
 
 	containerId := b.genContainerId()
 
-	containerRequest, err := b.generateContainerRequest(opts, dockerfile, containerId, authInfo.Workspace)
+	containerRequest, err := b.generateContainerRequest(opts, containerId, authInfo.Workspace)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Error occured while generating container request: " + err.Error()}
 		return err
@@ -334,6 +215,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	start := time.Now()
 	buildContainerRunning := false
 
+	containerSpinupTimeout := b.calculateContainerSpinupTimeout(ctx, opts)
 	for !buildContainerRunning {
 		select {
 		case <-ctx.Done():
@@ -467,22 +349,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	return nil
 }
 
-func (b *Builder) shouldUseDefaultDockerCreds(opts *BuildOpts) (string, error) {
-	isDockerHub := opts.BaseImageRegistry == dockerHubRegistry
-	credsNotSet := opts.BaseImageCreds == ""
-
-	if isDockerHub && credsNotSet {
-		username := b.config.ImageService.Registries.Docker.Username
-		password := b.config.ImageService.Registries.Docker.Password
-		if username != "" && password != "" {
-			return fmt.Sprintf("%s:%s", username, password), nil
-		}
-	}
-	return "", errors.New("docker creds not set in config")
-}
-
 // generateContainerRequest generates a container request for the build container
-func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, containerId string, workspace *types.Workspace) (*types.ContainerRequest, error) {
+func (b *Builder) generateContainerRequest(opts *BuildOpts, containerId string, workspace *types.Workspace) (*types.ContainerRequest, error) {
 	baseImageId, err := b.GetImageId(&BuildOpts{
 		BaseImageRegistry: opts.BaseImageRegistry,
 		BaseImageName:     opts.BaseImageName,
@@ -515,7 +383,7 @@ func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, 
 		BuildOptions: types.BuildOptions{
 			SourceImage:      &sourceImage,
 			SourceImageCreds: opts.BaseImageCreds,
-			Dockerfile:       dockerfile,
+			Dockerfile:       &opts.Dockerfile,
 			BuildCtxObject:   &opts.BuildCtxObject,
 			BuildSecrets:     opts.BuildSecrets,
 		},
@@ -856,23 +724,30 @@ func tagOrDigest(digest string, tag string) string {
 	return digest
 }
 
-func (b *Builder) calculateImageArchiveDuration(ctx context.Context, opts *BuildOpts) time.Duration {
-	sourceImage := getSourceImage(opts)
-	imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to inspect image")
+func (b *Builder) calculateContainerSpinupTimeout(ctx context.Context, opts *BuildOpts) time.Duration {
+	switch {
+	case opts.Dockerfile != "":
+		return dockerfileContainerSpinupTimeout
+	case opts.ExistingImageUri != "":
+		sourceImage := getSourceImage(opts)
+		imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to inspect image")
+			return defaultContainerSpinupTimeout
+		}
+
+		imageSizeBytes := 0
+		for _, layer := range imageMetadata.LayersData {
+			imageSizeBytes += layer.Size
+		}
+
+		timePerByte := time.Duration(b.config.ImageService.ArchiveNanosecondsPerByte) * time.Nanosecond
+		timeLimit := timePerByte * time.Duration(imageSizeBytes) * 10
+		log.Info().Int("image_size", imageSizeBytes).Msgf("estimated time to prepare new base image: %s", timeLimit.String())
+		return timeLimit
+	default:
 		return defaultContainerSpinupTimeout
 	}
-
-	imageSizeBytes := 0
-	for _, layer := range imageMetadata.LayersData {
-		imageSizeBytes += layer.Size
-	}
-
-	timePerByte := time.Duration(b.config.ImageService.ArchiveNanosecondsPerByte) * time.Nanosecond
-	timeLimit := timePerByte * time.Duration(imageSizeBytes) * 10
-	log.Info().Int("image_size", imageSizeBytes).Msgf("estimated time to prepare new base image: %s", timeLimit.String())
-	return timeLimit
 }
 
 func getSourceImage(opts *BuildOpts) string {
