@@ -58,21 +58,21 @@ func (g *MachineGroup) ListPoolMachines(ctx echo.Context) error {
 	poolName := ctx.QueryParam("pool_name")
 	providerName := ctx.QueryParam("provider_name")
 
-	neighbors, err := g.providerRepo.ListAllMachines(providerName, poolName, false)
+	machines, err := g.providerRepo.ListAllMachines(providerName, poolName, false)
 	if err != nil {
 		return HTTPInternalServerError("Failed to get neighbors")
 	}
 
-	availableNeighbors := make([]*types.ProviderMachine, 0)
-	for _, neighbor := range neighbors {
-		if neighbor.State.Status != types.MachineStatusRegistered {
+	availableMachines := make([]*types.ProviderMachine, 0)
+	for _, machine := range machines {
+		if machine.State.Status != types.MachineStatusRegistered {
 			continue
 		}
 
-		availableNeighbors = append(availableNeighbors, neighbor)
+		availableMachines = append(availableMachines, machine)
 	}
 
-	return ctx.JSON(http.StatusOK, availableNeighbors)
+	return ctx.JSON(http.StatusOK, availableMachines)
 }
 
 func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {

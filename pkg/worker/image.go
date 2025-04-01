@@ -263,7 +263,7 @@ func (c *ImageClient) Cleanup() error {
 	})
 
 	log.Info().Str("path", c.imageCachePath).Msg("cleaning up blobfs image cache")
-	if c.config.BlobCache.BlobFs.Enabled && c.cacheClient != nil {
+	if c.config.Cache.BlobCache.BlobFs.Enabled && c.cacheClient != nil {
 		err := c.cacheClient.Cleanup()
 		if err != nil {
 			return err

@@ -11,22 +11,26 @@ import (
 )
 
 type AppConfig struct {
-	ClusterName       string                            `key:"clusterName" json:"cluster_name"`
-	DebugMode         bool                              `key:"debugMode" json:"debug_mode"`
-	PrettyLogs        bool                              `key:"prettyLogs" json:"pretty_logs"`
-	Database          DatabaseConfig                    `key:"database" json:"database"`
-	GatewayService    GatewayServiceConfig              `key:"gateway" json:"gateway_service"`
-	FileService       FileServiceConfig                 `key:"fileService" json:"file_service"`
-	ImageService      ImageServiceConfig                `key:"imageService" json:"image_service"`
-	Storage           StorageConfig                     `key:"storage" json:"storage"`
-	Worker            WorkerConfig                      `key:"worker" json:"worker"`
-	Providers         ProviderConfig                    `key:"providers" json:"providers"`
-	Tailscale         TailscaleConfig                   `key:"tailscale" json:"tailscale"`
-	Proxy             ProxyConfig                       `key:"proxy" json:"proxy"`
-	Monitoring        MonitoringConfig                  `key:"monitoring" json:"monitoring"`
+	ClusterName    string               `key:"clusterName" json:"cluster_name"`
+	DebugMode      bool                 `key:"debugMode" json:"debug_mode"`
+	PrettyLogs     bool                 `key:"prettyLogs" json:"pretty_logs"`
+	Database       DatabaseConfig       `key:"database" json:"database"`
+	GatewayService GatewayServiceConfig `key:"gateway" json:"gateway_service"`
+	FileService    FileServiceConfig    `key:"fileService" json:"file_service"`
+	ImageService   ImageServiceConfig   `key:"imageService" json:"image_service"`
+	Storage        StorageConfig        `key:"storage" json:"storage"`
+	Worker         WorkerConfig         `key:"worker" json:"worker"`
+	Providers      ProviderConfig       `key:"providers" json:"providers"`
+	Tailscale      TailscaleConfig      `key:"tailscale" json:"tailscale"`
+	Proxy          ProxyConfig          `key:"proxy" json:"proxy"`
+	Monitoring     MonitoringConfig     `key:"monitoring" json:"monitoring"`
+	Abstractions   AbstractionConfig    `key:"abstractions" json:"abstractions"`
+	Cache          CacheConfig          `key:"cache" json:"cache"`
+}
+
+type CacheConfig struct {
 	BlobCacheMetadata blobcache.BlobCacheMetadataConfig `key:"blobcacheMetadata" json:"blobcache_metadata"`
 	BlobCache         blobcache.BlobCacheConfig         `key:"blobcache" json:"blobcache"`
-	Abstractions      AbstractionConfig                 `key:"abstractions" json:"abstractions"`
 }
 
 type DatabaseConfig struct {

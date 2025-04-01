@@ -157,15 +157,15 @@ func NewWorker() (*Worker, error) {
 
 	var cacheClient *blobcache.BlobCacheClient = nil
 	if config.Worker.BlobCacheEnabled {
-		if config.BlobCacheMetadata.ValkeyConfig.Enabled {
-			config.BlobCache.Metadata.RedisAddr = "127.0.0.1:26379"
-			config.BlobCache.Metadata.RedisPasswd = config.BlobCacheMetadata.ValkeyConfig.Password
-			config.BlobCache.Metadata.RedisTLSEnabled = false
-			config.BlobCache.Metadata.RedisMode = blobcache.RedisModeSentinel
-			config.BlobCache.Metadata.RedisMasterName = "bc-metadata-master"
+		if config.Cache.BlobCacheMetadata.Mode == blobcache.BlobCacheMetadataModeLocal {
+			config.Cache.BlobCache.Metadata.RedisAddr = fmt.Sprintf("%s:%s", config.Cache.BlobCacheMetadata.ValkeyConfig.Host, config.Cache.BlobCacheMetadata.ValkeyConfig.Port)
+			config.Cache.BlobCache.Metadata.RedisPasswd = config.Cache.BlobCacheMetadata.ValkeyConfig.Password
+			config.Cache.BlobCache.Metadata.RedisTLSEnabled = false
+			config.Cache.BlobCache.Metadata.RedisMode = blobcache.RedisModeSentinel
+			config.Cache.BlobCache.Metadata.RedisMasterName = config.Cache.BlobCacheMetadata.ValkeyConfig.PrimaryName
 		}
 
-		cacheClient, err = blobcache.NewBlobCacheClient(ctx, config.BlobCache)
+		cacheClient, err = blobcache.NewBlobCacheClient(ctx, config.Cache.BlobCache)
 		if err == nil {
 			err = cacheClient.WaitForHosts(defaultCacheWaitTime)
 		}
