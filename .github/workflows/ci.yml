@@ -37,7 +37,7 @@ jobs:
       - name: Install dependencies
         run: |
           uv sync
-          uv pip install ruff
+          uv pip install ruff pytest
         if: steps.cached-dependencies.outputs.cache-hit != 'true'
 
       - name: Code formatting
