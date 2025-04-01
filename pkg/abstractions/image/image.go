@@ -116,7 +116,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 	}
 
 	if in.ExistingImageUri != "" {
-		is.builder.handleCustomBaseImage(opts, nil)
+		opts.handleCustomBaseImage(nil)
 	}
 
 	if in.Dockerfile != "" {

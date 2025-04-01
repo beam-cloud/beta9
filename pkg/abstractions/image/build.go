@@ -42,6 +42,8 @@ const (
 	dockerHubRegistry string = "docker.io"
 )
 
+var buildEnv []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_SYSTEM_PYTHON=true", "UV_COMPILE_BYTECODE=true"}
+
 type Builder struct {
 	config        types.AppConfig
 	scheduler     *scheduler.Scheduler
@@ -145,6 +147,24 @@ func (o *BuildOpts) addPythonRequirements() {
 	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 }
 
+// handleCustomBaseImage validates the custom base image and parses its details into build options
+func (o *BuildOpts) handleCustomBaseImage(outputChan chan common.OutputMsg) error {
+	if outputChan != nil {
+		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", o.ExistingImageUri)}
+	}
+
+	err := o.setCustomImageBuildOptions()
+	if err != nil {
+		if outputChan != nil {
+			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
+		}
+		return err
+	}
+
+	o.addPythonRequirements()
+	return nil
+}
+
 func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
 	return &Builder{
 		config:        config,
@@ -240,7 +260,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		dockerfile = &opts.Dockerfile
 		containerSpinupTimeout = dockerfileContainerSpinupTimeout
 	case opts.ExistingImageUri != "":
-		err := b.handleCustomBaseImage(opts, outputChan)
+		err := opts.handleCustomBaseImage(outputChan)
 		if err != nil {
 			return err
 		}
@@ -371,21 +391,21 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	micromambaEnv := strings.Contains(opts.PythonVersion, "micromamba")
 	if micromambaEnv {
-		client.Exec(containerId, "micromamba config set use_lockfiles False")
+		client.Exec(containerId, "micromamba config set use_lockfiles False", buildEnv)
 	}
 
 	var setupCommands []string
 
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv && !opts.IgnorePython {
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd, buildEnv); (err != nil || !resp.Ok) && !micromambaEnv && !opts.IgnorePython {
 
 		if opts.PythonVersion == types.Python3.String() {
 			opts.PythonVersion = b.config.ImageService.PythonVersion
 		} else {
 			// Check if any python version is installed and warn the user that they are overriding it
 			checkPythonVersionCmd := fmt.Sprintf("%s --version", types.Python3.String())
-			if resp, err := client.Exec(containerId, checkPythonVersionCmd); err == nil && resp.Ok {
+			if resp, err := client.Exec(containerId, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
 				outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: fmt.Sprintf("requested python version (%s) was not detected, but an existing python3 environment was detected. The requested python version will be installed, replacing the existing python environment.\n", opts.PythonVersion), Warning: true}
 			}
 		}
@@ -421,7 +441,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			continue
 		}
 
-		if r, err := client.Exec(containerId, cmd); err != nil || !r.Ok {
+		if r, err := client.Exec(containerId, cmd, buildEnv); err != nil || !r.Ok {
 			log.Error().Str("container_id", containerId).Str("command", cmd).Err(err).Msg("failed to execute command for container")
 
 			errMsg := ""
@@ -521,24 +541,6 @@ func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, 
 
 func (b *Builder) genContainerId() string {
 	return fmt.Sprintf("%s%s", types.BuildContainerPrefix, uuid.New().String()[:8])
-}
-
-// handleCustomBaseImage validates the custom base image and parses its details into build options
-func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.OutputMsg) error {
-	if outputChan != nil {
-		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", opts.ExistingImageUri)}
-	}
-
-	err := opts.setCustomImageBuildOptions()
-	if err != nil {
-		if outputChan != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
-		}
-		return err
-	}
-
-	opts.addPythonRequirements()
-	return nil
 }
 
 // Check if an image already exists in the registry
@@ -663,7 +665,8 @@ func getPythonStandaloneInstallCommand(config types.PythonStandaloneConfig, pyth
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	command := fmt.Sprintf("PIP_ROOT_USER_ACTION=ignore %s -m pip install", pythonVersion)
+	// DEBIAN_FRONTEND=noninteractive PIP_ROOT_USER_ACTION=ignore
+	command := "uv pip install"
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
 	}
