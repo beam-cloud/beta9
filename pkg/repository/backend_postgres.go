@@ -1193,7 +1193,8 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 	}
 
 	if filters.AppId != "" {
-		qb = qb.Where(squirrel.Eq{"d.app_id": filters.AppId})
+		qb = qb.Join("app a ON d.app_id = a.id")
+		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 	}
 
 	return qb
@@ -1275,7 +1276,8 @@ func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilt
 	}
 
 	if filters.AppId != "" {
-		qb = qb.Where(squirrel.Eq{"s.app_id": filters.AppId})
+		qb = qb.Join("app a ON s.app_id = a.id")
+		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 	}
 
 	return qb
