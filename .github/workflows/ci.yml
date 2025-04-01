@@ -22,33 +22,27 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Set up Poetry
-        env:
-          ACTIONS_ALLOW_UNSECURE_COMMANDS: true
-        uses: snok/install-poetry@v1
-        with:
-          version: 1.5.1
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          installer-parallel: true
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Load cached venv
-        id: cached-poetry-dependencies
+        id: cached-dependencies
         uses: actions/cache@v3
         with:
           path: .venv
-          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/uv.lock') }}
 
       - name: Install dependencies
-        run: poetry install
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        run: uv pip install -r requirements.txt
+        if: steps.cached-dependencies.outputs.cache-hit != 'true'
 
       - name: Code formatting
-        run: poetry run ruff format .
+        run: uv pip run ruff format .
 
-      # todo: remove exit-zero once ruff issues are fixed
       - name: Code linting
-        run: poetry run ruff check .
+        run: uv pip run ruff check .
 
       - name: Run tests
         env: 
