@@ -1415,7 +1415,7 @@ func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, 
 	query := `
 	INSERT INTO workspace_storage (bucket_name, access_key, secret_key, endpoint_url, region)
 	VALUES ($1, $2, $3, $4, $5)
-	RETURNING id, bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at;
+	RETURNING id, external_id, bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at;
 	`
 
 	if err := r.encryptFields(&storage); err != nil {
