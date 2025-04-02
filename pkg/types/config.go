@@ -24,8 +24,8 @@ type AppConfig struct {
 	Tailscale      TailscaleConfig           `key:"tailscale" json:"tailscale"`
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
-	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
 	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
+	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
 }
 
 type DatabaseConfig struct {
