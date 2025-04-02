@@ -35,7 +35,7 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 	g.POST("/:workspaceId/create/:volumeName", auth.WithWorkspaceAuth(group.CreateVolume))
 	g.PUT("/:workspaceId/upload/:volumePath*", auth.WithWorkspaceAuth(group.UploadFile))
 	g.GET("/:workspaceId/generate-download-token/:volumePath*", auth.WithWorkspaceAuth(group.GenerateDownloadToken))
-	g.GET("/:workspaceId/presigned-url/:volumePath*", auth.WithWorkspaceAuth(group.GetPresignedURL))
+	g.GET("/:workspaceId/generate-download-url/:volumePath*", auth.WithWorkspaceAuth(group.GetDownloadURL))
 	g.GET("/:workspaceId/download-with-token/:volumePath*", group.DownloadFileWithToken)
 	g.GET("/:workspaceId/download/:volumePath*", auth.WithWorkspaceAuth(group.DownloadFile))
 	g.GET("/:workspaceId/ls/:volumePath*", auth.WithWorkspaceAuth(group.Ls))
@@ -285,7 +285,7 @@ func (g *volumeGroup) GenerateDownloadToken(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, token)
 }
 
-func (g *volumeGroup) GetPresignedURL(ctx echo.Context) error {
+func (g *volumeGroup) GetDownloadURL(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	workspaceId := ctx.Param("workspaceId")
 
