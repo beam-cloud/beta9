@@ -54,7 +54,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 			}, nil
 		} else {
 			return &pb.HeadObjectResponse{
-				Ok:                  false,
+				Ok:                  true,
 				Exists:              false,
 				UseWorkspaceStorage: useWorkspaceStorage,
 			}, nil
@@ -81,23 +81,25 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		}, nil
 	}
 
-	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
+	object, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil && !in.Overwrite {
 		return &pb.CreateObjectResponse{
 			Ok:       true,
-			ObjectId: existingObject.ExternalId,
+			ObjectId: object.ExternalId,
 		}, nil
 	}
 
-	newObject, err := gws.backendRepo.CreateObject(ctx, in.Hash, in.Size, authInfo.Workspace.Id)
-	if err != nil {
-		return &pb.CreateObjectResponse{
-			Ok:       false,
-			ErrorMsg: "Unable to create object",
-		}, nil
+	if object == nil {
+		object, err = gws.backendRepo.CreateObject(ctx, in.Hash, in.Size, authInfo.Workspace.Id)
+		if err != nil {
+			return &pb.CreateObjectResponse{
+				Ok:       false,
+				ErrorMsg: "Unable to create object",
+			}, nil
+		}
 	}
 
-	presignedURL, err := storageClient.GeneratePresignedPutURL(ctx, path.Join(types.DefaultObjectPrefix, newObject.ExternalId), defaultObjectPutExpirationS)
+	presignedURL, err := storageClient.GeneratePresignedPutURL(ctx, path.Join(types.DefaultObjectPrefix, object.ExternalId), defaultObjectPutExpirationS)
 	if err != nil {
 		return &pb.CreateObjectResponse{
 			Ok:       false,
@@ -107,7 +109,7 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 
 	return &pb.CreateObjectResponse{
 		Ok:           true,
-		ObjectId:     newObject.ExternalId,
+		ObjectId:     object.ExternalId,
 		PresignedUrl: presignedURL,
 	}, nil
 }
@@ -121,7 +123,7 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 
 	var size int
 	var file *os.File
-	var newObject types.Object
+	var newObject *types.Object
 
 	for {
 		request, err := stream.Recv()

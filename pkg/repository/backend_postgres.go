@@ -383,7 +383,7 @@ func (r *PostgresBackendRepository) UpdateTokenAsClusterAdmin(ctx context.Contex
 
 // Object
 
-func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error) {
+func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (*types.Object, error) {
 	query := `
     INSERT INTO object (hash, size, workspace_id)
     VALUES ($1, $2, $3)
@@ -392,22 +392,22 @@ func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash strin
 
 	var newObject types.Object
 	if err := r.client.GetContext(ctx, &newObject, query, hash, size, workspaceId); err != nil {
-		return types.Object{}, err
+		return nil, err
 	}
 
-	return newObject, nil
+	return &newObject, nil
 }
 
-func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error) {
+func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (*types.Object, error) {
 	var object types.Object
 
 	query := `SELECT id, external_id, hash, size, created_at FROM object WHERE hash = $1 AND workspace_id = $2;`
 	err := r.client.GetContext(ctx, &object, query, hash, workspaceId)
 	if err != nil {
-		return types.Object{}, err
+		return nil, err
 	}
 
-	return object, nil
+	return &object, nil
 }
 
 func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error) {
@@ -1415,7 +1415,7 @@ func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, 
 	query := `
 	INSERT INTO workspace_storage (bucket_name, access_key, secret_key, endpoint_url, region)
 	VALUES ($1, $2, $3, $4, $5)
-	RETURNING id, bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at;
+	RETURNING id, external_id, bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at;
 	`
 
 	if err := r.encryptFields(&storage); err != nil {
@@ -1424,6 +1424,16 @@ func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, 
 
 	var created types.WorkspaceStorage
 	if err := r.client.GetContext(ctx, &created, query, storage.BucketName, storage.AccessKey, storage.SecretKey, storage.EndpointUrl, storage.Region); err != nil {
+		return nil, err
+	}
+
+	queryUpdateWorkspace := `
+	UPDATE workspace
+	SET storage_id = $1
+	WHERE id = $2;
+	`
+
+	if _, err := r.client.ExecContext(ctx, queryUpdateWorkspace, created.Id, workspaceId); err != nil {
 		return nil, err
 	}
 
@@ -1875,9 +1885,24 @@ func (r *PostgresBackendRepository) encryptFields(row interface{}) error {
 	}
 
 	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+
 		if v.Type().Field(i).Tag.Get("encrypt") == "true" {
-			if encryptedValue, err := pkgCommon.Encrypt(secretKey, v.Field(i).String()); err == nil {
-				v.Field(i).SetString(encryptedValue)
+			var value string
+			if field.Kind() == reflect.Ptr && !field.IsNil() {
+				value = field.Elem().String()
+			} else if field.Kind() == reflect.String {
+				value = field.String()
+			} else {
+				continue // Skip if not a string or nil pointer
+			}
+
+			if encryptedValue, err := pkgCommon.Encrypt(secretKey, value); err == nil {
+				if field.Kind() == reflect.Ptr {
+					field.Set(reflect.ValueOf(&encryptedValue))
+				} else {
+					field.SetString(encryptedValue)
+				}
 			} else {
 				return err
 			}

@@ -202,7 +202,7 @@ class FileSyncer:
             if head_response.use_workspace_storage:
                 create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
                     CreateObjectRequest(
-                        object_metadata=metadata, hash=hash, size=size, overwrite=False
+                        object_metadata=metadata, hash=hash, size=size, overwrite=True
                     )
                 )
                 if create_object_response.ok and self.is_workspace_dir:
