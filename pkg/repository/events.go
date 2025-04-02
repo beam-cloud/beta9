@@ -262,6 +262,20 @@ func (t *TCPEventClientRepo) PushRunStubEvent(workspaceId string, stub *types.St
 	)
 }
 
+func (t *TCPEventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub) {
+	t.pushEvent(
+		types.EventStubClone,
+		types.EventStubSchemaVersion,
+		types.EventStubSchema{
+			ID:           stub.ExternalId,
+			StubType:     stub.Type,
+			StubConfig:   stub.Config,
+			WorkspaceID:  workspaceId,
+			ParentStubID: parentStub.ExternalId,
+		},
+	)
+}
+
 func (t *TCPEventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
 	event := types.EventTaskSchema{
 		ID:          task.ExternalId,
