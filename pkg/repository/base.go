@@ -67,6 +67,8 @@ type ContainerRepository interface {
 	GetStubState(stubId string) (string, error)
 	SetStubState(stubId, state string) error
 	DeleteStubState(stubId string) error
+	SetBuildContainerTTL(containerId string, ttl time.Duration) error
+	HasBuildContainerTTL(containerId string) bool
 }
 
 type WorkerPoolRepository interface {

@@ -51,7 +51,6 @@ type Builder struct {
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
-	rdb           *common.RedisClient
 	skopeoClient  common.SkopeoClient
 }
 
@@ -68,7 +67,6 @@ func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, schedu
 		registry:      registry,
 		containerRepo: containerRepo,
 		eventBus:      common.NewEventBus(rdb),
-		rdb:           rdb,
 		skopeoClient:  common.NewSkopeoClient(config),
 	}, nil
 }
@@ -145,14 +143,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	var (
 		authInfo, _ = auth.AuthInfoFromContext(ctx)
 		success     = atomic.Bool{}
+		containerId = b.genContainerId()
 	)
 
-	err := opts.initializeBuildConfiguration(b.config, outputChan)
-	if err != nil {
+	// Perform tweaks for custom base image, dockerfile, python requirements, etc.
+	if err := opts.initializeBuildConfiguration(b.config, outputChan); err != nil {
 		return err
 	}
-
-	containerId := b.genContainerId()
 
 	containerRequest, err := b.generateContainerRequest(opts, containerId, authInfo.Workspace)
 	if err != nil {
@@ -160,20 +157,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	// If user cancels the build, send a stop-build event to the worker
-	go func() {
-		<-ctx.Done()
-		if success.Load() {
-			return
-		}
-		err := b.stopBuild(containerId)
-		if err != nil {
-			log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
-		}
-	}()
+	// FIXME: This flow can be improved now that containers are running in attached mode.
+	// Send a stop-build event to the worker if the user cancels the build
+	go b.handleBuildCancellation(ctx, &success, containerId)
 
-	err = b.scheduler.Run(containerRequest)
-	if err != nil {
+	if err = b.scheduler.Run(containerRequest); err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: err.Error() + "\n"}
 		return err
 	}
@@ -184,13 +172,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	err = b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
-	if err != nil {
+	if err := b.containerRepo.SetBuildContainerTTL(containerId, time.Duration(imageContainerTtlS)*time.Second); err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
-	go b.keepAlive(ctx, containerId, ctx.Done())
+	go b.refreshBuildContainerTTL(ctx, containerId, ctx.Done())
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
@@ -416,7 +403,7 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
+func (b *Builder) refreshBuildContainerTTL(ctx context.Context, containerId string, done <-chan struct{}) {
 	ticker := time.NewTicker(time.Duration(buildContainerKeepAliveIntervalS) * time.Second)
 	defer ticker.Stop()
 
@@ -427,7 +414,9 @@ func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan
 		case <-done:
 			return
 		case <-ticker.C:
-			b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
+			if err := b.containerRepo.SetBuildContainerTTL(containerId, time.Duration(imageContainerTtlS)*time.Second); err != nil {
+				log.Error().Str("container_id", containerId).Err(err).Msg("failed to set build container ttl")
+			}
 		}
 	}
 }
@@ -717,13 +706,16 @@ func (b *Builder) stopBuild(containerId string) error {
 	return nil
 }
 
-func tagOrDigest(digest string, tag string) string {
-	if tag != "" {
-		return tag
+func (b *Builder) handleBuildCancellation(ctx context.Context, success *atomic.Bool, containerId string) {
+	<-ctx.Done()
+	if success.Load() {
+		return
 	}
-	return digest
+	err := b.stopBuild(containerId)
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
+	}
 }
-
 func (b *Builder) calculateContainerSpinupTimeout(ctx context.Context, opts *BuildOpts) time.Duration {
 	switch {
 	case opts.Dockerfile != "":
@@ -759,4 +751,11 @@ func getSourceImage(opts *BuildOpts) string {
 		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
 	}
 	return sourceImage
+}
+
+func tagOrDigest(digest string, tag string) string {
+	if tag != "" {
+		return tag
+	}
+	return digest
 }
