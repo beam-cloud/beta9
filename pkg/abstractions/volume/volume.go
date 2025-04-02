@@ -565,6 +565,23 @@ func (vs *GlobalVolumeService) movePath(ctx context.Context, originalPath string
 		return "", errors.New("unable to find volume")
 	}
 
+	if workspace.StorageAvailable() {
+		storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+		if err != nil {
+			return "", err
+		}
+
+		originalVolumePath := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, originalRelativePath)
+		newVolumePath := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, newRelativePath)
+
+		err = storageClient.MoveObject(ctx, originalVolumePath, newVolumePath)
+		if err != nil {
+			return "", err
+		}
+
+		return newPath, nil
+	}
+
 	_, originalFullPath, _ := GetVolumePaths(workspace.Name, volume.ExternalId, originalRelativePath)
 
 	if _, err := os.Stat(originalFullPath); os.IsNotExist(err) {

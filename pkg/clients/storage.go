@@ -237,3 +237,25 @@ func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]
 
 	return deletedObjects, nil
 }
+
+func (c *StorageClient) MoveObject(ctx context.Context, sourceKey, destinationKey string) error {
+	_, err := c.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(*c.WorkspaceStorage.BucketName),
+		CopySource: aws.String(fmt.Sprintf("%s/%s", *c.WorkspaceStorage.BucketName, sourceKey)),
+		Key:        aws.String(destinationKey),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to copy file from %s to %s: %w", sourceKey, destinationKey, err)
+	}
+
+	// Delete the original object
+	_, err = c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Key:    aws.String(sourceKey),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete original file %s: %w", sourceKey, err)
+	}
+
+	return nil
+}
