@@ -168,6 +168,8 @@ func (vs *GlobalVolumeService) CopyPathStream(stream pb.VolumeService_CopyPathSt
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	log.Printf("CopyPathStream: %v", authInfo.Workspace.Name)
+
 	ch := make(chan CopyPathContent)
 
 	go func() {
@@ -286,8 +288,18 @@ func (vs *GlobalVolumeService) deleteVolume(ctx context.Context, workspace *type
 	}
 
 	if workspace.StorageAvailable() {
-		// TODO: Delete from volume
-		return nil
+		storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+		if err != nil {
+			return err
+		}
+
+		volumePath := path.Join(types.DefaultVolumesPrefix, volume.ExternalId)
+		_, err = storageClient.DeleteWithPrefix(ctx, volumePath)
+		if err != nil {
+			return err
+		}
+
+		return vs.backendRepo.DeleteVolume(ctx, volume.WorkspaceId, volume.Name)
 	}
 
 	volumeDir, _, err := GetVolumePaths(workspace.Name, volume.ExternalId, "")
@@ -381,6 +393,21 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 		return nil, errors.New("unable to find volume")
 	}
 
+	if workspace.StorageAvailable() {
+		storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+		if err != nil {
+			return nil, err
+		}
+
+		volumePath = path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
+		deleted, err := storageClient.DeleteWithPrefix(ctx, volumePath)
+		if err != nil {
+			return nil, err
+		}
+
+		return deleted, nil
+	}
+
 	// Get paths and prevent access above parent directory
 	rootVolumePath, fullVolumePath, err := GetVolumePaths(workspace.Name, volume.ExternalId, volumePath)
 	if err != nil {
@@ -450,6 +477,7 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 	}
 
 	var files []FileInfo = []FileInfo{}
+
 	if workspace.StorageAvailable() {
 		storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
 		if err != nil {
@@ -457,32 +485,26 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 		}
 
 		volumePath = path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
-		objects, dirs, err := storageClient.ListDirectory(ctx, volumePath)
+		objects, err := storageClient.ListDirectory(ctx, volumePath)
 		if err != nil {
 			return nil, errors.New("unable to list files")
 		}
 
-		log.Println("volumePath", volumePath)
-		log.Println("objects", objects)
-		log.Println("dirs", dirs)
-
-		files = make([]FileInfo, 0, len(objects)+len(dirs))
-
-		for _, dir := range dirs {
-			files = append(files, FileInfo{
-				Path:    strings.TrimPrefix(dir, volumePath),
-				Size:    0,
-				ModTime: 0,
-				IsDir:   true,
-			})
-		}
+		files = make([]FileInfo, 0, len(objects))
 
 		for _, obj := range objects {
+			isDir := strings.HasSuffix(*obj.Key, "/")
+
+			path := strings.TrimPrefix(*obj.Key, volumePath+"/")
+			if isDir {
+				path = strings.TrimSuffix(path, "/")
+			}
+
 			files = append(files, FileInfo{
-				Path:    strings.TrimPrefix(*obj.Key, volumePath),
+				Path:    path,
 				Size:    uint64(*obj.Size),
 				ModTime: obj.LastModified.Unix(),
-				IsDir:   false,
+				IsDir:   isDir,
 			})
 		}
 	} else {

@@ -52,6 +52,18 @@ func NewStorageClient(ctx context.Context, workspaceName string, workspaceStorag
 	}, nil
 }
 
+func (c *StorageClient) S3Client() *s3.Client {
+	return c.s3Client
+}
+
+func (c *StorageClient) PresignClient() *s3.PresignClient {
+	return c.presignClient
+}
+
+func (c *StorageClient) BucketName() string {
+	return *c.WorkspaceStorage.BucketName
+}
+
 func (c *StorageClient) Upload(ctx context.Context, key string, data []byte) error {
 	_, err := c.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
@@ -94,7 +106,7 @@ func (c *StorageClient) Delete(ctx context.Context, key string) error {
 	return err
 }
 
-func (c *StorageClient) ListDirectory(ctx context.Context, dir string) ([]s3types.Object, []string, error) {
+func (c *StorageClient) ListDirectory(ctx context.Context, dir string) ([]s3types.Object, error) {
 	if !strings.HasSuffix(dir, "/") {
 		dir += "/"
 	}
@@ -105,22 +117,30 @@ func (c *StorageClient) ListDirectory(ctx context.Context, dir string) ([]s3type
 		Delimiter: aws.String("/"),
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	var files []s3types.Object
+	var allObjects []s3types.Object
+
+	// Add regular files
 	for _, obj := range resp.Contents {
-		if *obj.Key != dir { // exclude the directory itself
-			files = append(files, obj)
+		if *obj.Key != dir {
+			allObjects = append(allObjects, obj)
 		}
 	}
 
-	var dirs []string
+	// Add directories
 	for _, cp := range resp.CommonPrefixes {
-		dirs = append(dirs, *cp.Prefix)
+		dirObject := s3types.Object{
+			Key:          cp.Prefix,
+			Size:         aws.Int64(0),
+			LastModified: aws.Time(time.Now()),
+		}
+
+		allObjects = append(allObjects, dirObject)
 	}
 
-	return files, dirs, nil
+	return allObjects, nil
 }
 
 func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
@@ -172,10 +192,48 @@ func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string) ([]s3
 	return resp.Contents, nil
 }
 
-func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string) error {
-	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
-		Key:    aws.String(prefix),
-	})
-	return err
+func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]string, error) {
+	var continuationToken *string
+	var deletedObjects []string
+
+	for {
+		resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket:            aws.String(*c.WorkspaceStorage.BucketName),
+			Prefix:            aws.String(prefix),
+			ContinuationToken: continuationToken,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		// Prepare the objects to delete
+		var objectsToDelete []s3types.ObjectIdentifier
+		for _, obj := range resp.Contents {
+			objectsToDelete = append(objectsToDelete, s3types.ObjectIdentifier{Key: obj.Key})
+			deletedObjects = append(deletedObjects, strings.TrimPrefix(*obj.Key, prefix))
+		}
+
+		// Delete the objects in batches
+		if len(objectsToDelete) > 0 {
+			_, err = c.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
+				Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+				Delete: &s3types.Delete{
+					Objects: objectsToDelete,
+					Quiet:   aws.Bool(true),
+				},
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		// Check if there are more objects to process
+		if resp.IsTruncated != nil && !*resp.IsTruncated {
+			break
+		}
+
+		continuationToken = resp.NextContinuationToken
+	}
+
+	return deletedObjects, nil
 }
