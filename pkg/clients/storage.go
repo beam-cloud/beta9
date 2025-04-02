@@ -259,3 +259,34 @@ func (c *StorageClient) MoveObject(ctx context.Context, sourceKey, destinationKe
 
 	return nil
 }
+
+const (
+	testObjectKey = "test-access-object"
+)
+
+func (c *StorageClient) ValidateBucketAccess(ctx context.Context) error {
+	_, err := c.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to access bucket: %w", err)
+	}
+
+	// Check write access by attempting to put an object with no content
+	_, err = c.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Key:    aws.String(testObjectKey),
+		Body:   bytes.NewReader([]byte{}), // Empty body
+		ACL:    s3types.ObjectCannedACLBucketOwnerFullControl,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to write to bucket: %w", err)
+	}
+
+	// Clean up by deleting the test object
+	if err := c.Delete(ctx, testObjectKey); err != nil {
+		return fmt.Errorf("failed to delete test object: %w", err)
+	}
+
+	return nil
+}

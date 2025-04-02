@@ -3,9 +3,13 @@ package apiv1
 import (
 	"net/http"
 
+	"strings"
+
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v4"
 )
 
@@ -24,6 +28,7 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 	g.POST("", group.CreateWorkspace)
 	g.GET("/current", auth.WithAuth(group.CurrentWorkspace))
 	g.GET("/:workspaceId/export", auth.WithWorkspaceAuth(group.ExportWorkspaceConfig))
+	g.POST("/:workspaceId/storage", auth.WithWorkspaceAuth(group.CreateWorkspaceStorage))
 
 	return group
 }
@@ -83,4 +88,67 @@ func (g *WorkspaceGroup) ExportWorkspaceConfig(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, config)
+}
+
+type CreateWorkspaceStorageRequest struct {
+	BucketName  string `json:"bucket_name" validate:"required"`
+	AccessKey   string `json:"access_key" validate:"required"`
+	SecretKey   string `json:"secret_key" validate:"required"`
+	EndpointUrl string `json:"endpoint_url" validate:"required"`
+	Region      string `json:"region" validate:"required"`
+}
+
+func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	workspace := cc.AuthInfo.Workspace
+	if workspace.ExternalId != workspaceId {
+		return HTTPUnauthorized("Invalid token")
+	}
+
+	if workspace.StorageAvailable() {
+		return HTTPBadRequest("Workspace storage already exists")
+	}
+
+	var request CreateWorkspaceStorageRequest
+	if err := ctx.Bind(&request); err != nil {
+		return HTTPBadRequest("Invalid payload")
+	}
+
+	v := validator.New()
+	if err := v.Struct(request); err != nil {
+		var missingFields []string
+		for _, err := range err.(validator.ValidationErrors) {
+			missingFields = append(missingFields, err.Field())
+		}
+
+		return HTTPBadRequest("Missing required fields: " + strings.Join(missingFields, ", "))
+	}
+
+	storage := &types.WorkspaceStorage{
+		BucketName:  &request.BucketName,
+		AccessKey:   &request.AccessKey,
+		SecretKey:   &request.SecretKey,
+		EndpointUrl: &request.EndpointUrl,
+		Region:      &request.Region,
+	}
+
+	storageClient, err := clients.NewStorageClient(ctx.Request().Context(), workspace.Name, storage)
+	if err != nil {
+		return HTTPInternalServerError("Unable to create workspace storage")
+	}
+
+	err = storageClient.ValidateBucketAccess(ctx.Request().Context())
+	if err != nil {
+		return HTTPInternalServerError("Unable to access bucket: " + err.Error())
+	}
+
+	createdStorage, err := g.backendRepo.CreateWorkspaceStorage(ctx.Request().Context(), workspace.Id, *storage)
+	if err != nil {
+		return HTTPInternalServerError("Unable to create workspace storage")
+	}
+
+	return ctx.JSON(http.StatusOK, createdStorage)
 }

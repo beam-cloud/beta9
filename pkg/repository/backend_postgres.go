@@ -1427,6 +1427,16 @@ func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, 
 		return nil, err
 	}
 
+	queryUpdateWorkspace := `
+	UPDATE workspace
+	SET storage_id = $1
+	WHERE id = $2;
+	`
+
+	if _, err := r.client.ExecContext(ctx, queryUpdateWorkspace, created.Id, workspaceId); err != nil {
+		return nil, err
+	}
+
 	return &created, nil
 }
 
@@ -1875,9 +1885,24 @@ func (r *PostgresBackendRepository) encryptFields(row interface{}) error {
 	}
 
 	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+
 		if v.Type().Field(i).Tag.Get("encrypt") == "true" {
-			if encryptedValue, err := pkgCommon.Encrypt(secretKey, v.Field(i).String()); err == nil {
-				v.Field(i).SetString(encryptedValue)
+			var value string
+			if field.Kind() == reflect.Ptr && !field.IsNil() {
+				value = field.Elem().String()
+			} else if field.Kind() == reflect.String {
+				value = field.String()
+			} else {
+				continue // Skip if not a string or nil pointer
+			}
+
+			if encryptedValue, err := pkgCommon.Encrypt(secretKey, value); err == nil {
+				if field.Kind() == reflect.Ptr {
+					field.Set(reflect.ValueOf(&encryptedValue))
+				} else {
+					field.SetString(encryptedValue)
+				}
 			} else {
 				return err
 			}
