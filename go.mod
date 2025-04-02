@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.51.4
-	github.com/beam-cloud/blobcache-v2 v0.0.0-20250228212315-d1ce0d5702fc
+	github.com/beam-cloud/blobcache-v2 v0.0.0-20250402205159-7050ba514f13
 	github.com/beam-cloud/clip v0.0.0-20250314195126-c4a7a2a7f4ba
 	github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -25,6 +25,7 @@ require (
 	github.com/cloudevents/sdk-go/v2 v2.15.2
 	github.com/containerd/console v1.0.4
 	github.com/coreos/go-iptables v0.7.1-0.20240112124308-65c67c9f46e6
+	github.com/go-playground/validator/v10 v10.26.0
 	github.com/go-viper/mapstructure/v2 v2.2.1
 	github.com/gofrs/uuid v4.4.0+incompatible
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
@@ -90,7 +91,13 @@ require (
 	tailscale.com v1.72.1
 )
 
-require github.com/hashicorp/errwrap v1.1.0 // indirect
+require (
+	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/hashicorp/errwrap v1.1.0 // indirect
+	github.com/leodido/go-urn v1.4.0 // indirect
+)
 
 require (
 	buf.build/gen/go/cedana/cedana/grpc/go v1.5.1-20250123222419-64bf8384f939.2 // indirect
