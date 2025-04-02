@@ -5,9 +5,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
@@ -129,9 +132,11 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
-	if err != nil {
+
+	if cc.AuthInfo.Workspace.ExternalId != workspaceId {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
@@ -153,7 +158,7 @@ func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
 	if path, err := g.gvs.getFilePath(
 		ctx.Request().Context(),
 		decodedVolumePath,
-		&workspace,
+		cc.AuthInfo.Workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to download file %v", err))
 	} else {
@@ -211,9 +216,11 @@ func (g *volumeGroup) Ls(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) Rm(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
-	if err != nil {
+
+	if cc.AuthInfo.Workspace.ExternalId != workspaceId {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
@@ -226,7 +233,7 @@ func (g *volumeGroup) Rm(ctx echo.Context) error {
 	if _, err := g.gvs.deletePath(
 		ctx.Request().Context(),
 		decodedVolumePath,
-		&workspace,
+		cc.AuthInfo.Workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete path")
 	} else {
@@ -239,17 +246,46 @@ func (g *volumeGroup) Mv(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) GenerateDownloadToken(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	workspaceId := ctx.Param("workspaceId")
+	workspace := cc.AuthInfo.Workspace
+	if workspace.ExternalId != workspaceId {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+	}
+
 	volumePath := ctx.Param("volumePath*")
 	decodedVolumePath, err := url.QueryUnescape(volumePath)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
 	}
 
-	token, err := g.gvs.GenerateWorkspaceVolumePathDownloadToken(workspaceId, decodedVolumePath)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
-	}
+	if cc.AuthInfo.Workspace.StorageAvailable() {
+		storageClient, err := clients.NewStorageClient(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, cc.AuthInfo.Workspace.Storage)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create storage client")
+		}
 
-	return ctx.JSON(http.StatusOK, token)
+		volumeName := path.Base(decodedVolumePath)
+
+		volume, err := g.gvs.getOrCreateVolume(ctx.Request().Context(), workspace, volumeName)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to create volume")
+		}
+
+		key := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, decodedVolumePath)
+		url, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), key, 120)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
+		}
+
+		return ctx.JSON(http.StatusOK, url)
+	} else {
+		token, err := g.gvs.GenerateWorkspaceVolumePathDownloadToken(workspaceId, decodedVolumePath)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
+		}
+
+		return ctx.JSON(http.StatusOK, token)
+	}
 }
