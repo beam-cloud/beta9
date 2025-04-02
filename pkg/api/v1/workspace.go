@@ -162,5 +162,5 @@ func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
 		}
 	}
 
-	return ctx.JSON(http.StatusOK, createdStorage)
+	return ctx.JSON(http.StatusCreated, createdStorage)
 }
