@@ -276,7 +276,7 @@ func (c *StorageClient) ValidateBucketAccess(ctx context.Context) error {
 	_, err = c.s3Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
 		Key:    aws.String(testObjectKey),
-		Body:   bytes.NewReader([]byte{}), // Empty body
+		Body:   bytes.NewReader([]byte{}),
 		ACL:    s3types.ObjectCannedACLBucketOwnerFullControl,
 	})
 	if err != nil {
