@@ -355,7 +355,7 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		return nil, HTTPInternalServerError("Failed to clone stub")
 	}
 
-	go g.eventRepo.PushCloneStubEvent(workspace.ExternalId, &newStub)
+	go g.eventRepo.PushCloneStubEvent(workspace.ExternalId, &newStub, &stub.Stub)
 
 	return &newStub, nil
 }
