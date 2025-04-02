@@ -383,7 +383,7 @@ func (r *PostgresBackendRepository) UpdateTokenAsClusterAdmin(ctx context.Contex
 
 // Object
 
-func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error) {
+func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (*types.Object, error) {
 	query := `
     INSERT INTO object (hash, size, workspace_id)
     VALUES ($1, $2, $3)
@@ -392,22 +392,22 @@ func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash strin
 
 	var newObject types.Object
 	if err := r.client.GetContext(ctx, &newObject, query, hash, size, workspaceId); err != nil {
-		return types.Object{}, err
+		return nil, err
 	}
 
-	return newObject, nil
+	return &newObject, nil
 }
 
-func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error) {
+func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (*types.Object, error) {
 	var object types.Object
 
 	query := `SELECT id, external_id, hash, size, created_at FROM object WHERE hash = $1 AND workspace_id = $2;`
 	err := r.client.GetContext(ctx, &object, query, hash, workspaceId)
 	if err != nil {
-		return types.Object{}, err
+		return nil, err
 	}
 
-	return object, nil
+	return &object, nil
 }
 
 func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error) {
