@@ -22,7 +22,7 @@ const (
 	GatewayService_Authorize_FullMethodName             = "/gateway.GatewayService/Authorize"
 	GatewayService_SignPayload_FullMethodName           = "/gateway.GatewayService/SignPayload"
 	GatewayService_HeadObject_FullMethodName            = "/gateway.GatewayService/HeadObject"
-	GatewayService_PutObject_FullMethodName             = "/gateway.GatewayService/PutObject"
+	GatewayService_CreateObject_FullMethodName          = "/gateway.GatewayService/CreateObject"
 	GatewayService_PutObjectStream_FullMethodName       = "/gateway.GatewayService/PutObjectStream"
 	GatewayService_ListContainers_FullMethodName        = "/gateway.GatewayService/ListContainers"
 	GatewayService_StopContainer_FullMethodName         = "/gateway.GatewayService/StopContainer"
@@ -63,7 +63,7 @@ type GatewayServiceClient interface {
 	SignPayload(ctx context.Context, in *SignPayloadRequest, opts ...grpc.CallOption) (*SignPayloadResponse, error)
 	// Objects
 	HeadObject(ctx context.Context, in *HeadObjectRequest, opts ...grpc.CallOption) (*HeadObjectResponse, error)
-	PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error)
+	CreateObject(ctx context.Context, in *CreateObjectRequest, opts ...grpc.CallOption) (*CreateObjectResponse, error)
 	PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error)
 	// Containers
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
@@ -139,9 +139,9 @@ func (c *gatewayServiceClient) HeadObject(ctx context.Context, in *HeadObjectReq
 	return out, nil
 }
 
-func (c *gatewayServiceClient) PutObject(ctx context.Context, in *PutObjectRequest, opts ...grpc.CallOption) (*PutObjectResponse, error) {
-	out := new(PutObjectResponse)
-	err := c.cc.Invoke(ctx, GatewayService_PutObject_FullMethodName, in, out, opts...)
+func (c *gatewayServiceClient) CreateObject(ctx context.Context, in *CreateObjectRequest, opts ...grpc.CallOption) (*CreateObjectResponse, error) {
+	out := new(CreateObjectResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CreateObject_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -465,7 +465,7 @@ type GatewayServiceServer interface {
 	SignPayload(context.Context, *SignPayloadRequest) (*SignPayloadResponse, error)
 	// Objects
 	HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error)
-	PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error)
+	CreateObject(context.Context, *CreateObjectRequest) (*CreateObjectResponse, error)
 	PutObjectStream(GatewayService_PutObjectStreamServer) error
 	// Containers
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
@@ -520,8 +520,8 @@ func (UnimplementedGatewayServiceServer) SignPayload(context.Context, *SignPaylo
 func (UnimplementedGatewayServiceServer) HeadObject(context.Context, *HeadObjectRequest) (*HeadObjectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HeadObject not implemented")
 }
-func (UnimplementedGatewayServiceServer) PutObject(context.Context, *PutObjectRequest) (*PutObjectResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PutObject not implemented")
+func (UnimplementedGatewayServiceServer) CreateObject(context.Context, *CreateObjectRequest) (*CreateObjectResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateObject not implemented")
 }
 func (UnimplementedGatewayServiceServer) PutObjectStream(GatewayService_PutObjectStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method PutObjectStream not implemented")
@@ -677,20 +677,20 @@ func _GatewayService_HeadObject_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
-func _GatewayService_PutObject_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PutObjectRequest)
+func _GatewayService_CreateObject_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateObjectRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(GatewayServiceServer).PutObject(ctx, in)
+		return srv.(GatewayServiceServer).CreateObject(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: GatewayService_PutObject_FullMethodName,
+		FullMethod: GatewayService_CreateObject_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(GatewayServiceServer).PutObject(ctx, req.(*PutObjectRequest))
+		return srv.(GatewayServiceServer).CreateObject(ctx, req.(*CreateObjectRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1253,8 +1253,8 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _GatewayService_HeadObject_Handler,
 		},
 		{
-			MethodName: "PutObject",
-			Handler:    _GatewayService_PutObject_Handler,
+			MethodName: "CreateObject",
+			Handler:    _GatewayService_CreateObject_Handler,
 		},
 		{
 			MethodName: "ListContainers",

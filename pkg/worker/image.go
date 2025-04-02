@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -544,8 +545,8 @@ func getBuildContext(request *types.ContainerRequest) (string, error) {
 	buildCtxPath := "."
 	if request.BuildOptions.BuildCtxObject != nil {
 		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
-
-		err := common.ExtractObjectFile(context.TODO(), *request.BuildOptions.BuildCtxObject, request.Workspace.Name, buildCtxPath)
+		objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
+		err := common.ExtractObjectFile(context.TODO(), objectPath, buildCtxPath)
 		if err != nil {
 			return "", err
 		}

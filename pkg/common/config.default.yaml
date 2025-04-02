@@ -9,6 +9,7 @@ database:
     password: password
     name: main
     timezone: UTC
+    encryptionKey: sk_pKz38fK8v7lz01AneJI8MJnR70akmP2CtDNf1IufKcY=
   redis:
     mode: single
     addrs:
@@ -31,6 +32,20 @@ storage:
     cacheSize: 0
     prefetch: 1
     bufferSize: 300
+  workspaceStorage:
+    mode: geese
+    baseMountPath: /workspace/data
+    geese:
+      debug: false
+      force: true
+      fsyncOnClose: true
+      memoryLimit: 2048
+      maxFlushers: 64
+      maxParallelParts: 64
+      partSizes: 16
+      dirMode: 0777
+      fileMode: 0666
+      listType: 1
 gateway:
   host: beta9-gateway
   invokeURLType: path
