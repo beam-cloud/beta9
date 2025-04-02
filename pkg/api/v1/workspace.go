@@ -14,15 +14,17 @@ import (
 )
 
 type WorkspaceGroup struct {
-	routerGroup *echo.Group
-	config      types.AppConfig
-	backendRepo repository.BackendRepository
+	routerGroup   *echo.Group
+	config        types.AppConfig
+	backendRepo   repository.BackendRepository
+	workspaceRepo repository.WorkspaceRepository
 }
 
-func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig) *WorkspaceGroup {
+func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, config types.AppConfig) *WorkspaceGroup {
 	group := &WorkspaceGroup{routerGroup: g,
-		backendRepo: backendRepo,
-		config:      config,
+		backendRepo:   backendRepo,
+		workspaceRepo: workspaceRepo,
+		config:        config,
 	}
 
 	g.POST("", group.CreateWorkspace)
@@ -148,6 +150,16 @@ func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
 	createdStorage, err := g.backendRepo.CreateWorkspaceStorage(ctx.Request().Context(), workspace.Id, *storage)
 	if err != nil {
 		return HTTPInternalServerError("Unable to create workspace storage")
+	}
+
+	// Revoke existing cached token so next request has the new workspace storage object
+	authHeader := ctx.Request().Header.Get("Authorization")
+	tokenKey := strings.TrimPrefix(authHeader, "Bearer ")
+	if tokenKey != "" {
+		err = g.workspaceRepo.RevokeToken(tokenKey)
+		if err != nil {
+			return HTTPInternalServerError("Unable to revoke token")
+		}
 	}
 
 	return ctx.JSON(http.StatusOK, createdStorage)
