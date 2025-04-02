@@ -54,7 +54,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 			}, nil
 		} else {
 			return &pb.HeadObjectResponse{
-				Ok:                  false,
+				Ok:                  true,
 				Exists:              false,
 				UseWorkspaceStorage: useWorkspaceStorage,
 			}, nil
@@ -86,6 +86,20 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		return &pb.CreateObjectResponse{
 			Ok:       true,
 			ObjectId: existingObject.ExternalId,
+		}, nil
+	} else if err == nil && in.Overwrite {
+		presignedURL, err := storageClient.GeneratePresignedPutURL(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId), defaultObjectPutExpirationS)
+		if err != nil {
+			return &pb.CreateObjectResponse{
+				Ok:       false,
+				ErrorMsg: "Unable to generate presigned URL",
+			}, nil
+		}
+
+		return &pb.CreateObjectResponse{
+			Ok:           true,
+			ObjectId:     existingObject.ExternalId,
+			PresignedUrl: presignedURL,
 		}, nil
 	}
 
