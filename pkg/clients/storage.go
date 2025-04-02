@@ -157,8 +157,9 @@ func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string,
 
 func (c *StorageClient) GeneratePresignedGetURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
 	result, err := c.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
-		Key:    aws.String(key),
+		Bucket:                     aws.String(*c.WorkspaceStorage.BucketName),
+		Key:                        aws.String(key),
+		ResponseContentDisposition: aws.String("attachment"),
 	}, s3.WithPresignExpires(time.Duration(expiresInSeconds)*time.Second))
 	if err != nil {
 		return "", fmt.Errorf("failed to generate presigned URL: %w", err)
