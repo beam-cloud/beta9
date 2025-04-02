@@ -163,14 +163,6 @@ func NewWorker() (*Worker, error) {
 
 	var cacheClient *blobcache.BlobCacheClient = nil
 	if config.Worker.BlobCacheEnabled {
-		if config.BlobCache.Metadata.Mode == blobcache.BlobCacheMetadataModeLocal {
-			config.BlobCache.Metadata.RedisAddr = fmt.Sprintf("%s:%d", config.BlobCache.Metadata.ValkeyConfig.Host, config.BlobCache.Metadata.ValkeyConfig.Port)
-			config.BlobCache.Metadata.RedisPasswd = config.BlobCache.Metadata.ValkeyConfig.Password
-			config.BlobCache.Metadata.RedisTLSEnabled = false
-			config.BlobCache.Metadata.RedisMode = blobcache.RedisModeSentinel
-			config.BlobCache.Metadata.RedisMasterName = config.BlobCache.Metadata.ValkeyConfig.PrimaryName
-		}
-
 		cacheClient, err = blobcache.NewBlobCacheClient(ctx, config.BlobCache)
 		if err == nil {
 			err = cacheClient.WaitForHosts(defaultCacheWaitTime)
