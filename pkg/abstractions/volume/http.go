@@ -312,6 +312,8 @@ func (g *volumeGroup) GetDownloadURL(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, url)
 }
 
+const PresignedGetURLExpiration = 3600 // 1 hour
+
 func (g *volumeGroup) generatePresignGetURL(ctx context.Context, workspace *types.Workspace, volumePath string) (string, error) {
 	storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
 	if err != nil {
@@ -325,7 +327,7 @@ func (g *volumeGroup) generatePresignGetURL(ctx context.Context, workspace *type
 	}
 
 	key := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
-	url, err := storageClient.GeneratePresignedGetURL(ctx, key, 120)
+	url, err := storageClient.GeneratePresignedGetURL(ctx, key, PresignedGetURLExpiration)
 	if err != nil {
 		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
 	}
