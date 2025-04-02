@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -167,8 +166,6 @@ func (vs *GlobalVolumeService) ListPath(ctx context.Context, in *pb.ListPathRequ
 func (vs *GlobalVolumeService) CopyPathStream(stream pb.VolumeService_CopyPathStreamServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	log.Printf("CopyPathStream: %v", authInfo.Workspace.Name)
 
 	ch := make(chan CopyPathContent)
 
