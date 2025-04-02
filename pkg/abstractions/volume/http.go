@@ -1,13 +1,17 @@
 package volume
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"path/filepath"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
@@ -31,6 +35,7 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 	g.POST("/:workspaceId/create/:volumeName", auth.WithWorkspaceAuth(group.CreateVolume))
 	g.PUT("/:workspaceId/upload/:volumePath*", auth.WithWorkspaceAuth(group.UploadFile))
 	g.GET("/:workspaceId/generate-download-token/:volumePath*", auth.WithWorkspaceAuth(group.GenerateDownloadToken))
+	g.GET("/:workspaceId/generate-download-url/:volumePath*", auth.WithWorkspaceAuth(group.GetDownloadURL))
 	g.GET("/:workspaceId/download-with-token/:volumePath*", group.DownloadFileWithToken)
 	g.GET("/:workspaceId/download/:volumePath*", auth.WithWorkspaceAuth(group.DownloadFile))
 	g.GET("/:workspaceId/ls/:volumePath*", auth.WithWorkspaceAuth(group.Ls))
@@ -129,9 +134,11 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
-	if err != nil {
+
+	if cc.AuthInfo.Workspace.ExternalId != workspaceId {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
@@ -153,7 +160,7 @@ func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
 	if path, err := g.gvs.getFilePath(
 		ctx.Request().Context(),
 		decodedVolumePath,
-		&workspace,
+		cc.AuthInfo.Workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to download file %v", err))
 	} else {
@@ -162,6 +169,8 @@ func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
@@ -172,6 +181,19 @@ func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
 	decodedVolumePath, err := url.QueryUnescape(volumePath)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
+
+	if cc.AuthInfo.Workspace.StorageAvailable() {
+		presignedUrl, err := g.generatePresignGetURL(
+			ctx.Request().Context(),
+			cc.AuthInfo.Workspace,
+			decodedVolumePath,
+		)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate presigned URL")
+		}
+
+		return ctx.Redirect(http.StatusTemporaryRedirect, presignedUrl)
 	}
 
 	if path, err := g.gvs.getFilePath(
@@ -211,9 +233,11 @@ func (g *volumeGroup) Ls(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) Rm(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
-	if err != nil {
+
+	if cc.AuthInfo.Workspace.ExternalId != workspaceId {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
@@ -226,7 +250,7 @@ func (g *volumeGroup) Rm(ctx echo.Context) error {
 	if _, err := g.gvs.deletePath(
 		ctx.Request().Context(),
 		decodedVolumePath,
-		&workspace,
+		cc.AuthInfo.Workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to delete path")
 	} else {
@@ -239,7 +263,14 @@ func (g *volumeGroup) Mv(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) GenerateDownloadToken(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	workspaceId := ctx.Param("workspaceId")
+	workspace := cc.AuthInfo.Workspace
+	if workspace.ExternalId != workspaceId {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+	}
+
 	volumePath := ctx.Param("volumePath*")
 	decodedVolumePath, err := url.QueryUnescape(volumePath)
 	if err != nil {
@@ -252,4 +283,54 @@ func (g *volumeGroup) GenerateDownloadToken(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, token)
+}
+
+func (g *volumeGroup) GetDownloadURL(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	workspaceId := ctx.Param("workspaceId")
+
+	workspace := cc.AuthInfo.Workspace
+	if workspace.ExternalId != workspaceId {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+	}
+
+	volumePath := ctx.Param("volumePath*")
+	decodedVolumePath, err := url.QueryUnescape(volumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
+
+	if !cc.AuthInfo.Workspace.StorageAvailable() {
+		return g.GenerateDownloadToken(ctx)
+	}
+
+	url, err := g.generatePresignGetURL(ctx.Request().Context(), workspace, decodedVolumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate presigned URL")
+	}
+
+	return ctx.JSON(http.StatusOK, url)
+}
+
+const PresignedGetURLExpiration = 3600 // 1 hour
+
+func (g *volumeGroup) generatePresignGetURL(ctx context.Context, workspace *types.Workspace, volumePath string) (string, error) {
+	storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+	if err != nil {
+		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to create storage client")
+	}
+
+	volumeName, volumePath := parseVolumeInput(volumePath)
+	volume, err := g.gvs.getOrCreateVolume(ctx, workspace, volumeName)
+	if err != nil {
+		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to create volume")
+	}
+
+	key := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
+	url, err := storageClient.GeneratePresignedGetURL(ctx, key, PresignedGetURLExpiration)
+	if err != nil {
+		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
+	}
+
+	return url, nil
 }
