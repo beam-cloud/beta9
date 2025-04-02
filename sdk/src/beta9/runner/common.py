@@ -30,6 +30,7 @@ from ..exceptions import RunnerException
 
 USER_CODE_DIR = "/mnt/code"
 USER_VOLUMES_DIR = "/volumes"
+USER_OUTPUTS_DIR = "/outputs"
 USER_CACHE_DIR = "/cache"
 
 PICKLE_SUFFIX = ".pkl"

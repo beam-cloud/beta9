@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 	"time"
@@ -154,10 +155,33 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error) {
 	var workspace types.Workspace
 
-	query := `SELECT id, name, created_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled FROM workspace WHERE external_id = $1;`
+	query := `SELECT id, name, created_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled, storage_id FROM workspace WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &workspace, query, externalId)
 	if err != nil {
 		return types.Workspace{}, err
+	}
+
+	return workspace, nil
+}
+
+func (r *PostgresBackendRepository) GetWorkspaceWithRelated(ctx context.Context, workspaceId uint) (types.WorkspaceWithRelated, error) {
+	var workspace types.WorkspaceWithRelated
+
+	query := `
+	SELECT w.id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
+	cl.id "concurrency_limit.id", cl.gpu_limit "concurrency_limit.gpu_limit", cl.cpu_millicore_limit "concurrency_limit.cpu_millicore_limit",
+	ws.id "workspace_storage.id", ws.bucket_name "workspace_storage.bucket_name", ws.access_key "workspace_storage.access_key",
+	ws.secret_key "workspace_storage.secret_key", ws.endpoint_url "workspace_storage.endpoint_url", ws.region "workspace_storage.region",
+	ws.created_at "workspace_storage.created_at", ws.updated_at "workspace_storage.updated_at"
+	FROM workspace w
+	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
+	LEFT JOIN concurrency_limit cl ON w.concurrency_limit_id = cl.id
+	WHERE w.id = $1;
+	`
+
+	err := r.client.GetContext(ctx, &workspace, query, workspaceId)
+	if err != nil {
+		return types.WorkspaceWithRelated{}, err
 	}
 
 	return workspace, nil
@@ -230,18 +254,25 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	query := `
 	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at",
-		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled"
+		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled", w.storage_id "workspace.storage_id",
+		   ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", 
+		   ws.secret_key AS "workspace.storage.secret_key", ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
+	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
 	WHERE t.key = $1 AND t.active = TRUE;
 	`
 
 	var token types.Token
-	var workspace types.Workspace
-	token.Workspace = &workspace
 
 	if err := r.client.GetContext(ctx, &token, query, tokenKey); err != nil {
 		return nil, nil, err
+	}
+
+	if token.Workspace.StorageAvailable() {
+		if err := r.decryptFields(token.Workspace.Storage); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// After successful authorization, check if the token is reusable.
@@ -258,7 +289,7 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 		}
 	}
 
-	return &token, &workspace, nil
+	return &token, token.Workspace, nil
 }
 
 func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error) {
@@ -352,7 +383,7 @@ func (r *PostgresBackendRepository) UpdateTokenAsClusterAdmin(ctx context.Contex
 
 // Object
 
-func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error) {
+func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (*types.Object, error) {
 	query := `
     INSERT INTO object (hash, size, workspace_id)
     VALUES ($1, $2, $3)
@@ -361,22 +392,22 @@ func (r *PostgresBackendRepository) CreateObject(ctx context.Context, hash strin
 
 	var newObject types.Object
 	if err := r.client.GetContext(ctx, &newObject, query, hash, size, workspaceId); err != nil {
-		return types.Object{}, err
+		return nil, err
 	}
 
-	return newObject, nil
+	return &newObject, nil
 }
 
-func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error) {
+func (r *PostgresBackendRepository) GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (*types.Object, error) {
 	var object types.Object
 
 	query := `SELECT id, external_id, hash, size, created_at FROM object WHERE hash = $1 AND workspace_id = $2;`
 	err := r.client.GetContext(ctx, &object, query, hash, workspaceId)
 	if err != nil {
-		return types.Object{}, err
+		return nil, err
 	}
 
-	return object, nil
+	return &object, nil
 }
 
 func (r *PostgresBackendRepository) GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error) {
@@ -841,10 +872,13 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public, s.app_id,
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"`,
+		`ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", ws.secret_key AS "workspace.storage.secret_key", 
+		ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"`,
 	).
 		From("stub s").
 		Join("workspace w ON s.workspace_id = w.id").
 		LeftJoin("object o ON s.object_id = o.id").
+		LeftJoin("workspace_storage ws ON w.storage_id = ws.id").
 		Where(squirrel.Eq{"s.external_id": externalId})
 
 	var stubFilters types.StubFilter
@@ -865,6 +899,12 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 			return nil, nil
 		}
 		return &types.StubWithRelated{}, err
+	}
+
+	if stub.Workspace.StorageAvailable() {
+		if err := r.decryptFields(stub.Workspace.Storage); err != nil {
+			return nil, err
+		}
 	}
 
 	return &stub, nil
@@ -1367,6 +1407,50 @@ func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, con
 	return &limit, nil
 }
 
+func (r *PostgresBackendRepository) GetWorkspaceStorage(ctx context.Context, workspaceId uint) (*types.WorkspaceStorage, error) {
+	var storage types.WorkspaceStorage
+
+	query := `SELECT bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at FROM workspace_storage WHERE id = $1;`
+	if err := r.client.GetContext(ctx, &storage, query, workspaceId); err != nil {
+		return nil, err
+	}
+
+	if err := r.decryptFields(&storage); err != nil {
+		return nil, err
+	}
+
+	return &storage, nil
+}
+
+func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, workspaceId uint, storage types.WorkspaceStorage) (*types.WorkspaceStorage, error) {
+	query := `
+	INSERT INTO workspace_storage (bucket_name, access_key, secret_key, endpoint_url, region)
+	VALUES ($1, $2, $3, $4, $5)
+	RETURNING id, external_id, bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at;
+	`
+
+	if err := r.encryptFields(&storage); err != nil {
+		return nil, err
+	}
+
+	var created types.WorkspaceStorage
+	if err := r.client.GetContext(ctx, &created, query, storage.BucketName, storage.AccessKey, storage.SecretKey, storage.EndpointUrl, storage.Region); err != nil {
+		return nil, err
+	}
+
+	queryUpdateWorkspace := `
+	UPDATE workspace
+	SET storage_id = $1
+	WHERE id = $2;
+	`
+
+	if _, err := r.client.ExecContext(ctx, queryUpdateWorkspace, created.Id, workspaceId); err != nil {
+		return nil, err
+	}
+
+	return &created, nil
+}
+
 func (r *PostgresBackendRepository) CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuMillicoreLimit uint32) (*types.ConcurrencyLimit, error) {
 	query := `
 	INSERT INTO concurrency_limit (gpu_limit, cpu_millicore_limit)
@@ -1473,12 +1557,12 @@ func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace 
 		return nil, err
 	}
 
-	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	encryptedValue, err := pkgCommon.Encrypt(signingKey, value)
+	encryptedValue, err := pkgCommon.Encrypt(secretKey, value)
 	if err != nil {
 		return nil, err
 	}
@@ -1521,12 +1605,12 @@ func (r *PostgresBackendRepository) GetSecretByNameDecrypted(ctx context.Context
 		return nil, err
 	}
 
-	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	decryptedSecret, err := pkgCommon.Decrypt(signingKey, secret.Value)
+	decryptedSecret, err := pkgCommon.Decrypt(secretKey, secret.Value)
 	if err != nil {
 		return nil, err
 	}
@@ -1542,13 +1626,13 @@ func (r *PostgresBackendRepository) GetSecretsByNameDecrypted(ctx context.Contex
 		return nil, err
 	}
 
-	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
 	for i, secret := range secrets {
-		decryptedSecret, err := pkgCommon.Decrypt(signingKey, secret.Value)
+		decryptedSecret, err := pkgCommon.Decrypt(secretKey, secret.Value)
 		if err != nil {
 			return nil, err
 		}
@@ -1588,12 +1672,12 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
-	signingKey, err := pkgCommon.ParseSigningKey(*workspace.SigningKey)
+	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
 	if err != nil {
 		return nil, err
 	}
 
-	encryptedValue, err := pkgCommon.Encrypt(signingKey, value)
+	encryptedValue, err := pkgCommon.Encrypt(secretKey, value)
 	if err != nil {
 		return nil, err
 	}
@@ -1794,4 +1878,83 @@ func (r *PostgresBackendRepository) ListApps(ctx context.Context, workspaceId ui
 	}
 
 	return apps, nil
+}
+
+// decryptFields decrypts fields of a struct using AES-GCM
+func (r *PostgresBackendRepository) decryptFields(row interface{}) error {
+	secretKey, err := pkgCommon.ParseSecretKey(r.config.EncryptionKey)
+	if err != nil {
+		return err
+	}
+
+	v := reflect.ValueOf(row)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem() // Dereference the pointer to get the underlying struct
+	}
+
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+		if v.Type().Field(i).Tag.Get("encrypt") == "true" {
+			var value string
+			if field.Kind() == reflect.Ptr && !field.IsNil() {
+				value = field.Elem().String()
+			} else if field.Kind() == reflect.String {
+				value = field.String()
+			} else {
+				continue // Skip if not a string or nil pointer
+			}
+
+			if decryptedValue, err := pkgCommon.Decrypt(secretKey, value); err == nil {
+				if field.Kind() == reflect.Ptr {
+					field.Set(reflect.ValueOf(&decryptedValue))
+				} else {
+					field.SetString(decryptedValue)
+				}
+			} else {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// encryptFields encrypts fields of a struct using AES-GCM
+func (r *PostgresBackendRepository) encryptFields(row interface{}) error {
+	secretKey, err := pkgCommon.ParseSecretKey(r.config.EncryptionKey)
+	if err != nil {
+		return err
+	}
+
+	v := reflect.ValueOf(row)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem() // Dereference the pointer to get the underlying struct
+	}
+
+	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
+
+		if v.Type().Field(i).Tag.Get("encrypt") == "true" {
+			var value string
+			if field.Kind() == reflect.Ptr && !field.IsNil() {
+				value = field.Elem().String()
+			} else if field.Kind() == reflect.String {
+				value = field.String()
+			} else {
+				continue // Skip if not a string or nil pointer
+			}
+
+			if encryptedValue, err := pkgCommon.Encrypt(secretKey, value); err == nil {
+				if field.Kind() == reflect.Ptr {
+					field.Set(reflect.ValueOf(&encryptedValue))
+				} else {
+					field.SetString(encryptedValue)
+				}
+			} else {
+				return err
+			}
+		}
+	}
+
+	return nil
 }

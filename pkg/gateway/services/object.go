@@ -2,75 +2,115 @@ package gatewayservices
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"io"
 	"os"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+)
+
+const (
+	defaultObjectPutExpirationS = 60 * 60 * 24
 )
 
 func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequest) (*pb.HeadObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	useWorkspaceStorage := authInfo.Workspace.StorageAvailable()
 	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil {
-		return &pb.HeadObjectResponse{
-			Ok:     true,
-			Exists: true,
-			ObjectMetadata: &pb.ObjectMetadata{
-				Name: existingObject.Hash,
-				Size: existingObject.Size,
-			},
-			ObjectId: existingObject.ExternalId,
-		}, nil
+		exists := true
+
+		objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
+		if _, err := os.Stat(objectPath); os.IsNotExist(err) {
+			exists = false
+		}
+
+		if useWorkspaceStorage {
+			storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+			if err != nil {
+				return &pb.HeadObjectResponse{
+					Ok:       false,
+					ErrorMsg: "Unable to create storage client",
+				}, nil
+			}
+
+			exists, _, _ = storageClient.Head(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
+		}
+
+		if exists {
+			return &pb.HeadObjectResponse{
+				Ok:     true,
+				Exists: true,
+				ObjectMetadata: &pb.ObjectMetadata{
+					Name: existingObject.Hash,
+					Size: existingObject.Size,
+				},
+				ObjectId:            existingObject.ExternalId,
+				UseWorkspaceStorage: useWorkspaceStorage,
+			}, nil
+		} else {
+			return &pb.HeadObjectResponse{
+				Ok:                  true,
+				Exists:              false,
+				UseWorkspaceStorage: useWorkspaceStorage,
+			}, nil
+		}
 	}
 
 	return &pb.HeadObjectResponse{
-		Ok:     true,
-		Exists: false,
+		Ok:                  true,
+		Exists:              false,
+		UseWorkspaceStorage: useWorkspaceStorage,
 	}, nil
 }
 
-func (gws *GatewayService) PutObject(ctx context.Context, in *pb.PutObjectRequest) (*pb.PutObjectResponse, error) {
+func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObjectRequest) (*pb.CreateObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)
 
-	existingObject, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
+	storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+	if err != nil {
+		return &pb.CreateObjectResponse{
+			Ok:       false,
+			ErrorMsg: "Unable to create storage client",
+		}, nil
+	}
+
+	object, err := gws.backendRepo.GetObjectByHash(ctx, in.Hash, authInfo.Workspace.Id)
 	if err == nil && !in.Overwrite {
-		return &pb.PutObjectResponse{
+		return &pb.CreateObjectResponse{
 			Ok:       true,
-			ObjectId: existingObject.ExternalId,
+			ObjectId: object.ExternalId,
 		}, nil
 	}
 
-	hash := sha256.Sum256(in.ObjectContent)
-	hashStr := hex.EncodeToString(hash[:])
+	if object == nil {
+		object, err = gws.backendRepo.CreateObject(ctx, in.Hash, in.Size, authInfo.Workspace.Id)
+		if err != nil {
+			return &pb.CreateObjectResponse{
+				Ok:       false,
+				ErrorMsg: "Unable to create object",
+			}, nil
+		}
+	}
 
-	newObject, err := gws.backendRepo.CreateObject(ctx, hashStr, int64(len(in.ObjectContent)), authInfo.Workspace.Id)
+	presignedURL, err := storageClient.GeneratePresignedPutURL(ctx, path.Join(types.DefaultObjectPrefix, object.ExternalId), defaultObjectPutExpirationS)
 	if err != nil {
-		return &pb.PutObjectResponse{
+		return &pb.CreateObjectResponse{
 			Ok:       false,
-			ErrorMsg: "Unable to create object",
+			ErrorMsg: "Unable to generate presigned URL",
 		}, nil
 	}
 
-	filePath := path.Join(objectPath, newObject.ExternalId)
-	err = os.WriteFile(filePath, in.ObjectContent, 0644)
-	if err != nil {
-		return &pb.PutObjectResponse{
-			Ok:       false,
-			ErrorMsg: "Unable to write file",
-		}, nil
-	}
-
-	return &pb.PutObjectResponse{
-		Ok:       true,
-		ObjectId: newObject.ExternalId,
+	return &pb.CreateObjectResponse{
+		Ok:           true,
+		ObjectId:     object.ExternalId,
+		PresignedUrl: presignedURL,
 	}, nil
 }
 
@@ -83,13 +123,14 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 
 	var size int
 	var file *os.File
-	var newObject types.Object
+	var newObject *types.Object
 
 	for {
 		request, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
 			return stream.SendAndClose(&pb.PutObjectResponse{
 				Ok:       false,

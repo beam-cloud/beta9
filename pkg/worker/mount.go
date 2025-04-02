@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"strings"
 
 	"github.com/rs/zerolog/log"
 
@@ -15,11 +16,13 @@ import (
 
 type ContainerMountManager struct {
 	mountPointPaths *common.SafeMap[[]string]
+	storageConfig   types.StorageConfig
 }
 
 func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 	return &ContainerMountManager{
 		mountPointPaths: common.NewSafeMap[[]string](),
+		storageConfig:   config.Storage,
 	}
 }
 
@@ -27,13 +30,32 @@ func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	for i, m := range request.Mounts {
 		if m.MountPath == types.WorkerUserCodeVolume {
-			err := common.ExtractObjectFile(context.TODO(), request.Stub.Object.ExternalId, request.Workspace.Name, types.TempContainerWorkspace(request.ContainerId))
+			objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
+
+			if request.StorageAvailable() {
+				objectPath = path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultObjectPrefix, request.Stub.Object.ExternalId)
+			}
+
+			err := common.ExtractObjectFile(context.TODO(), objectPath, types.TempContainerWorkspace(request.ContainerId))
 			if err != nil {
 				return err
 			}
 
 			m.LocalPath = types.TempContainerWorkspace(request.ContainerId)
 			request.Mounts[i].LocalPath = m.LocalPath
+		}
+
+		// NOTE: The following adjustments to local paths are part of a migration to use WorkspaceStorage and can be removed once all existing workspaces are migrated.
+		if request.StorageAvailable() {
+			switch {
+			case strings.HasPrefix(m.MountPath, types.WorkerContainerVolumePath):
+				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultVolumesPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultVolumesPrefix), 1)
+				request.Mounts[i].LocalPath = m.LocalPath
+
+			case strings.HasPrefix(m.MountPath, types.WorkerUserOutputVolume):
+				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultOutputsPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultOutputsPrefix), 1)
+				request.Mounts[i].LocalPath = m.LocalPath
+			}
 		}
 
 		if m.MountType == storage.StorageModeMountPoint && m.MountPointConfig != nil {
@@ -62,8 +84,8 @@ func (c *ContainerMountManager) RemoveContainerMounts(containerId string) {
 	}
 
 	mountPointS3, _ := storage.NewMountPointStorage(types.MountPointConfig{})
-	for _, m := range mountPointPaths {
-		if err := mountPointS3.Unmount(m); err != nil {
+	for _, localPath := range mountPointPaths {
+		if err := mountPointS3.Unmount(localPath); err != nil {
 			log.Error().Str("container_id", containerId).Err(err).Msg("failed to unmount external s3 bucket")
 		}
 	}
