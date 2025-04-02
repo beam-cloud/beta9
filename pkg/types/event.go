@@ -40,6 +40,7 @@ var (
 	EventStubDeploy         = "stub.deploy"
 	EventStubServe          = "stub.serve"
 	EventStubRun            = "stub.run"
+	EventStubClone          = "stub.clone"
 
 	EventWorkerPoolDegraded = "workerpool.degraded"
 	EventWorkerPoolHealthy  = "workerpool.healthy"
