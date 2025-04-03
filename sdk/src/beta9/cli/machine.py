@@ -162,14 +162,8 @@ def list_machines(
     help="The pool to select for the machine.",
     required=True,
 )
-@click.option(
-    "--agent-branch",
-    "-a",
-    help="The branch of the beta9-agent to use for the machine.",
-    required=False,
-)
 @extraclick.pass_service_client
-def create_machine(service: ServiceClient, pool: str, agent_branch: str):
+def create_machine(service: ServiceClient, pool: str):
     res: CreateMachineResponse
     res = service.gateway.create_machine(CreateMachineRequest(pool_name=pool))
     if not res.ok:
@@ -178,10 +172,6 @@ def create_machine(service: ServiceClient, pool: str, agent_branch: str):
     terminal.header(
         f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
     )
-
-    agent_url = "https://release.beam.cloud/agent/agent"
-    if agent_branch:
-        agent_url += f"@{agent_branch}"
 
     cmd_args = [
         f'--token "{res.machine.registration_token}"',
@@ -192,8 +182,13 @@ def create_machine(service: ServiceClient, pool: str, agent_branch: str):
         f'--provider-name "{res.machine.provider_name}"',
     ]
 
-    if agent_branch:
-        cmd_args.append(f'--agent-branch "{agent_branch}"')
+    agent_url = "https://release.beam.cloud/agent/agent"
+    if res.machine.agent_upstream_url:
+        agent_url = res.machine.agent_upstream_url
+
+    if res.machine.agent_upstream_branch:
+        cmd_args.append(f'--agent-branch "{res.machine.agent_upstream_branch}"')
+        agent_url += f"-{res.machine.agent_upstream_branch}"
 
     text = textwrap.dedent(
         f"""\
