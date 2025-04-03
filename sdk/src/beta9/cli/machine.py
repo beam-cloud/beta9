@@ -183,12 +183,13 @@ def create_machine(service: ServiceClient, pool: str):
     ]
 
     agent_url = "https://release.beam.cloud/agent/agent"
-    if res.machine.agent_upstream_url:
-        agent_url = res.machine.agent_upstream_url
+    if res.agent_upstream_url:
+        agent_url = res.agent_upstream_url
+        cmd_args.append(f'--flux-upstream "{res.agent_upstream_url}"')
 
-    if res.machine.agent_upstream_branch:
-        cmd_args.append(f'--agent-branch "{res.machine.agent_upstream_branch}"')
-        agent_url += f"-{res.machine.agent_upstream_branch}"
+    if res.agent_upstream_branch:
+        cmd_args.append(f'--flux-branch "{res.agent_upstream_branch}"')
+        agent_url += f"-{res.agent_upstream_branch}"
 
     text = textwrap.dedent(
         f"""\

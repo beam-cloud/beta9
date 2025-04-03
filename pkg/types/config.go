@@ -26,7 +26,7 @@ type AppConfig struct {
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
-	Agent          ProviderAgentConfig       `key:"agent" json:"agent"`
+	Agent          AgentConfig               `key:"agent" json:"agent"`
 }
 
 type DatabaseConfig struct {
@@ -373,7 +373,7 @@ type ProviderConfig struct {
 	Generic    GenericProviderConfig    `key:"generic" json:"generic"`
 }
 
-type ProviderAgentConfig struct {
+type AgentConfig struct {
 	ElasticSearch  ElasticSearchConfig `key:"elasticSearch" json:"elastic_search"`
 	VictoriaLogs   VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
 	UpstreamURL    string              `key:"upstreamURL" json:"upstream_url"`
