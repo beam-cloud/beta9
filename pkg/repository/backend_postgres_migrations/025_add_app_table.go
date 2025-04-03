@@ -16,6 +16,7 @@ type StubForMigration struct {
 	StubName       string
 	DeploymentName string
 	DeploymentID   int64
+	WorkspaceId    uint
 }
 
 func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
@@ -54,7 +55,7 @@ func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 	// Get all stubs that have deployments
 	StubWithDeployment := []StubForMigration{}
 	stubWithDeploymentRows, err := tx.QueryContext(ctx, `
-		select s.id as stub_id, s.name as stub_name, d.id as deployment_id, d.name as deployment_name from stub s join deployment d on s.id = d.stub_id;
+		select s.workspace_id as workspace_id, s.id as stub_id, s.name as stub_name, d.id as deployment_id, d.name as deployment_name from stub s join deployment d on s.id = d.stub_id;
 	`)
 	if err != nil {
 		return err
@@ -62,7 +63,7 @@ func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 
 	for stubWithDeploymentRows.Next() {
 		row := StubForMigration{}
-		err = stubWithDeploymentRows.Scan(&row.StubID, &row.StubName, &row.DeploymentID, &row.DeploymentName)
+		err = stubWithDeploymentRows.Scan(&row.WorkspaceId, &row.StubID, &row.StubName, &row.DeploymentID, &row.DeploymentName)
 		if err != nil {
 			return err
 		}
@@ -82,7 +83,7 @@ func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 				`INSERT INTO app (name, description, workspace_id)
 				VALUES ($1, $2, $3)
 				RETURNING id;
-			`, stub.DeploymentName, "", 1).Scan(&appId)
+			`, stub.DeploymentName, "", stub.WorkspaceId).Scan(&appId)
 			if err != nil {
 				return err
 			}
@@ -111,7 +112,7 @@ func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 	// Set app_id to NULL for stubs without deployments
 	StubsWithoutDeployment := []StubForMigration{}
 	stubWithoutDeploymentRows, err := tx.QueryContext(ctx, `
-		SELECT s.id as stub_id, s.name as stub_name
+		SELECT s.workspace_id as workspace_id, s.id as stub_id, s.name as stub_name
 		FROM stub s
 		LEFT JOIN deployment d ON s.id = d.stub_id
 		WHERE d.stub_id IS NULL;
@@ -122,7 +123,7 @@ func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 
 	for stubWithoutDeploymentRows.Next() {
 		row := StubForMigration{}
-		err = stubWithoutDeploymentRows.Scan(&row.StubID, &row.StubName)
+		err = stubWithoutDeploymentRows.Scan(&row.WorkspaceId, &row.StubID, &row.StubName)
 		if err != nil {
 			return err
 		}
@@ -142,7 +143,7 @@ func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 				`INSERT INTO app (name, description, workspace_id)
 				VALUES ($1, $2, $3)
 				RETURNING id;
-			`, stub.StubName, "", 1).Scan(&appId)
+			`, stub.StubName, "", stub.WorkspaceId).Scan(&appId)
 			if err != nil {
 				return err
 			}

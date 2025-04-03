@@ -356,13 +356,14 @@ type Autoscaler struct {
 
 // @go2proto
 type App struct {
-	Id          uint      `db:"id" json:"id"`
-	ExternalId  string    `db:"external_id" json:"external_id"`
-	Name        string    `db:"name" json:"name"`
-	Description string    `db:"description" json:"description"`
-	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time `db:"updated_at" json:"updated_at"`
+	Id          uint         `db:"id" json:"id"`
+	ExternalId  string       `db:"external_id" json:"external_id"`
+	Name        string       `db:"name" json:"name"`
+	Description string       `db:"description" json:"description"`
+	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	CreatedAt   time.Time    `db:"created_at" json:"created_at"`
+	UpdatedAt   time.Time    `db:"updated_at" json:"updated_at"`
+	DeletedAt   sql.NullTime `db:"deleted_at" json:"deleted_at"`
 }
 
 const (

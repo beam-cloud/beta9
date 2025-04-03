@@ -843,9 +843,13 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
     INSERT INTO stub (name, type, config, object_id, workspace_id, app_id)
     VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id;
-    `
+  `
 	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, workspaceId, appId); err != nil {
 		return types.Stub{}, err
+	}
+
+	if err := r.updateAppActivity(ctx, appId); err != nil {
+		return stub, err
 	}
 
 	return stub, nil
@@ -1289,6 +1293,10 @@ func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, worksp
 	`
 	err := c.client.GetContext(ctx, &deployment, queryCreate, name, subdomain, workspaceId, stubId, version, stubType, appId)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := c.updateAppActivity(ctx, appId); err != nil {
 		return nil, err
 	}
 
@@ -1878,6 +1886,37 @@ func (r *PostgresBackendRepository) ListApps(ctx context.Context, workspaceId ui
 	}
 
 	return apps, nil
+}
+
+func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId})
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.App]{
+			Client:          r.client,
+			SelectBuilder:   qb,
+			SortOrder:       "DESC",
+			SortColumn:      "updated_at",
+			SortQueryPrefix: "a",
+			PageSize:        10,
+		},
+		filters.Cursor,
+	)
+	if err != nil {
+		return common.CursorPaginationInfo[types.App]{}, err
+	}
+
+	return *page, nil
+}
+
+// Use to update the updated_at field of app when stub and deployment is created with app_id
+func (r *PostgresBackendRepository) updateAppActivity(ctx context.Context, appId uint) error {
+	query := `UPDATE app set updated_at=NOW() where id=$1`
+
+	if _, err := r.client.ExecContext(ctx, query, appId); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // decryptFields decrypts fields of a struct using AES-GCM

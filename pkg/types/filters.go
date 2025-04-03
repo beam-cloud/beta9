@@ -70,6 +70,11 @@ type StubFilter struct {
 	AppId       string      `query:"app_id"`
 }
 
+type AppFilter struct {
+	Name   string `query:"name"`
+	Cursor string `query:"cursor"`
+}
+
 type StubGetURLFilter struct {
 	StubId       string `param:"stubId"`
 	WorkspaceId  string `param:"workspaceId"`
