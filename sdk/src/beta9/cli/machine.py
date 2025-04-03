@@ -184,7 +184,6 @@ def create_machine(service: ServiceClient, pool: str):
 
     agent_url = "https://release.beam.cloud/agent/agent"
     if res.agent_upstream_url:
-        agent_url = res.agent_upstream_url
         cmd_args.append(f'--flux-upstream "{res.agent_upstream_url}"')
 
     if res.agent_upstream_branch:
