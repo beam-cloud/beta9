@@ -162,8 +162,15 @@ def list_machines(
     help="The pool to select for the machine.",
     required=True,
 )
+@click.option(
+    "--agent-branch",
+    "-a",
+    help="The branch of the beta9-agent to use for the machine.",
+    required=False,
+    default="main",
+)
 @extraclick.pass_service_client
-def create_machine(service: ServiceClient, pool: str):
+def create_machine(service: ServiceClient, pool: str, agent_branch: str):
     res: CreateMachineResponse
     res = service.gateway.create_machine(CreateMachineRequest(pool_name=pool))
     if not res.ok:
@@ -173,17 +180,24 @@ def create_machine(service: ServiceClient, pool: str):
         f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
     )
 
+    cmd_args = [
+        f'--token "{res.machine.registration_token}"',
+        f'--machine-id "{res.machine.id}"',
+        f'--tailscale-url "{res.machine.tailscale_url}"',
+        f'--tailscale-auth "{res.machine.tailscale_auth}"',
+        f'--pool-name "{res.machine.pool_name}"',
+        f'--provider-name "{res.machine.provider_name}"',
+    ]
+
+    if agent_branch:
+        cmd_args.append(f'--agent-branch "{agent_branch}"')
+
     text = textwrap.dedent(
         f"""\
         # -- Agent setup
         sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
         sudo chmod +x agent && \\
-        sudo ./agent --token "{res.machine.registration_token}" \\
-            --machine-id "{res.machine.id}" \\
-            --tailscale-url "{res.machine.tailscale_url}" \\
-            --tailscale-auth "{res.machine.tailscale_auth}" \\
-            --pool-name "{res.machine.pool_name}" \\
-            --provider-name "{res.machine.provider_name}"
+        sudo ./agent {" \\\n\t  ".join(cmd_args)}
         """
     )
 
