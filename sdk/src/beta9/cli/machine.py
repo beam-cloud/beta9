@@ -167,7 +167,6 @@ def list_machines(
     "-a",
     help="The branch of the beta9-agent to use for the machine.",
     required=False,
-    default="main",
 )
 @extraclick.pass_service_client
 def create_machine(service: ServiceClient, pool: str, agent_branch: str):
@@ -179,6 +178,10 @@ def create_machine(service: ServiceClient, pool: str, agent_branch: str):
     terminal.header(
         f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
     )
+
+    agent_url = "https://release.beam.cloud/agent/agent"
+    if agent_branch:
+        agent_url += f"@{agent_branch}"
 
     cmd_args = [
         f'--token "{res.machine.registration_token}"',
@@ -195,7 +198,7 @@ def create_machine(service: ServiceClient, pool: str, agent_branch: str):
     text = textwrap.dedent(
         f"""\
         # -- Agent setup
-        sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
+        sudo curl -L -o agent {agent_url} && \\
         sudo chmod +x agent && \\
         sudo ./agent {" \\\n\t  ".join(cmd_args)}
         """
