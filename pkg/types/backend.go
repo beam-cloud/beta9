@@ -15,7 +15,7 @@ import (
 // @go2proto
 type Workspace struct {
 	Id                 uint              `db:"id" json:"id,omitempty"`
-	ExternalId         string            `db:"external_id" json:"external_id"`
+	ExternalId         string            `db:"external_id" json:"external_id,omitempty"`
 	Name               string            `db:"name" json:"name"`
 	CreatedAt          time.Time         `db:"created_at" json:"created_at,omitempty"`
 	UpdatedAt          time.Time         `db:"updated_at" json:"updated_at,omitempty"`
@@ -176,7 +176,7 @@ type VolumeWithRelated struct {
 
 type Deployment struct {
 	Id          uint         `db:"id" json:"id"`
-	ExternalId  string       `db:"external_id" json:"external_id"`
+	ExternalId  string       `db:"external_id" json:"external_id,omitempty"`
 	Name        string       `db:"name" json:"name"`
 	Active      bool         `db:"active" json:"active"`
 	Subdomain   string       `db:"subdomain" json:"subdomain"`
@@ -199,7 +199,7 @@ type DeploymentWithRelated struct {
 // @go2proto
 type Object struct {
 	Id          uint      `db:"id" json:"id"`
-	ExternalId  string    `db:"external_id" json:"external_id"`
+	ExternalId  string    `db:"external_id" json:"external_id,omitempty"`
 	Hash        string    `db:"hash" json:"hash"`
 	Size        int64     `db:"size" json:"size"`
 	WorkspaceId uint      `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
@@ -357,7 +357,7 @@ type Autoscaler struct {
 // @go2proto
 type App struct {
 	Id          uint         `db:"id" json:"id"`
-	ExternalId  string       `db:"external_id" json:"external_id"`
+	ExternalId  string       `db:"external_id" json:"external_id,omitempty"`
 	Name        string       `db:"name" json:"name"`
 	Description string       `db:"description" json:"description"`
 	WorkspaceId uint         `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
@@ -408,8 +408,8 @@ func (t StubType) Kind() string {
 
 // @go2proto
 type Stub struct {
-	Id            uint      `db:"id" json:"_"`
-	ExternalId    string    `db:"external_id" json:"external_id"`
+	Id            uint      `db:"id" json:"id,omitempty"`
+	ExternalId    string    `db:"external_id" json:"external_id,omitempty"`
 	Name          string    `db:"name" json:"name"`
 	Type          StubType  `db:"type" json:"type"`
 	Config        string    `db:"config" json:"config"`

@@ -58,6 +58,7 @@ type TaskFilter struct {
 	MaxDuration    uint        `query:"max_duration"`
 	Interval       string      `query:"interval"`
 	Cursor         string      `query:"cursor"`
+	AppId          string      `query:"app_id"`
 }
 
 // Struct that includes the custom type
