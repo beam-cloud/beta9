@@ -42,6 +42,8 @@ const (
 	dockerHubRegistry string = "docker.io"
 )
 
+var buildEnv []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_SYSTEM_PYTHON=true", "UV_COMPILE_BYTECODE=true"}
+
 type Builder struct {
 	config        types.AppConfig
 	scheduler     *scheduler.Scheduler
@@ -49,100 +51,12 @@ type Builder struct {
 	containerRepo repository.ContainerRepository
 	tailscale     *network.Tailscale
 	eventBus      *common.EventBus
-	rdb           *common.RedisClient
 	skopeoClient  common.SkopeoClient
 }
 
 type BuildStep struct {
 	Command string
 	Type    string
-}
-
-type BuildOpts struct {
-	BaseImageRegistry  string
-	BaseImageName      string
-	BaseImageTag       string
-	BaseImageDigest    string
-	BaseImageCreds     string
-	ExistingImageUri   string
-	ExistingImageCreds map[string]string
-	Dockerfile         string
-	BuildCtxObject     string
-	PythonVersion      string
-	PythonPackages     []string
-	Commands           []string
-	BuildSteps         []BuildStep
-	ForceRebuild       bool
-	EnvVars            []string
-	BuildSecrets       []string
-	Gpu                string
-	IgnorePython       bool
-}
-
-func (o *BuildOpts) String() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "{")
-	fmt.Fprintf(&b, "  \"BaseImageRegistry\": %q,", o.BaseImageRegistry)
-	fmt.Fprintf(&b, "  \"BaseImageName\": %q,", o.BaseImageName)
-	fmt.Fprintf(&b, "  \"BaseImageTag\": %q,", o.BaseImageTag)
-	fmt.Fprintf(&b, "  \"BaseImageDigest\": %q,", o.BaseImageDigest)
-	fmt.Fprintf(&b, "  \"BaseImageCreds\": %q,", o.BaseImageCreds)
-	fmt.Fprintf(&b, "  \"ExistingImageUri\": %q,", o.ExistingImageUri)
-	fmt.Fprintf(&b, "  \"ExistingImageCreds\": %#v,", o.ExistingImageCreds)
-	fmt.Fprintf(&b, "  \"Dockerfile\": %q,", o.Dockerfile)
-	fmt.Fprintf(&b, "  \"BuildCtxObject\": %q,", o.BuildCtxObject)
-	fmt.Fprintf(&b, "  \"PythonVersion\": %q,", o.PythonVersion)
-	fmt.Fprintf(&b, "  \"PythonPackages\": %#v,", o.PythonPackages)
-	fmt.Fprintf(&b, "  \"Commands\": %#v,", o.Commands)
-	fmt.Fprintf(&b, "  \"BuildSteps\": %#v,", o.BuildSteps)
-	fmt.Fprintf(&b, "  \"ForceRebuild\": %v", o.ForceRebuild)
-	fmt.Fprintf(&b, "  \"Gpu\": %q,", o.Gpu)
-	fmt.Fprintf(&b, "  \"IgnorePython\": %v,", o.IgnorePython)
-	fmt.Fprintf(&b, "}")
-	return b.String()
-}
-
-func (o *BuildOpts) setCustomImageBuildOptions() error {
-	baseImage, err := ExtractImageNameAndTag(o.ExistingImageUri)
-	if err != nil {
-		return err
-	}
-
-	if len(o.ExistingImageCreds) > 0 && o.ExistingImageUri != "" {
-		token, err := GetRegistryToken(o)
-		if err != nil {
-			return err
-		}
-		o.BaseImageCreds = token
-	}
-
-	o.BaseImageRegistry = baseImage.Registry
-	o.BaseImageName = baseImage.Repo
-	o.BaseImageTag = baseImage.Tag
-	o.BaseImageDigest = baseImage.Digest
-
-	return nil
-}
-
-func (o *BuildOpts) addPythonRequirements() {
-	// Override any specified python packages with base requirements (to ensure we have what need in the image)
-	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")
-
-	// Create a map to track package names in baseRequirementsSlice
-	baseNames := make(map[string]bool)
-	for _, basePkg := range baseRequirementsSlice {
-		baseNames[extractPackageName(basePkg)] = true
-	}
-
-	// Filter out existing packages from opts.PythonPackages
-	filteredPythonPackages := make([]string, 0)
-	for _, optPkg := range o.PythonPackages {
-		if !baseNames[extractPackageName(optPkg)] {
-			filteredPythonPackages = append(filteredPythonPackages, optPkg)
-		}
-	}
-
-	o.PythonPackages = append(filteredPythonPackages, baseRequirementsSlice...)
 }
 
 func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
@@ -153,7 +67,6 @@ func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, schedu
 		registry:      registry,
 		containerRepo: containerRepo,
 		eventBus:      common.NewEventBus(rdb),
-		rdb:           rdb,
 		skopeoClient:  common.NewSkopeoClient(config),
 	}, nil
 }
@@ -228,51 +141,27 @@ func (i *BaseImage) String() string {
 // Build user image
 func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg) error {
 	var (
-		dockerfile             *string
-		authInfo, _            = auth.AuthInfoFromContext(ctx)
-		containerSpinupTimeout = defaultContainerSpinupTimeout
-		success                = atomic.Bool{}
+		authInfo, _ = auth.AuthInfoFromContext(ctx)
+		success     = atomic.Bool{}
+		containerId = b.genContainerId()
 	)
 
-	switch {
-	case opts.Dockerfile != "":
-		opts.addPythonRequirements()
-		dockerfile = &opts.Dockerfile
-		containerSpinupTimeout = dockerfileContainerSpinupTimeout
-	case opts.ExistingImageUri != "":
-		err := b.handleCustomBaseImage(opts, outputChan)
-		if err != nil {
-			return err
-		}
-		containerSpinupTimeout = b.calculateImageArchiveDuration(ctx, opts)
+	// Perform tweaks for custom base image, dockerfile, python requirements, etc.
+	if err := opts.initializeBuildConfiguration(b.config, outputChan); err != nil {
+		return err
 	}
 
-	if creds, err := b.shouldUseDefaultDockerCreds(opts); err == nil {
-		opts.BaseImageCreds = creds
-	}
-
-	containerId := b.genContainerId()
-
-	containerRequest, err := b.generateContainerRequest(opts, dockerfile, containerId, authInfo.Workspace)
+	containerRequest, err := b.generateContainerRequest(opts, containerId, authInfo.Workspace)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Error occured while generating container request: " + err.Error()}
 		return err
 	}
 
-	// If user cancels the build, send a stop-build event to the worker
-	go func() {
-		<-ctx.Done()
-		if success.Load() {
-			return
-		}
-		err := b.stopBuild(containerId)
-		if err != nil {
-			log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
-		}
-	}()
+	// FIXME: This flow can be improved now that containers are running in attached mode.
+	// Send a stop-build event to the worker if the user cancels the build
+	go b.handleBuildCancellation(ctx, &success, containerId)
 
-	err = b.scheduler.Run(containerRequest)
-	if err != nil {
+	if err = b.scheduler.Run(containerRequest); err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: err.Error() + "\n"}
 		return err
 	}
@@ -283,13 +172,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	err = b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
-	if err != nil {
+	if err := b.containerRepo.SetBuildContainerTTL(containerId, time.Duration(imageContainerTtlS)*time.Second); err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Failed to connect to build container.\n"}
 		return err
 	}
 
-	go b.keepAlive(ctx, containerId, ctx.Done())
+	go b.refreshBuildContainerTTL(ctx, containerId, ctx.Done())
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
@@ -314,6 +202,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	start := time.Now()
 	buildContainerRunning := false
 
+	containerSpinupTimeout := b.calculateContainerSpinupTimeout(ctx, opts)
 	for !buildContainerRunning {
 		select {
 		case <-ctx.Done():
@@ -371,21 +260,21 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	micromambaEnv := strings.Contains(opts.PythonVersion, "micromamba")
 	if micromambaEnv {
-		client.Exec(containerId, "micromamba config set use_lockfiles False")
+		client.Exec(containerId, "micromamba config set use_lockfiles False", buildEnv)
 	}
 
 	var setupCommands []string
 
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", opts.PythonVersion)
-	if resp, err := client.Exec(containerId, checkPythonVersionCmd); (err != nil || !resp.Ok) && !micromambaEnv && !opts.IgnorePython {
+	if resp, err := client.Exec(containerId, checkPythonVersionCmd, buildEnv); (err != nil || !resp.Ok) && !micromambaEnv && !opts.IgnorePython {
 
 		if opts.PythonVersion == types.Python3.String() {
 			opts.PythonVersion = b.config.ImageService.PythonVersion
 		} else {
 			// Check if any python version is installed and warn the user that they are overriding it
 			checkPythonVersionCmd := fmt.Sprintf("%s --version", types.Python3.String())
-			if resp, err := client.Exec(containerId, checkPythonVersionCmd); err == nil && resp.Ok {
+			if resp, err := client.Exec(containerId, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
 				outputChan <- common.OutputMsg{Done: false, Success: success.Load(), Msg: fmt.Sprintf("requested python version (%s) was not detected, but an existing python3 environment was detected. The requested python version will be installed, replacing the existing python environment.\n", opts.PythonVersion), Warning: true}
 			}
 		}
@@ -421,7 +310,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			continue
 		}
 
-		if r, err := client.Exec(containerId, cmd); err != nil || !r.Ok {
+		if r, err := client.Exec(containerId, cmd, buildEnv); err != nil || !r.Ok {
 			log.Error().Str("container_id", containerId).Str("command", cmd).Err(err).Msg("failed to execute command for container")
 
 			errMsg := ""
@@ -447,22 +336,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	return nil
 }
 
-func (b *Builder) shouldUseDefaultDockerCreds(opts *BuildOpts) (string, error) {
-	isDockerHub := opts.BaseImageRegistry == dockerHubRegistry
-	credsNotSet := opts.BaseImageCreds == ""
-
-	if isDockerHub && credsNotSet {
-		username := b.config.ImageService.Registries.Docker.Username
-		password := b.config.ImageService.Registries.Docker.Password
-		if username != "" && password != "" {
-			return fmt.Sprintf("%s:%s", username, password), nil
-		}
-	}
-	return "", errors.New("docker creds not set in config")
-}
-
 // generateContainerRequest generates a container request for the build container
-func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, containerId string, workspace *types.Workspace) (*types.ContainerRequest, error) {
+func (b *Builder) generateContainerRequest(opts *BuildOpts, containerId string, workspace *types.Workspace) (*types.ContainerRequest, error) {
 	baseImageId, err := b.GetImageId(&BuildOpts{
 		BaseImageRegistry: opts.BaseImageRegistry,
 		BaseImageName:     opts.BaseImageName,
@@ -495,7 +370,7 @@ func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, 
 		BuildOptions: types.BuildOptions{
 			SourceImage:      &sourceImage,
 			SourceImageCreds: opts.BaseImageCreds,
-			Dockerfile:       dockerfile,
+			Dockerfile:       &opts.Dockerfile,
 			BuildCtxObject:   &opts.BuildCtxObject,
 			BuildSecrets:     opts.BuildSecrets,
 		},
@@ -523,30 +398,12 @@ func (b *Builder) genContainerId() string {
 	return fmt.Sprintf("%s%s", types.BuildContainerPrefix, uuid.New().String()[:8])
 }
 
-// handleCustomBaseImage validates the custom base image and parses its details into build options
-func (b *Builder) handleCustomBaseImage(opts *BuildOpts, outputChan chan common.OutputMsg) error {
-	if outputChan != nil {
-		outputChan <- common.OutputMsg{Done: false, Success: false, Msg: fmt.Sprintf("Using custom base image: %s\n", opts.ExistingImageUri)}
-	}
-
-	err := opts.setCustomImageBuildOptions()
-	if err != nil {
-		if outputChan != nil {
-			outputChan <- common.OutputMsg{Done: true, Success: false, Msg: err.Error() + "\n"}
-		}
-		return err
-	}
-
-	opts.addPythonRequirements()
-	return nil
-}
-
 // Check if an image already exists in the registry
 func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 	return b.registry.Exists(ctx, imageId)
 }
 
-func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
+func (b *Builder) refreshBuildContainerTTL(ctx context.Context, containerId string, done <-chan struct{}) {
 	ticker := time.NewTicker(time.Duration(buildContainerKeepAliveIntervalS) * time.Second)
 	defer ticker.Stop()
 
@@ -557,7 +414,9 @@ func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan
 		case <-done:
 			return
 		case <-ticker.C:
-			b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
+			if err := b.containerRepo.SetBuildContainerTTL(containerId, time.Duration(imageContainerTtlS)*time.Second); err != nil {
+				log.Error().Str("container_id", containerId).Err(err).Msg("failed to set build container ttl")
+			}
 		}
 	}
 }
@@ -663,7 +522,8 @@ func getPythonStandaloneInstallCommand(config types.PythonStandaloneConfig, pyth
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	command := fmt.Sprintf("PIP_ROOT_USER_ACTION=ignore %s -m pip install", pythonVersion)
+	// DEBIAN_FRONTEND=noninteractive PIP_ROOT_USER_ACTION=ignore
+	command := "uv pip install"
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
 	}
@@ -846,30 +706,40 @@ func (b *Builder) stopBuild(containerId string) error {
 	return nil
 }
 
-func tagOrDigest(digest string, tag string) string {
-	if tag != "" {
-		return tag
+func (b *Builder) handleBuildCancellation(ctx context.Context, success *atomic.Bool, containerId string) {
+	<-ctx.Done()
+	if success.Load() {
+		return
 	}
-	return digest
-}
-
-func (b *Builder) calculateImageArchiveDuration(ctx context.Context, opts *BuildOpts) time.Duration {
-	sourceImage := getSourceImage(opts)
-	imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
+	err := b.stopBuild(containerId)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to inspect image")
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop build")
+	}
+}
+func (b *Builder) calculateContainerSpinupTimeout(ctx context.Context, opts *BuildOpts) time.Duration {
+	switch {
+	case opts.Dockerfile != "":
+		return dockerfileContainerSpinupTimeout
+	case opts.ExistingImageUri != "":
+		sourceImage := getSourceImage(opts)
+		imageMetadata, err := b.skopeoClient.Inspect(ctx, sourceImage, opts.BaseImageCreds, nil)
+		if err != nil {
+			log.Error().Err(err).Msg("failed to inspect image")
+			return defaultContainerSpinupTimeout
+		}
+
+		imageSizeBytes := 0
+		for _, layer := range imageMetadata.LayersData {
+			imageSizeBytes += layer.Size
+		}
+
+		timePerByte := time.Duration(b.config.ImageService.ArchiveNanosecondsPerByte) * time.Nanosecond
+		timeLimit := timePerByte * time.Duration(imageSizeBytes) * 10
+		log.Info().Int("image_size", imageSizeBytes).Msgf("estimated time to prepare new base image: %s", timeLimit.String())
+		return timeLimit
+	default:
 		return defaultContainerSpinupTimeout
 	}
-
-	imageSizeBytes := 0
-	for _, layer := range imageMetadata.LayersData {
-		imageSizeBytes += layer.Size
-	}
-
-	timePerByte := time.Duration(b.config.ImageService.ArchiveNanosecondsPerByte) * time.Nanosecond
-	timeLimit := timePerByte * time.Duration(imageSizeBytes) * 10
-	log.Info().Int("image_size", imageSizeBytes).Msgf("estimated time to prepare new base image: %s", timeLimit.String())
-	return timeLimit
 }
 
 func getSourceImage(opts *BuildOpts) string {
@@ -881,4 +751,11 @@ func getSourceImage(opts *BuildOpts) string {
 		sourceImage = fmt.Sprintf("%s/%s:%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag)
 	}
 	return sourceImage
+}
+
+func tagOrDigest(digest string, tag string) string {
+	if tag != "" {
+		return tag
+	}
+	return digest
 }

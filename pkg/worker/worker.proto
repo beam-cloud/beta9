@@ -23,6 +23,7 @@ message RunCKillResponse { bool ok = 1; }
 message RunCExecRequest {
   string container_id = 1;
   string cmd = 2;
+  repeated string env = 3;
 }
 
 message RunCExecResponse { bool ok = 1; }
