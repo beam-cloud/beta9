@@ -11,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	repoCommon "github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
@@ -70,14 +71,19 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 		if deployments, err := g.backendRepo.ListDeploymentsPaginated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list deployments")
 		} else {
-			return ctx.JSON(http.StatusOK, deployments)
+			paginatedSerializedDeployments := repoCommon.CursorPaginationInfo[types.SerializedDeploymentWithRelated]{
+				Data: serializeDeploymentsWithRelated(deployments.Data),
+				Next: deployments.Next,
+			}
+
+			return ctx.JSON(http.StatusOK, paginatedSerializedDeployments)
 		}
 	} else {
 		if deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list deployments")
 		} else {
-			sanitizeDeployments(deployments)
-			return ctx.JSON(http.StatusOK, deployments)
+
+			return ctx.JSON(http.StatusOK, serializeDeploymentsWithRelated(deployments))
 		}
 
 	}
@@ -213,8 +219,12 @@ func (g *DeploymentGroup) ListLatestDeployments(ctx echo.Context) error {
 	if deployments, err := g.backendRepo.ListLatestDeploymentsWithRelatedPaginated(ctx.Request().Context(), filters); err != nil {
 		return HTTPInternalServerError("Failed to list deployments")
 	} else {
-		sanitizeDeployments(deployments.Data)
-		return ctx.JSON(http.StatusOK, deployments)
+		paginatedSerializedDeployments := repoCommon.CursorPaginationInfo[types.SerializedDeploymentWithRelated]{
+			Data: serializeDeploymentsWithRelated(deployments.Data),
+			Next: deployments.Next,
+		}
+
+		return ctx.JSON(http.StatusOK, paginatedSerializedDeployments)
 	}
 }
 
@@ -276,8 +286,12 @@ func getPackagePath(workspaceName, objectId string) string {
 	return path.Join("/data/objects/", workspaceName, objectId)
 }
 
-func sanitizeDeployments(deployments []types.DeploymentWithRelated) {
+func serializeDeploymentsWithRelated(deployments []types.DeploymentWithRelated) []types.SerializedDeploymentWithRelated {
+	_deployments := make([]types.SerializedDeploymentWithRelated, len(deployments))
+
 	for i := range deployments {
-		deployments[i].Stub.SanitizeConfig()
+		_deployments[i].Serialize(deployments[i])
 	}
+
+	return _deployments
 }
