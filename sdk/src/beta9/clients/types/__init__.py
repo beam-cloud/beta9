@@ -11,17 +11,6 @@ import betterproto
 
 
 @dataclass(eq=False, repr=False)
-class App(betterproto.Message):
-    id: int = betterproto.uint32_field(1)
-    external_id: str = betterproto.string_field(2)
-    name: str = betterproto.string_field(3)
-    description: str = betterproto.string_field(4)
-    workspace_id: int = betterproto.uint32_field(5)
-    created_at: datetime = betterproto.message_field(6)
-    updated_at: datetime = betterproto.message_field(7)
-
-
-@dataclass(eq=False, repr=False)
 class BuildOptions(betterproto.Message):
     source_image: str = betterproto.string_field(1)
     dockerfile: str = betterproto.string_field(2)

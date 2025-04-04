@@ -511,7 +511,6 @@ func (r *WorkerRedisRepository) AddContainerToWorker(workerId string, containerI
 		return fmt.Errorf("failed to add container to worker container index: %w", err)
 	}
 
-	log.Info().Str("container_id", containerId).Str("worker_id", workerId).Msg("container added to worker")
 	return nil
 }
 
@@ -523,7 +522,6 @@ func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, conta
 		return fmt.Errorf("failed to remove container from worker container index: %w", err)
 	}
 
-	log.Info().Str("container_id", containerId).Str("worker_id", workerId).Msg("container removed from worker")
 	return nil
 }
 

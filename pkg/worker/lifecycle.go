@@ -520,6 +520,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
 		WorkerId:    s.workerId,
 		ContainerId: request.ContainerId,
+		PoolName:    s.poolName,
+		PodHostname: s.podHostName,
 	})
 	defer s.workerRepoClient.RemoveContainerFromWorker(ctx, &pb.RemoveContainerFromWorkerRequest{
 		WorkerId:    s.workerId,
