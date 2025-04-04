@@ -361,17 +361,18 @@ func (g *volumeGroup) generatePresignedURL(ctx context.Context, workspace *types
 
 	key := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
 	var url string
-	if urlType == "PUT" {
+	switch urlType {
+	case http.MethodPut:
 		url, err = storageClient.GeneratePresignedPutURL(ctx, key, PresignedGetURLExpiration)
 		if err != nil {
 			return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate upload token")
 		}
-	} else if urlType == "GET" {
+	case http.MethodGet:
 		url, err = storageClient.GeneratePresignedGetURL(ctx, key, PresignedGetURLExpiration)
 		if err != nil {
 			return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
 		}
-	} else {
+	default:
 		return "", echo.NewHTTPError(http.StatusBadRequest, "Invalid URL type")
 	}
 
