@@ -67,6 +67,8 @@ message RemoveImagePullLockResponse {
 message AddContainerToWorkerRequest {
   string worker_id = 1;
   string container_id = 2;
+  string pool_name = 3;
+  string pod_hostname = 4;
 }
 
 message AddContainerToWorkerResponse {
@@ -77,6 +79,8 @@ message AddContainerToWorkerResponse {
 message RemoveContainerFromWorkerRequest {
   string worker_id = 1;
   string container_id = 2;
+  string pool_name = 3;
+  string pod_hostname = 4;  
 }
 
 message RemoveContainerFromWorkerResponse {

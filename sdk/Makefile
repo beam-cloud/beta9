@@ -4,14 +4,17 @@ init:
 	git submodule update --init --recursive
 
 docs:
-	@poetry run ./bin/docgen.py 2>/dev/null
+	uv run ./bin/docgen.py 2>/dev/null
 
 tests:
-	poetry run pytest -s
+	uv run pytest -s
 	# open .htmlcov/index.html
 
 format:
-	poetry run ruff check .
+	uv ruff check .
 
-publish:
-	poetry publish --build
+build: 
+	uv build
+
+publish: build
+	uv publish

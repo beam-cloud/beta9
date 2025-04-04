@@ -26,6 +26,7 @@ type AppConfig struct {
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
 	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
 	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
+	Agent          AgentConfig               `key:"agent" json:"agent"`
 }
 
 type DatabaseConfig struct {
@@ -372,9 +373,11 @@ type ProviderConfig struct {
 	Generic    GenericProviderConfig    `key:"generic" json:"generic"`
 }
 
-type ProviderAgentConfig struct {
-	ElasticSearch ElasticSearchConfig `key:"elasticSearch" json:"elastic_search"`
-	VictoriaLogs  VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
+type AgentConfig struct {
+	ElasticSearch  ElasticSearchConfig `key:"elasticSearch" json:"elastic_search"`
+	VictoriaLogs   VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
+	UpstreamURL    string              `key:"upstreamURL" json:"upstream_url"`
+	UpstreamBranch string              `key:"upstreamBranch" json:"upstream_branch"`
 }
 
 type ElasticSearchConfig struct {
@@ -392,43 +395,37 @@ type VictoriaLogsConfig struct {
 }
 
 type EC2ProviderConfig struct {
-	AWSAccessKey string              `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string              `key:"awsSecretKey" json:"aws_secret_key"`
-	AWSRegion    string              `key:"awsRegion" json:"aws_region"`
-	AMI          string              `key:"ami" json:"ami"`
-	SubnetId     *string             `key:"subnetId" json:"subnet_id"`
-	Agent        ProviderAgentConfig `key:"agent" json:"agent"`
+	AWSAccessKey string  `key:"awsAccessKey" json:"aws_access_key"`
+	AWSSecretKey string  `key:"awsSecretKey" json:"aws_secret_key"`
+	AWSRegion    string  `key:"awsRegion" json:"aws_region"`
+	AMI          string  `key:"ami" json:"ami"`
+	SubnetId     *string `key:"subnetId" json:"subnet_id"`
 }
 
 type OCIProviderConfig struct {
-	Tenancy            string              `key:"tenancy" json:"tenancy"`
-	UserId             string              `key:"userId" json:"user_id"`
-	Region             string              `key:"region" json:"region"`
-	FingerPrint        string              `key:"fingerprint" json:"fingerprint"`
-	PrivateKey         string              `key:"privateKey" json:"private_key"`
-	PrivateKeyPassword string              `key:"privateKeyPassword" json:"private_key_password"`
-	CompartmentId      string              `key:"compartmentId" json:"compartment_id"`
-	SubnetId           string              `key:"subnetId" json:"subnet_id"`
-	AvailabilityDomain string              `key:"availabilityDomain" json:"availability_domain"`
-	ImageId            string              `key:"imageId" json:"image_id"`
-	Agent              ProviderAgentConfig `key:"agent" json:"agent"`
+	Tenancy            string `key:"tenancy" json:"tenancy"`
+	UserId             string `key:"userId" json:"user_id"`
+	Region             string `key:"region" json:"region"`
+	FingerPrint        string `key:"fingerprint" json:"fingerprint"`
+	PrivateKey         string `key:"privateKey" json:"private_key"`
+	PrivateKeyPassword string `key:"privateKeyPassword" json:"private_key_password"`
+	CompartmentId      string `key:"compartmentId" json:"compartment_id"`
+	SubnetId           string `key:"subnetId" json:"subnet_id"`
+	AvailabilityDomain string `key:"availabilityDomain" json:"availability_domain"`
+	ImageId            string `key:"imageId" json:"image_id"`
 }
 
 type LambdaLabsProviderConfig struct {
-	ApiKey string              `key:"apiKey" json:"apiKey"`
-	Agent  ProviderAgentConfig `key:"agent" json:"agent"`
+	ApiKey string `key:"apiKey" json:"apiKey"`
 }
 
 type CrusoeProviderConfig struct {
-	Agent ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type HydraProviderConfig struct {
-	Agent ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type GenericProviderConfig struct {
-	Agent ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type MetricsCollector string
