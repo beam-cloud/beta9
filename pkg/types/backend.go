@@ -354,7 +354,6 @@ type Autoscaler struct {
 	MinContainers     uint           `json:"min_containers"`
 }
 
-// @go2proto
 type App struct {
 	Id          uint         `db:"id" json:"id"`
 	ExternalId  string       `db:"external_id" json:"external_id"`
