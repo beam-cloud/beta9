@@ -1,4 +1,3 @@
-import textwrap
 from datetime import datetime, timezone
 
 import click
@@ -190,14 +189,12 @@ def create_machine(service: ServiceClient, pool: str):
         cmd_args.append(f'--flux-branch "{res.agent_upstream_branch}"')
         agent_url += f"-{res.agent_upstream_branch}"
 
-    text = textwrap.dedent(
-        f"""\
-        # -- Agent setup
-        sudo curl -L -o agent {agent_url} && \\
-        sudo chmod +x agent && \\
-        sudo ./agent {" \\\n\t  ".join(cmd_args)}
-        """
-    )
+    cmd_args_formatted = " \\\n\t  ".join(cmd_args)
+    text = f"""# -- Agent setup
+    sudo curl -L -o agent {agent_url} &&
+    sudo chmod +x agent &&
+    sudo ./agent {cmd_args_formatted}
+    """
 
     if res.machine.user_data:
         text = f"""# -- User data\n{res.machine.user_data}\n{text}"""
