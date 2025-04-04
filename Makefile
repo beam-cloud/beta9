@@ -63,8 +63,7 @@ stop:
 	cd hack && okteto down --file okteto.yaml
 
 protocol:
-	poetry install --directory ./sdk
-	poetry run --no-interaction --directory ./sdk bash -c "cd .. && ./bin/gen_proto.sh"
+	uv run ./bin/gen_proto.sh
 
 verify-protocol:
 	./bin/verify_proto.sh
@@ -75,10 +74,7 @@ test-pkg:
 # build-test can be run with "local" to run extra tests when pointing to your local
 # dev setup. It will also exclude custom image tests due to arm64 issues on mac.
 build-test:
-	poetry config virtualenvs.in-project true
-	poetry install -C sdk
-	poetry shell -C sdk
-	cd e2e/build_tests && python app.py $(MODE)
+	uv run python e2e/build_tests/app.py $(MODE)
 
 load-test:
 	cd e2e/load_tests && k6 run --env URL=$(URL) --env TOKEN=$(TOKEN) throughput.js
