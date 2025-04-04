@@ -24,8 +24,9 @@ type AppConfig struct {
 	Tailscale      TailscaleConfig           `key:"tailscale" json:"tailscale"`
 	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
 	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
-	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
 	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
+	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
+	Agent          AgentConfig               `key:"agent" json:"agent"`
 }
 
 type DatabaseConfig struct {
@@ -62,13 +63,14 @@ type RedisConfig struct {
 }
 
 type PostgresConfig struct {
-	Host      string `key:"host" json:"host"`
-	Port      int    `key:"port" json:"port"`
-	Name      string `key:"name" json:"name"`
-	Username  string `key:"username" json:"username"`
-	Password  string `key:"password" json:"password"`
-	TimeZone  string `key:"timezone" json:"timezone"`
-	EnableTLS bool   `key:"enableTLS" json:"enable_tls"`
+	Host          string `key:"host" json:"host"`
+	Port          int    `key:"port" json:"port"`
+	Name          string `key:"name" json:"name"`
+	Username      string `key:"username" json:"username"`
+	Password      string `key:"password" json:"password"`
+	TimeZone      string `key:"timezone" json:"timezone"`
+	EnableTLS     bool   `key:"enableTLS" json:"enable_tls"`
+	EncryptionKey string `key:"encryptionKey" json:"encryption_key"`
 }
 
 type GRPCConfig struct {
@@ -187,13 +189,20 @@ type PythonStandaloneConfig struct {
 }
 
 type StorageConfig struct {
-	Mode           string           `key:"mode" json:"mode"`
-	FilesystemName string           `key:"fsName" json:"filesystem_name"`
-	FilesystemPath string           `key:"fsPath" json:"filesystem_path"`
-	ObjectPath     string           `key:"objectPath" json:"object_path"`
-	JuiceFS        JuiceFSConfig    `key:"juicefs" json:"juicefs"`
-	CunoFS         CunoFSConfig     `key:"cunofs" json:"cunofs"`
-	MountPoint     MountPointConfig `key:"mountpoint" json:"mountpoint"`
+	Mode             string                 `key:"mode" json:"mode"`
+	FilesystemName   string                 `key:"fsName" json:"filesystem_name"`
+	FilesystemPath   string                 `key:"fsPath" json:"filesystem_path"`
+	ObjectPath       string                 `key:"objectPath" json:"object_path"`
+	JuiceFS          JuiceFSConfig          `key:"juicefs" json:"juicefs"`
+	Geese            GeeseConfig            `key:"geese" json:"geese"`
+	MountPoint       MountPointConfig       `key:"mountpoint" json:"mountpoint"`
+	WorkspaceStorage WorkspaceStorageConfig `key:"workspaceStorage" json:"workspace_storage"`
+}
+
+type WorkspaceStorageConfig struct {
+	Mode          string      `key:"mode" json:"mode"`
+	BaseMountPath string      `key:"baseMountPath" json:"base_mount_path"`
+	Geese         GeeseConfig `key:"geese" json:"geese"`
 }
 
 type JuiceFSConfig struct {
@@ -207,12 +216,22 @@ type JuiceFSConfig struct {
 	BufferSize   int64  `key:"bufferSize" json:"buffer_size"`
 }
 
-type CunoFSConfig struct {
-	LicenseKey    string `key:"licenseKey" json:"license_key"`
-	S3AccessKey   string `key:"s3AccessKey" json:"s3_access_key"`
-	S3SecretKey   string `key:"s3SecretKey" json:"s3_secret_key"`
-	S3EndpointUrl string `key:"s3EndpointURL" json:"s3_endpoint_url"`
-	S3BucketName  string `key:"s3BucketName" json:"s3_bucket_name"`
+type GeeseConfig struct {
+	Debug            bool   `key:"debug" json:"debug"`                         // --debug
+	Force            bool   `key:"force" json:"force"`                         // -f (force)
+	FsyncOnClose     bool   `key:"fsyncOnClose" json:"fsync_on_close"`         // --fsync-on-close
+	MemoryLimit      int64  `key:"memoryLimit" json:"memory_limit"`            // --memory-limit
+	MaxFlushers      int    `key:"maxFlushers" json:"max_flushers"`            // --max-flushers
+	MaxParallelParts int    `key:"maxParallelParts" json:"max_parallel_parts"` // --max-parallel-parts
+	PartSizes        int64  `key:"partSizes" json:"part_sizes"`                // --part-sizes
+	DirMode          string `key:"dirMode" json:"dir_mode"`                    // --dir-mode, e.g., "0777"
+	FileMode         string `key:"fileMode" json:"file_mode"`                  // --file-mode, e.g., "0666"
+	ListType         int    `key:"listType" json:"list_type"`                  // --list-type
+	AccessKey        string `key:"accessKey" json:"access_key"`
+	SecretKey        string `key:"secretKey" json:"secret_key"`
+	EndpointUrl      string `key:"endpointURL" json:"endpoint_url"` // --endpoint
+	BucketName       string `key:"bucketName" json:"bucket_name"`
+	Region           string `key:"region" json:"region"`
 }
 
 // @go2proto
@@ -354,9 +373,11 @@ type ProviderConfig struct {
 	Generic    GenericProviderConfig    `key:"generic" json:"generic"`
 }
 
-type ProviderAgentConfig struct {
-	ElasticSearch ElasticSearchConfig `key:"elasticSearch" json:"elastic_search"`
-	VictoriaLogs  VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
+type AgentConfig struct {
+	ElasticSearch  ElasticSearchConfig `key:"elasticSearch" json:"elastic_search"`
+	VictoriaLogs   VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
+	UpstreamURL    string              `key:"upstreamURL" json:"upstream_url"`
+	UpstreamBranch string              `key:"upstreamBranch" json:"upstream_branch"`
 }
 
 type ElasticSearchConfig struct {
@@ -374,43 +395,37 @@ type VictoriaLogsConfig struct {
 }
 
 type EC2ProviderConfig struct {
-	AWSAccessKey string              `key:"awsAccessKey" json:"aws_access_key"`
-	AWSSecretKey string              `key:"awsSecretKey" json:"aws_secret_key"`
-	AWSRegion    string              `key:"awsRegion" json:"aws_region"`
-	AMI          string              `key:"ami" json:"ami"`
-	SubnetId     *string             `key:"subnetId" json:"subnet_id"`
-	Agent        ProviderAgentConfig `key:"agent" json:"agent"`
+	AWSAccessKey string  `key:"awsAccessKey" json:"aws_access_key"`
+	AWSSecretKey string  `key:"awsSecretKey" json:"aws_secret_key"`
+	AWSRegion    string  `key:"awsRegion" json:"aws_region"`
+	AMI          string  `key:"ami" json:"ami"`
+	SubnetId     *string `key:"subnetId" json:"subnet_id"`
 }
 
 type OCIProviderConfig struct {
-	Tenancy            string              `key:"tenancy" json:"tenancy"`
-	UserId             string              `key:"userId" json:"user_id"`
-	Region             string              `key:"region" json:"region"`
-	FingerPrint        string              `key:"fingerprint" json:"fingerprint"`
-	PrivateKey         string              `key:"privateKey" json:"private_key"`
-	PrivateKeyPassword string              `key:"privateKeyPassword" json:"private_key_password"`
-	CompartmentId      string              `key:"compartmentId" json:"compartment_id"`
-	SubnetId           string              `key:"subnetId" json:"subnet_id"`
-	AvailabilityDomain string              `key:"availabilityDomain" json:"availability_domain"`
-	ImageId            string              `key:"imageId" json:"image_id"`
-	Agent              ProviderAgentConfig `key:"agent" json:"agent"`
+	Tenancy            string `key:"tenancy" json:"tenancy"`
+	UserId             string `key:"userId" json:"user_id"`
+	Region             string `key:"region" json:"region"`
+	FingerPrint        string `key:"fingerprint" json:"fingerprint"`
+	PrivateKey         string `key:"privateKey" json:"private_key"`
+	PrivateKeyPassword string `key:"privateKeyPassword" json:"private_key_password"`
+	CompartmentId      string `key:"compartmentId" json:"compartment_id"`
+	SubnetId           string `key:"subnetId" json:"subnet_id"`
+	AvailabilityDomain string `key:"availabilityDomain" json:"availability_domain"`
+	ImageId            string `key:"imageId" json:"image_id"`
 }
 
 type LambdaLabsProviderConfig struct {
-	ApiKey string              `key:"apiKey" json:"apiKey"`
-	Agent  ProviderAgentConfig `key:"agent" json:"agent"`
+	ApiKey string `key:"apiKey" json:"apiKey"`
 }
 
 type CrusoeProviderConfig struct {
-	Agent ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type HydraProviderConfig struct {
-	Agent ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type GenericProviderConfig struct {
-	Agent ProviderAgentConfig `key:"agent" json:"agent"`
 }
 
 type MetricsCollector string

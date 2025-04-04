@@ -2,6 +2,7 @@ package output
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -129,7 +131,7 @@ func (o *OutputRedisService) writeToFile(ctx context.Context, contentCh <-chan O
 func (o *OutputRedisService) OutputStat(ctx context.Context, in *pb.OutputStatRequest) (*pb.OutputStatResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	stat, err := o.statOutput(ctx, authInfo.Workspace.Name, in.TaskId, in.Id, in.Filename)
+	stat, err := o.statOutput(ctx, authInfo, in.TaskId, in.Id, in.Filename)
 	if err != nil {
 		return &pb.OutputStatResponse{
 			Ok:     false,
@@ -151,7 +153,7 @@ func (o *OutputRedisService) OutputStat(ctx context.Context, in *pb.OutputStatRe
 func (o *OutputRedisService) OutputPublicURL(ctx context.Context, in *pb.OutputPublicURLRequest) (*pb.OutputPublicURLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	url, err := o.setPublicURL(ctx, authInfo.Workspace.Name, in.TaskId, in.Id, in.Filename, in.Expires)
+	url, err := o.setPublicURL(ctx, authInfo, in.TaskId, in.Id, in.Filename, in.Expires)
 	if err != nil {
 		return &pb.OutputPublicURLResponse{
 			Ok:     false,
@@ -174,13 +176,45 @@ type Stat struct {
 	Mtime time.Time
 }
 
-func (o *OutputRedisService) statOutput(ctx context.Context, workspaceName, taskId, outputId, filename string) (*Stat, error) {
+func (o *OutputRedisService) statOutput(ctx context.Context, authInfo *auth.AuthInfo, taskId, outputId, filename string) (*Stat, error) {
+	workspaceName := authInfo.Workspace.Name
+
 	task, err := o.backendRepo.GetTaskWithRelated(ctx, taskId)
 	if err != nil {
 		return nil, err
 	}
 
 	fullPath := path.Join(types.DefaultOutputsPath, fmt.Sprint(workspaceName), task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
+
+	if authInfo.Workspace.StorageAvailable() {
+		fullPath = path.Join(types.DefaultOutputsPrefix, task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
+
+		storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		if err != nil {
+			return nil, err
+		}
+
+		exists, object, err := storageClient.Head(ctx, fullPath)
+		if err != nil {
+			return nil, err
+		}
+
+		if exists {
+			size := int64(0)
+			if object.ContentLength != nil {
+				size = *object.ContentLength
+			}
+
+			return &Stat{
+				Mode:  "0644",
+				Size:  size,
+				Atime: *object.LastModified,
+				Mtime: *object.LastModified,
+			}, nil
+		} else {
+			return nil, errors.New("output does not exist")
+		}
+	}
 
 	var stat unix.Stat_t
 	err = unix.Stat(fullPath, &stat)
@@ -196,21 +230,37 @@ func (o *OutputRedisService) statOutput(ctx context.Context, workspaceName, task
 	}, nil
 }
 
-func (o *OutputRedisService) setPublicURL(ctx context.Context, workspaceName, taskId, outputId, filename string, expires uint32) (string, error) {
-	return SetPublicURL(ctx, o.config, o.backendRepo, o.rdb, workspaceName, taskId, outputId, filename, expires)
+func (o *OutputRedisService) setPublicURL(ctx context.Context, authInfo *auth.AuthInfo, taskId, outputId, filename string, expires uint32) (string, error) {
+	return SetPublicURL(ctx, o.config, o.backendRepo, o.rdb, authInfo, taskId, outputId, filename, expires)
 }
 
 func (o *OutputRedisService) getPublicURL(id string) (string, error) {
 	return o.rdb.Get(context.TODO(), Keys.outputPublicURL(id)).Result()
 }
 
-func SetPublicURL(ctx context.Context, config types.AppConfig, backendRepo repository.BackendRepository, redisClient *common.RedisClient, workspaceName, taskId, outputId, filename string, expires uint32) (string, error) {
+func SetPublicURL(ctx context.Context, config types.AppConfig, backendRepo repository.BackendRepository, redisClient *common.RedisClient, authInfo *auth.AuthInfo, taskId, outputId, filename string, expires uint32) (string, error) {
 	task, err := backendRepo.GetTaskWithRelated(ctx, taskId)
 	if err != nil {
 		return "", err
 	}
 
-	fullPath := GetTaskOutputPath(workspaceName, task, outputId, filename)
+	fullPath := GetTaskOutputPath(authInfo.Workspace.Name, task, outputId, filename)
+
+	if authInfo.Workspace.StorageAvailable() {
+		storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		if err != nil {
+			return "", err
+		}
+
+		fullPath = path.Join(types.DefaultOutputsPrefix, task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
+		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx, fullPath, int64(expires))
+		if err != nil {
+			return "", err
+		}
+
+		return presignedURL, nil
+	}
+
 	if err = redisClient.Set(ctx, Keys.outputPublicURL(outputId), fullPath, time.Duration(expires)*time.Second).Err(); err != nil {
 		return "", err
 	}

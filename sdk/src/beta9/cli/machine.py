@@ -1,4 +1,3 @@
-import textwrap
 from datetime import datetime, timezone
 
 import click
@@ -173,19 +172,29 @@ def create_machine(service: ServiceClient, pool: str):
         f"Created machine with ID: '{res.machine.id}'. Use the following command to setup the node:"
     )
 
-    text = textwrap.dedent(
-        f"""\
-        # -- Agent setup
-        sudo curl -L -o agent https://release.beam.cloud/agent/agent && \\
-        sudo chmod +x agent && \\
-        sudo ./agent --token "{res.machine.registration_token}" \\
-            --machine-id "{res.machine.id}" \\
-            --tailscale-url "{res.machine.tailscale_url}" \\
-            --tailscale-auth "{res.machine.tailscale_auth}" \\
-            --pool-name "{res.machine.pool_name}" \\
-            --provider-name "{res.machine.provider_name}"
-        """
-    )
+    cmd_args = [
+        f'--token "{res.machine.registration_token}"',
+        f'--machine-id "{res.machine.id}"',
+        f'--tailscale-url "{res.machine.tailscale_url}"',
+        f'--tailscale-auth "{res.machine.tailscale_auth}"',
+        f'--pool-name "{res.machine.pool_name}"',
+        f'--provider-name "{res.machine.provider_name}"',
+    ]
+
+    agent_url = "https://release.beam.cloud/agent/agent"
+    if res.agent_upstream_url:
+        cmd_args.append(f'--flux-upstream "{res.agent_upstream_url}"')
+
+    if res.agent_upstream_branch:
+        cmd_args.append(f'--flux-branch "{res.agent_upstream_branch}"')
+        agent_url += f"-{res.agent_upstream_branch}"
+
+    cmd_args_formatted = " \\\n\t  ".join(cmd_args)
+    text = f"""# -- Agent setup
+    sudo curl -L -o agent {agent_url} &&
+    sudo chmod +x agent &&
+    sudo ./agent {cmd_args_formatted}
+    """
 
     if res.machine.user_data:
         text = f"""# -- User data\n{res.machine.user_data}\n{text}"""

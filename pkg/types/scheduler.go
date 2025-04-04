@@ -240,6 +240,10 @@ func (c *ContainerRequest) VolumeCacheCompatible() bool {
 	return c.Workspace.VolumeCacheEnabled
 }
 
+func (c *ContainerRequest) StorageAvailable() bool {
+	return c.Workspace.StorageAvailable()
+}
+
 func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 	mounts := make([]*pb.Mount, len(c.Mounts))
 	for i, m := range c.Mounts {

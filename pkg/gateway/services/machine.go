@@ -199,6 +199,8 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 			TailscaleAuth:     gws.appConfig.Tailscale.AuthKey,
 			UserData:          pool.UserData,
 		},
+		AgentUpstreamUrl:    gws.appConfig.Agent.UpstreamURL,
+		AgentUpstreamBranch: gws.appConfig.Agent.UpstreamBranch,
 	}, nil
 }
 

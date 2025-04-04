@@ -76,6 +76,7 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 }
 
 func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
 	filters, err := g.preprocessFilters(ctx)
 	if err != nil {
 		return err
@@ -94,7 +95,7 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 		for i := range tasks.Data {
 			tasks.Data[i].Stub.SanitizeConfig()
 			if !skipDetails {
-				g.addOutputsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
+				g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, &tasks.Data[i])
 				g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 			}
 		}
@@ -119,19 +120,19 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 			return HTTPNotFound()
 		}
 		task.Stub.SanitizeConfig()
-		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 
 		return ctx.JSON(http.StatusOK, task)
 	}
 }
 
-func (g *TaskGroup) addOutputsToTask(ctx context.Context, workspaceName string, task *types.TaskWithRelated) error {
+func (g *TaskGroup) addOutputsToTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
 	task.Outputs = []types.TaskOutput{}
-	outputFiles := output.GetTaskOutputFiles(workspaceName, task)
+	outputFiles := output.GetTaskOutputFiles(authInfo.Workspace.Name, task)
 
 	for outputId, fileName := range outputFiles {
-		url, err := output.SetPublicURL(ctx, g.config, g.backendRepo, g.redisClient, workspaceName, task.ExternalId, outputId, fileName, DefaultTaskOutputExpirationS)
+		url, err := output.SetPublicURL(ctx, g.config, g.backendRepo, g.redisClient, authInfo, task.ExternalId, outputId, fileName, DefaultTaskOutputExpirationS)
 		if err != nil {
 			return err
 		}

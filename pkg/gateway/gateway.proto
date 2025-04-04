@@ -13,7 +13,7 @@ service GatewayService {
 
   // Objects
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {}
-  rpc PutObject(PutObjectRequest) returns (PutObjectResponse) {}
+  rpc CreateObject(CreateObjectRequest) returns (CreateObjectResponse) {}
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
 
   // Containers
@@ -97,6 +97,21 @@ message HeadObjectResponse {
   string object_id = 3;
   ObjectMetadata object_metadata = 4;
   string error_msg = 5;
+  bool use_workspace_storage = 6;
+}
+
+message CreateObjectRequest {
+  ObjectMetadata object_metadata = 1;
+  string hash = 2;
+  int64 size = 3;
+  bool overwrite = 4;
+}
+
+message CreateObjectResponse {
+  bool ok = 1;
+  string object_id = 2;
+  string presigned_url = 3;
+  string error_msg = 4;
 }
 
 message PutObjectRequest {
@@ -420,6 +435,8 @@ message CreateMachineResponse {
   bool ok = 1;
   string err_msg = 2;
   Machine machine = 3;
+  string agent_upstream_url = 4;
+  string agent_upstream_branch = 5;
 }
 
 message DeleteMachineRequest {

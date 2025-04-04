@@ -84,6 +84,7 @@ type WorkspaceRepository interface {
 	GetConcurrencyLimitByWorkspaceId(workspaceId string) (*types.ConcurrencyLimit, error)
 	SetConcurrencyLimitByWorkspaceId(workspaceId string, limit *types.ConcurrencyLimit) error
 	AuthorizeToken(string) (*types.Token, *types.Workspace, error)
+	RevokeToken(tokenKey string) error
 	SetAuthorizationToken(*types.Token, *types.Workspace) error
 }
 
@@ -92,9 +93,12 @@ type BackendRepository interface {
 	CreateWorkspace(ctx context.Context) (types.Workspace, error)
 	GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error)
 	GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error)
+	GetWorkspaceWithRelated(ctx context.Context, workspaceId uint) (types.WorkspaceWithRelated, error)
+	GetWorkspaceStorage(ctx context.Context, workspaceId uint) (*types.WorkspaceStorage, error)
+	CreateWorkspaceStorage(ctx context.Context, workspaceId uint, storage types.WorkspaceStorage) (*types.WorkspaceStorage, error)
 	GetAdminWorkspace(ctx context.Context) (*types.Workspace, error)
-	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (types.Object, error)
-	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (types.Object, error)
+	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (*types.Object, error)
+	GetObjectByHash(ctx context.Context, hash string, workspaceId uint) (*types.Object, error)
 	GetObjectByExternalId(ctx context.Context, externalId string, workspaceId uint) (types.Object, error)
 	GetObjectByExternalStubId(ctx context.Context, stubId string, workspaceId uint) (types.Object, error)
 	UpdateObjectSizeByExternalId(ctx context.Context, externalId string, size int) error
