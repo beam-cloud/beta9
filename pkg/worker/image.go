@@ -22,6 +22,7 @@ import (
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/umoci"
 	"github.com/opencontainers/umoci/oci/cas/dir"
@@ -177,23 +178,60 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
 		sourceOffset := int64(0)
 
-		// If the image archive is already cached in memory (in blobcache), then we can use that as the local cache path
-		baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-		if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
-			localCachePath = baseBlobFsContentPath
-		} else {
-			pullStartTime := time.Now()
-			outputLogger.Info(fmt.Sprintf("Image <%s> not found in worker region, caching nearby\n", imageId))
+		// Create constant backoff
+		b := backoff.NewConstantBackOff(300 * time.Millisecond)
 
-			// Otherwise, lets cache it in a nearby blobcache host
+		operation := func() error {
+			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
+			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
+				localCachePath = baseBlobFsContentPath
+				return nil
+			}
+
+			if err := c.cacheClient.AcquireStoreContentFromSourceLock(ctx, sourcePath); err != nil {
+				return err
+			}
+
+			pullStartTime := time.Now()
+			outputLogger.Info(fmt.Sprintf("Image <%s> not found in worker region, attempting to cache\n", imageId))
+
+			storeContext, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			go func() {
+				ticker := time.NewTicker(time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-storeContext.Done():
+						return
+					case <-ticker.C:
+						c.cacheClient.RefreshStoreContentFromSourceLock(storeContext, sourcePath)
+					}
+				}
+			}()
+
 			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
+			c.cacheClient.ReleaseStoreContentFromSourceLock(ctx, sourcePath)
+
 			if err == nil {
 				localCachePath = baseBlobFsContentPath
 				outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
-			} else {
-				outputLogger.Info(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
+				metrics.RecordImagePullTime(time.Since(pullStartTime))
+				return nil
 			}
-			metrics.RecordImagePullTime(time.Since(pullStartTime))
+
+			outputLogger.Info(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
+			return backoff.Permanent(err)
+		}
+
+		// Run with context
+		err := backoff.RetryNotify(operation, backoff.WithContext(b, ctx),
+			func(err error, d time.Duration) {
+				log.Info().Str("image_id", imageId).Err(err).Msg("retrying cache attempt")
+			})
+		if err != nil {
+			outputLogger.Info(fmt.Sprintf("Giving up on caching image <%s>: %v\n", imageId, err))
 		}
 	}
 
