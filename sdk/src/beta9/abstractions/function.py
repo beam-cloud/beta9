@@ -91,6 +91,7 @@ class Function(RunnerAbstraction):
 
     def __init__(
         self,
+        app: str = "",
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
@@ -122,6 +123,7 @@ class Function(RunnerAbstraction):
             name=name,
             task_policy=task_policy,
             on_deploy=on_deploy,
+            app=app,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
@@ -295,6 +297,8 @@ class Schedule(Function):
     Decorator which allows you to run the decorated function as a scheduled job.
 
     Parameters:
+        app (str):
+            The name of the app to which this function belongs
         when (str):
             A cron expression that specifies when the task should be run. For example "*/5 * * * *".
             The timezone is always UTC.
@@ -351,6 +355,7 @@ class Schedule(Function):
     def __init__(
         self,
         when: str,
+        app: str = "",
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,

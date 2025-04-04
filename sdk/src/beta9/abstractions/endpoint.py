@@ -36,6 +36,8 @@ class Endpoint(RunnerAbstraction):
     Tasks are invoked synchronously as HTTP requests.
 
     Parameters:
+        app (str):
+            The name of the app to associated with
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
@@ -117,6 +119,7 @@ class Endpoint(RunnerAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
+        app: str = "",
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(),
@@ -159,6 +162,7 @@ class Endpoint(RunnerAbstraction):
             task_policy=task_policy,
             concurrent_requests=self.concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
+            app=app,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -178,6 +182,8 @@ class ASGI(Endpoint):
     Decorator which allows you to create an ASGI application.
 
     Parameters:
+        app (str):
+            The name of the app to associated with
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
@@ -270,6 +276,7 @@ class ASGI(Endpoint):
 
     def __init__(
         self,
+        app: str = "",
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
@@ -312,6 +319,7 @@ class ASGI(Endpoint):
             autoscaler=autoscaler,
             callback_url=callback_url,
             checkpoint_enabled=checkpoint_enabled,
+            app=app,
         )
 
         self.is_asgi = True

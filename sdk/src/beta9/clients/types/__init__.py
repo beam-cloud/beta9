@@ -133,6 +133,7 @@ class Stub(betterproto.Message):
     created_at: datetime = betterproto.message_field(9)
     updated_at: datetime = betterproto.message_field(10)
     public: bool = betterproto.bool_field(11)
+    app_id: int = betterproto.uint32_field(12)
 
 
 @dataclass(eq=False, repr=False)

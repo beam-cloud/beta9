@@ -40,6 +40,7 @@ type DeploymentFilter struct {
 	SearchQuery      string      `query:"search_query"`
 	MinContainersGTE uint        `query:"min_containers"`
 	ShowDeleted      bool        `query:"show_deleted"`
+	AppId            string      `query:"app_id"`
 }
 
 type TaskFilter struct {
@@ -57,6 +58,7 @@ type TaskFilter struct {
 	MaxDuration    uint        `query:"max_duration"`
 	Interval       string      `query:"interval"`
 	Cursor         string      `query:"cursor"`
+	AppId          string      `query:"app_id"`
 }
 
 // Struct that includes the custom type
@@ -66,6 +68,12 @@ type StubFilter struct {
 	StubTypes   StringSlice `query:"stub_types"`
 	Cursor      string      `query:"cursor"`
 	Pagination  bool        `query:"pagination"`
+	AppId       string      `query:"app_id"`
+}
+
+type AppFilter struct {
+	Name   string `query:"name"`
+	Cursor string `query:"cursor"`
 }
 
 type StubGetURLFilter struct {

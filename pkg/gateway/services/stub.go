@@ -185,6 +185,19 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	appName := in.AppName
+	if appName == "" {
+		appName = in.Name
+	}
+
+	app, err := gws.backendRepo.GetOrCreateApp(ctx, authInfo.Workspace.Id, appName)
+	if err != nil {
+		return &pb.GetOrCreateStubResponse{
+			Ok:     false,
+			ErrMsg: "Failed to get or create app",
+		}, nil
+	}
+
 	object, err := gws.backendRepo.GetObjectByExternalId(ctx, in.ObjectId, authInfo.Workspace.Id)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
@@ -192,10 +205,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
-	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id, in.ForceCreate)
+	stub, err := gws.backendRepo.GetOrCreateStub(ctx, in.Name, in.StubType, stubConfig, object.Id, authInfo.Workspace.Id, in.ForceCreate, app.Id)
 	if err != nil {
 		return &pb.GetOrCreateStubResponse{
-			Ok: false,
+			Ok:     false,
+			ErrMsg: "Failed to get or create stub",
 		}, nil
 	}
 
@@ -236,7 +250,7 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 		version = lastestDeployment.Version + 1
 	}
 
-	deployment, err := gws.backendRepo.CreateDeployment(ctx, authInfo.Workspace.Id, in.Name, version, stub.Id, string(stub.Type))
+	deployment, err := gws.backendRepo.CreateDeployment(ctx, authInfo.Workspace.Id, in.Name, version, stub.Id, string(stub.Type), stub.AppId)
 	if err != nil {
 		return &pb.DeployStubResponse{
 			Ok: false,
