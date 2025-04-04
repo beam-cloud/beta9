@@ -193,7 +193,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			}
 
 			pullStartTime := time.Now()
-			outputLogger.Info(fmt.Sprintf("Image <%s> not found in worker region, attempting to cache\n", imageId))
+			outputLogger.Info(fmt.Sprintf("Image <%s> not found in worker region, attempting to cache nearby\n", imageId))
 
 			storeContext, cancel := context.WithCancel(ctx)
 			defer cancel()
