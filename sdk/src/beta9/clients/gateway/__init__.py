@@ -503,6 +503,8 @@ class CreateMachineResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     err_msg: str = betterproto.string_field(2)
     machine: "Machine" = betterproto.message_field(3)
+    agent_upstream_url: str = betterproto.string_field(4)
+    agent_upstream_branch: str = betterproto.string_field(5)
 
 
 @dataclass(eq=False, repr=False)

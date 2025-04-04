@@ -10,13 +10,13 @@ setup:
 	# helm install beta9 deploy/charts/beta9 --create-namespace --values deploy/charts/beta9/values.local.yaml
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
 
-# Note: you may need https://github.com/python-poetry/poetry-plugin-shell as of poetry v2.0.0
 setup-sdk:
-	curl -sSL https://install.python-poetry.org | python3 -
-	export PATH="$$HOME/.local/bin:$$PATH"
-	poetry config virtualenvs.in-project true
-	poetry install -C sdk
-	poetry shell -C sdk
+	@if ! command -v uv &> /dev/null; then \
+		echo "uv is not installed, installing..."; \
+		pip install uv; \
+	fi
+	@uv sync --directory ./sdk
+	@exec $${SHELL} -c "source ./sdk/.venv/bin/activate && exec $${SHELL}"
 
 k3d-up:
 	bash bin/k3d.sh up
@@ -63,8 +63,7 @@ stop:
 	cd hack && okteto down --file okteto.yaml
 
 protocol:
-	poetry install --directory ./sdk
-	poetry run --no-interaction --directory ./sdk bash -c "cd .. && ./bin/gen_proto.sh"
+	uv run ./bin/gen_proto.sh
 
 verify-protocol:
 	./bin/verify_proto.sh
@@ -75,10 +74,7 @@ test-pkg:
 # build-test can be run with "local" to run extra tests when pointing to your local
 # dev setup. It will also exclude custom image tests due to arm64 issues on mac.
 build-test:
-	poetry config virtualenvs.in-project true
-	poetry install -C sdk
-	poetry shell -C sdk
-	cd e2e/build_tests && python app.py $(MODE)
+	uv run python e2e/build_tests/app.py $(MODE)
 
 load-test:
 	cd e2e/load_tests && k6 run --env URL=$(URL) --env TOKEN=$(TOKEN) throughput.js

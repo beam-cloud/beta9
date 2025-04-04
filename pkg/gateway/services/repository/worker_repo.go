@@ -7,6 +7,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 )
 
 type WorkerRepositoryService struct {
@@ -78,18 +79,22 @@ func (s *WorkerRepositoryService) RemoveImagePullLock(ctx context.Context, req *
 func (s *WorkerRepositoryService) AddContainerToWorker(ctx context.Context, req *pb.AddContainerToWorkerRequest) (*pb.AddContainerToWorkerResponse, error) {
 	err := s.workerRepo.AddContainerToWorker(req.WorkerId, req.ContainerId)
 	if err != nil {
+		log.Error().Str("pool_name", req.PoolName).Str("hostname", req.PodHostname).Str("worker_id", req.WorkerId).Str("container_id", req.ContainerId).Msg("failed to add container to worker")
 		return &pb.AddContainerToWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	log.Info().Str("pool_name", req.PoolName).Str("hostname", req.PodHostname).Str("worker_id", req.WorkerId).Str("container_id", req.ContainerId).Msg("container added to worker")
 	return &pb.AddContainerToWorkerResponse{Ok: true}, nil
 }
 
 func (s *WorkerRepositoryService) RemoveContainerFromWorker(ctx context.Context, req *pb.RemoveContainerFromWorkerRequest) (*pb.RemoveContainerFromWorkerResponse, error) {
 	err := s.workerRepo.RemoveContainerFromWorker(req.WorkerId, req.ContainerId)
 	if err != nil {
+		log.Error().Str("pool_name", req.PoolName).Str("hostname", req.PodHostname).Str("worker_id", req.WorkerId).Str("container_id", req.ContainerId).Msg("failed to remove container from worker")
 		return &pb.RemoveContainerFromWorkerResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	log.Info().Str("pool_name", req.PoolName).Str("hostname", req.PodHostname).Str("worker_id", req.WorkerId).Str("container_id", req.ContainerId).Msg("container removed from worker")
 	return &pb.RemoveContainerFromWorkerResponse{Ok: true}, nil
 }
 

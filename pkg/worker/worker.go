@@ -35,6 +35,7 @@ const (
 type Worker struct {
 	workerId                string
 	workerToken             string
+	poolName                string
 	cpuLimit                int64
 	memoryLimit             int64
 	gpuType                 string
@@ -214,6 +215,7 @@ func NewWorker() (*Worker, error) {
 		ctx:                     ctx,
 		workerId:                workerId,
 		workerToken:             workerToken,
+		poolName:                workerPoolName,
 		cancel:                  cancel,
 		config:                  config,
 		imageMountPath:          getImageMountPath(workerId),
