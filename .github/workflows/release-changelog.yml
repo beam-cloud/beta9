@@ -4,7 +4,7 @@ on:
   release:
     types: [published]
 
-    
+
 jobs:
   changelog:
     runs-on: ubuntu-latest
@@ -62,7 +62,7 @@ jobs:
                 }
               }
             }
-            
+
             // Stop the workflow if no features or fixes are found
             if (feats.length === 0 && fixes.length === 0) {
               core.setOutput('should_continue', 'false');
@@ -122,33 +122,122 @@ jobs:
 
             core.setOutput('feats', featsString);
             core.setOutput('fixes', fixesString);
-
         env:
           CREATED_AT: ${{ steps.release.outputs.created_at }}
           NEW_FEATS: ${{ steps.release.outputs.new_feats }}
           NEW_FIXES: ${{ steps.release.outputs.new_fixes }}
 
+      - name: Enhance changelog with LLM
+        if: steps.release.outputs.should_continue == 'true'
+        id: enhance_changelog
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const systemPrompt = `You are a technical documentation specialist who transforms raw changelog entries into user-friendly, marketing-oriented release notes in the Mintlify format. 
+
+            Follow these rules:
+            1. Group related features into meaningful sections with descriptive headings
+            2. Enhance technical descriptions to highlight user benefits
+            3. Use consistent, friendly language, avoiding jargon
+            4. Ensure the output is concise and easy to read
+            5. Format output using the <Update> component as shown in the Mintlify examples
+            6. Include appropriate spacing and formatting for readability
+            7. Categorize features under "Improvements" and fixes under "Bug fixes" sections
+            8. Add a compelling title that summarizes the major changes
+            9. Make the changelog accessible to non-technical users while preserving technical accuracy
+            10. Output in markdown format ready for inclusion in a Mintlify docs site
+            11. Format each improvement and bug fix with the feature name in bold, followed by its description
+               Example: "**Feature Name**: Description of the feature"`;
+            12. Do not change the <Info> component 
+
+            const userPrompt = `Transform these raw changelog entries into a well-formatted Mintlify changelog for ${process.env.PRETTY_DATE}:
+              
+            ## Features
+            ${process.env.FEATURES_SECTION}
+
+            ## Fixes
+            ${process.env.FIXES_SECTION}
+
+            Format the output using the Mintlify <Update> component structure like this:
+
+            ---
+            title: "Small Title of Major Change"
+            description: "Brief description of the major change or theme of this update"
+            ---
+
+            <Info>
+              We ship improvements daily. Our changelog is automatically generated each time we make a release, and an LLM is used to convert our commit messages into user-friendly feature descriptions.
+            </Info>
+
+            <Update label="Month Year">
+              ## Descriptive Title of Major Change
+
+              Brief description of the major change or theme of this update.
+
+              ## Improvements
+
+              **Enhanced feature 1**: Description of the feature
+              **Enhanced feature 2**: Description of the feature
+              
+              ## Bug fixes
+
+              **Enhanced fix 1**: Description of the fix
+              **Enhanced fix 2**: Description of the fix
+            </Update>`;
+
+            try {
+              const response = await fetch('https://api.together.xyz/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${process.env.TOGETHER_API_KEY}`
+                },
+                body: JSON.stringify({
+                  model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+                  messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                  ],
+                  temperature: 0.7,
+                  max_tokens: 2000
+                })
+              });
+              
+              const data = await response.json();
+              
+              if (data.choices && data.choices[0].message.content) {
+                const enhancedContent = data.choices[0].message.content.trim();
+                core.setOutput('enhanced_content', enhancedContent);
+              } else {
+                throw new Error("Invalid response from OpenAI API");
+              }
+            } catch (error) {
+              console.error('Error calling OpenAI API:', error);
+              throw error;
+            }
+        env:
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          FEATURES_SECTION: ${{ steps.process_changelog.outputs.feats }}
+          FIXES_SECTION: ${{ steps.process_changelog.outputs.fixes }}
+          PRETTY_DATE: ${{ steps.release.outputs.pretty_date }}
+
       - name: Create new release file in beam-docs
         if: steps.release.outputs.should_continue == 'true'
-        run: |
-          cd beam-docs/v2/releases
-          FILENAME="./${{ steps.release.outputs.created_at }}.mdx"
-          if [ -f "$FILENAME" ]; then
-            rm -f $FILENAME
-          fi
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const filename = `./beam-docs/v2/releases/${process.env.CREATED_AT}.mdx`;
 
-          echo "---" >> $FILENAME
-          echo "title: \"${{ steps.release.outputs.pretty_date }}\"" >> $FILENAME
-          echo "---" >> $FILENAME
-          echo "" >> $FILENAME
-          echo "## Features" >> $FILENAME
-          echo "" >> $FILENAME
-          echo "${{ steps.process_changelog.outputs.feats }}" >> $FILENAME
-          echo "" >> $FILENAME
-          echo "## Fixes" >> $FILENAME
-          echo "" >> $FILENAME
-          echo "${{ steps.process_changelog.outputs.fixes }}" >> $FILENAME
-          echo "" >> $FILENAME
+            if (fs.existsSync(filename)) {
+              fs.unlinkSync(filename);
+            }
+
+            fs.writeFileSync(filename, process.env.ENHANCED_CONTENT);
+            console.log(`Created changelog file: ${filename}`);
+        env:
+          CREATED_AT: ${{ steps.release.outputs.created_at }}
+          ENHANCED_CONTENT: ${{ steps.enhance_changelog.outputs.enhanced_content }}
 
       - name: Update mint.json
         if: steps.release.outputs.should_continue == 'true'
