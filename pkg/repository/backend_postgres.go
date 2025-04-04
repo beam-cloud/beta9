@@ -746,10 +746,17 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
 	}
 
-	if len(filters.StubIds) > 0 {
+	if len(filters.StubIds) > 0 || filters.AppId != "" {
 		qb = qb.Join("stub s ON t.stub_id = s.id")
-		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
+	}
 
+	if len(filters.StubIds) > 0 {
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
+	}
+
+	if filters.AppId != "" {
+		qb = qb.Join("app a ON s.app_id = a.id")
+		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 	}
 
 	if filters.CreatedAtStart != "" {
@@ -768,6 +775,7 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 	var taskCounts []types.TaskCountByTime
 	err = c.client.SelectContext(ctx, &taskCounts, sql, args...)
 	if err != nil {
+		log.Printf("%v", err)
 		return nil, err
 	}
 
@@ -1084,6 +1092,11 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 		Join(
 			"stub s ON d.stub_id = s.id",
 		)
+
+	if filters.AppId != "" {
+		query = query.Join("app a on d.app_id=a.id")
+		query = query.Where(squirrel.Eq{"a.external_id": filters.AppId})
+	}
 
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
@@ -1886,6 +1899,17 @@ func (r *PostgresBackendRepository) ListApps(ctx context.Context, workspaceId ui
 	}
 
 	return apps, nil
+}
+
+func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId uint, appId string) (*types.App, error) {
+	var app types.App
+	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM app WHERE external_id=$1 and workspace_id=$2;`
+	err := r.client.GetContext(ctx, &app, query, appId, workspaceId)
+	if err == nil {
+		return &app, nil
+	}
+
+	return &app, nil
 }
 
 func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
