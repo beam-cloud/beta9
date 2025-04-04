@@ -189,7 +189,7 @@ func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
 			ctx.Request().Context(),
 			cc.AuthInfo.Workspace,
 			decodedVolumePath,
-			"GET",
+			http.MethodGet,
 		)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate presigned URL")
@@ -306,7 +306,7 @@ func (g *volumeGroup) GetDownloadURL(ctx echo.Context) error {
 		return g.GenerateDownloadToken(ctx)
 	}
 
-	url, err := g.generatePresignedURL(ctx.Request().Context(), workspace, decodedVolumePath, "GET")
+	url, err := g.generatePresignedURL(ctx.Request().Context(), workspace, decodedVolumePath, http.MethodGet)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate presigned URL")
 	}
@@ -337,7 +337,7 @@ func (g *volumeGroup) GetUploadURL(ctx echo.Context) error {
 		return g.GenerateDownloadToken(ctx)
 	}
 
-	url, err := g.generatePresignedURL(ctx.Request().Context(), workspace, decodedVolumePath, "PUT")
+	url, err := g.generatePresignedURL(ctx.Request().Context(), workspace, decodedVolumePath, http.MethodPut)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate presigned URL")
 	}
