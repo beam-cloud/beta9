@@ -435,3 +435,38 @@ func TestSerializeMethod(t *testing.T) {
 		t.Error("Time is not correct")
 	}
 }
+
+func TestSerializeMaps(t *testing.T) {
+	type Test struct {
+		ID  int                    `serializer:"id"`
+		Map map[string]interface{} `serializer:"map"`
+	}
+
+	test := Test{
+		ID:  1,
+		Map: map[string]interface{}{"key": "value"},
+	}
+
+	result := Serialize(test)
+
+	bytes, err := json.Marshal(result)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
+
+	var parsedResult map[string]interface{}
+	err = json.Unmarshal(bytes, &parsedResult)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	mapVal, ok := parsedResult["map"].(map[string]interface{})
+	if !ok {
+		t.Error("Map is not correct")
+	}
+
+	if mapVal["key"] != "value" {
+		t.Error("Map is not correct")
+	}
+}
