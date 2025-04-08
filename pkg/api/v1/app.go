@@ -1,13 +1,13 @@
 package apiv1
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/serializer"
 	"github.com/labstack/echo/v4"
 )
 
@@ -30,9 +30,9 @@ func NewAppGroup(g *echo.Group, backendRepo repository.BackendRepository, config
 }
 
 type AppWithLatestStubOrDeployment struct {
-	types.SerializedApp
-	Stub       *types.SerializedStubWithRelated       `json:"stub,omitempty"`
-	Deployment *types.SerializedDeploymentWithRelated `json:"deployment,omitempty"`
+	types.App
+	Stub       *types.StubWithRelated       `json:"stub,omitempty" serializer:"stub"`
+	Deployment *types.DeploymentWithRelated `json:"deployment,omitempty" serializer:"deployment"`
 }
 
 func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
@@ -64,7 +64,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 	}
 
 	for i := range apps.Data {
-		appsWithLatest.Data[i].SerializedApp.Serialize(apps.Data[i])
+		appsWithLatest.Data[i].App = apps.Data[i]
 
 		deployments, err := a.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), types.DeploymentFilter{AppId: apps.Data[i].ExternalId})
 		if err != nil {
@@ -72,8 +72,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 
 		if deployments != nil && len(deployments) > 0 {
-			appsWithLatest.Data[i].Deployment = &types.SerializedDeploymentWithRelated{}
-			appsWithLatest.Data[i].Deployment.Serialize(deployments[0])
+			appsWithLatest.Data[i].Deployment = &deployments[0]
 			continue
 		}
 
@@ -87,14 +86,13 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 			return HTTPBadRequest("No stubs or deployments found for app")
 		}
 
-		appsWithLatest.Data[i].Stub = &types.SerializedStubWithRelated{}
-		appsWithLatest.Data[i].Stub.Serialize(stubs[0])
+		appsWithLatest.Data[i].Stub = &stubs[0]
 		appsWithLatest.Data[i].Stub.SanitizeConfig()
 	}
 
 	return ctx.JSON(
 		http.StatusOK,
-		appsWithLatest,
+		serializer.Serialize(appsWithLatest),
 	)
 }
 
@@ -121,7 +119,5 @@ func (a *AppGroup) RetrieveApp(ctx echo.Context) error {
 		return HTTPBadRequest("Failed to retrieve app")
 	}
 
-	log.Println(app)
-
-	return ctx.JSON(http.StatusOK, *(&types.SerializedApp{}).Serialize(*app))
+	return ctx.JSON(http.StatusOK, serializer.Serialize(app))
 }

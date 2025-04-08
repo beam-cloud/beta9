@@ -197,7 +197,12 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		task.Status = types.TaskStatusError
 	}
 
-	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	task.EndedAt = types.NullTime{
+		NullTime: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+	}
 	_, err = t.fs.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
 	if err != nil {
 		return err

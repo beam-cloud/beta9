@@ -31,7 +31,6 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 	}
 
 	g.GET("/:workspaceId", group.ListVolumes)
-
 	g.POST("/:workspaceId/create/:volumeName", auth.WithWorkspaceAuth(group.CreateVolume))
 	g.PUT("/:workspaceId/upload/:volumePath*", auth.WithWorkspaceAuth(group.UploadFile))
 	g.GET("/:workspaceId/generate-download-token/:volumePath*", auth.WithWorkspaceAuth(group.GenerateDownloadToken))

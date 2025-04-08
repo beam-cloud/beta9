@@ -14,6 +14,7 @@ import (
 	repoCommon "github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/serializer"
 )
 
 type DeploymentGroup struct {
@@ -71,19 +72,19 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 		if deployments, err := g.backendRepo.ListDeploymentsPaginated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list deployments")
 		} else {
-			paginatedSerializedDeployments := repoCommon.CursorPaginationInfo[types.SerializedDeploymentWithRelated]{
-				Data: serializeDeploymentsWithRelated(deployments.Data),
+			paginatedSerializedDeployments := repoCommon.CursorPaginationInfo[types.DeploymentWithRelated]{
+				Data: deployments.Data,
 				Next: deployments.Next,
 			}
 
-			return ctx.JSON(http.StatusOK, paginatedSerializedDeployments)
+			return ctx.JSON(http.StatusOK, serializer.Serialize(paginatedSerializedDeployments))
 		}
 	} else {
 		if deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list deployments")
 		} else {
 
-			return ctx.JSON(http.StatusOK, serializeDeploymentsWithRelated(deployments))
+			return ctx.JSON(http.StatusOK, serializer.Serialize(deployments))
 		}
 
 	}
@@ -103,7 +104,7 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 		return HTTPNotFound()
 	} else {
 		deployment.Stub.SanitizeConfig()
-		return ctx.JSON(http.StatusOK, deployment)
+		return ctx.JSON(http.StatusOK, serializer.Serialize(deployment))
 	}
 }
 
@@ -219,12 +220,12 @@ func (g *DeploymentGroup) ListLatestDeployments(ctx echo.Context) error {
 	if deployments, err := g.backendRepo.ListLatestDeploymentsWithRelatedPaginated(ctx.Request().Context(), filters); err != nil {
 		return HTTPInternalServerError("Failed to list deployments")
 	} else {
-		paginatedSerializedDeployments := repoCommon.CursorPaginationInfo[types.SerializedDeploymentWithRelated]{
-			Data: serializeDeploymentsWithRelated(deployments.Data),
+		paginatedSerializedDeployments := repoCommon.CursorPaginationInfo[types.DeploymentWithRelated]{
+			Data: deployments.Data,
 			Next: deployments.Next,
 		}
 
-		return ctx.JSON(http.StatusOK, paginatedSerializedDeployments)
+		return ctx.JSON(http.StatusOK, serializer.Serialize(paginatedSerializedDeployments))
 	}
 }
 
@@ -284,14 +285,4 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 
 func getPackagePath(workspaceName, objectId string) string {
 	return path.Join("/data/objects/", workspaceName, objectId)
-}
-
-func serializeDeploymentsWithRelated(deployments []types.DeploymentWithRelated) []types.SerializedDeploymentWithRelated {
-	_deployments := make([]types.SerializedDeploymentWithRelated, len(deployments))
-
-	for i := range deployments {
-		_deployments[i].Serialize(deployments[i])
-	}
-
-	return _deployments
 }

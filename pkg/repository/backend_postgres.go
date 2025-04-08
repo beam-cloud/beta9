@@ -155,7 +155,7 @@ func (r *PostgresBackendRepository) CreateWorkspace(ctx context.Context) (types.
 func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error) {
 	var workspace types.Workspace
 
-	query := `SELECT id, name, created_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled, storage_id FROM workspace WHERE external_id = $1;`
+	query := `SELECT id, name, created_at, updated_at, concurrency_limit_id, volume_cache_enabled, multi_gpu_enabled, storage_id FROM workspace WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &workspace, query, externalId)
 	if err != nil {
 		return types.Workspace{}, err
@@ -562,7 +562,7 @@ func (r *PostgresBackendRepository) GetTaskByWorkspace(ctx context.Context, exte
 	var taskWithRelated types.TaskWithRelated
 	query := `
 	SELECT
-		w.external_id AS "workspace.external_id", w.name AS "workspace.name", t.*,
+		w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.updated_at AS "workspace.updated_at", w.created_at AS "workspace.created_at", t.*,
 		s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", s.type AS "stub.type", s.created_at AS "stub.created_at", s.updated_at AS "stub.updated_at"
 	FROM task t
 	JOIN workspace w ON t.workspace_id = w.id
@@ -598,7 +598,9 @@ func (r *PostgresBackendRepository) ListTasks(ctx context.Context) ([]types.Task
 
 func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters types.TaskFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\", s.type AS \"stub.type\", d.external_id AS \"deployment.external_id\", d.name AS \"deployment.name\", d.version AS \"deployment.version\"",
+		"t.*, w.external_id AS \"workspace.external_id\", w.name AS \"workspace.name\", " +
+			"w.created_at AS \"workspace.created_at\", w.updated_at AS \"workspace.updated_at\", " +
+			"s.external_id AS \"stub.external_id\", s.name AS \"stub.name\", s.config AS \"stub.config\", s.type AS \"stub.type\", d.external_id AS \"deployment.external_id\", d.name AS \"deployment.name\", d.version AS \"deployment.version\"",
 	).From("task t").
 		Join("workspace w ON t.workspace_id = w.id").
 		Join("stub s ON t.stub_id = s.id").
@@ -672,6 +674,11 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 
 	if filters.Limit > 0 {
 		qb = qb.Limit(uint64(filters.Limit))
+	}
+
+	if filters.AppId != "" {
+		qb = qb.Join("app a ON s.app_id = a.id")
+		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 	}
 
 	return qb
@@ -1180,9 +1187,9 @@ func (c *PostgresBackendRepository) GetDeploymentByStubExternalId(ctx context.Co
 
 func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.DeploymentFilter) squirrel.SelectBuilder {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		"d.id, d.external_id, d.name, d.active, d.subdomain, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at",
-		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"",
-		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+		"d.id, d.external_id, d.name, d.active, d.subdomain, d.workspace_id, d.stub_id, d.stub_type, d.version, d.created_at, d.updated_at, d.deleted_at",
+		"w.external_id AS \"workspace.external_id\"", "w.name AS \"workspace.name\"", "w.created_at AS \"workspace.created_at\"", "w.updated_at AS \"workspace.updated_at\"",
+		"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"", "s.type AS \"stub.type\"", "s.created_at AS \"stub.created_at\"", "s.updated_at AS \"stub.updated_at\"",
 	).From("deployment d").
 		Join("workspace w ON d.workspace_id = w.id").
 		Join("stub s ON d.stub_id = s.id").
@@ -1903,7 +1910,7 @@ func (r *PostgresBackendRepository) ListApps(ctx context.Context, workspaceId ui
 
 func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId uint, appId string) (*types.App, error) {
 	var app types.App
-	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM app WHERE external_id=$1 and workspace_id=$2;`
+	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at, description, deleted_at FROM app WHERE external_id=$1 and workspace_id=$2;`
 	err := r.client.GetContext(ctx, &app, query, appId, workspaceId)
 	if err == nil {
 		return &app, nil

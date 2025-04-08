@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/serializer"
 	"github.com/labstack/echo/v4"
 )
 
@@ -99,7 +101,7 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 				g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 			}
 		}
-		return ctx.JSON(http.StatusOK, tasks)
+		return ctx.JSON(http.StatusOK, serializer.Serialize(tasks))
 	}
 }
 
@@ -123,7 +125,7 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 
-		return ctx.JSON(http.StatusOK, task)
+		return ctx.JSON(http.StatusOK, serializer.Serialize(task))
 	}
 }
 
@@ -203,7 +205,12 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 	}
 
 	task.Status = types.TaskStatusCancelled
-	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	task.EndedAt = types.NullTime{
+		NullTime: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+	}
 	if _, err := g.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 		return errors.New("failed to update task")
 	}
@@ -222,6 +229,8 @@ func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, erro
 	if err := ctx.Bind(&filters); err != nil {
 		return nil, HTTPBadRequest("Failed to decode query parameters")
 	}
+
+	log.Println(filters.AppId)
 
 	filters.WorkspaceID = workspace.Id
 

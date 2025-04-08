@@ -8,6 +8,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/serializer"
 )
 
 type TokenGroup struct {
@@ -44,7 +45,7 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 		return HTTPInternalServerError("Unable to create token")
 	}
 
-	return ctx.JSON(http.StatusOK, token)
+	return ctx.JSON(http.StatusOK, serializer.Serialize(token))
 }
 
 type ClusterAdminTokensRequestSerializer struct {
@@ -92,7 +93,7 @@ func (g *TokenGroup) ListWorkspaceTokens(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to list tokens")
 	}
 
-	return ctx.JSON(http.StatusOK, tokens)
+	return ctx.JSON(http.StatusOK, serializer.Serialize(tokens))
 }
 
 func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
@@ -108,7 +109,7 @@ func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to toggle token")
 	}
 
-	return ctx.JSON(http.StatusOK, token)
+	return ctx.JSON(http.StatusOK, serializer.Serialize(token))
 }
 
 func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {
