@@ -180,6 +180,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 		// Create constant backoff
 		b := backoff.NewConstantBackOff(300 * time.Millisecond)
+		imageLocked := false
 
 		operation := func() error {
 			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
@@ -188,41 +189,27 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				return nil
 			}
 
-			if err := c.cacheClient.AcquireStoreContentFromSourceLock(ctx, sourcePath); err != nil {
-				return err
-			}
-
 			pullStartTime := time.Now()
-			outputLogger.Info(fmt.Sprintf("Image <%s> not found in worker region, attempting to cache nearby\n", imageId))
 
-			storeContext, cancel := context.WithCancel(ctx)
-			defer cancel()
-
-			go func() {
-				ticker := time.NewTicker(time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-storeContext.Done():
-						return
-					case <-ticker.C:
-						c.cacheClient.RefreshStoreContentFromSourceLock(storeContext, sourcePath)
-					}
-				}
-			}()
-
-			_, err := c.cacheClient.StoreContentFromSource(sourcePath, sourceOffset)
-			c.cacheClient.ReleaseStoreContentFromSourceLock(ctx, sourcePath)
-
-			if err == nil {
-				localCachePath = baseBlobFsContentPath
-				outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
-				metrics.RecordImagePullTime(time.Since(pullStartTime))
-				return nil
+			// If the image was previously locked, don't try to cache it again, just wait until the caching is complete
+			if imageLocked {
+				return errors.New("image locked")
 			}
 
-			outputLogger.Info(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
-			return backoff.Permanent(err)
+			_, err := c.cacheClient.StoreContentFromSourceWithLock(sourcePath, sourceOffset)
+			if err != nil {
+				if err == blobcache.ErrUnableToAcquireLock {
+					imageLocked = true
+					return err
+				}
+				outputLogger.Error(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
+				return backoff.Permanent(err)
+			}
+
+			localCachePath = baseBlobFsContentPath
+			outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
+			metrics.RecordImagePullTime(time.Since(pullStartTime))
+			return nil
 		}
 
 		// Run with context
