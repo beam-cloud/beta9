@@ -22,6 +22,9 @@ func checkSerializeMethod(val reflect.Value) bool {
 	method := val.MethodByName("Serialize")
 
 	// Also check method signature (0 inputs, 1 output)
+	// Note: This checks the signature but doesn't validate if the *returned type*
+	// is inherently serializable by standard means (e.g., JSON). It relies on the
+	// custom Serialize method returning a sensible value (primitive, map, slice, etc.).
 	if method.IsValid() && method.Type().NumIn() == 0 && method.Type().NumOut() == 1 {
 		return true
 	}
@@ -77,27 +80,43 @@ func loopFields(val reflect.Value, typ reflect.Type) map[string]interface{} {
 			continue
 		}
 
-		result[tagName] = serialize(field.Interface())
+		result[tagName] = Serialize(field.Interface())
 	}
 
+	// Process 'source:' tags after initial field processing
 	for key, value := range fromMap {
 		keys := strings.Split(value, ".")
-		val := serialize(result)
+		var currentVal interface{} = result // Start traversal from the top-level result map
+		validPath := true
+
 		for _, k := range keys {
-			_val, ok := val.(map[string]interface{})
+			mapVal, ok := currentVal.(map[string]interface{})
 			if !ok {
+				// Current value is not a map, cannot traverse deeper
+				validPath = false
 				break
 			}
 
-			val = _val[k]
+			nestedVal, exists := mapVal[k]
+			if !exists {
+				// Key does not exist at this level
+				validPath = false
+				break
+			}
+			currentVal = nestedVal // Move to the nested value for the next iteration
 		}
 
-		result[key] = serialize(val)
+		if validPath {
+			// Only serialize and assign if the full path was valid
+			result[key] = Serialize(currentVal)
+		} else {
+			delete(result, key)
+		}
 	}
 	return result
 }
 
-func serialize(v interface{}) interface{} {
+func Serialize(v interface{}) interface{} {
 	val := reflect.ValueOf(v)
 	typ := reflect.TypeOf(v)
 
@@ -119,7 +138,7 @@ func serialize(v interface{}) interface{} {
 	} else if val.Kind() == reflect.Slice {
 		result := make([]interface{}, val.Len())
 		for i := 0; i < val.Len(); i++ {
-			result[i] = serialize(val.Index(i).Interface())
+			result[i] = Serialize(val.Index(i).Interface())
 		}
 		return result
 	} else {
@@ -129,8 +148,4 @@ func serialize(v interface{}) interface{} {
 
 		return val.Interface()
 	}
-}
-
-func Serialize(v interface{}) interface{} {
-	return serialize(v)
 }

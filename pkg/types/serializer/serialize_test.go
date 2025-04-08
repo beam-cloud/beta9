@@ -2,7 +2,6 @@ package serializer
 
 import (
 	"encoding/json"
-	"log"
 	"testing"
 	"time"
 )
@@ -155,7 +154,7 @@ func TestSerializeArray(t *testing.T) {
 	}
 
 	if len(parsedResult) != 3 {
-		t.Error("Expected 2 items in the array")
+		t.Error("Expected 3 items in the array")
 	}
 
 	if parsedResult[0]["id"] != "123" || parsedResult[0]["name"] != "test" || parsedResult[0]["nested_id"] != "abcdefg" {
@@ -214,7 +213,7 @@ func TestOmitempty(t *testing.T) {
 	}
 
 	if _, ok := parsedResult["name"]; ok {
-		t.Error("Expected nested to be nil")
+		t.Error("Expected nested to be omitted")
 	}
 
 	bytes, err = json.Marshal(parsedResult["nested"])
@@ -257,7 +256,7 @@ func TestOmitempty(t *testing.T) {
 	}
 
 	if _, ok := parsedResult2["nested"]; ok {
-		t.Error("Expected nested to be nil")
+		t.Error("Expected nested to be omitted")
 	}
 }
 
@@ -299,7 +298,7 @@ func TestPointers(t *testing.T) {
 	}
 
 	if val, ok := parsedResult["nested"]; ok && val != nil {
-		t.Error("Expected nested to be nil")
+		t.Error("Expected nested to be omitted")
 	}
 
 	test2 := Test{
@@ -433,7 +432,6 @@ func TestSerializeMethod(t *testing.T) {
 	}
 
 	if parsedResult["time"] != test.Time.Serialize() {
-		log.Println(parsedResult["time"])
 		t.Error("Time is not correct")
 	}
 }
