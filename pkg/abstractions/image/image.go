@@ -231,7 +231,7 @@ func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
 				if strings.Contains(event.Key, common.RedisKeys.SchedulerContainerState("")) {
 					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), common.RedisKeys.SchedulerContainerState(""))
 
-					if is.containerRepo.HasBuildContainerTTL(containerId) {
+					if !is.containerRepo.HasBuildContainerTTL(containerId) {
 						is.builder.scheduler.Stop(&types.StopContainerArgs{
 							ContainerId: containerId,
 							Force:       true,

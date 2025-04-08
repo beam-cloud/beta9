@@ -560,5 +560,5 @@ func (cr *ContainerRedisRepository) SetBuildContainerTTL(containerId string, ttl
 }
 
 func (cr *ContainerRedisRepository) HasBuildContainerTTL(containerId string) bool {
-	return cr.rdb.Exists(context.TODO(), common.RedisKeys.ImageBuildContainerTTL(containerId)).Val() == 0
+	return cr.rdb.Exists(context.TODO(), common.RedisKeys.ImageBuildContainerTTL(containerId)).Val() != 0
 }
