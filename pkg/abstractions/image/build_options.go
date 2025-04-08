@@ -6,7 +6,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/pkg/errors"
 )
 
 type BuildOpts struct {
@@ -134,16 +133,14 @@ func (o *BuildOpts) initializeBuildConfiguration(cfg types.AppConfig, outputChan
 		}
 	}
 
-	if err := o.setDefaultDockerCreds(cfg); err != nil {
-		return err
-	}
+	o.setDefaultDockerCreds(cfg)
 
 	return nil
 }
 
 // setDefaultDockerCreds checks if Docker Hub credentials should be used from config
 // when base image is from Docker Hub and no credentials are explicitly set
-func (o *BuildOpts) setDefaultDockerCreds(cfg types.AppConfig) error {
+func (o *BuildOpts) setDefaultDockerCreds(cfg types.AppConfig) {
 	isDockerHub := o.BaseImageRegistry == dockerHubRegistry
 	credsNotSet := o.BaseImageCreds == ""
 
@@ -152,9 +149,6 @@ func (o *BuildOpts) setDefaultDockerCreds(cfg types.AppConfig) error {
 		password := cfg.ImageService.Registries.Docker.Password
 		if username != "" && password != "" {
 			o.BaseImageCreds = fmt.Sprintf("%s:%s", username, password)
-			return nil
 		}
 	}
-
-	return errors.New("docker creds not set in config")
 }

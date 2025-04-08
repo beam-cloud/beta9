@@ -123,10 +123,12 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		opts.addPythonRequirements()
 	}
 
-	imageId, err := is.builder.GetImageId(opts)
+	imageId, err := getImageId(opts)
 	if err != nil {
 		valid = false
 	}
+
+	log.Info().Str("image_id", imageId).Msg("image id")
 
 	return &pb.VerifyImageBuildResponse{
 		ImageId: imageId,

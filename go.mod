@@ -97,6 +97,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
 )
 
 require (
