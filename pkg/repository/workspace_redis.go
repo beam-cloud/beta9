@@ -85,6 +85,15 @@ func (wr *WorkspaceRedisRepository) AuthorizeToken(token string) (*types.Token, 
 	return info.Token, info.Workspace, nil
 }
 
+func (wr *WorkspaceRedisRepository) RevokeToken(tokenKey string) error {
+	err := wr.rdb.Del(context.Background(), common.RedisKeys.WorkspaceAuthorizedToken(tokenKey)).Err()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (wr *WorkspaceRedisRepository) SetAuthorizationToken(token *types.Token, workspace *types.Workspace) error {
 	bytes, err := json.Marshal(AuthInfo{
 		Workspace: workspace,

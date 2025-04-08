@@ -26,7 +26,7 @@ import (
 
 const (
 	baseConfigPath            string        = "/tmp"
-	defaultContainerDirectory string        = "/mnt/code"
+	defaultContainerDirectory string        = types.WorkerUserCodeVolume
 	specBaseName              string        = "config.json"
 	initialSpecBaseName       string        = "initial_config.json"
 	runcEventsInterval        time.Duration = 5 * time.Second
@@ -498,6 +498,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
 		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)),
+		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
 		"PYTHONUNBUFFERED=1",
 	}
 
@@ -519,6 +520,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
 		WorkerId:    s.workerId,
 		ContainerId: request.ContainerId,
+		PoolName:    s.poolName,
+		PodHostname: s.podHostName,
 	})
 	defer s.workerRepoClient.RemoveContainerFromWorker(ctx, &pb.RemoveContainerFromWorkerRequest{
 		WorkerId:    s.workerId,

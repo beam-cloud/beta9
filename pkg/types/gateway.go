@@ -6,6 +6,9 @@ const (
 	DefaultVolumesPath                 string = "/data/volumes"
 	DefaultObjectPath                  string = "/data/objects"
 	DefaultOutputsPath                 string = "/data/outputs"
+	DefaultObjectPrefix                string = "objects"
+	DefaultVolumesPrefix               string = "volumes"
+	DefaultOutputsPrefix               string = "outputs"
 	DefaultFilesystemName              string = "beta9-fs"
 	DefaultFilesystemPath              string = "/data"
 	FailedDeploymentContainerThreshold int    = 3

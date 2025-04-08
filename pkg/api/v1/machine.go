@@ -15,6 +15,18 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+type RegisterMachineRequest struct {
+	Token        string `json:"token"`
+	MachineID    string `json:"machine_id"`
+	HostName     string `json:"hostname"`
+	ProviderName string `json:"provider_name"`
+	PoolName     string `json:"pool_name"`
+	Cpu          string `json:"cpu"`
+	Memory       string `json:"memory"`
+	GpuCount     string `json:"gpu_count"`
+	PrivateIP    string `json:"private_ip"`
+}
+
 type MachineGroup struct {
 	providerRepo repository.ProviderRepository
 	tailscale    *network.Tailscale
@@ -33,18 +45,34 @@ func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, 
 
 	g.GET("/:workspaceId/gpus", auth.WithWorkspaceAuth(group.GPUCounts))
 	g.POST("/register", group.RegisterMachine)
+	g.GET("/list", group.ListPoolMachines)
 	return group
 }
 
-type RegisterMachineRequest struct {
-	Token        string `json:"token"`
-	MachineID    string `json:"machine_id"`
-	HostName     string `json:"hostname"`
-	ProviderName string `json:"provider_name"`
-	PoolName     string `json:"pool_name"`
-	Cpu          string `json:"cpu"`
-	Memory       string `json:"memory"`
-	GpuCount     string `json:"gpu_count"`
+func (g *MachineGroup) ListPoolMachines(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if (cc.AuthInfo.Token.TokenType != types.TokenTypeMachine) && (cc.AuthInfo.Token.TokenType != types.TokenTypeWorker) {
+		return HTTPForbidden("Invalid token")
+	}
+
+	poolName := ctx.QueryParam("pool_name")
+	providerName := ctx.QueryParam("provider_name")
+
+	machines, err := g.providerRepo.ListAllMachines(providerName, poolName, false)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get neighbors")
+	}
+
+	availableMachines := make([]*types.ProviderMachine, 0)
+	for _, machine := range machines {
+		if machine.State.Status != types.MachineStatusRegistered {
+			continue
+		}
+
+		availableMachines = append(availableMachines, machine)
+	}
+
+	return ctx.JSON(http.StatusOK, availableMachines)
 }
 
 func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
@@ -97,6 +125,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		Cpu:       cpu,
 		Memory:    memory,
 		GpuCount:  uint32(gpuCount),
+		PrivateIP: request.PrivateIP,
 	}, &poolConfig)
 	if err != nil {
 		return HTTPInternalServerError("Failed to register machine")
