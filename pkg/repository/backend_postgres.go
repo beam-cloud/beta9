@@ -328,6 +328,18 @@ func (r *PostgresBackendRepository) ListTokens(ctx context.Context, workspaceId 
 	return tokens, nil
 }
 
+func (r *PostgresBackendRepository) GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error) {
+	query := `SELECT id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id FROM token WHERE external_id = $1 AND workspace_id = $2;`
+
+	var token types.Token
+	err := r.client.GetContext(ctx, &token, query, extTokenId, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &token, nil
+}
+
 func (r *PostgresBackendRepository) ToggleToken(ctx context.Context, workspaceId uint, extTokenId string) (types.Token, error) {
 	query := `
 	UPDATE token

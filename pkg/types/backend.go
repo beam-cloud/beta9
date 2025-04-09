@@ -140,6 +140,7 @@ func (w *WorkspaceStorage) ToProto() *pb.WorkspaceStorage {
 
 const (
 	TokenTypeClusterAdmin string = "admin"
+	TokenTypePrimary      string = "primary"
 	TokenTypeWorkspace    string = "workspace"
 	TokenTypeWorker       string = "worker"
 	TokenTypeMachine      string = "machine"
