@@ -33,13 +33,24 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, conf
 }
 
 func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
 		return HTTPBadRequest("Invalid workspace ID")
 	}
 
-	token, err := g.backendRepo.CreateToken(ctx.Request().Context(), workspace.Id, types.TokenTypeWorkspace, true)
+	tokenType := ctx.QueryParam("token_type")
+	if tokenType == "" {
+		tokenType = types.TokenTypeWorkspace
+	}
+
+	if tokenType == types.TokenTypeWorkspacePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return HTTPBadRequest("Invalid token type")
+	}
+
+	token, err := g.backendRepo.CreateToken(ctx.Request().Context(), workspace.Id, tokenType, true)
 	if err != nil {
 		return HTTPInternalServerError("Unable to create token")
 	}
@@ -112,14 +123,25 @@ func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
 }
 
 func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
 		return HTTPBadRequest("Invalid workspace ID")
 	}
 
-	extTokenId := ctx.Param("tokenId")
-	err = g.backendRepo.DeleteToken(ctx.Request().Context(), workspace.Id, extTokenId)
+	tokenId := ctx.Param("tokenId")
+
+	token, err := g.backendRepo.GetTokenByExternalId(ctx.Request().Context(), workspace.Id, tokenId)
+	if err != nil {
+		return HTTPBadRequest("Invalid token ID")
+	}
+
+	if token.TokenType == types.TokenTypeWorkspacePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return HTTPBadRequest("Cannot delete primary token")
+	}
+
+	err = g.backendRepo.DeleteToken(ctx.Request().Context(), workspace.Id, tokenId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to delete token")
 	}
