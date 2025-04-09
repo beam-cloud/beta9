@@ -43,7 +43,7 @@ func (t NullTime) MarshalJSON() ([]byte, error) {
 	return _t.MarshalJSON()
 }
 
-func (t NullTime) UnmarshalJSON(data []byte) error {
+func (t *NullTime) UnmarshalJSON(data []byte) error {
 	if string(data) == "null" {
 		t.Valid = false
 		return nil
