@@ -20,6 +20,11 @@ func NewStubGroupForTest() *StubGroup {
 				MaxGpuCount: 2,
 			},
 		},
+		Monitoring: types.MonitoringConfig{
+			FluentBit: types.FluentBitConfig{
+				Events: types.FluentBitEventConfig{},
+			},
+		},
 	}
 
 	e := echo.New()
@@ -27,6 +32,7 @@ func NewStubGroupForTest() *StubGroup {
 	return NewStubGroup(
 		e.Group("/stubs"),
 		backendRepo,
+		repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events),
 		config,
 	)
 }

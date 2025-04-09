@@ -35,6 +35,7 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 	g.POST("/:workspaceId/create/:volumeName", auth.WithWorkspaceAuth(group.CreateVolume))
 	g.PUT("/:workspaceId/upload/:volumePath*", auth.WithWorkspaceAuth(group.UploadFile))
 	g.GET("/:workspaceId/generate-download-token/:volumePath*", auth.WithWorkspaceAuth(group.GenerateDownloadToken))
+	g.GET("/:workspaceId/generate-upload-url/:volumePath*", auth.WithWorkspaceAuth(group.GetUploadURL))
 	g.GET("/:workspaceId/generate-download-url/:volumePath*", auth.WithWorkspaceAuth(group.GetDownloadURL))
 	g.GET("/:workspaceId/download-with-token/:volumePath*", group.DownloadFileWithToken)
 	g.GET("/:workspaceId/download/:volumePath*", auth.WithWorkspaceAuth(group.DownloadFile))
@@ -137,11 +138,6 @@ func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	workspaceId := ctx.Param("workspaceId")
-
-	if cc.AuthInfo.Workspace.ExternalId != workspaceId {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
-	}
-
 	volumePath := ctx.Param("volumePath*")
 	decodedVolumePath, err := url.QueryUnescape(volumePath)
 	if err != nil {
@@ -184,10 +180,11 @@ func (g *volumeGroup) DownloadFile(ctx echo.Context) error {
 	}
 
 	if cc.AuthInfo.Workspace.StorageAvailable() {
-		presignedUrl, err := g.generatePresignGetURL(
+		presignedUrl, err := g.generatePresignedURL(
 			ctx.Request().Context(),
 			cc.AuthInfo.Workspace,
 			decodedVolumePath,
+			http.MethodGet,
 		)
 		if err != nil {
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate presigned URL")
@@ -304,7 +301,38 @@ func (g *volumeGroup) GetDownloadURL(ctx echo.Context) error {
 		return g.GenerateDownloadToken(ctx)
 	}
 
-	url, err := g.generatePresignGetURL(ctx.Request().Context(), workspace, decodedVolumePath)
+	url, err := g.generatePresignedURL(ctx.Request().Context(), workspace, decodedVolumePath, http.MethodGet)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate presigned URL")
+	}
+
+	return ctx.JSON(http.StatusOK, url)
+}
+
+func (g *volumeGroup) GetUploadURL(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	if !cc.AuthInfo.Workspace.StorageAvailable() {
+		return ctx.JSON(http.StatusMethodNotAllowed, nil)
+	}
+
+	workspaceId := ctx.Param("workspaceId")
+	workspace := cc.AuthInfo.Workspace
+	if workspace.ExternalId != workspaceId {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
+	}
+
+	volumePath := ctx.Param("volumePath*")
+	decodedVolumePath, err := url.QueryUnescape(volumePath)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
+
+	if !cc.AuthInfo.Workspace.StorageAvailable() {
+		return g.GenerateDownloadToken(ctx)
+	}
+
+	url, err := g.generatePresignedURL(ctx.Request().Context(), workspace, decodedVolumePath, http.MethodPut)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate presigned URL")
 	}
@@ -314,7 +342,7 @@ func (g *volumeGroup) GetDownloadURL(ctx echo.Context) error {
 
 const PresignedGetURLExpiration = 3600 // 1 hour
 
-func (g *volumeGroup) generatePresignGetURL(ctx context.Context, workspace *types.Workspace, volumePath string) (string, error) {
+func (g *volumeGroup) generatePresignedURL(ctx context.Context, workspace *types.Workspace, volumePath string, urlType string) (string, error) {
 	storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
 	if err != nil {
 		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to create storage client")
@@ -327,9 +355,20 @@ func (g *volumeGroup) generatePresignGetURL(ctx context.Context, workspace *type
 	}
 
 	key := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
-	url, err := storageClient.GeneratePresignedGetURL(ctx, key, PresignedGetURLExpiration)
-	if err != nil {
-		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
+	var url string
+	switch urlType {
+	case http.MethodPut:
+		url, err = storageClient.GeneratePresignedPutURL(ctx, key, PresignedGetURLExpiration)
+		if err != nil {
+			return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate upload token")
+		}
+	case http.MethodGet:
+		url, err = storageClient.GeneratePresignedGetURL(ctx, key, PresignedGetURLExpiration)
+		if err != nil {
+			return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to generate download token")
+		}
+	default:
+		return "", echo.NewHTTPError(http.StatusBadRequest, "Invalid URL type")
 	}
 
 	return url, nil
