@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -334,6 +335,9 @@ func (r *PostgresBackendRepository) GetTokenByExternalId(ctx context.Context, wo
 	var token types.Token
 	err := r.client.GetContext(ctx, &token, query, extTokenId, workspaceId)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errors.New("token not found")
+		}
 		return nil, err
 	}
 
