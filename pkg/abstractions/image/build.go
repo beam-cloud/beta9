@@ -1,10 +1,13 @@
 package image
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync/atomic"
+	"text/template"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -13,6 +16,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
+	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 )
 
@@ -22,6 +26,16 @@ type RuncClient interface {
 	Kill(containerId string) (*pb.RunCKillResponse, error)
 	Status(containerId string) (*pb.RunCStatusResponse, error)
 	StreamLogs(ctx context.Context, containerId string, outputChan chan common.OutputMsg) error
+}
+
+// PythonStandaloneTemplate is used to render the standalone python install script
+type PythonStandaloneTemplate struct {
+	PythonVersion string
+
+	// Architecture, OS, and Vendor are determined at runtime
+	Architecture string
+	OS           string
+	Vendor       string
 }
 
 type BuildStep struct {
@@ -111,7 +125,7 @@ func (b *Build) resolvePythonVersionRequirement() error {
 		}
 
 		b.opts.PythonVersion = b.config.ImageService.PythonVersion
-		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, b.opts.PythonVersion)
+		installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, b.opts.PythonVersion)
 		if err != nil {
 			b.log(true, err.Error()+"\n")
 			return err
@@ -130,7 +144,7 @@ func (b *Build) resolvePythonVersionRequirement() error {
 		}
 
 		b.log(false, fmt.Sprintf("%s not detected, installing it for you...\n", b.opts.PythonVersion))
-		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, b.opts.PythonVersion)
+		installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, b.opts.PythonVersion)
 		if err != nil {
 			b.log(true, err.Error()+"\n")
 			return err
@@ -293,11 +307,10 @@ func genContainerId() string {
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	// DEBIAN_FRONTEND=noninteractive PIP_ROOT_USER_ACTION=ignore
-	// command := "uv pip install --system"
-	// if strings.Contains(pythonVersion, "micromamba") {
-	command := fmt.Sprintf("PIP_ROOT_USER_ACTION=ignore %s -m pip install", pythonVersion)
-	// }
+	command := "uv pip install"
+	if strings.Contains(pythonVersion, "micromamba") {
+		command = fmt.Sprintf("%s -m pip install", pythonVersion)
+	}
 
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
@@ -464,4 +477,43 @@ func extractPackageName(pkg string) string {
 
 	// Handle regular packages
 	return strings.FieldsFunc(pkg, func(c rune) bool { return c == '=' || c == '>' || c == '<' || c == '[' || c == ';' })[0]
+}
+
+func getPythonInstallCommand(config types.PythonStandaloneConfig, pythonVersion string) (string, error) {
+	var arch string
+	switch runtime.GOARCH {
+	case "amd64":
+		arch = "x86_64"
+	case "arm64":
+		arch = "aarch64"
+	default:
+		return "", errors.New("unsupported architecture for python standalone install")
+	}
+
+	var vendor, os string
+	switch runtime.GOOS {
+	case "linux":
+		vendor, os = "unknown", "linux"
+	case "darwin":
+		vendor, os = "apple", "darwin"
+	default:
+		return "", errors.New("unsupported OS for python standalone install")
+	}
+
+	tmpl, err := template.New("standalonePython").Parse(config.InstallScriptTemplate)
+	if err != nil {
+		return "", err
+	}
+
+	var output bytes.Buffer
+	if err := tmpl.Execute(&output, PythonStandaloneTemplate{
+		PythonVersion: config.Versions[pythonVersion],
+		Architecture:  arch,
+		OS:            os,
+		Vendor:        vendor,
+	}); err != nil {
+		return "", err
+	}
+
+	return output.String(), nil
 }

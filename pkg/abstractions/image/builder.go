@@ -1,13 +1,10 @@
 package image
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"fmt"
 	"regexp"
-	"runtime"
-	"text/template"
 	"time"
 
 	"github.com/pkg/errors"
@@ -282,55 +279,6 @@ func ExtractImageNameAndTag(imageRef string) (BaseImage, error) {
 		Tag:      tag,
 		Digest:   digest,
 	}, nil
-}
-
-// PythonStandaloneTemplate is used to render the standalone python install script
-type PythonStandaloneTemplate struct {
-	PythonVersion string
-
-	// Architecture, OS, and Vendor are determined at runtime
-	Architecture string
-	OS           string
-	Vendor       string
-}
-
-func getPythonStandaloneInstallCommand(config types.PythonStandaloneConfig, pythonVersion string) (string, error) {
-	var arch string
-	switch runtime.GOARCH {
-	case "amd64":
-		arch = "x86_64"
-	case "arm64":
-		arch = "aarch64"
-	default:
-		return "", errors.New("unsupported architecture for python standalone install")
-	}
-
-	var vendor, os string
-	switch runtime.GOOS {
-	case "linux":
-		vendor, os = "unknown", "linux"
-	case "darwin":
-		vendor, os = "apple", "darwin"
-	default:
-		return "", errors.New("unsupported OS for python standalone install")
-	}
-
-	tmpl, err := template.New("standalonePython").Parse(config.InstallScriptTemplate)
-	if err != nil {
-		return "", err
-	}
-
-	var output bytes.Buffer
-	if err := tmpl.Execute(&output, PythonStandaloneTemplate{
-		PythonVersion: config.Versions[pythonVersion],
-		Architecture:  arch,
-		OS:            os,
-		Vendor:        vendor,
-	}); err != nil {
-		return "", err
-	}
-
-	return output.String(), nil
 }
 
 func (b *Builder) stopBuild(containerId string) error {

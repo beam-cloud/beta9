@@ -128,8 +128,6 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		valid = false
 	}
 
-	log.Info().Str("image_id", imageId).Msg("image id")
-
 	return &pb.VerifyImageBuildResponse{
 		ImageId: imageId,
 		Exists:  is.builder.Exists(ctx, imageId),
