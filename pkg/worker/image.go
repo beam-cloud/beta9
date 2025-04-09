@@ -162,7 +162,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
-	c.logger.Log(request.ContainerId, request.StubId, "Loading image: %s", imageId)
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
@@ -181,7 +180,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
 		if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
 			localCachePath = baseBlobFsContentPath
-		} else {
+		} else if c.cacheClient.HostsAvailable() {
 			pullStartTime := time.Now()
 			outputLogger.Info(fmt.Sprintf("Image <%s> not found in worker region, caching nearby\n", imageId))
 
