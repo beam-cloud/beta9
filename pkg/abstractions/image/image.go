@@ -123,7 +123,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		opts.addPythonRequirements()
 	}
 
-	imageId, err := getImageId(opts)
+	imageId, err := getImageID(opts)
 	if err != nil {
 		valid = false
 	}

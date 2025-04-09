@@ -19,7 +19,7 @@ type ImageIdHash struct {
 	CommandListHash string
 }
 
-func getImageId(opts *BuildOpts) (string, error) {
+func getImageID(opts *BuildOpts) (string, error) {
 	h := sha1.New()
 	h.Write([]byte(strings.Join(opts.Commands, "-")))
 	if len(opts.BuildSteps) > 0 {

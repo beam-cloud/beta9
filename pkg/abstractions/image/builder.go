@@ -92,18 +92,18 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 		return err
 	}
 
-	hostname, err := b.containerRepo.GetWorkerAddress(ctx, build.containerId)
+	hostname, err := b.containerRepo.GetWorkerAddress(ctx, build.containerID)
 	if err != nil {
 		build.log(true, "Failed to connect to build container.\n")
 		return err
 	}
 
-	if err := b.containerRepo.SetBuildContainerTTL(build.containerId, time.Duration(imageContainerTtlS)*time.Second); err != nil {
+	if err := b.containerRepo.SetBuildContainerTTL(build.containerID, time.Duration(imageContainerTtlS)*time.Second); err != nil {
 		build.log(true, "Failed to connect to build container.\n")
 		return err
 	}
 
-	go b.refreshBuildContainerTTL(ctx, build.containerId)
+	go b.refreshBuildContainerTTL(ctx, build.containerID)
 
 	return build.connectToHost(hostname, b.tailscale)
 }
@@ -121,7 +121,7 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 	for !buildContainerRunning {
 		select {
 		case <-ctx.Done():
-			log.Info().Str("container_id", build.containerId).Msg("build was aborted")
+			log.Info().Str("container_id", build.containerID).Msg("build was aborted")
 			build.log(true, "Build was aborted.\n")
 			return ctx.Err()
 
@@ -137,7 +137,7 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 				continue
 			}
 
-			exitCode, err := b.containerRepo.GetContainerExitCode(build.containerId)
+			exitCode, err := b.containerRepo.GetContainerExitCode(build.containerID)
 			if err == nil && exitCode != 0 {
 				exitCodeMsg := getExitCodeMsg(exitCode)
 				// Wait for any final logs to get sent before returning
@@ -146,8 +146,8 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 				return errors.New(fmt.Sprintf("container exited with error: %s\n", exitCodeMsg))
 			}
 		case <-timeoutTicker.C:
-			if err := b.stopBuild(build.containerId); err != nil {
-				log.Error().Str("container_id", build.containerId).Err(err).Msg("failed to stop build")
+			if err := b.stopBuild(build.containerID); err != nil {
+				log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
 			}
 
 			build.log(true, fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout))
@@ -161,7 +161,7 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 	}
 
 	var err error
-	build.imageId, err = getImageId(build.opts)
+	build.imageID, err = getImageID(build.opts)
 	if err != nil {
 		return err
 	}
@@ -301,13 +301,13 @@ func (b *Builder) handleBuildCancellation(ctx context.Context, build *Build) {
 	if build.success.Load() {
 		return
 	}
-	err := b.stopBuild(build.containerId)
+	err := b.stopBuild(build.containerID)
 	if err != nil {
-		log.Error().Str("container_id", build.containerId).Err(err).Msg("failed to stop build")
+		log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
 	}
 
 	if err := build.killContainer(); err != nil {
-		log.Error().Str("container_id", build.containerId).Err(err).Msg("failed to kill build container")
+		log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to kill build container")
 	}
 }
 

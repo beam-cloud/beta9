@@ -48,8 +48,8 @@ type Build struct {
 	config      types.AppConfig
 	opts        *BuildOpts
 	success     *atomic.Bool
-	containerId string
-	imageId     string
+	containerID string
+	imageID     string
 	outputChan  chan common.OutputMsg
 	authInfo    *auth.AuthInfo
 	runcClient  RuncClient
@@ -65,7 +65,7 @@ func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.Outpu
 		config:      config,
 		opts:        opts,
 		success:     &atomic.Bool{},
-		containerId: genContainerId(),
+		containerID: genContainerId(),
 		outputChan:  outputChan,
 		authInfo:    authInfo,
 		micromamba:  strings.Contains(opts.PythonVersion, "micromamba"),
@@ -120,7 +120,7 @@ func (b *Build) resolvePythonVersionRequirement() error {
 	// config if no python3 is found.
 	if b.opts.PythonVersion == types.Python3.String() {
 		checkPythonVersionCmd := fmt.Sprintf("%s --version", b.opts.PythonVersion)
-		if resp, err := b.runcClient.Exec(b.containerId, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
+		if resp, err := b.runcClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
 			return nil
 		}
 
@@ -136,10 +136,10 @@ func (b *Build) resolvePythonVersionRequirement() error {
 
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", b.opts.PythonVersion)
-	if resp, err := b.runcClient.Exec(b.containerId, checkPythonVersionCmd, buildEnv); err != nil || !resp.Ok {
+	if resp, err := b.runcClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err != nil || !resp.Ok {
 		// Warn the user if they are overriding an existing python3 environment
 		checkPythonVersionCmd = fmt.Sprintf("%s --version", types.Python3.String())
-		if resp, err := b.runcClient.Exec(b.containerId, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
+		if resp, err := b.runcClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
 			b.logWarning(fmt.Sprintf("requested python version (%s) was not detected, but an existing python3 environment was detected. The requested python version will be installed, replacing the existing python environment.\n", b.opts.PythonVersion))
 		}
 
@@ -157,7 +157,7 @@ func (b *Build) resolvePythonVersionRequirement() error {
 }
 
 func (b *Build) executeCommands() error {
-	log.Info().Str("container_id", b.containerId).Interface("options", b.opts).Msg("container building")
+	log.Info().Str("container_id", b.containerID).Interface("options", b.opts).Msg("container building")
 	startTime := time.Now()
 
 	for _, cmd := range b.commands {
@@ -165,8 +165,8 @@ func (b *Build) executeCommands() error {
 			continue
 		}
 
-		if r, err := b.runcClient.Exec(b.containerId, cmd, buildEnv); err != nil || !r.Ok {
-			log.Error().Str("container_id", b.containerId).Str("command", cmd).Err(err).Msg("failed to execute command for container")
+		if r, err := b.runcClient.Exec(b.containerID, cmd, buildEnv); err != nil || !r.Ok {
+			log.Error().Str("container_id", b.containerID).Str("command", cmd).Err(err).Msg("failed to execute command for container")
 
 			errMsg := ""
 			if err != nil {
@@ -178,12 +178,12 @@ func (b *Build) executeCommands() error {
 			return err
 		}
 	}
-	log.Info().Str("container_id", b.containerId).Dur("duration", time.Since(startTime)).Msg("container build took")
+	log.Info().Str("container_id", b.containerID).Dur("duration", time.Since(startTime)).Msg("container build took")
 	return nil
 }
 
 func (b *Build) archive() error {
-	if err := b.runcClient.Archive(b.ctx, b.containerId, b.imageId, b.outputChan); err != nil {
+	if err := b.runcClient.Archive(b.ctx, b.containerID, b.imageID, b.outputChan); err != nil {
 		b.log(true, err.Error()+"\n")
 		return err
 	}
@@ -203,7 +203,7 @@ func (b *Build) logWarning(Msg string) {
 }
 
 func (b *Build) logWithImageAndPythonVersion(Done bool, Msg string) {
-	b.outputChan <- common.OutputMsg{Done: Done, Success: b.success.Load(), Archiving: true, Msg: Msg, ImageId: b.imageId, PythonVersion: b.opts.PythonVersion}
+	b.outputChan <- common.OutputMsg{Done: Done, Success: b.success.Load(), Archiving: true, Msg: Msg, ImageId: b.imageID, PythonVersion: b.opts.PythonVersion}
 }
 
 func (b *Build) connectToHost(hostname string, tailscale *network.Tailscale) error {
@@ -224,14 +224,14 @@ func (b *Build) connectToHost(hostname string, tailscale *network.Tailscale) err
 }
 
 func (b *Build) streamLogs() {
-	go b.runcClient.StreamLogs(b.ctx, b.containerId, b.outputChan)
+	go b.runcClient.StreamLogs(b.ctx, b.containerID, b.outputChan)
 }
 
 func (b *Build) killContainer() error {
 	if b.runcClient == nil {
 		return nil
 	}
-	_, err := b.runcClient.Kill(b.containerId)
+	_, err := b.runcClient.Kill(b.containerID)
 	return err
 }
 
@@ -239,12 +239,12 @@ func (b *Build) getContainerStatus() (*pb.RunCStatusResponse, error) {
 	if b.runcClient == nil {
 		return nil, nil
 	}
-	return b.runcClient.Status(b.containerId)
+	return b.runcClient.Status(b.containerID)
 }
 
 // generateContainerRequest generates a container request for the build container
 func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
-	baseImageId, err := getImageId(&BuildOpts{
+	baseImageID, err := getImageID(&BuildOpts{
 		BaseImageRegistry: b.opts.BaseImageRegistry,
 		BaseImageName:     b.opts.BaseImageName,
 		BaseImageTag:      b.opts.BaseImageTag,
@@ -280,11 +280,11 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 			BuildCtxObject:   &b.opts.BuildCtxObject,
 			BuildSecrets:     b.opts.BuildSecrets,
 		},
-		ContainerId: b.containerId,
+		ContainerId: b.containerID,
 		Env:         b.opts.EnvVars,
 		Cpu:         cpu,
 		Memory:      memory,
-		ImageId:     baseImageId,
+		ImageId:     baseImageID,
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},

@@ -46,7 +46,7 @@ func setupTestBuild(t *testing.T, opts *BuildOpts) (*Build, *mocks.RuncClient, c
 	build.runcClient = mockRuncClient // Inject the mock client
 
 	// Mock image ID generation (simplified)
-	build.imageId = "test-image-id"
+	build.imageID = "test-image-id"
 
 	return build, mockRuncClient, outputChan
 }
@@ -63,7 +63,7 @@ func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 	build, mockRuncClient, _ := setupTestBuild(t, opts)
 
 	// Mock python version check - python exists
-	mockRuncClient.On("Exec", build.containerId, "python3.10 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+	mockRuncClient.On("Exec", build.containerID, "python3.10 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
 
 	err := build.prepareCommands()
 	assert.NoError(t, err)
@@ -73,7 +73,7 @@ func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 		"echo hello",
 	}
 	assert.Equal(t, expectedCommands, build.commands)
-	assert.NotEmpty(t, build.imageId)
+	assert.NotEmpty(t, build.imageID)
 	mockRuncClient.AssertExpectations(t)
 }
 
@@ -88,9 +88,9 @@ func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
 	build, mockRuncClient, outputChan := setupTestBuild(t, opts)
 
 	// Mock python version check - specific version doesn't exist
-	mockRuncClient.On("Exec", build.containerId, "python3.11 --version", buildEnv).Return(nil, errors.New("not found"))
+	mockRuncClient.On("Exec", build.containerID, "python3.11 --version", buildEnv).Return(nil, errors.New("not found"))
 	// Mock general python3 check - it exists (so we show a warning)
-	mockRuncClient.On("Exec", build.containerId, "python3 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+	mockRuncClient.On("Exec", build.containerID, "python3 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
 
 	err := build.prepareCommands()
 	assert.NoError(t, err)
@@ -101,7 +101,7 @@ func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
 	// Installation command should contain arch, os, vendor derived from runtime and template
 	assert.Contains(t, build.commands[0], "installing python cpython-3.11.5+20230826")
 	assert.Equal(t, expectedPipCmd, build.commands[1])
-	assert.NotEmpty(t, build.imageId)
+	assert.NotEmpty(t, build.imageID)
 
 	// Check for warning message
 	select {
@@ -140,7 +140,7 @@ func TestBuild_prepareSteps_IgnorePython(t *testing.T) {
 	// No python install or pip commands should be added
 	assert.Equal(t, []string{"apt update"}, build.commands)
 	assert.Equal(t, "", build.opts.PythonVersion, "PythonVersion should be cleared if IgnorePython is true and python is not found")
-	assert.NotEmpty(t, build.imageId)
+	assert.NotEmpty(t, build.imageID)
 	mockRuncClient.AssertExpectations(t)
 }
 
@@ -172,7 +172,7 @@ func TestBuild_prepareSteps_Micromamba(t *testing.T) {
 	}
 
 	assert.Equal(t, expectedCommands, build.commands)
-	assert.NotEmpty(t, build.imageId)
+	assert.NotEmpty(t, build.imageID)
 	mockRuncClient.AssertExpectations(t)
 }
 
@@ -180,8 +180,8 @@ func TestBuild_executeSteps_Success(t *testing.T) {
 	build, mockRuncClient, _ := setupTestBuild(t, nil)
 	build.commands = []string{"cmd1", "cmd2"}
 
-	mockRuncClient.On("Exec", build.containerId, "cmd1", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil).Once()
-	mockRuncClient.On("Exec", build.containerId, "cmd2", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil).Once()
+	mockRuncClient.On("Exec", build.containerID, "cmd1", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil).Once()
+	mockRuncClient.On("Exec", build.containerID, "cmd2", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil).Once()
 
 	err := build.executeCommands()
 	assert.NoError(t, err)
@@ -192,10 +192,10 @@ func TestBuild_executeSteps_Failure(t *testing.T) {
 	build, mockRuncClient, outputChan := setupTestBuild(t, nil)
 	build.commands = []string{"cmd1", "cmd2-fails", "cmd3"}
 
-	mockRuncClient.On("Exec", build.containerId, "cmd1", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil).Once()
+	mockRuncClient.On("Exec", build.containerID, "cmd1", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil).Once()
 	// Mock failure on the second command
 	execErr := errors.New("command failed")
-	mockRuncClient.On("Exec", build.containerId, "cmd2-fails", buildEnv).Return(nil, execErr).Once()
+	mockRuncClient.On("Exec", build.containerID, "cmd2-fails", buildEnv).Return(nil, execErr).Once()
 	// cmd3 should not be called
 
 	err := build.executeCommands()
@@ -214,14 +214,14 @@ func TestBuild_executeSteps_Failure(t *testing.T) {
 
 	mockRuncClient.AssertExpectations(t)
 	// Ensure cmd3 was not called
-	mockRuncClient.AssertNotCalled(t, "Exec", build.containerId, "cmd3", buildEnv)
+	mockRuncClient.AssertNotCalled(t, "Exec", build.containerID, "cmd3", buildEnv)
 }
 
 func TestBuild_archive_Success(t *testing.T) {
 	build, mockRuncClient, outputChan := setupTestBuild(t, nil)
-	build.imageId = "final-image-id" // Ensure imageId is set
+	build.imageID = "final-image-id" // Ensure imageId is set
 
-	mockRuncClient.On("Archive", build.ctx, build.containerId, build.imageId, outputChan).Return(nil).Once()
+	mockRuncClient.On("Archive", build.ctx, build.containerID, build.imageID, outputChan).Return(nil).Once()
 
 	err := build.archive()
 	assert.NoError(t, err)
@@ -230,10 +230,10 @@ func TestBuild_archive_Success(t *testing.T) {
 
 func TestBuild_archive_Failure(t *testing.T) {
 	build, mockRuncClient, outputChan := setupTestBuild(t, nil)
-	build.imageId = "final-image-id"
+	build.imageID = "final-image-id"
 	archiveErr := errors.New("archiving failed")
 
-	mockRuncClient.On("Archive", build.ctx, build.containerId, build.imageId, outputChan).Return(archiveErr).Once()
+	mockRuncClient.On("Archive", build.ctx, build.containerID, build.imageID, outputChan).Return(archiveErr).Once()
 
 	err := build.archive()
 	assert.Error(t, err)
