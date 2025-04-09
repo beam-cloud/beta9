@@ -24,6 +24,11 @@ type RuncClient interface {
 	StreamLogs(ctx context.Context, containerId string, outputChan chan common.OutputMsg) error
 }
 
+type BuildStep struct {
+	Command string
+	Type    string
+}
+
 type Build struct {
 	ctx         context.Context
 	config      types.AppConfig
@@ -34,12 +39,23 @@ type Build struct {
 	outputChan  chan common.OutputMsg
 	authInfo    *auth.AuthInfo
 	runcClient  RuncClient
+	commands    []string
+	micromamba  bool
 }
 
 func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg, config types.AppConfig) (*Build, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	return &Build{ctx: ctx, opts: opts, success: &atomic.Bool{}, containerId: genContainerId(), outputChan: outputChan, authInfo: authInfo, config: config}, nil
+	return &Build{
+		ctx:         ctx,
+		config:      config,
+		opts:        opts,
+		success:     &atomic.Bool{},
+		containerId: genContainerId(),
+		outputChan:  outputChan,
+		authInfo:    authInfo,
+		micromamba:  strings.Contains(opts.PythonVersion, "micromamba"),
+	}, nil
 }
 
 func (b *Build) initializeBuildConfiguration() error {
@@ -49,66 +65,88 @@ func (b *Build) initializeBuildConfiguration() error {
 	return nil
 }
 
-func (b *Build) prepareSteps() error {
-	var err error
-	b.imageId, err = getImageId(b.opts)
-	if err != nil {
+// prepareCommands prepares a slice of strings representing commands that will be executed in the build container.
+// Commands come from three sources:
+//   - Python version requirement that needs to be installed
+//   - Python packages and shell commands that are passed as parameters to the image in the sdk
+//   - Build steps that are chained to the image in the sdk
+func (b *Build) prepareCommands() error {
+	if err := b.resolvePythonVersionRequirement(); err != nil {
 		return err
 	}
-	log.Info().Str("image_id", b.imageId).Msg("image id")
 
-	micromambaEnv := strings.Contains(b.opts.PythonVersion, "micromamba")
-	if micromambaEnv {
-		b.runcClient.Exec(b.containerId, "micromamba config set use_lockfiles False", buildEnv)
-	}
-
-	var setupCommands []string
-
-	// Detect if python3.x is installed in the container, if not install it
-	checkPythonVersionCmd := fmt.Sprintf("%s --version", b.opts.PythonVersion)
-	if resp, err := b.runcClient.Exec(b.containerId, checkPythonVersionCmd, buildEnv); (err != nil || !resp.Ok) && !micromambaEnv && !b.opts.IgnorePython {
-
-		if b.opts.PythonVersion == types.Python3.String() {
-			b.opts.PythonVersion = b.config.ImageService.PythonVersion
-		} else {
-			// Check if any python version is installed and warn the user that they are overriding it
-			checkPythonVersionCmd := fmt.Sprintf("%s --version", types.Python3.String())
-			if resp, err := b.runcClient.Exec(b.containerId, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
-				b.outputChan <- common.OutputMsg{Done: false, Success: b.success.Load(), Msg: fmt.Sprintf("requested python version (%s) was not detected, but an existing python3 environment was detected. The requested python version will be installed, replacing the existing python environment.\n", b.opts.PythonVersion), Warning: true}
-			}
-		}
-
-		b.outputChan <- common.OutputMsg{Done: false, Success: b.success.Load(), Msg: fmt.Sprintf("%s not detected, installing it for you...\n", b.opts.PythonVersion)}
-		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, b.opts.PythonVersion)
-		if err != nil {
-			b.outputChan <- common.OutputMsg{Done: true, Success: b.success.Load(), Msg: err.Error() + "\n"}
-			return err
-		}
-
-		setupCommands = append(setupCommands, installCmd)
-	} else if b.opts.IgnorePython && resp != nil && !resp.Ok {
-		b.opts.PythonVersion = ""
-	}
-
-	// Generate the pip install command and prepend it to the commands list
+	// Add pip install command from image's python package list
 	if len(b.opts.PythonPackages) > 0 && b.opts.PythonVersion != "" {
 		pipInstallCmd := generatePipInstallCommand(b.opts.PythonPackages, b.opts.PythonVersion)
-		setupCommands = append(setupCommands, pipInstallCmd)
+		b.commands = append(b.commands, pipInstallCmd)
 	}
 
-	b.opts.Commands = append(setupCommands, b.opts.Commands...)
+	// Add shell commands from image's command list
+	b.commands = append(b.commands, b.opts.Commands...)
 
-	// Generate the commands to run in the container
-	b.opts.Commands = append(b.opts.Commands, parseBuildSteps(b.opts.BuildSteps, b.opts.PythonVersion)...)
+	// Add any additional build steps that were chained to the image
+	b.commands = append(b.commands, parseBuildSteps(b.opts.BuildSteps, b.opts.PythonVersion)...)
 
 	return nil
 }
 
-func (b *Build) executeSteps() error {
+// resolvePythonVersionRequirement ensures that if a python version is requested, it is installed.
+func (b *Build) resolvePythonVersionRequirement() error {
+	if b.micromamba {
+		b.commands = append(b.commands, "micromamba config set use_lockfiles False")
+		return nil
+	}
+
+	if b.opts.IgnorePython {
+		b.opts.PythonVersion = ""
+		return nil
+	}
+
+	// If the requested python version is python3 (default), install the default python version from the image
+	// config if no python3 is found.
+	if b.opts.PythonVersion == types.Python3.String() {
+		checkPythonVersionCmd := fmt.Sprintf("%s --version", b.opts.PythonVersion)
+		if resp, err := b.runcClient.Exec(b.containerId, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
+			return nil
+		}
+
+		b.opts.PythonVersion = b.config.ImageService.PythonVersion
+		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, b.opts.PythonVersion)
+		if err != nil {
+			b.log(true, err.Error()+"\n")
+			return err
+		}
+		b.commands = append(b.commands, installCmd)
+		return nil
+	}
+
+	// Detect if python3.x is installed in the container, if not install it
+	checkPythonVersionCmd := fmt.Sprintf("%s --version", b.opts.PythonVersion)
+	if resp, err := b.runcClient.Exec(b.containerId, checkPythonVersionCmd, buildEnv); err != nil || !resp.Ok {
+		// Warn the user if they are overriding an existing python3 environment
+		checkPythonVersionCmd = fmt.Sprintf("%s --version", types.Python3.String())
+		if resp, err := b.runcClient.Exec(b.containerId, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
+			b.logWarning(fmt.Sprintf("requested python version (%s) was not detected, but an existing python3 environment was detected. The requested python version will be installed, replacing the existing python environment.\n", b.opts.PythonVersion))
+		}
+
+		b.log(false, fmt.Sprintf("%s not detected, installing it for you...\n", b.opts.PythonVersion))
+		installCmd, err := getPythonStandaloneInstallCommand(b.config.ImageService.Runner.PythonStandalone, b.opts.PythonVersion)
+		if err != nil {
+			b.log(true, err.Error()+"\n")
+			return err
+		}
+
+		b.commands = append(b.commands, installCmd)
+	}
+
+	return nil
+}
+
+func (b *Build) executeCommands() error {
 	log.Info().Str("container_id", b.containerId).Interface("options", b.opts).Msg("container building")
 	startTime := time.Now()
 
-	for _, cmd := range b.opts.Commands {
+	for _, cmd := range b.commands {
 		if cmd == "" {
 			continue
 		}
@@ -122,7 +160,7 @@ func (b *Build) executeSteps() error {
 			}
 
 			time.Sleep(defaultImageBuildGracefulShutdownS) // Wait for logs to be passed through
-			b.Log(true, errMsg)
+			b.log(true, errMsg)
 			return err
 		}
 	}
@@ -132,34 +170,38 @@ func (b *Build) executeSteps() error {
 
 func (b *Build) archive() error {
 	if err := b.runcClient.Archive(b.ctx, b.containerId, b.imageId, b.outputChan); err != nil {
-		b.Log(true, err.Error()+"\n")
+		b.log(true, err.Error()+"\n")
 		return err
 	}
 	return nil
 }
 
-func (b *Build) SetSuccess(success bool) {
+func (b *Build) setSuccess(success bool) {
 	b.success.Store(success)
 }
 
-func (b *Build) Log(Done bool, Msg string) {
+func (b *Build) log(Done bool, Msg string) {
 	b.outputChan <- common.OutputMsg{Done: Done, Success: b.success.Load(), Msg: Msg}
 }
 
-func (b *Build) LogWithImageAndPythonVersion(Done bool, Msg string) {
+func (b *Build) logWarning(Msg string) {
+	b.outputChan <- common.OutputMsg{Done: false, Success: b.success.Load(), Warning: true, Msg: Msg}
+}
+
+func (b *Build) logWithImageAndPythonVersion(Done bool, Msg string) {
 	b.outputChan <- common.OutputMsg{Done: Done, Success: b.success.Load(), Archiving: true, Msg: Msg, ImageId: b.imageId, PythonVersion: b.opts.PythonVersion}
 }
 
 func (b *Build) connectToHost(hostname string, tailscale *network.Tailscale) error {
 	conn, err := network.ConnectToHost(b.ctx, hostname, time.Second*30, tailscale, b.config.Tailscale)
 	if err != nil {
-		b.Log(true, "Failed to connect to build container.\n")
+		b.log(true, "Failed to connect to build container.\n")
 		return err
 	}
 
 	client, err := common.NewRunCClient(hostname, b.authInfo.Token.Key, conn)
 	if err != nil {
-		b.Log(true, "Failed to connect to build container.\n")
+		b.log(true, "Failed to connect to build container.\n")
 		return err
 	}
 

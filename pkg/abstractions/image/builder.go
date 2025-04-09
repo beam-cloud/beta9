@@ -47,11 +47,6 @@ type Builder struct {
 	skopeoClient  common.SkopeoClient
 }
 
-type BuildStep struct {
-	Command string
-	Type    string
-}
-
 func NewBuilder(config types.AppConfig, registry *registry.ImageRegistry, scheduler *scheduler.Scheduler, tailscale *network.Tailscale, containerRepo repository.ContainerRepository, rdb *common.RedisClient) (*Builder, error) {
 	return &Builder{
 		config:        config,
@@ -91,23 +86,23 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 
 	containerRequest, err := build.generateContainerRequest()
 	if err != nil {
-		build.Log(true, "Error occured while generating container request: "+err.Error())
+		build.log(true, "Error occured while generating container request: "+err.Error())
 		return err
 	}
 
 	if err = b.scheduler.Run(containerRequest); err != nil {
-		build.Log(true, err.Error()+"\n")
+		build.log(true, err.Error()+"\n")
 		return err
 	}
 
 	hostname, err := b.containerRepo.GetWorkerAddress(ctx, build.containerId)
 	if err != nil {
-		build.Log(true, "Failed to connect to build container.\n")
+		build.log(true, "Failed to connect to build container.\n")
 		return err
 	}
 
 	if err := b.containerRepo.SetBuildContainerTTL(build.containerId, time.Duration(imageContainerTtlS)*time.Second); err != nil {
-		build.Log(true, "Failed to connect to build container.\n")
+		build.log(true, "Failed to connect to build container.\n")
 		return err
 	}
 
@@ -117,7 +112,7 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 }
 
 func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error {
-	build.Log(false, "Setting up build container...\n")
+	build.log(false, "Setting up build container...\n")
 	buildContainerRunning := false
 
 	containerSpinupTimeout := b.calculateContainerSpinupTimeout(ctx, build.opts)
@@ -130,13 +125,13 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 		select {
 		case <-ctx.Done():
 			log.Info().Str("container_id", build.containerId).Msg("build was aborted")
-			build.Log(true, "Build was aborted.\n")
+			build.log(true, "Build was aborted.\n")
 			return ctx.Err()
 
 		case <-retryTicker.C:
 			r, err := build.getContainerStatus()
 			if err != nil {
-				build.Log(true, "Error occurred while checking container status: "+err.Error())
+				build.log(true, "Error occurred while checking container status: "+err.Error())
 				return err
 			}
 
@@ -150,7 +145,7 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 				exitCodeMsg := getExitCodeMsg(exitCode)
 				// Wait for any final logs to get sent before returning
 				time.Sleep(200 * time.Millisecond)
-				build.Log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
+				build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
 				return errors.New(fmt.Sprintf("container exited with error: %s\n", exitCodeMsg))
 			}
 		case <-timeoutTicker.C:
@@ -158,14 +153,20 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 				log.Error().Str("container_id", build.containerId).Err(err).Msg("failed to stop build")
 			}
 
-			build.Log(true, fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout))
+			build.log(true, fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout))
 			return errors.New(fmt.Sprintf("timeout: container not running after %s seconds", containerSpinupTimeout))
 		}
 	}
 
 	if !buildContainerRunning {
-		build.Log(true, "Unable to connect to build container.\n")
+		build.log(true, "Unable to connect to build container.\n")
 		return errors.New("container not running")
+	}
+
+	var err error
+	build.imageId, err = getImageId(build.opts)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -185,7 +186,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	err = b.startBuildContainer(ctx, build)
 	if err != nil {
-		build.Log(true, "Failed to start build container: "+err.Error())
+		build.log(true, "Failed to start build container: "+err.Error())
 		return err
 	}
 
@@ -196,11 +197,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	if err := build.prepareSteps(); err != nil {
+	if err := build.prepareCommands(); err != nil {
 		return err
 	}
 
-	if err := build.executeSteps(); err != nil {
+	if err := build.executeCommands(); err != nil {
 		return err
 	}
 
@@ -208,8 +209,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	build.SetSuccess(true)
-	build.LogWithImageAndPythonVersion(true, "Build completed successfully")
+	build.setSuccess(true)
+	build.logWithImageAndPythonVersion(true, "Build completed successfully")
 	return nil
 }
 
