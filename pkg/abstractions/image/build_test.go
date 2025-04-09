@@ -3,7 +3,6 @@ package image
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -70,7 +69,7 @@ func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 	assert.NoError(t, err)
 
 	expectedCommands := []string{
-		"PIP_ROOT_USER_ACTION=ignore python3.10 -m pip install \"requests\" \"numpy\"",
+		"uv pip install \"requests\" \"numpy\"",
 		"echo hello",
 	}
 	assert.Equal(t, expectedCommands, build.commands)
@@ -97,8 +96,7 @@ func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Expect installation command based on PythonStandaloneConfig
-	// expectedInstallCmd := "echo installing python cpython-3.11.5+20230826" // Simplified based on template - REMOVED as unused
-	expectedPipCmd := "PIP_ROOT_USER_ACTION=ignore python3.11 -m pip install \"pandas\""
+	expectedPipCmd := "uv pip install \"pandas\""
 
 	// Installation command should contain arch, os, vendor derived from runtime and template
 	assert.Contains(t, build.commands[0], "installing python cpython-3.11.5+20230826")
@@ -167,10 +165,10 @@ func TestBuild_prepareSteps_Micromamba(t *testing.T) {
 
 	expectedCommands := []string{
 		"micromamba config set use_lockfiles False",
-		"PIP_ROOT_USER_ACTION=ignore micromamba-1.5 -m pip install -c \"conda-forge::numpy\" \"pytorch\"", // From PythonPackages
-		"micromamba install -y -n beta9 \"scipy\"",                                                        // From BuildSteps (mamba)
+		"micromamba-1.5 -m pip install -c \"conda-forge::numpy\" \"pytorch\"", // From PythonPackages
+		"micromamba install -y -n beta9 \"scipy\"",                            // From BuildSteps (mamba)
 		"echo done mamba",
-		"PIP_ROOT_USER_ACTION=ignore micromamba-1.5 -m pip install \"requests\" \"beautifulsoup4\"", // From BuildSteps (pip)
+		"micromamba-1.5 -m pip install \"requests\" \"beautifulsoup4\"", // From BuildSteps (pip)
 	}
 
 	assert.Equal(t, expectedCommands, build.commands)
@@ -254,17 +252,6 @@ func TestBuild_archive_Failure(t *testing.T) {
 	mockRuncClient.AssertExpectations(t)
 }
 
-// Helper to get image ID for testing purposes (simplified version of actual logic)
-func test_getImageId(opts *BuildOpts) (string, error) {
-	if opts.ExistingImageUri != "" {
-		return "existing-" + opts.ExistingImageUri, nil
-	}
-	if opts.Dockerfile != "" {
-		return "dockerfile-build", nil
-	}
-	return fmt.Sprintf("%s-%s-%s-%s", opts.BaseImageRegistry, opts.BaseImageName, opts.BaseImageTag, opts.BaseImageDigest), nil
-}
-
 // Test parseBuildSteps specifically for command coalescing
 func Test_parseBuildSteps(t *testing.T) {
 	pythonVersion := "python3.9"
@@ -283,12 +270,12 @@ func Test_parseBuildSteps(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"PIP_ROOT_USER_ACTION=ignore python3.9 -m pip install \"requests\" \"numpy\"", // Coalesced pip
+		"uv pip install \"requests\" \"numpy\"", // Coalesced pip
 		"echo 'installing libs'",
 		"micromamba install -y -n beta9 -c pytorch \"conda-forge::pandas\" \"scipy\"", // Coalesced mamba (flags don't split mamba)
 		"echo 'done'",
-		"PIP_ROOT_USER_ACTION=ignore python3.9 -m pip install --no-deps flask", // Flagged line isn't quoted
-		"PIP_ROOT_USER_ACTION=ignore python3.9 -m pip install \"gunicorn\"",    // Second pip group
+		"uv pip install --no-deps flask", // Flagged line isn't quoted
+		"uv pip install \"gunicorn\"",    // Second pip group
 	}
 
 	result := parseBuildSteps(steps, pythonVersion)
