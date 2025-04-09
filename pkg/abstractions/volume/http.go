@@ -138,11 +138,6 @@ func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	workspaceId := ctx.Param("workspaceId")
-
-	if cc.AuthInfo.Workspace.ExternalId != workspaceId {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
-	}
-
 	volumePath := ctx.Param("volumePath*")
 	decodedVolumePath, err := url.QueryUnescape(volumePath)
 	if err != nil {
