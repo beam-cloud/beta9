@@ -75,7 +75,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 			continue
 		}
 
-		// App has no deployments we get a stub
+		// If the app doesn't have a deployment, we get the latest stub
 		stubs, err := a.backendRepo.ListStubs(ctx.Request().Context(), types.StubFilter{AppId: apps.Data[i].ExternalId})
 		if err != nil {
 			return HTTPBadRequest("Failed to get apps")

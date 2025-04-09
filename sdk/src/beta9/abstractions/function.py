@@ -34,6 +34,9 @@ class Function(RunnerAbstraction):
     Decorator which allows you to run the decorated function in a remote container.
 
     Parameters:
+        app (str):
+            Assign the function to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
@@ -298,7 +301,8 @@ class Schedule(Function):
 
     Parameters:
         app (str):
-            The name of the app to which this function belongs
+            Assign the scheduled function to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         when (str):
             A cron expression that specifies when the task should be run. For example "*/5 * * * *".
             The timezone is always UTC.

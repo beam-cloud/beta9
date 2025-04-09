@@ -68,7 +68,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
     Parameters:
         app (str):
-            The name of the app to associate with the pod
+            Assign the pod to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         entrypoint (Optional[List[str]]):
             The command to run in the container. Default is [].
         ports (Optional[List[int]]):
