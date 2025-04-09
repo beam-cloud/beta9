@@ -139,11 +139,11 @@ func (w *WorkspaceStorage) ToProto() *pb.WorkspaceStorage {
 }
 
 const (
-	TokenTypeClusterAdmin string = "admin"
-	TokenTypePrimary      string = "primary"
-	TokenTypeWorkspace    string = "workspace"
-	TokenTypeWorker       string = "worker"
-	TokenTypeMachine      string = "machine"
+	TokenTypeClusterAdmin     string = "admin"
+	TokenTypeWorkspacePrimary string = "workspace_primary"
+	TokenTypeWorkspace        string = "workspace"
+	TokenTypeWorker           string = "worker"
+	TokenTypeMachine          string = "machine"
 )
 
 type Token struct {

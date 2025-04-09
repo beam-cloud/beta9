@@ -13,7 +13,7 @@ func init() {
 }
 
 func addWorkspacePrimaryToken(ctx context.Context, tx *sql.Tx) error {
-	newTokenTypes := []string{"primary"}
+	newTokenTypes := []string{"workspace_primary"}
 
 	for _, tokenType := range newTokenTypes {
 		addEnumSQL := fmt.Sprintf(`

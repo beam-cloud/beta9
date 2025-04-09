@@ -44,7 +44,7 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 	tokenType := ctx.QueryParam("token_type")
 	if tokenType == "" {
 		tokenType = types.TokenTypeWorkspace
-	} else if tokenType == types.TokenTypePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+	} else if tokenType == types.TokenTypeWorkspacePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return HTTPBadRequest("Invalid token type")
 	}
 
@@ -135,7 +135,7 @@ func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid token ID")
 	}
 
-	if token.TokenType == types.TokenTypePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+	if token.TokenType == types.TokenTypeWorkspacePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return HTTPBadRequest("Cannot delete primary token")
 	}
 
