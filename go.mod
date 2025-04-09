@@ -1,6 +1,8 @@
 module github.com/beam-cloud/beta9
 
-go 1.22.10
+go 1.23.0
+
+toolchain go1.24.1
 
 require (
 	buf.build/gen/go/cedana/cedana/protocolbuffers/go v1.36.3-20250123222419-64bf8384f939.1
@@ -16,7 +18,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.51.4
-	github.com/beam-cloud/blobcache-v2 v0.0.0-20250402205159-7050ba514f13
+	github.com/beam-cloud/blobcache-v2 v0.0.0-20250409191605-4d9739224e40
 	github.com/beam-cloud/clip v0.0.0-20250314195126-c4a7a2a7f4ba
 	github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -76,7 +78,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.31.0
 	go.opentelemetry.io/otel/trace v1.33.0
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56
-	golang.org/x/net v0.35.0
+	golang.org/x/net v0.36.0
 	golang.org/x/sync v0.11.0
 	golang.org/x/sys v0.30.0
 	golang.org/x/time v0.8.0
@@ -284,7 +286,7 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13 // indirect
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba // indirect
-	golang.org/x/crypto v0.33.0 // indirect
+	golang.org/x/crypto v0.35.0 // indirect
 	golang.org/x/mod v0.23.0 // indirect
 	golang.org/x/oauth2 v0.24.0 // indirect
 	golang.org/x/term v0.29.0 // indirect

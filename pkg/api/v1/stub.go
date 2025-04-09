@@ -21,12 +21,14 @@ type StubGroup struct {
 	routerGroup *echo.Group
 	config      types.AppConfig
 	backendRepo repository.BackendRepository
+	eventRepo   repository.EventRepository
 }
 
-func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig) *StubGroup {
+func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, eventRepo repository.EventRepository, config types.AppConfig) *StubGroup {
 	group := &StubGroup{routerGroup: g,
 		backendRepo: backendRepo,
 		config:      config,
+		eventRepo:   eventRepo,
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId))           // Allows workspace admins to list stubs specific to their workspace
@@ -357,6 +359,8 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to clone stub")
 	}
+
+	go g.eventRepo.PushCloneStubEvent(workspace.ExternalId, &newStub, &stub.Stub)
 
 	return &newStub, nil
 }

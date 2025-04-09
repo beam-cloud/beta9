@@ -447,9 +447,12 @@ type MonitoringConfig struct {
 }
 
 type VictoriaMetricsConfig struct {
-	PushURL   string `key:"pushURL" json:"push_url"`
-	AuthToken string `key:"authToken" json:"auth_token"`
-	PushSecs  int    `key:"pushSecs" json:"push_secs"`
+	PushURL       string `key:"pushURL" json:"push_url"`
+	AuthToken     string `key:"authToken" json:"auth_token"`
+	PushSecs      int    `key:"pushSecs" json:"push_secs"`
+	WriteURL      string `key:"writeURL" json:"write_url"`
+	WriteUsername string `key:"writeUsername" json:"write_username"`
+	WritePassword string `key:"writePassword" json:"write_password"`
 }
 
 type PrometheusConfig struct {

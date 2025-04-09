@@ -22,9 +22,10 @@ dependencies = [
     "prompt-toolkit<4.0.0,>=3.0.48",
     "requests<3.0.0,>=2.32.3",
     "paramiko<4.0.0,>=3.5.0",
+    "websockets>=13,<14",
 ]
 name = "beta9"
-version = "0.1.186"
+version = "0.1.188"
 description = ""
 
 [project.scripts]

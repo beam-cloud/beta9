@@ -106,6 +106,7 @@ type BackendRepository interface {
 	CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
+	GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error)
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	UpdateTokenAsClusterAdmin(ctx context.Context, tokenId string, disabled bool) error
 	ToggleToken(ctx context.Context, workspaceId uint, extTokenId string) (types.Token, error)
@@ -213,6 +214,7 @@ type EventRepository interface {
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)
+	PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub)
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
