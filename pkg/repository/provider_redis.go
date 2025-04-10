@@ -185,7 +185,7 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 				return nil, fmt.Errorf("error parsing machine state for %s: %w", machineId, err)
 			}
 
-			if state.Status == types.MachineStatusPending {
+			if state.Status == types.MachineStatusPending || !state.Ready {
 				// Still waiting for machine registration
 				continue
 			}
