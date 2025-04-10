@@ -185,9 +185,10 @@ def create_machine(service: ServiceClient, pool: str):
     if res.agent_upstream_url:
         cmd_args.append(f'--flux-upstream "{res.agent_upstream_url}"')
 
-    if res.agent_upstream_branch and res.agent_upstream_branch != "main":
+    if res.agent_upstream_branch:
         cmd_args.append(f'--flux-branch "{res.agent_upstream_branch}"')
-        agent_url += f"-{res.agent_upstream_branch}"
+        if res.agent_upstream_branch != "main":
+            agent_url += f"-{res.agent_upstream_branch}"
 
     cmd_args_formatted = " \\\n\t  ".join(cmd_args)
     text = f"""# -- Agent setup
