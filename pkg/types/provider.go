@@ -62,6 +62,7 @@ type ProviderMachineState struct {
 	AutoConsolidate   bool                            `json:"auto_consolidate" redis:"auto_consolidate"`
 	AgentVersion      string                          `json:"agent_version" redis:"agent_version"`
 	MetadataMode      blobcache.BlobCacheMetadataMode `json:"metadata_mode" redis:"metadata_mode"`
+	Ready             bool                            `json:"ready" redis:"ready"`
 }
 
 type ProviderNotImplemented struct {
