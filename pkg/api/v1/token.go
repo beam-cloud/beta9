@@ -107,19 +107,31 @@ func (g *TokenGroup) ListWorkspaceTokens(ctx echo.Context) error {
 }
 
 func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
 	workspaceId := ctx.Param("workspaceId")
 	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
 		return HTTPBadRequest("Invalid workspace ID")
 	}
 
-	extTokenId := ctx.Param("tokenId")
-	token, err := g.backendRepo.ToggleToken(ctx.Request().Context(), workspace.Id, extTokenId)
+	tokenId := ctx.Param("tokenId")
+
+	token, err := g.backendRepo.GetTokenByExternalId(ctx.Request().Context(), workspace.Id, tokenId)
+	if err != nil {
+		return HTTPBadRequest("Invalid token ID")
+	}
+
+	if token.TokenType == types.TokenTypeWorkspacePrimary && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return HTTPBadRequest("Cannot toggle primary token")
+	}
+
+	toggledToken, err := g.backendRepo.ToggleToken(ctx.Request().Context(), workspace.Id, tokenId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to toggle token")
 	}
 
-	return ctx.JSON(http.StatusOK, token)
+	return ctx.JSON(http.StatusOK, toggledToken)
 }
 
 func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {
