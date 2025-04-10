@@ -97,6 +97,7 @@ class GpuType(str, Enum):
     H100 = "H100"
     A6000 = "A6000"
     RTX4090 = "RTX4090"
+    L40S = "L40S"
 
 
 # Add GpuType str literals. Must copy/paste for now.
@@ -112,6 +113,7 @@ GpuTypeLiteral = Literal[
     "H100",
     "A6000",
     "RTX4090",
+    "L40S",
 ]
 
 GpuTypeAlias = Union[GpuType, GpuTypeLiteral]
