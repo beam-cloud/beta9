@@ -8,6 +8,7 @@ import (
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -186,7 +187,7 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 			}
 
 			if state.Status == types.MachineStatusPending || !state.Ready {
-				// Still waiting for machine registration
+				log.Info().Msgf("waiting for machine to be ready: %s", machineId)
 				continue
 			}
 
