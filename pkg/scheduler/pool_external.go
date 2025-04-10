@@ -248,7 +248,11 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
 	}
 
-	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount && machine.State.Ready {
+	if !machine.State.Ready {
+		return nil, errors.New("machine not ready")
+	}
+
+	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
 		log.Info().Str("machine_id", machine.State.MachineId).Str("hostname", machine.State.HostName).Msg("using existing machine")
 
 		// If there is only one GPU available on the machine, give the worker access to everything
