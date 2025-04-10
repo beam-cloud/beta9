@@ -61,7 +61,6 @@ type ProviderMachineState struct {
 	LastKeepalive     string                          `json:"last_keepalive" redis:"last_keepalive"`
 	AutoConsolidate   bool                            `json:"auto_consolidate" redis:"auto_consolidate"`
 	AgentVersion      string                          `json:"agent_version" redis:"agent_version"`
-	Ready             bool                            `json:"ready" redis:"ready"`
 	MetadataMode      blobcache.BlobCacheMetadataMode `json:"metadata_mode" redis:"metadata_mode"`
 }
 
