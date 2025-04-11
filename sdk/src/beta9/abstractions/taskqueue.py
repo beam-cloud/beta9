@@ -34,7 +34,8 @@ class TaskQueue(RunnerAbstraction):
 
     Parameters:
         app (str):
-            The name of the app to associated the task queue with
+            Assign the task queue to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):

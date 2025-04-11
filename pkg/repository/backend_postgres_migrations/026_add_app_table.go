@@ -55,7 +55,7 @@ func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 	// Get all stubs that have deployments
 	StubWithDeployment := []StubForMigration{}
 	stubWithDeploymentRows, err := tx.QueryContext(ctx, `
-		select s.workspace_id as workspace_id, s.id as stub_id, s.name as stub_name, d.id as deployment_id, d.name as deployment_name from stub s join deployment d on s.id = d.stub_id;
+		SELECT s.workspace_id AS workspace_id, s.id AS stub_id, s.name AS stub_name, d.id AS deployment_id, d.name AS deployment_name FROM stub s JOIN deployment d ON s.id = d.stub_id;
 	`)
 	if err != nil {
 		return err

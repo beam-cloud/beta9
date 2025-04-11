@@ -71,12 +71,12 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 			return HTTPBadRequest("Failed to get apps")
 		}
 
-		if deployments != nil && len(deployments) > 0 {
+		if len(deployments) > 0 {
 			appsWithLatest.Data[i].Deployment = &deployments[0]
 			continue
 		}
 
-		// App has no deployments we get a stub
+		// If the app doesn't have a deployment, we get the latest stub
 		stubs, err := a.backendRepo.ListStubs(ctx.Request().Context(), types.StubFilter{AppId: apps.Data[i].ExternalId})
 		if err != nil {
 			return HTTPBadRequest("Failed to get apps")
@@ -87,7 +87,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 
 		appsWithLatest.Data[i].Stub = &stubs[0]
-		appsWithLatest.Data[i].Stub.SanitizeConfig()
+		appsWithLatest.Data[i].Stub
 	}
 
 	serializedAppsWithLatest, err := serializer.Serialize(appsWithLatest)

@@ -134,18 +134,16 @@ func (g *volumeGroup) UploadFile(ctx echo.Context) error {
 }
 
 func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-
 	workspaceId := ctx.Param("workspaceId")
-
-	if cc.AuthInfo.Workspace.ExternalId != workspaceId {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
-	}
-
 	volumePath := ctx.Param("volumePath*")
 	decodedVolumePath, err := url.QueryUnescape(volumePath)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid volume path")
+	}
+
+	workspace, err := g.gvs.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return echo.NewHTTPError(http.StatusBadRequest, "Invalid workspace ID")
 	}
 
 	token := ctx.QueryParam("token")
@@ -160,7 +158,7 @@ func (g *volumeGroup) DownloadFileWithToken(ctx echo.Context) error {
 	if path, err := g.gvs.getFilePath(
 		ctx.Request().Context(),
 		decodedVolumePath,
-		cc.AuthInfo.Workspace,
+		&workspace,
 	); err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, fmt.Sprintf("Failed to download file %v", err))
 	} else {

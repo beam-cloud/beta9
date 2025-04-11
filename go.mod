@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.51.4
-	github.com/beam-cloud/blobcache-v2 v0.0.0-20250402205159-7050ba514f13
+	github.com/beam-cloud/blobcache-v2 v0.0.0-20250409191605-4d9739224e40
 	github.com/beam-cloud/clip v0.0.0-20250314195126-c4a7a2a7f4ba
 	github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -129,7 +129,7 @@ require (
 	github.com/bits-and-blooms/bitset v1.13.0 // indirect
 	github.com/briandowns/spinner v1.23.0 // indirect
 	github.com/bsm/redislock v0.9.4 // indirect
-	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
+	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coder/websocket v1.8.12 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.4 // indirect

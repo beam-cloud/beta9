@@ -58,7 +58,7 @@ EOT
 
 # nvidia-container-toolkit
 # ========================
-FROM golang AS nvidia-container-toolkit
+FROM golang:1.23-bookworm AS nvidia-container-toolkit
 
 WORKDIR /workspace
 
