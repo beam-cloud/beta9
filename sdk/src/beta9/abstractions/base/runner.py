@@ -113,7 +113,7 @@ class RunnerAbstraction(BaseAbstraction):
             formatted_env = [f"{k}={v}" for k, v in env.items()]
 
         self.name = name
-        self.app = app
+        self.app = app or os.path.basename(os.getcwd())
         self.authorized = authorized
         self.image: Image = image
         self.image_available: bool = False

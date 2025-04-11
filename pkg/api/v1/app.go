@@ -69,8 +69,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 			return HTTPBadRequest("Failed to get apps")
 		}
 
-		if deployments != nil && len(deployments) > 0 {
-
+		if len(deployments) > 0 {
 			appsWithLatest.Data[i].Deployment = &deployments[0]
 			continue
 		}
