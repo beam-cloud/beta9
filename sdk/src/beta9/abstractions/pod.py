@@ -67,6 +67,9 @@ class Pod(RunnerAbstraction, DeployableMixin):
     Pod allows you to run arbitrary services in fast, scalable, and secure remote containers.
 
     Parameters:
+        app (str):
+            Assign the pod to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         entrypoint (Optional[List[str]]):
             The command to run in the container. Default is [].
         ports (Optional[List[int]]):
@@ -116,6 +119,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
     def __init__(
         self,
+        app: str = "",
         entrypoint: List[str] = [],
         ports: Optional[List[int]] = [],
         name: Optional[str] = None,
@@ -144,6 +148,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             name=name,
             authorized=authorized,
             keep_warm_seconds=keep_warm_seconds,
+            app=app,
         )
         self.parent = self
         self.func = None

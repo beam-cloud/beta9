@@ -762,10 +762,17 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
 	}
 
-	if len(filters.StubIds) > 0 {
+	if len(filters.StubIds) > 0 || filters.AppId != "" {
 		qb = qb.Join("stub s ON t.stub_id = s.id")
-		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
+	}
 
+	if len(filters.StubIds) > 0 {
+		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
+	}
+
+	if filters.AppId != "" {
+		qb = qb.Join("app a ON s.app_id = a.id")
+		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 	}
 
 	if filters.CreatedAtStart != "" {
@@ -784,6 +791,7 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 	var taskCounts []types.TaskCountByTime
 	err = c.client.SelectContext(ctx, &taskCounts, sql, args...)
 	if err != nil {
+		log.Printf("%v", err)
 		return nil, err
 	}
 
@@ -830,7 +838,7 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Co
 
 // Stub
 
-func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error) {
+func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error) {
 	var stub types.Stub
 
 	// Serialize config to JSON
@@ -839,10 +847,11 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 		return types.Stub{}, err
 	}
 
+	// @Luke slightly concerned that this is can get the wrong stub. If name + stubtype + objectId + config matches (Likely can happen from clone but haven't seen it yet)
 	if !forceCreate {
 		// Query to check if a stub with the same name, type, object_id, and config exists
 		queryGet := `
-    SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at
+    SELECT id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id
     FROM stub
     WHERE name = $1 AND type = $2 AND object_id = $3 AND config::jsonb = $4::jsonb;
     `
@@ -855,12 +864,16 @@ func (r *PostgresBackendRepository) GetOrCreateStub(ctx context.Context, name, s
 
 	// Stub not found, create a new one
 	queryCreate := `
-    INSERT INTO stub (name, type, config, object_id, workspace_id)
-    VALUES ($1, $2, $3, $4, $5)
-    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at;
-    `
-	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, workspaceId); err != nil {
+    INSERT INTO stub (name, type, config, object_id, workspace_id, app_id)
+    VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING id, external_id, name, type, config, config_version, object_id, workspace_id, created_at, updated_at, app_id;
+  `
+	if err := r.client.GetContext(ctx, &stub, queryCreate, name, stubType, string(configJSON), objectId, workspaceId, appId); err != nil {
 		return types.Stub{}, err
+	}
+
+	if err := r.updateAppActivity(ctx, appId); err != nil {
+		return stub, err
 	}
 
 	return stub, nil
@@ -884,7 +897,7 @@ func (r *PostgresBackendRepository) UpdateStubConfig(ctx context.Context, stubId
 func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error) {
 	var stub types.StubWithRelated
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
-		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public,
+		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public, s.app_id,
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"`,
 		`ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", ws.secret_key AS "workspace.storage.secret_key", 
@@ -1096,6 +1109,11 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 			"stub s ON d.stub_id = s.id",
 		)
 
+	if filters.AppId != "" {
+		query = query.Join("app a on d.app_id=a.id")
+		query = query.Where(squirrel.Eq{"a.external_id": filters.AppId})
+	}
+
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
 			Client:          c.client,
@@ -1247,6 +1265,11 @@ func (c *PostgresBackendRepository) listDeploymentsQueryBuilder(filters types.De
 		qb = qb.Where("COALESCE((s.config->'autoscaler'->>'min_containers')::int, 0) >= ?", filters.MinContainersGTE)
 	}
 
+	if filters.AppId != "" {
+		qb = qb.Join("app a ON d.app_id = a.id")
+		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
+	}
+
 	return qb
 }
 
@@ -1288,17 +1311,21 @@ func (c *PostgresBackendRepository) ListDeploymentsPaginated(ctx context.Context
 	return *page, nil
 }
 
-func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error) {
+func (c *PostgresBackendRepository) CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string, appId uint) (*types.Deployment, error) {
 	var deployment types.Deployment
 
 	subdomain := generateSubdomain(name, stubType, workspaceId)
 	queryCreate := `
-		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type)
-		VALUES ($1, true, $2, $3, $4, $5, $6)
-		RETURNING id, external_id, name, active, subdomain, workspace_id, stub_id, stub_type, version, created_at, updated_at;
+		INSERT INTO deployment (name, active, subdomain, workspace_id, stub_id, version, stub_type, app_id)
+		VALUES ($1, true, $2, $3, $4, $5, $6, $7)
+		RETURNING id, external_id, name, active, subdomain, workspace_id, stub_id, stub_type, version, created_at, updated_at, app_id;
 	`
-	err := c.client.GetContext(ctx, &deployment, queryCreate, name, subdomain, workspaceId, stubId, version, stubType)
+	err := c.client.GetContext(ctx, &deployment, queryCreate, name, subdomain, workspaceId, stubId, version, stubType, appId)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := c.updateAppActivity(ctx, appId); err != nil {
 		return nil, err
 	}
 
@@ -1323,6 +1350,11 @@ func (c *PostgresBackendRepository) listStubsQueryBuilder(filters types.StubFilt
 
 	if len(filters.StubTypes) > 0 {
 		qb = qb.Where(squirrel.Eq{"s.type": filters.StubTypes})
+	}
+
+	if filters.AppId != "" {
+		qb = qb.Join("app a ON s.app_id = a.id")
+		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 	}
 
 	return qb
@@ -1847,6 +1879,84 @@ func (r *PostgresBackendRepository) GetTaskMetrics(ctx context.Context, periodSt
 	}
 
 	return metrics, nil
+}
+
+func (r *PostgresBackendRepository) GetOrCreateApp(ctx context.Context, workspaceId uint, appName string) (*types.App, error) {
+	// Check if the app already exists
+	var app types.App
+	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM app WHERE name=$1 and workspace_id=$2;`
+	err := r.client.GetContext(ctx, &app, query, appName, workspaceId)
+	if err == nil {
+		return &app, nil
+	} else if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	query = `
+	INSERT INTO app (name, workspace_id, description)
+	VALUES ($1, $2, $3)
+	RETURNING id, external_id, name, description, workspace_id, created_at, updated_at;
+	`
+
+	if err := r.client.GetContext(ctx, &app, query, appName, workspaceId, ""); err != nil {
+		return nil, err
+	}
+
+	return &app, nil
+}
+
+func (r *PostgresBackendRepository) ListApps(ctx context.Context, workspaceId uint) ([]types.App, error) {
+	var apps []types.App
+
+	query := `SELECT * FROM app WHERE workspace_id = $1;`
+	err := r.client.SelectContext(ctx, &apps, query, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return apps, nil
+}
+
+func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId uint, appId string) (*types.App, error) {
+	var app types.App
+	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM app WHERE external_id=$1 and workspace_id=$2;`
+	err := r.client.GetContext(ctx, &app, query, appId, workspaceId)
+	if err == nil {
+		return &app, nil
+	}
+
+	return &app, nil
+}
+
+func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId})
+	page, err := common.Paginate(
+		common.SquirrelCursorPaginator[types.App]{
+			Client:          r.client,
+			SelectBuilder:   qb,
+			SortOrder:       "DESC",
+			SortColumn:      "updated_at",
+			SortQueryPrefix: "a",
+			PageSize:        10,
+		},
+		filters.Cursor,
+	)
+	if err != nil {
+		return common.CursorPaginationInfo[types.App]{}, err
+	}
+
+	return *page, nil
+}
+
+// Use to update the updated_at field of app when stub and deployment is created with app_id
+func (r *PostgresBackendRepository) updateAppActivity(ctx context.Context, appId uint) error {
+	query := `UPDATE app set updated_at=NOW() where id=$1`
+
+	if _, err := r.client.ExecContext(ctx, query, appId); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // decryptFields decrypts fields of a struct using AES-GCM

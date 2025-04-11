@@ -33,6 +33,9 @@ class TaskQueue(RunnerAbstraction):
     in python through the .put() method.
 
     Parameters:
+        app (str):
+            Assign the task queue to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
@@ -113,6 +116,7 @@ class TaskQueue(RunnerAbstraction):
 
     def __init__(
         self,
+        app: str = "",
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
@@ -158,6 +162,7 @@ class TaskQueue(RunnerAbstraction):
             autoscaler=autoscaler,
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
+            app=app,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
         self.retry_for = retry_for or []

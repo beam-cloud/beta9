@@ -120,6 +120,7 @@ message Stub {
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp updated_at = 10;
   bool public = 11;
+  uint32 app_id = 12;
 }
 
 message StubWithRelated {
