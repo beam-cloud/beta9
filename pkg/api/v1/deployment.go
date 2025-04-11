@@ -77,14 +77,23 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 				Next: deployments.Next,
 			}
 
-			return ctx.JSON(http.StatusOK, serializer.Serialize(paginatedSerializedDeployments))
+			serializedPaginatedDeployments, err := serializer.Serialize(paginatedSerializedDeployments)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize response")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedPaginatedDeployments)
 		}
 	} else {
 		if deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list deployments")
 		} else {
+			serializedDeployments, err := serializer.Serialize(deployments)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize response")
+			}
 
-			return ctx.JSON(http.StatusOK, serializer.Serialize(deployments))
+			return ctx.JSON(http.StatusOK, serializedDeployments)
 		}
 
 	}
@@ -104,7 +113,12 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 		return HTTPNotFound()
 	} else {
 		deployment.Stub.SanitizeConfig()
-		return ctx.JSON(http.StatusOK, serializer.Serialize(deployment))
+		serializedDeployment, err := serializer.Serialize(deployment)
+		if err != nil {
+			return HTTPInternalServerError("Failed to serialize response")
+		}
+
+		return ctx.JSON(http.StatusOK, serializedDeployment)
 	}
 }
 
@@ -225,7 +239,12 @@ func (g *DeploymentGroup) ListLatestDeployments(ctx echo.Context) error {
 			Next: deployments.Next,
 		}
 
-		return ctx.JSON(http.StatusOK, serializer.Serialize(paginatedSerializedDeployments))
+		serializedPaginatedDeployments, err := serializer.Serialize(paginatedSerializedDeployments)
+		if err != nil {
+			return HTTPInternalServerError("Failed to serialize response")
+		}
+
+		return ctx.JSON(http.StatusOK, serializedPaginatedDeployments)
 	}
 }
 

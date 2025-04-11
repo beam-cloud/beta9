@@ -2,6 +2,7 @@ package serializer
 
 import (
 	"encoding/json"
+	"log"
 	"testing"
 	"time"
 )
@@ -17,7 +18,11 @@ func TestBasicSerialize(t *testing.T) {
 		Name: "test",
 	}
 
-	result := Serialize(test)
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
 
 	bytes, err := json.Marshal(result)
 	if err != nil {
@@ -71,7 +76,11 @@ func TestNestedSerialize(t *testing.T) {
 		},
 	}
 
-	result := Serialize(test)
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
 
 	bytes, err := json.Marshal(result)
 	if err != nil {
@@ -139,7 +148,11 @@ func TestSerializeArray(t *testing.T) {
 		},
 	}
 
-	result := Serialize(test)
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
 
 	bytes, err := json.Marshal(result)
 	if err != nil {
@@ -198,7 +211,11 @@ func TestOmitempty(t *testing.T) {
 		},
 	}
 
-	result := Serialize(test)
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
 
 	bytes, err := json.Marshal(result)
 	if err != nil {
@@ -242,7 +259,12 @@ func TestOmitempty(t *testing.T) {
 		Name: "test",
 	}
 
-	result = Serialize(test2)
+	result, err = Serialize(test2)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
+
 	bytes, err = json.Marshal(result)
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -279,7 +301,11 @@ func TestPointers(t *testing.T) {
 		Name: nil,
 	}
 
-	result := Serialize(test)
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
 
 	bytes, err := json.Marshal(result)
 	if err != nil {
@@ -312,7 +338,12 @@ func TestPointers(t *testing.T) {
 		},
 	}
 
-	result = Serialize(test2)
+	result, err = Serialize(test2)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
+
 	bytes, err = json.Marshal(result)
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
@@ -372,7 +403,11 @@ func TestEmbeddedStruct(t *testing.T) {
 		},
 	}
 
-	result := Serialize(test)
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
 
 	bytes, err := json.Marshal(result)
 	if err != nil {
@@ -417,7 +452,11 @@ func TestSerializeMethod(t *testing.T) {
 		Time: SerializeAbleTime(time.Now()),
 	}
 
-	result := Serialize(test)
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
 
 	bytes, err := json.Marshal(result)
 	if err != nil {
@@ -430,6 +469,8 @@ func TestSerializeMethod(t *testing.T) {
 	if err != nil {
 		t.Errorf("Expected no error, got %v", err)
 	}
+
+	log.Println(parsedResult["time"])
 
 	if parsedResult["time"] != test.Time.Serialize() {
 		t.Error("Time is not correct")
@@ -447,7 +488,11 @@ func TestSerializeMaps(t *testing.T) {
 		Map: map[string]interface{}{"key": "value"},
 	}
 
-	result := Serialize(test)
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
 
 	bytes, err := json.Marshal(result)
 	if err != nil {
@@ -468,5 +513,66 @@ func TestSerializeMaps(t *testing.T) {
 
 	if mapVal["key"] != "value" {
 		t.Error("Map is not correct")
+	}
+}
+
+func TestSerializePrimitive(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected interface{}
+	}{
+		{1, 1},
+		{"test", "test"},
+		{true, true},
+		{false, false},
+	}
+
+	for _, test := range tests {
+		result, err := Serialize(test.input)
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+			return
+		}
+
+		if result != test.expected {
+			t.Errorf("Expected %v, got %v", test.expected, result)
+		}
+	}
+
+	testMap := map[string]interface{}{
+		"key": "value",
+	}
+
+	result, err := Serialize(testMap)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
+
+	mapVal, ok := result.(map[string]interface{})
+	if !ok {
+		t.Error("Result is not a map")
+	}
+
+	if mapVal["key"] != "value" {
+		t.Error("Map is not correct")
+	}
+
+	testSlice := []interface{}{1, "test", true, false}
+	result, err = Serialize(testSlice)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
+
+	sliceVal, ok := result.([]interface{})
+	if !ok {
+		t.Error("Result is not a slice")
+	}
+
+	for i, val := range sliceVal {
+		if val != testSlice[i] {
+			t.Errorf("Expected %v, got %v", testSlice[i], val)
+		}
 	}
 }

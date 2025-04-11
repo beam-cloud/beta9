@@ -1,6 +1,7 @@
 package serializer
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -8,15 +9,14 @@ import (
 const TagName = "serializer"
 const SourceTag = "source:"
 
+type Serializer interface {
+	Serialize() interface{}
+}
+
 func checkSerializeMethod(val reflect.Value) bool {
 	// Handle invalid values
 	if !val.IsValid() {
 		return false
-	}
-
-	// Convert to pointer if needed and addressable
-	if val.Kind() != reflect.Ptr && val.CanAddr() {
-		val = val.Addr()
 	}
 
 	method := val.MethodByName("Serialize")
@@ -32,7 +32,8 @@ func checkSerializeMethod(val reflect.Value) bool {
 	return false
 }
 
-func loopFields(val reflect.Value, typ reflect.Type) map[string]interface{} {
+func parseStruct(val reflect.Value, typ reflect.Type) map[string]interface{} {
+	embeddedFields := make(map[string]interface{})
 	result := make(map[string]interface{})
 	fromMap := make(map[string]string)
 
@@ -40,21 +41,20 @@ func loopFields(val reflect.Value, typ reflect.Type) map[string]interface{} {
 		field := val.Field(i)
 		fieldType := typ.Field(i)
 		tagValue := fieldType.Tag.Get(TagName)
-		tagMeta := strings.Split(tagValue, ",")
+		metaTags := strings.Split(tagValue, ",")
 		tagName := ""
 
 		if field.Kind() == reflect.Ptr && field.IsNil() {
 			tagName = ""
 		}
 
+		// If the field is an anonymous struct, recursively serialize it
 		if fieldType.Anonymous {
-			for k, v := range loopFields(field, fieldType.Type) {
-				result[k] = v
-			}
+			embeddedFields = parseStruct(field, fieldType.Type)
 			continue
 		}
 
-		for index, meta := range tagMeta {
+		for index, meta := range metaTags {
 			if index == 0 {
 				if meta == "-" {
 					continue
@@ -80,13 +80,13 @@ func loopFields(val reflect.Value, typ reflect.Type) map[string]interface{} {
 			continue
 		}
 
-		result[tagName] = Serialize(field.Interface())
+		result[tagName] = serialize(field.Interface())
 	}
 
 	// Process 'source:' tags after initial field processing
 	for key, value := range fromMap {
 		keys := strings.Split(value, ".")
-		var currentVal interface{} = result // Start traversal from the top-level result map
+		var currentVal interface{} = result // Start traversal from the top-level result map relative to the field
 		validPath := true
 
 		for _, k := range keys {
@@ -107,16 +107,24 @@ func loopFields(val reflect.Value, typ reflect.Type) map[string]interface{} {
 		}
 
 		if validPath {
-			// Only serialize and assign if the full path was valid
-			result[key] = Serialize(currentVal)
+			result[key] = serialize(currentVal)
 		} else {
 			delete(result, key)
 		}
 	}
+
+	for k, v := range embeddedFields {
+		if _, ok := result[k]; !ok {
+			// If the field is not already in the result, add it
+			// This is to ensure that child fields take precedence over parent fields
+			result[k] = v
+		}
+	}
+
 	return result
 }
 
-func Serialize(v interface{}) interface{} {
+func serialize(v interface{}) interface{} {
 	val := reflect.ValueOf(v)
 	typ := reflect.TypeOf(v)
 
@@ -126,26 +134,47 @@ func Serialize(v interface{}) interface{} {
 		}
 
 		val = val.Elem()
-		typ = typ.Elem()
+		return serialize(val.Interface())
 	}
 
-	if val.Kind() == reflect.Struct {
+	switch val.Kind() {
+	case reflect.Struct:
 		if checkSerializeMethod(val) {
 			return val.MethodByName("Serialize").Call(nil)[0].Interface()
 		}
 
-		return loopFields(val, typ)
-	} else if val.Kind() == reflect.Slice {
+		return parseStruct(val, typ)
+	case reflect.Slice, reflect.Array:
 		result := make([]interface{}, val.Len())
 		for i := 0; i < val.Len(); i++ {
-			result[i] = Serialize(val.Index(i).Interface())
+			result[i] = serialize(val.Index(i).Interface())
 		}
 		return result
-	} else {
+	case reflect.Map:
+		result := make(map[string]interface{})
+		for _, key := range val.MapKeys() {
+			result[key.String()] = serialize(val.MapIndex(key).Interface())
+		}
+		return result
+	default:
 		if !val.IsValid() {
 			return nil
 		}
 
 		return val.Interface()
 	}
+}
+
+func Serialize(v interface{}) (res interface{}, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(error); ok {
+				err = e
+			} else {
+				err = fmt.Errorf("failed to serialize: %v", r)
+			}
+		}
+	}()
+
+	return serialize(v), nil
 }

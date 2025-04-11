@@ -34,25 +34,6 @@ type NullTime struct {
 	sql.NullTime
 }
 
-func (t NullTime) MarshalJSON() ([]byte, error) {
-	if !t.Valid {
-		return []byte("null"), nil
-	}
-
-	_t := time.Time(t.Time)
-	return _t.MarshalJSON()
-}
-
-func (t *NullTime) UnmarshalJSON(data []byte) error {
-	if string(data) == "null" {
-		t.Valid = false
-		return nil
-	}
-
-	_t := time.Time(t.Time)
-	return _t.UnmarshalJSON(data)
-}
-
 func (t NullTime) Serialize() interface{} {
 	if !t.Valid {
 		return nil

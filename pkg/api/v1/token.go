@@ -45,7 +45,12 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 		return HTTPInternalServerError("Unable to create token")
 	}
 
-	return ctx.JSON(http.StatusOK, serializer.Serialize(token))
+	serializedToken, err := serializer.Serialize(token)
+	if err != nil {
+		return HTTPInternalServerError("Failed to serialize response")
+	}
+
+	return ctx.JSON(http.StatusOK, serializedToken)
 }
 
 type ClusterAdminTokensRequestSerializer struct {
@@ -93,7 +98,12 @@ func (g *TokenGroup) ListWorkspaceTokens(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to list tokens")
 	}
 
-	return ctx.JSON(http.StatusOK, serializer.Serialize(tokens))
+	serializedTokens, err := serializer.Serialize(tokens)
+	if err != nil {
+		return HTTPInternalServerError("Failed to serialize response")
+	}
+
+	return ctx.JSON(http.StatusOK, serializedTokens)
 }
 
 func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
@@ -109,7 +119,12 @@ func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to toggle token")
 	}
 
-	return ctx.JSON(http.StatusOK, serializer.Serialize(token))
+	serializedToken, err := serializer.Serialize(token)
+	if err != nil {
+		return HTTPInternalServerError("Failed to serialize response")
+	}
+
+	return ctx.JSON(http.StatusOK, serializedToken)
 }
 
 func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {

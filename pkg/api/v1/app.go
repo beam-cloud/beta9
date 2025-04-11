@@ -90,9 +90,14 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		appsWithLatest.Data[i].Stub.SanitizeConfig()
 	}
 
+	serializedAppsWithLatest, err := serializer.Serialize(appsWithLatest)
+	if err != nil {
+		return HTTPInternalServerError("Failed to serialize response")
+	}
+
 	return ctx.JSON(
 		http.StatusOK,
-		serializer.Serialize(appsWithLatest),
+		serializedAppsWithLatest,
 	)
 }
 
@@ -119,5 +124,10 @@ func (a *AppGroup) RetrieveApp(ctx echo.Context) error {
 		return HTTPBadRequest("Failed to retrieve app")
 	}
 
-	return ctx.JSON(http.StatusOK, serializer.Serialize(app))
+	serializedApp, err := serializer.Serialize(app)
+	if err != nil {
+		return HTTPInternalServerError("Failed to serialize response")
+	}
+
+	return ctx.JSON(http.StatusOK, serializedApp)
 }

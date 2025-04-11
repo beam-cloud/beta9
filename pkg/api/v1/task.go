@@ -101,7 +101,13 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 				g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
 			}
 		}
-		return ctx.JSON(http.StatusOK, serializer.Serialize(tasks))
+
+		serializedTasks, err := serializer.Serialize(tasks)
+		if err != nil {
+			return HTTPInternalServerError("Failed to serialize response")
+		}
+
+		return ctx.JSON(http.StatusOK, serializedTasks)
 	}
 }
 
@@ -125,7 +131,12 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 
-		return ctx.JSON(http.StatusOK, serializer.Serialize(task))
+		serializedTask, err := serializer.Serialize(task)
+		if err != nil {
+			return HTTPInternalServerError("Failed to serialize response")
+		}
+
+		return ctx.JSON(http.StatusOK, serializedTask)
 	}
 }
 
