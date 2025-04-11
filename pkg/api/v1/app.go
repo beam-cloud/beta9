@@ -87,7 +87,7 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		}
 
 		appsWithLatest.Data[i].Stub = &stubs[0]
-		appsWithLatest.Data[i].Stub
+		appsWithLatest.Data[i].Stub.SanitizeConfig()
 	}
 
 	serializedAppsWithLatest, err := serializer.Serialize(appsWithLatest)
