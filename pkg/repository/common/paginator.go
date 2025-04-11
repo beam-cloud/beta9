@@ -9,12 +9,13 @@ import (
 	"time"
 
 	"github.com/Masterminds/squirrel"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/jmoiron/sqlx"
 )
 
 type CursorPaginationInfo[DBType any] struct {
-	Next string   `json:"next"`
-	Data []DBType `json:"data"`
+	Next string   `json:"next" serializer:"next"`
+	Data []DBType `json:"data" serializer:"data"`
 }
 
 const CursorTimestampFormat = "2006-01-02 15:04:05.999999 -0700 MST"
@@ -140,7 +141,7 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 		pageReturnLength = settings.PageSize
 		lastRow := StructToMap(rows[len(rows)-1])
 		cursor := DatetimeCursor{
-			Value: lastRow[settings.SortColumn].(time.Time).Format(CursorTimestampFormat),
+			Value: lastRow[settings.SortColumn].(types.Time).Format(CursorTimestampFormat),
 			Id:    lastRow["id"].(uint),
 		}
 

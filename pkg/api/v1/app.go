@@ -7,6 +7,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/serializer"
 	"github.com/labstack/echo/v4"
 )
 
@@ -23,14 +24,15 @@ func NewAppGroup(g *echo.Group, backendRepo repository.BackendRepository, config
 	}
 
 	g.GET("/:workspaceId/latest", auth.WithWorkspaceAuth(group.ListAppWithLatestActivity))
+	g.GET("/:workspaceId/:appId", auth.WithWorkspaceAuth(group.RetrieveApp))
 
 	return group
 }
 
 type AppWithLatestStubOrDeployment struct {
 	types.App
-	Stub       *types.StubWithRelated       `json:"stub"`
-	Deployment *types.DeploymentWithRelated `json:"deployment"`
+	Stub       *types.StubWithRelated       `json:"stub,omitempty" serializer:"stub"`
+	Deployment *types.DeploymentWithRelated `json:"deployment,omitempty" serializer:"deployment"`
 }
 
 func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
@@ -88,8 +90,44 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 		appsWithLatest.Data[i].Stub.SanitizeConfig()
 	}
 
+	serializedAppsWithLatest, err := serializer.Serialize(appsWithLatest)
+	if err != nil {
+		return HTTPInternalServerError("Failed to serialize response")
+	}
+
 	return ctx.JSON(
 		http.StatusOK,
-		appsWithLatest,
+		serializedAppsWithLatest,
 	)
+}
+
+func (a *AppGroup) RetrieveApp(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	workspaceID := ctx.Param("workspaceId")
+	appId := ctx.Param("appId")
+
+	if cc.AuthInfo.Workspace.ExternalId != workspaceID && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return HTTPNotFound()
+	}
+
+	workspace, err := a.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceID)
+	if err != nil {
+		return HTTPBadRequest("Failed to retrieve workspace")
+	}
+
+	app, err := a.backendRepo.RetrieveApp(
+		ctx.Request().Context(),
+		workspace.Id,
+		appId,
+	)
+	if err != nil {
+		return HTTPBadRequest("Failed to retrieve app")
+	}
+
+	serializedApp, err := serializer.Serialize(app)
+	if err != nil {
+		return HTTPInternalServerError("Failed to serialize response")
+	}
+
+	return ctx.JSON(http.StatusOK, serializedApp)
 }

@@ -41,8 +41,8 @@ func addTokenRow(
 				token.WorkspaceId,
 				workspace.ExternalId,
 				token.TokenType,
-				token.CreatedAt,
-				token.UpdatedAt,
+				token.CreatedAt.Time,
+				token.UpdatedAt.Time,
 			),
 		)
 }
@@ -54,8 +54,8 @@ func mockBackendWithValidToken() MockDetails {
 		Id:         1,
 		ExternalId: "test",
 		Name:       "test",
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
+		CreatedAt:  types.Time{Time: time.Now()},
+		UpdatedAt:  types.Time{Time: time.Now()},
 	}
 
 	tokenForTest := types.Token{
@@ -66,8 +66,8 @@ func mockBackendWithValidToken() MockDetails {
 		Reusable:    true,
 		WorkspaceId: &workspaceForTest.Id,
 		Workspace:   &workspaceForTest,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		CreatedAt:   types.Time{Time: time.Now()},
+		UpdatedAt:   types.Time{Time: time.Now()},
 	}
 
 	mockRedis, err := repository.NewRedisClientForTest()

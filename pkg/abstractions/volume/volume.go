@@ -83,8 +83,8 @@ func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.Get
 		Volume: &pb.VolumeInstance{
 			Id:            volume.ExternalId,
 			Name:          volume.Name,
-			CreatedAt:     timestamppb.New(volume.CreatedAt),
-			UpdatedAt:     timestamppb.New(volume.UpdatedAt),
+			CreatedAt:     timestamppb.New(volume.CreatedAt.Time),
+			UpdatedAt:     timestamppb.New(volume.UpdatedAt.Time),
 			WorkspaceId:   authInfo.Workspace.ExternalId,
 			WorkspaceName: authInfo.Workspace.Name,
 		},
@@ -123,8 +123,8 @@ func (vs *GlobalVolumeService) ListVolumes(ctx context.Context, in *pb.ListVolum
 			Id:            v.ExternalId,
 			Name:          v.Name,
 			Size:          v.Size,
-			CreatedAt:     timestamppb.New(v.CreatedAt),
-			UpdatedAt:     timestamppb.New(v.UpdatedAt),
+			CreatedAt:     timestamppb.New(v.CreatedAt.Time),
+			UpdatedAt:     timestamppb.New(v.UpdatedAt.Time),
 			WorkspaceId:   v.Workspace.ExternalId,
 			WorkspaceName: v.Workspace.Name,
 		}

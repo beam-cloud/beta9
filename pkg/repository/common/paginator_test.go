@@ -35,7 +35,7 @@ func TestStructToMap(t *testing.T) {
 					WorkspaceId: 1,
 					Status:      "test",
 					ContainerId: "1",
-					CreatedAt:   MockCreatedAtDatetime,
+					CreatedAt:   types.Time{Time: MockCreatedAtDatetime},
 				},
 			},
 			want: map[string]interface{}{
@@ -44,7 +44,7 @@ func TestStructToMap(t *testing.T) {
 				"workspace_id": uint(1),
 				"status":       types.TaskStatus("test"),
 				"container_id": "1",
-				"created_at":   MockCreatedAtDatetime,
+				"created_at":   types.Time{Time: MockCreatedAtDatetime},
 			},
 		},
 		{
@@ -54,14 +54,14 @@ func TestStructToMap(t *testing.T) {
 					Id:          1,
 					ExternalId:  "test",
 					WorkspaceId: 1,
-					CreatedAt:   MockCreatedAtDatetime,
+					CreatedAt:   types.Time{Time: MockCreatedAtDatetime},
 				},
 			},
 			want: map[string]interface{}{
 				"id":           uint(1),
 				"external_id":  "test",
 				"workspace_id": uint(1),
-				"created_at":   MockCreatedAtDatetime,
+				"created_at":   types.Time{Time: MockCreatedAtDatetime},
 			},
 		},
 	}

@@ -29,7 +29,7 @@ func (gws *GatewayService) ListTokens(ctx context.Context, req *pb.ListTokensReq
 			workspaceId = uint32(*token.WorkspaceId)
 		}
 
-		updatedAt := *timestamppb.New(token.UpdatedAt)
+		updatedAt := *timestamppb.New(token.UpdatedAt.Time)
 
 		t = append(t, &pb.Token{
 			TokenId:     token.ExternalId,
@@ -38,7 +38,7 @@ func (gws *GatewayService) ListTokens(ctx context.Context, req *pb.ListTokensReq
 			Reusable:    token.Reusable,
 			WorkspaceId: &workspaceId,
 			TokenType:   token.TokenType,
-			CreatedAt:   timestamppb.New(token.CreatedAt),
+			CreatedAt:   timestamppb.New(token.CreatedAt.Time),
 			UpdatedAt:   &updatedAt,
 		})
 	}
@@ -61,7 +61,7 @@ func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenR
 		}, nil
 	}
 
-	updatedAt := *timestamppb.New(token.UpdatedAt)
+	updatedAt := *timestamppb.New(token.UpdatedAt.Time)
 	workspaceId := uint32(authInfo.Workspace.Id)
 
 	return &pb.CreateTokenResponse{
@@ -72,7 +72,7 @@ func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenR
 			Reusable:    token.Reusable,
 			WorkspaceId: &workspaceId,
 			TokenType:   token.TokenType,
-			CreatedAt:   timestamppb.New(token.CreatedAt),
+			CreatedAt:   timestamppb.New(token.CreatedAt.Time),
 			UpdatedAt:   &updatedAt,
 		},
 		Ok: true,
@@ -90,7 +90,7 @@ func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenR
 		}, nil
 	}
 
-	updatedAt := *timestamppb.New(token.UpdatedAt)
+	updatedAt := *timestamppb.New(token.UpdatedAt.Time)
 	workspaceId := uint32(authInfo.Workspace.Id)
 
 	return &pb.ToggleTokenResponse{
@@ -101,7 +101,7 @@ func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenR
 			Reusable:    token.Reusable,
 			WorkspaceId: &workspaceId,
 			TokenType:   token.TokenType,
-			CreatedAt:   timestamppb.New(token.CreatedAt),
+			CreatedAt:   timestamppb.New(token.CreatedAt.Time),
 			UpdatedAt:   &updatedAt,
 		},
 		Ok: true,
