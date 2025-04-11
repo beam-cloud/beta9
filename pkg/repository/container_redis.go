@@ -554,3 +554,11 @@ func (cr *ContainerRedisRepository) GetContainerRequestStatus(containerId string
 
 	return types.ContainerRequestStatus(status), nil
 }
+
+func (cr *ContainerRedisRepository) SetBuildContainerTTL(containerId string, ttl time.Duration) error {
+	return cr.rdb.Set(context.TODO(), common.RedisKeys.ImageBuildContainerTTL(containerId), "1", ttl).Err()
+}
+
+func (cr *ContainerRedisRepository) HasBuildContainerTTL(containerId string) bool {
+	return cr.rdb.Exists(context.TODO(), common.RedisKeys.ImageBuildContainerTTL(containerId)).Val() != 0
+}
