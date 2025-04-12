@@ -67,8 +67,6 @@ type WorkerPoolControllerOptions struct {
 	WorkerRepo     repository.WorkerRepository
 	WorkerPoolRepo repository.WorkerPoolRepository
 	ContainerRepo  repository.ContainerRepository
-	ProviderName   *types.MachineProvider
-	ProviderRepo   repository.ProviderRepository
 	EventRepo      repository.EventRepository
 	Tailscale      *network.Tailscale
 }
@@ -80,9 +78,8 @@ func GenerateWorkerId() string {
 func MonitorPoolSize(wpc WorkerPoolController,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
-	providerRepo repository.ProviderRepository) error {
-	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, workerPoolRepo, providerRepo)
+	workerPoolRepo repository.WorkerPoolRepository) error {
+	poolSizer, err := NewWorkerPoolSizer(wpc, workerPoolConfig, workerRepo, workerPoolRepo)
 	if err != nil {
 		return err
 	}
@@ -97,7 +94,6 @@ func MonitorPoolHealth(opts PoolHealthMonitorOptions) error {
 		WorkerPoolConfig: opts.WorkerPoolConfig,
 		WorkerConfig:     opts.WorkerConfig,
 		WorkerRepo:       opts.WorkerRepo,
-		ProviderRepo:     opts.ProviderRepo,
 		WorkerPoolRepo:   opts.WorkerPoolRepo,
 		ContainerRepo:    opts.ContainerRepo,
 		EventRepo:        opts.EventRepo,

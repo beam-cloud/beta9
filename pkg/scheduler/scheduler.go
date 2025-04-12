@@ -37,7 +37,6 @@ type Scheduler struct {
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
 	eventBus := common.NewEventBus(redisClient)
 	workerRepo := repo.NewWorkerRedisRepository(redisClient, config.Worker)
-	providerRepo := repo.NewProviderRedisRepository(redisClient)
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
@@ -59,23 +58,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 				Config:         config,
 				BackendRepo:    backendRepo,
 				WorkerRepo:     workerRepo,
-				ProviderRepo:   providerRepo,
 				WorkerPoolRepo: workerPoolRepo,
 				ContainerRepo:  containerRepo,
-				EventRepo:      eventRepo,
-			})
-		case types.PoolModeExternal:
-			controller, err = NewExternalWorkerPoolController(WorkerPoolControllerOptions{
-				Context:        ctx,
-				Name:           name,
-				Config:         config,
-				BackendRepo:    backendRepo,
-				WorkerRepo:     workerRepo,
-				ProviderRepo:   providerRepo,
-				WorkerPoolRepo: workerPoolRepo,
-				ContainerRepo:  containerRepo,
-				ProviderName:   pool.Provider,
-				Tailscale:      tailscale,
 				EventRepo:      eventRepo,
 			})
 		default:

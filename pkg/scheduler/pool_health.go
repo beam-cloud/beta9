@@ -17,7 +17,6 @@ type PoolHealthMonitorOptions struct {
 	WorkerConfig     types.WorkerConfig
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
-	ProviderRepo     repository.ProviderRepository
 	ContainerRepo    repository.ContainerRepository
 	EventRepo        repository.EventRepository
 }
@@ -30,7 +29,6 @@ type PoolHealthMonitor struct {
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
 	containerRepo    repository.ContainerRepository
-	providerRepo     repository.ProviderRepository
 	eventRepo        repository.EventRepository
 }
 
@@ -42,7 +40,6 @@ func NewPoolHealthMonitor(opts PoolHealthMonitorOptions) *PoolHealthMonitor {
 		workerConfig:     opts.WorkerConfig,
 		workerRepo:       opts.WorkerRepo,
 		containerRepo:    opts.ContainerRepo,
-		providerRepo:     opts.ProviderRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
 		eventRepo:        opts.EventRepo,
 	}
@@ -98,23 +95,6 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 	workers, err := p.workerRepo.GetAllWorkersInPool(p.wpc.Name())
 	if err != nil {
 		return nil, err
-	}
-
-	if p.wpc.Mode() == types.PoolModeExternal {
-		providerName := string(*p.workerPoolConfig.Provider)
-		machines, err := p.providerRepo.ListAllMachines(providerName, p.wpc.Name(), false)
-		if err != nil {
-			return nil, err
-		}
-
-		for _, machine := range machines {
-			switch machine.State.Status {
-			case types.MachineStatusPending:
-				pendingMachines++
-			case types.MachineStatusRegistered:
-				registeredMachines++
-			}
-		}
 	}
 
 	for _, worker := range workers {

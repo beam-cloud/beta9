@@ -1,12 +1,10 @@
 package scheduler
 
 import (
-	"errors"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/beam-cloud/redislock"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -14,7 +12,6 @@ import (
 type WorkerPoolSizer struct {
 	controller             WorkerPoolController
 	workerRepo             repository.WorkerRepository
-	providerRepo           repository.ProviderRepository
 	workerPoolRepo         repository.WorkerPoolRepository
 	workerPoolConfig       *types.WorkerPoolConfig
 	workerPoolSizingConfig *types.WorkerPoolSizingConfig
@@ -23,8 +20,7 @@ type WorkerPoolSizer struct {
 func NewWorkerPoolSizer(controller WorkerPoolController,
 	workerPoolConfig *types.WorkerPoolConfig,
 	workerRepo repository.WorkerRepository,
-	workerPoolRepo repository.WorkerPoolRepository,
-	providerRepo repository.ProviderRepository) (*WorkerPoolSizer, error) {
+	workerPoolRepo repository.WorkerPoolRepository) (*WorkerPoolSizer, error) {
 	poolSizingConfig, err := parsePoolSizingConfig(workerPoolConfig.PoolSizing)
 	if err != nil {
 		return nil, err
@@ -36,7 +32,6 @@ func NewWorkerPoolSizer(controller WorkerPoolController,
 		workerPoolSizingConfig: poolSizingConfig,
 		workerRepo:             workerRepo,
 		workerPoolRepo:         workerPoolRepo,
-		providerRepo:           providerRepo,
 	}, nil
 }
 
@@ -95,50 +90,8 @@ func (s *WorkerPoolSizer) Start() {
 				log.Info().Str("pool_name", s.controller.Name()).Interface("worker", newWorker).Msg("added new worker to maintain pool size")
 			}
 
-			// Handle case where we want to make sure all available manually provisioned nodes have available workers
-			if s.workerPoolConfig.Mode == types.PoolModeExternal {
-				err := s.occupyAvailableMachines()
-				if err != nil && !errors.Is(err, redislock.ErrNotObtained) {
-					log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to list machines in external pool")
-				}
-			}
 		}()
 	}
-}
-
-// occupyAvailableMachines ensures that all manually provisioned machines always have workers occupying them
-// This only adds one worker per machine, so if a machine has more capacity, it will not be fully utilized unless
-// this is called multiple times.
-func (s *WorkerPoolSizer) occupyAvailableMachines() error {
-	if err := s.workerPoolRepo.SetWorkerPoolSizerLock(s.controller.Name()); err != nil {
-		return err
-	}
-	defer s.workerPoolRepo.RemoveWorkerPoolSizerLock(s.controller.Name())
-
-	machines, err := s.providerRepo.ListAllMachines(string(*s.workerPoolConfig.Provider), s.controller.Name(), true)
-	if err != nil {
-		return err
-	}
-
-	for _, m := range machines {
-		if m.State.AutoConsolidate {
-			continue
-		}
-
-		cpu := s.workerPoolSizingConfig.DefaultWorkerCpu
-		memory := s.workerPoolSizingConfig.DefaultWorkerMemory
-		gpuType := s.workerPoolSizingConfig.DefaultWorkerGpuType
-		gpuCount := s.workerPoolSizingConfig.DefaultWorkerGpuCount
-
-		worker, err := s.controller.AddWorkerToMachine(cpu, memory, gpuType, gpuCount, m.State.MachineId)
-		if err != nil {
-			continue
-		}
-
-		log.Info().Str("pool_name", s.controller.Name()).Interface("worker", worker).Msg("added new worker to occupy existing machine")
-	}
-
-	return nil
 }
 
 func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*types.Worker, error) {

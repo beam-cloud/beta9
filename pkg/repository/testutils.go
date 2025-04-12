@@ -48,12 +48,6 @@ func NewWorkspaceRedisRepositoryForTest(rdb *common.RedisClient) WorkspaceReposi
 	return &WorkspaceRedisRepository{rdb: rdb}
 }
 
-func NewProviderRedisRepositoryForTest(rdb *common.RedisClient) ProviderRepository {
-	lock := common.NewRedisLock(rdb)
-	lockOptions := common.RedisLockOptions{TtlS: 10, Retries: 0}
-	return &ProviderRedisRepository{rdb: rdb, lock: lock, lockOptions: lockOptions}
-}
-
 func NewBackendPostgresRepositoryForTest() (BackendRepository, sqlmock.Sqlmock) {
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {

@@ -181,21 +181,6 @@ type TaskRepository interface {
 	RemoveTaskRetryLock(ctx context.Context, workspaceName, stubId, taskId string) error
 }
 
-type ProviderRepository interface {
-	GetMachine(providerName, poolName, machineId string) (*types.ProviderMachine, error)
-	AddMachine(providerName, poolName, machineId string, machineInfo *types.ProviderMachineState) error
-	RemoveMachine(providerName, poolName, machineId string) error
-	SetMachineKeepAlive(providerName, poolName, machineId, agentVersion string, metrics *types.ProviderMachineMetrics) error
-	SetLastWorkerSeen(providerName, poolName, machineId string) error
-	RegisterMachine(providerName, poolName, machineId string, newMachineInfo *types.ProviderMachineState, poolConfig *types.WorkerPoolConfig) error
-	WaitForMachineRegistration(providerName, poolName, machineId string) (*types.ProviderMachineState, error)
-	ListAllMachines(providerName, poolName string, useLock bool) ([]*types.ProviderMachine, error)
-	SetMachineLock(providerName, poolName, machineId string) error
-	RemoveMachineLock(providerName, poolName, machineId string) error
-	GetGPUAvailability(pools map[string]types.WorkerPoolConfig) (map[string]bool, error)
-	GetGPUCounts(pools map[string]types.WorkerPoolConfig) (map[string]int, error)
-}
-
 type TailscaleRepository interface {
 	GetHostnamesForService(serviceName string) ([]string, error)
 	SetHostname(serviceName, serviceId, hostName string) error

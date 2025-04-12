@@ -63,7 +63,6 @@ type Gateway struct {
 	WorkspaceRepo    repository.WorkspaceRepository
 	ContainerRepo    repository.ContainerRepository
 	BackendRepo      repository.BackendRepository
-	ProviderRepo     repository.ProviderRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
 	EventRepo        repository.EventRepository
 	Tailscale        *network.Tailscale
@@ -137,7 +136,6 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
-	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker)
 	workerPoolRepo := repository.NewWorkerPoolRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
@@ -151,7 +149,6 @@ func NewGateway() (*Gateway, error) {
 	gateway.TaskRepo = taskRepo
 	gateway.WorkspaceRepo = workspaceRepo
 	gateway.ContainerRepo = containerRepo
-	gateway.ProviderRepo = providerRepo
 	gateway.WorkerPoolRepo = workerPoolRepo
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
@@ -208,7 +205,6 @@ func (g *Gateway) initHttp() error {
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient, g.BackendRepo)
-	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config, g.workerRepo)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.Config)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.BackendRepo, g.TaskDispatcher, g.Config)
@@ -435,7 +431,6 @@ func (g *Gateway) registerServices() error {
 		Config:         g.Config,
 		BackendRepo:    g.BackendRepo,
 		ContainerRepo:  g.ContainerRepo,
-		ProviderRepo:   g.ProviderRepo,
 		Scheduler:      g.Scheduler,
 		TaskDispatcher: g.TaskDispatcher,
 		RedisClient:    g.RedisClient,
