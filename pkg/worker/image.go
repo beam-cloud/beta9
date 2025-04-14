@@ -9,7 +9,6 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
@@ -160,17 +159,8 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 
 func (c *ImageClient) PrepareImageMount(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, error) {
 	imageId := request.ImageId
-	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
-	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
-	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
-		localCachePath = ""
-	}
-
-	if c.cacheClient.HostsAvailable() {
-		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
-		localCachePath = fmt.Sprintf("/%s", sourcePath)
-	}
+	localCachePath := ""
 
 	// FIXME: When doing a build, it makes sense to eager cache the base image still
 
@@ -233,7 +223,7 @@ func (c *ImageClient) PrepareImageMount(ctx context.Context, request *types.Cont
 
 	// elapsed := time.Since(startTime)
 
-	// remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
+	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 	// if _, err := os.Stat(remoteArchivePath); err != nil {
 	// err = c.registry.Pull(context.TODO(), remoteArchivePath, imageId)
 	// 	if err != nil {
@@ -241,7 +231,6 @@ func (c *ImageClient) PrepareImageMount(ctx context.Context, request *types.Cont
 	// 	}
 	// }
 	elapsed := time.Duration(0)
-	remoteArchivePath := fmt.Sprintf("/rimages/%s.%s", imageId, c.registry.ImageFileExtension)
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           remoteArchivePath,

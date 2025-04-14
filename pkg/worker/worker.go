@@ -155,24 +155,24 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	// TODO: clean this up.
-	// Mount the image registry in case the blobcache becomes unavailable
-	mountPointStorage, err := storage.NewMountPointStorage(types.MountPointConfig{
-		BucketName:  config.ImageService.Registries.S3.BucketName,
-		AccessKey:   config.ImageService.Registries.S3.AccessKey,
-		SecretKey:   config.ImageService.Registries.S3.SecretKey,
-		Region:      config.ImageService.Registries.S3.Region,
-		EndpointURL: config.ImageService.Registries.S3.Endpoint,
-	})
-	if err != nil {
-		return nil, err
-	}
+	// // TODO: clean this up.
+	// // Mount the image registry in case the blobcache becomes unavailable
+	// mountPointStorage, err := storage.NewMountPointStorage(types.MountPointConfig{
+	// 	BucketName:  config.ImageService.Registries.S3.BucketName,
+	// 	AccessKey:   config.ImageService.Registries.S3.AccessKey,
+	// 	SecretKey:   config.ImageService.Registries.S3.SecretKey,
+	// 	Region:      config.ImageService.Registries.S3.Region,
+	// 	EndpointURL: config.ImageService.Registries.S3.Endpoint,
+	// })
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	// Mount filesystem
-	err = mountPointStorage.Mount("/rimages")
-	if err != nil {
-		log.Fatal().Err(err).Msg("unable to mount filesystem")
-	}
+	// // Mount filesystem
+	// err = mountPointStorage.Mount("/rimages")
+	// if err != nil {
+	// 	log.Fatal().Err(err).Msg("unable to mount filesystem")
+	// }
 
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
