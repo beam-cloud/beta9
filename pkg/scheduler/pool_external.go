@@ -235,15 +235,8 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		return nil, err
 	}
 
-	switch machine.State.MetadataMode {
-	case blobcache.BlobCacheMetadataModeLocal:
-		if machine.State.Status != types.MachineStatusReady {
-			return nil, errors.New("machine not ready")
-		}
-	case blobcache.BlobCacheMetadataModeDefault:
-		if machine.State.Status != types.MachineStatusRegistered {
-			return nil, errors.New("machine not registered")
-		}
+	if machine.State.Status != types.MachineStatusReady {
+		return nil, errors.New("machine not ready")
 	}
 
 	remainingMachineCpu := machine.State.Cpu

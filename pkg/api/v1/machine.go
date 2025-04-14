@@ -65,7 +65,7 @@ func (g *MachineGroup) ListPoolMachines(ctx echo.Context) error {
 
 	availableMachines := make([]*types.ProviderMachine, 0)
 	for _, machine := range machines {
-		if machine.State.Status != types.MachineStatusReady && machine.State.Status != types.MachineStatusRegistered {
+		if machine.State.Status != types.MachineStatusReady {
 			continue
 		}
 
