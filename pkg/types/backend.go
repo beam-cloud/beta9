@@ -42,10 +42,19 @@ func (t NullTime) Serialize() interface{} {
 	return time.Time(t.Time).Format(time.RFC3339)
 }
 
+func (t NullTime) Now() NullTime {
+	return NullTime{
+		NullTime: sql.NullTime{
+			Time:  time.Now(),
+			Valid: true,
+		},
+	}
+}
+
 // @go2proto
 type Workspace struct {
-	Id                 uint              `db:"id" json:"id,omitempty"`
-	ExternalId         string            `db:"external_id" json:"external_id,omitempty" serializer:"id"`
+	Id                 uint              `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
+	ExternalId         string            `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
 	Name               string            `db:"name" json:"name" serializer:"name"`
 	CreatedAt          Time              `db:"created_at" json:"created_at,omitempty" serializer:"created_at"`
 	UpdatedAt          Time              `db:"updated_at" json:"updated_at,omitempty" serializer:"updated_at"`
@@ -177,8 +186,8 @@ const (
 )
 
 type Token struct {
-	Id                     uint       `db:"id" json:"id"`
-	ExternalId             string     `db:"external_id" json:"external_id" serializer:"id"`
+	Id                     uint       `db:"id" json:"id" serializer:"id,source:external_id"`
+	ExternalId             string     `db:"external_id" json:"external_id" serializer:"external_id"`
 	Key                    string     `db:"key" json:"key" serializer:"key"`
 	Active                 bool       `db:"active" json:"active" serializer:"active"`
 	Reusable               bool       `db:"reusable" json:"reusable" serializer:"reusable"`
@@ -206,7 +215,7 @@ type VolumeWithRelated struct {
 }
 
 type Deployment struct {
-	Id          uint     `db:"id" json:"id"`
+	Id          uint     `db:"id" json:"id" serializer:"id,source:external_id"`
 	ExternalId  string   `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
 	Name        string   `db:"name" json:"name" serializer:"name"`
 	Active      bool     `db:"active" json:"active" serializer:"active"`
@@ -225,12 +234,13 @@ type DeploymentWithRelated struct {
 	Deployment
 	Workspace Workspace `db:"workspace" json:"workspace" serializer:"workspace"`
 	Stub      Stub      `db:"stub" json:"stub" serializer:"stub"`
+	StubId    string    `serializer:"stub_id,source:stub.id"`
 }
 
 // @go2proto
 type Object struct {
-	Id          uint   `db:"id" json:"id"`
-	ExternalId  string `db:"external_id" json:"external_id,omitempty" serializer:"id"`
+	Id          uint   `db:"id" json:"id" serializer:"id,source:external_id"`
+	ExternalId  string `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
 	Hash        string `db:"hash" json:"hash" serializer:"hash"`
 	Size        int64  `db:"size" json:"size" serializer:"size"`
 	WorkspaceId uint   `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
@@ -296,8 +306,8 @@ type TaskParams struct {
 }
 
 type Task struct {
-	Id          uint       `db:"id" json:"id,omitempty"`
-	ExternalId  string     `db:"external_id" json:"external_id,omitempty" serializer:"id"`
+	Id          uint       `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
+	ExternalId  string     `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
 	Status      TaskStatus `db:"status" json:"status,omitempty" serializer:"status"`
 	ContainerId string     `db:"container_id" json:"container_id,omitempty" serializer:"container_id"`
 	StartedAt   NullTime   `db:"started_at" json:"started_at,omitempty" serializer:"started_at"`
@@ -386,8 +396,8 @@ type Autoscaler struct {
 }
 
 type App struct {
-	Id          uint     `db:"id" json:"id"`
-	ExternalId  string   `db:"external_id" json:"external_id,omitempty" serializer:"id"`
+	Id          uint     `db:"id" json:"id" serializer:"id,source:external_id"`
+	ExternalId  string   `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
 	Name        string   `db:"name" json:"name" serializer:"name"`
 	Description string   `db:"description" json:"description" serializer:"description"`
 	WorkspaceId uint     `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
@@ -438,8 +448,8 @@ func (t StubType) Kind() string {
 
 // @go2proto
 type Stub struct {
-	Id            uint     `db:"id" json:"id,omitempty"`
-	ExternalId    string   `db:"external_id" json:"external_id,omitempty" serializer:"id"`
+	Id            uint     `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
+	ExternalId    string   `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
 	Name          string   `db:"name" json:"name" serializer:"name"`
 	Type          StubType `db:"type" json:"type" serializer:"type"`
 	Config        string   `db:"config" json:"config" serializer:"config"`

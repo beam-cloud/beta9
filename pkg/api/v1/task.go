@@ -2,7 +2,6 @@ package apiv1
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"log"
 	"net/http"
@@ -216,12 +215,7 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 	}
 
 	task.Status = types.TaskStatusCancelled
-	task.EndedAt = types.NullTime{
-		NullTime: sql.NullTime{
-			Time:  time.Now(),
-			Valid: true,
-		},
-	}
+	task.EndedAt = types.NullTime{}.Now()
 	if _, err := g.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 		return errors.New("failed to update task")
 	}

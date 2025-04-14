@@ -42,7 +42,7 @@ func TestBasicSerialize(t *testing.T) {
 	}
 }
 
-func TestNestedSerialize(t *testing.T) {
+func TestNestedSerializeSource(t *testing.T) {
 	type DeepNested struct {
 		ID         int    `serializer:"id"`
 		Name       string `serializer:"name"`
@@ -95,6 +95,41 @@ func TestNestedSerialize(t *testing.T) {
 	}
 
 	if int64(parsedResult["id"].(float64)) != int64(test.Nested.ID) || parsedResult["name"] != test.Nested.Name || parsedResult["name2"] != test.Nested.DeepNested.Name || parsedResult["deep_nested_id"] != test.Nested.DeepNested.ExternalID {
+		t.Error("Values are not correct")
+	}
+}
+
+func TestSerializeSourceAtSameLevel(t *testing.T) {
+	type Test struct {
+		ID    int    `serializer:"id"`
+		Name  string `serializer:"name"`
+		Name2 string `serializer:"name2,source:name"`
+	}
+
+	test := Test{
+		ID:   1,
+		Name: "test",
+	}
+
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
+
+	bytes, err := json.Marshal(result)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
+
+	var parsedResult map[string]interface{}
+	err = json.Unmarshal(bytes, &parsedResult)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	if parsedResult["name2"] != "test" {
 		t.Error("Values are not correct")
 	}
 }

@@ -2,7 +2,6 @@ package taskqueue
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -273,12 +272,7 @@ func (tq *RedisTaskQueue) TaskQueuePop(ctx context.Context, in *pb.TaskQueuePopR
 	}
 
 	task.ContainerId = in.ContainerId
-	task.StartedAt = types.NullTime{
-		NullTime: sql.NullTime{
-			Time:  time.Now(),
-			Valid: true,
-		},
-	}
+	task.StartedAt = types.NullTime{}.Now()
 	task.Status = types.TaskStatusRunning
 
 	err = tq.rdb.SAdd(ctx, Keys.taskQueueTaskRunningLockIndex(authInfo.Workspace.Name, in.StubId, in.ContainerId), task.ExternalId).Err()
@@ -347,12 +341,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
-	task.EndedAt = types.NullTime{
-		NullTime: sql.NullTime{
-			Time:  time.Now(),
-			Valid: true,
-		},
-	}
+	task.EndedAt = types.NullTime{}.Now()
 	task.Status = types.TaskStatus(in.TaskStatus)
 
 	if task.Status == types.TaskStatusRetry {
