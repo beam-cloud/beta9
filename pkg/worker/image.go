@@ -158,7 +158,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 	return c, nil
 }
 
-func (c *ImageClient) PrepareImageMount(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, error) {
+func (c *ImageClient) PrepareImageMount(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
@@ -167,72 +167,11 @@ func (c *ImageClient) PrepareImageMount(ctx context.Context, request *types.Cont
 		localCachePath = ""
 	}
 
-	// FIXME: When doing a build, it makes sense to eager cache the base image still
-
-	// // If we have a valid cache client, attempt to cache entirety of the image
-	// // in memory (in a nearby region). If a remote cache is available, this supercedes
-	// // the local cache - which is basically just downloading the image to disk
-	// startTime := time.Now()
-
-	if c.cacheClient != nil && !isBuildContainer {
-		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
-		// 	sourceOffset := int64(0)
-
-		// 	// Create constant backoff
-		// 	b := backoff.NewConstantBackOff(300 * time.Millisecond)
-		// 	imageLocked := false
-
-		// 	operation := func() error {
-		baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-		// 		if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
-		// 			localCachePath = baseBlobFsContentPath
-		// 			return nil
-		// 		}
-
-		// 		if !c.cacheClient.HostsAvailable() {
-		// 			return nil
-		// 		}
-
-		// 		pullStartTime := time.Now()
-
-		// 		// If the image was previously locked, don't try to cache it again, just wait until the caching is complete
-		// 		if imageLocked {
-		// 			return errors.New("image locked")
-		// 		}
-
-		// 		_, err := c.cacheClient.StoreContentFromSourceWithLock(sourcePath, sourceOffset)
-		// 		if err != nil {
-		// 			if err == blobcache.ErrUnableToAcquireLock {
-		// 				imageLocked = true
-		// 				return err
-		// 			}
-		// 			outputLogger.Error(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
-		// 			return backoff.Permanent(err)
-		// 		}
-
-		localCachePath = baseBlobFsContentPath
-		// 		outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
-		// 		metrics.RecordImagePullTime(time.Since(pullStartTime))
-		// 		return nil
-		// 	}
-
-		// 	// Run with context
-		// 	err := backoff.RetryNotify(operation, backoff.WithContext(b, ctx),
-		// 		func(err error, d time.Duration) {
-		// 			log.Info().Str("image_id", imageId).Err(err).Msg("retrying cache attempt")
-		// 		})
-		// 	if err != nil {
-		// 		outputLogger.Info(fmt.Sprintf("Giving up on caching image <%s>: %v\n", imageId, err))
-		// 	}
-	}
-
-	elapsed := time.Duration(0)
-
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 	if _, err := os.Stat(remoteArchivePath); err != nil {
 		err = c.registry.Pull(context.TODO(), remoteArchivePath, imageId)
 		if err != nil {
-			return elapsed, err
+			return err
 		}
 	}
 
@@ -254,7 +193,7 @@ func (c *ImageClient) PrepareImageMount(ctx context.Context, request *types.Cont
 	// Check if a fuse server exists for this imageId
 	_, mounted := c.mountedFuseServers.Get(imageId)
 	if mounted {
-		return elapsed, nil
+		return nil
 	}
 
 	// Get lock on image mount
@@ -263,7 +202,7 @@ func (c *ImageClient) PrepareImageMount(ctx context.Context, request *types.Cont
 		ImageId:  imageId,
 	}))
 	if err != nil {
-		return elapsed, err
+		return err
 	}
 	defer handleGRPCResponse(c.workerRepoClient.RemoveImagePullLock(context.Background(), &pb.RemoveImagePullLockRequest{
 		WorkerId: c.workerId,
@@ -273,16 +212,16 @@ func (c *ImageClient) PrepareImageMount(ctx context.Context, request *types.Cont
 
 	startServer, _, server, err := clip.MountArchive(*mountOptions)
 	if err != nil {
-		return elapsed, err
+		return err
 	}
 
 	err = startServer()
 	if err != nil {
-		return elapsed, err
+		return err
 	}
 
 	c.mountedFuseServers.Set(imageId, server)
-	return elapsed, nil
+	return nil
 }
 
 func (c *ImageClient) Cleanup() error {
