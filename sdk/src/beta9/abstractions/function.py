@@ -34,6 +34,9 @@ class Function(RunnerAbstraction):
     Decorator which allows you to run the decorated function in a remote container.
 
     Parameters:
+        app (str):
+            Assign the function to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
@@ -91,6 +94,7 @@ class Function(RunnerAbstraction):
 
     def __init__(
         self,
+        app: str = "",
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
@@ -122,6 +126,7 @@ class Function(RunnerAbstraction):
             name=name,
             task_policy=task_policy,
             on_deploy=on_deploy,
+            app=app,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None
@@ -295,6 +300,9 @@ class Schedule(Function):
     Decorator which allows you to run the decorated function as a scheduled job.
 
     Parameters:
+        app (str):
+            Assign the scheduled function to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         when (str):
             A cron expression that specifies when the task should be run. For example "*/5 * * * *".
             The timezone is always UTC.
@@ -351,6 +359,7 @@ class Schedule(Function):
     def __init__(
         self,
         when: str,
+        app: str = "",
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,

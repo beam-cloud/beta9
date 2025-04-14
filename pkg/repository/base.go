@@ -122,7 +122,7 @@ type BackendRepository interface {
 	ListTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error)
 	AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error)
 	GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error)
-	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
+	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error)
 	UpdateStubConfig(ctx context.Context, stubId uint, config *types.StubConfigV1) error
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
 	GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error)
@@ -137,7 +137,7 @@ type BackendRepository interface {
 	GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error)
 	GetDeploymentByStubExternalId(ctx context.Context, workspaceId uint, stubExternalId string) (*types.DeploymentWithRelated, error)
 	GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error)
-	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
+	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string, appId uint) (*types.Deployment, error)
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
 	DeleteDeployment(ctx context.Context, deployment types.Deployment) error
 	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)
@@ -162,6 +162,9 @@ type BackendRepository interface {
 	ListenToChannel(ctx context.Context, channel string) (<-chan string, error)
 	Ping() error
 	GetTaskMetrics(ctx context.Context, periodStart time.Time, periodEnd time.Time) (types.TaskMetrics, error)
+	GetOrCreateApp(ctx context.Context, workspaceId uint, appName string) (*types.App, error)
+	ListApps(ctx context.Context, workspaceId uint) ([]types.App, error)
+	ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error)
 }
 
 type TaskRepository interface {

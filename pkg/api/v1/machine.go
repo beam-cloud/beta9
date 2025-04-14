@@ -65,7 +65,7 @@ func (g *MachineGroup) ListPoolMachines(ctx echo.Context) error {
 
 	availableMachines := make([]*types.ProviderMachine, 0)
 	for _, machine := range machines {
-		if machine.State.Status != types.MachineStatusRegistered {
+		if machine.State.Status != types.MachineStatusReady {
 			continue
 		}
 
@@ -119,13 +119,14 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	}
 
 	err = g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{
-		MachineId: request.MachineID,
-		Token:     request.Token,
-		HostName:  hostName,
-		Cpu:       cpu,
-		Memory:    memory,
-		GpuCount:  uint32(gpuCount),
-		PrivateIP: request.PrivateIP,
+		MachineId:    request.MachineID,
+		Token:        request.Token,
+		HostName:     hostName,
+		Cpu:          cpu,
+		Memory:       memory,
+		GpuCount:     uint32(gpuCount),
+		PrivateIP:    request.PrivateIP,
+		MetadataMode: g.config.BlobCache.Metadata.Mode,
 	}, &poolConfig)
 	if err != nil {
 		return HTTPInternalServerError("Failed to register machine")
