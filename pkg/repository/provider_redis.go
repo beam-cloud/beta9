@@ -8,6 +8,7 @@ import (
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -185,8 +186,8 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 				return nil, fmt.Errorf("error parsing machine state for %s: %w", machineId, err)
 			}
 
-			if state.Status == types.MachineStatusPending {
-				// Still waiting for machine registration
+			if state.Status != types.MachineStatusReady {
+				log.Info().Msgf("waiting for machine to be ready: %s", machineId)
 				continue
 			}
 
@@ -219,6 +220,29 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 	err = r.rdb.SAdd(context.TODO(), machineIndexKey, stateKey).Err()
 	if err != nil {
 		return fmt.Errorf("failed to add machine state key to index <%v>: %w", machineIndexKey, err)
+	}
+
+	return nil
+}
+
+func (r *ProviderRedisRepository) SetMachineStatusReady(providerName, poolName, machineId string) error {
+	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
+
+	machineState, err := r.getMachineStateFromKey(stateKey)
+	if err != nil {
+		return fmt.Errorf("failed to get machine state <%v>: %w", stateKey, err)
+	}
+
+	machineState.Status = types.MachineStatusReady
+
+	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineState)).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
+	}
+
+	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.MachineKeepaliveExpirationS)*time.Second).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set machine state ttl <%v>: %w", stateKey, err)
 	}
 
 	return nil
@@ -328,6 +352,7 @@ func (r *ProviderRedisRepository) RegisterMachine(providerName, poolName, machin
 	machineInfo.Memory = newMachineInfo.Memory
 	machineInfo.GpuCount = newMachineInfo.GpuCount
 	machineInfo.PrivateIP = newMachineInfo.PrivateIP
+	machineInfo.MetadataMode = newMachineInfo.MetadataMode
 
 	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineInfo)).Err()
 	if err != nil {
