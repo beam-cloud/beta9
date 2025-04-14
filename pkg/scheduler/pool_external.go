@@ -235,8 +235,15 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		return nil, err
 	}
 
-	if machine.State.Status != types.MachineStatusRegistered {
-		return nil, errors.New("machine not registered")
+	switch machine.State.MetadataMode {
+	case blobcache.BlobCacheMetadataModeLocal:
+		if machine.State.Status != types.MachineStatusReady {
+			return nil, errors.New("machine not ready")
+		}
+	case blobcache.BlobCacheMetadataModeDefault:
+		if machine.State.Status != types.MachineStatusRegistered {
+			return nil, errors.New("machine not registered")
+		}
 	}
 
 	remainingMachineCpu := machine.State.Cpu
@@ -246,10 +253,6 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		remainingMachineCpu -= worker.TotalCpu
 		remainingMachineMemory -= worker.TotalMemory
 		remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
-	}
-
-	if machine.State.Status != types.MachineStatusReady {
-		return nil, errors.New("machine not ready")
 	}
 
 	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
