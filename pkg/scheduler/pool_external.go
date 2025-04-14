@@ -248,7 +248,7 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
 	}
 
-	if !machine.State.Ready {
+	if machine.State.Status != types.MachineStatusReady {
 		return nil, errors.New("machine not ready")
 	}
 

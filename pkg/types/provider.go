@@ -9,6 +9,7 @@ import (
 const (
 	MachineStatusRegistered          MachineStatus = "registered"
 	MachineStatusPending             MachineStatus = "pending"
+	MachineStatusReady               MachineStatus = "ready"
 	MachinePendingExpirationS        int           = 3600 // 1 hour
 	MachineKeepaliveExpirationS      int           = 300  // 5 minutes
 	MachineEmptyConsolidationPeriodM time.Duration = 10 * time.Minute
@@ -62,7 +63,6 @@ type ProviderMachineState struct {
 	AutoConsolidate   bool                            `json:"auto_consolidate" redis:"auto_consolidate"`
 	AgentVersion      string                          `json:"agent_version" redis:"agent_version"`
 	MetadataMode      blobcache.BlobCacheMetadataMode `json:"metadata_mode" redis:"metadata_mode"`
-	Ready             bool                            `json:"ready" redis:"ready"`
 }
 
 type ProviderNotImplemented struct {

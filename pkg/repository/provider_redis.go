@@ -186,7 +186,7 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 				return nil, fmt.Errorf("error parsing machine state for %s: %w", machineId, err)
 			}
 
-			if state.Status == types.MachineStatusPending || !state.Ready {
+			if state.Status != types.MachineStatusReady {
 				log.Info().Msgf("waiting for machine to be ready: %s", machineId)
 				continue
 			}
@@ -225,7 +225,7 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 	return nil
 }
 
-func (r *ProviderRedisRepository) SetMachineReady(providerName, poolName, machineId string) error {
+func (r *ProviderRedisRepository) SetMachineStatusReady(providerName, poolName, machineId string) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 
 	machineState, err := r.getMachineStateFromKey(stateKey)
@@ -233,7 +233,7 @@ func (r *ProviderRedisRepository) SetMachineReady(providerName, poolName, machin
 		return fmt.Errorf("failed to get machine state <%v>: %w", stateKey, err)
 	}
 
-	machineState.Ready = true
+	machineState.Status = types.MachineStatusReady
 
 	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineState)).Err()
 	if err != nil {
