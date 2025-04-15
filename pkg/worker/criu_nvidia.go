@@ -140,18 +140,6 @@ func (c *NvidiaCRIUManager) checkpointCached(cachedCheckpointPath string, contai
 		log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
 		return false
 	}
-
-	// The "/cache" prefix is added by way of mounting and is not reflected in the path that the metadata
-	// cache is tracking.
-	cachedCheckpointPath = strings.TrimPrefix(cachedCheckpointPath, "/cache")
-
-	// client := c.fileCacheManager.GetClient()
-	// if !client.IsDirCachedNearby(context.Background(), cachedCheckpointPath) {
-	// 	log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
-	// 	return false
-	// }
-
-	log.Info().Str("container_id", containerId).Msgf("checkpoint cached nearby")
 	return true
 }
 
