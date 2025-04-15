@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -106,6 +107,8 @@ func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) 
 			return "", err
 		}
 		defer file.Close()
+	} else if cm.client.IsPathCachedNearby(context.Background(), workspaceVolumePath) {
+		return workspaceVolumePath, nil
 	}
 
 	_, err = cm.client.StoreContentFromSource(fileName, 0)

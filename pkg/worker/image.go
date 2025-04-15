@@ -183,7 +183,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 		operation := func() error {
 			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-			if _, err := os.Stat(baseBlobFsContentPath); err == nil {
+			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
 				localCachePath = baseBlobFsContentPath
 				return nil
 			}
