@@ -16,8 +16,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.51.4
-	github.com/beam-cloud/blobcache-v2 v0.0.0-20250415220757-9d8eca714e8e
-	github.com/beam-cloud/clip v0.0.0-20250415202858-ec9aa7fb5f1f
+	github.com/beam-cloud/blobcache-v2 v0.0.0-20250415231635-533cd27f20bb
+	github.com/beam-cloud/clip v0.0.0-20250415225442-70b041c523b5
 	github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
 	github.com/cedana/cedana v0.9.240
@@ -92,6 +92,7 @@ require (
 )
 
 require (
+	github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.8 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
