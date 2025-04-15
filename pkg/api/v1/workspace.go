@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"fmt"
 	"net/http"
 
 	"strings"
@@ -30,7 +31,8 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 	g.POST("", group.CreateWorkspace)
 	g.GET("/current", auth.WithAuth(group.CurrentWorkspace))
 	g.GET("/:workspaceId/export", auth.WithWorkspaceAuth(group.ExportWorkspaceConfig))
-	g.POST("/:workspaceId/storage", auth.WithWorkspaceAuth(group.CreateWorkspaceStorage))
+	g.POST("/:workspaceId/create-external-storage", auth.WithWorkspaceAuth(group.CreateExternalWorkspaceStorage))
+	g.POST("/:workspaceId/create-storage", auth.WithWorkspaceAuth(group.CreateWorkspaceDefaultStorage))
 
 	return group
 }
@@ -100,7 +102,15 @@ type CreateWorkspaceStorageRequest struct {
 	Region      string `json:"region" validate:"required"`
 }
 
-func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
+// CreateExternalWorkspaceStorage takes in the details for accessing an external s3 compatible storage bucket.
+// This includes:
+// - Bucket name
+// - Access key
+// - Secret key
+// - Endpoint URL
+// - Region
+// It then creates a new workspace storage object for that bucket and sets it as the storage bucket for the workspace.
+func (g *WorkspaceGroup) CreateExternalWorkspaceStorage(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 
 	cc, _ := ctx.(*auth.HttpAuthContext)
@@ -160,6 +170,56 @@ func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
 		if err != nil {
 			return HTTPInternalServerError("Unable to revoke token")
 		}
+	}
+
+	return ctx.JSON(http.StatusCreated, createdStorage)
+}
+
+// CreateWorkspaceDefaultStorage creates a new bucket in the configured default storage provider.
+// It then creates a new workspace storage object for that bucket and sets it as the storage bucket for the workspace.
+func (g *WorkspaceGroup) CreateWorkspaceDefaultStorage(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	workspace := cc.AuthInfo.Workspace
+	if workspace.ExternalId != workspaceId {
+		return HTTPUnauthorized("Invalid token")
+	}
+
+	bucketName := fmt.Sprintf("workspace-%d", workspace.Id)
+	accessKey := g.config.Storage.WorkspaceStorage.DefaultAccessKey
+	secretKey := g.config.Storage.WorkspaceStorage.DefaultSecretKey
+	endpointUrl := g.config.Storage.WorkspaceStorage.DefaultEndpointUrl
+	region := g.config.Storage.WorkspaceStorage.DefaultRegion
+
+	storage := &types.WorkspaceStorage{
+		BucketName:  &bucketName,
+		AccessKey:   &accessKey,
+		SecretKey:   &secretKey,
+		EndpointUrl: &endpointUrl,
+		Region:      &region,
+	}
+
+	storageClient, err := clients.NewStorageClient(ctx.Request().Context(), workspace.Name, storage)
+	if err != nil {
+		return HTTPInternalServerError("Unable to create workspace storage")
+	}
+
+	err = storageClient.CreateBucket(ctx.Request().Context())
+	if err != nil {
+		return HTTPInternalServerError("Unable to create bucket: " + err.Error())
+	}
+
+	err = storageClient.ValidateBucketAccess(ctx.Request().Context())
+	if err != nil {
+		return HTTPInternalServerError("Unable to access bucket: " + err.Error())
+	}
+
+	// Register the newly created bucket for this workspace in the database
+	createdStorage, err := g.backendRepo.CreateWorkspaceStorage(ctx.Request().Context(), workspace.Id, *storage)
+	if err != nil {
+		return HTTPInternalServerError("Unable to create workspace storage")
 	}
 
 	return ctx.JSON(http.StatusCreated, createdStorage)
