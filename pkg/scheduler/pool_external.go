@@ -236,7 +236,7 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 	}
 
 	if machine.State.Status != types.MachineStatusReady {
-		return nil, errors.New("machine not ready")
+		return nil, nil
 	}
 
 	remainingMachineCpu := machine.State.Cpu
@@ -268,7 +268,7 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		return worker, nil
 	}
 
-	return nil, errors.New("machine out of capacity")
+	return nil, nil
 }
 
 func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
