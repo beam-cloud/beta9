@@ -16,7 +16,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -497,14 +496,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 
 	// TODO: Once we set up dynamic secrets updating in agents, we can remove this
 	remoteConfig.Monitoring.FluentBit.Events.Endpoint = "http://beta9-fluent-bit.kube-system:9880"
-
-	if remoteConfig.BlobCache.Metadata.Mode == blobcache.BlobCacheMetadataModeLocal {
-		remoteConfig.BlobCache.Metadata.RedisAddr = fmt.Sprintf("%s:%d", remoteConfig.BlobCache.Metadata.ValkeyConfig.Host, remoteConfig.BlobCache.Metadata.ValkeyConfig.Port)
-		remoteConfig.BlobCache.Metadata.RedisPasswd = remoteConfig.BlobCache.Metadata.ValkeyConfig.Password
-		remoteConfig.BlobCache.Metadata.RedisTLSEnabled = false
-		remoteConfig.BlobCache.Metadata.RedisMode = blobcache.RedisModeSentinel
-		remoteConfig.BlobCache.Metadata.RedisMasterName = remoteConfig.BlobCache.Metadata.ValkeyConfig.PrimaryName
-	}
 
 	// Serialize the AppConfig struct to JSON
 	configJson, err := json.MarshalIndent(remoteConfig, "", "  ")

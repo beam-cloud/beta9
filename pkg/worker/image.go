@@ -183,7 +183,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 		operation := func() error {
 			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
+			if _, err := os.Stat(baseBlobFsContentPath); err == nil {
 				localCachePath = baseBlobFsContentPath
 				return nil
 			}
@@ -292,7 +292,7 @@ func (c *ImageClient) Cleanup() error {
 	})
 
 	log.Info().Str("path", c.imageCachePath).Msg("cleaning up blobfs image cache")
-	if c.config.BlobCache.BlobFs.Enabled && c.cacheClient != nil {
+	if c.config.BlobCache.Client.BlobFs.Enabled && c.cacheClient != nil {
 		err := c.cacheClient.Cleanup()
 		if err != nil {
 			return err

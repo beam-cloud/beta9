@@ -145,11 +145,11 @@ func (c *NvidiaCRIUManager) checkpointCached(cachedCheckpointPath string, contai
 	// cache is tracking.
 	cachedCheckpointPath = strings.TrimPrefix(cachedCheckpointPath, "/cache")
 
-	client := c.fileCacheManager.GetClient()
-	if !client.IsDirCachedNearby(context.Background(), cachedCheckpointPath) {
-		log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
-		return false
-	}
+	// client := c.fileCacheManager.GetClient()
+	// if !client.IsDirCachedNearby(context.Background(), cachedCheckpointPath) {
+	// 	log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
+	// 	return false
+	// }
 
 	log.Info().Str("container_id", containerId).Msgf("checkpoint cached nearby")
 	return true
