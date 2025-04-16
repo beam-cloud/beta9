@@ -519,9 +519,13 @@ func (s *Worker) keepalive() {
 	for {
 		select {
 		case <-ticker.C:
-			s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
+			log.Printf("keepalive run: %s", s.workerId)
+			_, err := s.workerRepoClient.SetWorkerKeepAlive(s.ctx, &pb.SetWorkerKeepAliveRequest{
 				WorkerId: s.workerId,
 			})
+			if err != nil {
+				log.Printf("keepalive error: %s", err)
+			}
 		case <-s.ctx.Done():
 			return
 		}
