@@ -40,7 +40,7 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 
 			if !request.StorageAvailable() {
 				objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
-				err := common.ExtractObjectFile(context.TODO(), objectPath, m.LocalPath)
+				err := common.ExtractObjectFile(ctx, objectPath, m.LocalPath)
 				if err != nil {
 					return err
 				}
