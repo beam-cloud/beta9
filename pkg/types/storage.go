@@ -2,6 +2,6 @@ package types
 
 import "fmt"
 
-func WorkspaceBucketName(workspaceId uint) string {
-	return fmt.Sprintf("workspace-%d", workspaceId)
+func WorkspaceBucketName(workspaceExternalId string) string {
+	return fmt.Sprintf("workspace-%s", workspaceExternalId)
 }
