@@ -241,7 +241,7 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 		if err != nil {
 			return HTTPInternalServerError("Failed to get object")
 		}
-		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), fmt.Sprintf("%s/%s", types.DefaultObjectPrefix, object.ExternalId), presignedURLExpirationSec)
+		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), fmt.Sprintf("%s/%s", types.DefaultObjectPrefix, object.ExternalId), presignedURLExpirationS)
 		if err != nil {
 			return HTTPInternalServerError("Failed to generate presigned URL")
 		}
