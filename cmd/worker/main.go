@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"runtime/pprof"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -22,7 +23,11 @@ func main() {
 	if err := pprof.StartCPUProfile(f); err != nil {
 		panic(err)
 	}
-	defer pprof.StopCPUProfile()
+
+	go func() {
+		time.Sleep(240 * time.Second)
+		pprof.StopCPUProfile()
+	}()
 
 	configManager, err := common.NewConfigManager[types.AppConfig]()
 	if err != nil {
