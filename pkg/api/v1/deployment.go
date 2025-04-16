@@ -17,7 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-const presignedURLExpiration = 10 * 60
+const presignedURLExpirationSec = 10 * 60
 
 type DeploymentGroup struct {
 	routerGroup   *echo.Group
@@ -241,7 +241,7 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 		if err != nil {
 			return HTTPInternalServerError("Failed to get object")
 		}
-		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), fmt.Sprintf("%s/%s", types.DefaultObjectPrefix, object.ExternalId), presignedURLExpiration)
+		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), fmt.Sprintf("%s/%s", types.DefaultObjectPrefix, object.ExternalId), presignedURLExpirationSec)
 		if err != nil {
 			return HTTPInternalServerError("Failed to generate presigned URL")
 		}
