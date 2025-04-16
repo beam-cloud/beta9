@@ -161,6 +161,10 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuC
 			continue
 		}
 
+		if worker == nil {
+			continue
+		}
+
 		return worker, nil
 	}
 
