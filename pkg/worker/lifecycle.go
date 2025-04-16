@@ -245,7 +245,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		InitialSpec:  initialBundleSpec,
 	}
 
-	err = s.containerMountManager.SetupContainerMounts(request, outputLogger)
+	err = s.containerMountManager.SetupContainerMounts(ctx, request, outputLogger)
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
 	}
@@ -298,6 +298,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
+}
+
+func (s *Worker) prepareMntCode(request *types.ContainerRequest) {
 }
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {

@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -27,13 +29,38 @@ func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 }
 
 // SetupContainerMounts initializes any external storage for a container
-func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest, outputLogger *slog.Logger) error {
+func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	for i, m := range request.Mounts {
 		if m.MountPath == types.WorkerUserCodeVolume {
 			objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
 
 			if request.StorageAvailable() {
-				objectPath = path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultObjectPrefix, request.Stub.Object.ExternalId)
+				storageClient, err := clients.NewStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
+				if err != nil {
+					log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to instantiate storage client")
+					return err
+				}
+
+				objBytes, err := storageClient.Download(ctx, fmt.Sprintf("objects/%s", request.Stub.Object.ExternalId))
+				if err != nil {
+					log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to download object")
+					return err
+				}
+
+				tempObjectPath := "/tmp/objects/" + request.ContainerId
+				err = os.MkdirAll(path.Dir(tempObjectPath), 0755)
+				if err != nil {
+					log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to create temp object directory")
+					return err
+				}
+
+				err = os.WriteFile(tempObjectPath, objBytes, 0644)
+				if err != nil {
+					log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to write object to file")
+					return err
+				}
+
+				objectPath = tempObjectPath
 			}
 
 			err := common.ExtractObjectFile(context.TODO(), objectPath, types.TempContainerWorkspace(request.ContainerId))
