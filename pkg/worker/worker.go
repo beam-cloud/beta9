@@ -527,6 +527,7 @@ func (s *Worker) keepalive() {
 				log.Printf("keepalive error: %s", err)
 			}
 		case <-s.ctx.Done():
+			log.Printf("keepalive context done: %s", s.workerId)
 			return
 		}
 	}
