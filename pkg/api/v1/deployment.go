@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"fmt"
 	"net/http"
 	"path"
 	"time"
@@ -240,7 +241,7 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 		if err != nil {
 			return HTTPInternalServerError("Failed to get object")
 		}
-		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), "objects/"+object.ExternalId, presignedURLExpiration)
+		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), fmt.Sprintf("%s/%s", types.DefaultObjectPrefix, object.ExternalId), presignedURLExpiration)
 		if err != nil {
 			return HTTPInternalServerError("Failed to generate presigned URL")
 		}
