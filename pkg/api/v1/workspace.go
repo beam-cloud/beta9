@@ -31,7 +31,7 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 	g.GET("/current", auth.WithAuth(group.CurrentWorkspace))
 	g.GET("/:workspaceId/export", auth.WithWorkspaceAuth(group.ExportWorkspaceConfig))
 	g.POST("/:workspaceId/set-external-storage", auth.WithWorkspaceAuth(group.SetExternalWorkspaceStorage))
-	g.POST("/:workspaceId/create-storage", auth.WithWorkspaceAuth(group.CreateWorkspaceDefaultStorage))
+	g.POST("/:workspaceId/create-storage", auth.WithWorkspaceAuth(group.CreateWorkspaceStorage))
 
 	return group
 }
@@ -162,9 +162,9 @@ func (g *WorkspaceGroup) SetExternalWorkspaceStorage(ctx echo.Context) error {
 	return ctx.JSON(http.StatusCreated, createdStorage)
 }
 
-// CreateWorkspaceDefaultStorage creates a new bucket in the configured default storage provider.
+// CreateWorkspaceStorage creates a new bucket in the configured default storage provider.
 // It then creates a new workspace storage object for that bucket and sets it as the storage bucket for the workspace.
-func (g *WorkspaceGroup) CreateWorkspaceDefaultStorage(ctx echo.Context) error {
+func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 
 	workspace, err := g.validateWorkspaceForStorageCreation(ctx, workspaceId)
