@@ -40,7 +40,7 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 					return err
 				}
 			} else {
-				if err := getMntCodeAndExtract(ctx, request); err != nil {
+				if err := getAndExtractStubCode(ctx, request); err != nil {
 					return err
 				}
 			}
@@ -127,8 +127,8 @@ func checkpointSignalDir(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/criu", containerId)
 }
 
-// getMntCodeAndExtract downloads the object from storage and extracts it to the temp location that will be mounted
-func getMntCodeAndExtract(ctx context.Context, request *types.ContainerRequest) error {
+// getAndExtractStubCode downloads the object from storage and extracts it to the temp location that will be mounted
+func getAndExtractStubCode(ctx context.Context, request *types.ContainerRequest) error {
 	storageClient, err := clients.NewStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to instantiate storage client")
