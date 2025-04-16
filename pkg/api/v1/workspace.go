@@ -1,7 +1,6 @@
 package apiv1
 
 import (
-	"fmt"
 	"net/http"
 
 	"strings"
@@ -31,7 +30,7 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 	g.POST("", group.CreateWorkspace)
 	g.GET("/current", auth.WithAuth(group.CurrentWorkspace))
 	g.GET("/:workspaceId/export", auth.WithWorkspaceAuth(group.ExportWorkspaceConfig))
-	g.POST("/:workspaceId/create-external-storage", auth.WithWorkspaceAuth(group.CreateExternalWorkspaceStorage))
+	g.POST("/:workspaceId/set-external-storage", auth.WithWorkspaceAuth(group.SetExternalWorkspaceStorage))
 	g.POST("/:workspaceId/create-storage", auth.WithWorkspaceAuth(group.CreateWorkspaceDefaultStorage))
 
 	return group
@@ -102,7 +101,7 @@ type CreateWorkspaceStorageRequest struct {
 	Region      string `json:"region" validate:"required"`
 }
 
-// CreateExternalWorkspaceStorage takes in the details for accessing an external s3 compatible storage bucket.
+// SetExternalWorkspaceStorage takes in the details for accessing an external s3 compatible storage bucket.
 // This includes:
 // - Bucket name
 // - Access key
@@ -110,7 +109,7 @@ type CreateWorkspaceStorageRequest struct {
 // - Endpoint URL
 // - Region
 // It then creates a new workspace storage object for that bucket and sets it as the storage bucket for the workspace.
-func (g *WorkspaceGroup) CreateExternalWorkspaceStorage(ctx echo.Context) error {
+func (g *WorkspaceGroup) SetExternalWorkspaceStorage(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 
 	workspace, err := g.validateWorkspaceForStorageCreation(ctx, workspaceId)
@@ -173,7 +172,7 @@ func (g *WorkspaceGroup) CreateWorkspaceDefaultStorage(ctx echo.Context) error {
 		return err
 	}
 
-	bucketName := fmt.Sprintf("workspace-%d", workspace.Id)
+	bucketName := types.WorkspaceBucketName(workspace.Id)
 	accessKey := g.config.Storage.WorkspaceStorage.DefaultAccessKey
 	secretKey := g.config.Storage.WorkspaceStorage.DefaultSecretKey
 	endpointUrl := g.config.Storage.WorkspaceStorage.DefaultEndpointUrl
@@ -232,12 +231,7 @@ func (g *WorkspaceGroup) revokeTokenIfPresent(ctx echo.Context) error {
 // validateWorkspaceForStorageCreation checks if the request is authorized for the given workspace ID
 // and if storage can be created for this workspace.
 func (g *WorkspaceGroup) validateWorkspaceForStorageCreation(ctx echo.Context, workspaceId string) (*types.Workspace, error) {
-	cc, ok := ctx.(*auth.HttpAuthContext)
-	if !ok {
-		// This should ideally not happen if the middleware is set up correctly
-		ctx.Logger().Error("Failed to cast context to HttpAuthContext")
-		return nil, HTTPInternalServerError("Internal context error")
-	}
+	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	workspace := cc.AuthInfo.Workspace
 	if workspace.ExternalId != workspaceId {
