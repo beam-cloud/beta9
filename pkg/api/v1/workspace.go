@@ -172,7 +172,7 @@ func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
 		return err
 	}
 
-	bucketName := types.WorkspaceBucketName(workspace.Id)
+	bucketName := types.WorkspaceBucketName(workspace.ExternalId)
 	accessKey := g.config.Storage.WorkspaceStorage.DefaultAccessKey
 	secretKey := g.config.Storage.WorkspaceStorage.DefaultSecretKey
 	endpointUrl := g.config.Storage.WorkspaceStorage.DefaultEndpointUrl
