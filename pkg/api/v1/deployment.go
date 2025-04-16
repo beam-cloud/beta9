@@ -17,7 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-const presignedURLExpirationSec = 10 * 60
+const presignedURLExpirationS = 10 * 60
 
 type DeploymentGroup struct {
 	routerGroup   *echo.Group
