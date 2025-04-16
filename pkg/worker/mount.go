@@ -1,11 +1,15 @@
 package worker
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -32,43 +36,20 @@ func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	for i, m := range request.Mounts {
 		if m.MountPath == types.WorkerUserCodeVolume {
-			objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
-
-			if request.StorageAvailable() {
-				storageClient, err := clients.NewStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
-				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to instantiate storage client")
-					return err
-				}
-
-				objBytes, err := storageClient.Download(ctx, fmt.Sprintf("objects/%s", request.Stub.Object.ExternalId))
-				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to download object")
-					return err
-				}
-
-				tempObjectPath := "/tmp/objects/" + request.ContainerId
-				err = os.MkdirAll(path.Dir(tempObjectPath), 0755)
-				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to create temp object directory")
-					return err
-				}
-
-				err = os.WriteFile(tempObjectPath, objBytes, 0644)
-				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to write object to file")
-					return err
-				}
-
-				objectPath = tempObjectPath
-			}
-
-			err := common.ExtractObjectFile(context.TODO(), objectPath, types.TempContainerWorkspace(request.ContainerId))
-			if err != nil {
-				return err
-			}
-
 			m.LocalPath = types.TempContainerWorkspace(request.ContainerId)
+
+			if !request.StorageAvailable() {
+				objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
+				err := common.ExtractObjectFile(context.TODO(), objectPath, m.LocalPath)
+				if err != nil {
+					return err
+				}
+			} else {
+				if err := getMntCodeAndExtract(ctx, request); err != nil {
+					return err
+				}
+			}
+
 			request.Mounts[i].LocalPath = m.LocalPath
 		}
 
@@ -149,4 +130,76 @@ const (
 
 func checkpointSignalDir(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/criu", containerId)
+}
+
+// getMntCodeAndExtract downloads the object from storage and extracts it to the temp location that will be mounted
+func getMntCodeAndExtract(ctx context.Context, request *types.ContainerRequest) error {
+	storageClient, err := clients.NewStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to instantiate storage client")
+		return err
+	}
+
+	objBytes, err := storageClient.Download(ctx, fmt.Sprintf("objects/%s", request.Stub.Object.ExternalId))
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to download object")
+		return err
+	}
+
+	destPath := types.TempContainerWorkspace(request.ContainerId)
+
+	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
+		return nil
+	}
+
+	if err := os.MkdirAll(destPath, 0755); err != nil {
+		return err
+	}
+
+	zipReader, err := zip.NewReader(bytes.NewReader(objBytes), int64(len(objBytes)))
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("error creating zip reader")
+		return err
+	}
+
+	// Extract each file
+	for _, zipFile := range zipReader.File {
+		filePath := filepath.Join(destPath, zipFile.Name)
+
+		if !strings.HasPrefix(filePath, filepath.Clean(destPath)+string(os.PathSeparator)) {
+			return fmt.Errorf("illegal file path: %s", filePath)
+		}
+
+		if zipFile.FileInfo().IsDir() {
+			if err := os.MkdirAll(filePath, zipFile.Mode()); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+			return err
+		}
+
+		destFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, zipFile.Mode())
+		if err != nil {
+			return err
+		}
+
+		srcFile, err := zipFile.Open()
+		if err != nil {
+			destFile.Close()
+			return err
+		}
+
+		_, err = io.Copy(destFile, srcFile)
+		srcFile.Close()
+		destFile.Close()
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

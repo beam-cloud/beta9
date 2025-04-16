@@ -300,9 +300,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	return nil
 }
 
-func (s *Worker) prepareMntCode(request *types.ContainerRequest) {
-}
-
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
 	switch {
 	case request.BuildOptions.Dockerfile != nil:
