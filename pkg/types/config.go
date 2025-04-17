@@ -200,9 +200,13 @@ type StorageConfig struct {
 }
 
 type WorkspaceStorageConfig struct {
-	Mode          string      `key:"mode" json:"mode"`
-	BaseMountPath string      `key:"baseMountPath" json:"base_mount_path"`
-	Geese         GeeseConfig `key:"geese" json:"geese"`
+	Mode               string      `key:"mode" json:"mode"`
+	BaseMountPath      string      `key:"baseMountPath" json:"base_mount_path"`
+	Geese              GeeseConfig `key:"geese" json:"geese"`
+	DefaultAccessKey   string      `key:"defaultAccessKey" json:"default_access_key"`
+	DefaultSecretKey   string      `key:"defaultSecretKey" json:"default_secret_key"`
+	DefaultEndpointUrl string      `key:"defaultEndpointUrl" json:"default_endpoint_url"`
+	DefaultRegion      string      `key:"defaultRegion" json:"default_region"`
 }
 
 type JuiceFSConfig struct {
