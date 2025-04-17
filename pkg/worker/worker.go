@@ -205,7 +205,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring)
+	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring, gpuType)
 	if err != nil {
 		cancel()
 		return nil, err
