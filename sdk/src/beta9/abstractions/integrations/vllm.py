@@ -343,11 +343,13 @@ class VLLM(ASGI):
         )
 
         model_config = asyncio.run(engine_client.get_model_config())
-        api_server.init_app_state(
-            engine_client,
-            model_config,
-            app.state,
-            self.app_args,
+        asyncio.run(
+            api_server.init_app_state(
+                engine_client,
+                model_config,
+                app.state,
+                self.app_args,
+            )
         )
 
         return app
