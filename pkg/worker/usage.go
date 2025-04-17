@@ -17,12 +17,14 @@ type WorkerUsageMetrics struct {
 	metricsRepo         repo.UsageMetricsRepository
 	ctx                 context.Context
 	containerCostClient *clients.ContainerCostClient
+	gpuType             string
 }
 
 func NewWorkerUsageMetrics(
 	ctx context.Context,
 	workerId string,
 	config types.MonitoringConfig,
+	gpuType string,
 ) (*WorkerUsageMetrics, error) {
 	metricsRepo, err := usage.NewUsageMetricsRepository(config, string(usage.MetricsSourceWorker))
 	if err != nil {
@@ -34,6 +36,7 @@ func NewWorkerUsageMetrics(
 	return &WorkerUsageMetrics{
 		ctx:                 ctx,
 		workerId:            workerId,
+		gpuType:             gpuType,
 		metricsRepo:         metricsRepo,
 		containerCostClient: containerCostClient,
 	}, nil
@@ -74,6 +77,7 @@ func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *t
 	ticker := time.NewTicker(types.ContainerDurationEmissionInterval)
 	defer ticker.Stop()
 
+	request.Gpu = wm.gpuType
 	wm.addContainerCostPerMs(request)
 
 	for {
