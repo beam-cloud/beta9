@@ -291,3 +291,10 @@ func (c *StorageClient) ValidateBucketAccess(ctx context.Context) error {
 
 	return nil
 }
+
+func (c *StorageClient) CreateBucket(ctx context.Context) error {
+	_, err := c.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+	})
+	return err
+}

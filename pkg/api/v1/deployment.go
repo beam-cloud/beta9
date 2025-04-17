@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"fmt"
 	"net/http"
 	"path"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	repoCommon "github.com/beam-cloud/beta9/pkg/repository/common"
@@ -16,6 +18,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/beta9/pkg/types/serializer"
 )
+
+const presignedURLExpirationS = 10 * 60
 
 type DeploymentGroup struct {
 	routerGroup   *echo.Group
@@ -261,8 +265,21 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 	if err != nil {
 		return HTTPInternalServerError("Failed to get object")
 	}
-	path := getPackagePath(workspace.Name, object.ExternalId)
 
+	if workspaceStorage, err := g.backendRepo.GetWorkspaceStorage(ctx.Request().Context(), workspace.Id); err == nil {
+		storageClient, err := clients.NewStorageClient(ctx.Request().Context(), workspace.Name, workspaceStorage)
+		if err != nil {
+			return HTTPInternalServerError("Failed to get object")
+		}
+		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), fmt.Sprintf("%s/%s", types.DefaultObjectPrefix, object.ExternalId), presignedURLExpirationS)
+		if err != nil {
+			return HTTPInternalServerError("Failed to generate presigned URL")
+		}
+
+		return ctx.Redirect(http.StatusTemporaryRedirect, presignedURL)
+	}
+
+	path := getPackagePath(workspace.Name, object.ExternalId)
 	return ctx.File(path)
 }
 

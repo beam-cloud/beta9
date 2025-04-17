@@ -161,6 +161,10 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuC
 			continue
 		}
 
+		if worker == nil {
+			continue
+		}
+
 		return worker, nil
 	}
 
@@ -235,8 +239,8 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		return nil, err
 	}
 
-	if machine.State.Status != types.MachineStatusRegistered {
-		return nil, errors.New("machine not registered")
+	if machine.State.Status != types.MachineStatusReady {
+		return nil, nil
 	}
 
 	remainingMachineCpu := machine.State.Cpu
@@ -246,10 +250,6 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		remainingMachineCpu -= worker.TotalCpu
 		remainingMachineMemory -= worker.TotalMemory
 		remainingMachineGpuCount -= uint32(worker.TotalGpuCount)
-	}
-
-	if machine.State.Status != types.MachineStatusReady {
-		return nil, errors.New("machine not ready")
 	}
 
 	if remainingMachineCpu >= int64(cpu) && remainingMachineMemory >= int64(memory) && machine.State.Gpu == gpuType && remainingMachineGpuCount >= gpuCount {
@@ -272,7 +272,7 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		return worker, nil
 	}
 
-	return nil, errors.New("machine out of capacity")
+	return nil, nil
 }
 
 func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {

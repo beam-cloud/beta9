@@ -225,29 +225,6 @@ func (r *ProviderRedisRepository) AddMachine(providerName, poolName, machineId s
 	return nil
 }
 
-func (r *ProviderRedisRepository) SetMachineStatusReady(providerName, poolName, machineId string) error {
-	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
-
-	machineState, err := r.getMachineStateFromKey(stateKey)
-	if err != nil {
-		return fmt.Errorf("failed to get machine state <%v>: %w", stateKey, err)
-	}
-
-	machineState.Status = types.MachineStatusReady
-
-	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineState)).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set machine state <%v>: %w", stateKey, err)
-	}
-
-	err = r.rdb.Expire(context.TODO(), stateKey, time.Duration(types.MachineKeepaliveExpirationS)*time.Second).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set machine state ttl <%v>: %w", stateKey, err)
-	}
-
-	return nil
-}
-
 func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, machineId, agentVersion string, metrics *types.ProviderMachineMetrics) error {
 	stateKey := common.RedisKeys.ProviderMachineState(providerName, poolName, machineId)
 	metricsKey := common.RedisKeys.ProviderMachineMetrics(providerName, poolName, machineId)
@@ -260,6 +237,7 @@ func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, ma
 	// Update the LastKeepalive with the current Unix timestamp
 	machineState.LastKeepalive = fmt.Sprintf("%d", time.Now().Unix())
 	machineState.AgentVersion = agentVersion
+	machineState.Status = types.MachineStatusReady
 
 	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineState)).Err()
 	if err != nil {

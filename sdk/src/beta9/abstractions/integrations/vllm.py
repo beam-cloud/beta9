@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple, Type, Union
 
 from ... import terminal
 from ...abstractions.base.container import Container
@@ -28,26 +28,21 @@ class VLLMArgs:
     """
 
     # Args for init_app_state
-    response_role: Optional[str] = "assistant"
+    model: str = "facebook/opt-125m"
+    max_log_len: Optional[int] = None
+    chat_template: Optional[str] = None
     lora_modules: Optional[List[str]] = None
     prompt_adapters: Optional[List[str]] = None
-    chat_template: Optional[str] = None
-    chat_template_url: Optional[str] = None
-    chat_template_text_format: str = "string"
-    allowed_local_media_path: str = ""
-    hf_overrides: Optional[Union[Dict[str, Any], Callable[[Any], Any]]] = None
-    enable_lora_bias: bool = False
+    response_role: Optional[str] = "assistant"
+    chat_template_content_format: str = "auto"
     return_tokens_as_token_ids: bool = False
-    enable_prompt_tokens_details: bool = False
     enable_auto_tool_choice: bool = False
     tool_call_parser: Optional[str] = None
+    reasoning_parser: Optional[str] = None
+    enable_prompt_tokens_details: bool = False
+    enable_server_load_tracking: bool = False
+    chat_template_url: Optional[str] = None
     tool_parser_plugin: Optional[str] = None
-    disable_log_stats: bool = False
-    disable_log_requests: bool = False
-    max_log_len: Optional[int] = None
-    model: str = "facebook/opt-125m"
-    served_model_name: Optional[Union[str, List[str]]] = None
-    tokenizer: Optional[str] = None
 
     # Args for AsyncEngineArgs
     skip_tokenizer_init: bool = False
@@ -59,10 +54,8 @@ class VLLMArgs:
     config_format: str = "auto"
     dtype: str = "auto"
     kv_cache_dtype: str = "auto"
-    quantization_param_path: Optional[str] = None
     seed: int = 0
     max_model_len: Optional[int] = None
-    worker_use_ray: bool = False
     distributed_executor_backend: Optional[Union[str, Any]] = None
     pipeline_parallel_size: int = 1
     tensor_parallel_size: int = 1
@@ -84,7 +77,6 @@ class VLLMArgs:
     tokenizer_revision: Optional[str] = None
     quantization: Optional[str] = None
     enforce_eager: Optional[bool] = None
-    max_context_len_to_capture: Optional[int] = None
     max_seq_len_to_capture: int = 8192
     disable_custom_all_reduce: bool = False
     tokenizer_pool_size: int = 0
@@ -114,20 +106,7 @@ class VLLMArgs:
     scheduler_delay_factor: float = 0.0
     enable_chunked_prefill: Optional[bool] = None
     guided_decoding_backend: str = "outlines"
-    speculative_model: Optional[str] = None
-    speculative_model_quantization: Optional[str] = None
-    speculative_draft_tensor_parallel_size: Optional[int] = None
-    num_speculative_tokens: Optional[int] = None
-    speculative_disable_mqa_scorer: Optional[bool] = False
-    speculative_max_model_len: Optional[int] = None
-    speculative_disable_by_batch_size: Optional[int] = None
-    ngram_prompt_lookup_max: Optional[int] = None
-    ngram_prompt_lookup_min: Optional[int] = None
-    spec_decoding_acceptance_method: str = "rejection_sampler"
-    typical_acceptance_sampler_posterior_threshold: Optional[float] = None
-    typical_acceptance_sampler_posterior_alpha: Optional[float] = None
     qlora_adapter_name_or_path: Optional[str] = None
-    disable_logprobs_during_spec_decoding: Optional[bool] = None
     otlp_traces_endpoint: Optional[str] = None
     collect_detailed_traces: Optional[str] = None
     disable_async_output_proc: bool = False
@@ -136,6 +115,40 @@ class VLLMArgs:
     mm_processor_kwargs: Optional[Dict[str, Any]] = None
     scheduling_policy: Literal["fcfs", "priority"] = "fcfs"
     disable_log_requests: bool = False
+    kv_transfer_config: Optional[Any] = None
+    logits_processor_pattern: Optional[str] = None
+    max_long_partial_prefills: Optional[int] = 1
+    disable_mm_preprocessor_cache: bool = False
+    allowed_local_media_path: str = ""
+    disable_log_stats: bool = False
+    enable_expert_parallel: bool = False
+    prefix_caching_hash_algo: str = "builtin"
+    enable_lora_bias: bool = False
+    use_tqdm_on_load: bool = False
+    model_impl: str = "auto"
+    worker_cls: str = "auto"
+    additional_config: Optional[Dict[str, Any]] = None
+    hf_token: Optional[Union[bool, str]] = None
+    worker_extension_cls: str = ""
+    served_model_name: Optional[Union[str, List[str]]] = None
+    override_generation_config: Optional[Dict[str, Any]] = None
+    show_hidden_metrics_for_version: Optional[str] = None
+    enable_reasoning: Optional[bool] = None
+    scheduler_cls: Union[str, Type[object]] = "vllm.core.scheduler.Scheduler"
+    tokenizer: Optional[str] = None
+    generation_config: Optional[str] = "auto"
+    hf_overrides: Optional[Any] = None
+    long_prefill_token_threshold: Optional[int] = 0
+    max_num_partial_prefills: Optional[int] = 1
+    calculate_kv_scales: Optional[bool] = None
+    reasoning_parser: Optional[str] = None
+    speculative_config: Optional[Dict[str, Any]] = None
+    disable_cascade_attn: bool = False
+    enable_sleep_mode: bool = False
+    hf_config_path: Optional[str] = None
+    disable_chunked_mm_input: bool = False
+    data_parallel_size: int = 1
+    compilation_config: Optional[Any] = None
 
 
 class VLLM(ASGI):
@@ -214,7 +227,7 @@ class VLLM(ASGI):
             volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
 
         image = image.add_python_packages(
-            ["fastapi", "numpy", "vllm==0.6.4.post1", "huggingface_hub==0.26.3"]
+            ["fastapi", "numpy", "vllm==0.8.4", "huggingface_hub==0.30.2"]
         )
 
         super().__init__(
@@ -242,15 +255,19 @@ class VLLM(ASGI):
             served_model_name=vllm_args.served_model_name,
             disable_log_requests=vllm_args.disable_log_requests,
             max_log_len=vllm_args.max_log_len,
-            response_role=vllm_args.response_role,
+            disable_log_stats=vllm_args.disable_log_stats,
+            chat_template=vllm_args.chat_template,
             lora_modules=vllm_args.lora_modules,
             prompt_adapters=vllm_args.prompt_adapters,
-            chat_template=vllm_args.chat_template,
+            response_role=vllm_args.response_role,
+            chat_template_content_format=vllm_args.chat_template_content_format,
             return_tokens_as_token_ids=vllm_args.return_tokens_as_token_ids,
             enable_auto_tool_choice=vllm_args.enable_auto_tool_choice,
             tool_call_parser=vllm_args.tool_call_parser,
-            disable_log_stats=vllm_args.disable_log_stats,
+            enable_reasoning=vllm_args.enable_reasoning,
+            reasoning_parser=vllm_args.reasoning_parser,
             enable_prompt_tokens_details=vllm_args.enable_prompt_tokens_details,
+            enable_server_load_tracking=vllm_args.enable_server_load_tracking,
         )
 
     def __name__(self) -> str:
@@ -322,11 +339,13 @@ class VLLM(ASGI):
         )
 
         model_config = asyncio.run(engine_client.get_model_config())
-        api_server.init_app_state(
-            engine_client,
-            model_config,
-            app.state,
-            self.app_args,
+        asyncio.run(
+            api_server.init_app_state(
+                engine_client,
+                model_config,
+                app.state,
+                self.app_args,
+            )
         )
 
         return app
