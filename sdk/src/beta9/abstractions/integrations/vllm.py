@@ -28,11 +28,8 @@ class VLLMArgs:
     """
 
     # Args for init_app_state
-    served_model_name: Optional[Union[str, List[str]]] = None
     model: str = "facebook/opt-125m"
-    disable_log_requests: bool = False
     max_log_len: Optional[int] = None
-    disable_log_stats: bool = False
     chat_template: Optional[str] = None
     lora_modules: Optional[List[str]] = None
     prompt_adapters: Optional[List[str]] = None
@@ -41,7 +38,6 @@ class VLLMArgs:
     return_tokens_as_token_ids: bool = False
     enable_auto_tool_choice: bool = False
     tool_call_parser: Optional[str] = None
-    enable_reasoning: bool = False
     reasoning_parser: Optional[str] = None
     enable_prompt_tokens_details: bool = False
     enable_server_load_tracking: bool = False
