@@ -119,14 +119,13 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 	}
 
 	err = g.providerRepo.RegisterMachine(request.ProviderName, request.PoolName, request.MachineID, &types.ProviderMachineState{
-		MachineId:    request.MachineID,
-		Token:        request.Token,
-		HostName:     hostName,
-		Cpu:          cpu,
-		Memory:       memory,
-		GpuCount:     uint32(gpuCount),
-		PrivateIP:    request.PrivateIP,
-		MetadataMode: remoteConfig.BlobCache.Server.Metadata.Mode,
+		MachineId: request.MachineID,
+		Token:     request.Token,
+		HostName:  hostName,
+		Cpu:       cpu,
+		Memory:    memory,
+		GpuCount:  uint32(gpuCount),
+		PrivateIP: request.PrivateIP,
 	}, &poolConfig)
 	if err != nil {
 		return HTTPInternalServerError("Failed to register machine")

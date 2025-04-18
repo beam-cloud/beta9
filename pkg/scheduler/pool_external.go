@@ -498,9 +498,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		return nil, err
 	}
 
-	// TODO: Once we set up dynamic secrets updating in agents, we can remove this
-	remoteConfig.Monitoring.FluentBit.Events.Endpoint = "http://beta9-fluent-bit.kube-system:9880"
-
 	// Serialize the AppConfig struct to JSON
 	configJson, err := json.MarshalIndent(remoteConfig, "", "  ")
 	if err == nil {
