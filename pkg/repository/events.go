@@ -281,7 +281,7 @@ func (t *TCPEventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
 		ID:          task.ExternalId,
 		Status:      task.Status,
 		ContainerID: task.ContainerId,
-		CreatedAt:   task.CreatedAt,
+		CreatedAt:   task.CreatedAt.Time,
 		StubID:      task.Stub.ExternalId,
 		WorkspaceID: task.Workspace.ExternalId,
 	}
@@ -306,7 +306,7 @@ func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 		ID:          task.ExternalId,
 		Status:      task.Status,
 		ContainerID: task.ContainerId,
-		CreatedAt:   task.CreatedAt,
+		CreatedAt:   task.CreatedAt.Time,
 		StubID:      task.Stub.ExternalId,
 		WorkspaceID: task.Workspace.ExternalId,
 	}

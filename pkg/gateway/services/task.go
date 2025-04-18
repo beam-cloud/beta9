@@ -2,10 +2,8 @@ package gatewayservices
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"strings"
-	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -32,7 +30,7 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 		return &pb.StartTaskResponse{Ok: false}, nil
 	}
 
-	task.StartedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	task.StartedAt = types.NullTime{}.Now()
 	task.Status = types.TaskStatusRunning
 
 	if in.ContainerId != "" {
@@ -76,7 +74,7 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		}, nil
 	}
 
-	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	task.EndedAt = types.NullTime{}.Now()
 	task.Status = types.TaskStatus(in.TaskStatus)
 
 	if in.ContainerId != "" {
@@ -149,8 +147,8 @@ func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksReques
 			WorkspaceName: task.Workspace.Name,
 			StubId:        task.Stub.ExternalId,
 			StubName:      task.Stub.Name,
-			CreatedAt:     timestamppb.New(task.CreatedAt),
-			UpdatedAt:     timestamppb.New(task.UpdatedAt),
+			CreatedAt:     timestamppb.New(task.CreatedAt.Time),
+			UpdatedAt:     timestamppb.New(task.UpdatedAt.Time),
 		}
 	}
 
@@ -203,7 +201,7 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 	}
 
 	task.Status = types.TaskStatusCancelled
-	task.EndedAt = sql.NullTime{Time: time.Now(), Valid: true}
+	task.EndedAt = types.NullTime{}.Now()
 	if _, err := gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 		return errors.New("failed to update task")
 	}

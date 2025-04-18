@@ -71,8 +71,8 @@ func (gws *GatewayService) ListDeployments(ctx context.Context, in *pb.ListDeplo
 			Version:       uint32(deployment.Version),
 			WorkspaceId:   deployment.Workspace.ExternalId,
 			WorkspaceName: deployment.Workspace.Name,
-			CreatedAt:     timestamppb.New(deployment.CreatedAt),
-			UpdatedAt:     timestamppb.New(deployment.UpdatedAt),
+			CreatedAt:     timestamppb.New(deployment.CreatedAt.Time),
+			UpdatedAt:     timestamppb.New(deployment.UpdatedAt.Time),
 		}
 	}
 

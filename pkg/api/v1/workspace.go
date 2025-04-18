@@ -9,6 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/serializer"
 	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v4"
 )
@@ -63,7 +64,12 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 func (g *WorkspaceGroup) CurrentWorkspace(ctx echo.Context) error {
 	authContext, _ := ctx.(*auth.HttpAuthContext)
 
-	return ctx.JSON(http.StatusOK, authContext.AuthInfo.Workspace)
+	serializedWorkspace, err := serializer.Serialize(authContext.AuthInfo.Workspace)
+	if err != nil {
+		return HTTPInternalServerError("Unable to serialize workspace")
+	}
+
+	return ctx.JSON(http.StatusOK, serializedWorkspace)
 }
 
 type WorkspaceConfigExport struct {
