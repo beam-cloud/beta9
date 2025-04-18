@@ -58,16 +58,17 @@ func (wm *WorkerUsageMetrics) metricsContainerDuration(request *types.ContainerR
 
 func (wm *WorkerUsageMetrics) metricsContainerCost(request *types.ContainerRequest, duration time.Duration) {
 	wm.metricsRepo.IncrementCounter(types.UsageMetricsWorkerContainerCost, map[string]interface{}{
-		"container_id":   request.ContainerId,
-		"worker_id":      wm.workerId,
-		"stub_id":        request.StubId,
-		"workspace_id":   request.WorkspaceId,
-		"cpu_millicores": request.Cpu,
-		"mem_mb":         request.Memory,
-		"gpu":            request.Gpu,
-		"gpu_count":      request.GpuCount,
-		"cost_per_ms":    request.CostPerMs,
-		"duration_ms":    duration.Milliseconds(),
+		"container_id":      request.ContainerId,
+		"worker_id":         wm.workerId,
+		"stub_id":           request.StubId,
+		"workspace_id":      request.WorkspaceId,
+		"cpu_millicores":    request.Cpu,
+		"mem_mb":            request.Memory,
+		"gpu":               request.Gpu,
+		"gpu_count":         request.GpuCount,
+		"cost_per_ms":       request.CostPerMs,
+		"cost_for_duration": request.CostPerMs * float64(duration.Milliseconds()),
+		"duration_ms":       duration.Milliseconds(),
 	}, request.CostPerMs*float64(duration.Milliseconds()))
 }
 
@@ -78,7 +79,7 @@ func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *t
 	defer ticker.Stop()
 
 	request.Gpu = wm.gpuType
-	wm.addContainerCostPerMs(request)
+	request.CostPerMs = wm.getContainerCostPerMs(request)
 
 	for {
 		select {
@@ -97,11 +98,9 @@ func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *t
 	}
 }
 
-// addContainerCostPerMs adds the container cost per ms to the request if the config provided
-// a container cost hook endpoint.
-func (wm *WorkerUsageMetrics) addContainerCostPerMs(request *types.ContainerRequest) {
+func (wm *WorkerUsageMetrics) getContainerCostPerMs(request *types.ContainerRequest) float64 {
 	if wm.containerCostClient == nil {
-		return
+		return 0
 	}
 
 	costPerMs, err := wm.containerCostClient.GetContainerCostPerMs(request)
@@ -109,5 +108,5 @@ func (wm *WorkerUsageMetrics) addContainerCostPerMs(request *types.ContainerRequ
 		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to get container cost per ms")
 	}
 
-	request.CostPerMs = costPerMs
+	return costPerMs
 }
