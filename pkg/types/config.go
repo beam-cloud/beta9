@@ -386,9 +386,9 @@ type AgentConfig struct {
 }
 
 type ConfigmanConfig struct {
-	ControllerAddress string `key:"controllerAddress" json:"controller_address"`
-	ControllerToken   string `key:"controllerToken" json:"controller_token"`
-	ControllerGroup   string `key:"controllerGroup" json:"controller_group"`
+	ControllerAddress      string `key:"controllerAddress" json:"controller_address"`
+	ControllerToken        string `key:"controllerToken" json:"controller_token"`
+	ControllerDefaultGroup string `key:"controllerDefaultGroup" json:"controller_default_group"`
 }
 
 type ElasticSearchConfig struct {
