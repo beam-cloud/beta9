@@ -382,6 +382,13 @@ type AgentConfig struct {
 	VictoriaLogs   VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
 	UpstreamURL    string              `key:"upstreamURL" json:"upstream_url"`
 	UpstreamBranch string              `key:"upstreamBranch" json:"upstream_branch"`
+	Configman      ConfigmanConfig     `key:"configman" json:"configman"`
+}
+
+type ConfigmanConfig struct {
+	ControllerAddress      string `key:"controllerAddress" json:"controller_address"`
+	ControllerToken        string `key:"controllerToken" json:"controller_token"`
+	ControllerDefaultGroup string `key:"controllerDefaultGroup" json:"controller_default_group"`
 }
 
 type ElasticSearchConfig struct {
