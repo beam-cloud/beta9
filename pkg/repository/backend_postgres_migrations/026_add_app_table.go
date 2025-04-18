@@ -19,6 +19,10 @@ type StubForMigration struct {
 	WorkspaceId    uint
 }
 
+const (
+	migrationAppName = "default"
+)
+
 func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
 		CREATE TABLE app (
@@ -52,109 +56,45 @@ func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 
-	// Get all stubs that have deployments
-	StubWithDeployment := []StubForMigration{}
-	stubWithDeploymentRows, err := tx.QueryContext(ctx, `
-		SELECT s.workspace_id AS workspace_id, s.id AS stub_id, s.name AS stub_name, d.id AS deployment_id, d.name AS deployment_name FROM stub s JOIN deployment d ON s.id = d.stub_id;
+	allWorkspacesRows, err := tx.QueryContext(ctx, `
+		SELECT id FROM workspace;
 	`)
 	if err != nil {
 		return err
 	}
 
-	for stubWithDeploymentRows.Next() {
-		row := StubForMigration{}
-		err = stubWithDeploymentRows.Scan(&row.WorkspaceId, &row.StubID, &row.StubName, &row.DeploymentID, &row.DeploymentName)
+	allWorkspaces := []uint{}
+	for allWorkspacesRows.Next() {
+		var workspaceID uint
+		err = allWorkspacesRows.Scan(&workspaceID)
 		if err != nil {
 			return err
 		}
-		StubWithDeployment = append(StubWithDeployment, row)
+		allWorkspaces = append(allWorkspaces, workspaceID)
 	}
 
-	existingDeploymentNamesToAppID := make(map[string]int)
-	for _, stub := range StubWithDeployment {
-		// Check if the deployment name already exists in the map
-		var appId uint
-		if appID, exists := existingDeploymentNamesToAppID[stub.DeploymentName]; exists {
-			appId = uint(appID)
-		} else {
-			// Insert a new app record
-			err := tx.QueryRowContext(
-				ctx,
-				`INSERT INTO app (name, description, workspace_id)
-				VALUES ($1, $2, $3)
-				RETURNING id;
-			`, stub.DeploymentName, "", stub.WorkspaceId).Scan(&appId)
-			if err != nil {
-				return err
-			}
-			existingDeploymentNamesToAppID[stub.DeploymentName] = int(appId)
-		}
+	allWorkspacesRows.Close()
 
-		_, err := tx.ExecContext(ctx, `
-			UPDATE stub
-			SET app_id = $1
-			WHERE id = $2;
-		`, appId, stub.StubID)
+	for _, workspaceID := range allWorkspaces {
+		var appID uint
+		err := tx.QueryRowContext(ctx, `
+			INSERT INTO app (name, description, workspace_id)
+			VALUES ($1, $2, $3) RETURNING id;
+		`, migrationAppName, "", workspaceID).Scan(&appID)
 		if err != nil {
 			return err
 		}
 
 		_, err = tx.ExecContext(ctx, `
-			UPDATE deployment
-			SET app_id = $1
-			WHERE id = $2;
-		`, appId, stub.DeploymentID)
+			UPDATE stub SET app_id = $1 WHERE workspace_id = $2;
+		`, appID, workspaceID)
 		if err != nil {
 			return err
 		}
-	}
 
-	// Set app_id to NULL for stubs without deployments
-	StubsWithoutDeployment := []StubForMigration{}
-	stubWithoutDeploymentRows, err := tx.QueryContext(ctx, `
-		SELECT s.workspace_id as workspace_id, s.id as stub_id, s.name as stub_name
-		FROM stub s
-		LEFT JOIN deployment d ON s.id = d.stub_id
-		WHERE d.stub_id IS NULL;
-	`)
-	if err != nil {
-		return err
-	}
-
-	for stubWithoutDeploymentRows.Next() {
-		row := StubForMigration{}
-		err = stubWithoutDeploymentRows.Scan(&row.WorkspaceId, &row.StubID, &row.StubName)
-		if err != nil {
-			return err
-		}
-		StubsWithoutDeployment = append(StubsWithoutDeployment, row)
-	}
-
-	stubNameToAppID := make(map[string]int)
-	for _, stub := range StubsWithoutDeployment {
-		// Check if the stub name already exists in the map
-		var appId uint
-		if appID, exists := stubNameToAppID[stub.StubName]; exists {
-			appId = uint(appID)
-		} else {
-			// Insert a new app record
-			err := tx.QueryRowContext(
-				ctx,
-				`INSERT INTO app (name, description, workspace_id)
-				VALUES ($1, $2, $3)
-				RETURNING id;
-			`, stub.StubName, "", stub.WorkspaceId).Scan(&appId)
-			if err != nil {
-				return err
-			}
-			stubNameToAppID[stub.StubName] = int(appId)
-		}
-
-		_, err := tx.ExecContext(ctx, `
-			UPDATE stub
-			SET app_id = $1
-			WHERE id = $2;
-		`, appId, stub.StubID)
+		_, err = tx.ExecContext(ctx, `
+			UPDATE deployment SET app_id = $1 WHERE workspace_id = $2;
+		`, appID, workspaceID)
 		if err != nil {
 			return err
 		}
