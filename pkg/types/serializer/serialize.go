@@ -169,7 +169,7 @@ func Serialize(v interface{}) (res interface{}, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			if e, ok := r.(error); ok {
-				err = e
+				err = fmt.Errorf("unhandled error: %v", e)
 			} else {
 				err = fmt.Errorf("failed to serialize: %v", r)
 			}

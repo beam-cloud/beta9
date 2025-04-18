@@ -611,3 +611,37 @@ func TestSerializePrimitive(t *testing.T) {
 		}
 	}
 }
+
+func TestSerializeJsonStringAsString(t *testing.T) {
+	type Test struct {
+		ID   int    `serializer:"id"`
+		Data string `serializer:"data"`
+	}
+
+	test := Test{
+		ID:   1,
+		Data: "{\"key\": \"value\"}",
+	}
+
+	result, err := Serialize(test)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
+
+	bytes, err := json.Marshal(result)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+		return
+	}
+
+	var parsedResult map[string]interface{}
+	err = json.Unmarshal(bytes, &parsedResult)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	if parsedResult["data"] != "{\"key\": \"value\"}" {
+		t.Error("Data is not correct")
+	}
+}

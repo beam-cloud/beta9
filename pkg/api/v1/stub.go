@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/serializer"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
 )
@@ -55,13 +56,23 @@ func (g *StubGroup) ListStubsByWorkspaceId(ctx echo.Context) error {
 		if stubs, err := g.backendRepo.ListStubsPaginated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list stubs")
 		} else {
-			return ctx.JSON(http.StatusOK, stubs)
+			serializedStub, err := serializer.Serialize(stubs)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize stubs")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedStub)
 		}
 	} else {
 		if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list stubs")
 		} else {
-			return ctx.JSON(http.StatusOK, stubs)
+			serializedStub, err := serializer.Serialize(stubs)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize stubs")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedStub)
 		}
 	}
 }
@@ -76,13 +87,23 @@ func (g *StubGroup) ListStubs(ctx echo.Context) error {
 		if stubs, err := g.backendRepo.ListStubsPaginated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list stubs")
 		} else {
-			return ctx.JSON(http.StatusOK, stubs)
+			serializedStub, err := serializer.Serialize(stubs)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize stubs")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedStub)
 		}
 	} else {
 		if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list stubs")
 		} else {
-			return ctx.JSON(http.StatusOK, stubs)
+			serializedStub, err := serializer.Serialize(stubs)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize stubs")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedStub)
 		}
 	}
 }

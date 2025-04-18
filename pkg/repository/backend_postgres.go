@@ -715,8 +715,11 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
 	}
 
-	if len(filters.StubIds) > 0 {
+	if len(filters.StubIds) > 0 || filters.AppId != "" {
 		qb = qb.Join("stub s ON t.stub_id = s.id")
+	}
+
+	if len(filters.StubIds) > 0 {
 		qb = qb.Where(squirrel.Eq{"s.external_id": filters.StubIds})
 	}
 
@@ -726,6 +729,11 @@ func (c *PostgresBackendRepository) GetTaskCountPerDeployment(ctx context.Contex
 
 	if filters.CreatedAtEnd != "" {
 		qb = qb.Where(squirrel.LtOrEq{"t.created_at": filters.CreatedAtEnd})
+	}
+
+	if filters.AppId != "" {
+		qb = qb.Join("app a ON s.app_id = a.id")
+		qb = qb.Where(squirrel.Eq{"a.external_id": filters.AppId})
 	}
 
 	sql, args, err := qb.ToSql()

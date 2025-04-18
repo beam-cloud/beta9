@@ -1,7 +1,7 @@
 dev:
   beta9-gateway:
-    image: registry.localhost:5000/beta9-gateway:latest
-    # image: public.ecr.aws/n4e0e1y0/beta9-gateway:latest
+    # image: registry.localhost:5000/beta9-gateway:latest
+    image: public.ecr.aws/n4e0e1y0/beta9-gateway:latest
     command:
     - /workspace/bin/hotreload.sh
     sync:
@@ -17,5 +17,5 @@ dev:
     - 5432:postgresql:5432
     - 6379:redis-master:6379
     persistentVolume:
-      enabled: false
-      # size: 10Gi
+      enabled: true
+      size: 10Gi
