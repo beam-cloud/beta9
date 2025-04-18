@@ -126,7 +126,7 @@ func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
 		Memory:       memory,
 		GpuCount:     uint32(gpuCount),
 		PrivateIP:    request.PrivateIP,
-		MetadataMode: g.config.BlobCache.Metadata.Mode,
+		MetadataMode: remoteConfig.BlobCache.Server.Metadata.Mode,
 	}, &poolConfig)
 	if err != nil {
 		return HTTPInternalServerError("Failed to register machine")
