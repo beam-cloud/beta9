@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"reflect"
 	"strings"
 	"time"
@@ -129,8 +128,6 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 		return nil, err
 	}
 
-	log.Printf("sql: %s", sql)
-
 	rows := []DBType{}
 	err = settings.Client.Select(&rows, sql, args...)
 	if err != nil {
@@ -150,9 +147,6 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 
 		nextCursor = EncodeCursor(cursor)
 	}
-
-	log.Printf("nextCursor: %s", nextCursor)
-	log.Printf("rows: %v, pageReturnLength: %d", rows, pageReturnLength)
 
 	return &CursorPaginationInfo[DBType]{
 		Next: nextCursor,
