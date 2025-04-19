@@ -60,6 +60,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	if s.config.EndpointUrl != "" {
 		args = append(args, fmt.Sprintf("--endpoint=%s", s.config.EndpointUrl))
 	}
+	args = append(args, "--symlink-zeroed")
 
 	// Add bucket and mount path
 	args = append(args, s.config.BucketName, localPath)
