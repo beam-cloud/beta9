@@ -168,6 +168,7 @@ func (s *Worker) deleteContainer(containerId string) {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
+	startTime := time.Now()
 
 	s.containerInstances.Set(containerId, &ContainerInstance{
 		Id:        containerId,
@@ -196,12 +197,8 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Attempt to pull image
 	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
-	if err != nil {
-		if !request.IsBuildRequest() {
-			return err
-		}
 
+	if request.IsBuildRequest() {
 		select {
 		case <-ctx.Done():
 			return nil
@@ -209,13 +206,14 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 			if err := s.buildOrPullBaseImage(ctx, request, containerId, outputLogger); err != nil {
 				return err
 			}
-			elapsed, err = s.imageClient.PullLazy(ctx, request, outputLogger)
-			if err != nil {
-				return err
-			}
 		}
 	}
-	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
+
+	err = s.imageClient.PrepareImageMount(ctx, request, outputLogger)
+	if err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to prepare image: %v", err)
+		return err
+	}
 
 	// Determine how many ports we need to expose
 	portsToExpose := len(request.Ports)
@@ -293,7 +291,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return ctx.Err()
 	default:
 		// Start the container
-		go s.spawn(request, spec, outputLogger, opts)
+		go s.spawn(request, spec, outputLogger, opts, startTime)
 	}
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
@@ -514,7 +512,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
+func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions, startTime time.Time) {
 	ctx, cancel := context.WithCancel(s.ctx)
 
 	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
@@ -592,6 +590,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
 		}
+		outputLogger.Info(fmt.Sprintf("Container running after %s...\n", time.Since(startTime)))
 	}()
 
 	// Setup container overlay filesystem
