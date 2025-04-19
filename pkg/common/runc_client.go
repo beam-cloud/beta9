@@ -88,8 +88,8 @@ func (c *RunCClient) Status(containerId string) (*pb.RunCStatusResponse, error) 
 	return resp, nil
 }
 
-func (c *RunCClient) Exec(containerId, cmd string) (*pb.RunCExecResponse, error) {
-	resp, err := c.client.RunCExec(context.TODO(), &pb.RunCExecRequest{ContainerId: containerId, Cmd: cmd})
+func (c *RunCClient) Exec(containerId, cmd string, env []string) (*pb.RunCExecResponse, error) {
+	resp, err := c.client.RunCExec(context.TODO(), &pb.RunCExecRequest{ContainerId: containerId, Cmd: cmd, Env: env})
 	if err != nil {
 		return resp, err
 	}
