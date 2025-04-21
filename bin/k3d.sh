@@ -13,6 +13,9 @@ check_gpu_linux() {
 }
 
 k3d_up() {
+  mkdir -p .k3d/storage
+  chmod 777 .k3d/storage
+  
   os_type="$(uname)"
   case "$os_type" in
     Linux*)

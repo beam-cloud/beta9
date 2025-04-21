@@ -63,8 +63,10 @@ FROM golang AS geesefs
 WORKDIR /workspace
 
 RUN <<EOT
+set -eux
 git clone https://github.com/beam-cloud/geesefs.git
 cd geesefs
+git checkout 02ebd066ad8aad5faad4198e1a07f8ded0384713
 make build
 EOT
 
