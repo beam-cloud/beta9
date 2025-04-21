@@ -39,7 +39,7 @@ func (t NullTime) Serialize() interface{} {
 		return nil
 	}
 
-	return time.Time(t.Time).Format(time.RFC3339)
+	return time.Time(t.Time).Format(time.RFC3339Nano)
 }
 
 func (t NullTime) Now() NullTime {
@@ -232,9 +232,12 @@ type Deployment struct {
 
 type DeploymentWithRelated struct {
 	Deployment
-	Workspace Workspace `db:"workspace" json:"workspace" serializer:"workspace"`
-	Stub      Stub      `db:"stub" json:"stub" serializer:"stub"`
-	StubId    string    `serializer:"stub_id,source:stub.id"`
+	Workspace   Workspace `db:"workspace" json:"workspace" serializer:"workspace"`
+	Stub        Stub      `db:"stub" json:"stub" serializer:"stub"`
+	App         App       `db:"app" json:"app" serializer:"app"`
+	StubId      string    `serializer:"stub_id,source:stub.id"`
+	AppId       string    `serializer:"app_id,source:app.id"`
+	WorkspaceId string    `serializer:"workspace_id,source:workspace.id"`
 }
 
 // @go2proto
