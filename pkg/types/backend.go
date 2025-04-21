@@ -17,7 +17,7 @@ type Time struct {
 }
 
 func (t Time) Serialize() string {
-	return t.Time.Format(time.RFC3339)
+	return t.Time.Format(time.RFC3339Nano)
 }
 
 func (t *Time) Scan(value interface{}) error {
