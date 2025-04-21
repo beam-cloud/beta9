@@ -11,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/rs/zerolog/log"
 )
 
@@ -24,15 +25,17 @@ type WorkspaceStorageManager struct {
 	config             types.StorageConfig
 	containerInstances *common.SafeMap[*ContainerInstance]
 	mu                 sync.Mutex
+	cacheClient        *blobcache.BlobCacheClient
 }
 
-func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, containerInstances *common.SafeMap[*ContainerInstance]) (*WorkspaceStorageManager, error) {
+func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, containerInstances *common.SafeMap[*ContainerInstance], cacheClient *blobcache.BlobCacheClient) (*WorkspaceStorageManager, error) {
 	sm := &WorkspaceStorageManager{
 		ctx:                ctx,
 		mounts:             common.NewSafeMap[storage.Storage](),
 		config:             config,
 		containerInstances: containerInstances,
 		mu:                 sync.Mutex{},
+		cacheClient:        cacheClient,
 	}
 
 	go sm.cleanupUnusedMounts()
@@ -88,7 +91,7 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 			FileMode:         s.config.WorkspaceStorage.Geese.FileMode,
 			ListType:         s.config.WorkspaceStorage.Geese.ListType,
 		},
-	})
+	}, s.cacheClient)
 	if err != nil {
 		return nil, err
 	}

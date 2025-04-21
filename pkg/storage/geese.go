@@ -8,23 +8,26 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/rs/zerolog/log"
 	core "github.com/yandex-cloud/geesefs/core"
 	cfg "github.com/yandex-cloud/geesefs/core/cfg"
 )
 
 type GeeseStorage struct {
-	config types.GeeseConfig
-	mfs    core.MountedFS
-	fs     *core.Goofys
-	mu     sync.Mutex
+	config      types.GeeseConfig
+	mfs         core.MountedFS
+	fs          *core.Goofys
+	mu          sync.Mutex
+	cacheClient *blobcache.BlobCacheClient
 }
 
-func NewGeeseStorage(config types.GeeseConfig) (Storage, error) {
+func NewGeeseStorage(config types.GeeseConfig, cacheClient *blobcache.BlobCacheClient) (Storage, error) {
 	return &GeeseStorage{
-		config: config,
-		mfs:    nil,
-		fs:     nil,
+		config:      config,
+		mfs:         nil,
+		fs:          nil,
+		cacheClient: cacheClient,
 	}, nil
 }
 
@@ -56,6 +59,11 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.FsyncOnClose = s.config.FsyncOnClose
 	flags.MemoryLimit = uint64(s.config.MemoryLimit)
 	flags.SymlinkZeroed = true
+
+	// If we have a cache client, use it
+	if s.cacheClient != nil {
+		flags.ExternalCacheClient = nil // s.cacheClient
+	}
 
 	fs, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)
 	if err != nil {
