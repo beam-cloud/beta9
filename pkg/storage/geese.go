@@ -3,102 +3,69 @@ package storage
 import (
 	"context"
 	"fmt"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 	core "github.com/yandex-cloud/geesefs/core"
 	cfg "github.com/yandex-cloud/geesefs/core/cfg"
-
-	"github.com/rs/zerolog/log"
 )
 
 type GeeseStorage struct {
 	config types.GeeseConfig
+	mfs    core.MountedFS
+	fs     *core.Goofys
+	mu     sync.Mutex
 }
 
 func NewGeeseStorage(config types.GeeseConfig) (Storage, error) {
 	return &GeeseStorage{
 		config: config,
+		mfs:    nil,
+		fs:     nil,
 	}, nil
 }
 
 func (s *GeeseStorage) Mount(localPath string) error {
 	log.Info().Str("local_path", localPath).Msg("geese filesystem mounting")
 
-	args := []string{}
-	if s.config.Debug {
-		args = append(args, "--debug")
-	}
-	if s.config.Force {
-		args = append(args, "-f")
-	}
-	if s.config.FsyncOnClose {
-		args = append(args, "--fsync-on-close")
-	}
+	flags := cfg.DefaultFlags()
+	s3Config := &cfg.S3Config{}
+	s3Config.Init()
 
-	flags := &cfg.FlagStorage{
-		Backend: &cfg.S3Config{
-			AccessKey: s.config.AccessKey,
-			SecretKey: s.config.SecretKey,
-			Region:    s.config.Region,
+	s3Config.AccessKey = s.config.AccessKey
+	s3Config.SecretKey = s.config.SecretKey
+	s3Config.Region = s.config.Region
+
+	flags.Backend = s3Config
+	flags.Endpoint = s.config.EndpointUrl
+	flags.MountPoint = localPath
+	flags.Foreground = false
+	flags.DirMode = os.FileMode(0755)
+	flags.FileMode = os.FileMode(0644)
+	flags.MaxFlushers = int64(s.config.MaxFlushers)
+	flags.MaxParallelParts = int(s.config.MaxParallelParts)
+	flags.PartSizes = []cfg.PartSizeConfig{
+		{
+			PartSize:  1024 * 1024,
+			PartCount: 10,
 		},
-		Endpoint:   s.config.EndpointUrl,
-		MountPoint: localPath,
-		// MemoryLimit:      uint64(s.config.MemoryLimit),
-		// MaxFlushers:      int64(s.config.MaxFlushers),
-		// MaxParallelParts: int64(s.config.MaxParallelParts),
-		// PartSizes:        s.config.PartSizes,
-		// DirMode:          os.FileMode(s.config.DirMode),
-		// FileMode:         os.FileMode(s.config.FileMode),
-		// FsyncOnClose:     s.config.FsyncOnClose,
 	}
+	flags.FsyncOnClose = s.config.FsyncOnClose
+	flags.MemoryLimit = uint64(s.config.MemoryLimit)
+	flags.SymlinkZeroed = true
 
-	// if s.config.MemoryLimit > 0 {
-	// 	args = append(args, fmt.Sprintf("--memory-limit=%d", s.config.MemoryLimit))
-	// }
-	// if s.config.MaxFlushers > 0 {
-	// 	args = append(args, fmt.Sprintf("--max-flushers=%d", s.config.MaxFlushers))
-	// }
-	// if s.config.MaxParallelParts > 0 {
-	// 	args = append(args, fmt.Sprintf("--max-parallel-parts=%d", s.config.MaxParallelParts))
-	// }
-	// if s.config.PartSizes > 0 {
-	// 	args = append(args, fmt.Sprintf("--part-sizes=%d", s.config.PartSizes))
-	// }
-	// if s.config.DirMode != "" {
-	// 	args = append(args, fmt.Sprintf("--dir-mode=%s", s.config.DirMode))
-	// }
-	// if s.config.FileMode != "" {
-	// 	args = append(args, fmt.Sprintf("--file-mode=%s", s.config.FileMode))
-	// }
-	// if s.config.ListType > 0 {
-	// 	args = append(args, fmt.Sprintf("--list-type=%d", s.config.ListType))
-	// }
-	// if s.config.EndpointUrl != "" {
-	// 	args = append(args, fmt.Sprintf("--endpoint=%s", s.config.EndpointUrl))
-	// }
-
-	// Add bucket and mount path
-
-	// Set bucket credentials as env vars
-	if s.config.AccessKey != "" || s.config.SecretKey != "" {
-		// flags.
-		// cmd.Env = append(cmd.Env,
-		// 	fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", s.config.AccessKey),
-		// 	fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", s.config.SecretKey),
-		// )
-	}
-
-	// // Mount asynchronously
-	// go func() {
-	_, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)
+	fs, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)
 	if err != nil {
 		log.Error().Err(err).Str("local_path", localPath).Msg("geesefs: mount process exited with error")
 	}
 
-	log.Info().Str("local_path", localPath).Msg("geesefs: filesystem mounted")
-
-	mfs.Unmount()
+	s.mu.Lock()
+	s.mfs = mfs
+	s.fs = fs
+	s.mu.Unlock()
 
 	// Poll until the filesystem is mounted or we timeout
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -132,7 +99,18 @@ func (s *GeeseStorage) Mount(localPath string) error {
 }
 
 func (s *GeeseStorage) Unmount(localPath string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.mfs != nil {
+		s.mfs.Unmount()
+	}
+
 	log.Info().Str("local_path", localPath).Msg("geesefs: filesystem unmounted")
+
+	s.mfs = nil
+	s.fs = nil
+
 	return nil
 }
 
