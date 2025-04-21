@@ -212,7 +212,8 @@ class _CallableWrapper(DeployableMixin):
             return
 
         terminal.header(f"Function complete <{last_response.task_id}>")
-        if last_response.result == "":
+        # Sometimes the result is empty (task timed out)
+        if not last_response.result:
             return None
         return cloudpickle.loads(last_response.result)
 
