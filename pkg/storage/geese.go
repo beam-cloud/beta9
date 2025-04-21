@@ -1,19 +1,19 @@
 package storage
 
 import (
+	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	core "github.com/yandex-cloud/geesefs/core"
+	cfg "github.com/yandex-cloud/geesefs/core/cfg"
+
 	"github.com/rs/zerolog/log"
 )
 
 type GeeseStorage struct {
 	config types.GeeseConfig
-	pid    int
 }
 
 func NewGeeseStorage(config types.GeeseConfig) (Storage, error) {
@@ -36,58 +36,69 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		args = append(args, "--fsync-on-close")
 	}
 
-	if s.config.MemoryLimit > 0 {
-		args = append(args, fmt.Sprintf("--memory-limit=%d", s.config.MemoryLimit))
+	flags := &cfg.FlagStorage{
+		Backend: &cfg.S3Config{
+			AccessKey: s.config.AccessKey,
+			SecretKey: s.config.SecretKey,
+			Region:    s.config.Region,
+		},
+		Endpoint:   s.config.EndpointUrl,
+		MountPoint: localPath,
+		// MemoryLimit:      uint64(s.config.MemoryLimit),
+		// MaxFlushers:      int64(s.config.MaxFlushers),
+		// MaxParallelParts: int64(s.config.MaxParallelParts),
+		// PartSizes:        s.config.PartSizes,
+		// DirMode:          os.FileMode(s.config.DirMode),
+		// FileMode:         os.FileMode(s.config.FileMode),
+		// FsyncOnClose:     s.config.FsyncOnClose,
 	}
-	if s.config.MaxFlushers > 0 {
-		args = append(args, fmt.Sprintf("--max-flushers=%d", s.config.MaxFlushers))
-	}
-	if s.config.MaxParallelParts > 0 {
-		args = append(args, fmt.Sprintf("--max-parallel-parts=%d", s.config.MaxParallelParts))
-	}
-	if s.config.PartSizes > 0 {
-		args = append(args, fmt.Sprintf("--part-sizes=%d", s.config.PartSizes))
-	}
-	if s.config.DirMode != "" {
-		args = append(args, fmt.Sprintf("--dir-mode=%s", s.config.DirMode))
-	}
-	if s.config.FileMode != "" {
-		args = append(args, fmt.Sprintf("--file-mode=%s", s.config.FileMode))
-	}
-	if s.config.ListType > 0 {
-		args = append(args, fmt.Sprintf("--list-type=%d", s.config.ListType))
-	}
-	if s.config.EndpointUrl != "" {
-		args = append(args, fmt.Sprintf("--endpoint=%s", s.config.EndpointUrl))
-	}
+
+	// if s.config.MemoryLimit > 0 {
+	// 	args = append(args, fmt.Sprintf("--memory-limit=%d", s.config.MemoryLimit))
+	// }
+	// if s.config.MaxFlushers > 0 {
+	// 	args = append(args, fmt.Sprintf("--max-flushers=%d", s.config.MaxFlushers))
+	// }
+	// if s.config.MaxParallelParts > 0 {
+	// 	args = append(args, fmt.Sprintf("--max-parallel-parts=%d", s.config.MaxParallelParts))
+	// }
+	// if s.config.PartSizes > 0 {
+	// 	args = append(args, fmt.Sprintf("--part-sizes=%d", s.config.PartSizes))
+	// }
+	// if s.config.DirMode != "" {
+	// 	args = append(args, fmt.Sprintf("--dir-mode=%s", s.config.DirMode))
+	// }
+	// if s.config.FileMode != "" {
+	// 	args = append(args, fmt.Sprintf("--file-mode=%s", s.config.FileMode))
+	// }
+	// if s.config.ListType > 0 {
+	// 	args = append(args, fmt.Sprintf("--list-type=%d", s.config.ListType))
+	// }
+	// if s.config.EndpointUrl != "" {
+	// 	args = append(args, fmt.Sprintf("--endpoint=%s", s.config.EndpointUrl))
+	// }
 
 	// Add bucket and mount path
-	args = append(args, s.config.BucketName, localPath)
-
-	cmd := exec.Command("geesefs", args...)
 
 	// Set bucket credentials as env vars
 	if s.config.AccessKey != "" || s.config.SecretKey != "" {
-		cmd.Env = append(cmd.Env,
-			fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", s.config.AccessKey),
-			fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", s.config.SecretKey),
-		)
+		// flags.
+		// cmd.Env = append(cmd.Env,
+		// 	fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", s.config.AccessKey),
+		// 	fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", s.config.SecretKey),
+		// )
 	}
 
-	// Start the geesefs process so we can capture the PID
-	if err := cmd.Start(); err != nil {
-		log.Error().Err(err).Msg("failed to start geesefs process")
-		return err
+	// // Mount asynchronously
+	// go func() {
+	_, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)
+	if err != nil {
+		log.Error().Err(err).Str("local_path", localPath).Msg("geesefs: mount process exited with error")
 	}
 
-	s.pid = cmd.Process.Pid
+	log.Info().Str("local_path", localPath).Msg("geesefs: filesystem mounted")
 
-	// Wait asynchronously
-	go func() {
-		if err := cmd.Wait(); err != nil {
-			log.Error().Err(err).Str("local_path", localPath).Int("pid", s.pid).Msg("geesefs: mount process exited with error")
-		}
-	}()
+	mfs.Unmount()
 
 	// Poll until the filesystem is mounted or we timeout
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -121,31 +132,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 }
 
 func (s *GeeseStorage) Unmount(localPath string) error {
-	waitTimeSeconds := 5
-
-	// Try to terminate the geesefs process w/ a SIGINT
-	if s.pid > 0 {
-		if p, err := os.FindProcess(s.pid); err == nil {
-			log.Info().Str("local_path", localPath).Int("pid", s.pid).Msg("geesefs: unmounting filesystem")
-
-			p.Signal(syscall.SIGINT)
-
-			// Wait up to waitTimeSeconds seconds for graceful shutdown
-			for i := 0; i < waitTimeSeconds; i++ {
-				if p.Signal(syscall.Signal(0)) != nil {
-					break // Process exited
-				}
-
-				time.Sleep(1 * time.Second)
-			}
-
-			// Force kill the process if still running
-			p.Kill()
-		}
-	}
-
 	log.Info().Str("local_path", localPath).Msg("geesefs: filesystem unmounted")
-	s.pid = 0
 	return nil
 }
 

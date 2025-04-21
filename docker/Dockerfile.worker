@@ -56,6 +56,19 @@ make install
 /usr/local/bin/skopeo --version
 EOT
 
+# build geesefs fork
+# ========================
+FROM golang AS geesefs
+
+WORKDIR /workspace
+
+RUN <<EOT
+git clone https://github.com/beam-cloud/geesefs.git
+cd geesefs
+git checkout db2450f01b57a1e6c8e7a283ef78ea0655e0fa9f
+make build
+EOT
+
 # nvidia-container-toolkit
 # ========================
 FROM golang:1.23-bookworm AS nvidia-container-toolkit
@@ -158,14 +171,6 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
 RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint && \
     chmod +x /usr/local/bin/cuda-checkpoint
 
-RUN if [ "$(uname -m)" = "x86_64" ]; then \
-    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
-    chmod +x /usr/local/bin/geesefs; \
-    elif [ "$(uname -m)" = "aarch64" ]; then \
-    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
-    chmod +x /usr/local/bin/geesefs; \
-    fi
-
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*
@@ -178,6 +183,7 @@ COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
+COPY --from=geesefs /workspace/geesefs/geesefs /usr/local/bin/geesefs
 
 COPY ./bin/volume_cache_x86.so /usr/local/lib/volume_cache_x86.so
 COPY ./bin/volume_cache_arm.so /usr/local/lib/volume_cache_arm.so
