@@ -37,12 +37,10 @@ storage:
     baseMountPath: /workspace/data
     geese:
       debug: false
-      force: true
       fsyncOnClose: true
       memoryLimit: 2048
       maxFlushers: 64
       maxParallelParts: 64
-      partSizes: 16
       dirMode: 0777
       fileMode: 0666
       listType: 1
