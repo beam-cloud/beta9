@@ -206,7 +206,7 @@ type EventRepository interface {
 	PushContainerRequestedEvent(request *types.ContainerRequest)
 	PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest)
-	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest)
+	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest, exitCode int)
 	PushContainerOOMEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushWorkerStartedEvent(workerID string)
