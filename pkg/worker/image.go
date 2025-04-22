@@ -175,7 +175,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	if c.cacheClient != nil && !isBuildContainer {
 		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
-		sourceOffset := int64(0)
 
 		// Create constant backoff
 		b := backoff.NewConstantBackOff(300 * time.Millisecond)
@@ -199,7 +198,16 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				return errors.New("image locked")
 			}
 
-			_, err := c.cacheClient.StoreContentFromSourceWithLock(sourcePath, sourceOffset)
+			_, err := c.cacheClient.StoreContentFromSourceWithLock(struct {
+				Path        string
+				BucketName  string
+				Region      string
+				EndpointURL string
+				AccessKey   string
+				SecretKey   string
+			}{
+				Path: sourcePath,
+			})
 			if err != nil {
 				if err == blobcache.ErrUnableToAcquireLock {
 					imageLocked = true

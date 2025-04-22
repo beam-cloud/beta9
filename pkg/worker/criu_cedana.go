@@ -248,7 +248,19 @@ func (c *CedanaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) 
 		client := c.fileCacheManager.GetClient()
 
 		// Remove the leading "/" from the checkpoint path
-		_, err := client.StoreContentFromSource(checkpointPath[1:], 0)
+		_, err := client.StoreContentFromSource(struct {
+			Path        string
+			BucketName  string
+			Region      string
+			EndpointURL string
+			AccessKey   string
+			SecretKey   string
+		}{
+			Path:        checkpointPath[1:],
+			BucketName:  "",
+			Region:      "",
+			EndpointURL: "",
+		})
 		if err != nil {
 			return "", err
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -12,6 +13,12 @@ import (
 	"github.com/rs/zerolog/log"
 	core "github.com/yandex-cloud/geesefs/core"
 	cfg "github.com/yandex-cloud/geesefs/core/cfg"
+)
+
+const (
+	defaultGeeseFSDirMode      = 0755
+	defaultGeeseFSFileMode     = 0644
+	defaultGeeseFSMountTimeout = 30 * time.Second
 )
 
 type GeeseStorage struct {
@@ -46,23 +53,36 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.Endpoint = s.config.EndpointUrl
 	flags.MountPoint = localPath
 	flags.Foreground = false
-	flags.DirMode = os.FileMode(0755)
-	flags.FileMode = os.FileMode(0644)
+
+	dirMode, err := strconv.ParseInt(s.config.DirMode, 8, 32)
+	if err != nil {
+		dirMode = defaultGeeseFSDirMode
+	}
+	flags.DirMode = os.FileMode(dirMode)
+
+	fileMode, err := strconv.ParseInt(s.config.FileMode, 8, 32)
+	if err != nil {
+		fileMode = defaultGeeseFSFileMode
+	}
+	flags.FileMode = os.FileMode(fileMode)
+
 	flags.MaxFlushers = int64(s.config.MaxFlushers)
 	flags.MaxParallelParts = int(s.config.MaxParallelParts)
 	flags.PartSizes = []cfg.PartSizeConfig{
-		{
-			PartSize:  1024 * 1024,
-			PartCount: 10,
-		},
+		{PartSize: 5 * 1024 * 1024, PartCount: 1000},
+		{PartSize: 25 * 1024 * 1024, PartCount: 1000},
+		{PartSize: 125 * 1024 * 1024, PartCount: 8000},
 	}
+
 	flags.FsyncOnClose = s.config.FsyncOnClose
-	flags.MemoryLimit = uint64(s.config.MemoryLimit)
+	flags.DebugMain = s.config.Debug == true
+	flags.MemoryLimit = uint64(s.config.MemoryLimit) * 1024 * 1024
 	flags.SymlinkZeroed = true
+	flags.HTTPTimeout = 60 * time.Second
 
 	// If we have a cache client, use it
 	if s.cacheClient != nil {
-		flags.ExternalCacheClient = nil // s.cacheClient
+		flags.ExternalCacheClient = s.cacheClient
 	}
 
 	fs, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)
@@ -79,7 +99,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	timeout := time.After(30 * time.Second)
+	timeout := time.After(defaultGeeseFSMountTimeout)
 
 	done := make(chan bool)
 	go func() {

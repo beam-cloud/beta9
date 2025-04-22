@@ -168,7 +168,21 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 		wg.Add(1)
 		poolSubmitErr := p.Submit(func() {
 			defer wg.Done()
-			_, err := client.StoreContentFromSource(path[1:], 0)
+			_, err := client.StoreContentFromSource(struct {
+				Path        string
+				BucketName  string
+				Region      string
+				EndpointURL string
+				AccessKey   string
+				SecretKey   string
+			}{
+				Path:        path[1:],
+				BucketName:  "",
+				Region:      "",
+				EndpointURL: "",
+				AccessKey:   "",
+				SecretKey:   "",
+			})
 			if err != nil {
 				storeContentErrMu.Lock()
 				storeContentErr = multierror.Append(storeContentErr, err)

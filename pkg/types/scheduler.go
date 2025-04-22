@@ -234,7 +234,7 @@ func (c *ContainerRequest) IsBuildRequest() bool {
 }
 
 func (c *ContainerRequest) VolumeCacheCompatible() bool {
-	if c.IsBuildRequest() || c.CheckpointEnabled {
+	if c.IsBuildRequest() || c.CheckpointEnabled || c.Workspace.StorageAvailable() {
 		return false
 	}
 	return c.Workspace.VolumeCacheEnabled
