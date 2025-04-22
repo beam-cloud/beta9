@@ -81,12 +81,10 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 
 			// Global config
 			Debug:            s.config.WorkspaceStorage.Geese.Debug,
-			Force:            s.config.WorkspaceStorage.Geese.Force,
 			FsyncOnClose:     s.config.WorkspaceStorage.Geese.FsyncOnClose,
 			MemoryLimit:      s.config.WorkspaceStorage.Geese.MemoryLimit,
 			MaxFlushers:      s.config.WorkspaceStorage.Geese.MaxFlushers,
 			MaxParallelParts: s.config.WorkspaceStorage.Geese.MaxParallelParts,
-			PartSizes:        s.config.WorkspaceStorage.Geese.PartSizes,
 			DirMode:          s.config.WorkspaceStorage.Geese.DirMode,
 			FileMode:         s.config.WorkspaceStorage.Geese.FileMode,
 			ListType:         s.config.WorkspaceStorage.Geese.ListType,

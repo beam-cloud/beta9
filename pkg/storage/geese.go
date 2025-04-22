@@ -80,7 +80,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.SymlinkZeroed = true
 	flags.HTTPTimeout = 60 * time.Second
 
-	// If we have a cache client, use it
+	// If we have a cache client available, use it
 	if s.cacheClient != nil {
 		flags.ExternalCacheClient = s.cacheClient
 	}

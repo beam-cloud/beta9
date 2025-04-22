@@ -222,12 +222,10 @@ type JuiceFSConfig struct {
 
 type GeeseConfig struct {
 	Debug            bool   `key:"debug" json:"debug"`                         // --debug
-	Force            bool   `key:"force" json:"force"`                         // -f (force)
 	FsyncOnClose     bool   `key:"fsyncOnClose" json:"fsync_on_close"`         // --fsync-on-close
 	MemoryLimit      int64  `key:"memoryLimit" json:"memory_limit"`            // --memory-limit
 	MaxFlushers      int    `key:"maxFlushers" json:"max_flushers"`            // --max-flushers
 	MaxParallelParts int    `key:"maxParallelParts" json:"max_parallel_parts"` // --max-parallel-parts
-	PartSizes        int64  `key:"partSizes" json:"part_sizes"`                // --part-sizes
 	DirMode          string `key:"dirMode" json:"dir_mode"`                    // --dir-mode, e.g., "0777"
 	FileMode         string `key:"fileMode" json:"file_mode"`                  // --file-mode, e.g., "0666"
 	ListType         int    `key:"listType" json:"list_type"`                  // --list-type

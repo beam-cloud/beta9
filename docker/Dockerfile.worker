@@ -56,18 +56,6 @@ make install
 /usr/local/bin/skopeo --version
 EOT
 
-# build geesefs fork
-# ========================
-FROM golang AS geesefs
-
-WORKDIR /workspace
-
-RUN <<EOT
-git clone https://github.com/beam-cloud/geesefs.git
-cd geesefs
-git checkout db2450f01b57a1e6c8e7a283ef78ea0655e0fa9f
-make build
-EOT
 
 # nvidia-container-toolkit
 # ========================
