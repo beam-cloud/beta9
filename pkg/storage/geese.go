@@ -22,6 +22,12 @@ const (
 	defaultGeeseFSRequestTimeout = 60 * time.Second
 )
 
+var defaultGeeseFSPartSizes = []cfg.PartSizeConfig{
+	{PartSize: 5 * 1024 * 1024, PartCount: 1000},
+	{PartSize: 25 * 1024 * 1024, PartCount: 1000},
+	{PartSize: 125 * 1024 * 1024, PartCount: 8000},
+}
+
 type GeeseStorage struct {
 	config      types.GeeseConfig
 	mfs         core.MountedFS
@@ -42,39 +48,35 @@ func NewGeeseStorage(config types.GeeseConfig, cacheClient *blobcache.BlobCacheC
 func (s *GeeseStorage) Mount(localPath string) error {
 	log.Info().Str("local_path", localPath).Msg("geese filesystem mounting")
 
-	flags := cfg.DefaultFlags()
-	s3Config := &cfg.S3Config{}
-	s3Config.Init()
-
-	s3Config.AccessKey = s.config.AccessKey
-	s3Config.SecretKey = s.config.SecretKey
-	s3Config.Region = s.config.Region
-
-	flags.Backend = s3Config
-	flags.Endpoint = s.config.EndpointUrl
-	flags.MountPoint = localPath
-	flags.Foreground = false
-
 	dirMode, err := strconv.ParseInt(s.config.DirMode, 8, 32)
 	if err != nil {
 		dirMode = defaultGeeseFSDirMode
 	}
-	flags.DirMode = os.FileMode(dirMode)
 
 	fileMode, err := strconv.ParseInt(s.config.FileMode, 8, 32)
 	if err != nil {
 		fileMode = defaultGeeseFSFileMode
 	}
-	flags.FileMode = os.FileMode(fileMode)
 
+	// Backend config
+	s3Config := &cfg.S3Config{}
+	s3Config.Init()
+	s3Config.AccessKey = s.config.AccessKey
+	s3Config.SecretKey = s.config.SecretKey
+	s3Config.Region = s.config.Region
+
+	// Set mount flags
+	flags := cfg.DefaultFlags()
+	flags.Backend = s3Config
+	flags.Endpoint = s.config.EndpointUrl
+	flags.MountPoint = localPath
+	flags.Foreground = false
+
+	flags.DirMode = os.FileMode(dirMode)
+	flags.FileMode = os.FileMode(fileMode)
 	flags.MaxFlushers = int64(s.config.MaxFlushers)
 	flags.MaxParallelParts = int(s.config.MaxParallelParts)
-	flags.PartSizes = []cfg.PartSizeConfig{
-		{PartSize: 5 * 1024 * 1024, PartCount: 1000},
-		{PartSize: 25 * 1024 * 1024, PartCount: 1000},
-		{PartSize: 125 * 1024 * 1024, PartCount: 8000},
-	}
-
+	flags.PartSizes = defaultGeeseFSPartSizes
 	flags.FsyncOnClose = s.config.FsyncOnClose
 	flags.DebugMain = s.config.Debug == true
 	flags.MemoryLimit = uint64(s.config.MemoryLimit) * 1024 * 1024
@@ -90,11 +92,6 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	if err != nil {
 		log.Error().Err(err).Str("local_path", localPath).Msg("geesefs: mount process exited with error")
 	}
-
-	s.mu.Lock()
-	s.mfs = mfs
-	s.fs = fs
-	s.mu.Unlock()
 
 	// Poll until the filesystem is mounted or we timeout
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -124,6 +121,12 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	}
 
 	log.Info().Str("local_path", localPath).Msg("geesefs: filesystem mounted")
+
+	s.mu.Lock()
+	s.mfs = mfs
+	s.fs = fs
+	s.mu.Unlock()
+
 	return nil
 }
 
