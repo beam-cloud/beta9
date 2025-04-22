@@ -75,7 +75,7 @@ func (s *GlobalVolumeService) CreatePresignedURL(ctx context.Context, in *pb.Cre
 	bucket := s.config.BucketName
 
 	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 		if err != nil {
 			return &pb.CreatePresignedURLResponse{
 				Ok:     false,
@@ -180,7 +180,7 @@ func (s *GlobalVolumeService) CreateMultipartUpload(ctx context.Context, in *pb.
 	key := joinCleanPath(types.DefaultVolumesPrefix, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)
 
 	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 		if err != nil {
 			return &pb.CreateMultipartUploadResponse{
 				Ok:     false,
@@ -271,7 +271,7 @@ func (s *GlobalVolumeService) CompleteMultipartUpload(ctx context.Context, in *p
 	key := joinCleanPath(types.DefaultVolumesPrefix, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)
 
 	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 		if err != nil {
 			return &pb.CompleteMultipartUploadResponse{
 				Ok:     false,
@@ -333,7 +333,7 @@ func (s *GlobalVolumeService) AbortMultipartUpload(ctx context.Context, in *pb.A
 	key := joinCleanPath(types.DefaultVolumesPrefix, authInfo.Workspace.Name, volume.ExternalId, in.VolumePath)
 
 	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 		if err != nil {
 			return &pb.AbortMultipartUploadResponse{
 				Ok:     false,

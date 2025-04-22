@@ -30,7 +30,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 		}
 
 		if useWorkspaceStorage {
-			storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+			storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 			if err != nil {
 				return &pb.HeadObjectResponse{
 					Ok:       false,
@@ -73,7 +73,7 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)
 
-	storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 	if err != nil {
 		return &pb.CreateObjectResponse{
 			Ok:       false,
