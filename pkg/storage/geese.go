@@ -90,6 +90,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	fs, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)
 	if err != nil {
 		log.Error().Err(err).Str("local_path", localPath).Msg("geesefs: mount process exited with error")
+		return err
 	}
 
 	// Poll until the filesystem is mounted or we timeout
