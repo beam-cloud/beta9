@@ -1459,11 +1459,11 @@ func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, con
 	return &limit, nil
 }
 
-func (r *PostgresBackendRepository) GetWorkspaceStorage(ctx context.Context, workspaceId uint) (*types.WorkspaceStorage, error) {
+func (r *PostgresBackendRepository) GetWorkspaceStorage(ctx context.Context, storageId uint) (*types.WorkspaceStorage, error) {
 	var storage types.WorkspaceStorage
 
 	query := `SELECT bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at FROM workspace_storage WHERE id = $1;`
-	if err := r.client.GetContext(ctx, &storage, query, workspaceId); err != nil {
+	if err := r.client.GetContext(ctx, &storage, query, storageId); err != nil {
 		return nil, err
 	}
 
