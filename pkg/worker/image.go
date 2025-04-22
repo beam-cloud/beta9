@@ -206,8 +206,12 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				AccessKey   string
 				SecretKey   string
 			}{
-				Path:       sourcePath,
-				BucketName: "",
+				Path:        sourcePath,
+				BucketName:  c.config.ImageService.Registries.S3.BucketName,
+				Region:      c.config.ImageService.Registries.S3.Region,
+				EndpointURL: c.config.ImageService.Registries.S3.Endpoint,
+				AccessKey:   c.config.ImageService.Registries.S3.AccessKey,
+				SecretKey:   c.config.ImageService.Registries.S3.SecretKey,
 			})
 			if err != nil {
 				if err == blobcache.ErrUnableToAcquireLock {
