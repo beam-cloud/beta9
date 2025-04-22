@@ -171,7 +171,6 @@ COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
-COPY --from=geesefs /workspace/geesefs/geesefs /usr/local/bin/geesefs
 
 COPY ./bin/volume_cache_x86.so /usr/local/lib/volume_cache_x86.so
 COPY ./bin/volume_cache_arm.so /usr/local/lib/volume_cache_arm.so
