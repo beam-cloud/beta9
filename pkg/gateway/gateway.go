@@ -140,7 +140,7 @@ func NewGateway() (*Gateway, error) {
 
 	storageClient, err := clients.NewDefaultStorageClient(context.Background(), config)
 	if err != nil {
-		log.Error().Err(err).Msg("Unable to create default storage client")
+		return nil, err
 	}
 
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
