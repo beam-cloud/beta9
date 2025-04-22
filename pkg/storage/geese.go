@@ -71,7 +71,6 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.Endpoint = s.config.EndpointUrl
 	flags.MountPoint = localPath
 	flags.Foreground = false
-
 	flags.DirMode = os.FileMode(dirMode)
 	flags.FileMode = os.FileMode(fileMode)
 	flags.MaxFlushers = int64(s.config.MaxFlushers)
