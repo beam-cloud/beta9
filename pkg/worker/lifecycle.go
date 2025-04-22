@@ -245,6 +245,8 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		InitialSpec:  initialBundleSpec,
 	}
 
+	log.Info().Str("container_id", containerId).Msgf("initial bundle spec: %v", initialBundleSpec)
+
 	err = s.containerMountManager.SetupContainerMounts(ctx, request, outputLogger)
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
@@ -408,8 +410,11 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	var volumeCacheMap map[string]string = make(map[string]string)
 
+	log.Info().Str("container_id", request.ContainerId).Msgf("looping through mounts: %v", request.Mounts)
 	// Add bind mounts to runc spec
 	for _, m := range request.Mounts {
+		log.Info().Str("container_id", request.ContainerId).Msgf("looping through mounts: %v", m)
+
 		// Skip mountpoint storage if the local path does not exist (mounting failed)
 		if m.MountType == storage.StorageModeMountPoint {
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
@@ -420,12 +425,15 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
 			}
 
+			log.Info().Str("container_id", request.ContainerId).Msgf("stating to check if mount directory exists: %v", m.LocalPath)
 			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
+				log.Info().Str("container_id", request.ContainerId).Msgf("mount directory does not exist, creating: %v", m.LocalPath)
 				err := os.MkdirAll(m.LocalPath, 0755)
 				if err != nil {
 					log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
 				}
 			}
+			log.Info().Str("container_id", request.ContainerId).Msgf("done with path: %v", m.LocalPath)
 		}
 
 		mode := "rw"
@@ -447,6 +455,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 			Options:     []string{"rbind", mode},
 		})
 	}
+
+	log.Info().Str("container_id", request.ContainerId).Msg("done with mounts")
 
 	// If volume caching is enabled, set it up and add proper mounts to spec
 	if request.VolumeCacheCompatible() && s.fileCacheManager.CacheAvailable() {

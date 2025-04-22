@@ -198,22 +198,23 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				return errors.New("image locked")
 			}
 
-			_, err := c.cacheClient.StoreContentFromSourceWithLock(struct {
-				Path        string
-				BucketName  string
-				Region      string
-				EndpointURL string
-				AccessKey   string
-				SecretKey   string
+			_, err := c.cacheClient.StoreContentFromFUSE(struct {
+				Path string
 			}{
-				Path:       sourcePath,
-				BucketName: "",
+				Path: sourcePath,
+			}, struct {
+				RoutingKey string
+				Lock       bool
+			}{
+				RoutingKey: sourcePath,
+				Lock:       true,
 			})
 			if err != nil {
 				if err == blobcache.ErrUnableToAcquireLock {
 					imageLocked = true
 					return err
 				}
+
 				outputLogger.Error(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
 				return backoff.Permanent(err)
 			}
