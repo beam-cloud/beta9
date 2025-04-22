@@ -447,8 +447,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		})
 	}
 
-	log.Info().Str("container_id", request.ContainerId).Msg("done with mounts")
-
 	// If volume caching is enabled, set it up and add proper mounts to spec
 	if request.VolumeCacheCompatible() && s.fileCacheManager.CacheAvailable() {
 		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
