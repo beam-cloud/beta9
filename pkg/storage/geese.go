@@ -57,6 +57,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	if err != nil {
 		fileMode = defaultGeeseFSFileMode
 	}
+	args = append(args, "--symlink-zeroed")
 
 	// Backend config
 	s3Config := &cfg.S3Config{}
