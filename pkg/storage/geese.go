@@ -22,12 +22,6 @@ const (
 	defaultGeeseFSRequestTimeout = 60 * time.Second
 )
 
-var defaultGeeseFSPartSizes = []cfg.PartSizeConfig{
-	{PartSize: 5 * 1024 * 1024, PartCount: 1000},
-	{PartSize: 25 * 1024 * 1024, PartCount: 1000},
-	{PartSize: 125 * 1024 * 1024, PartCount: 8000},
-}
-
 type GeeseStorage struct {
 	config      types.GeeseConfig
 	mfs         core.MountedFS
@@ -48,6 +42,7 @@ func NewGeeseStorage(config types.GeeseConfig, cacheClient *blobcache.BlobCacheC
 func (s *GeeseStorage) Mount(localPath string) error {
 	log.Info().Str("local_path", localPath).Msg("geese filesystem mounting")
 
+	flags := cfg.DefaultFlags()
 	dirMode, err := strconv.ParseInt(s.config.DirMode, 8, 32)
 	if err != nil {
 		dirMode = defaultGeeseFSDirMode
@@ -66,7 +61,6 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	s3Config.Region = s.config.Region
 
 	// Set mount flags
-	flags := cfg.DefaultFlags()
 	flags.Backend = s3Config
 	flags.Endpoint = s.config.EndpointUrl
 	flags.MountPoint = localPath
@@ -75,7 +69,6 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.FileMode = os.FileMode(fileMode)
 	flags.MaxFlushers = int64(s.config.MaxFlushers)
 	flags.MaxParallelParts = int(s.config.MaxParallelParts)
-	flags.PartSizes = defaultGeeseFSPartSizes
 	flags.FsyncOnClose = s.config.FsyncOnClose
 	flags.DebugMain = s.config.Debug == true
 	flags.MemoryLimit = uint64(s.config.MemoryLimit) * 1024 * 1024
