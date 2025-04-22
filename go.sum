@@ -128,10 +128,10 @@ github.com/aws/aws-sdk-go-v2/service/sts v1.33.19/go.mod h1:cQnB8CUnxbMU82JvlqjK
 github.com/aws/smithy-go v1.22.2 h1:6D9hW43xKFrRx/tXXfAlIZc4JI+yQe6snnWcQyxSyLQ=
 github.com/aws/smithy-go v1.22.2/go.mod h1:irrKGvNn1InZwb2d7fkIRNucdfwR8R+Ts3wxYa/cJHg=
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
-github.com/beam-cloud/blobcache-v2 v0.0.0-20250422180059-ddff06f54b80 h1:Veq7aat2QDbSwuSo05scT+dNWyNKrZaMXSEAZBTF68s=
-github.com/beam-cloud/blobcache-v2 v0.0.0-20250422180059-ddff06f54b80/go.mod h1:I3Bz75TyPfk5pLn/6rZl6Q1CFYrH3eDfpJAvTOVAWzg=
-github.com/beam-cloud/clip v0.0.0-20250422140150-5eb5f9bd0a56 h1:1FV46XQ2LXkFAS9g6ftucwVTMwIPgGIx1biPMA83j+M=
-github.com/beam-cloud/clip v0.0.0-20250422140150-5eb5f9bd0a56/go.mod h1:7NiHbwYqg/y21SdA28xmi5aQjDMhtzPQCIzQQHyi9UE=
+github.com/beam-cloud/blobcache-v2 v0.0.0-20250422185413-c7307595a0db h1:1ZYHwFV/B9BpUcJu5gwpHWqU1t5qgjn8va1o7Ua2CLQ=
+github.com/beam-cloud/blobcache-v2 v0.0.0-20250422185413-c7307595a0db/go.mod h1:I3Bz75TyPfk5pLn/6rZl6Q1CFYrH3eDfpJAvTOVAWzg=
+github.com/beam-cloud/clip v0.0.0-20250422145719-8f518a9d4acd h1:Nww6HJvpI6VIwFW9X4dPjEI3vvY8ePvNtKie+idon+s=
+github.com/beam-cloud/clip v0.0.0-20250422145719-8f518a9d4acd/go.mod h1:7NiHbwYqg/y21SdA28xmi5aQjDMhtzPQCIzQQHyi9UE=
 github.com/beam-cloud/geesefs v0.0.0-20250422184049-9f94137be883 h1:l3gKXvMeXy0DOFLkd2omFCzCKdQEZejNvq0DMauKBLc=
 github.com/beam-cloud/geesefs v0.0.0-20250422184049-9f94137be883/go.mod h1:utihEuMyzBOeZ6oU2ozzZkJmyzbYBuYrxsLUo1DfZXs=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250422184049-9f94137be883 h1:DvPyr/iTWDe4/DhfwfxAx9Sf8htn85bjFjWZPWloIyA=
