@@ -138,7 +138,7 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
-	storageClient, err := clients.NewDefaultStorageClient(context.Background(), config)
+	storageClient, err := clients.NewDefaultStorageClient(ctx, config)
 	if err != nil {
 		return nil, err
 	}
