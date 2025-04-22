@@ -222,7 +222,7 @@ func (g *WorkspaceGroup) setupDefaultWorkspaceStorage(ctx echo.Context, bucketNa
 		EndpointUrl: &g.config.Storage.WorkspaceStorage.DefaultEndpointUrl,
 		Region:      &g.config.Storage.WorkspaceStorage.DefaultRegion,
 	})
-	return createdStorage, nil
+	return createdStorage, err
 }
 
 // revokeTokenIfPresent revokes the token found in the Authorization header, if present.
