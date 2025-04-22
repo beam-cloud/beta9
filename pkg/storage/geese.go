@@ -16,10 +16,11 @@ import (
 )
 
 const (
-	defaultGeeseFSDirMode        = 0755
-	defaultGeeseFSFileMode       = 0644
-	defaultGeeseFSMountTimeout   = 30 * time.Second
-	defaultGeeseFSRequestTimeout = 60 * time.Second
+	defaultGeeseFSDirMode         = 0755
+	defaultGeeseFSFileMode        = 0644
+	defaultGeeseFSMountTimeout    = 30 * time.Second
+	defaultGeeseFSRequestTimeout  = 60 * time.Second
+	defaultGeeseFSFuseReadAheadKb = 32768
 )
 
 type GeeseStorage struct {
@@ -74,6 +75,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.MemoryLimit = uint64(s.config.MemoryLimit) * 1024 * 1024
 	flags.SymlinkZeroed = true
 	flags.HTTPTimeout = defaultGeeseFSRequestTimeout
+	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
 
 	// If we have a cache client available, use it
 	if s.cacheClient != nil {
