@@ -206,7 +206,8 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				AccessKey   string
 				SecretKey   string
 			}{
-				Path: sourcePath,
+				Path:       sourcePath,
+				BucketName: "",
 			})
 			if err != nil {
 				if err == blobcache.ErrUnableToAcquireLock {
