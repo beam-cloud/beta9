@@ -70,7 +70,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.MaxFlushers = int64(s.config.MaxFlushers)
 	flags.MaxParallelParts = int(s.config.MaxParallelParts)
 	flags.FsyncOnClose = s.config.FsyncOnClose
-	flags.DebugMain = s.config.Debug == true
+	flags.DebugMain = s.config.Debug
 	flags.MemoryLimit = uint64(s.config.MemoryLimit) * 1024 * 1024
 	flags.SymlinkZeroed = true
 	flags.HTTPTimeout = defaultGeeseFSRequestTimeout
