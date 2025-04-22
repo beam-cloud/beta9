@@ -266,7 +266,11 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to get object")
 	}
 
-	if workspaceStorage, err := g.backendRepo.GetWorkspaceStorage(ctx.Request().Context(), workspace.Id); err == nil {
+	if workspace.StorageId != nil {
+		workspaceStorage, err := g.backendRepo.GetWorkspaceStorage(ctx.Request().Context(), *workspace.StorageId)
+		if err != nil {
+			return HTTPInternalServerError("Failed to get workspace storage")
+		}
 		storageClient, err := clients.NewWorkspaceStorageClient(ctx.Request().Context(), workspace.Name, workspaceStorage)
 		if err != nil {
 			return HTTPInternalServerError("Failed to get object")

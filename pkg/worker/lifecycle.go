@@ -672,7 +672,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
-	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
+	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request, exitCode) }()
 
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)

@@ -73,6 +73,13 @@ type EventContainerLifecycleSchema struct {
 	Request     ContainerRequest `json:"request"`
 }
 
+var EventContainerStoppedSchemaVersion = "1.0"
+
+type EventContainerStoppedSchema struct {
+	EventContainerLifecycleSchema
+	ExitCode int `json:"exit_code"`
+}
+
 var EventContainerMetricsSchemaVersion = "1.0"
 
 type EventContainerMetricsSchema struct {
