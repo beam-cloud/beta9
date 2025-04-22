@@ -669,11 +669,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	outputWriter := containerInstance.OutputWriter
 
-	containerExitCode := -1
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
-	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request, containerExitCode) }()
+	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request, exitCode) }()
 
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
@@ -704,7 +703,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 	}()
 
-	containerExitCode, containerId, _ = s.runContainer(ctx, request, configPath, outputWriter, startedChan, checkpointPIDChan)
+	exitCode, containerId, _ = s.runContainer(ctx, request, configPath, outputWriter, startedChan, checkpointPIDChan)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)

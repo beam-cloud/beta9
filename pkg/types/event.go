@@ -63,7 +63,7 @@ var (
 
 // Schema versions should be in ISO 8601 format
 
-var EventContainerLifecycleSchemaVersion = "1.2"
+var EventContainerLifecycleSchemaVersion = "1.1"
 
 type EventContainerLifecycleSchema struct {
 	ContainerID string           `json:"container_id"`
@@ -71,7 +71,13 @@ type EventContainerLifecycleSchema struct {
 	StubID      string           `json:"stub_id"`
 	Status      string           `json:"status"`
 	Request     ContainerRequest `json:"request"`
-	ExitCode    int              `json:"exit_code"`
+}
+
+var EventContainerStoppedSchemaVersion = "1.0"
+
+type EventContainerStoppedSchema struct {
+	EventContainerLifecycleSchema
+	ExitCode int `json:"exit_code"`
 }
 
 var EventContainerMetricsSchemaVersion = "1.0"
