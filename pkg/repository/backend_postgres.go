@@ -1462,7 +1462,10 @@ func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, con
 func (r *PostgresBackendRepository) GetWorkspaceStorage(ctx context.Context, workspaceId uint) (*types.WorkspaceStorage, error) {
 	var storage types.WorkspaceStorage
 
-	query := `SELECT bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at FROM workspace_storage WHERE id = $1;`
+	query := `select ws.bucket_name, ws.access_key, ws.secret_key, ws.endpoint_url, ws.region, ws.created_at, ws.updated_at 
+from workspace_storage ws
+join workspace w on w.storage_id = ws.id
+where w.id = $1;`
 	if err := r.client.GetContext(ctx, &storage, query, workspaceId); err != nil {
 		return nil, err
 	}
