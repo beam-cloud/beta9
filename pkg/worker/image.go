@@ -243,24 +243,10 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	elapsed := time.Since(startTime)
-
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, registry.RemoteImageFileExtension)
-	sourceRegistry := c.config.ImageService.Registries.S3.Primary
-
-	if _, err := os.Stat(remoteArchivePath); err != nil {
-
-		err = c.primaryRegistry.Pull(ctx, remoteArchivePath, imageId)
-		if err != nil {
-
-			sourceRegistry = c.config.ImageService.Registries.S3.Secondary
-			err = c.secondaryRegistry.Pull(ctx, remoteArchivePath, imageId)
-			if err != nil {
-				return elapsed, err
-			}
-
-			// HACK: Async copy the archives to the primary registry if it exists in the secondary registry
-			go c.primaryRegistry.CopyImageFromRegistry(context.Background(), imageId, c.secondaryRegistry)
-		}
+	sourceRegistry, err := c.pullImageFromRegistry(ctx, remoteArchivePath, imageId, c.primaryRegistry)
+	if err != nil {
+		return elapsed, err
 	}
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
@@ -335,6 +321,27 @@ func (c *ImageClient) Cleanup() error {
 	}
 
 	return nil
+}
+
+func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string, registry *registry.ImageRegistry) (*types.S3ImageRegistry, error) {
+	sourceRegistry := c.config.ImageService.Registries.S3.Primary
+
+	if _, err := os.Stat(archivePath); err != nil {
+		err = c.primaryRegistry.Pull(ctx, archivePath, imageId)
+		if err != nil {
+
+			sourceRegistry = c.config.ImageService.Registries.S3.Secondary
+			err = c.secondaryRegistry.Pull(ctx, archivePath, imageId)
+			if err != nil {
+				return nil, err
+			}
+
+			// HACK: Async copy the archives to the primary registry if it exists in the secondary registry
+			go c.primaryRegistry.CopyImageFromRegistry(context.Background(), imageId, c.secondaryRegistry)
+		}
+	}
+
+	return &sourceRegistry, nil
 }
 
 func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) error {
