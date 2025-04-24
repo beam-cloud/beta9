@@ -235,12 +235,9 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 			case <-ctx.Done():
 				return
 			case <-keepaliveTicker.C:
-				err := stream.Send(&pb.AttachToContainerResponse{
+				stream.Send(&pb.AttachToContainerResponse{
 					Output: "",
 				})
-				if err != nil {
-					continue
-				}
 			}
 		}
 	}()
