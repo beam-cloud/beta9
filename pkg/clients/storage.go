@@ -3,6 +3,7 @@ package clients
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -83,6 +84,35 @@ func (c *StorageClient) Head(ctx context.Context, key string) (bool, *s3.HeadObj
 	}
 
 	return true, output, nil
+}
+
+func (c *StorageClient) Exists(ctx context.Context, key string) (bool, error) {
+	_, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Key:    aws.String(key),
+		Range:  aws.String("bytes=0-0"),
+	})
+
+	if err != nil {
+		var nsk *s3types.NoSuchKey
+		if errors.As(err, &nsk) {
+			return false, nil
+		}
+
+		var notFound *s3types.NotFound
+		if errors.As(err, &notFound) {
+			return false, nil
+		}
+
+		var apiErr s3types.NoSuchKey
+		if errors.As(err, &apiErr) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (c *StorageClient) Download(ctx context.Context, key string) ([]byte, error) {

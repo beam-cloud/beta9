@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -186,8 +188,12 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 
 // Exists returns true if the object exists
 func (s *S3Store) Exists(ctx context.Context, key string) bool {
-	_, err := s.headObject(ctx, key)
-	return err == nil
+	exists, err := s.objectExists(ctx, key)
+	if err != nil {
+		return false
+	}
+
+	return exists
 }
 
 // Size returns the size of the object in bytes
@@ -237,6 +243,37 @@ func (s *S3Store) headObject(ctx context.Context, key string) (*s3.HeadObjectOut
 		Bucket: aws.String(s.config.BucketName),
 		Key:    aws.String(key),
 	})
+}
+
+// objectExists quickly checks if an object exists with the extra head request
+// as we don't need the metadata here
+func (s *S3Store) objectExists(ctx context.Context, key string) (bool, error) {
+	_, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.config.BucketName),
+		Key:    aws.String(key),
+		Range:  aws.String("bytes=0-0"),
+	})
+
+	if err != nil {
+		var nsk *s3types.NoSuchKey
+		if errors.As(err, &nsk) {
+			return false, nil
+		}
+
+		var notFound *s3types.NotFound
+		if errors.As(err, &notFound) {
+			return false, nil
+		}
+
+		var apiErr s3types.NoSuchKey
+		if errors.As(err, &apiErr) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return true, nil
 }
 
 func NewLocalObjectStore() (*LocalObjectStore, error) {

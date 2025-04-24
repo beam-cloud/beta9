@@ -76,6 +76,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.SymlinkZeroed = true
 	flags.HTTPTimeout = defaultGeeseFSRequestTimeout
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
+	flags.NoPreloadDir = true
 
 	// If we have a cache client available, use it
 	if s.cacheClient != nil {
