@@ -255,18 +255,7 @@ func (s *S3Store) objectExists(ctx context.Context, key string) (bool, error) {
 	})
 
 	if err != nil {
-		var nsk *s3types.NoSuchKey
-		if errors.As(err, &nsk) {
-			return false, nil
-		}
-
-		var notFound *s3types.NotFound
-		if errors.As(err, &notFound) {
-			return false, nil
-		}
-
-		var apiErr s3types.NoSuchKey
-		if errors.As(err, &apiErr) {
+		if errors.As(err, new(*s3types.NoSuchKey)) || errors.As(err, new(*s3types.NotFound)) {
 			return false, nil
 		}
 
