@@ -228,6 +228,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	// Send periodic keepalive messages to the client to keep the connection alive
 	keepaliveTicker := time.NewTicker(containerStreamKeepaliveInterval)
 	defer keepaliveTicker.Stop()
+
 	keepaliveErrCh := make(chan error, 1)
 	go func() {
 		for {
