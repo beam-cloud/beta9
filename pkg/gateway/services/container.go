@@ -229,7 +229,6 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	keepaliveTicker := time.NewTicker(containerStreamKeepaliveInterval)
 	defer keepaliveTicker.Stop()
 
-	keepaliveErrCh := make(chan error, 1)
 	go func() {
 		for {
 			select {
@@ -240,8 +239,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 					Output: "",
 				})
 				if err != nil {
-					keepaliveErrCh <- err
-					return
+					continue
 				}
 			}
 		}
