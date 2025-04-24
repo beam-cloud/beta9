@@ -76,8 +76,9 @@ func (r *ImageRegistry) Size(ctx context.Context, imageId string) (int64, error)
 	return r.store.Size(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
-func (r *ImageRegistry) GetStore() ObjectStore {
-	return r.store
+func (r *ImageRegistry) CopyImageFromRegistry(ctx context.Context, imageId string, sourceRegistry *ImageRegistry) error {
+	objects := []string{fmt.Sprintf("%s.%s", imageId, LocalImageFileExtension), fmt.Sprintf("%s.%s", imageId, RemoteImageFileExtension)}
+	return copyObjects(ctx, objects, sourceRegistry.store, r.store)
 }
 
 type ObjectStore interface {
@@ -326,20 +327,20 @@ func (s *LocalObjectStore) PutReader(ctx context.Context, reader io.Reader, key 
 }
 
 // CopyObjects copies a list of objects from one registry to another
-func CopyObjects(ctx context.Context, keys []string, sourceRegistry, dstRegistry ObjectStore) error {
+func copyObjects(ctx context.Context, keys []string, sourceObjectStore, destinationObjectStore ObjectStore) error {
 	log.Info().Msgf("registry miss for objects <%v>, pulling from source registry", keys)
 
 	for _, key := range keys {
 		log.Info().Str("key", key).Msg("copying object")
 
-		reader, err := sourceRegistry.GetReader(ctx, key)
+		reader, err := sourceObjectStore.GetReader(ctx, key)
 		if err != nil {
 			log.Error().Err(err).Str("key", key).Msg("failed to get object from source object store")
 			return err
 		}
 		defer reader.Close()
 
-		err = dstRegistry.PutReader(ctx, reader, key)
+		err = destinationObjectStore.PutReader(ctx, reader, key)
 		if err != nil {
 			log.Error().Err(err).Str("key", key).Msg("failed to put object in destination object store")
 			return err

@@ -259,8 +259,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			}
 
 			// HACK: Async copy the archives to the primary registry if it exists in the secondary registry
-			fullArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, registry.LocalImageFileExtension)
-			go registry.CopyObjects(context.Background(), []string{remoteArchivePath, fullArchivePath}, c.secondaryRegistry.GetStore(), c.primaryRegistry.GetStore())
+			go c.primaryRegistry.CopyImageFromRegistry(context.Background(), imageId, c.secondaryRegistry)
 		}
 	}
 
