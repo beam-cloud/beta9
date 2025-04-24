@@ -249,18 +249,18 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	if _, err := os.Stat(remoteArchivePath); err != nil {
 
-		err = c.primaryRegistry.Pull(context.TODO(), remoteArchivePath, imageId)
+		err = c.primaryRegistry.Pull(ctx, remoteArchivePath, imageId)
 		if err != nil {
 
 			sourceRegistry = c.config.ImageService.Registries.S3.Secondary
-			err = c.secondaryRegistry.Pull(context.TODO(), remoteArchivePath, imageId)
+			err = c.secondaryRegistry.Pull(ctx, remoteArchivePath, imageId)
 			if err != nil {
 				return elapsed, err
 			}
 
 			// HACK: Async copy the archives to the primary registry if it exists in the secondary registry
 			fullArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, registry.LocalImageFileExtension)
-			go registry.CopyObjects(context.TODO(), []string{remoteArchivePath, fullArchivePath}, c.secondaryRegistry.GetStore(), c.primaryRegistry.GetStore())
+			go registry.CopyObjects(context.Background(), []string{remoteArchivePath, fullArchivePath}, c.secondaryRegistry.GetStore(), c.primaryRegistry.GetStore())
 		}
 	}
 

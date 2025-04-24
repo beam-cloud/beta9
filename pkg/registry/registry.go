@@ -323,6 +323,7 @@ func (s *LocalObjectStore) PutReader(ctx context.Context, reader io.Reader, key 
 	return err
 }
 
+// CopyObjects copies a list of objects from one registry to another
 func CopyObjects(ctx context.Context, keys []string, sourceRegistry, dstRegistry ObjectStore) error {
 	log.Info().Msgf("registry miss for objects <%v>, pulling from source registry", keys)
 
@@ -331,14 +332,14 @@ func CopyObjects(ctx context.Context, keys []string, sourceRegistry, dstRegistry
 
 		reader, err := sourceRegistry.GetReader(ctx, key)
 		if err != nil {
-			log.Error().Err(err).Str("key", key).Msg("failed to get reader from source store")
+			log.Error().Err(err).Str("key", key).Msg("failed to get object from source object store")
 			return err
 		}
+		defer reader.Close()
 
 		err = dstRegistry.PutReader(ctx, reader, key)
-		reader.Close()
 		if err != nil {
-			log.Error().Err(err).Str("key", key).Msg("failed to put reader to destination store")
+			log.Error().Err(err).Str("key", key).Msg("failed to put object in destination object store")
 			return err
 		}
 
