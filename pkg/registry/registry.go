@@ -21,30 +21,30 @@ import (
 const (
 	S3ImageRegistryStore     = "s3"
 	LocalImageRegistryStore  = "local"
-	remoteImageFileExtension = "rclip"
-	localImageFileExtension  = "clip"
+	RemoteImageFileExtension = "rclip"
+	LocalImageFileExtension  = "clip"
 )
 
 type ImageRegistry struct {
-	store              ObjectStore
+	Store              ObjectStore
 	config             types.ImageServiceConfig
 	ImageFileExtension string
 }
 
-func NewImageRegistry(config types.AppConfig) (*ImageRegistry, error) {
+func NewImageRegistry(config types.AppConfig, registry types.S3ImageRegistry) (*ImageRegistry, error) {
 	var err error
 	var store ObjectStore
 
-	var imageFileExtension string = localImageFileExtension
+	var imageFileExtension string = LocalImageFileExtension
 	switch config.ImageService.RegistryStore {
 	case S3ImageRegistryStore:
-		imageFileExtension = remoteImageFileExtension
-		store, err = NewS3Store(config)
+		imageFileExtension = RemoteImageFileExtension
+		store, err = NewS3Store(registry)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		imageFileExtension = localImageFileExtension
+		imageFileExtension = LocalImageFileExtension
 		store, err = NewLocalObjectStore()
 		if err != nil {
 			return nil, err
@@ -52,26 +52,26 @@ func NewImageRegistry(config types.AppConfig) (*ImageRegistry, error) {
 	}
 
 	return &ImageRegistry{
-		store:              store,
+		Store:              store,
 		config:             config.ImageService,
 		ImageFileExtension: imageFileExtension,
 	}, nil
 }
 
 func (r *ImageRegistry) Exists(ctx context.Context, imageId string) bool {
-	return r.store.Exists(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
+	return r.Store.Exists(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
 func (r *ImageRegistry) Push(ctx context.Context, localPath string, imageId string) error {
-	return r.store.Put(ctx, localPath, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
+	return r.Store.Put(ctx, localPath, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
 func (r *ImageRegistry) Pull(ctx context.Context, localPath string, imageId string) error {
-	return r.store.Get(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension), localPath)
+	return r.Store.Get(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension), localPath)
 }
 
 func (r *ImageRegistry) Size(ctx context.Context, imageId string) (int64, error) {
-	return r.store.Size(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
+	return r.Store.Size(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
 type ObjectStore interface {
@@ -79,26 +79,28 @@ type ObjectStore interface {
 	Get(ctx context.Context, key string, localPath string) error
 	Exists(ctx context.Context, key string) bool
 	Size(ctx context.Context, key string) (int64, error)
+	GetReader(ctx context.Context, key string) (io.ReadCloser, error)
+	PutReader(ctx context.Context, reader io.Reader, key string) error
 }
 
 type S3Store struct {
 	client *s3.Client
-	config types.S3ImageRegistryConfig
+	config types.S3ImageRegistry
 }
 
-func NewS3Store(config types.AppConfig) (*S3Store, error) {
-	cfg, err := common.GetAWSConfig(config.ImageService.Registries.S3.AccessKey, config.ImageService.Registries.S3.SecretKey, config.ImageService.Registries.S3.Region, config.ImageService.Registries.S3.Endpoint)
+func NewS3Store(config types.S3ImageRegistry) (*S3Store, error) {
+	cfg, err := common.GetAWSConfig(config.AccessKey, config.SecretKey, config.Region, config.Endpoint)
 	if err != nil {
 		return nil, err
 	}
 
 	return &S3Store{
 		client: s3.NewFromConfig(cfg, func(o *s3.Options) {
-			if config.ImageService.Registries.S3.ForcePathStyle {
+			if config.ForcePathStyle {
 				o.UsePathStyle = true
 			}
 		}),
-		config: config.ImageService.Registries.S3,
+		config: config,
 	}, nil
 }
 
@@ -190,6 +192,29 @@ func (s *S3Store) Size(ctx context.Context, key string) (int64, error) {
 	return *res.ContentLength, nil
 }
 
+func (s *S3Store) GetReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.config.BucketName),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Body, nil
+}
+
+func (s *S3Store) PutReader(ctx context.Context, reader io.Reader, key string) error {
+	uploader := manager.NewUploader(s.client)
+
+	_, err := uploader.Upload(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(s.config.BucketName),
+		Key:    aws.String(key),
+		Body:   reader,
+	})
+	return err
+}
+
 // headObject returns the metadata of an object
 func (s *S3Store) headObject(ctx context.Context, key string) (*s3.HeadObjectOutput, error) {
 	_, err := s.client.GetObject(ctx, &s3.GetObjectInput{
@@ -276,4 +301,44 @@ func (s *LocalObjectStore) Size(ctx context.Context, key string) (int64, error) 
 		return 0, err
 	}
 	return fileInfo.Size(), nil
+}
+
+func (s *LocalObjectStore) GetReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	return os.Open(filepath.Join(s.Path, key))
+}
+
+func (s *LocalObjectStore) PutReader(ctx context.Context, reader io.Reader, key string) error {
+	destPath := filepath.Join(s.Path, key)
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, reader)
+	return err
+}
+
+func CopyObjects(ctx context.Context, keys []string, sourceRegistry, dstRegistry ObjectStore) error {
+	log.Info().Msgf("registry miss for objects <%v>, pulling from source registry", keys)
+
+	for _, key := range keys {
+		log.Info().Str("key", key).Msg("copying object")
+
+		reader, err := sourceRegistry.GetReader(ctx, key)
+		if err != nil {
+			log.Error().Err(err).Str("key", key).Msg("failed to get reader from source store")
+			return err
+		}
+
+		err = dstRegistry.PutReader(ctx, reader, key)
+		reader.Close()
+		if err != nil {
+			log.Error().Err(err).Str("key", key).Msg("failed to put reader to destination store")
+			return err
+		}
+
+		log.Info().Str("key", key).Msg("successfully copied object")
+	}
+	return nil
 }

@@ -168,6 +168,11 @@ type DockerImageRegistryConfig struct {
 }
 
 type S3ImageRegistryConfig struct {
+	Primary   S3ImageRegistry `key:"primary" json:"primary"`
+	Secondary S3ImageRegistry `key:"secondary" json:"secondary"`
+}
+
+type S3ImageRegistry struct {
 	BucketName     string `key:"bucketName" json:"bucket_name"`
 	AccessKey      string `key:"accessKey" json:"access_key"`
 	SecretKey      string `key:"secretKey" json:"secret_key"`
