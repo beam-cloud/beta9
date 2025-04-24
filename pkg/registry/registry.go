@@ -326,7 +326,7 @@ func (s *LocalObjectStore) PutReader(ctx context.Context, reader io.Reader, key 
 	return err
 }
 
-// CopyObjects copies a list of objects from one registry to another
+// copyObjects copies a list of objects from one registry to another
 func copyObjects(ctx context.Context, keys []string, sourceObjectStore, destinationObjectStore ObjectStore) error {
 	log.Info().Msgf("registry miss for objects <%v>, pulling from source registry", keys)
 

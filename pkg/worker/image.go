@@ -244,7 +244,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	elapsed := time.Since(startTime)
 	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, registry.RemoteImageFileExtension)
-	sourceRegistry, err := c.pullImageFromRegistry(ctx, remoteArchivePath, imageId, c.primaryRegistry)
+	sourceRegistry, err := c.pullImageFromRegistry(ctx, remoteArchivePath, imageId)
 	if err != nil {
 		return elapsed, err
 	}
@@ -323,7 +323,7 @@ func (c *ImageClient) Cleanup() error {
 	return nil
 }
 
-func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string, registry *registry.ImageRegistry) (*types.S3ImageRegistry, error) {
+func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string) (*types.S3ImageRegistry, error) {
 	sourceRegistry := c.config.ImageService.Registries.S3.Primary
 
 	if _, err := os.Stat(archivePath); err != nil {
