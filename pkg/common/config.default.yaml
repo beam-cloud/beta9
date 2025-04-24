@@ -97,14 +97,12 @@ imageService:
         accessKey: test
         secretKey: test
         endpoint:
-        forcePathStyle: true
       secondary:
         bucketName: beta9-images-old
         region: us-east-1
         accessKey: test
         secretKey: test
         endpoint:
-        forcePathStyle: true
   runner:
     baseImageName: beta9-runner
     baseImageRegistry: registry.localhost:5000
