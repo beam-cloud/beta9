@@ -128,6 +128,10 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 	}, nil
 }
 
+const (
+	containerStreamKeepaliveInterval = 10 * time.Second
+)
+
 func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToContainerServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
@@ -219,6 +223,27 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	streamErrCh := make(chan error, 1)
 	go func() {
 		streamErrCh <- containerStream.Stream(ctx, authInfo, container.ContainerId)
+	}()
+
+	// Send periodic keepalive messages to the client to keep the connection alive
+	keepaliveTicker := time.NewTicker(containerStreamKeepaliveInterval)
+	defer keepaliveTicker.Stop()
+	keepaliveErrCh := make(chan error, 1)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-keepaliveTicker.C:
+				err := stream.Send(&pb.AttachToContainerResponse{
+					Output: "",
+				})
+				if err != nil {
+					keepaliveErrCh <- err
+					return
+				}
+			}
+		}
 	}()
 
 	// RX incoming client messages
