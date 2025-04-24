@@ -26,7 +26,7 @@ const (
 )
 
 type ImageRegistry struct {
-	Store              ObjectStore
+	store              ObjectStore
 	config             types.ImageServiceConfig
 	ImageFileExtension string
 }
@@ -52,26 +52,30 @@ func NewImageRegistry(config types.AppConfig, registry types.S3ImageRegistry) (*
 	}
 
 	return &ImageRegistry{
-		Store:              store,
+		store:              store,
 		config:             config.ImageService,
 		ImageFileExtension: imageFileExtension,
 	}, nil
 }
 
 func (r *ImageRegistry) Exists(ctx context.Context, imageId string) bool {
-	return r.Store.Exists(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
+	return r.store.Exists(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
 func (r *ImageRegistry) Push(ctx context.Context, localPath string, imageId string) error {
-	return r.Store.Put(ctx, localPath, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
+	return r.store.Put(ctx, localPath, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
 func (r *ImageRegistry) Pull(ctx context.Context, localPath string, imageId string) error {
-	return r.Store.Get(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension), localPath)
+	return r.store.Get(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension), localPath)
 }
 
 func (r *ImageRegistry) Size(ctx context.Context, imageId string) (int64, error) {
-	return r.Store.Size(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
+	return r.store.Size(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
+}
+
+func (r *ImageRegistry) GetStore() ObjectStore {
+	return r.store
 }
 
 type ObjectStore interface {
