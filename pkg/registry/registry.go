@@ -32,10 +32,12 @@ type ImageRegistry struct {
 }
 
 func NewImageRegistry(config types.AppConfig, registry types.S3ImageRegistry) (*ImageRegistry, error) {
-	var err error
-	var store ObjectStore
+	var (
+		err                error
+		store              ObjectStore
+		imageFileExtension string = LocalImageFileExtension
+	)
 
-	var imageFileExtension string = LocalImageFileExtension
 	switch config.ImageService.RegistryStore {
 	case S3ImageRegistryStore:
 		imageFileExtension = RemoteImageFileExtension
