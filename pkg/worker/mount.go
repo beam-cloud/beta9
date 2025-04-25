@@ -35,10 +35,12 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 
 			if !request.StorageAvailable() {
 				objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
+
 				err := common.ExtractObjectFile(ctx, objectPath, m.LocalPath)
 				if err != nil {
 					return err
 				}
+
 			} else {
 				if err := getAndExtractStubCode(ctx, request); err != nil {
 					return err
@@ -142,6 +144,5 @@ func getAndExtractStubCode(ctx context.Context, request *types.ContainerRequest)
 	}
 
 	destPath := types.TempContainerWorkspace(request.ContainerId)
-
 	return common.UnzipBytesToPath(destPath, objBytes, request)
 }

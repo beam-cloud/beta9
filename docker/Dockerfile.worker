@@ -56,19 +56,6 @@ make install
 /usr/local/bin/skopeo --version
 EOT
 
-# build geesefs fork
-# ========================
-FROM golang AS geesefs
-
-WORKDIR /workspace
-
-RUN <<EOT
-set -eux
-git clone https://github.com/beam-cloud/geesefs.git
-cd geesefs
-git checkout 02ebd066ad8aad5faad4198e1a07f8ded0384713
-make build
-EOT
 
 # nvidia-container-toolkit
 # ========================
@@ -184,7 +171,6 @@ COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
-COPY --from=geesefs /workspace/geesefs/geesefs /usr/local/bin/geesefs
 
 COPY ./bin/volume_cache_x86.so /usr/local/lib/volume_cache_x86.so
 COPY ./bin/volume_cache_arm.so /usr/local/lib/volume_cache_arm.so

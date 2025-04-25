@@ -98,7 +98,7 @@ func NewGateway() (*Gateway, error) {
 
 	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	storage, err := storage.NewStorage(config.Storage)
+	storage, err := storage.NewStorage(config.Storage, nil)
 	if err != nil {
 		return nil, err
 	}

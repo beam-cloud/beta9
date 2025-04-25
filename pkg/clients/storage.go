@@ -3,6 +3,7 @@ package clients
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -121,6 +122,24 @@ func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bo
 	}
 
 	return true, output, nil
+}
+
+func (c *StorageClient) Exists(ctx context.Context, key string, bucket string) (bool, error) {
+	_, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Range:  aws.String("bytes=0-0"),
+	})
+
+	if err != nil {
+		if errors.As(err, new(*s3types.NoSuchKey)) || errors.As(err, new(*s3types.NotFound)) {
+			return false, nil
+		}
+
+		return false, err
+	}
+
+	return true, nil
 }
 
 func (c *StorageClient) Download(ctx context.Context, key string, bucket string) ([]byte, error) {
@@ -344,6 +363,10 @@ func (c *WorkspaceStorageClient) Upload(ctx context.Context, key string, data []
 
 func (c *WorkspaceStorageClient) Head(ctx context.Context, key string) (bool, *s3.HeadObjectOutput, error) {
 	return c.StorageClient.Head(ctx, key, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) Exists(ctx context.Context, key string) (bool, error) {
+	return c.StorageClient.Exists(ctx, key, *c.WorkspaceStorage.BucketName)
 }
 
 func (c *WorkspaceStorageClient) Download(ctx context.Context, key string) ([]byte, error) {

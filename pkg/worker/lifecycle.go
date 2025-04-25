@@ -420,11 +420,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
 			}
 
-			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
-				err := os.MkdirAll(m.LocalPath, 0755)
-				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
-				}
+			err := os.MkdirAll(m.LocalPath, 0755)
+			if err != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
+				continue
 			}
 		}
 
