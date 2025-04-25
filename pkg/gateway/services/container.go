@@ -107,7 +107,7 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 		}, nil
 	}
 
-	if state.WorkspaceId != workspaceId && authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+	if isAdmin, _ := isClusterAdmin(ctx); state.WorkspaceId != workspaceId && !isAdmin {
 		return &pb.StopContainerResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Container not found: %s", in.ContainerId),
