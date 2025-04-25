@@ -301,7 +301,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 		return existingObject.Id, nil
 	}
 
-	var success bool
+	success := false
 	newObject, err := g.backendRepo.CreateObject(ctx, parentObject.Hash, parentObject.Size, childWorkspace.Id)
 	if err != nil {
 		return 0, err

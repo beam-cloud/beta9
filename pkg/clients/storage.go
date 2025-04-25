@@ -287,7 +287,10 @@ type CopyObjectInput struct {
 }
 
 func (c *StorageClient) CopyObject(ctx context.Context, input CopyObjectInput) error {
-	bucket := input.DestinationStorageClient.BucketName()
+	bucket := c.BucketName()
+	if input.DestinationStorageClient != nil {
+		bucket = input.DestinationStorageClient.BucketName()
+	}
 
 	_, err := c.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
 		Bucket:     aws.String(bucket),
