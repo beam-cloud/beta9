@@ -80,6 +80,10 @@ func newMountpointCmdArgs(s *MountPointStorage, localPath string) []string {
 		cmdArgs = append(cmdArgs, "--allow-delete", "--allow-overwrite")
 	}
 
+	if s.config.ForcePathStyle {
+		cmdArgs = append(cmdArgs, "--force-path-style")
+	}
+
 	if s.config.EndpointURL != "" {
 		cmdArgs = append(cmdArgs, fmt.Sprintf("--endpoint-url=%s", s.config.EndpointURL))
 	}
@@ -87,5 +91,6 @@ func newMountpointCmdArgs(s *MountPointStorage, localPath string) []string {
 	if s.config.Region != "" {
 		cmdArgs = append(cmdArgs, fmt.Sprintf("--region=%s", s.config.Region))
 	}
+
 	return cmdArgs
 }

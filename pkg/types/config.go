@@ -243,12 +243,13 @@ type GeeseConfig struct {
 
 // @go2proto
 type MountPointConfig struct {
-	BucketName  string `json:"s3_bucket"`
-	AccessKey   string `json:"access_key"`
-	SecretKey   string `json:"secret_key"`
-	EndpointURL string `json:"bucket_url"`
-	Region      string `json:"region"`
-	ReadOnly    bool   `json:"read_only"`
+	BucketName     string `json:"s3_bucket"`
+	AccessKey      string `json:"access_key"`
+	SecretKey      string `json:"secret_key"`
+	EndpointURL    string `json:"bucket_url"`
+	Region         string `json:"region"`
+	ReadOnly       bool   `json:"read_only"`
+	ForcePathStyle bool   `json:"force_path_style"`
 }
 
 func (m *MountPointConfig) ToProto() *pb.MountPointConfig {

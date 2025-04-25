@@ -108,6 +108,7 @@ class MountPointConfig(betterproto.Message):
     endpoint_url: str = betterproto.string_field(4)
     region: str = betterproto.string_field(5)
     read_only: bool = betterproto.bool_field(6)
+    force_path_style: bool = betterproto.bool_field(7)
 
 
 @dataclass(eq=False, repr=False)
