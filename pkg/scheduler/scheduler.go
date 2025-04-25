@@ -298,6 +298,7 @@ func (s *Scheduler) StartProcessingRequests() {
 		// on that worker.
 		err = s.scheduleRequest(worker, request)
 		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request on existing worker")
 			s.addRequestToBacklog(request)
 			continue
 		}
@@ -310,6 +311,7 @@ func (s *Scheduler) StartProcessingRequests() {
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
 	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to update assigned container gpu")
 		return err
 	}
 
@@ -494,7 +496,7 @@ func calculateBackoffDelay(retryCount int) time.Duration {
 		return 0
 	}
 
-	baseDelay := 5 * time.Second
+	baseDelay := 1 * time.Second
 	maxDelay := 30 * time.Second
 	delay := time.Duration(math.Pow(2, float64(retryCount))) * baseDelay
 	if delay > maxDelay {
