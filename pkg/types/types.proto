@@ -97,6 +97,7 @@ message MountPointConfig {
   string endpoint_url = 4;
   string region = 5;
   bool read_only = 6;
+  bool force_path_style = 7;
 }
 
 message Object {

@@ -45,12 +45,13 @@ func ConfigureContainerRequestMounts(containerId, stubObjectId string, workspace
 			}
 
 			mount.MountPointConfig = &types.MountPointConfig{
-				BucketName:  v.Config.BucketName,
-				AccessKey:   decryptedSecrets[0],
-				SecretKey:   decryptedSecrets[1],
-				EndpointURL: v.Config.EndpointUrl,
-				Region:      v.Config.Region,
-				ReadOnly:    v.Config.ReadOnly,
+				BucketName:     v.Config.BucketName,
+				AccessKey:      decryptedSecrets[0],
+				SecretKey:      decryptedSecrets[1],
+				EndpointURL:    v.Config.EndpointUrl,
+				Region:         v.Config.Region,
+				ReadOnly:       v.Config.ReadOnly,
+				ForcePathStyle: v.Config.ForcePathStyle,
 			}
 			mount.LocalPath = path.Join(defaultExternalVolumesPath, workspace.Name, v.Id)
 			mount.MountType = storage.StorageModeMountPoint
