@@ -285,7 +285,7 @@ func (vs *GlobalVolumeService) deleteVolume(ctx context.Context, workspace *type
 	}
 
 	if workspace.StorageAvailable() {
-		storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
 		if err != nil {
 			return err
 		}
@@ -391,7 +391,7 @@ func (vs *GlobalVolumeService) deletePath(ctx context.Context, inputPath string,
 	}
 
 	if workspace.StorageAvailable() {
-		storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
 		if err != nil {
 			return nil, err
 		}
@@ -476,7 +476,7 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 	var files []FileInfo = []FileInfo{}
 
 	if workspace.StorageAvailable() {
-		storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
 		if err != nil {
 			return nil, err
 		}
@@ -563,7 +563,7 @@ func (vs *GlobalVolumeService) movePath(ctx context.Context, originalPath string
 	}
 
 	if workspace.StorageAvailable() {
-		storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
 		if err != nil {
 			return "", err
 		}

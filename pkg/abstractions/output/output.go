@@ -189,7 +189,7 @@ func (o *OutputRedisService) statOutput(ctx context.Context, authInfo *auth.Auth
 	if authInfo.Workspace.StorageAvailable() {
 		fullPath = path.Join(types.DefaultOutputsPrefix, task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
 
-		storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +247,7 @@ func SetPublicURL(ctx context.Context, config types.AppConfig, backendRepo repos
 	fullPath := GetTaskOutputPath(authInfo.Workspace.Name, task, outputId, filename)
 
 	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
 		if err != nil {
 			return "", err
 		}
