@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"path"
@@ -195,7 +194,6 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 
 	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
 	if err != nil {
-		log.Printf("Failed to lookup stub: %s", err)
 		return HTTPInternalServerError("Failed to lookup stub")
 	}
 
@@ -303,7 +301,6 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 		return existingObject.Id, nil
 	}
 
-	log.Printf("Creating new object in child workspace")
 	var success bool
 	newObject, err := g.backendRepo.CreateObject(ctx, parentObject.Hash, parentObject.Size, childWorkspace.Id)
 	if err != nil {
@@ -316,28 +313,21 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 		}
 	}()
 
-	log.Printf("New object created in child workspace: %s", newObject.ExternalId)
-
 	newObjectVolumePath := path.Join(types.DefaultObjectPath, childWorkspace.Name)
 	newObjectVolumeFilePath := path.Join(newObjectVolumePath, newObject.ExternalId)
 	newObjectStorageFilePath := path.Join(types.DefaultObjectPrefix, newObject.ExternalId)
 
 	// If both workspaces have the storage client available, copy the object with the storage client
 	if parentWorkspace.StorageAvailable() && childWorkspace.StorageAvailable() {
-		log.Printf("Copying object contents with storage client")
 		parentStorageClient, err := clients.NewStorageClient(ctx, parentWorkspace.Name, parentWorkspace.Storage)
 		if err != nil {
-			log.Println(err)
 			return 0, err
 		}
 
 		childStorageClient, err := clients.NewStorageClient(ctx, childWorkspace.Name, childWorkspace.Storage)
 		if err != nil {
-			log.Println(err)
 			return 0, err
 		}
-
-		log.Println(parentObjectStorageFilePath, newObjectStorageFilePath)
 
 		err = parentStorageClient.CopyObject(ctx, clients.CopyObjectInput{
 			SourceKey:                parentObjectStorageFilePath,
@@ -345,7 +335,6 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 			DestinationStorageClient: childStorageClient,
 		})
 		if err != nil {
-			log.Println(err)
 			return 0, err
 		}
 
@@ -353,21 +342,16 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 		return newObject.Id, nil
 	}
 
-	log.Printf("Copying object contents from volume mount")
-
 	var input []byte
 	// If the parent workspace has the storage client available, download the object with the storage client
 	if parentWorkspace.StorageAvailable() {
-		log.Printf("Downloading object from storage client")
 		parentStorageClient, err := clients.NewStorageClient(ctx, parentWorkspace.Name, parentWorkspace.Storage)
 		if err != nil {
-			log.Printf("Failed to create storage client: %s", err)
 			return 0, err
 		}
 
 		input, err = parentStorageClient.Download(ctx, parentObjectStorageFilePath)
 		if err != nil {
-			log.Printf("Failed to download object from storage client: %s", err)
 			return 0, err
 		}
 	} else {
@@ -378,8 +362,6 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 			return 0, err
 		}
 	}
-
-	log.Printf("Uploading object to storage client")
 
 	// If the child workspace has the storage client available, upload the object with the storage client
 	if childWorkspace.StorageAvailable() {

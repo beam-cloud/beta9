@@ -11,7 +11,6 @@ dev:
         go build -o /workspace/bin/gateway /workspace/cmd/gateway/main.go
         go build -o /workspace/bin/worker /workspace/cmd/worker/main.go
       BUILD_BINARY_PATH: /workspace/bin/gateway
-      CONFIG_PATH: config.yaml
     forward:
     - 1993:1993
     - 1994:1994
