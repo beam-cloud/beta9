@@ -75,7 +75,7 @@ func (w *Workspace) StorageAvailable() bool {
 type WorkspaceWithRelated struct {
 	Workspace
 	ConcurrencyLimit *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit" serializer:"concurrency_limit"`
-	Storage          *WorkspaceStorage `db:"storage" json:"storage" serializer:"storage"`
+	Storage          *WorkspaceStorage `db:"workspace_storage" json:"storage" serializer:"storage"`
 }
 
 func (w *WorkspaceWithRelated) StorageAvailable() bool {
