@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	"github.com/hashicorp/go-multierror"
 	"github.com/panjf2000/ants/v2"
@@ -170,16 +171,12 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 			sourcePath := path[1:]
 
 			defer wg.Done()
-			_, err := client.StoreContentFromFUSE(struct {
-				Path string
-			}{
+			_, err := client.StoreContentFromFUSE(blobcache.ContentSourceFUSE{
 				Path: sourcePath,
-			}, struct {
-				RoutingKey string
-				Lock       bool
-			}{
-				RoutingKey: sourcePath,
-				Lock:       true,
+			}, blobcache.StoreContentOptions{
+				CreateCacheFSEntry: true,
+				RoutingKey:         sourcePath,
+				Lock:               true,
 			})
 			if err != nil {
 				storeContentErrMu.Lock()

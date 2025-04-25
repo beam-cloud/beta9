@@ -181,16 +181,16 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	startTime := time.Now()
 
 	if c.cacheClient != nil && !isBuildContainer {
-		clipFile := fmt.Sprintf("%s.clip", imageId)
-		sourcePath := fmt.Sprintf("images/%s", clipFile)
+		imageKey := fmt.Sprintf("%s.clip", imageId)
+		sourcePath := filepath.Join(c.config.ImageService.Registries.S3.Primary.Region, c.config.ImageService.Registries.S3.Primary.BucketName, imageKey)
 
 		// Create constant backoff
 		b := backoff.NewConstantBackOff(300 * time.Millisecond)
 		imageLocked := false
 
 		operation := func() error {
-			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
+			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, imageKey)
+			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+imageKey) {
 				localCachePath = baseBlobFsContentPath
 				return nil
 			}
@@ -206,27 +206,21 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				return errors.New("image locked")
 			}
 
-			log.Info().Str("clip_file", clipFile).Msg("caching image")
-			_, err := c.cacheClient.StoreContentFromS3(struct {
-				Path        string
-				BucketName  string
-				Region      string
-				EndpointURL string
-				AccessKey   string
-				SecretKey   string
-			}{
-				Path:        clipFile,
-				BucketName:  c.config.ImageService.Registries.S3.Primary.BucketName,
-				Region:      c.config.ImageService.Registries.S3.Primary.Region,
-				EndpointURL: c.config.ImageService.Registries.S3.Primary.Endpoint,
-				AccessKey:   c.config.ImageService.Registries.S3.Primary.AccessKey,
-				SecretKey:   c.config.ImageService.Registries.S3.Primary.SecretKey,
-			}, struct {
-				RoutingKey string
-				Lock       bool
-			}{
-				RoutingKey: clipFile,
-				Lock:       true,
+			log.Info().Str("clip_file", imageKey).Msg("caching image")
+			_, err := c.cacheClient.StoreContentFromS3(blobcache.ContentSourceS3{
+				Path: imageKey,
+				// FIXME: It would be nice to just have this config in the blobcache server and
+				// set up a client one time for images.
+				BucketName:     c.config.ImageService.Registries.S3.Primary.BucketName,
+				Region:         c.config.ImageService.Registries.S3.Primary.Region,
+				EndpointURL:    c.config.ImageService.Registries.S3.Primary.Endpoint,
+				AccessKey:      c.config.ImageService.Registries.S3.Primary.AccessKey,
+				SecretKey:      c.config.ImageService.Registries.S3.Primary.SecretKey,
+				ForcePathStyle: c.config.ImageService.Registries.S3.Primary.ForcePathStyle,
+			}, blobcache.StoreContentOptions{
+				CreateCacheFSEntry: true,
+				RoutingKey:         sourcePath,
+				Lock:               true,
 			})
 			if err != nil {
 				if err == blobcache.ErrUnableToAcquireLock {

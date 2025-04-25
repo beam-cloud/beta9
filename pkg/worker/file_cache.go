@@ -39,15 +39,12 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 		}
 
 		if !info.IsDir() {
-			_, err := cm.client.StoreContentFromFUSE(struct {
-				Path string
-			}{
+			_, err := cm.client.StoreContentFromFUSE(blobcache.ContentSourceFUSE{
 				Path: path,
-			}, struct {
-				RoutingKey string
-				Lock       bool
-			}{
-				RoutingKey: path,
+			}, blobcache.StoreContentOptions{
+				CreateCacheFSEntry: true,
+				RoutingKey:         path,
+				Lock:               true,
 			})
 			if err != nil {
 				log.Error().Str("path", path).Err(err).Msg("failed to cache file")
@@ -120,16 +117,12 @@ func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) 
 		return workspaceVolumePath, nil
 	}
 
-	_, err = cm.client.StoreContentFromFUSE(struct {
-		Path string
-	}{
+	_, err = cm.client.StoreContentFromFUSE(blobcache.ContentSourceFUSE{
 		Path: fileName,
-	}, struct {
-		RoutingKey string
-		Lock       bool
-	}{
-		RoutingKey: fileName,
-		Lock:       true,
+	}, blobcache.StoreContentOptions{
+		CreateCacheFSEntry: true,
+		RoutingKey:         fileName,
+		Lock:               true,
 	})
 	if err != nil {
 		return "", err
