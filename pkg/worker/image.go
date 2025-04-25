@@ -181,7 +181,8 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	startTime := time.Now()
 
 	if c.cacheClient != nil && !isBuildContainer {
-		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
+		clipFile := fmt.Sprintf("%s.clip", imageId)
+		sourcePath := fmt.Sprintf("images/%s", clipFile)
 
 		// Create constant backoff
 		b := backoff.NewConstantBackOff(300 * time.Millisecond)
@@ -205,15 +206,26 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				return errors.New("image locked")
 			}
 
-			_, err := c.cacheClient.StoreContentFromFUSE(struct {
-				Path string
+			log.Info().Str("clip_file", clipFile).Msg("caching image")
+			_, err := c.cacheClient.StoreContentFromS3(struct {
+				Path        string
+				BucketName  string
+				Region      string
+				EndpointURL string
+				AccessKey   string
+				SecretKey   string
 			}{
-				Path: sourcePath,
+				Path:        clipFile,
+				BucketName:  c.config.ImageService.Registries.S3.Primary.BucketName,
+				Region:      c.config.ImageService.Registries.S3.Primary.Region,
+				EndpointURL: c.config.ImageService.Registries.S3.Primary.Endpoint,
+				AccessKey:   c.config.ImageService.Registries.S3.Primary.AccessKey,
+				SecretKey:   c.config.ImageService.Registries.S3.Primary.SecretKey,
 			}, struct {
 				RoutingKey string
 				Lock       bool
 			}{
-				RoutingKey: sourcePath,
+				RoutingKey: clipFile,
 				Lock:       true,
 			})
 			if err != nil {

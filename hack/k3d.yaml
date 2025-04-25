@@ -27,7 +27,7 @@ volumes:
 - volume: $PWD/manifests/k3d:k3s-manifests-custom
   nodeFilters:
   - server:0
-- volume: $PWD/.k3d/storage:k3s-storage
+- volume: $HOME/.beta9-k3d/storage:k3s-storage
   nodeFilters:
   - servers:*
 
@@ -37,7 +37,7 @@ registries:
     host: "0.0.0.0"
     hostPort: "5001"
     volumes:
-    - $PWD/.k3d/registry:/var/lib/registry
+    - $HOME/.beta9-k3d/registry:/var/lib/registry
 
 options:
   k3d:
