@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -193,6 +195,7 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 
 	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
 	if err != nil {
+		log.Printf("Failed to lookup stub: %s", err)
 		return HTTPInternalServerError("Failed to lookup stub")
 	}
 
@@ -280,46 +283,134 @@ func (g StubGroup) configureVolumes(ctx context.Context, volumes []*pb.Volume, w
 	return nil
 }
 
-func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (uint, error) {
+func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *types.Workspace, stub *types.StubWithRelated) (uint, error) {
+	parentWorkspace, err := g.backendRepo.GetWorkspaceWithRelated(ctx, stub.Workspace.Id)
+	if err != nil {
+		return 0, err
+	}
+
 	parentObject, err := g.backendRepo.GetObjectByExternalStubId(ctx, stub.ExternalId, stub.WorkspaceId)
 	if err != nil {
 		return 0, err
 	}
 
-	parentObjectPath := path.Join(types.DefaultObjectPath, stub.Workspace.Name)
-	parentObjectFilePath := path.Join(parentObjectPath, parentObject.ExternalId)
+	parentObjectVolumePath := path.Join(types.DefaultObjectPath, stub.Workspace.Name)
+	parentObjectVolumeFilePath := path.Join(parentObjectVolumePath, parentObject.ExternalId)
+	parentObjectStorageFilePath := path.Join(types.DefaultObjectPrefix, parentObject.ExternalId)
 
-	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, parentObject.Hash, workspace.Id); err == nil {
+	// Check if the object already exists in the child workspace
+	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, parentObject.Hash, childWorkspace.Id); err == nil {
 		return existingObject.Id, nil
 	}
 
-	newObject, err := g.backendRepo.CreateObject(ctx, parentObject.Hash, parentObject.Size, workspace.Id)
+	log.Printf("Creating new object in child workspace")
+	var success bool
+	newObject, err := g.backendRepo.CreateObject(ctx, parentObject.Hash, parentObject.Size, childWorkspace.Id)
 	if err != nil {
 		return 0, err
 	}
 
-	newObjectPath := path.Join(types.DefaultObjectPath, workspace.Name)
+	defer func() {
+		if !success {
+			g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
+		}
+	}()
 
-	if _, err := os.Stat(newObjectPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(newObjectPath, 0755); err != nil {
+	log.Printf("New object created in child workspace: %s", newObject.ExternalId)
+
+	newObjectVolumePath := path.Join(types.DefaultObjectPath, childWorkspace.Name)
+	newObjectVolumeFilePath := path.Join(newObjectVolumePath, newObject.ExternalId)
+	newObjectStorageFilePath := path.Join(types.DefaultObjectPrefix, newObject.ExternalId)
+
+	// If both workspaces have the storage client available, copy the object with the storage client
+	if parentWorkspace.StorageAvailable() && childWorkspace.StorageAvailable() {
+		log.Printf("Copying object contents with storage client")
+		parentStorageClient, err := clients.NewStorageClient(ctx, parentWorkspace.Name, parentWorkspace.Storage)
+		if err != nil {
+			log.Println(err)
+			return 0, err
+		}
+
+		childStorageClient, err := clients.NewStorageClient(ctx, childWorkspace.Name, childWorkspace.Storage)
+		if err != nil {
+			log.Println(err)
+			return 0, err
+		}
+
+		log.Println(parentObjectStorageFilePath, newObjectStorageFilePath)
+
+		err = parentStorageClient.CopyObject(ctx, clients.CopyObjectInput{
+			SourceKey:                parentObjectStorageFilePath,
+			DestinationKey:           newObjectStorageFilePath,
+			DestinationStorageClient: childStorageClient,
+		})
+		if err != nil {
+			log.Println(err)
+			return 0, err
+		}
+
+		success = true
+		return newObject.Id, nil
+	}
+
+	log.Printf("Copying object contents from volume mount")
+
+	var input []byte
+	// If the parent workspace has the storage client available, download the object with the storage client
+	if parentWorkspace.StorageAvailable() {
+		log.Printf("Downloading object from storage client")
+		parentStorageClient, err := clients.NewStorageClient(ctx, parentWorkspace.Name, parentWorkspace.Storage)
+		if err != nil {
+			log.Printf("Failed to create storage client: %s", err)
+			return 0, err
+		}
+
+		input, err = parentStorageClient.Download(ctx, parentObjectStorageFilePath)
+		if err != nil {
+			log.Printf("Failed to download object from storage client: %s", err)
+			return 0, err
+		}
+	} else {
+		// If the parent workspace does not have the storage client available, read the object from the volume mount
+		input, err = os.ReadFile(parentObjectVolumeFilePath)
+		if err != nil {
+			g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
 			return 0, err
 		}
 	}
 
-	newObjectFilePath := path.Join(newObjectPath, newObject.ExternalId)
+	log.Printf("Uploading object to storage client")
 
-	input, err := os.ReadFile(parentObjectFilePath)
+	// If the child workspace has the storage client available, upload the object with the storage client
+	if childWorkspace.StorageAvailable() {
+		childStorageClient, err := clients.NewStorageClient(ctx, childWorkspace.Name, childWorkspace.Storage)
+		if err != nil {
+			return 0, err
+		}
+
+		err = childStorageClient.Upload(ctx, newObjectStorageFilePath, input)
+		if err != nil {
+			return 0, err
+		}
+
+		success = true
+		return newObject.Id, nil
+	}
+
+	if _, err := os.Stat(newObjectVolumePath); os.IsNotExist(err) {
+		if err := os.MkdirAll(newObjectVolumePath, 0755); err != nil {
+			return 0, err
+		}
+	}
+
+	// If the child workspace does not have the storage client available, write the object to the volume mount
+	err = os.WriteFile(newObjectVolumeFilePath, input, 0644)
 	if err != nil {
 		g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
 		return 0, err
 	}
 
-	err = os.WriteFile(newObjectFilePath, input, 0644)
-	if err != nil {
-		g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
-		return 0, err
-	}
-
+	success = true
 	return newObject.Id, nil
 }
 

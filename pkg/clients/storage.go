@@ -280,6 +280,23 @@ func (c *StorageClient) MoveObject(ctx context.Context, sourceKey, destinationKe
 	return nil
 }
 
+type CopyObjectInput struct {
+	SourceKey                string
+	DestinationKey           string
+	DestinationStorageClient *StorageClient
+}
+
+func (c *StorageClient) CopyObject(ctx context.Context, input CopyObjectInput) error {
+	bucket := input.DestinationStorageClient.BucketName()
+
+	_, err := c.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(bucket),
+		CopySource: aws.String(fmt.Sprintf("%s/%s", c.BucketName(), input.SourceKey)),
+		Key:        aws.String(input.DestinationKey),
+	})
+	return err
+}
+
 const (
 	testObjectKey = "test-access-object"
 )

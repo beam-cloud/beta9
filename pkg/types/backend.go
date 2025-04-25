@@ -78,6 +78,10 @@ type WorkspaceWithRelated struct {
 	Storage          *WorkspaceStorage `db:"storage" json:"storage" serializer:"storage"`
 }
 
+func (w *WorkspaceWithRelated) StorageAvailable() bool {
+	return w.Storage != nil && w.Storage.Id != nil && *w.Storage.Id > 0
+}
+
 func (w *WorkspaceWithRelated) ToProto() *pb.WorkspaceWithRelated {
 	return &pb.WorkspaceWithRelated{
 		Workspace:        w.Workspace.ToProto(),
