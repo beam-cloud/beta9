@@ -12,7 +12,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -107,7 +106,7 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 		}, nil
 	}
 
-	if state.WorkspaceId != workspaceId {
+	if isAdmin, _ := isClusterAdmin(ctx); state.WorkspaceId != workspaceId && !isAdmin {
 		return &pb.StopContainerResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Container not found: %s", in.ContainerId),
@@ -116,7 +115,6 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 
 	err = gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: in.ContainerId, Reason: types.StopContainerReasonUser})
 	if err != nil {
-		log.Error().Err(err).Msg("unable to stop container")
 		return &pb.StopContainerResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Unable to stop container: %s", in.ContainerId),
