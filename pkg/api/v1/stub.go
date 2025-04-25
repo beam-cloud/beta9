@@ -215,7 +215,12 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 		return err
 	}
 
-	return ctx.JSON(http.StatusOK, newStub)
+	serializedStub, err := serializer.Serialize(newStub)
+	if err != nil {
+		return err
+	}
+
+	return ctx.JSON(http.StatusOK, serializedStub)
 }
 
 func (g StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub *types.StubWithRelated) error {
