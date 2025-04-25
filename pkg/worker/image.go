@@ -206,7 +206,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				return errors.New("image locked")
 			}
 
-			log.Info().Str("clip_file", imageKey).Msg("caching image")
 			_, err := c.cacheClient.StoreContentFromS3(blobcache.ContentSourceS3{
 				Path: imageKey,
 				// FIXME: It would be nice to just have this config in the blobcache server and
