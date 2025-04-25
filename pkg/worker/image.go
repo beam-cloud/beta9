@@ -189,7 +189,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		imageLocked := false
 
 		operation := func() error {
-			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, imageKey)
+			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
 			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+imageKey) {
 				localCachePath = baseBlobFsContentPath
 				return nil
