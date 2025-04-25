@@ -44,6 +44,9 @@ storage:
       dirMode: 0777
       fileMode: 0666
       listType: 1
+      readAheadKB: 32768
+      readAheadLargeKB: 131072
+      fuseReadAheadKB: 32768
 gateway:
   host: beta9-gateway
   invokeURLType: path
