@@ -338,6 +338,7 @@ type WorkerPoolConfig struct {
 	UserData             string                            `key:"userData" json:"user_data"`
 	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
+	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
 }
 
 type WorkerPoolJobSpecConfig struct {
