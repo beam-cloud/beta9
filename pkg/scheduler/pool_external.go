@@ -445,7 +445,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "BLOBCACHE_LOCALITY",
-			Value: wpc.name,
+			Value: wpc.workerPoolConfig.ConfigGroup,
 		},
 		{
 			Name:  "WORKER_TOKEN",
