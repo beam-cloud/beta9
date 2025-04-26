@@ -404,7 +404,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		},
 		{
 			Name:  "BLOBCACHE_LOCALITY",
-			Value: wpc.config.BlobCache.Global.DefaultLocality,
+			Value: wpc.workerPoolConfig.ConfigGroup,
 		},
 		{
 			Name:  "WORKER_TOKEN",
