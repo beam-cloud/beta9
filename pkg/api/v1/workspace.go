@@ -59,7 +59,7 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 		return HTTPInternalServerError("Unable to create workspace")
 	}
 
-	bucketName := types.WorkspaceBucketName(workspace.ExternalId)
+	bucketName := types.WorkspaceBucketName(g.config.Storage.WorkspaceStorage.DefaultBucketPrefix, workspace.ExternalId)
 	_, err = g.setupDefaultWorkspaceStorage(ctx, bucketName, workspace.Id)
 	if err != nil {
 		log.Error().Err(err).Msgf("Failed to setup workspace storage for workspace %d", workspace.Id)
@@ -187,7 +187,7 @@ func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
 		return err
 	}
 
-	bucketName := types.WorkspaceBucketName(workspace.ExternalId)
+	bucketName := types.WorkspaceBucketName(g.config.Storage.WorkspaceStorage.DefaultBucketPrefix, workspace.ExternalId)
 
 	createdStorage, err := g.setupDefaultWorkspaceStorage(ctx, bucketName, workspace.Id)
 	if err != nil {

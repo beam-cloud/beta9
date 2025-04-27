@@ -35,6 +35,11 @@ storage:
   workspaceStorage:
     mode: geese
     baseMountPath: /workspace/data
+    defaultBucketPrefix: workspace
+    defaultAccessKey: test
+    defaultSecretKey: test
+    defaultEndpointUrl: http://localstack:4566
+    defaultRegion: us-east-1
     geese:
       debug: false
       fsyncOnClose: true
