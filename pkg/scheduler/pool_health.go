@@ -111,7 +111,10 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 			switch machine.State.Status {
 			case types.MachineStatusPending:
 				pendingMachines++
-			case types.MachineStatusRegistered:
+			// HOTFIX: need to add better checks for whether or not a machine is ready here
+			// case types.MachineStatusRegistered:
+			// 	registeredMachines++
+			case types.MachineStatusReady:
 				registeredMachines++
 			}
 		}
