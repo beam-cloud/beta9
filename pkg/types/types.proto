@@ -162,6 +162,7 @@ message WorkerPoolState {
   int64 running_containers = 9;
   int64 registered_machines = 10;
   int64 pending_machines = 11;
+  int64 ready_machines = 12;
 }
 
 message Workspace {
