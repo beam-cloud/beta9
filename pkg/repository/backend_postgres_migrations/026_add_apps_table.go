@@ -11,14 +11,6 @@ func init() {
 	goose.AddMigrationContext(upCreateAppTable, downDropAppTable)
 }
 
-type StubForMigration struct {
-	StubID         int64
-	StubName       string
-	DeploymentName string
-	DeploymentID   int64
-	WorkspaceId    uint
-}
-
 const (
 	migrationAppName = "default"
 )
