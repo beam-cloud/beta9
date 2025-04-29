@@ -75,7 +75,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
         ports (Optional[List[int]]):
             The ports to expose the container to. Default is [].
         name (Optional[str]):
-            A name for the pod. Default is None.
+            An optional app name for this pod. If not specified, it will be the name of the
+            working directory containing the python file with the pod class.
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the pod. Default is 1.0.
         memory (Union[int, str]):
