@@ -35,6 +35,11 @@ storage:
   workspaceStorage:
     mode: geese
     baseMountPath: /workspace/data
+    defaultBucketPrefix: workspace
+    defaultAccessKey: test
+    defaultSecretKey: test
+    defaultEndpointUrl: http://localstack:4566
+    defaultRegion: us-east-1
     geese:
       debug: false
       fsyncOnClose: true
@@ -44,6 +49,9 @@ storage:
       dirMode: 0777
       fileMode: 0666
       listType: 1
+      readAheadKB: 32768
+      readAheadLargeKB: 131072
+      fuseReadAheadKB: 32768
 gateway:
   host: beta9-gateway
   invokeURLType: path

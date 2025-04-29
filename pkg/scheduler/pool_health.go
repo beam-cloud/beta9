@@ -94,6 +94,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 	runningContainers := 0
 	registeredMachines := 0
 	pendingMachines := 0
+	readyMachines := 0
 
 	workers, err := p.workerRepo.GetAllWorkersInPool(p.wpc.Name())
 	if err != nil {
@@ -113,6 +114,8 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 				pendingMachines++
 			case types.MachineStatusRegistered:
 				registeredMachines++
+			case types.MachineStatusReady:
+				readyMachines++
 			}
 		}
 	}
@@ -184,6 +187,7 @@ func (p *PoolHealthMonitor) getPoolState() (*types.WorkerPoolState, error) {
 		FreeMemory:         freeCapacity.FreeMemory,
 		RegisteredMachines: int64(registeredMachines),
 		PendingMachines:    int64(pendingMachines),
+		ReadyMachines:      int64(readyMachines),
 	}, nil
 }
 
@@ -203,9 +207,9 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 		failoverReasons = append(failoverReasons, "exceeded max scheduling latency")
 	}
 
-	if (nextState.RegisteredMachines < p.workerConfig.Failover.MinMachinesAvailable) && p.wpc.Mode() == types.PoolModeExternal {
+	if (nextState.ReadyMachines < p.workerConfig.Failover.MinMachinesAvailable) && p.wpc.Mode() == types.PoolModeExternal {
 		status = types.WorkerPoolStatusDegraded
-		failoverReasons = append(failoverReasons, "not enough registered machines")
+		failoverReasons = append(failoverReasons, "not enough ready machines")
 	}
 
 	nextState.Status = status

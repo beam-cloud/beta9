@@ -12,20 +12,23 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types/serializer"
 	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type WorkspaceGroup struct {
-	routerGroup   *echo.Group
-	config        types.AppConfig
-	backendRepo   repository.BackendRepository
-	workspaceRepo repository.WorkspaceRepository
+	routerGroup          *echo.Group
+	config               types.AppConfig
+	backendRepo          repository.BackendRepository
+	workspaceRepo        repository.WorkspaceRepository
+	defaultStorageClient *clients.StorageClient
 }
 
-func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, config types.AppConfig) *WorkspaceGroup {
+func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, defaultStorageClient *clients.StorageClient, config types.AppConfig) *WorkspaceGroup {
 	group := &WorkspaceGroup{routerGroup: g,
-		backendRepo:   backendRepo,
-		workspaceRepo: workspaceRepo,
-		config:        config,
+		backendRepo:          backendRepo,
+		workspaceRepo:        workspaceRepo,
+		config:               config,
+		defaultStorageClient: defaultStorageClient,
 	}
 
 	g.POST("", group.CreateWorkspace)
@@ -54,6 +57,13 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 	workspace, err := g.backendRepo.CreateWorkspace(ctx.Request().Context())
 	if err != nil {
 		return HTTPInternalServerError("Unable to create workspace")
+	}
+
+	bucketName := types.WorkspaceBucketName(g.config.Storage.WorkspaceStorage.DefaultBucketPrefix, workspace.ExternalId)
+	_, err = g.setupDefaultWorkspaceStorage(ctx, bucketName, workspace.Id)
+	if err != nil {
+		log.Error().Err(err).Msgf("Failed to setup workspace storage for workspace %d", workspace.Id)
+		return HTTPInternalServerError("Unable to setup workspace storage")
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
@@ -146,7 +156,7 @@ func (g *WorkspaceGroup) SetExternalWorkspaceStorage(ctx echo.Context) error {
 		Region:      &request.Region,
 	}
 
-	storageClient, err := clients.NewStorageClient(ctx.Request().Context(), workspace.Name, storage)
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx.Request().Context(), workspace.Name, storage)
 	if err != nil {
 		return HTTPInternalServerError("Unable to create workspace storage")
 	}
@@ -172,44 +182,16 @@ func (g *WorkspaceGroup) SetExternalWorkspaceStorage(ctx echo.Context) error {
 // It then creates a new workspace storage object for that bucket and sets it as the storage bucket for the workspace.
 func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
-
 	workspace, err := g.validateWorkspaceForStorageCreation(ctx, workspaceId)
 	if err != nil {
 		return err
 	}
 
-	bucketName := types.WorkspaceBucketName(workspace.ExternalId)
-	accessKey := g.config.Storage.WorkspaceStorage.DefaultAccessKey
-	secretKey := g.config.Storage.WorkspaceStorage.DefaultSecretKey
-	endpointUrl := g.config.Storage.WorkspaceStorage.DefaultEndpointUrl
-	region := g.config.Storage.WorkspaceStorage.DefaultRegion
+	bucketName := types.WorkspaceBucketName(g.config.Storage.WorkspaceStorage.DefaultBucketPrefix, workspace.ExternalId)
 
-	storage := &types.WorkspaceStorage{
-		BucketName:  &bucketName,
-		AccessKey:   &accessKey,
-		SecretKey:   &secretKey,
-		EndpointUrl: &endpointUrl,
-		Region:      &region,
-	}
-
-	storageClient, err := clients.NewStorageClient(ctx.Request().Context(), workspace.Name, storage)
+	createdStorage, err := g.setupDefaultWorkspaceStorage(ctx, bucketName, workspace.Id)
 	if err != nil {
-		return HTTPInternalServerError("Unable to create workspace storage")
-	}
-
-	err = storageClient.CreateBucket(ctx.Request().Context())
-	if err != nil {
-		return HTTPInternalServerError("Unable to create bucket: " + err.Error())
-	}
-
-	err = storageClient.ValidateBucketAccess(ctx.Request().Context())
-	if err != nil {
-		return HTTPInternalServerError("Unable to access bucket: " + err.Error())
-	}
-
-	// Register the newly created bucket for this workspace in the database
-	createdStorage, err := g.backendRepo.CreateWorkspaceStorage(ctx.Request().Context(), workspace.Id, *storage)
-	if err != nil {
+		log.Error().Err(err).Msgf("Failed to create workspace storage for workspace %d", workspace.Id)
 		return HTTPInternalServerError("Unable to create workspace storage")
 	}
 
@@ -218,6 +200,29 @@ func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusCreated, createdStorage)
+}
+
+// setupDefaultWorkspaceStorage creates a new bucket in the configured default storage provider.
+func (g *WorkspaceGroup) setupDefaultWorkspaceStorage(ctx echo.Context, bucketName string, workspaceId uint) (*types.WorkspaceStorage, error) {
+	err := g.defaultStorageClient.CreateBucket(ctx.Request().Context(), bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	err = g.defaultStorageClient.ValidateBucketAccess(ctx.Request().Context(), bucketName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Register the newly created bucket for this workspace in the database
+	createdStorage, err := g.backendRepo.CreateWorkspaceStorage(ctx.Request().Context(), workspaceId, types.WorkspaceStorage{
+		BucketName:  &bucketName,
+		AccessKey:   &g.config.Storage.WorkspaceStorage.DefaultAccessKey,
+		SecretKey:   &g.config.Storage.WorkspaceStorage.DefaultSecretKey,
+		EndpointUrl: &g.config.Storage.WorkspaceStorage.DefaultEndpointUrl,
+		Region:      &g.config.Storage.WorkspaceStorage.DefaultRegion,
+	})
+	return createdStorage, err
 }
 
 // revokeTokenIfPresent revokes the token found in the Authorization header, if present.

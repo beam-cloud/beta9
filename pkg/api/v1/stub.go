@@ -324,20 +324,16 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 
 	// If both workspaces have the storage client available, copy the object with the storage client
 	if parentWorkspace.StorageAvailable() && childWorkspace.StorageAvailable() {
-		parentStorageClient, err := clients.NewStorageClient(ctx, parentWorkspace.Name, parentWorkspace.Storage)
+		storageClient, err := clients.NewDefaultStorageClient(ctx, g.config)
 		if err != nil {
 			return 0, err
 		}
 
-		childStorageClient, err := clients.NewStorageClient(ctx, childWorkspace.Name, childWorkspace.Storage)
-		if err != nil {
-			return 0, err
-		}
-
-		err = parentStorageClient.CopyObject(ctx, clients.CopyObjectInput{
-			SourceKey:                parentObjectStorageFilePath,
-			DestinationKey:           newObjectStorageFilePath,
-			DestinationStorageClient: childStorageClient,
+		err = storageClient.CopyObject(ctx, clients.CopyObjectInput{
+			SourceKey:             parentObjectStorageFilePath,
+			SourceBucketName:      *parentWorkspace.Storage.BucketName,
+			DestinationKey:        newObjectStorageFilePath,
+			DestinationBucketName: *childWorkspace.Storage.BucketName,
 		})
 		if err != nil {
 			return 0, err
@@ -350,7 +346,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 	var input []byte
 	// If the parent workspace has the storage client available, download the object with the storage client
 	if parentWorkspace.StorageAvailable() {
-		parentStorageClient, err := clients.NewStorageClient(ctx, parentWorkspace.Name, parentWorkspace.Storage)
+		parentStorageClient, err := clients.NewWorkspaceStorageClient(ctx, parentWorkspace.Name, parentWorkspace.Storage)
 		if err != nil {
 			return 0, err
 		}
@@ -370,7 +366,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 
 	// If the child workspace has the storage client available, upload the object with the storage client
 	if childWorkspace.StorageAvailable() {
-		childStorageClient, err := clients.NewStorageClient(ctx, childWorkspace.Name, childWorkspace.Storage)
+		childStorageClient, err := clients.NewWorkspaceStorageClient(ctx, childWorkspace.Name, childWorkspace.Storage)
 		if err != nil {
 			return 0, err
 		}

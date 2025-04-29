@@ -1135,6 +1135,14 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 		query = query.Where(squirrel.Eq{"a.external_id": filters.AppId})
 	}
 
+	if filters.SearchQuery != "" {
+		if err := uuid.Validate(filters.SearchQuery); err == nil {
+			query = query.Where(squirrel.Eq{"d.external_id": filters.SearchQuery})
+		} else {
+			query = query.Where(squirrel.Like{"d.name": "%" + filters.SearchQuery + "%"})
+		}
+	}
+
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
 			Client:          c.client,

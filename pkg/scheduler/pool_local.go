@@ -393,6 +393,11 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) []corev1.EnvVar {
+	locality := wpc.workerPoolConfig.ConfigGroup
+	if locality == "" {
+		locality = wpc.config.BlobCache.Global.DefaultLocality
+	}
+
 	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -404,7 +409,7 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		},
 		{
 			Name:  "BLOBCACHE_LOCALITY",
-			Value: wpc.config.BlobCache.Global.DefaultLocality,
+			Value: wpc.workerPoolConfig.ConfigGroup,
 		},
 		{
 			Name:  "WORKER_TOKEN",

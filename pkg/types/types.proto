@@ -97,6 +97,7 @@ message MountPointConfig {
   string endpoint_url = 4;
   string region = 5;
   bool read_only = 6;
+  bool force_path_style = 7;
 }
 
 message Object {
@@ -161,6 +162,7 @@ message WorkerPoolState {
   int64 running_containers = 9;
   int64 registered_machines = 10;
   int64 pending_machines = 11;
+  int64 ready_machines = 12;
 }
 
 message Workspace {

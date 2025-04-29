@@ -17,14 +17,22 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
+const (
+	testObjectKey = "test-access-object"
+)
+
 type StorageClient struct {
-	WorkspaceName    string
-	WorkspaceStorage *types.WorkspaceStorage
-	s3Client         *s3.Client
-	presignClient    *s3.PresignClient
+	s3Client      *s3.Client
+	presignClient *s3.PresignClient
 }
 
-func NewStorageClient(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage) (*StorageClient, error) {
+type WorkspaceStorageClient struct {
+	WorkspaceName    string
+	WorkspaceStorage *types.WorkspaceStorage
+	StorageClient    *StorageClient
+}
+
+func NewWorkspaceStorageClient(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage) (*WorkspaceStorageClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(*workspaceStorage.Region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
@@ -45,12 +53,46 @@ func NewStorageClient(ctx context.Context, workspaceName string, workspaceStorag
 	s3Client := s3.NewFromConfig(cfg)
 	presignClient := s3.NewPresignClient(s3Client)
 
-	return &StorageClient{
+	return &WorkspaceStorageClient{
 		WorkspaceName:    workspaceName,
 		WorkspaceStorage: workspaceStorage,
-		s3Client:         s3Client,
-		presignClient:    presignClient,
+		StorageClient: &StorageClient{
+			s3Client:      s3Client,
+			presignClient: presignClient,
+		},
 	}, nil
+}
+
+func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*StorageClient, error) {
+
+	s3Cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(cfg.Storage.WorkspaceStorage.DefaultRegion),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+			cfg.Storage.WorkspaceStorage.DefaultAccessKey,
+			cfg.Storage.WorkspaceStorage.DefaultSecretKey,
+			"",
+		)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	s3Client := s3.NewFromConfig(s3Cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String(cfg.Storage.WorkspaceStorage.DefaultEndpointUrl)
+	})
+	presignClient := s3.NewPresignClient(s3Client)
+
+	return &StorageClient{
+		s3Client:      s3Client,
+		presignClient: presignClient,
+	}, nil
+}
+
+func (c *StorageClient) CreateBucket(ctx context.Context, bucket string) error {
+	_, err := c.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
+		Bucket: aws.String(bucket),
+	})
+	return err
 }
 
 func (c *StorageClient) S3Client() *s3.Client {
@@ -61,22 +103,18 @@ func (c *StorageClient) PresignClient() *s3.PresignClient {
 	return c.presignClient
 }
 
-func (c *StorageClient) BucketName() string {
-	return *c.WorkspaceStorage.BucketName
-}
-
-func (c *StorageClient) Upload(ctx context.Context, key string, data []byte) error {
+func (c *StorageClient) UploadToBucket(ctx context.Context, key string, data []byte, bucket string) error {
 	_, err := c.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Body:   bytes.NewReader(data),
 	})
 	return err
 }
 
-func (c *StorageClient) Head(ctx context.Context, key string) (bool, *s3.HeadObjectOutput, error) {
+func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bool, *s3.HeadObjectOutput, error) {
 	output, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -86,9 +124,9 @@ func (c *StorageClient) Head(ctx context.Context, key string) (bool, *s3.HeadObj
 	return true, output, nil
 }
 
-func (c *StorageClient) Exists(ctx context.Context, key string) (bool, error) {
+func (c *StorageClient) Exists(ctx context.Context, key string, bucket string) (bool, error) {
 	_, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 		Range:  aws.String("bytes=0-0"),
 	})
@@ -104,9 +142,9 @@ func (c *StorageClient) Exists(ctx context.Context, key string) (bool, error) {
 	return true, nil
 }
 
-func (c *StorageClient) Download(ctx context.Context, key string) ([]byte, error) {
+func (c *StorageClient) Download(ctx context.Context, key string, bucket string) ([]byte, error) {
 	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
@@ -117,21 +155,21 @@ func (c *StorageClient) Download(ctx context.Context, key string) ([]byte, error
 	return io.ReadAll(resp.Body)
 }
 
-func (c *StorageClient) Delete(ctx context.Context, key string) error {
+func (c *StorageClient) Delete(ctx context.Context, key string, bucket string) error {
 	_, err := c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	})
 	return err
 }
 
-func (c *StorageClient) ListDirectory(ctx context.Context, dir string) ([]s3types.Object, error) {
+func (c *StorageClient) ListDirectory(ctx context.Context, dir string, bucket string) ([]s3types.Object, error) {
 	if !strings.HasSuffix(dir, "/") {
 		dir += "/"
 	}
 
 	resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket:    aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket:    aws.String(bucket),
 		Prefix:    aws.String(dir),
 		Delimiter: aws.String("/"),
 	})
@@ -162,9 +200,9 @@ func (c *StorageClient) ListDirectory(ctx context.Context, dir string) ([]s3type
 	return allObjects, nil
 }
 
-func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
+func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64, bucket string) (string, error) {
 	result, err := c.presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(key),
 	}, s3.WithPresignExpires(time.Duration(expiresInSeconds)*time.Second))
 	if err != nil {
@@ -174,9 +212,9 @@ func (c *StorageClient) GeneratePresignedPutURL(ctx context.Context, key string,
 	return result.URL, nil
 }
 
-func (c *StorageClient) GeneratePresignedGetURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
+func (c *StorageClient) GeneratePresignedGetURL(ctx context.Context, key string, expiresInSeconds int64, bucket string) (string, error) {
 	result, err := c.presignClient.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket:                     aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket:                     aws.String(bucket),
 		Key:                        aws.String(key),
 		ResponseContentDisposition: aws.String("attachment"),
 	}, s3.WithPresignExpires(time.Duration(expiresInSeconds)*time.Second))
@@ -187,10 +225,10 @@ func (c *StorageClient) GeneratePresignedGetURL(ctx context.Context, key string,
 	return result.URL, nil
 }
 
-func (c *StorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []string, expiresInSeconds int64) (map[string]string, error) {
+func (c *StorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []string, expiresInSeconds int64, bucket string) (map[string]string, error) {
 	urls := make(map[string]string)
 	for _, key := range keys {
-		url, err := c.GeneratePresignedPutURL(ctx, key, expiresInSeconds)
+		url, err := c.GeneratePresignedPutURL(ctx, key, expiresInSeconds, bucket)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate presigned URL for key %s: %w", key, err)
 		}
@@ -200,9 +238,9 @@ func (c *StorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []str
 	return urls, nil
 }
 
-func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string) ([]s3types.Object, error) {
+func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string, bucket string) ([]s3types.Object, error) {
 	resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucket),
 		Prefix: aws.String(prefix),
 	})
 	if err != nil {
@@ -212,13 +250,13 @@ func (c *StorageClient) ListWithPrefix(ctx context.Context, prefix string) ([]s3
 	return resp.Contents, nil
 }
 
-func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]string, error) {
+func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string, bucket string) ([]string, error) {
 	var continuationToken *string
 	var deletedObjects []string
 
 	for {
 		resp, err := c.s3Client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
-			Bucket:            aws.String(*c.WorkspaceStorage.BucketName),
+			Bucket:            aws.String(bucket),
 			Prefix:            aws.String(prefix),
 			ContinuationToken: continuationToken,
 		})
@@ -236,7 +274,7 @@ func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]
 		// Delete the objects in batches
 		if len(objectsToDelete) > 0 {
 			_, err = c.s3Client.DeleteObjects(ctx, &s3.DeleteObjectsInput{
-				Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+				Bucket: aws.String(bucket),
 				Delete: &s3types.Delete{
 					Objects: objectsToDelete,
 					Quiet:   aws.Bool(true),
@@ -258,10 +296,10 @@ func (c *StorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]
 	return deletedObjects, nil
 }
 
-func (c *StorageClient) MoveObject(ctx context.Context, sourceKey, destinationKey string) error {
+func (c *StorageClient) MoveObject(ctx context.Context, sourceKey, destinationKey string, bucket string) error {
 	_, err := c.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
-		Bucket:     aws.String(*c.WorkspaceStorage.BucketName),
-		CopySource: aws.String(fmt.Sprintf("%s/%s", *c.WorkspaceStorage.BucketName, sourceKey)),
+		Bucket:     aws.String(bucket),
+		CopySource: aws.String(fmt.Sprintf("%s/%s", bucket, sourceKey)),
 		Key:        aws.String(destinationKey),
 	})
 	if err != nil {
@@ -270,7 +308,7 @@ func (c *StorageClient) MoveObject(ctx context.Context, sourceKey, destinationKe
 
 	// Delete the original object
 	_, err = c.s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucket),
 		Key:    aws.String(sourceKey),
 	})
 	if err != nil {
@@ -281,32 +319,25 @@ func (c *StorageClient) MoveObject(ctx context.Context, sourceKey, destinationKe
 }
 
 type CopyObjectInput struct {
-	SourceKey                string
-	DestinationKey           string
-	DestinationStorageClient *StorageClient
+	SourceKey             string
+	SourceBucketName      string
+	DestinationKey        string
+	DestinationBucketName string
 }
 
 func (c *StorageClient) CopyObject(ctx context.Context, input CopyObjectInput) error {
-	bucket := c.BucketName()
-	if input.DestinationStorageClient != nil {
-		bucket = input.DestinationStorageClient.BucketName()
-	}
-
 	_, err := c.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
-		Bucket:     aws.String(bucket),
-		CopySource: aws.String(fmt.Sprintf("%s/%s", c.BucketName(), input.SourceKey)),
+		Bucket:     aws.String(input.DestinationBucketName),
+		CopySource: aws.String(fmt.Sprintf("%s/%s", input.SourceBucketName, input.SourceKey)),
 		Key:        aws.String(input.DestinationKey),
 	})
+
 	return err
 }
 
-const (
-	testObjectKey = "test-access-object"
-)
-
-func (c *StorageClient) ValidateBucketAccess(ctx context.Context) error {
+func (c *StorageClient) ValidateBucketAccess(ctx context.Context, bucketName string) error {
 	_, err := c.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucketName),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to access bucket: %w", err)
@@ -314,7 +345,7 @@ func (c *StorageClient) ValidateBucketAccess(ctx context.Context) error {
 
 	// Check write access by attempting to put an object with no content
 	_, err = c.s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
+		Bucket: aws.String(bucketName),
 		Key:    aws.String(testObjectKey),
 		Body:   bytes.NewReader([]byte{}),
 		ACL:    s3types.ObjectCannedACLBucketOwnerFullControl,
@@ -324,16 +355,71 @@ func (c *StorageClient) ValidateBucketAccess(ctx context.Context) error {
 	}
 
 	// Clean up by deleting the test object
-	if err := c.Delete(ctx, testObjectKey); err != nil {
+	if err := c.Delete(ctx, testObjectKey, bucketName); err != nil {
 		return fmt.Errorf("failed to delete test object: %w", err)
 	}
 
 	return nil
 }
 
-func (c *StorageClient) CreateBucket(ctx context.Context) error {
-	_, err := c.s3Client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(*c.WorkspaceStorage.BucketName),
-	})
-	return err
+func (c *WorkspaceStorageClient) S3Client() *s3.Client {
+	return c.StorageClient.s3Client
+}
+
+func (c *WorkspaceStorageClient) PresignClient() *s3.PresignClient {
+	return c.StorageClient.presignClient
+}
+
+func (c *WorkspaceStorageClient) BucketName() string {
+	return *c.WorkspaceStorage.BucketName
+}
+
+func (c *WorkspaceStorageClient) Upload(ctx context.Context, key string, data []byte) error {
+	return c.StorageClient.UploadToBucket(ctx, key, data, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) Head(ctx context.Context, key string) (bool, *s3.HeadObjectOutput, error) {
+	return c.StorageClient.Head(ctx, key, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) Exists(ctx context.Context, key string) (bool, error) {
+	return c.StorageClient.Exists(ctx, key, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) Download(ctx context.Context, key string) ([]byte, error) {
+	return c.StorageClient.Download(ctx, key, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) Delete(ctx context.Context, key string) error {
+	return c.StorageClient.Delete(ctx, key, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) ListDirectory(ctx context.Context, dir string) ([]s3types.Object, error) {
+	return c.StorageClient.ListDirectory(ctx, dir, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) GeneratePresignedPutURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
+	return c.StorageClient.GeneratePresignedPutURL(ctx, key, expiresInSeconds, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) GeneratePresignedGetURL(ctx context.Context, key string, expiresInSeconds int64) (string, error) {
+	return c.StorageClient.GeneratePresignedGetURL(ctx, key, expiresInSeconds, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) GeneratePresignedPutURLs(ctx context.Context, keys []string, expiresInSeconds int64) (map[string]string, error) {
+	return c.StorageClient.GeneratePresignedPutURLs(ctx, keys, expiresInSeconds, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) ListWithPrefix(ctx context.Context, prefix string) ([]s3types.Object, error) {
+	return c.StorageClient.ListWithPrefix(ctx, prefix, *c.WorkspaceStorage.BucketName)
+}
+
+func (c *WorkspaceStorageClient) DeleteWithPrefix(ctx context.Context, prefix string) ([]string, error) {
+	return c.StorageClient.DeleteWithPrefix(ctx, prefix, *c.WorkspaceStorage.BucketName)
+}
+func (c *WorkspaceStorageClient) MoveObject(ctx context.Context, sourceKey, destinationKey string) error {
+	return c.StorageClient.MoveObject(ctx, sourceKey, destinationKey, *c.WorkspaceStorage.BucketName)
+}
+func (c *WorkspaceStorageClient) ValidateBucketAccess(ctx context.Context) error {
+	return c.StorageClient.ValidateBucketAccess(ctx, *c.WorkspaceStorage.BucketName)
 }
