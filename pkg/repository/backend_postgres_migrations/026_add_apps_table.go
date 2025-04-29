@@ -25,7 +25,7 @@ const (
 
 func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
-		CREATE TABLE app (
+		CREATE TABLE IF NOT EXISTS app (
 			id SERIAL PRIMARY KEY,
 			external_id UUID DEFAULT uuid_generate_v4() NOT NULL,
 			name VARCHAR(255) NOT NULL,
@@ -41,19 +41,33 @@ func upCreateAppTable(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 
-	// update stubs table to add app_id column
 	_, err = tx.ExecContext(ctx, `
-		ALTER TABLE stub
-		ADD COLUMN app_id INT NULL REFERENCES app(id);
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM information_schema.columns 
+				WHERE table_name='stub' AND column_name='app_id'
+			) THEN
+				ALTER TABLE stub ADD COLUMN app_id INT NULL REFERENCES app(id);
+			END IF;
+		END
+		$$;
 	`)
 	if err != nil {
 		return err
 	}
 
-	// update deployments table to add app_id column
 	_, err = tx.ExecContext(ctx, `
-		ALTER TABLE deployment
-		ADD COLUMN app_id INT NULL REFERENCES app(id);
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM information_schema.columns 
+				WHERE table_name='deployment' AND column_name='app_id'
+			) THEN
+				ALTER TABLE deployment ADD COLUMN app_id INT NULL REFERENCES app(id);
+			END IF;
+		END
+		$$;
 	`)
 	if err != nil {
 		return err
