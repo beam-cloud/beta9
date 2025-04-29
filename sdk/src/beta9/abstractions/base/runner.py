@@ -113,7 +113,7 @@ class RunnerAbstraction(BaseAbstraction):
             formatted_env = [f"{k}={v}" for k, v in env.items()]
 
         self.name = name
-        self.app = app or os.path.basename(os.getcwd())
+        self.app = app
         self.authorized = authorized
         self.image: Image = image
         self.image_available: bool = False
@@ -400,6 +400,9 @@ class RunnerAbstraction(BaseAbstraction):
                 exit=False,
             )
             return False
+
+        if not self.app:
+            self.app = self.name or os.path.basename(os.getcwd())
 
         if not self.stub_created:
             stub_request = GetOrCreateStubRequest(
