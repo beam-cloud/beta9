@@ -1107,6 +1107,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 		Select(
 			"d.*",
 			"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+			"s.created_at AS \"stub.created_at\"", "s.type AS \"stub.type\"", "s.updated_at AS \"stub.updated_at\"",
 		).
 		From("deployment d").
 		Join(`(
