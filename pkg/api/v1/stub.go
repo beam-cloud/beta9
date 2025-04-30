@@ -286,28 +286,28 @@ func (g StubGroup) configureVolumes(ctx context.Context, volumes []*pb.Volume, w
 	return nil
 }
 
-func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *types.Workspace, stub *types.StubWithRelated) (uint, error) {
-	parentWorkspace, err := g.backendRepo.GetWorkspaceWithRelated(ctx, stub.Workspace.Id)
+func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace *types.Workspace, stub *types.StubWithRelated) (uint, error) {
+	sourceWorkspace, err := g.backendRepo.GetWorkspaceWithRelated(ctx, stub.Workspace.Id)
 	if err != nil {
 		return 0, err
 	}
 
-	parentObject, err := g.backendRepo.GetObjectByExternalStubId(ctx, stub.ExternalId, stub.WorkspaceId)
+	sourceObject, err := g.backendRepo.GetObjectByExternalStubId(ctx, stub.ExternalId, stub.WorkspaceId)
 	if err != nil {
 		return 0, err
 	}
 
-	parentObjectVolumePath := path.Join(types.DefaultObjectPath, stub.Workspace.Name)
-	parentObjectVolumeFilePath := path.Join(parentObjectVolumePath, parentObject.ExternalId)
-	parentObjectStorageFilePath := path.Join(types.DefaultObjectPrefix, parentObject.ExternalId)
+	sourceObjectVolumePath := path.Join(types.DefaultObjectPath, stub.Workspace.Name)
+	sourceObjectVolumeFilePath := path.Join(sourceObjectVolumePath, sourceObject.ExternalId)
+	sourceObjectStorageFilePath := path.Join(types.DefaultObjectPrefix, sourceObject.ExternalId)
 
 	// Check if the object already exists in the child workspace
-	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, parentObject.Hash, childWorkspace.Id); err == nil {
+	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, sourceObject.Hash, destinationWorkspace.Id); err == nil {
 		return existingObject.Id, nil
 	}
 
 	success := false
-	newObject, err := g.backendRepo.CreateObject(ctx, parentObject.Hash, parentObject.Size, childWorkspace.Id)
+	newObject, err := g.backendRepo.CreateObject(ctx, sourceObject.Hash, sourceObject.Size, destinationWorkspace.Id)
 	if err != nil {
 		return 0, err
 	}
@@ -318,22 +318,22 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 		}
 	}()
 
-	newObjectVolumePath := path.Join(types.DefaultObjectPath, childWorkspace.Name)
+	newObjectVolumePath := path.Join(types.DefaultObjectPath, destinationWorkspace.Name)
 	newObjectVolumeFilePath := path.Join(newObjectVolumePath, newObject.ExternalId)
 	newObjectStorageFilePath := path.Join(types.DefaultObjectPrefix, newObject.ExternalId)
 
 	// If both workspaces have the storage client available, copy the object with the storage client
-	if parentWorkspace.StorageAvailable() && childWorkspace.StorageAvailable() {
+	if sourceWorkspace.StorageAvailable() && destinationWorkspace.StorageAvailable() {
 		storageClient, err := clients.NewDefaultStorageClient(ctx, g.config)
 		if err != nil {
 			return 0, err
 		}
 
 		err = storageClient.CopyObject(ctx, clients.CopyObjectInput{
-			SourceKey:             parentObjectStorageFilePath,
-			SourceBucketName:      *parentWorkspace.Storage.BucketName,
+			SourceKey:             sourceObjectStorageFilePath,
+			SourceBucketName:      *sourceWorkspace.Storage.BucketName,
 			DestinationKey:        newObjectStorageFilePath,
-			DestinationBucketName: *childWorkspace.Storage.BucketName,
+			DestinationBucketName: *destinationWorkspace.Storage.BucketName,
 		})
 		if err != nil {
 			return 0, err
@@ -345,19 +345,19 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 
 	var input []byte
 	// If the parent workspace has the storage client available, download the object with the storage client
-	if parentWorkspace.StorageAvailable() {
-		parentStorageClient, err := clients.NewWorkspaceStorageClient(ctx, parentWorkspace.Name, parentWorkspace.Storage)
+	if sourceWorkspace.StorageAvailable() {
+		sourceStorageClient, err := clients.NewWorkspaceStorageClient(ctx, sourceWorkspace.Name, sourceWorkspace.Storage)
 		if err != nil {
 			return 0, err
 		}
 
-		input, err = parentStorageClient.Download(ctx, parentObjectStorageFilePath)
+		input, err = sourceStorageClient.Download(ctx, sourceObjectStorageFilePath)
 		if err != nil {
 			return 0, err
 		}
 	} else {
 		// If the parent workspace does not have the storage client available, read the object from the volume mount
-		input, err = os.ReadFile(parentObjectVolumeFilePath)
+		input, err = os.ReadFile(sourceObjectVolumeFilePath)
 		if err != nil {
 			g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
 			return 0, err
@@ -365,13 +365,13 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, childWorkspace *type
 	}
 
 	// If the child workspace has the storage client available, upload the object with the storage client
-	if childWorkspace.StorageAvailable() {
-		childStorageClient, err := clients.NewWorkspaceStorageClient(ctx, childWorkspace.Name, childWorkspace.Storage)
+	if destinationWorkspace.StorageAvailable() {
+		destinationStorageClient, err := clients.NewWorkspaceStorageClient(ctx, destinationWorkspace.Name, destinationWorkspace.Storage)
 		if err != nil {
 			return 0, err
 		}
 
-		err = childStorageClient.Upload(ctx, newObjectStorageFilePath, input)
+		err = destinationStorageClient.Upload(ctx, newObjectStorageFilePath, input)
 		if err != nil {
 			return 0, err
 		}
