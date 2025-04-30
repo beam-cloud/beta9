@@ -162,6 +162,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,
+		AppId:       stub.App.ExternalId,
 		WorkspaceId: stub.Workspace.ExternalId,
 		Workspace:   stub.Workspace,
 		EntryPoint:  []string{stubConfig.PythonVersion, "-m", "beta9.runner.function"},

@@ -11,6 +11,17 @@ import betterproto
 
 
 @dataclass(eq=False, repr=False)
+class App(betterproto.Message):
+    id: int = betterproto.uint32_field(1)
+    external_id: str = betterproto.string_field(2)
+    name: str = betterproto.string_field(3)
+    description: str = betterproto.string_field(4)
+    workspace_id: int = betterproto.uint32_field(5)
+    created_at: datetime = betterproto.message_field(6)
+    updated_at: datetime = betterproto.message_field(7)
+
+
+@dataclass(eq=False, repr=False)
 class BuildOptions(betterproto.Message):
     source_image: str = betterproto.string_field(1)
     dockerfile: str = betterproto.string_field(2)
@@ -62,18 +73,19 @@ class ContainerRequest(betterproto.Message):
     gpu_count: int = betterproto.uint32_field(8)
     image_id: str = betterproto.string_field(9)
     stub_id: str = betterproto.string_field(10)
-    workspace_id: str = betterproto.string_field(11)
-    workspace: "Workspace" = betterproto.message_field(12)
-    stub: "StubWithRelated" = betterproto.message_field(13)
-    timestamp: datetime = betterproto.message_field(14)
-    mounts: List["Mount"] = betterproto.message_field(15)
-    retry_count: int = betterproto.int64_field(16)
-    pool_selector: str = betterproto.string_field(17)
-    preemptable: bool = betterproto.bool_field(18)
-    checkpoint_enabled: bool = betterproto.bool_field(19)
-    build_options: "BuildOptions" = betterproto.message_field(20)
-    ports: List[int] = betterproto.uint32_field(21)
-    cost_per_ms: float = betterproto.double_field(22)
+    app_id: str = betterproto.string_field(11)
+    workspace_id: str = betterproto.string_field(12)
+    workspace: "Workspace" = betterproto.message_field(13)
+    stub: "StubWithRelated" = betterproto.message_field(14)
+    timestamp: datetime = betterproto.message_field(15)
+    mounts: List["Mount"] = betterproto.message_field(16)
+    retry_count: int = betterproto.int64_field(17)
+    pool_selector: str = betterproto.string_field(18)
+    preemptable: bool = betterproto.bool_field(19)
+    checkpoint_enabled: bool = betterproto.bool_field(20)
+    build_options: "BuildOptions" = betterproto.message_field(21)
+    ports: List[int] = betterproto.uint32_field(22)
+    cost_per_ms: float = betterproto.double_field(23)
 
 
 @dataclass(eq=False, repr=False)
@@ -142,6 +154,7 @@ class StubWithRelated(betterproto.Message):
     stub: "Stub" = betterproto.message_field(1)
     workspace: "Workspace" = betterproto.message_field(2)
     object: "Object" = betterproto.message_field(3)
+    app: "App" = betterproto.message_field(4)
 
 
 @dataclass(eq=False, repr=False)

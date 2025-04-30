@@ -210,6 +210,7 @@ type ContainerRequest struct {
 	GpuCount          uint32          `json:"gpu_count"`
 	ImageId           string          `json:"image_id"`
 	StubId            string          `json:"stub_id"`
+	AppId             string          `json:"app_id"`
 	WorkspaceId       string          `json:"workspace_id"`
 	Workspace         Workspace       `json:"workspace"`
 	Stub              StubWithRelated `json:"stub"`
@@ -277,6 +278,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		ImageId:           c.ImageId,
 		Mounts:            mounts,
 		StubId:            c.StubId,
+		AppId:             c.AppId,
 		WorkspaceId:       c.WorkspaceId,
 		Workspace:         c.Workspace.ToProto(),
 		Stub:              c.Stub.ToProto(),
@@ -319,6 +321,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		ImageId:           in.ImageId,
 		Mounts:            mounts,
 		WorkspaceId:       in.WorkspaceId,
+		AppId:             in.AppId,
 		Workspace:         *NewWorkspaceFromProto(in.Workspace),
 		Stub:              *NewStubWithRelatedFromProto(in.Stub),
 		StubId:            in.StubId,

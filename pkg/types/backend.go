@@ -398,6 +398,7 @@ type Autoscaler struct {
 	MinContainers     uint           `json:"min_containers"`
 }
 
+// @go2proto
 type App struct {
 	Id          uint     `db:"id" json:"id" serializer:"id,source:external_id"`
 	ExternalId  string   `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
@@ -406,7 +407,18 @@ type App struct {
 	WorkspaceId uint     `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	CreatedAt   Time     `db:"created_at" json:"created_at" serializer:"created_at"`
 	UpdatedAt   Time     `db:"updated_at" json:"updated_at" serializer:"updated_at"`
-	DeletedAt   NullTime `db:"deleted_at" json:"deleted_at" serializer:"deleted_at"`
+	DeletedAt   NullTime `db:"deleted_at" json:"deleted_at" serializer:"deleted_at" go2proto:"ignore"`
+}
+
+func (a *App) ToProto() *pb.App {
+	return &pb.App{
+		Id:          uint32(a.Id),
+		ExternalId:  a.ExternalId,
+		Name:        a.Name,
+		Description: a.Description,
+		CreatedAt:   timestamppb.New(a.CreatedAt.Time),
+		UpdatedAt:   timestamppb.New(a.UpdatedAt.Time),
+	}
 }
 
 const (
@@ -528,6 +540,7 @@ type StubWithRelated struct {
 	Stub
 	Workspace Workspace `db:"workspace" json:"workspace" serializer:"workspace"`
 	Object    Object    `db:"object" json:"object" serializer:"object"`
+	App       *App      `db:"app" json:"app" serializer:"app"`
 }
 
 func (s *StubWithRelated) ToProto() *pb.StubWithRelated {
