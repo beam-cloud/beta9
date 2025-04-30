@@ -210,7 +210,6 @@ type ContainerRequest struct {
 	GpuCount          uint32          `json:"gpu_count"`
 	ImageId           string          `json:"image_id"`
 	StubId            string          `json:"stub_id"`
-	AppId             string          `json:"app_id"`
 	WorkspaceId       string          `json:"workspace_id"`
 	Workspace         Workspace       `json:"workspace"`
 	Stub              StubWithRelated `json:"stub"`
@@ -223,6 +222,7 @@ type ContainerRequest struct {
 	BuildOptions      BuildOptions    `json:"build_options"`
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
+	AppId             string          `json:"app_id"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
