@@ -1,6 +1,6 @@
 dependencies:
 - name: common
-  repository: https://bjw-s.github.io/helm-charts
+  repository: https://bjw-s-labs.github.io/helm-charts
   version: 2.5.0
 - name: beam-blobcache-chart
   repository: oci://public.ecr.aws/n4e0e1y0

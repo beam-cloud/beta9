@@ -52,6 +52,7 @@ storage:
       readAheadKB: 32768
       readAheadLargeKB: 131072
       fuseReadAheadKB: 32768
+      mountOptions: []
 gateway:
   host: beta9-gateway
   invokeURLType: path

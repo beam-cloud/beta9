@@ -132,7 +132,7 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 
 		serializedTask, err := serializer.Serialize(task)
 		if err != nil {
-			return HTTPInternalServerError("Failed to serialize response")
+			return nil
 		}
 
 		return ctx.JSON(http.StatusOK, serializedTask)

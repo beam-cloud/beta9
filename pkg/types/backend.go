@@ -58,7 +58,7 @@ type Workspace struct {
 	Name               string            `db:"name" json:"name" serializer:"name"`
 	CreatedAt          Time              `db:"created_at" json:"created_at,omitempty" serializer:"created_at"`
 	UpdatedAt          Time              `db:"updated_at" json:"updated_at,omitempty" serializer:"updated_at"`
-	SigningKey         *string           `db:"signing_key" json:"signing_key"`
+	SigningKey         *string           `db:"signing_key" json:"signing_key" serializer:"signing_key"`
 	VolumeCacheEnabled bool              `db:"volume_cache_enabled" json:"volume_cache_enabled" serializer:"volume_cache_enabled"`
 	MultiGpuEnabled    bool              `db:"multi_gpu_enabled" json:"multi_gpu_enabled" serializer:"multi_gpu_enabled"`
 	ConcurrencyLimitId *uint             `db:"concurrency_limit_id" json:"concurrency_limit_id,omitempty"`

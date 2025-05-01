@@ -227,22 +227,23 @@ type JuiceFSConfig struct {
 }
 
 type GeeseConfig struct {
-	Debug            bool   `key:"debug" json:"debug"`                          // --debug
-	FsyncOnClose     bool   `key:"fsyncOnClose" json:"fsync_on_close"`          // --fsync-on-close
-	MemoryLimit      int64  `key:"memoryLimit" json:"memory_limit"`             // --memory-limit
-	MaxFlushers      int    `key:"maxFlushers" json:"max_flushers"`             // --max-flushers
-	MaxParallelParts int    `key:"maxParallelParts" json:"max_parallel_parts"`  // --max-parallel-parts
-	ReadAheadKB      int    `key:"readAheadKB" json:"read_ahead_kb"`            // --read-ahead-kb
-	ReadAheadLargeKB int    `key:"readAheadLargeKB" json:"read_ahead_large_kb"` // --read-ahead-large-kb
-	FuseReadAheadKB  int    `key:"fuseReadAheadKB" json:"fuse_read_ahead_kb"`   // --fuse-read-ahead-kb
-	DirMode          string `key:"dirMode" json:"dir_mode"`                     // --dir-mode, e.g., "0777"
-	FileMode         string `key:"fileMode" json:"file_mode"`                   // --file-mode, e.g., "0666"
-	ListType         int    `key:"listType" json:"list_type"`                   // --list-type
-	AccessKey        string `key:"accessKey" json:"access_key"`
-	SecretKey        string `key:"secretKey" json:"secret_key"`
-	EndpointUrl      string `key:"endpointURL" json:"endpoint_url"` // --endpoint
-	BucketName       string `key:"bucketName" json:"bucket_name"`
-	Region           string `key:"region" json:"region"`
+	Debug            bool     `key:"debug" json:"debug"`                          // --debug
+	FsyncOnClose     bool     `key:"fsyncOnClose" json:"fsync_on_close"`          // --fsync-on-close
+	MountOptions     []string `key:"mountOptions" json:"mount_options"`           // --mount-options
+	MemoryLimit      int64    `key:"memoryLimit" json:"memory_limit"`             // --memory-limit
+	MaxFlushers      int      `key:"maxFlushers" json:"max_flushers"`             // --max-flushers
+	MaxParallelParts int      `key:"maxParallelParts" json:"max_parallel_parts"`  // --max-parallel-parts
+	ReadAheadKB      int      `key:"readAheadKB" json:"read_ahead_kb"`            // --read-ahead-kb
+	ReadAheadLargeKB int      `key:"readAheadLargeKB" json:"read_ahead_large_kb"` // --read-ahead-large-kb
+	FuseReadAheadKB  int      `key:"fuseReadAheadKB" json:"fuse_read_ahead_kb"`   // --fuse-read-ahead-kb
+	DirMode          string   `key:"dirMode" json:"dir_mode"`                     // --dir-mode, e.g., "0777"
+	FileMode         string   `key:"fileMode" json:"file_mode"`                   // --file-mode, e.g., "0666"
+	ListType         int      `key:"listType" json:"list_type"`                   // --list-type
+	AccessKey        string   `key:"accessKey" json:"access_key"`
+	SecretKey        string   `key:"secretKey" json:"secret_key"`
+	EndpointUrl      string   `key:"endpointURL" json:"endpoint_url"` // --endpoint
+	BucketName       string   `key:"bucketName" json:"bucket_name"`
+	Region           string   `key:"region" json:"region"`
 }
 
 // @go2proto
@@ -340,6 +341,7 @@ type WorkerPoolConfig struct {
 	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
+	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
 }
 
 type WorkerPoolJobSpecConfig struct {
