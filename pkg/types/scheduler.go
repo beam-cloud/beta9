@@ -451,6 +451,7 @@ type WorkerPoolState struct {
 	RunningContainers  int64            `redis:"running_containers" json:"running_containers"`
 	RegisteredMachines int64            `redis:"registered_machines" json:"registered_machines"`
 	PendingMachines    int64            `redis:"pending_machines" json:"pending_machines"`
+	ReadyMachines      int64            `redis:"ready_machines" json:"ready_machines"`
 }
 
 func (w *WorkerPoolState) ToProto() *pb.WorkerPoolState {

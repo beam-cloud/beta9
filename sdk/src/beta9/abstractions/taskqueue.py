@@ -82,8 +82,8 @@ class TaskQueue(RunnerAbstraction):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this task_queue, used during deployment. If not specified, you must specify the name
-            at deploy time with the --name argument
+            An optional app name for this task queue. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
         authorized (bool):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.

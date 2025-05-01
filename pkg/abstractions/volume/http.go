@@ -345,7 +345,7 @@ func (g *volumeGroup) GetUploadURL(ctx echo.Context) error {
 const PresignedGetURLExpiration = 3600 // 1 hour
 
 func (g *volumeGroup) generatePresignedURL(ctx context.Context, workspace *types.Workspace, volumePath string, urlType string) (string, error) {
-	storageClient, err := clients.NewStorageClient(ctx, workspace.Name, workspace.Storage)
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, workspace.Name, workspace.Storage)
 	if err != nil {
 		return "", echo.NewHTTPError(http.StatusInternalServerError, "Failed to create storage client")
 	}

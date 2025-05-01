@@ -66,8 +66,8 @@ class Function(RunnerAbstraction):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this function, used during deployment. If not specified, you must specify the name
-            at deploy time with the --name argument
+            An optional app name for this function. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
         task_policy (TaskPolicy):
             The task policy for the function. This helps manage the lifecycle of an individual task.
             Setting values here will override timeout and retries.
@@ -336,8 +336,8 @@ class Schedule(Function):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this function, used during deployment. If not specified, you must specify the name
-            at deploy time with the --name argument
+            An optional app name for this function. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
 
     Example:
         ```python

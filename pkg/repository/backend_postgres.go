@@ -1107,6 +1107,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 		Select(
 			"d.*",
 			"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+			"s.created_at AS \"stub.created_at\"", "s.type AS \"stub.type\"", "s.updated_at AS \"stub.updated_at\"",
 		).
 		From("deployment d").
 		Join(`(
@@ -1127,6 +1128,14 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 	if filters.AppId != "" {
 		query = query.Join("app a on d.app_id=a.id")
 		query = query.Where(squirrel.Eq{"a.external_id": filters.AppId})
+	}
+
+	if filters.SearchQuery != "" {
+		if err := uuid.Validate(filters.SearchQuery); err == nil {
+			query = query.Where(squirrel.Eq{"d.external_id": filters.SearchQuery})
+		} else {
+			query = query.Where(squirrel.Like{"d.name": "%" + filters.SearchQuery + "%"})
+		}
 	}
 
 	page, err := common.Paginate(

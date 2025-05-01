@@ -24,6 +24,7 @@ func NewAppGroup(g *echo.Group, backendRepo repository.BackendRepository, config
 	}
 
 	g.GET("/:workspaceId/latest", auth.WithWorkspaceAuth(group.ListAppWithLatestActivity))
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListApps))
 	g.GET("/:workspaceId/:appId", auth.WithWorkspaceAuth(group.RetrieveApp))
 
 	return group
@@ -98,6 +99,40 @@ func (a *AppGroup) ListAppWithLatestActivity(ctx echo.Context) error {
 	return ctx.JSON(
 		http.StatusOK,
 		serializedAppsWithLatest,
+	)
+}
+
+func (a *AppGroup) ListApps(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	workspaceID := ctx.Param("workspaceId")
+
+	if cc.AuthInfo.Workspace.ExternalId != workspaceID && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return HTTPNotFound()
+	}
+
+	workspace, err := a.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceID)
+	if err != nil {
+		return HTTPBadRequest("Failed to retrieve workspace")
+	}
+
+	var filters types.AppFilter
+	if err := ctx.Bind(&filters); err != nil {
+		return HTTPBadRequest("Failed to decode query parameters")
+	}
+
+	apps, err := a.backendRepo.ListAppsPaginated(ctx.Request().Context(), workspace.Id, filters)
+	if err != nil {
+		return err
+	}
+
+	serializedApps, err := serializer.Serialize(apps)
+	if err != nil {
+		return HTTPBadRequest("Failed to serialize response")
+	}
+
+	return ctx.JSON(
+		http.StatusOK,
+		serializedApps,
 	)
 }
 

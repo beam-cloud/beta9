@@ -71,7 +71,6 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		FilesystemName: workspaceName,
 		FilesystemPath: mountPath,
 		Geese: types.GeeseConfig{
-
 			// Workspace specific config
 			EndpointUrl: *workspaceStorage.EndpointUrl,
 			BucketName:  *workspaceStorage.BucketName,
@@ -88,6 +87,10 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 			DirMode:          s.config.WorkspaceStorage.Geese.DirMode,
 			FileMode:         s.config.WorkspaceStorage.Geese.FileMode,
 			ListType:         s.config.WorkspaceStorage.Geese.ListType,
+			MountOptions:     s.config.WorkspaceStorage.Geese.MountOptions,
+			ReadAheadKB:      s.config.WorkspaceStorage.Geese.ReadAheadKB,
+			ReadAheadLargeKB: s.config.WorkspaceStorage.Geese.ReadAheadLargeKB,
+			FuseReadAheadKB:  s.config.WorkspaceStorage.Geese.FuseReadAheadKB,
 		},
 	}, s.cacheClient)
 	if err != nil {

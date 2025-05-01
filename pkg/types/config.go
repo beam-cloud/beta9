@@ -205,13 +205,14 @@ type StorageConfig struct {
 }
 
 type WorkspaceStorageConfig struct {
-	Mode               string      `key:"mode" json:"mode"`
-	BaseMountPath      string      `key:"baseMountPath" json:"base_mount_path"`
-	Geese              GeeseConfig `key:"geese" json:"geese"`
-	DefaultAccessKey   string      `key:"defaultAccessKey" json:"default_access_key"`
-	DefaultSecretKey   string      `key:"defaultSecretKey" json:"default_secret_key"`
-	DefaultEndpointUrl string      `key:"defaultEndpointUrl" json:"default_endpoint_url"`
-	DefaultRegion      string      `key:"defaultRegion" json:"default_region"`
+	Mode                string      `key:"mode" json:"mode"`
+	BaseMountPath       string      `key:"baseMountPath" json:"base_mount_path"`
+	Geese               GeeseConfig `key:"geese" json:"geese"`
+	DefaultBucketPrefix string      `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
+	DefaultAccessKey    string      `key:"defaultAccessKey" json:"default_access_key"`
+	DefaultSecretKey    string      `key:"defaultSecretKey" json:"default_secret_key"`
+	DefaultEndpointUrl  string      `key:"defaultEndpointUrl" json:"default_endpoint_url"`
+	DefaultRegion       string      `key:"defaultRegion" json:"default_region"`
 }
 
 type JuiceFSConfig struct {
@@ -226,50 +227,57 @@ type JuiceFSConfig struct {
 }
 
 type GeeseConfig struct {
-	Debug            bool   `key:"debug" json:"debug"`                         // --debug
-	FsyncOnClose     bool   `key:"fsyncOnClose" json:"fsync_on_close"`         // --fsync-on-close
-	MemoryLimit      int64  `key:"memoryLimit" json:"memory_limit"`            // --memory-limit
-	MaxFlushers      int    `key:"maxFlushers" json:"max_flushers"`            // --max-flushers
-	MaxParallelParts int    `key:"maxParallelParts" json:"max_parallel_parts"` // --max-parallel-parts
-	DirMode          string `key:"dirMode" json:"dir_mode"`                    // --dir-mode, e.g., "0777"
-	FileMode         string `key:"fileMode" json:"file_mode"`                  // --file-mode, e.g., "0666"
-	ListType         int    `key:"listType" json:"list_type"`                  // --list-type
-	AccessKey        string `key:"accessKey" json:"access_key"`
-	SecretKey        string `key:"secretKey" json:"secret_key"`
-	EndpointUrl      string `key:"endpointURL" json:"endpoint_url"` // --endpoint
-	BucketName       string `key:"bucketName" json:"bucket_name"`
-	Region           string `key:"region" json:"region"`
+	Debug            bool     `key:"debug" json:"debug"`                          // --debug
+	FsyncOnClose     bool     `key:"fsyncOnClose" json:"fsync_on_close"`          // --fsync-on-close
+	MountOptions     []string `key:"mountOptions" json:"mount_options"`           // --mount-options
+	MemoryLimit      int64    `key:"memoryLimit" json:"memory_limit"`             // --memory-limit
+	MaxFlushers      int      `key:"maxFlushers" json:"max_flushers"`             // --max-flushers
+	MaxParallelParts int      `key:"maxParallelParts" json:"max_parallel_parts"`  // --max-parallel-parts
+	ReadAheadKB      int      `key:"readAheadKB" json:"read_ahead_kb"`            // --read-ahead-kb
+	ReadAheadLargeKB int      `key:"readAheadLargeKB" json:"read_ahead_large_kb"` // --read-ahead-large-kb
+	FuseReadAheadKB  int      `key:"fuseReadAheadKB" json:"fuse_read_ahead_kb"`   // --fuse-read-ahead-kb
+	DirMode          string   `key:"dirMode" json:"dir_mode"`                     // --dir-mode, e.g., "0777"
+	FileMode         string   `key:"fileMode" json:"file_mode"`                   // --file-mode, e.g., "0666"
+	ListType         int      `key:"listType" json:"list_type"`                   // --list-type
+	AccessKey        string   `key:"accessKey" json:"access_key"`
+	SecretKey        string   `key:"secretKey" json:"secret_key"`
+	EndpointUrl      string   `key:"endpointURL" json:"endpoint_url"` // --endpoint
+	BucketName       string   `key:"bucketName" json:"bucket_name"`
+	Region           string   `key:"region" json:"region"`
 }
 
 // @go2proto
 type MountPointConfig struct {
-	BucketName  string `json:"s3_bucket"`
-	AccessKey   string `json:"access_key"`
-	SecretKey   string `json:"secret_key"`
-	EndpointURL string `json:"bucket_url"`
-	Region      string `json:"region"`
-	ReadOnly    bool   `json:"read_only"`
+	BucketName     string `json:"s3_bucket"`
+	AccessKey      string `json:"access_key"`
+	SecretKey      string `json:"secret_key"`
+	EndpointURL    string `json:"bucket_url"`
+	Region         string `json:"region"`
+	ReadOnly       bool   `json:"read_only"`
+	ForcePathStyle bool   `json:"force_path_style"`
 }
 
 func (m *MountPointConfig) ToProto() *pb.MountPointConfig {
 	return &pb.MountPointConfig{
-		BucketName:  m.BucketName,
-		AccessKey:   m.AccessKey,
-		SecretKey:   m.SecretKey,
-		EndpointUrl: m.EndpointURL,
-		Region:      m.Region,
-		ReadOnly:    m.ReadOnly,
+		BucketName:     m.BucketName,
+		AccessKey:      m.AccessKey,
+		SecretKey:      m.SecretKey,
+		EndpointUrl:    m.EndpointURL,
+		Region:         m.Region,
+		ReadOnly:       m.ReadOnly,
+		ForcePathStyle: m.ForcePathStyle,
 	}
 }
 
 func NewMountPointConfigFromProto(in *pb.MountPointConfig) *MountPointConfig {
 	return &MountPointConfig{
-		BucketName:  in.BucketName,
-		AccessKey:   in.AccessKey,
-		SecretKey:   in.SecretKey,
-		EndpointURL: in.EndpointUrl,
-		Region:      in.Region,
-		ReadOnly:    in.ReadOnly,
+		BucketName:     in.BucketName,
+		AccessKey:      in.AccessKey,
+		SecretKey:      in.SecretKey,
+		EndpointURL:    in.EndpointUrl,
+		Region:         in.Region,
+		ReadOnly:       in.ReadOnly,
+		ForcePathStyle: in.ForcePathStyle,
 	}
 }
 
@@ -332,6 +340,8 @@ type WorkerPoolConfig struct {
 	UserData             string                            `key:"userData" json:"user_data"`
 	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
+	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
+	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
 }
 
 type WorkerPoolJobSpecConfig struct {

@@ -434,6 +434,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		podHostname = fmt.Sprintf("machine-%s.%s.%s", machineId, wpc.config.Tailscale.User, wpc.config.Tailscale.HostName)
 	}
 
+	locality := wpc.workerPoolConfig.ConfigGroup
+	if locality == "" {
+		locality = wpc.config.BlobCache.Global.DefaultLocality
+	}
+
 	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -445,7 +450,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		},
 		{
 			Name:  "BLOBCACHE_LOCALITY",
-			Value: wpc.name,
+			Value: locality,
 		},
 		{
 			Name:  "WORKER_TOKEN",

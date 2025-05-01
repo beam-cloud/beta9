@@ -22,6 +22,7 @@ import (
 	_signal "github.com/beam-cloud/beta9/pkg/abstractions/experimental/signal"
 	pod "github.com/beam-cloud/beta9/pkg/abstractions/pod"
 	_shell "github.com/beam-cloud/beta9/pkg/abstractions/shell"
+	"github.com/beam-cloud/beta9/pkg/clients"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
@@ -54,27 +55,28 @@ import (
 
 type Gateway struct {
 	pb.UnimplementedSchedulerServer
-	Config           types.AppConfig
-	httpServer       *http.Server
-	grpcServer       *grpc.Server
-	RedisClient      *common.RedisClient
-	TaskDispatcher   *task.Dispatcher
-	TaskRepo         repository.TaskRepository
-	WorkspaceRepo    repository.WorkspaceRepository
-	ContainerRepo    repository.ContainerRepository
-	BackendRepo      repository.BackendRepository
-	ProviderRepo     repository.ProviderRepository
-	WorkerPoolRepo   repository.WorkerPoolRepository
-	EventRepo        repository.EventRepository
-	Tailscale        *network.Tailscale
-	usageMetricsRepo repository.UsageMetricsRepository
-	workerRepo       repository.WorkerRepository
-	Storage          storage.Storage
-	Scheduler        *scheduler.Scheduler
-	ctx              context.Context
-	cancelFunc       context.CancelFunc
-	baseRouteGroup   *echo.Group
-	rootRouteGroup   *echo.Group
+	Config               types.AppConfig
+	httpServer           *http.Server
+	grpcServer           *grpc.Server
+	RedisClient          *common.RedisClient
+	TaskDispatcher       *task.Dispatcher
+	TaskRepo             repository.TaskRepository
+	WorkspaceRepo        repository.WorkspaceRepository
+	ContainerRepo        repository.ContainerRepository
+	BackendRepo          repository.BackendRepository
+	ProviderRepo         repository.ProviderRepository
+	WorkerPoolRepo       repository.WorkerPoolRepository
+	EventRepo            repository.EventRepository
+	Tailscale            *network.Tailscale
+	usageMetricsRepo     repository.UsageMetricsRepository
+	workerRepo           repository.WorkerRepository
+	Storage              storage.Storage
+	DefaultStorageClient *clients.StorageClient
+	Scheduler            *scheduler.Scheduler
+	ctx                  context.Context
+	cancelFunc           context.CancelFunc
+	baseRouteGroup       *echo.Group
+	rootRouteGroup       *echo.Group
 }
 
 func NewGateway() (*Gateway, error) {
@@ -136,6 +138,11 @@ func NewGateway() (*Gateway, error) {
 		return nil, err
 	}
 
+	storageClient, err := clients.NewDefaultStorageClient(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+
 	containerRepo := repository.NewContainerRedisRepository(redisClient)
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker)
@@ -159,6 +166,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.usageMetricsRepo = usageMetricsRepo
 	gateway.EventRepo = eventRepo
 	gateway.workerRepo = workerRepo
+	gateway.DefaultStorageClient = storageClient
 
 	return gateway, nil
 }
@@ -209,7 +217,7 @@ func (g *Gateway) initHttp() error {
 
 	apiv1.NewHealthGroup(g.baseRouteGroup.Group("/health"), g.RedisClient, g.BackendRepo)
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config, g.workerRepo)
-	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.Config)
+	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.DefaultStorageClient, g.Config)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.Config)
 	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.BackendRepo, g.TaskDispatcher, g.Config)
 	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.Config)
