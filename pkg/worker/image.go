@@ -182,15 +182,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	if c.cacheClient != nil && !isBuildContainer {
 		imageKey := fmt.Sprintf("%s.clip", imageId)
-		sourcePath := filepath.Join(c.config.ImageService.Registries.S3.Primary.Region, c.config.ImageService.Registries.S3.Primary.BucketName, imageKey)
+		sourcePath := filepath.Join("/", c.config.ImageService.Registries.S3.Primary.Region, c.config.ImageService.Registries.S3.Primary.BucketName, imageKey)
 
 		// Create constant backoff
 		b := backoff.NewConstantBackOff(300 * time.Millisecond)
 		imageLocked := false
 
 		operation := func() error {
-			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+imageKey) {
+			baseBlobFsContentPath := filepath.Join(baseFileCachePath, sourcePath)
+			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, sourcePath) {
 				localCachePath = baseBlobFsContentPath
 				return nil
 			}
@@ -207,9 +207,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			}
 
 			_, err := c.cacheClient.StoreContentFromS3(blobcache.ContentSourceS3{
-				Path: imageKey,
-				// FIXME: It would be nice to just have this config in the blobcache server and
-				// set up a client one time for images.
+				Path:           imageKey,
 				BucketName:     c.config.ImageService.Registries.S3.Primary.BucketName,
 				Region:         c.config.ImageService.Registries.S3.Primary.Region,
 				EndpointURL:    c.config.ImageService.Registries.S3.Primary.Endpoint,
