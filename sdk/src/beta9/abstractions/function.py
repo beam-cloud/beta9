@@ -1,6 +1,6 @@
 import concurrent.futures
 import inspect
-import os
+import sys
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
@@ -250,14 +250,14 @@ class _CallableWrapper(DeployableMixin):
                     f"Exiting shell. Mapped functions will {'be terminated.' if not self.parent.headless else 'continue running.'}",
                     exit=False,
                 )
-                os._exit(1)
+                sys.exit(1)
 
     def map(self, inputs: Sequence[Any]) -> Iterator[Any]:
         if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=self.base_stub_type,
         ):
-            return iter([])
+            terminal.error("Function failed to prepare runtime ❌")
 
         iterator = self._threaded_map(inputs)
         try:
@@ -267,7 +267,7 @@ class _CallableWrapper(DeployableMixin):
                 f"Exiting shell. Mapped functions will {'be terminated.' if not self.parent.headless else 'continue running.'}",
                 exit=False,
             )
-            os._exit(1)
+            sys.exit(1)
 
 
 class ScheduleWrapper(_CallableWrapper):
