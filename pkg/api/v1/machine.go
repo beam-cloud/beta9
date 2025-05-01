@@ -77,6 +77,11 @@ func (g *MachineGroup) ListPoolMachines(ctx echo.Context) error {
 }
 
 func (g *MachineGroup) GetRemoteConfig(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if (cc.AuthInfo.Token.TokenType != types.TokenTypeMachine) && (cc.AuthInfo.Token.TokenType != types.TokenTypeWorker) {
+		return HTTPForbidden("Invalid token")
+	}
+
 	remoteConfig, err := providers.GetRemoteConfig(g.config, g.tailscale)
 	if err != nil {
 		return HTTPInternalServerError("Unable to create remote config")
