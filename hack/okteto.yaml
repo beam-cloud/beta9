@@ -1,7 +1,7 @@
 dev:
   beta9-gateway:
-    # image: registry.localhost:5000/beta9-gateway:latest
-    image: public.ecr.aws/n4e0e1y0/beta9-gateway:latest
+    image: registry.localhost:5000/beta9-gateway:latest
+    # image: public.ecr.aws/n4e0e1y0/beta9-gateway:latest
     command:
     - /workspace/bin/hotreload.sh
     sync:
@@ -11,11 +11,12 @@ dev:
         go build -o /workspace/bin/gateway /workspace/cmd/gateway/main.go
         go build -o /workspace/bin/worker /workspace/cmd/worker/main.go
       BUILD_BINARY_PATH: /workspace/bin/gateway
+      CONFIG_PATH: /workspace/config.yaml
     forward:
     - 1993:1993
     - 1994:1994
     - 5432:postgresql:5432
     - 6379:redis-master:6379
     persistentVolume:
-      enabled: true
-      size: 10Gi
+      enabled: false
+      # size: 10Gi
