@@ -87,7 +87,9 @@ func (g *MachineGroup) GetConfig(ctx echo.Context) error {
 		return HTTPInternalServerError("Unable to create remote config")
 	}
 
-	return ctx.JSON(http.StatusOK, remoteConfig)
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
+		"config": remoteConfig,
+	})
 }
 
 func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
