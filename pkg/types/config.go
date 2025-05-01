@@ -341,6 +341,7 @@ type WorkerPoolConfig struct {
 	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
+	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
 }
 
 type WorkerPoolJobSpecConfig struct {
