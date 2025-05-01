@@ -45,6 +45,7 @@ func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, 
 
 	g.GET("/:workspaceId/gpus", auth.WithWorkspaceAuth(group.GPUCounts))
 	g.POST("/register", group.RegisterMachine)
+	g.GET("/remote-config", group.GetRemoteConfig)
 	g.GET("/list", group.ListPoolMachines)
 	return group
 }
@@ -73,6 +74,15 @@ func (g *MachineGroup) ListPoolMachines(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, availableMachines)
+}
+
+func (g *MachineGroup) GetRemoteConfig(ctx echo.Context) error {
+	remoteConfig, err := providers.GetRemoteConfig(g.config, g.tailscale)
+	if err != nil {
+		return HTTPInternalServerError("Unable to create remote config")
+	}
+
+	return ctx.JSON(http.StatusOK, remoteConfig)
 }
 
 func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {
