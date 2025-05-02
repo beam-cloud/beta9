@@ -131,8 +131,9 @@ _stream:
 			}
 
 			if err := l.exitCallback(int32(exitCode)); err != nil {
-				break _stream
+				return err
 			}
+			return nil
 
 		case <-ctx.Done():
 			// This ensures when the sdk exits, the message printed is

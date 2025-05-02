@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -54,23 +55,14 @@ func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, e
 }
 
 func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
-	existingKeys, err := kem.fetchExistingKeys(patternPrefix)
-	if err != nil {
-		return err
-	}
-
-	for _, key := range existingKeys {
-		keyEventChan <- KeyEvent{
-			Key:       key,
-			Operation: KeyOperationSet,
-		}
-	}
-
 	pattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
 	messages, errs, close := kem.rdb.PSubscribe(ctx, pattern)
 
+	timer := time.NewTicker(10 * time.Second)
+
 	go func() {
 		defer close()
+		defer timer.Stop()
 
 	retry:
 		for {
@@ -82,6 +74,21 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 				keyEventChan <- KeyEvent{
 					Key:       key,
 					Operation: operation,
+				}
+
+			case <-timer.C:
+				// There is a chance that the key was set before the subscription
+				existingKeys, err := kem.fetchExistingKeys(patternPrefix)
+				if err != nil {
+					log.Error().Err(err).Msg("error fetching existing keys")
+					continue
+				}
+
+				for _, key := range existingKeys {
+					keyEventChan <- KeyEvent{
+						Key:       key,
+						Operation: KeyOperationSet,
+					}
 				}
 
 			case <-ctx.Done():
