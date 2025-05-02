@@ -130,7 +130,12 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
 
-		return ctx.JSON(http.StatusOK, task)
+		serializedTask, err := serializer.Serialize(task)
+		if err != nil {
+			return err
+		}
+
+		return ctx.JSON(http.StatusOK, serializedTask)
 	}
 }
 
