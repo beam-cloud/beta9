@@ -54,6 +54,9 @@ func (kem *KeyEventManager) fetchExistingKeys(patternPrefix string) ([]string, e
 }
 
 func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix string, keyEventChan chan KeyEvent) error {
+	pattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
+	messages, errs, close := kem.rdb.PSubscribe(ctx, pattern)
+
 	existingKeys, err := kem.fetchExistingKeys(patternPrefix)
 	if err != nil {
 		return err
@@ -65,9 +68,6 @@ func (kem *KeyEventManager) ListenForPattern(ctx context.Context, patternPrefix 
 			Operation: KeyOperationSet,
 		}
 	}
-
-	pattern := fmt.Sprintf("%s%s*", keyspacePrefix, patternPrefix)
-	messages, errs, close := kem.rdb.PSubscribe(ctx, pattern)
 
 	go func() {
 		defer close()
