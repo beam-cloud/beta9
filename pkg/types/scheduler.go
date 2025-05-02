@@ -222,7 +222,6 @@ type ContainerRequest struct {
 	BuildOptions      BuildOptions    `json:"build_options"`
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
-	AppId             string          `json:"app_id"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -278,7 +277,6 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		ImageId:           c.ImageId,
 		Mounts:            mounts,
 		StubId:            c.StubId,
-		AppId:             c.AppId,
 		WorkspaceId:       c.WorkspaceId,
 		Workspace:         c.Workspace.ToProto(),
 		Stub:              c.Stub.ToProto(),
@@ -321,7 +319,6 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		ImageId:           in.ImageId,
 		Mounts:            mounts,
 		WorkspaceId:       in.WorkspaceId,
-		AppId:             in.AppId,
 		Workspace:         *NewWorkspaceFromProto(in.Workspace),
 		Stub:              *NewStubWithRelatedFromProto(in.Stub),
 		StubId:            in.StubId,
