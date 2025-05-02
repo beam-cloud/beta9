@@ -7,16 +7,6 @@ import "google/protobuf/timestamp.proto";
 package types;
 
 
-message App {
-  uint32 id = 1;
-  string external_id = 2;
-  string name = 3;
-  string description = 4;
-  uint32 workspace_id = 5;
-  google.protobuf.Timestamp created_at = 6;
-  google.protobuf.Timestamp updated_at = 7;
-}
-
 message BuildOptions {
   string source_image = 1;
   string dockerfile = 2;
@@ -76,7 +66,6 @@ message ContainerRequest {
   BuildOptions build_options = 20;
   repeated uint32 ports = 21;
   double cost_per_ms = 22;
-  string app_id = 23;
 }
 
 message ContainerState {
@@ -139,7 +128,6 @@ message StubWithRelated {
   Stub stub = 1;
   Workspace workspace = 2;
   Object object = 3;
-  App app = 4;
 }
 
 message Worker {
