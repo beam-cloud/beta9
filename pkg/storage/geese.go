@@ -81,6 +81,10 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
 	flags.MountOptions = s.config.MountOptions
 
+	if s.config.DisableVolumeCaching {
+		flags.HashAttr = ""
+	}
+
 	if s.config.ReadAheadLargeKB > 0 {
 		flags.ReadAheadLargeKB = uint64(s.config.ReadAheadLargeKB)
 	}
