@@ -181,14 +181,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	startTime := time.Now()
 
 	if c.cacheClient != nil && !isBuildContainer {
-		sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
+		imageKey := fmt.Sprintf("%s.clip", imageId)
+		sourcePath := filepath.Join("/", c.config.ImageService.Registries.S3.Primary.Region, c.config.ImageService.Registries.S3.Primary.BucketName, imageKey)
 
 		// Create constant backoff
 		b := backoff.NewConstantBackOff(300 * time.Millisecond)
 		imageLocked := false
 
 		operation := func() error {
-			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
+			baseBlobFsContentPath := filepath.Join(baseFileCachePath, sourcePath)
 			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, sourcePath) {
 				localCachePath = baseBlobFsContentPath
 				return nil
@@ -205,16 +206,18 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				return errors.New("image locked")
 			}
 
-			_, err := c.cacheClient.StoreContentFromFUSE(struct {
-				Path string
-			}{
-				Path: sourcePath,
-			}, struct {
-				RoutingKey string
-				Lock       bool
-			}{
-				RoutingKey: sourcePath,
-				Lock:       true,
+			_, err := c.cacheClient.StoreContentFromS3(blobcache.ContentSourceS3{
+				Path:           imageKey,
+				BucketName:     c.config.ImageService.Registries.S3.Primary.BucketName,
+				Region:         c.config.ImageService.Registries.S3.Primary.Region,
+				EndpointURL:    c.config.ImageService.Registries.S3.Primary.Endpoint,
+				AccessKey:      c.config.ImageService.Registries.S3.Primary.AccessKey,
+				SecretKey:      c.config.ImageService.Registries.S3.Primary.SecretKey,
+				ForcePathStyle: c.config.ImageService.Registries.S3.Primary.ForcePathStyle,
+			}, blobcache.StoreContentOptions{
+				CreateCacheFSEntry: true,
+				RoutingKey:         sourcePath,
+				Lock:               true,
 			})
 			if err != nil {
 				if err == blobcache.ErrUnableToAcquireLock {

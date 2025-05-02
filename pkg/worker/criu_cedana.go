@@ -15,6 +15,7 @@ import (
 	"buf.build/gen/go/cedana/criu/protocolbuffers/go/criu"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/go-runc"
 	cedana "github.com/cedana/cedana/pkg/client"
 	"github.com/cedana/cedana/pkg/config"
@@ -249,16 +250,12 @@ func (c *CedanaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) 
 
 		// Remove the leading "/" from the checkpoint path
 		sourcePath := checkpointPath[1:]
-		_, err := client.StoreContentFromFUSE(struct {
-			Path string
-		}{
+		_, err := client.StoreContentFromFUSE(blobcache.ContentSourceFUSE{
 			Path: sourcePath,
-		}, struct {
-			RoutingKey string
-			Lock       bool
-		}{
-			RoutingKey: sourcePath,
-			Lock:       true,
+		}, blobcache.StoreContentOptions{
+			CreateCacheFSEntry: true,
+			RoutingKey:         sourcePath,
+			Lock:               true,
 		})
 		if err != nil {
 			return "", err
