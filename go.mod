@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.0
-	github.com/beam-cloud/blobcache-v2 v0.0.0-20250501023620-447539c5d94e
+	github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563
 	github.com/beam-cloud/clip v0.0.0-20250424185136-5f40b560b510
 	github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -339,9 +339,9 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )
 
-replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20250502185917-a45b09ee3201
+replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20250503164819-f2d710f34b9e
 
-replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250502185917-a45b09ee3201
+replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250503164819-f2d710f34b9e
 
 replace github.com/winfsp/cgofuse => github.com/vitalif/cgofuse v0.0.0-20230609211427-22e8fa44f6b8
 
