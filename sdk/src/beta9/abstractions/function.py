@@ -1,5 +1,6 @@
 import concurrent.futures
 import inspect
+import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
 
@@ -235,12 +236,24 @@ class _CallableWrapper(DeployableMixin):
 
     def _threaded_map(self, inputs: Sequence[Any]) -> Iterator[Any]:
         with terminal.progress(f"Running {len(inputs)} container(s)..."):
-            with concurrent.futures.ThreadPoolExecutor(len(inputs)) as pool:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(inputs)) as pool:
                 futures = [
                     pool.submit(self._call_remote, *self._format_args(args)) for args in inputs
                 ]
-                for future in concurrent.futures.as_completed(futures):
-                    yield future.result()
+                try:
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            yield future.result()
+                        except Exception as e:
+                            terminal.error(f"Task failed during map: {e}", exit=False)
+                            yield None
+                except KeyboardInterrupt:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    terminal.error(
+                        f"Exiting shell. Mapped functions will {'be terminated.' if not self.parent.headless else 'continue running.'}",
+                        exit=False,
+                    )
+                    os._exit(1)
 
     def map(self, inputs: Sequence[Any]) -> Iterator[Any]:
         if not self.parent.prepare_runtime(
@@ -249,7 +262,8 @@ class _CallableWrapper(DeployableMixin):
         ):
             terminal.error("Function failed to prepare runtime ❌")
 
-        return self._threaded_map(inputs)
+        iterator = self._threaded_map(inputs)
+        yield from iterator
 
 
 class ScheduleWrapper(_CallableWrapper):
