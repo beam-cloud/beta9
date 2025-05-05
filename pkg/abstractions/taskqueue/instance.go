@@ -94,6 +94,7 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 			GpuCount:          uint32(gpuCount),
 			ImageId:           i.StubConfig.Runtime.ImageId,
 			StubId:            i.Stub.ExternalId,
+			AppId:             i.Stub.App.ExternalId,
 			WorkspaceId:       i.Workspace.ExternalId,
 			Workspace:         *i.Workspace,
 			EntryPoint:        i.EntryPoint,
