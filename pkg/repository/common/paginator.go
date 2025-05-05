@@ -137,10 +137,10 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 	var nextCursor string
 	pageReturnLength := len(rows)
 
-	// We get 1 more row past the pageSize to check for any Next values
+	// We get 1 more row past the pageSize to check to see if there is more data
 	if pageReturnLength > settings.PageSize {
 		pageReturnLength = settings.PageSize
-		// We make the last row in the page (not including the extra row from pageSize + 1)
+		// We make the last row in the page the cursor value (not including the extra row from pageSize + 1)
 		lastRow := StructToMap(rows[len(rows)-2])
 		cursor := DatetimeCursor{
 			Value: lastRow[settings.SortColumn].(types.Time).Format(CursorTimestampFormat),
