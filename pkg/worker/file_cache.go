@@ -59,7 +59,7 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 }
 
 func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCacheMap map[string]string, spec *specs.Spec) error {
-	if !cm.client.HostsAvailable() {
+	if !cm.CacheAvailable() || !cm.client.HostsAvailable() {
 		return blobcache.ErrHostNotFound
 	}
 
@@ -116,7 +116,7 @@ func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) 
 			return "", err
 		}
 		defer file.Close()
-	} else if cm.client.IsPathCachedNearby(context.Background(), workspaceVolumePath) {
+	} else if cm.CacheAvailable() && cm.client.IsPathCachedNearby(context.Background(), workspaceVolumePath) {
 		return workspaceVolumePath, nil
 	}
 
@@ -160,6 +160,10 @@ func (cm *FileCacheManager) CacheAvailable() bool {
 	// Check if it's a valid mount point
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(baseFileCachePath, &stat); err != nil {
+		return false
+	}
+
+	if cm.client == nil {
 		return false
 	}
 
