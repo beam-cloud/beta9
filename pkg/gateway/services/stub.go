@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/endpoint"
 	"github.com/beam-cloud/beta9/pkg/abstractions/function"
@@ -80,6 +83,15 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Ok:     false,
 			ErrMsg: "Multi-GPU containers are not enabled for this workspace.",
 		}, nil
+	}
+
+	for _, gpu := range gpus {
+		if !gws.multiGPUAvailable(gpu, in.GpuCount) {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: fmt.Sprintf("Multi-GPU is not currently available for %s.", gpu.String()),
+			}, nil
+		}
 	}
 
 	stubConfig := types.StubConfigV1{
@@ -441,4 +453,20 @@ func (gws *GatewayService) getLowCapacityGpus(gpus []types.GpuType) ([]string, e
 		}
 	}
 	return lowGpus, nil
+}
+
+func (gws *GatewayService) multiGPUAvailable(gpu types.GpuType, reqGpuCount uint32) bool {
+	for _, poolConfig := range gws.appConfig.Worker.Pools {
+		if poolConfig.GPUType == gpu.String() {
+			count, err := strconv.Atoi(poolConfig.PoolSizing.DefaultWorkerGpuCount)
+			if err != nil {
+				log.Warn().Msgf("Failed to parse default worker GPU count for %s: %v", gpu.String(), err)
+				continue
+			}
+			if count >= int(reqGpuCount) {
+				return true
+			}
+		}
+	}
+	return false
 }
