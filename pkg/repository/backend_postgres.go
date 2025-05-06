@@ -1141,6 +1141,10 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 		}
 	}
 
+	if len(filters.StubType) > 0 {
+		query = query.Where(squirrel.Eq{"s.type": filters.StubType})
+	}
+
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.DeploymentWithRelated]{
 			Client:          c.client,
@@ -1958,6 +1962,11 @@ func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId
 
 func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId})
+
+	if filters.Name != "" {
+		qb = qb.Where(squirrel.Like{"LOWER(a.name)": fmt.Sprintf("%%%s%%", strings.ToLower(filters.Name))})
+	}
+
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.App]{
 			Client:          r.client,
