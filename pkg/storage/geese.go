@@ -81,6 +81,11 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
 	flags.MountOptions = s.config.MountOptions
 
+	// Staged write (experimental feature)
+	flags.StagedWriteModeEnabled = true
+	flags.StagedWritePath = "/tmp/geesefs-staged-write"
+	flags.StagedWriteDebounce = 30 * time.Second
+
 	if s.config.DisableVolumeCaching {
 		flags.HashAttr = ""
 	}
