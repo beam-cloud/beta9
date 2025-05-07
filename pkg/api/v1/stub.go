@@ -1,10 +1,12 @@
 package apiv1
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path"
@@ -343,7 +345,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace
 		return newObject.Id, nil
 	}
 
-	var input []byte
+	var input io.Reader
 	// If the parent workspace has the storage client available, download the object with the storage client
 	if sourceWorkspace.StorageAvailable() {
 		sourceStorageClient, err := clients.NewWorkspaceStorageClient(ctx, sourceWorkspace.Name, sourceWorkspace.Storage)
@@ -351,17 +353,22 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace
 			return 0, err
 		}
 
-		input, err = sourceStorageClient.Download(ctx, sourceObjectStorageFilePath)
+		_input, err := sourceStorageClient.DownloadWithReader(ctx, sourceObjectStorageFilePath)
 		if err != nil {
 			return 0, err
 		}
+
+		defer _input.Close()
+		input = _input
 	} else {
 		// If the parent workspace does not have the storage client available, read the object from the volume mount
-		input, err = os.ReadFile(sourceObjectVolumeFilePath)
+		_input, err := os.ReadFile(sourceObjectVolumeFilePath)
 		if err != nil {
 			g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
 			return 0, err
 		}
+
+		input = bytes.NewReader(_input)
 	}
 
 	// If the child workspace has the storage client available, upload the object with the storage client
@@ -371,7 +378,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace
 			return 0, err
 		}
 
-		err = destinationStorageClient.Upload(ctx, newObjectStorageFilePath, input)
+		err = destinationStorageClient.UploadWithReader(ctx, newObjectStorageFilePath, input)
 		if err != nil {
 			return 0, err
 		}
@@ -386,8 +393,25 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace
 		}
 	}
 
+	var file *os.File
+	if _, err := os.Stat(newObjectVolumeFilePath); err == nil {
+		file, err = os.OpenFile(newObjectVolumeFilePath, os.O_WRONLY, 0644)
+		if err != nil {
+			return 0, err
+		}
+	} else if os.IsNotExist(err) {
+		file, err = os.Create(newObjectStorageFilePath)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		return 0, err
+	}
+
+	defer file.Close()
+
 	// If the child workspace does not have the storage client available, write the object to the volume mount
-	err = os.WriteFile(newObjectVolumeFilePath, input, 0644)
+	_, err = io.Copy(file, input)
 	if err != nil {
 		g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
 		return 0, err
