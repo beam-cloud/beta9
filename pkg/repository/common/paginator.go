@@ -66,9 +66,9 @@ type SquirrelCursorPaginator[DBType any] struct {
 func getOperator(sortOrder string) string {
 	lowercaseSortOrder := strings.ToLower(sortOrder)
 	if lowercaseSortOrder == "asc" {
-		return ">="
+		return ">"
 	}
-	return "<="
+	return "<"
 }
 
 func EncodeCursor(cursor DatetimeCursor) string {
@@ -107,7 +107,7 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 		return nil, err
 	}
 
-	settings.SelectBuilder = settings.SelectBuilder.OrderBy(settings.SortColumn + " " + settings.SortOrder)
+	settings.SelectBuilder = settings.SelectBuilder.OrderBy(settings.SortQueryPrefix + "." + settings.SortColumn + " " + settings.SortOrder).OrderBy(settings.SortQueryPrefix + ".id " + settings.SortOrder)
 	settings.SelectBuilder = settings.SelectBuilder.Limit(uint64(settings.PageSize + 1))
 
 	if cursor != nil {
@@ -137,9 +137,11 @@ func Paginate[DBType any](settings SquirrelCursorPaginator[DBType], cursorString
 	var nextCursor string
 	pageReturnLength := len(rows)
 
+	// We get 1 more row past the pageSize to check to see if there is more data
 	if pageReturnLength > settings.PageSize {
 		pageReturnLength = settings.PageSize
-		lastRow := StructToMap(rows[len(rows)-1])
+		// We make the last row in the page the cursor value (not including the extra row from pageSize + 1)
+		lastRow := StructToMap(rows[len(rows)-2])
 		cursor := DatetimeCursor{
 			Value: lastRow[settings.SortColumn].(types.Time).Format(CursorTimestampFormat),
 			Id:    lastRow["id"].(uint),

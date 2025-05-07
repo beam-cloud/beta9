@@ -262,6 +262,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		GpuCount:    uint32(gpuCount),
 		ImageId:     stubConfig.Runtime.ImageId,
 		StubId:      stub.ExternalId,
+		AppId:       stub.App.ExternalId,
 		WorkspaceId: authInfo.Workspace.ExternalId,
 		Workspace:   *authInfo.Workspace,
 		EntryPoint:  entryPoint,
