@@ -400,7 +400,7 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace
 			return 0, err
 		}
 	} else if os.IsNotExist(err) {
-		file, err = os.Create(newObjectStorageFilePath)
+		file, err = os.Create(newObjectVolumeFilePath)
 		if err != nil {
 			return 0, err
 		}
