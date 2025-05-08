@@ -81,6 +81,14 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
 	flags.MountOptions = s.config.MountOptions
 
+	// Staged write mode config
+	flags.StagedWriteModeEnabled = s.config.StagedWriteModeEnabled
+	flags.StagedWritePath = s.config.StagedWritePath
+	flags.StagedWriteDebounce = s.config.StagedWriteDebounce
+	flags.StagedWriteUploadCallback = func(fullPath string, fileSize int64) {
+		log.Info().Str("local_path", localPath).Str("full_path", fullPath).Int64("file_size", fileSize).Msg("geesefs: staged file upload complete")
+	}
+
 	if s.config.DisableVolumeCaching {
 		flags.HashAttr = ""
 	}
@@ -148,6 +156,12 @@ func (s *GeeseStorage) Mount(localPath string) error {
 func (s *GeeseStorage) Unmount(localPath string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.fs != nil {
+		log.Info().Str("local_path", localPath).Msg("geesefs: waiting for files to flush")
+		s.fs.WaitForFlush()
+		log.Info().Str("local_path", localPath).Msg("geesefs: files flushed")
+	}
 
 	if s.mfs != nil {
 		s.mfs.Unmount()
