@@ -113,6 +113,10 @@ message MountPointConfig {
   bool force_path_style = 7;
 }
 
+message NullTime {
+  NullTime null_time = 1;
+}
+
 message Object {
   uint32 id = 1;
   string external_id = 2;

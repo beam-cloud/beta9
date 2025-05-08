@@ -185,6 +185,12 @@ func (r *PostgresBackendRepository) GetWorkspaceWithRelated(ctx context.Context,
 		return types.WorkspaceWithRelated{}, err
 	}
 
+	if workspace.StorageAvailable() {
+		if err := r.decryptFields(workspace.Storage); err != nil {
+			return types.WorkspaceWithRelated{}, err
+		}
+	}
+
 	return workspace, nil
 }
 

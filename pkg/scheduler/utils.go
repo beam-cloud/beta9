@@ -103,7 +103,7 @@ func ParseGPUType(gpu interface{}) (types.GpuType, error) {
 }
 
 func parseTmpSizeLimit(workerPoolTmpSizeLimit string, globalWorkerTmpSizeLimit string) resource.Quantity {
-	defaultLimit := resource.MustParse("30Gi")
+	defaultLimit := resource.MustParse("128Gi")
 
 	// First try worker pool specific limit, then fall back to global config
 	limitToUse := workerPoolTmpSizeLimit

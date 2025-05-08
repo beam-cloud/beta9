@@ -30,6 +30,7 @@ func (t *Time) Scan(value interface{}) error {
 	return nil
 }
 
+// @go2proto
 type NullTime struct {
 	sql.NullTime
 }
@@ -75,7 +76,11 @@ func (w *Workspace) StorageAvailable() bool {
 type WorkspaceWithRelated struct {
 	Workspace
 	ConcurrencyLimit *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit" serializer:"concurrency_limit"`
-	Storage          *WorkspaceStorage `db:"storage" json:"storage" serializer:"storage"`
+	Storage          *WorkspaceStorage `db:"workspace_storage" json:"storage" serializer:"storage"`
+}
+
+func (w *WorkspaceWithRelated) StorageAvailable() bool {
+	return w.Storage != nil && w.Storage.Id != nil && *w.Storage.Id > 0
 }
 
 func (w *WorkspaceWithRelated) ToProto() *pb.WorkspaceWithRelated {
@@ -407,7 +412,7 @@ type App struct {
 	WorkspaceId uint     `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
 	CreatedAt   Time     `db:"created_at" json:"created_at" serializer:"created_at"`
 	UpdatedAt   Time     `db:"updated_at" json:"updated_at" serializer:"updated_at"`
-	DeletedAt   NullTime `db:"deleted_at" json:"deleted_at" serializer:"deleted_at" go2proto:"ignore"`
+	DeletedAt   NullTime `db:"deleted_at" json:"deleted_at" serializer:"deleted_at"`
 }
 
 func (a *App) ToProto() *pb.App {

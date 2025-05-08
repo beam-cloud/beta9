@@ -112,6 +112,15 @@ func (c *StorageClient) UploadToBucket(ctx context.Context, key string, data []b
 	return err
 }
 
+func (c *StorageClient) UploadToBucketWithReader(ctx context.Context, key string, data io.Reader, bucket string) error {
+	_, err := c.s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+		Body:   data,
+	})
+	return err
+}
+
 func (c *StorageClient) Head(ctx context.Context, key string, bucket string) (bool, *s3.HeadObjectOutput, error) {
 	output, err := c.s3Client.HeadObject(ctx, &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
@@ -153,6 +162,18 @@ func (c *StorageClient) Download(ctx context.Context, key string, bucket string)
 	defer resp.Body.Close()
 
 	return io.ReadAll(resp.Body)
+}
+
+func (c *StorageClient) DownloadWithReader(ctx context.Context, key string, bucket string) (io.ReadCloser, error) {
+	resp, err := c.s3Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Body, nil
 }
 
 func (c *StorageClient) Delete(ctx context.Context, key string, bucket string) error {
@@ -318,6 +339,23 @@ func (c *StorageClient) MoveObject(ctx context.Context, sourceKey, destinationKe
 	return nil
 }
 
+type CopyObjectInput struct {
+	SourceKey             string
+	SourceBucketName      string
+	DestinationKey        string
+	DestinationBucketName string
+}
+
+func (c *StorageClient) CopyObject(ctx context.Context, input CopyObjectInput) error {
+	_, err := c.s3Client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(input.DestinationBucketName),
+		CopySource: aws.String(fmt.Sprintf("%s/%s", input.SourceBucketName, input.SourceKey)),
+		Key:        aws.String(input.DestinationKey),
+	})
+
+	return err
+}
+
 func (c *StorageClient) ValidateBucketAccess(ctx context.Context, bucketName string) error {
 	_, err := c.s3Client.HeadBucket(ctx, &s3.HeadBucketInput{
 		Bucket: aws.String(bucketName),
@@ -361,6 +399,10 @@ func (c *WorkspaceStorageClient) Upload(ctx context.Context, key string, data []
 	return c.StorageClient.UploadToBucket(ctx, key, data, *c.WorkspaceStorage.BucketName)
 }
 
+func (c *WorkspaceStorageClient) UploadWithReader(ctx context.Context, key string, data io.Reader) error {
+	return c.StorageClient.UploadToBucketWithReader(ctx, key, data, *c.WorkspaceStorage.BucketName)
+}
+
 func (c *WorkspaceStorageClient) Head(ctx context.Context, key string) (bool, *s3.HeadObjectOutput, error) {
 	return c.StorageClient.Head(ctx, key, *c.WorkspaceStorage.BucketName)
 }
@@ -371,6 +413,10 @@ func (c *WorkspaceStorageClient) Exists(ctx context.Context, key string) (bool, 
 
 func (c *WorkspaceStorageClient) Download(ctx context.Context, key string) ([]byte, error) {
 	return c.StorageClient.Download(ctx, key, *c.WorkspaceStorage.BucketName)
+}
+
+func (c WorkspaceStorageClient) DownloadWithReader(ctx context.Context, key string) (io.ReadCloser, error) {
+	return c.StorageClient.DownloadWithReader(ctx, key, *c.WorkspaceStorage.BucketName)
 }
 
 func (c *WorkspaceStorageClient) Delete(ctx context.Context, key string) error {
