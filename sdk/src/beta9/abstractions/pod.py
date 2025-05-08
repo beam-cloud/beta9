@@ -242,6 +242,9 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         if context is not None:
             self.config_context = context
+        
+        if self.app == "":
+            self.app = name
 
         if not self.prepare_runtime(stub_type=POD_DEPLOYMENT_STUB_TYPE, force_create_stub=True):
             return False

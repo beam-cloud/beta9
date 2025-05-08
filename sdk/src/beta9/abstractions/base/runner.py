@@ -402,7 +402,7 @@ class RunnerAbstraction(BaseAbstraction):
             return False
 
         if not self.app:
-            self.app = self.name or os.path.basename(os.getcwd())
+            terminal.error("Missing app name")
 
         if not self.stub_created:
             stub_request = GetOrCreateStubRequest(

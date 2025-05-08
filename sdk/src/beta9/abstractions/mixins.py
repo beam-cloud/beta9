@@ -60,6 +60,9 @@ class DeployableMixin:
         ):
             terminal.header("Running on_deploy hook")
             self.parent.on_deploy()
+        
+        if self.parent.app == "":
+            self.parent.app = name
 
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=self.deployment_stub_type, force_create_stub=True
