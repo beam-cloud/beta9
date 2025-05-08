@@ -58,7 +58,7 @@ class Endpoint(RunnerAbstraction):
             A list of volumes and/or cloud buckets to be mounted to the endpoint. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
-            Default is 3600. Set it to -1 to disable the timeout.
+            Default is 180. Set it to -1 to disable the timeout.
         workers (Optional[int]):
             The number of processes handling tasks per container.
             Modifying this parameter can improve throughput for certain workloads.
@@ -78,8 +78,8 @@ class Endpoint(RunnerAbstraction):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this endpoint, used during deployment. If not specified, you must specify the name
-            at deploy time with the --name argument
+            An optional app name for this endpoint. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
         authorized (bool):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
@@ -232,8 +232,8 @@ class ASGI(Endpoint):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this ASGI application, used during deployment. If not specified, you must
-            specify the name at deploy time with the --name argument
+            An optional app name for this ASGI application. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
         authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.
@@ -381,8 +381,8 @@ class RealtimeASGI(ASGI):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this ASGI application, used during deployment. If not specified, you must
-            specify the name at deploy time with the --name argument
+            An optional app name for this ASGI application. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
         authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.

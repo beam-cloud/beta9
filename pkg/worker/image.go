@@ -181,7 +181,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	startTime := time.Now()
 
 	if c.cacheClient != nil && !isBuildContainer {
-		sourcePath := fmt.Sprintf("images/%s.clip", imageId)
+		sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
 
 		// Create constant backoff
 		b := backoff.NewConstantBackOff(300 * time.Millisecond)
@@ -189,7 +189,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 		operation := func() error {
 			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, "/"+sourcePath) {
+			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, sourcePath) {
 				localCachePath = baseBlobFsContentPath
 				return nil
 			}

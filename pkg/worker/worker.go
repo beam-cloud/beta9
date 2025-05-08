@@ -161,6 +161,7 @@ func NewWorker() (*Worker, error) {
 
 		if err != nil {
 			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
+			cacheClient = nil
 		}
 	}
 

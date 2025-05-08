@@ -79,6 +79,11 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.HTTPTimeout = defaultGeeseFSRequestTimeout
 	flags.NoPreloadDir = true
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
+	flags.MountOptions = s.config.MountOptions
+
+	if s.config.DisableVolumeCaching {
+		flags.HashAttr = ""
+	}
 
 	if s.config.ReadAheadLargeKB > 0 {
 		flags.ReadAheadLargeKB = uint64(s.config.ReadAheadLargeKB)

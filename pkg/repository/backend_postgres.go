@@ -920,12 +920,15 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select(
 		`s.id, s.external_id, s.name, s.type, s.config, s.config_version, s.object_id, s.workspace_id, s.created_at, s.updated_at, s.public, s.app_id,
 	    w.id AS "workspace.id", w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.created_at AS "workspace.created_at", w.updated_at AS "workspace.updated_at", w.signing_key AS "workspace.signing_key", w.volume_cache_enabled AS "workspace.volume_cache_enabled", w.multi_gpu_enabled AS "workspace.multi_gpu_enabled",
-	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at"`,
+	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at",
+			a.id as "app.id", a.external_id as "app.external_id", a.name as "app.name"
+		`,
 		`ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", ws.secret_key AS "workspace.storage.secret_key", 
 		ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"`,
 	).
 		From("stub s").
 		Join("workspace w ON s.workspace_id = w.id").
+		Join("app a ON s.app_id = a.id").
 		LeftJoin("object o ON s.object_id = o.id").
 		LeftJoin("workspace_storage ws ON w.storage_id = ws.id").
 		Where(squirrel.Eq{"s.external_id": externalId})
@@ -1113,6 +1116,7 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 		Select(
 			"d.*",
 			"s.external_id AS \"stub.external_id\"", "s.name AS \"stub.name\"", "s.config AS \"stub.config\"",
+			"s.created_at AS \"stub.created_at\"", "s.type AS \"stub.type\"", "s.updated_at AS \"stub.updated_at\"",
 		).
 		From("deployment d").
 		Join(`(
@@ -1141,6 +1145,10 @@ func (c *PostgresBackendRepository) ListLatestDeploymentsWithRelatedPaginated(ct
 		} else {
 			query = query.Where(squirrel.Like{"d.name": "%" + filters.SearchQuery + "%"})
 		}
+	}
+
+	if len(filters.StubType) > 0 {
+		query = query.Where(squirrel.Eq{"s.type": filters.StubType})
 	}
 
 	page, err := common.Paginate(
@@ -1960,6 +1968,11 @@ func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId
 
 func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId})
+
+	if filters.Name != "" {
+		qb = qb.Where(squirrel.Like{"LOWER(a.name)": fmt.Sprintf("%%%s%%", strings.ToLower(filters.Name))})
+	}
+
 	page, err := common.Paginate(
 		common.SquirrelCursorPaginator[types.App]{
 			Client:          r.client,

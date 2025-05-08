@@ -108,7 +108,7 @@ func TestPaginateTasks(t *testing.T) {
 		AddRow(2, "test", "test", "1", time.Now(), time.Now(), 1, 1, time.Now(), time.Now()).
 		AddRow(3, "test", "test", "1", time.Now(), time.Now(), 1, 1, time.Now(), time.Now())
 
-	mock.ExpectQuery("SELECT \\* FROM tasks t ORDER BY \\w+ (asc|desc) LIMIT \\d+").WillReturnRows(tasksMockRows)
+	mock.ExpectQuery("SELECT \\* FROM tasks t ORDER BY t.created_at (asc|desc), t.id (asc|desc) LIMIT \\d+").WillReturnRows(tasksMockRows)
 
 	cursorPaginator, err := Paginate(SquirrelCursorPaginator[types.Task]{
 		Client:          sqlxDB,
@@ -133,7 +133,7 @@ func TestPaginateTasks(t *testing.T) {
 		AddRow(2, "test", "test", "1", time.Now(), time.Now(), 1, 1, time.Now(), time.Now()).
 		AddRow(3, "test", "test", "1", time.Now(), time.Now(), 1, 1, time.Now(), time.Now())
 
-	mock.ExpectQuery("SELECT \\* FROM tasks t ORDER BY \\w+ (asc|desc) LIMIT \\d+").WillReturnRows(tasksMockRows)
+	mock.ExpectQuery("SELECT \\* FROM tasks t ORDER BY t.created_at (asc|desc), t.id (asc|desc) LIMIT \\d+").WillReturnRows(tasksMockRows)
 
 	cursorPaginator, err = Paginate(SquirrelCursorPaginator[types.Task]{
 		Client:          sqlxDB,
@@ -165,7 +165,7 @@ func TestPaginateTasks(t *testing.T) {
 		AddRow(2, "test", "test", "1", time.Now(), time.Now(), 1, 1, time.Now(), time.Now()).
 		AddRow(3, "test", "test", "1", time.Now(), time.Now(), 1, 1, time.Now(), time.Now())
 
-	mock.ExpectQuery("SELECT \\* FROM tasks t WHERE (.*) ORDER BY \\w+ (asc|desc) LIMIT \\d+").WillReturnRows(tasksMockRows)
+	mock.ExpectQuery("SELECT \\* FROM tasks t WHERE (.*) ORDER BY t.created_at (asc|desc), t.id (asc|desc) LIMIT \\d+").WillReturnRows(tasksMockRows)
 
 	cursorPaginator, err = Paginate(SquirrelCursorPaginator[types.Task]{
 		Client:          sqlxDB,

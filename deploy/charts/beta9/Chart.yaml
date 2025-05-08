@@ -7,7 +7,7 @@ appVersion: 0.1.0
 home: https://beta9.dev
 dependencies:
 - name: common
-  repository: https://bjw-s.github.io/helm-charts
+  repository: https://bjw-s-labs.github.io/helm-charts
   version: 2.5.0
 - alias: blobcache
   name: beam-blobcache-chart
