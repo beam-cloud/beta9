@@ -77,6 +77,7 @@ type BuildOpts struct {
 	BuildSecrets       []string
 	Gpu                string
 	IgnorePython       bool
+	ClipVersion        uint8
 }
 
 func (o *BuildOpts) String() string {
@@ -436,7 +437,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 	log.Info().Str("container_id", containerId).Dur("duration", time.Since(startTime)).Msg("container build took")
 
-	err = client.Archive(ctx, containerId, imageId, outputChan)
+	err = client.Archive(ctx, containerId, imageId, opts.ClipVersion, outputChan)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Archiving: true, Success: success.Load(), Msg: err.Error() + "\n"}
 		return err

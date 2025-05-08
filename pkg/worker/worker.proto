@@ -38,7 +38,7 @@ message RunCLogEntry { string msg = 1; }
 message RunCArchiveRequest {
   string container_id = 1;
   string image_id = 2;
-  int64 clip_version = 3;
+  uint32 clip_version = 3;
 }
 
 message RunCArchiveResponse {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
+
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -128,9 +130,18 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		valid = false
 	}
 
+	var clipVersion uint8
+	clipVersion, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
+	if err != nil {
+		if is.builder.Exists(ctx, imageId) {
+			log.Warn().Msgf("missing image record for existing image %s", imageId)
+			clipVersion = clipCommon.ClipFileFormatVersion
+		}
+	}
+
 	return &pb.VerifyImageBuildResponse{
 		ImageId: imageId,
-		Exists:  is.builder.Exists(ctx, imageId),
+		Exists:  clipVersion != 0,
 		Valid:   valid,
 	}, nil
 }
@@ -150,6 +161,8 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		tag = is.config.ImageService.PythonVersion
 	}
 
+	clipVersion := uint8(is.config.ImageService.ClipVersion)
+
 	buildOptions := &BuildOpts{
 		BaseImageTag:       is.config.ImageService.Runner.Tags[tag],
 		BaseImageName:      is.config.ImageService.Runner.BaseImageName,
@@ -166,6 +179,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		BuildSecrets:       buildSecrets,
 		Gpu:                in.Gpu,
 		IgnorePython:       in.IgnorePython,
+		ClipVersion:        clipVersion,
 	}
 
 	ctx := stream.Context()
@@ -199,6 +213,12 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	if !lastMessage.Success {
 		return errors.New("build failed")
+	}
+
+	_, err = is.backendRepo.CreateImage(ctx, lastMessage.ImageId, clipVersion)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create image record")
+		return errors.New("failed to create image record")
 	}
 
 	log.Info().Msg("build completed successfully")

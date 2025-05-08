@@ -87,6 +87,7 @@ class ContainerRequest(betterproto.Message):
     ports: List[int] = betterproto.uint32_field(21)
     cost_per_ms: float = betterproto.double_field(22)
     app_id: str = betterproto.string_field(23)
+    clip_version: int = betterproto.int64_field(24)
 
 
 @dataclass(eq=False, repr=False)

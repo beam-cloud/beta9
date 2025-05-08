@@ -578,7 +578,7 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 }
 
 // Generate and upload archived version of the image for distribution
-func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageID string, clipVersion int64, progressChan chan int) error {
+func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageID string, clipVersion uint8, progressChan chan int) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

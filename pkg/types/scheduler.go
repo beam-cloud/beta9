@@ -223,7 +223,7 @@ type ContainerRequest struct {
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
 	AppId             string          `json:"app_id"`
-	ClipVersion       int64           `json:"clip_version"`
+	ClipVersion       uint8           `json:"clip_version"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {

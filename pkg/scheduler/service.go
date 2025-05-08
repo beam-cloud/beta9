@@ -52,7 +52,7 @@ func (wbs *SchedulerService) RunContainer(ctx context.Context, in *pb.RunContain
 		Gpu:         in.Gpu,
 		ImageId:     in.ImageId,
 		RetryCount:  0,
-		ClipVersion: in.ClipVersion,
+		ClipVersion: uint8(in.ClipVersion),
 	})
 
 	if err != nil {

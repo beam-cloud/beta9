@@ -1991,6 +1991,26 @@ func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, works
 	return *page, nil
 }
 
+func (r *PostgresBackendRepository) GetImageClipVersion(ctx context.Context, imageId string) (uint8, error) {
+	var clipVersion uint8
+	query := `SELECT clip_version FROM image WHERE id=$1;`
+	err := r.client.GetContext(ctx, &clipVersion, query, imageId)
+	if err == nil {
+		return clipVersion, nil
+	}
+
+	return 1, err
+}
+
+func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId string, clipVersion uint8) (uint8, error) {
+	query := `INSERT INTO image (id, clip_version) VALUES ($1, $2);`
+	if _, err := r.client.ExecContext(ctx, query, imageId, clipVersion); err != nil {
+		return 0, err
+	}
+
+	return clipVersion, nil
+}
+
 // Use to update the updated_at field of app when stub and deployment is created with app_id
 func (r *PostgresBackendRepository) updateAppActivity(ctx context.Context, appId uint) error {
 	query := `UPDATE app set updated_at=NOW() where id=$1`
