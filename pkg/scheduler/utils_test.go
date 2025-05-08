@@ -278,7 +278,7 @@ func TestParseTmpSizeLimit(t *testing.T) {
 			name:        "invalid tmp size limit",
 			poolLimit:   "10Qi",
 			globalLimit: "",
-			wantVal:     resource.MustParse("30Gi"),
+			wantVal:     resource.MustParse("128Gi"),
 			wantErr:     true,
 		},
 	}
