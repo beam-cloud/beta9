@@ -1,7 +1,6 @@
 syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beta9/proto";
-import "google/protobuf/timestamp.proto";
 import "types.proto";
 
 service ContainerRepositoryService {

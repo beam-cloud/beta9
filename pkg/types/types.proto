@@ -15,6 +15,7 @@ message App {
   uint32 workspace_id = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
+  NullTime deleted_at = 8;
 }
 
 message BuildOptions {
@@ -109,6 +110,10 @@ message MountPointConfig {
   string region = 5;
   bool read_only = 6;
   bool force_path_style = 7;
+}
+
+message NullTime {
+  NullTime null_time = 1;
 }
 
 message Object {
