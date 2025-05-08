@@ -207,16 +207,19 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 			return nil
 		default:
 			if err := s.buildOrPullBaseImage(ctx, request, containerId, outputLogger); err != nil {
+				log.Error().Str("container_id", containerId).Msgf("failed to build or pull base image: %v", err)
 				return err
 			}
 			elapsed, err = s.imageClient.PullLazy(ctx, request, outputLogger)
 			if err != nil {
+				log.Error().Str("container_id", containerId).Msgf("failed to pull image: %v", err)
 				return err
 			}
 		}
 	}
 	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
 
+	log.Info().Str("container_id", containerId).Msg("pulled image")
 	// Determine how many ports we need to expose
 	portsToExpose := len(request.Ports)
 	if portsToExpose == 0 {
