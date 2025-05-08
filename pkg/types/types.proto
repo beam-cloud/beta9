@@ -204,9 +204,3 @@ message WorkspaceStorage {
   google.protobuf.Timestamp updated_at = 9;
 }
 
-message WorkspaceWithRelated {
-  Workspace workspace = 1;
-  ConcurrencyLimit concurrency_limit = 2;
-  WorkspaceStorage storage = 3;
-}
-

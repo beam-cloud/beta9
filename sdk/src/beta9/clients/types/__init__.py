@@ -221,10 +221,3 @@ class WorkspaceStorage(betterproto.Message):
     region: str = betterproto.string_field(7)
     created_at: datetime = betterproto.message_field(8)
     updated_at: datetime = betterproto.message_field(9)
-
-
-@dataclass(eq=False, repr=False)
-class WorkspaceWithRelated(betterproto.Message):
-    workspace: "Workspace" = betterproto.message_field(1)
-    concurrency_limit: "ConcurrencyLimit" = betterproto.message_field(2)
-    storage: "WorkspaceStorage" = betterproto.message_field(3)
