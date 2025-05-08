@@ -289,7 +289,7 @@ func (g StubGroup) configureVolumes(ctx context.Context, volumes []*pb.Volume, w
 }
 
 func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace *types.Workspace, stub *types.StubWithRelated) (uint, error) {
-	sourceWorkspace, err := g.backendRepo.GetWorkspaceWithRelated(ctx, stub.Workspace.Id)
+	sourceWorkspace, err := g.backendRepo.GetWorkspace(ctx, stub.Workspace.Id)
 	if err != nil {
 		return 0, err
 	}
