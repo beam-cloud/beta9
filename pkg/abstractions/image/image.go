@@ -161,7 +161,10 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		tag = is.config.ImageService.PythonVersion
 	}
 
-	clipVersion := uint8(is.config.ImageService.ClipVersion)
+	clipVersion := clipCommon.ClipFileFormatVersion
+	if is.config.ImageService.ClipVersion != 0 {
+		clipVersion = uint8(is.config.ImageService.ClipVersion)
+	}
 
 	buildOptions := &BuildOpts{
 		BaseImageTag:       is.config.ImageService.Runner.Tags[tag],

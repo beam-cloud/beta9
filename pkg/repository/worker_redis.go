@@ -12,7 +12,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 )
 
 type WorkerRedisRepository struct {
@@ -497,8 +496,6 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	if err != nil {
 		return fmt.Errorf("failed to push request: %w", err)
 	}
-
-	log.Info().Str("container_id", request.ContainerId).Str("worker_id", worker.Id).Msg("request for container added")
 
 	return nil
 }

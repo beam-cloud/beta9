@@ -167,6 +167,7 @@ func (s *Worker) deleteContainer(containerId string) {
 
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
+	log.Info().Int("clip_version", int(request.ClipVersion)).Msgf("Running container %s", request.ContainerId)
 	containerId := request.ContainerId
 
 	s.containerInstances.Set(containerId, &ContainerInstance{

@@ -177,80 +177,82 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 	log.Info().Str("image_id", imageId).Str("local_cache_path", localCachePath).Msg("local cache path")
 
-	// If we have a valid cache client, attempt to cache entirety of the image
-	// in memory (in a nearby region). If a remote cache is available, this supercedes
-	// the local cache - which is basically just downloading the image to disk
-	startTime := time.Now()
-
-	if request.ClipVersion == 1 && c.cacheClient != nil && !isBuildContainer {
-		sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
-
-		// Create constant backoff
-		b := backoff.NewConstantBackOff(300 * time.Millisecond)
-		imageLocked := false
-
-		operation := func() error {
-			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, sourcePath) {
-				localCachePath = baseBlobFsContentPath
-				return nil
-			}
-
-			if !c.cacheClient.HostsAvailable() {
-				return nil
-			}
-
-			pullStartTime := time.Now()
-
-			// If the image was previously locked, don't try to cache it again, just wait until the caching is complete
-			if imageLocked {
-				return errors.New("image locked")
-			}
-
-			_, err := c.cacheClient.StoreContentFromFUSE(struct {
-				Path string
-			}{
-				Path: sourcePath,
-			}, struct {
-				RoutingKey string
-				Lock       bool
-			}{
-				RoutingKey: sourcePath,
-				Lock:       true,
-			})
-			if err != nil {
-				if err == blobcache.ErrUnableToAcquireLock {
-					imageLocked = true
-					return err
-				}
-
-				outputLogger.Error(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
-				return backoff.Permanent(err)
-			}
-
-			localCachePath = baseBlobFsContentPath
-			outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
-			metrics.RecordImagePullTime(time.Since(pullStartTime))
-			return nil
-		}
-
-		// Run with context
-		err := backoff.RetryNotify(operation, backoff.WithContext(b, ctx),
-			func(err error, d time.Duration) {
-				log.Info().Str("image_id", imageId).Err(err).Msg("retrying cache attempt")
-			})
-		if err != nil {
-			outputLogger.Info(fmt.Sprintf("Giving up on caching image <%s>: %v\n", imageId, err))
-		}
-	}
-
-	elapsed := time.Since(startTime)
 	var (
 		sourceRegistry    *types.S3ImageRegistry
 		remoteArchivePath string
 		err               error
+		elapsed           time.Duration
 	)
-	if request.ClipVersion == 1 {
+
+	log.Info().Msgf("Request clip version %d", request.ClipVersion)
+
+	if request.ClipVersion == clipCommon.ClipFileFormatVersion {
+		// If we have a valid cache client, attempt to cache entirety of the image
+		// in memory (in a nearby region). If a remote cache is available, this supercedes
+		// the local cache - which is basically just downloading the image to disk
+		startTime := time.Now()
+		if c.cacheClient != nil && !isBuildContainer {
+			sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
+
+			// Create constant backoff
+			b := backoff.NewConstantBackOff(300 * time.Millisecond)
+			imageLocked := false
+
+			operation := func() error {
+				baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
+				if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, sourcePath) {
+					localCachePath = baseBlobFsContentPath
+					return nil
+				}
+
+				if !c.cacheClient.HostsAvailable() {
+					return nil
+				}
+
+				pullStartTime := time.Now()
+
+				// If the image was previously locked, don't try to cache it again, just wait until the caching is complete
+				if imageLocked {
+					return errors.New("image locked")
+				}
+
+				_, err := c.cacheClient.StoreContentFromFUSE(struct {
+					Path string
+				}{
+					Path: sourcePath,
+				}, struct {
+					RoutingKey string
+					Lock       bool
+				}{
+					RoutingKey: sourcePath,
+					Lock:       true,
+				})
+				if err != nil {
+					if err == blobcache.ErrUnableToAcquireLock {
+						imageLocked = true
+						return err
+					}
+
+					outputLogger.Error(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
+					return backoff.Permanent(err)
+				}
+
+				localCachePath = baseBlobFsContentPath
+				outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
+				metrics.RecordImagePullTime(time.Since(pullStartTime))
+				return nil
+			}
+
+			// Run with context
+			err := backoff.RetryNotify(operation, backoff.WithContext(b, ctx),
+				func(err error, d time.Duration) {
+					log.Info().Str("image_id", imageId).Err(err).Msg("retrying cache attempt")
+				})
+			if err != nil {
+				outputLogger.Info(fmt.Sprintf("Giving up on caching image <%s>: %v\n", imageId, err))
+			}
+		}
+		elapsed = time.Since(startTime)
 		remoteArchivePath = fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, registry.RemoteImageFileExtension)
 		sourceRegistry, err = c.pullImageFromRegistry(ctx, remoteArchivePath, imageId)
 		if err != nil {
@@ -281,13 +283,12 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	var startServer func() error
 	var server *fuse.Server
 
-	if request.ClipVersion == 2 {
+	if request.ClipVersion == clipv2.ClipV2FileFormatVersion {
 		startServer, _, server, err = clipv2.MountArchive(context.Background(), clipv2.MountOptions{
 			ExtractOptions: clipv2.ExtractOptions{
 				ImageID: imageId,
 				// LocalPath:   fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
 				// OutputPath:  remoteArchivePath,
-				Verbose:     false,
 				StorageType: clipCommon.StorageModeS3,
 				S3Config: clipCommon.S3StorageInfo{
 					Bucket:         c.config.ImageService.Registries.S3.Primary.BucketName,
@@ -309,7 +310,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		var mountOptions *clip.MountOptions = &clip.MountOptions{
 			ArchivePath:           remoteArchivePath,
 			MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
-			Verbose:               false,
 			CachePath:             localCachePath,
 			ContentCache:          c.cacheClient,
 			ContentCacheAvailable: c.cacheClient != nil,
@@ -595,7 +595,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageID
 	var err error = nil
 	switch c.config.ImageService.RegistryStore {
 	case registry.S3ImageRegistryStore:
-		if clipVersion == 2 {
+		if clipVersion == clipv2.ClipV2FileFormatVersion {
 			err = clipv2.CreateArchive(clipv2.CreateOptions{
 				ImageID:    imageID,
 				SourcePath: bundlePath.Path,

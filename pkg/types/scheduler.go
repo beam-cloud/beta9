@@ -290,6 +290,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		Timestamp:         timestamppb.New(c.Timestamp),
 		BuildOptions:      buildOptions,
 		Ports:             c.Ports,
+		ClipVersion:       int64(c.ClipVersion),
 	}
 }
 
@@ -332,6 +333,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
 		Ports:             in.Ports,
+		ClipVersion:       uint8(in.ClipVersion),
 	}
 }
 
