@@ -133,15 +133,11 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 
 	if request.ClipVersion == 0 {
 		clipVersion, err := s.backendRepo.GetImageClipVersion(s.ctx, request.ImageId)
-		if err != nil {
-			if err != sql.ErrNoRows {
-				log.Warn().Str("image_id", request.ImageId).Err(err).Msg("failed to get image clip version, assuming v1")
-				clipVersion = clipCommon.ClipFileFormatVersion
-			}
+		if err != nil && err != sql.ErrNoRows {
+			log.Warn().Str("image_id", request.ImageId).Err(err).Msg("failed to get image clip version, assuming v1")
+			clipVersion = clipCommon.ClipFileFormatVersion
 		}
-
-		request.ClipVersion = clipVersion
-
+		request.ClipVersion = uint32(clipVersion)
 	}
 
 	err = s.containerRepo.SetContainerStateWithConcurrencyLimit(quota, request)
