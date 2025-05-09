@@ -159,9 +159,9 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	}
 
 	// Use config to override the default clip version (v1 - old format)
-	clipVersion := clipCommon.ClipFileFormatVersion
+	clipVersion := uint32(clipCommon.ClipFileFormatVersion)
 	if is.config.ImageService.ClipVersion != 0 {
-		clipVersion = uint8(is.config.ImageService.ClipVersion)
+		clipVersion = uint32(is.config.ImageService.ClipVersion)
 	}
 
 	buildOptions := &BuildOpts{

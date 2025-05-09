@@ -1989,8 +1989,8 @@ func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, works
 	return *page, nil
 }
 
-func (r *PostgresBackendRepository) GetImageClipVersion(ctx context.Context, imageId string) (uint8, error) {
-	var clipVersion uint8
+func (r *PostgresBackendRepository) GetImageClipVersion(ctx context.Context, imageId string) (uint32, error) {
+	var clipVersion uint32
 	query := `SELECT clip_version FROM image WHERE id=$1;`
 	err := r.client.GetContext(ctx, &clipVersion, query, imageId)
 	if err == nil {
@@ -2000,7 +2000,7 @@ func (r *PostgresBackendRepository) GetImageClipVersion(ctx context.Context, ima
 	return 0, err
 }
 
-func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId string, clipVersion uint8) (uint8, error) {
+func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error) {
 	query := `INSERT INTO image (id, clip_version) VALUES ($1, $2);`
 	if _, err := r.client.ExecContext(ctx, query, imageId, clipVersion); err != nil {
 		return 0, err

@@ -167,13 +167,13 @@ func generateProgressBar(progress int, total int) string {
 	return fmt.Sprintf("%s\r%s %d%%\n", up, progressBar, (progress*100)/total)
 }
 
-func (c *RunCClient) Archive(ctx context.Context, containerId, imageId string, clipVersion uint8, outputChan chan OutputMsg) error {
+func (c *RunCClient) Archive(ctx context.Context, containerId, imageId string, clipVersion uint32, outputChan chan OutputMsg) error {
 	outputChan <- OutputMsg{Archiving: true, Done: false, Success: false, Msg: "\nSaving image, this may take a few minutes...\n"}
 	stream, err := c.client.RunCArchive(ctx,
 		&pb.RunCArchiveRequest{
 			ContainerId: containerId,
 			ImageId:     imageId,
-			ClipVersion: uint32(clipVersion),
+			ClipVersion: clipVersion,
 		},
 	)
 	if err != nil {

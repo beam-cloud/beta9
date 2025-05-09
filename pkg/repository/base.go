@@ -166,8 +166,8 @@ type BackendRepository interface {
 	RetrieveApp(ctx context.Context, workspaceId uint, appId string) (*types.App, error)
 	ListApps(ctx context.Context, workspaceId uint) ([]types.App, error)
 	ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error)
-	GetImageClipVersion(ctx context.Context, imageId string) (uint8, error)
-	CreateImage(ctx context.Context, imageId string, clipVersion uint8) (uint8, error)
+	GetImageClipVersion(ctx context.Context, imageId string) (uint32, error)
+	CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error)
 }
 
 type TaskRepository interface {
