@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -130,13 +131,9 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		valid = false
 	}
 
-	var clipVersion uint8
-	clipVersion, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
-	if err != nil {
-		if is.builder.Exists(ctx, imageId) {
-			log.Warn().Msgf("missing image record for existing image %s", imageId)
-			clipVersion = clipCommon.ClipFileFormatVersion
-		}
+	clipVersion, err := is.backendRepo.GetImageClipVersion(ctx, imageId)
+	if err != nil && err != sql.ErrNoRows {
+		log.Error().Err(err).Msgf("failed to get image clip version for image %s", imageId)
 	}
 
 	return &pb.VerifyImageBuildResponse{
@@ -161,6 +158,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		tag = is.config.ImageService.PythonVersion
 	}
 
+	// Use config to override the default clip version (v1 - old format)
 	clipVersion := clipCommon.ClipFileFormatVersion
 	if is.config.ImageService.ClipVersion != 0 {
 		clipVersion = uint8(is.config.ImageService.ClipVersion)
