@@ -20,10 +20,6 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
-	clipv1 "github.com/beam-cloud/clip/pkg/clip"
-	clipCommon "github.com/beam-cloud/clip/pkg/common"
-	"github.com/beam-cloud/clip/pkg/storage"
-	clipv2 "github.com/beam-cloud/clip/pkg/v2"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/umoci"
@@ -168,7 +164,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 	return c, nil
 }
 
-func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, error) {
+func (c *ImageClient) SetupClipMount(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, error) {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
@@ -179,7 +175,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	log.Info().Str("image_id", imageId).Str("local_cache_path", localCachePath).Msg("local cache path")
 
 	var (
-		sourceRegistry    *types.S3ImageRegistry
+		sourceRegistry    = &c.config.ImageService.Registries.S3.Primary
 		remoteArchivePath string
 		err               error
 		elapsed           time.Duration
@@ -281,58 +277,24 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		Token:    lockResponse.Token,
 	}))
 
-	var startServer func() error
-	var server *fuse.Server
-
-	if request.ClipVersion == clip.ClipFileFormatVersion2 {
-		startServer, _, server, err = clipv2.MountArchive(context.Background(), clipv2.MountOptions{
-			ExtractOptions: clipv2.ExtractOptions{
-				ImageID: imageId,
-				// LocalPath:   fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
-				// OutputPath:  remoteArchivePath,
-				StorageType: clipCommon.StorageModeS3,
-				S3Config: clipCommon.S3StorageInfo{
-					Bucket:         c.config.ImageService.Registries.S3.Primary.BucketName,
-					Region:         c.config.ImageService.Registries.S3.Primary.Region,
-					Endpoint:       c.config.ImageService.Registries.S3.Primary.Endpoint,
-					ForcePathStyle: c.config.ImageService.Registries.S3.Primary.ForcePathStyle,
-					AccessKey:      c.config.ImageService.Registries.S3.Primary.AccessKey,
-					SecretKey:      c.config.ImageService.Registries.S3.Primary.SecretKey,
-				},
-			},
-			MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
-			ContentCache:          c.cacheClient,
-			ContentCacheAvailable: c.cacheClient != nil,
-		})
-		if err != nil {
-			return elapsed, err
-		}
-	} else {
-		var mountOptions *clipv1.MountOptions = &clipv1.MountOptions{
-			ArchivePath:           remoteArchivePath,
-			MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
-			CachePath:             localCachePath,
-			ContentCache:          c.cacheClient,
-			ContentCacheAvailable: c.cacheClient != nil,
-			Credentials: storage.ClipStorageCredentials{
-				S3: &storage.S3ClipStorageCredentials{
-					AccessKey: sourceRegistry.AccessKey,
-					SecretKey: sourceRegistry.SecretKey,
-				},
-			},
-			StorageInfo: &clipCommon.S3StorageInfo{
-				Bucket:         sourceRegistry.BucketName,
-				Region:         sourceRegistry.Region,
-				Endpoint:       sourceRegistry.Endpoint,
-				Key:            fmt.Sprintf("%s.%s", imageId, registry.LocalImageFileExtension),
-				ForcePathStyle: sourceRegistry.ForcePathStyle,
-			},
-		}
-
-		startServer, _, server, err = clipv1.MountArchive(*mountOptions)
-		if err != nil {
-			return elapsed, err
-		}
+	startServer, _, server, err := clip.MountArchive(ctx, clip.MountArchiveOptions{
+		ClipVersion:           request.ClipVersion,
+		ImageID:               imageId,
+		ImageMountPath:        c.imageMountPath,
+		S3Config:              *sourceRegistry,
+		ContentCache:          c.cacheClient,
+		ContentCacheAvailable: c.cacheClient != nil,
+		V1: clip.V1MountArchiveOptions{
+			CachePath:   localCachePath,
+			ArchivePath: remoteArchivePath,
+		},
+		V2: clip.V2MountArchiveOptions{
+			// FIXME: this should be in config or something
+			StorageType: clip.StorageModeS3,
+		},
+	})
+	if err != nil {
+		return elapsed, err
 	}
 
 	err = startServer()
@@ -602,7 +564,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageID
 		ArchivePath:       archivePath,
 		Verbose:           true,
 		ProgressChan:      progressChan,
-		S3Config:          c.config.ImageService.Registries.S3,
+		S3Config:          c.config.ImageService.Registries.S3.Primary,
 		V2: clip.V2CreateArchiveOptions{
 			// FIXME: this should be in config
 			MaxChunkSize: 32 * 1024 * 1024,

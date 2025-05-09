@@ -40,7 +40,7 @@ type CreateArchiveOptions struct {
 	ArchivePath  string
 	Verbose      bool
 	ProgressChan chan int
-	S3Config     types.S3ImageRegistryConfig
+	S3Config     types.S3ImageRegistry
 
 	// Config that is specific to v1/v2
 	V1 V1CreateArchiveOptions
@@ -62,18 +62,18 @@ func CreateArchive(ctx context.Context, options CreateArchiveOptions) error {
 		case registry.S3ImageRegistryStore:
 			createOpts.Credentials = storage.ClipStorageCredentials{
 				S3: &storage.S3ClipStorageCredentials{
-					AccessKey: options.S3Config.Primary.AccessKey,
-					SecretKey: options.S3Config.Primary.SecretKey,
+					AccessKey: options.S3Config.AccessKey,
+					SecretKey: options.S3Config.SecretKey,
 				},
 			}
 			createOpts.ProgressChan = options.ProgressChan
 
 			err = clipv1.CreateAndUploadArchive(ctx, createOpts, clipCommon.S3StorageInfo{
-				Bucket:         options.S3Config.Primary.BucketName,
-				Region:         options.S3Config.Primary.Region,
-				Endpoint:       options.S3Config.Primary.Endpoint,
+				Bucket:         options.S3Config.BucketName,
+				Region:         options.S3Config.Region,
+				Endpoint:       options.S3Config.Endpoint,
 				Key:            fmt.Sprintf("%s.clip", options.ImageID),
-				ForcePathStyle: options.S3Config.Primary.ForcePathStyle,
+				ForcePathStyle: options.S3Config.ForcePathStyle,
 			})
 		case registry.LocalImageRegistryStore:
 			err = clipv1.CreateArchive(createOpts)
@@ -104,11 +104,11 @@ func CreateArchive(ctx context.Context, options CreateArchiveOptions) error {
 		switch options.RegistryStoreType {
 		case registry.S3ImageRegistryStore:
 			createOpts.S3Config = clipCommon.S3StorageInfo{
-				AccessKey: options.S3Config.Primary.AccessKey,
-				SecretKey: options.S3Config.Primary.SecretKey,
-				Region:    options.S3Config.Primary.Region,
-				Bucket:    options.S3Config.Primary.BucketName,
-				Endpoint:  options.S3Config.Primary.Endpoint,
+				AccessKey: options.S3Config.AccessKey,
+				SecretKey: options.S3Config.SecretKey,
+				Region:    options.S3Config.Region,
+				Bucket:    options.S3Config.BucketName,
+				Endpoint:  options.S3Config.Endpoint,
 			}
 			createOpts.StorageType = clipCommon.StorageModeS3
 			err = clipv2.CreateArchive(createOpts)

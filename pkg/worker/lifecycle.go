@@ -197,7 +197,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Attempt to pull image
 	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
+	elapsed, err := s.imageClient.SetupClipMount(ctx, request, outputLogger)
 	if err != nil {
 		if !request.IsBuildRequest() {
 			return err
@@ -211,7 +211,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 				log.Error().Str("container_id", containerId).Msgf("failed to build or pull base image: %v", err)
 				return err
 			}
-			elapsed, err = s.imageClient.PullLazy(ctx, request, outputLogger)
+			elapsed, err = s.imageClient.SetupClipMount(ctx, request, outputLogger)
 			if err != nil {
 				log.Error().Str("container_id", containerId).Msgf("failed to pull image: %v", err)
 				return err
