@@ -72,25 +72,6 @@ func (w *Workspace) StorageAvailable() bool {
 	return w.Storage != nil && w.Storage.Id != nil && *w.Storage.Id > 0
 }
 
-// @go2proto
-type WorkspaceWithRelated struct {
-	Workspace
-	ConcurrencyLimit *ConcurrencyLimit `db:"concurrency_limit" json:"concurrency_limit" serializer:"concurrency_limit"`
-	Storage          *WorkspaceStorage `db:"workspace_storage" json:"storage" serializer:"storage"`
-}
-
-func (w *WorkspaceWithRelated) StorageAvailable() bool {
-	return w.Storage != nil && w.Storage.Id != nil && *w.Storage.Id > 0
-}
-
-func (w *WorkspaceWithRelated) ToProto() *pb.WorkspaceWithRelated {
-	return &pb.WorkspaceWithRelated{
-		Workspace:        w.Workspace.ToProto(),
-		Storage:          w.Storage.ToProto(),
-		ConcurrencyLimit: w.ConcurrencyLimit.ToProto(),
-	}
-}
-
 func (w *Workspace) ToProto() *pb.Workspace {
 	concurrencyLimit := &pb.ConcurrencyLimit{}
 	if w.ConcurrencyLimit != nil {
