@@ -19,6 +19,7 @@ class App(betterproto.Message):
     workspace_id: int = betterproto.uint32_field(5)
     created_at: datetime = betterproto.message_field(6)
     updated_at: datetime = betterproto.message_field(7)
+    deleted_at: "NullTime" = betterproto.message_field(8)
 
 
 @dataclass(eq=False, repr=False)
@@ -121,6 +122,11 @@ class MountPointConfig(betterproto.Message):
     region: str = betterproto.string_field(5)
     read_only: bool = betterproto.bool_field(6)
     force_path_style: bool = betterproto.bool_field(7)
+
+
+@dataclass(eq=False, repr=False)
+class NullTime(betterproto.Message):
+    null_time: "NullTime" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)
