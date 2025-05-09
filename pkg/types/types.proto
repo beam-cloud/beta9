@@ -78,7 +78,7 @@ message ContainerRequest {
   repeated uint32 ports = 21;
   double cost_per_ms = 22;
   string app_id = 23;
-  int64 clip_version = 24;
+  uint32 clip_version = 24;
 }
 
 message ContainerState {
@@ -208,11 +208,5 @@ message WorkspaceStorage {
   string region = 7;
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
-}
-
-message WorkspaceWithRelated {
-  Workspace workspace = 1;
-  ConcurrencyLimit concurrency_limit = 2;
-  WorkspaceStorage storage = 3;
 }
 

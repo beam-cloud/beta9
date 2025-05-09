@@ -165,29 +165,27 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context
 	return workspace, nil
 }
 
-func (r *PostgresBackendRepository) GetWorkspaceWithRelated(ctx context.Context, workspaceId uint) (types.WorkspaceWithRelated, error) {
-	var workspace types.WorkspaceWithRelated
+func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceId uint) (types.Workspace, error) {
+	var workspace types.Workspace
 
 	query := `
 	SELECT w.id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
-	cl.id "concurrency_limit.id", cl.gpu_limit "concurrency_limit.gpu_limit", cl.cpu_millicore_limit "concurrency_limit.cpu_millicore_limit",
-	ws.id "workspace_storage.id", ws.bucket_name "workspace_storage.bucket_name", ws.access_key "workspace_storage.access_key",
-	ws.secret_key "workspace_storage.secret_key", ws.endpoint_url "workspace_storage.endpoint_url", ws.region "workspace_storage.region",
-	ws.created_at "workspace_storage.created_at", ws.updated_at "workspace_storage.updated_at"
+	ws.id "storage.id", ws.bucket_name "storage.bucket_name", ws.access_key "storage.access_key",
+	ws.secret_key "storage.secret_key", ws.endpoint_url "storage.endpoint_url", ws.region "storage.region",
+	ws.created_at "storage.created_at", ws.updated_at "storage.updated_at"
 	FROM workspace w
 	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
-	LEFT JOIN concurrency_limit cl ON w.concurrency_limit_id = cl.id
 	WHERE w.id = $1;
 	`
 
 	err := r.client.GetContext(ctx, &workspace, query, workspaceId)
 	if err != nil {
-		return types.WorkspaceWithRelated{}, err
+		return types.Workspace{}, err
 	}
 
 	if workspace.StorageAvailable() {
 		if err := r.decryptFields(workspace.Storage); err != nil {
-			return types.WorkspaceWithRelated{}, err
+			return types.Workspace{}, err
 		}
 	}
 

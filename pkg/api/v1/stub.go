@@ -289,7 +289,7 @@ func (g StubGroup) configureVolumes(ctx context.Context, volumes []*pb.Volume, w
 }
 
 func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace *types.Workspace, stub *types.StubWithRelated) (uint, error) {
-	sourceWorkspace, err := g.backendRepo.GetWorkspaceWithRelated(ctx, stub.Workspace.Id)
+	sourceWorkspace, err := g.backendRepo.GetWorkspace(ctx, stub.Workspace.Id)
 	if err != nil {
 		return 0, err
 	}
@@ -324,8 +324,8 @@ func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace
 	newObjectVolumeFilePath := path.Join(newObjectVolumePath, newObject.ExternalId)
 	newObjectStorageFilePath := path.Join(types.DefaultObjectPrefix, newObject.ExternalId)
 
-	// If both workspaces have the storage client available, copy the object with the storage client
-	if sourceWorkspace.StorageAvailable() && destinationWorkspace.StorageAvailable() {
+	// If both workspaces have the storage client available and both are pointed to same storage provider, copy the object with the storage client
+	if sourceWorkspace.StorageAvailable() && destinationWorkspace.StorageAvailable() && sourceWorkspace.Storage.EndpointUrl == destinationWorkspace.Storage.EndpointUrl {
 		storageClient, err := clients.NewDefaultStorageClient(ctx, g.config)
 		if err != nil {
 			return 0, err

@@ -508,7 +508,7 @@ func (b *Builder) generateContainerRequest(opts *BuildOpts, dockerfile *string, 
 		WorkspaceId: workspace.ExternalId,
 		Workspace:   *workspace,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
-		ClipVersion: opts.ClipVersion,
+		ClipVersion: uint32(opts.ClipVersion),
 	}
 
 	if opts.Gpu != "" {
