@@ -16,7 +16,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/providers"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -161,6 +160,10 @@ func (wpc *ExternalWorkerPoolController) AddWorker(cpu int64, memory int64, gpuC
 			continue
 		}
 
+		if worker == nil {
+			continue
+		}
+
 		return worker, nil
 	}
 
@@ -235,8 +238,8 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		return nil, err
 	}
 
-	if machine.State.Status != types.MachineStatusRegistered {
-		return nil, errors.New("machine not registered")
+	if machine.State.Status != types.MachineStatusReady {
+		return nil, nil
 	}
 
 	remainingMachineCpu := machine.State.Cpu
@@ -268,7 +271,7 @@ func (wpc *ExternalWorkerPoolController) attemptToAssignWorkerToMachine(workerId
 		return worker, nil
 	}
 
-	return nil, errors.New("machine out of capacity")
+	return nil, nil
 }
 
 func (wpc *ExternalWorkerPoolController) createWorkerOnMachine(workerId, machineId string, machineState *types.ProviderMachineState, cpu int64, memory int64, gpuType string, gpuCount uint32) (*types.Worker, error) {
@@ -431,6 +434,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		podHostname = fmt.Sprintf("machine-%s.%s.%s", machineId, wpc.config.Tailscale.User, wpc.config.Tailscale.HostName)
 	}
 
+	locality := wpc.workerPoolConfig.ConfigGroup
+	if locality == "" {
+		locality = wpc.config.BlobCache.Global.DefaultLocality
+	}
+
 	envVars := []corev1.EnvVar{
 		{
 			Name:  "WORKER_ID",
@@ -439,6 +447,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		{
 			Name:  "WORKER_POOL_NAME",
 			Value: wpc.name,
+		},
+		{
+			Name:  "BLOBCACHE_LOCALITY",
+			Value: locality,
 		},
 		{
 			Name:  "WORKER_TOKEN",
@@ -493,17 +505,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)
 	if err != nil {
 		return nil, err
-	}
-
-	// TODO: Once we set up dynamic secrets updating in agents, we can remove this
-	remoteConfig.Monitoring.FluentBit.Events.Endpoint = "http://beta9-fluent-bit.kube-system:9880"
-
-	if remoteConfig.BlobCache.Metadata.Mode == blobcache.BlobCacheMetadataModeLocal {
-		remoteConfig.BlobCache.Metadata.RedisAddr = fmt.Sprintf("%s:%d", remoteConfig.BlobCache.Metadata.ValkeyConfig.Host, remoteConfig.BlobCache.Metadata.ValkeyConfig.Port)
-		remoteConfig.BlobCache.Metadata.RedisPasswd = remoteConfig.BlobCache.Metadata.ValkeyConfig.Password
-		remoteConfig.BlobCache.Metadata.RedisTLSEnabled = false
-		remoteConfig.BlobCache.Metadata.RedisMode = blobcache.RedisModeSentinel
-		remoteConfig.BlobCache.Metadata.RedisMasterName = remoteConfig.BlobCache.Metadata.ValkeyConfig.PrimaryName
 	}
 
 	// Serialize the AppConfig struct to JSON

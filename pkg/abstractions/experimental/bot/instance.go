@@ -519,6 +519,7 @@ func (i *botInstance) run(transitionName, sessionId, taskId string) error {
 		Gpu:         string(transitionConfig.Gpu),
 		GpuRequest:  gpuRequest,
 		GpuCount:    gpuCount,
+		AppId:       i.stub.App.ExternalId,
 		ImageId:     transitionConfig.ImageId,
 		StubId:      i.stub.ExternalId,
 		WorkspaceId: i.workspace.ExternalId,

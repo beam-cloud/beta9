@@ -222,6 +222,7 @@ type ContainerRequest struct {
 	BuildOptions      BuildOptions    `json:"build_options"`
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
+	AppId             string          `json:"app_id"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -234,7 +235,7 @@ func (c *ContainerRequest) IsBuildRequest() bool {
 }
 
 func (c *ContainerRequest) VolumeCacheCompatible() bool {
-	if c.IsBuildRequest() || c.CheckpointEnabled {
+	if c.IsBuildRequest() || c.CheckpointEnabled || c.StorageAvailable() {
 		return false
 	}
 	return c.Workspace.VolumeCacheEnabled
@@ -277,6 +278,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		ImageId:           c.ImageId,
 		Mounts:            mounts,
 		StubId:            c.StubId,
+		AppId:             c.AppId,
 		WorkspaceId:       c.WorkspaceId,
 		Workspace:         c.Workspace.ToProto(),
 		Stub:              c.Stub.ToProto(),
@@ -319,6 +321,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		ImageId:           in.ImageId,
 		Mounts:            mounts,
 		WorkspaceId:       in.WorkspaceId,
+		AppId:             in.AppId,
 		Workspace:         *NewWorkspaceFromProto(in.Workspace),
 		Stub:              *NewStubWithRelatedFromProto(in.Stub),
 		StubId:            in.StubId,
@@ -451,6 +454,7 @@ type WorkerPoolState struct {
 	RunningContainers  int64            `redis:"running_containers" json:"running_containers"`
 	RegisteredMachines int64            `redis:"registered_machines" json:"registered_machines"`
 	PendingMachines    int64            `redis:"pending_machines" json:"pending_machines"`
+	ReadyMachines      int64            `redis:"ready_machines" json:"ready_machines"`
 }
 
 func (w *WorkerPoolState) ToProto() *pb.WorkerPoolState {

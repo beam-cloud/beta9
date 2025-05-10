@@ -132,6 +132,11 @@ func (s *WorkerPoolSizer) occupyAvailableMachines() error {
 
 		worker, err := s.controller.AddWorkerToMachine(cpu, memory, gpuType, gpuCount, m.State.MachineId)
 		if err != nil {
+			log.Error().Str("pool_name", s.controller.Name()).Err(err).Msg("failed to add worker to machine")
+			continue
+		}
+		// When there is no capacity of the machine is not ready the worker will be nil with no error
+		if worker == nil {
 			continue
 		}
 

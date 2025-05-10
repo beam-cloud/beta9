@@ -307,6 +307,11 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		return "", err
 	}
 
+	go s.eventRepo.PushRunStubEvent(
+		authInfo.Workspace.ExternalId,
+		&stub.Stub,
+	)
+
 	return containerId, nil
 }
 

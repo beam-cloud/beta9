@@ -9,6 +9,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -27,21 +28,25 @@ func NewContainerMountManager(config types.AppConfig) *ContainerMountManager {
 }
 
 // SetupContainerMounts initializes any external storage for a container
-func (c *ContainerMountManager) SetupContainerMounts(request *types.ContainerRequest, outputLogger *slog.Logger) error {
+func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	for i, m := range request.Mounts {
 		if m.MountPath == types.WorkerUserCodeVolume {
-			objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
-
-			if request.StorageAvailable() {
-				objectPath = path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultObjectPrefix, request.Stub.Object.ExternalId)
-			}
-
-			err := common.ExtractObjectFile(context.TODO(), objectPath, types.TempContainerWorkspace(request.ContainerId))
-			if err != nil {
-				return err
-			}
-
 			m.LocalPath = types.TempContainerWorkspace(request.ContainerId)
+
+			if !request.StorageAvailable() {
+				objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, request.Stub.Object.ExternalId)
+
+				err := common.ExtractObjectFile(ctx, objectPath, m.LocalPath)
+				if err != nil {
+					return err
+				}
+
+			} else {
+				if err := getAndExtractStubCode(ctx, request); err != nil {
+					return err
+				}
+			}
+
 			request.Mounts[i].LocalPath = m.LocalPath
 		}
 
@@ -122,4 +127,22 @@ const (
 
 func checkpointSignalDir(containerId string) string {
 	return fmt.Sprintf("/tmp/%s/criu", containerId)
+}
+
+// getAndExtractStubCode downloads the object from storage and extracts it to the temp location that will be mounted
+func getAndExtractStubCode(ctx context.Context, request *types.ContainerRequest) error {
+	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to instantiate storage client")
+		return err
+	}
+
+	objBytes, err := storageClient.Download(ctx, fmt.Sprintf("objects/%s", request.Stub.Object.ExternalId))
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to download object")
+		return err
+	}
+
+	destPath := types.TempContainerWorkspace(request.ContainerId)
+	return common.UnzipBytesToPath(destPath, objBytes, request)
 }

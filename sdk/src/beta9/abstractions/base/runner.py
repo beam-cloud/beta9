@@ -77,6 +77,7 @@ def _set_stub_created_for_workspace(value: bool) -> None:
 class RunnerAbstraction(BaseAbstraction):
     def __init__(
         self,
+        app: str = "",
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
@@ -112,6 +113,7 @@ class RunnerAbstraction(BaseAbstraction):
             formatted_env = [f"{k}={v}" for k, v in env.items()]
 
         self.name = name
+        self.app = app
         self.authorized = authorized
         self.image: Image = image
         self.image_available: bool = False
@@ -399,12 +401,16 @@ class RunnerAbstraction(BaseAbstraction):
             )
             return False
 
+        if not self.app:
+            self.app = self.name or os.path.basename(os.getcwd())
+
         if not self.stub_created:
             stub_request = GetOrCreateStubRequest(
                 object_id=self.object_id,
                 image_id=self.image_id,
                 stub_type=stub_type,
                 name=stub_name,
+                app_name=self.app,
                 python_version=self.image.python_version,
                 cpu=self.cpu,
                 memory=self.memory,

@@ -140,18 +140,6 @@ func (c *NvidiaCRIUManager) checkpointCached(cachedCheckpointPath string, contai
 		log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
 		return false
 	}
-
-	// The "/cache" prefix is added by way of mounting and is not reflected in the path that the metadata
-	// cache is tracking.
-	cachedCheckpointPath = strings.TrimPrefix(cachedCheckpointPath, "/cache")
-
-	client := c.fileCacheManager.GetClient()
-	if !client.IsDirCachedNearby(context.Background(), cachedCheckpointPath) {
-		log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
-		return false
-	}
-
-	log.Info().Str("container_id", containerId).Msgf("checkpoint cached nearby")
 	return true
 }
 
@@ -179,8 +167,20 @@ func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
 
 		wg.Add(1)
 		poolSubmitErr := p.Submit(func() {
+			sourcePath := path[1:]
+
 			defer wg.Done()
-			_, err := client.StoreContentFromSource(path[1:], 0)
+			_, err := client.StoreContentFromFUSE(struct {
+				Path string
+			}{
+				Path: sourcePath,
+			}, struct {
+				RoutingKey string
+				Lock       bool
+			}{
+				RoutingKey: sourcePath,
+				Lock:       true,
+			})
 			if err != nil {
 				storeContentErrMu.Lock()
 				storeContentErr = multierror.Append(storeContentErr, err)

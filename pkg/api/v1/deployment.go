@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"fmt"
 	"net/http"
 	"path"
 	"time"
@@ -9,11 +10,16 @@ import (
 	"k8s.io/utils/ptr"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	repoCommon "github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/serializer"
 )
+
+const presignedURLExpirationS = 10 * 60
 
 type DeploymentGroup struct {
 	routerGroup   *echo.Group
@@ -70,14 +76,28 @@ func (g *DeploymentGroup) ListDeployments(ctx echo.Context) error {
 		if deployments, err := g.backendRepo.ListDeploymentsPaginated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list deployments")
 		} else {
-			return ctx.JSON(http.StatusOK, deployments)
+			paginatedSerializedDeployments := repoCommon.CursorPaginationInfo[types.DeploymentWithRelated]{
+				Data: deployments.Data,
+				Next: deployments.Next,
+			}
+
+			serializedPaginatedDeployments, err := serializer.Serialize(paginatedSerializedDeployments)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize response")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedPaginatedDeployments)
 		}
 	} else {
 		if deployments, err := g.backendRepo.ListDeploymentsWithRelated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list deployments")
 		} else {
-			sanitizeDeployments(deployments)
-			return ctx.JSON(http.StatusOK, deployments)
+			serializedDeployments, err := serializer.Serialize(deployments)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize response")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedDeployments)
 		}
 
 	}
@@ -97,7 +117,12 @@ func (g *DeploymentGroup) RetrieveDeployment(ctx echo.Context) error {
 		return HTTPNotFound()
 	} else {
 		deployment.Stub.SanitizeConfig()
-		return ctx.JSON(http.StatusOK, deployment)
+		serializedDeployment, err := serializer.Serialize(deployment)
+		if err != nil {
+			return HTTPInternalServerError("Failed to serialize response")
+		}
+
+		return ctx.JSON(http.StatusOK, serializedDeployment)
 	}
 }
 
@@ -213,8 +238,17 @@ func (g *DeploymentGroup) ListLatestDeployments(ctx echo.Context) error {
 	if deployments, err := g.backendRepo.ListLatestDeploymentsWithRelatedPaginated(ctx.Request().Context(), filters); err != nil {
 		return HTTPInternalServerError("Failed to list deployments")
 	} else {
-		sanitizeDeployments(deployments.Data)
-		return ctx.JSON(http.StatusOK, deployments)
+		paginatedSerializedDeployments := repoCommon.CursorPaginationInfo[types.DeploymentWithRelated]{
+			Data: deployments.Data,
+			Next: deployments.Next,
+		}
+
+		serializedPaginatedDeployments, err := serializer.Serialize(paginatedSerializedDeployments)
+		if err != nil {
+			return HTTPInternalServerError("Failed to serialize response")
+		}
+
+		return ctx.JSON(http.StatusOK, serializedPaginatedDeployments)
 	}
 }
 
@@ -231,8 +265,25 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 	if err != nil {
 		return HTTPInternalServerError("Failed to get object")
 	}
-	path := getPackagePath(workspace.Name, object.ExternalId)
 
+	if workspace.StorageId != nil {
+		workspaceStorage, err := g.backendRepo.GetWorkspaceStorage(ctx.Request().Context(), *workspace.StorageId)
+		if err != nil {
+			return HTTPInternalServerError("Failed to get workspace storage")
+		}
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx.Request().Context(), workspace.Name, workspaceStorage)
+		if err != nil {
+			return HTTPInternalServerError("Failed to get object")
+		}
+		presignedURL, err := storageClient.GeneratePresignedGetURL(ctx.Request().Context(), fmt.Sprintf("%s/%s", types.DefaultObjectPrefix, object.ExternalId), presignedURLExpirationS)
+		if err != nil {
+			return HTTPInternalServerError("Failed to generate presigned URL")
+		}
+
+		return ctx.Redirect(http.StatusTemporaryRedirect, presignedURL)
+	}
+
+	path := getPackagePath(workspace.Name, object.ExternalId)
 	return ctx.File(path)
 }
 
@@ -274,10 +325,4 @@ func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRela
 
 func getPackagePath(workspaceName, objectId string) string {
 	return path.Join("/data/objects/", workspaceName, objectId)
-}
-
-func sanitizeDeployments(deployments []types.DeploymentWithRelated) {
-	for i := range deployments {
-		deployments[i].Stub.SanitizeConfig()
-	}
 }

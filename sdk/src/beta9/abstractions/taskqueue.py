@@ -33,6 +33,9 @@ class TaskQueue(RunnerAbstraction):
     in python through the .put() method.
 
     Parameters:
+        app (str):
+            Assign the task queue to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
@@ -79,8 +82,8 @@ class TaskQueue(RunnerAbstraction):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this task_queue, used during deployment. If not specified, you must specify the name
-            at deploy time with the --name argument
+            An optional app name for this task queue. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
         authorized (bool):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
@@ -113,6 +116,7 @@ class TaskQueue(RunnerAbstraction):
 
     def __init__(
         self,
+        app: str = "",
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
@@ -158,6 +162,7 @@ class TaskQueue(RunnerAbstraction):
             autoscaler=autoscaler,
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
+            app=app,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
         self.retry_for = retry_for or []

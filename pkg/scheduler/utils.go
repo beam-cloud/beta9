@@ -95,13 +95,15 @@ func ParseGPUType(gpu interface{}) (types.GpuType, error) {
 		return types.GPU_A6000, nil
 	case string(types.GPU_RTX4090):
 		return types.GPU_RTX4090, nil
+	case string(types.GPU_L40S):
+		return types.GPU_L40S, nil
 	default:
 		return types.GpuType(""), errors.New("invalid gpu type")
 	}
 }
 
 func parseTmpSizeLimit(workerPoolTmpSizeLimit string, globalWorkerTmpSizeLimit string) resource.Quantity {
-	defaultLimit := resource.MustParse("30Gi")
+	defaultLimit := resource.MustParse("128Gi")
 
 	// First try worker pool specific limit, then fall back to global config
 	limitToUse := workerPoolTmpSizeLimit

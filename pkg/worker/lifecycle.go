@@ -245,7 +245,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		InitialSpec:  initialBundleSpec,
 	}
 
-	err = s.containerMountManager.SetupContainerMounts(request, outputLogger)
+	err = s.containerMountManager.SetupContainerMounts(ctx, request, outputLogger)
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
 	}
@@ -420,11 +420,10 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 				volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
 			}
 
-			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
-				err := os.MkdirAll(m.LocalPath, 0755)
-				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
-				}
+			err := os.MkdirAll(m.LocalPath, 0755)
+			if err != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
+				continue
 			}
 		}
 
@@ -672,7 +671,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Log metrics
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
-	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request) }()
+	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request, exitCode) }()
 
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)

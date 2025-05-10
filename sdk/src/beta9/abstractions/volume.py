@@ -84,6 +84,8 @@ class CloudBucketConfig:
     Parameters:
         read_only (bool):
             Whether the volume is read-only.
+        force_path_style (bool):
+            Whether to use the force path style option while mounting the volume (some non-AWS S3 providers require this).
         access_key (str):
             The name of the secret containing the S3 access key for the external provider.
         secret_key (str):
@@ -95,6 +97,7 @@ class CloudBucketConfig:
     """
 
     read_only: bool = False
+    force_path_style: bool = False
     access_key: Optional[str] = None
     secret_key: Optional[str] = None
     endpoint: Optional[str] = None
@@ -151,5 +154,6 @@ class CloudBucket(Volume):
             endpoint_url=self.config.endpoint,
             region=self.config.region,
             read_only=self.config.read_only,
+            force_path_style=self.config.force_path_style,
         )
         return vol

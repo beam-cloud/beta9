@@ -135,11 +135,6 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, containerInstances)
-	if err != nil {
-		return nil, err
-	}
-
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
 	if err != nil {
 		return nil, err
@@ -157,11 +152,6 @@ func NewWorker() (*Worker, error) {
 
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	userDataStorage, err := storage.NewStorage(config.Storage)
-	if err != nil {
-		return nil, err
-	}
-
 	var cacheClient *blobcache.BlobCacheClient = nil
 	if config.Worker.BlobCacheEnabled {
 		cacheClient, err = blobcache.NewBlobCacheClient(ctx, config.BlobCache)
@@ -171,7 +161,18 @@ func NewWorker() (*Worker, error) {
 
 		if err != nil {
 			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
+			cacheClient = nil
 		}
+	}
+
+	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
+	if err != nil {
+		return nil, err
+	}
+
+	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, containerInstances, cacheClient)
+	if err != nil {
+		return nil, err
 	}
 
 	fileCacheManager := NewFileCacheManager(config, cacheClient)
@@ -205,7 +206,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring)
+	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring, gpuType)
 	if err != nil {
 		cancel()
 		return nil, err

@@ -145,16 +145,19 @@ func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, worke
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest) {
+func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest, exitCode int) {
 	t.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
-		types.EventContainerLifecycleSchema{
-			ContainerID: containerID,
-			WorkerID:    workerID,
-			Request:     sanitizeContainerRequest(request),
-			StubID:      request.StubId,
-			Status:      types.EventContainerLifecycleStopped,
+		types.EventContainerStoppedSchema{
+			EventContainerLifecycleSchema: types.EventContainerLifecycleSchema{
+				ContainerID: containerID,
+				WorkerID:    workerID,
+				Request:     sanitizeContainerRequest(request),
+				StubID:      request.StubId,
+				Status:      types.EventContainerLifecycleStopped,
+			},
+			ExitCode: exitCode,
 		},
 	)
 }
@@ -262,12 +265,26 @@ func (t *TCPEventClientRepo) PushRunStubEvent(workspaceId string, stub *types.St
 	)
 }
 
+func (t *TCPEventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub) {
+	t.pushEvent(
+		types.EventStubClone,
+		types.EventStubSchemaVersion,
+		types.EventStubSchema{
+			ID:           stub.ExternalId,
+			StubType:     stub.Type,
+			StubConfig:   stub.Config,
+			WorkspaceID:  workspaceId,
+			ParentStubID: parentStub.ExternalId,
+		},
+	)
+}
+
 func (t *TCPEventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
 	event := types.EventTaskSchema{
 		ID:          task.ExternalId,
 		Status:      task.Status,
 		ContainerID: task.ContainerId,
-		CreatedAt:   task.CreatedAt,
+		CreatedAt:   task.CreatedAt.Time,
 		StubID:      task.Stub.ExternalId,
 		WorkspaceID: task.Workspace.ExternalId,
 	}
@@ -292,7 +309,7 @@ func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 		ID:          task.ExternalId,
 		Status:      task.Status,
 		ContainerID: task.ContainerId,
-		CreatedAt:   task.CreatedAt,
+		CreatedAt:   task.CreatedAt.Time,
 		StubID:      task.Stub.ExternalId,
 		WorkspaceID: task.Workspace.ExternalId,
 	}

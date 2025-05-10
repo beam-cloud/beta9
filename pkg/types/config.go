@@ -168,6 +168,11 @@ type DockerImageRegistryConfig struct {
 }
 
 type S3ImageRegistryConfig struct {
+	Primary   S3ImageRegistry `key:"primary" json:"primary"`
+	Secondary S3ImageRegistry `key:"secondary" json:"secondary"`
+}
+
+type S3ImageRegistry struct {
 	BucketName     string `key:"bucketName" json:"bucket_name"`
 	AccessKey      string `key:"accessKey" json:"access_key"`
 	SecretKey      string `key:"secretKey" json:"secret_key"`
@@ -200,9 +205,14 @@ type StorageConfig struct {
 }
 
 type WorkspaceStorageConfig struct {
-	Mode          string      `key:"mode" json:"mode"`
-	BaseMountPath string      `key:"baseMountPath" json:"base_mount_path"`
-	Geese         GeeseConfig `key:"geese" json:"geese"`
+	Mode                string      `key:"mode" json:"mode"`
+	BaseMountPath       string      `key:"baseMountPath" json:"base_mount_path"`
+	Geese               GeeseConfig `key:"geese" json:"geese"`
+	DefaultBucketPrefix string      `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
+	DefaultAccessKey    string      `key:"defaultAccessKey" json:"default_access_key"`
+	DefaultSecretKey    string      `key:"defaultSecretKey" json:"default_secret_key"`
+	DefaultEndpointUrl  string      `key:"defaultEndpointUrl" json:"default_endpoint_url"`
+	DefaultRegion       string      `key:"defaultRegion" json:"default_region"`
 }
 
 type JuiceFSConfig struct {
@@ -217,52 +227,61 @@ type JuiceFSConfig struct {
 }
 
 type GeeseConfig struct {
-	Debug            bool   `key:"debug" json:"debug"`                         // --debug
-	Force            bool   `key:"force" json:"force"`                         // -f (force)
-	FsyncOnClose     bool   `key:"fsyncOnClose" json:"fsync_on_close"`         // --fsync-on-close
-	MemoryLimit      int64  `key:"memoryLimit" json:"memory_limit"`            // --memory-limit
-	MaxFlushers      int    `key:"maxFlushers" json:"max_flushers"`            // --max-flushers
-	MaxParallelParts int    `key:"maxParallelParts" json:"max_parallel_parts"` // --max-parallel-parts
-	PartSizes        int64  `key:"partSizes" json:"part_sizes"`                // --part-sizes
-	DirMode          string `key:"dirMode" json:"dir_mode"`                    // --dir-mode, e.g., "0777"
-	FileMode         string `key:"fileMode" json:"file_mode"`                  // --file-mode, e.g., "0666"
-	ListType         int    `key:"listType" json:"list_type"`                  // --list-type
-	AccessKey        string `key:"accessKey" json:"access_key"`
-	SecretKey        string `key:"secretKey" json:"secret_key"`
-	EndpointUrl      string `key:"endpointURL" json:"endpoint_url"` // --endpoint
-	BucketName       string `key:"bucketName" json:"bucket_name"`
-	Region           string `key:"region" json:"region"`
+	Debug                  bool          `key:"debug" json:"debug"`                          // --debug
+	FsyncOnClose           bool          `key:"fsyncOnClose" json:"fsync_on_close"`          // --fsync-on-close
+	MountOptions           []string      `key:"mountOptions" json:"mount_options"`           // --mount-options
+	MemoryLimit            int64         `key:"memoryLimit" json:"memory_limit"`             // --memory-limit
+	MaxFlushers            int           `key:"maxFlushers" json:"max_flushers"`             // --max-flushers
+	MaxParallelParts       int           `key:"maxParallelParts" json:"max_parallel_parts"`  // --max-parallel-parts
+	ReadAheadKB            int           `key:"readAheadKB" json:"read_ahead_kb"`            // --read-ahead-kb
+	ReadAheadLargeKB       int           `key:"readAheadLargeKB" json:"read_ahead_large_kb"` // --read-ahead-large-kb
+	FuseReadAheadKB        int           `key:"fuseReadAheadKB" json:"fuse_read_ahead_kb"`   // --fuse-read-ahead-kb
+	DirMode                string        `key:"dirMode" json:"dir_mode"`                     // --dir-mode, e.g., "0777"
+	FileMode               string        `key:"fileMode" json:"file_mode"`                   // --file-mode, e.g., "0666"
+	ListType               int           `key:"listType" json:"list_type"`                   // --list-type
+	AccessKey              string        `key:"accessKey" json:"access_key"`
+	SecretKey              string        `key:"secretKey" json:"secret_key"`
+	EndpointUrl            string        `key:"endpointURL" json:"endpoint_url"` // --endpoint
+	BucketName             string        `key:"bucketName" json:"bucket_name"`
+	Region                 string        `key:"region" json:"region"`
+	DisableVolumeCaching   bool          `key:"disableVolumeCaching" json:"disable_volume_caching"`
+	StagedWriteModeEnabled bool          `key:"stagedWriteModeEnabled" json:"staged_write_mode_enabled"`
+	StagedWritePath        string        `key:"stagedWritePath" json:"staged_write_path"`
+	StagedWriteDebounce    time.Duration `key:"stagedWriteDebounce" json:"staged_write_debounce"`
 }
 
 // @go2proto
 type MountPointConfig struct {
-	BucketName  string `json:"s3_bucket"`
-	AccessKey   string `json:"access_key"`
-	SecretKey   string `json:"secret_key"`
-	EndpointURL string `json:"bucket_url"`
-	Region      string `json:"region"`
-	ReadOnly    bool   `json:"read_only"`
+	BucketName     string `json:"s3_bucket"`
+	AccessKey      string `json:"access_key"`
+	SecretKey      string `json:"secret_key"`
+	EndpointURL    string `json:"bucket_url"`
+	Region         string `json:"region"`
+	ReadOnly       bool   `json:"read_only"`
+	ForcePathStyle bool   `json:"force_path_style"`
 }
 
 func (m *MountPointConfig) ToProto() *pb.MountPointConfig {
 	return &pb.MountPointConfig{
-		BucketName:  m.BucketName,
-		AccessKey:   m.AccessKey,
-		SecretKey:   m.SecretKey,
-		EndpointUrl: m.EndpointURL,
-		Region:      m.Region,
-		ReadOnly:    m.ReadOnly,
+		BucketName:     m.BucketName,
+		AccessKey:      m.AccessKey,
+		SecretKey:      m.SecretKey,
+		EndpointUrl:    m.EndpointURL,
+		Region:         m.Region,
+		ReadOnly:       m.ReadOnly,
+		ForcePathStyle: m.ForcePathStyle,
 	}
 }
 
 func NewMountPointConfigFromProto(in *pb.MountPointConfig) *MountPointConfig {
 	return &MountPointConfig{
-		BucketName:  in.BucketName,
-		AccessKey:   in.AccessKey,
-		SecretKey:   in.SecretKey,
-		EndpointURL: in.EndpointUrl,
-		Region:      in.Region,
-		ReadOnly:    in.ReadOnly,
+		BucketName:     in.BucketName,
+		AccessKey:      in.AccessKey,
+		SecretKey:      in.SecretKey,
+		EndpointURL:    in.EndpointUrl,
+		Region:         in.Region,
+		ReadOnly:       in.ReadOnly,
+		ForcePathStyle: in.ForcePathStyle,
 	}
 }
 
@@ -325,6 +344,8 @@ type WorkerPoolConfig struct {
 	UserData             string                            `key:"userData" json:"user_data"`
 	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
 	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
+	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
+	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
 }
 
 type WorkerPoolJobSpecConfig struct {
@@ -378,6 +399,13 @@ type AgentConfig struct {
 	VictoriaLogs   VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
 	UpstreamURL    string              `key:"upstreamURL" json:"upstream_url"`
 	UpstreamBranch string              `key:"upstreamBranch" json:"upstream_branch"`
+	Configman      ConfigmanConfig     `key:"configman" json:"configman"`
+}
+
+type ConfigmanConfig struct {
+	ControllerAddress      string `key:"controllerAddress" json:"controller_address"`
+	ControllerToken        string `key:"controllerToken" json:"controller_token"`
+	ControllerDefaultGroup string `key:"controllerDefaultGroup" json:"controller_default_group"`
 }
 
 type ElasticSearchConfig struct {
@@ -447,9 +475,12 @@ type MonitoringConfig struct {
 }
 
 type VictoriaMetricsConfig struct {
-	PushURL   string `key:"pushURL" json:"push_url"`
-	AuthToken string `key:"authToken" json:"auth_token"`
-	PushSecs  int    `key:"pushSecs" json:"push_secs"`
+	PushURL       string `key:"pushURL" json:"push_url"`
+	AuthToken     string `key:"authToken" json:"auth_token"`
+	PushSecs      int    `key:"pushSecs" json:"push_secs"`
+	WriteURL      string `key:"writeURL" json:"write_url"`
+	WriteUsername string `key:"writeUsername" json:"write_username"`
+	WritePassword string `key:"writePassword" json:"write_password"`
 }
 
 type PrometheusConfig struct {

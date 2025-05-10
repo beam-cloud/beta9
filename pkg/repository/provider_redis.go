@@ -8,6 +8,7 @@ import (
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -185,8 +186,8 @@ func (r *ProviderRedisRepository) WaitForMachineRegistration(providerName, poolN
 				return nil, fmt.Errorf("error parsing machine state for %s: %w", machineId, err)
 			}
 
-			if state.Status == types.MachineStatusPending {
-				// Still waiting for machine registration
+			if state.Status != types.MachineStatusReady {
+				log.Info().Msgf("waiting for machine to be ready: %s", machineId)
 				continue
 			}
 
@@ -236,6 +237,7 @@ func (r *ProviderRedisRepository) SetMachineKeepAlive(providerName, poolName, ma
 	// Update the LastKeepalive with the current Unix timestamp
 	machineState.LastKeepalive = fmt.Sprintf("%d", time.Now().Unix())
 	machineState.AgentVersion = agentVersion
+	machineState.Status = types.MachineStatusReady
 
 	err = r.rdb.HSet(context.TODO(), stateKey, common.ToSlice(machineState)).Err()
 	if err != nil {

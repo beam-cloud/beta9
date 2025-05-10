@@ -40,6 +40,7 @@ var (
 	EventStubDeploy         = "stub.deploy"
 	EventStubServe          = "stub.serve"
 	EventStubRun            = "stub.run"
+	EventStubClone          = "stub.clone"
 
 	EventWorkerPoolDegraded = "workerpool.degraded"
 	EventWorkerPoolHealthy  = "workerpool.healthy"
@@ -70,6 +71,13 @@ type EventContainerLifecycleSchema struct {
 	StubID      string           `json:"stub_id"`
 	Status      string           `json:"status"`
 	Request     ContainerRequest `json:"request"`
+}
+
+var EventContainerStoppedSchemaVersion = "1.0"
+
+type EventContainerStoppedSchema struct {
+	EventContainerLifecycleSchema
+	ExitCode int `json:"exit_code"`
 }
 
 var EventContainerMetricsSchemaVersion = "1.0"
@@ -134,10 +142,11 @@ const (
 var EventStubSchemaVersion = "1.0"
 
 type EventStubSchema struct {
-	ID          string   `json:"id"`
-	StubType    StubType `json:"stub_type"`
-	WorkspaceID string   `json:"workspace_id"`
-	StubConfig  string   `json:"stub_config"`
+	ID           string   `json:"id"`
+	StubType     StubType `json:"stub_type"`
+	WorkspaceID  string   `json:"workspace_id"`
+	StubConfig   string   `json:"stub_config"`
+	ParentStubID string   `json:"parent_stub_id"`
 }
 
 var EventTaskSchemaVersion = "1.0"

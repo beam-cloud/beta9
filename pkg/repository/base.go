@@ -95,8 +95,8 @@ type BackendRepository interface {
 	CreateWorkspace(ctx context.Context) (types.Workspace, error)
 	GetWorkspaceByExternalId(ctx context.Context, externalId string) (types.Workspace, error)
 	GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error)
-	GetWorkspaceWithRelated(ctx context.Context, workspaceId uint) (types.WorkspaceWithRelated, error)
-	GetWorkspaceStorage(ctx context.Context, workspaceId uint) (*types.WorkspaceStorage, error)
+	GetWorkspace(ctx context.Context, workspaceId uint) (types.Workspace, error)
+	GetWorkspaceStorage(ctx context.Context, storageId uint) (*types.WorkspaceStorage, error)
 	CreateWorkspaceStorage(ctx context.Context, workspaceId uint, storage types.WorkspaceStorage) (*types.WorkspaceStorage, error)
 	GetAdminWorkspace(ctx context.Context) (*types.Workspace, error)
 	CreateObject(ctx context.Context, hash string, size int64, workspaceId uint) (*types.Object, error)
@@ -108,6 +108,7 @@ type BackendRepository interface {
 	CreateToken(ctx context.Context, workspaceId uint, tokenType string, reusable bool) (types.Token, error)
 	AuthorizeToken(ctx context.Context, tokenKey string) (*types.Token, *types.Workspace, error)
 	RetrieveActiveToken(ctx context.Context, workspaceId uint) (*types.Token, error)
+	GetTokenByExternalId(ctx context.Context, workspaceId uint, extTokenId string) (*types.Token, error)
 	ListTokens(ctx context.Context, workspaceId uint) ([]types.Token, error)
 	UpdateTokenAsClusterAdmin(ctx context.Context, tokenId string, disabled bool) error
 	ToggleToken(ctx context.Context, workspaceId uint, extTokenId string) (types.Token, error)
@@ -123,7 +124,7 @@ type BackendRepository interface {
 	ListTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error)
 	AggregateTasksByTimeWindow(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountByTime, error)
 	GetTaskCountPerDeployment(ctx context.Context, filters types.TaskFilter) ([]types.TaskCountPerDeployment, error)
-	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool) (types.Stub, error)
+	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error)
 	UpdateStubConfig(ctx context.Context, stubId uint, config *types.StubConfigV1) error
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
 	GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error)
@@ -138,7 +139,7 @@ type BackendRepository interface {
 	GetDeploymentByExternalId(ctx context.Context, workspaceId uint, deploymentExternalId string) (*types.DeploymentWithRelated, error)
 	GetDeploymentByStubExternalId(ctx context.Context, workspaceId uint, stubExternalId string) (*types.DeploymentWithRelated, error)
 	GetDeploymentByNameAndVersion(ctx context.Context, workspaceId uint, name string, version uint, stubType string) (*types.DeploymentWithRelated, error)
-	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string) (*types.Deployment, error)
+	CreateDeployment(ctx context.Context, workspaceId uint, name string, version uint, stubId uint, stubType string, appId uint) (*types.Deployment, error)
 	UpdateDeployment(ctx context.Context, deployment types.Deployment) (*types.Deployment, error)
 	DeleteDeployment(ctx context.Context, deployment types.Deployment) error
 	ListStubs(ctx context.Context, filters types.StubFilter) ([]types.StubWithRelated, error)
@@ -163,6 +164,10 @@ type BackendRepository interface {
 	ListenToChannel(ctx context.Context, channel string) (<-chan string, error)
 	Ping() error
 	GetTaskMetrics(ctx context.Context, periodStart time.Time, periodEnd time.Time) (types.TaskMetrics, error)
+	GetOrCreateApp(ctx context.Context, workspaceId uint, appName string) (*types.App, error)
+	RetrieveApp(ctx context.Context, workspaceId uint, appId string) (*types.App, error)
+	ListApps(ctx context.Context, workspaceId uint) ([]types.App, error)
+	ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error)
 }
 
 type TaskRepository interface {
@@ -203,7 +208,7 @@ type EventRepository interface {
 	PushContainerRequestedEvent(request *types.ContainerRequest)
 	PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest)
-	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest)
+	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest, exitCode int)
 	PushContainerOOMEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
 	PushWorkerStartedEvent(workerID string)
@@ -212,6 +217,7 @@ type EventRepository interface {
 	PushDeployStubEvent(workspaceId string, stub *types.Stub)
 	PushServeStubEvent(workspaceId string, stub *types.Stub)
 	PushRunStubEvent(workspaceId string, stub *types.Stub)
+	PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub)
 	PushTaskUpdatedEvent(task *types.TaskWithRelated)
 	PushTaskCreatedEvent(task *types.TaskWithRelated)
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)

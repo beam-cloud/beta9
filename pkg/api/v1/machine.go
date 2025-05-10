@@ -45,6 +45,7 @@ func NewMachineGroup(g *echo.Group, providerRepo repository.ProviderRepository, 
 
 	g.GET("/:workspaceId/gpus", auth.WithWorkspaceAuth(group.GPUCounts))
 	g.POST("/register", group.RegisterMachine)
+	g.GET("/config", group.GetConfig)
 	g.GET("/list", group.ListPoolMachines)
 	return group
 }
@@ -65,7 +66,7 @@ func (g *MachineGroup) ListPoolMachines(ctx echo.Context) error {
 
 	availableMachines := make([]*types.ProviderMachine, 0)
 	for _, machine := range machines {
-		if machine.State.Status != types.MachineStatusRegistered {
+		if machine.State.Status != types.MachineStatusReady {
 			continue
 		}
 
@@ -73,6 +74,22 @@ func (g *MachineGroup) ListPoolMachines(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, availableMachines)
+}
+
+func (g *MachineGroup) GetConfig(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if (cc.AuthInfo.Token.TokenType != types.TokenTypeMachine) && (cc.AuthInfo.Token.TokenType != types.TokenTypeWorker) {
+		return HTTPForbidden("Invalid token")
+	}
+
+	remoteConfig, err := providers.GetRemoteConfig(g.config, g.tailscale)
+	if err != nil {
+		return HTTPInternalServerError("Unable to create remote config")
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
+		"config": remoteConfig,
+	})
 }
 
 func (g *MachineGroup) RegisterMachine(ctx echo.Context) error {

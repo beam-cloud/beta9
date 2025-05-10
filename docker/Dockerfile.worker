@@ -56,9 +56,10 @@ make install
 /usr/local/bin/skopeo --version
 EOT
 
+
 # nvidia-container-toolkit
 # ========================
-FROM golang AS nvidia-container-toolkit
+FROM golang:1.23-bookworm AS nvidia-container-toolkit
 
 WORKDIR /workspace
 
@@ -117,13 +118,6 @@ ARG CEDANA_VERSION=0.9.240
 ARG CEDANA_BASE_URL=""
 ARG CEDANA_TOKEN=""
 
-RUN if [ -n "${CEDANA_TOKEN}" ]; then \
-    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/gpucontroller -o /usr/local/bin/cedana-gpu-controller && \
-    chmod +x /usr/local/bin/cedana-gpu-controller && \
-    curl -L -H "Authorization: Bearer ${CEDANA_TOKEN}" ${CEDANA_BASE_URL}/k8s/gpu/libcedana -o /usr/local/lib/libcedana-gpu.so && \
-    chmod +x /usr/local/lib/libcedana-gpu.so; \
-    fi
-
 RUN <<EOT
 set -eux
 if [ "$(uname -m)" = "x86_64" ]; then
@@ -168,14 +162,6 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
 
 RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint && \
     chmod +x /usr/local/bin/cuda-checkpoint
-
-RUN if [ "$(uname -m)" = "x86_64" ]; then \
-    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
-    chmod +x /usr/local/bin/geesefs; \
-    elif [ "$(uname -m)" = "aarch64" ]; then \
-    curl -L https://github.com/yandex-cloud/geesefs/releases/download/v0.42.4/geesefs-linux-amd64 -o /usr/local/bin/geesefs && \
-    chmod +x /usr/local/bin/geesefs; \
-    fi
 
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \

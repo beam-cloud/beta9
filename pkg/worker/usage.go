@@ -17,12 +17,14 @@ type WorkerUsageMetrics struct {
 	metricsRepo         repo.UsageMetricsRepository
 	ctx                 context.Context
 	containerCostClient *clients.ContainerCostClient
+	gpuType             string
 }
 
 func NewWorkerUsageMetrics(
 	ctx context.Context,
 	workerId string,
 	config types.MonitoringConfig,
+	gpuType string,
 ) (*WorkerUsageMetrics, error) {
 	metricsRepo, err := usage.NewUsageMetricsRepository(config, string(usage.MetricsSourceWorker))
 	if err != nil {
@@ -34,6 +36,7 @@ func NewWorkerUsageMetrics(
 	return &WorkerUsageMetrics{
 		ctx:                 ctx,
 		workerId:            workerId,
+		gpuType:             gpuType,
 		metricsRepo:         metricsRepo,
 		containerCostClient: containerCostClient,
 	}, nil
@@ -44,6 +47,7 @@ func (wm *WorkerUsageMetrics) metricsContainerDuration(request *types.ContainerR
 		"container_id":   request.ContainerId,
 		"worker_id":      wm.workerId,
 		"stub_id":        request.StubId,
+		"app_id":         request.AppId,
 		"workspace_id":   request.WorkspaceId,
 		"cpu_millicores": request.Cpu,
 		"mem_mb":         request.Memory,
@@ -55,16 +59,18 @@ func (wm *WorkerUsageMetrics) metricsContainerDuration(request *types.ContainerR
 
 func (wm *WorkerUsageMetrics) metricsContainerCost(request *types.ContainerRequest, duration time.Duration) {
 	wm.metricsRepo.IncrementCounter(types.UsageMetricsWorkerContainerCost, map[string]interface{}{
-		"container_id":   request.ContainerId,
-		"worker_id":      wm.workerId,
-		"stub_id":        request.StubId,
-		"workspace_id":   request.WorkspaceId,
-		"cpu_millicores": request.Cpu,
-		"mem_mb":         request.Memory,
-		"gpu":            request.Gpu,
-		"gpu_count":      request.GpuCount,
-		"cost_per_ms":    request.CostPerMs,
-		"duration_ms":    duration.Milliseconds(),
+		"container_id":      request.ContainerId,
+		"worker_id":         wm.workerId,
+		"stub_id":           request.StubId,
+		"app_id":            request.AppId,
+		"workspace_id":      request.WorkspaceId,
+		"cpu_millicores":    request.Cpu,
+		"mem_mb":            request.Memory,
+		"gpu":               request.Gpu,
+		"gpu_count":         request.GpuCount,
+		"cost_per_ms":       request.CostPerMs,
+		"cost_for_duration": request.CostPerMs * float64(duration.Milliseconds()),
+		"duration_ms":       duration.Milliseconds(),
 	}, request.CostPerMs*float64(duration.Milliseconds()))
 }
 
@@ -74,7 +80,8 @@ func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *t
 	ticker := time.NewTicker(types.ContainerDurationEmissionInterval)
 	defer ticker.Stop()
 
-	wm.addContainerCostPerMs(request)
+	request.Gpu = wm.gpuType
+	request.CostPerMs = wm.getContainerCostPerMs(request)
 
 	for {
 		select {
@@ -93,11 +100,9 @@ func (wm *WorkerUsageMetrics) EmitContainerUsage(ctx context.Context, request *t
 	}
 }
 
-// addContainerCostPerMs adds the container cost per ms to the request if the config provided
-// a container cost hook endpoint.
-func (wm *WorkerUsageMetrics) addContainerCostPerMs(request *types.ContainerRequest) {
+func (wm *WorkerUsageMetrics) getContainerCostPerMs(request *types.ContainerRequest) float64 {
 	if wm.containerCostClient == nil {
-		return
+		return 0
 	}
 
 	costPerMs, err := wm.containerCostClient.GetContainerCostPerMs(request)
@@ -105,5 +110,5 @@ func (wm *WorkerUsageMetrics) addContainerCostPerMs(request *types.ContainerRequ
 		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to get container cost per ms")
 	}
 
-	request.CostPerMs = costPerMs
+	return costPerMs
 }

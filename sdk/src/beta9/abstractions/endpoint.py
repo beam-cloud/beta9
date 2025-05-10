@@ -36,6 +36,9 @@ class Endpoint(RunnerAbstraction):
     Tasks are invoked synchronously as HTTP requests.
 
     Parameters:
+        app (str):
+            Assign the endpoint to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
@@ -55,7 +58,7 @@ class Endpoint(RunnerAbstraction):
             A list of volumes and/or cloud buckets to be mounted to the endpoint. Default is None.
         timeout (Optional[int]):
             The maximum number of seconds a task can run before it times out.
-            Default is 3600. Set it to -1 to disable the timeout.
+            Default is 180. Set it to -1 to disable the timeout.
         workers (Optional[int]):
             The number of processes handling tasks per container.
             Modifying this parameter can improve throughput for certain workloads.
@@ -75,8 +78,8 @@ class Endpoint(RunnerAbstraction):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this endpoint, used during deployment. If not specified, you must specify the name
-            at deploy time with the --name argument
+            An optional app name for this endpoint. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
         authorized (bool):
             If false, allows the endpoint to be invoked without an auth token.
             Default is True.
@@ -117,6 +120,7 @@ class Endpoint(RunnerAbstraction):
         self,
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
+        app: str = "",
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(),
@@ -159,6 +163,7 @@ class Endpoint(RunnerAbstraction):
             task_policy=task_policy,
             concurrent_requests=self.concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
+            app=app,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -178,6 +183,9 @@ class ASGI(Endpoint):
     Decorator which allows you to create an ASGI application.
 
     Parameters:
+        app (str):
+            Assign the ASGI endpoint to an app. If the app does not exist, it will be created with the given name.
+            An app is a group of resources (endpoints, task queues, functions, etc).
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
@@ -224,8 +232,8 @@ class ASGI(Endpoint):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this ASGI application, used during deployment. If not specified, you must
-            specify the name at deploy time with the --name argument
+            An optional app name for this ASGI application. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
         authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.
@@ -270,6 +278,7 @@ class ASGI(Endpoint):
 
     def __init__(
         self,
+        app: str = "",
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: GpuTypeAlias = GpuType.NoGPU,
@@ -312,6 +321,7 @@ class ASGI(Endpoint):
             autoscaler=autoscaler,
             callback_url=callback_url,
             checkpoint_enabled=checkpoint_enabled,
+            app=app,
         )
 
         self.is_asgi = True
@@ -371,8 +381,8 @@ class RealtimeASGI(ASGI):
         env (Optional[Dict[str, str]]):
             A dictionary of environment variables to be injected into the container. Default is {}.
         name (Optional[str]):
-            An optional name for this ASGI application, used during deployment. If not specified, you must
-            specify the name at deploy time with the --name argument
+            An optional app name for this ASGI application. If not specified, it will be the name of the
+            working directory containing the python file with the decorated function.
         authorized (bool):
             If false, allows the ASGI application to be invoked without an auth token.
             Default is True.

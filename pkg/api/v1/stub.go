@@ -1,18 +1,22 @@
 package apiv1
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/serializer"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/labstack/echo/v4"
 )
@@ -21,12 +25,14 @@ type StubGroup struct {
 	routerGroup *echo.Group
 	config      types.AppConfig
 	backendRepo repository.BackendRepository
+	eventRepo   repository.EventRepository
 }
 
-func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig) *StubGroup {
+func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, eventRepo repository.EventRepository, config types.AppConfig) *StubGroup {
 	group := &StubGroup{routerGroup: g,
 		backendRepo: backendRepo,
 		config:      config,
+		eventRepo:   eventRepo,
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId))           // Allows workspace admins to list stubs specific to their workspace
@@ -53,13 +59,23 @@ func (g *StubGroup) ListStubsByWorkspaceId(ctx echo.Context) error {
 		if stubs, err := g.backendRepo.ListStubsPaginated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list stubs")
 		} else {
-			return ctx.JSON(http.StatusOK, stubs)
+			serializedStub, err := serializer.Serialize(stubs)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize stubs")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedStub)
 		}
 	} else {
 		if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list stubs")
 		} else {
-			return ctx.JSON(http.StatusOK, stubs)
+			serializedStub, err := serializer.Serialize(stubs)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize stubs")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedStub)
 		}
 	}
 }
@@ -74,13 +90,23 @@ func (g *StubGroup) ListStubs(ctx echo.Context) error {
 		if stubs, err := g.backendRepo.ListStubsPaginated(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list stubs")
 		} else {
-			return ctx.JSON(http.StatusOK, stubs)
+			serializedStub, err := serializer.Serialize(stubs)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize stubs")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedStub)
 		}
 	} else {
 		if stubs, err := g.backendRepo.ListStubs(ctx.Request().Context(), filters); err != nil {
 			return HTTPInternalServerError("Failed to list stubs")
 		} else {
-			return ctx.JSON(http.StatusOK, stubs)
+			serializedStub, err := serializer.Serialize(stubs)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize stubs")
+			}
+
+			return ctx.JSON(http.StatusOK, serializedStub)
 		}
 	}
 }
@@ -191,7 +217,12 @@ func (g *StubGroup) CloneStubPublic(ctx echo.Context) error {
 		return err
 	}
 
-	return ctx.JSON(http.StatusOK, newStub)
+	serializedStub, err := serializer.Serialize(newStub)
+	if err != nil {
+		return err
+	}
+
+	return ctx.JSON(http.StatusOK, serializedStub)
 }
 
 func (g StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub *types.StubWithRelated) error {
@@ -257,46 +288,136 @@ func (g StubGroup) configureVolumes(ctx context.Context, volumes []*pb.Volume, w
 	return nil
 }
 
-func (g *StubGroup) copyObjectContents(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (uint, error) {
-	parentObject, err := g.backendRepo.GetObjectByExternalStubId(ctx, stub.ExternalId, stub.WorkspaceId)
+func (g *StubGroup) copyObjectContents(ctx context.Context, destinationWorkspace *types.Workspace, stub *types.StubWithRelated) (uint, error) {
+	sourceWorkspace, err := g.backendRepo.GetWorkspace(ctx, stub.Workspace.Id)
 	if err != nil {
 		return 0, err
 	}
 
-	parentObjectPath := path.Join(types.DefaultObjectPath, stub.Workspace.Name)
-	parentObjectFilePath := path.Join(parentObjectPath, parentObject.ExternalId)
+	sourceObject, err := g.backendRepo.GetObjectByExternalStubId(ctx, stub.ExternalId, stub.WorkspaceId)
+	if err != nil {
+		return 0, err
+	}
 
-	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, parentObject.Hash, workspace.Id); err == nil {
+	sourceObjectVolumePath := path.Join(types.DefaultObjectPath, stub.Workspace.Name)
+	sourceObjectVolumeFilePath := path.Join(sourceObjectVolumePath, sourceObject.ExternalId)
+	sourceObjectStorageFilePath := path.Join(types.DefaultObjectPrefix, sourceObject.ExternalId)
+
+	// Check if the object already exists in the child workspace
+	if existingObject, err := g.backendRepo.GetObjectByHash(ctx, sourceObject.Hash, destinationWorkspace.Id); err == nil {
 		return existingObject.Id, nil
 	}
 
-	newObject, err := g.backendRepo.CreateObject(ctx, parentObject.Hash, parentObject.Size, workspace.Id)
+	success := false
+	newObject, err := g.backendRepo.CreateObject(ctx, sourceObject.Hash, sourceObject.Size, destinationWorkspace.Id)
 	if err != nil {
 		return 0, err
 	}
 
-	newObjectPath := path.Join(types.DefaultObjectPath, workspace.Name)
+	defer func() {
+		if !success {
+			g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
+		}
+	}()
 
-	if _, err := os.Stat(newObjectPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(newObjectPath, 0755); err != nil {
+	newObjectVolumePath := path.Join(types.DefaultObjectPath, destinationWorkspace.Name)
+	newObjectVolumeFilePath := path.Join(newObjectVolumePath, newObject.ExternalId)
+	newObjectStorageFilePath := path.Join(types.DefaultObjectPrefix, newObject.ExternalId)
+
+	// If both workspaces have the storage client available and both are pointed to same storage provider, copy the object with the storage client
+	if sourceWorkspace.StorageAvailable() && destinationWorkspace.StorageAvailable() && sourceWorkspace.Storage.EndpointUrl == destinationWorkspace.Storage.EndpointUrl {
+		storageClient, err := clients.NewDefaultStorageClient(ctx, g.config)
+		if err != nil {
+			return 0, err
+		}
+
+		err = storageClient.CopyObject(ctx, clients.CopyObjectInput{
+			SourceKey:             sourceObjectStorageFilePath,
+			SourceBucketName:      *sourceWorkspace.Storage.BucketName,
+			DestinationKey:        newObjectStorageFilePath,
+			DestinationBucketName: *destinationWorkspace.Storage.BucketName,
+		})
+		if err != nil {
+			return 0, err
+		}
+
+		success = true
+		return newObject.Id, nil
+	}
+
+	var input io.Reader
+	// If the parent workspace has the storage client available, download the object with the storage client
+	if sourceWorkspace.StorageAvailable() {
+		sourceStorageClient, err := clients.NewWorkspaceStorageClient(ctx, sourceWorkspace.Name, sourceWorkspace.Storage)
+		if err != nil {
+			return 0, err
+		}
+
+		_input, err := sourceStorageClient.DownloadWithReader(ctx, sourceObjectStorageFilePath)
+		if err != nil {
+			return 0, err
+		}
+
+		defer _input.Close()
+		input = _input
+	} else {
+		// If the parent workspace does not have the storage client available, read the object from the volume mount
+		_input, err := os.ReadFile(sourceObjectVolumeFilePath)
+		if err != nil {
+			g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
+			return 0, err
+		}
+
+		input = bytes.NewReader(_input)
+	}
+
+	// If the child workspace has the storage client available, upload the object with the storage client
+	if destinationWorkspace.StorageAvailable() {
+		destinationStorageClient, err := clients.NewWorkspaceStorageClient(ctx, destinationWorkspace.Name, destinationWorkspace.Storage)
+		if err != nil {
+			return 0, err
+		}
+
+		err = destinationStorageClient.UploadWithReader(ctx, newObjectStorageFilePath, input)
+		if err != nil {
+			return 0, err
+		}
+
+		success = true
+		return newObject.Id, nil
+	}
+
+	if _, err := os.Stat(newObjectVolumePath); os.IsNotExist(err) {
+		if err := os.MkdirAll(newObjectVolumePath, 0755); err != nil {
 			return 0, err
 		}
 	}
 
-	newObjectFilePath := path.Join(newObjectPath, newObject.ExternalId)
+	var file *os.File
+	if _, err := os.Stat(newObjectVolumeFilePath); err == nil {
+		file, err = os.OpenFile(newObjectVolumeFilePath, os.O_WRONLY, 0644)
+		if err != nil {
+			return 0, err
+		}
+	} else if os.IsNotExist(err) {
+		file, err = os.Create(newObjectVolumeFilePath)
+		if err != nil {
+			return 0, err
+		}
+	} else {
+		return 0, err
+	}
 
-	input, err := os.ReadFile(parentObjectFilePath)
+	defer file.Close()
+
+	// If the child workspace does not have the storage client available, write the object to the volume mount
+	_, err = io.Copy(file, input)
 	if err != nil {
 		g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
 		return 0, err
 	}
 
-	err = os.WriteFile(newObjectFilePath, input, 0644)
-	if err != nil {
-		g.backendRepo.DeleteObjectByExternalId(ctx, newObject.ExternalId)
-		return 0, err
-	}
-
+	success = true
 	return newObject.Id, nil
 }
 
@@ -348,10 +469,17 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		return nil, HTTPInternalServerError("Failed to configure volumes")
 	}
 
-	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true)
+	app, err := g.backendRepo.GetOrCreateApp(ctx, workspace.Id, stub.Name)
+	if err != nil {
+		return nil, HTTPInternalServerError("Failed to create app")
+	}
+
+	newStub, err := g.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, objectId, workspace.Id, true, app.Id)
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to clone stub")
 	}
+
+	go g.eventRepo.PushCloneStubEvent(workspace.ExternalId, &newStub, &stub.Stub)
 
 	return &newStub, nil
 }

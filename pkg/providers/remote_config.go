@@ -50,23 +50,5 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("rediss://:%s@%s/0", juicefsRedisPassword, juiceFsRedisHostname)
 	}
 
-	if baseConfig.Worker.BlobCacheEnabled {
-		blobcacheRedisHostname, err := tailscale.ResolveService("blobcache-redis", connectTimeout)
-		if err != nil {
-			return nil, err
-		}
-
-		remoteConfig.BlobCache.Metadata.RedisAddr = fmt.Sprintf("%s:%d", blobcacheRedisHostname, 6379)
-
-		if remoteConfig.BlobCache.BlobFs.Enabled {
-			for idx, sourceConfig := range remoteConfig.BlobCache.BlobFs.Sources {
-				if sourceConfig.Mode == storage.StorageModeJuiceFS {
-					remoteConfig.BlobCache.BlobFs.Sources[idx].JuiceFS.RedisURI = remoteConfig.Storage.JuiceFS.RedisURI
-				}
-			}
-		}
-
-	}
-
 	return &remoteConfig, nil
 }

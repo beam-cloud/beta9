@@ -12,7 +12,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -107,7 +106,7 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 		}, nil
 	}
 
-	if state.WorkspaceId != workspaceId {
+	if isAdmin, _ := isClusterAdmin(ctx); state.WorkspaceId != workspaceId && !isAdmin {
 		return &pb.StopContainerResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Container not found: %s", in.ContainerId),
@@ -116,7 +115,6 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 
 	err = gws.scheduler.Stop(&types.StopContainerArgs{ContainerId: in.ContainerId, Reason: types.StopContainerReasonUser})
 	if err != nil {
-		log.Error().Err(err).Msg("unable to stop container")
 		return &pb.StopContainerResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Unable to stop container: %s", in.ContainerId),
@@ -127,6 +125,10 @@ func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContaine
 		Ok: true,
 	}, nil
 }
+
+const (
+	containerStreamKeepaliveInterval = 10 * time.Second
+)
 
 func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToContainerServer) error {
 	ctx := stream.Context()
@@ -183,7 +185,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	}
 
 	exitCallback := func(exitCode int32) error {
-		output := "\nContainer was stopped."
+		output := fmt.Sprintf("\nContainer was stopped.\n\nExit code: %d", exitCode)
 		if exitCode != 0 {
 			exitCodeMessage, ok := types.ExitCodeMessages[types.ContainerExitCode(exitCode)]
 			if ok {
@@ -219,6 +221,23 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	streamErrCh := make(chan error, 1)
 	go func() {
 		streamErrCh <- containerStream.Stream(ctx, authInfo, container.ContainerId)
+	}()
+
+	// Send periodic keepalive messages to the client to keep the connection alive
+	keepaliveTicker := time.NewTicker(containerStreamKeepaliveInterval)
+	defer keepaliveTicker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-keepaliveTicker.C:
+				stream.Send(&pb.AttachToContainerResponse{
+					Output: "",
+				})
+			}
+		}
 	}()
 
 	// RX incoming client messages

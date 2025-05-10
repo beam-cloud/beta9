@@ -39,7 +39,16 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 		}
 
 		if !info.IsDir() {
-			_, err := cm.client.StoreContentFromSource(path, 0)
+			_, err := cm.client.StoreContentFromFUSE(struct {
+				Path string
+			}{
+				Path: path,
+			}, struct {
+				RoutingKey string
+				Lock       bool
+			}{
+				RoutingKey: path,
+			})
 			if err != nil {
 				log.Error().Str("path", path).Err(err).Msg("failed to cache file")
 			}
@@ -50,7 +59,7 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 }
 
 func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCacheMap map[string]string, spec *specs.Spec) error {
-	if !cm.client.HostsAvailable() {
+	if !cm.CacheAvailable() || !cm.client.HostsAvailable() {
 		return blobcache.ErrHostNotFound
 	}
 
@@ -107,11 +116,21 @@ func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) 
 			return "", err
 		}
 		defer file.Close()
-	} else if cm.client.IsPathCachedNearby(context.Background(), workspaceVolumePath) {
+	} else if cm.CacheAvailable() && cm.client.IsPathCachedNearby(context.Background(), workspaceVolumePath) {
 		return workspaceVolumePath, nil
 	}
 
-	_, err = cm.client.StoreContentFromSource(fileName, 0)
+	_, err = cm.client.StoreContentFromFUSE(struct {
+		Path string
+	}{
+		Path: fileName,
+	}, struct {
+		RoutingKey string
+		Lock       bool
+	}{
+		RoutingKey: fileName,
+		Lock:       true,
+	})
 	if err != nil {
 		return "", err
 	}
@@ -141,6 +160,10 @@ func (cm *FileCacheManager) CacheAvailable() bool {
 	// Check if it's a valid mount point
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(baseFileCachePath, &stat); err != nil {
+		return false
+	}
+
+	if cm.client == nil {
 		return false
 	}
 

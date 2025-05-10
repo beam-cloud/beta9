@@ -11,6 +11,18 @@ import betterproto
 
 
 @dataclass(eq=False, repr=False)
+class App(betterproto.Message):
+    id: int = betterproto.uint32_field(1)
+    external_id: str = betterproto.string_field(2)
+    name: str = betterproto.string_field(3)
+    description: str = betterproto.string_field(4)
+    workspace_id: int = betterproto.uint32_field(5)
+    created_at: datetime = betterproto.message_field(6)
+    updated_at: datetime = betterproto.message_field(7)
+    deleted_at: "NullTime" = betterproto.message_field(8)
+
+
+@dataclass(eq=False, repr=False)
 class BuildOptions(betterproto.Message):
     source_image: str = betterproto.string_field(1)
     dockerfile: str = betterproto.string_field(2)
@@ -74,6 +86,7 @@ class ContainerRequest(betterproto.Message):
     build_options: "BuildOptions" = betterproto.message_field(20)
     ports: List[int] = betterproto.uint32_field(21)
     cost_per_ms: float = betterproto.double_field(22)
+    app_id: str = betterproto.string_field(23)
 
 
 @dataclass(eq=False, repr=False)
@@ -108,6 +121,12 @@ class MountPointConfig(betterproto.Message):
     endpoint_url: str = betterproto.string_field(4)
     region: str = betterproto.string_field(5)
     read_only: bool = betterproto.bool_field(6)
+    force_path_style: bool = betterproto.bool_field(7)
+
+
+@dataclass(eq=False, repr=False)
+class NullTime(betterproto.Message):
+    null_time: "NullTime" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)
@@ -133,6 +152,7 @@ class Stub(betterproto.Message):
     created_at: datetime = betterproto.message_field(9)
     updated_at: datetime = betterproto.message_field(10)
     public: bool = betterproto.bool_field(11)
+    app_id: int = betterproto.uint32_field(12)
 
 
 @dataclass(eq=False, repr=False)
@@ -140,6 +160,7 @@ class StubWithRelated(betterproto.Message):
     stub: "Stub" = betterproto.message_field(1)
     workspace: "Workspace" = betterproto.message_field(2)
     object: "Object" = betterproto.message_field(3)
+    app: "App" = betterproto.message_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -176,6 +197,7 @@ class WorkerPoolState(betterproto.Message):
     running_containers: int = betterproto.int64_field(9)
     registered_machines: int = betterproto.int64_field(10)
     pending_machines: int = betterproto.int64_field(11)
+    ready_machines: int = betterproto.int64_field(12)
 
 
 @dataclass(eq=False, repr=False)
@@ -205,10 +227,3 @@ class WorkspaceStorage(betterproto.Message):
     region: str = betterproto.string_field(7)
     created_at: datetime = betterproto.message_field(8)
     updated_at: datetime = betterproto.message_field(9)
-
-
-@dataclass(eq=False, repr=False)
-class WorkspaceWithRelated(betterproto.Message):
-    workspace: "Workspace" = betterproto.message_field(1)
-    concurrency_limit: "ConcurrencyLimit" = betterproto.message_field(2)
-    storage: "WorkspaceStorage" = betterproto.message_field(3)
