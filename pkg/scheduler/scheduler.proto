@@ -21,6 +21,7 @@ message RunContainerRequest {
   string gpu = 6;
   string image_id = 10;
   float schedule_timeout = 12;
+  int64 clip_version = 13;
 }
 
 message RunContainerResponse {

@@ -78,6 +78,7 @@ message ContainerRequest {
   repeated uint32 ports = 21;
   double cost_per_ms = 22;
   string app_id = 23;
+  uint32 clip_version = 24;
 }
 
 message ContainerState {

@@ -305,6 +305,7 @@ containerRequestStream:
 
 // handleContainerRequest handles an individual container request, spawning a new runc container
 func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
+	log.Info().Int("clip_version", int(request.ClipVersion)).Msgf("Handling container request %s", request.ContainerId)
 	containerId := request.ContainerId
 
 	s.containerLock.Lock()

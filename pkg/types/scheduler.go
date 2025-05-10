@@ -223,6 +223,7 @@ type ContainerRequest struct {
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
 	AppId             string          `json:"app_id"`
+	ClipVersion       uint32          `json:"clip_version"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -289,6 +290,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		Timestamp:         timestamppb.New(c.Timestamp),
 		BuildOptions:      buildOptions,
 		Ports:             c.Ports,
+		ClipVersion:       uint32(c.ClipVersion),
 	}
 }
 
@@ -331,6 +333,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
 		Ports:             in.Ports,
+		ClipVersion:       uint32(in.ClipVersion),
 	}
 }
 
