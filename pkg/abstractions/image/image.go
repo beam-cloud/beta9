@@ -28,7 +28,7 @@ type RuncImageService struct {
 	builder         *Builder
 	config          types.AppConfig
 	backendRepo     repository.BackendRepository
-	rdb             *common.RedisClient
+	containerRepo   repository.ContainerRepository
 	keyEventChan    chan common.KeyEvent
 	keyEventManager *common.KeyEventManager
 }
@@ -68,13 +68,13 @@ func NewRuncImageService(
 		builder:         builder,
 		config:          opts.Config,
 		backendRepo:     opts.BackendRepo,
+		containerRepo:   opts.ContainerRepo,
 		keyEventChan:    make(chan common.KeyEvent),
 		keyEventManager: keyEventManager,
-		rdb:             opts.RedisClient,
 	}
 
 	go is.monitorImageContainers(ctx)
-	go is.keyEventManager.ListenForPattern(ctx, Keys.imageBuildContainerTTL("*"), is.keyEventChan)
+	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.ImageBuildContainerTTL("*"), is.keyEventChan)
 	go is.keyEventManager.ListenForPattern(ctx, common.RedisKeys.SchedulerContainerState(types.BuildContainerPrefix+"*"), is.keyEventChan)
 
 	return &is, nil
@@ -116,14 +116,14 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 	}
 
 	if in.ExistingImageUri != "" {
-		is.builder.handleCustomBaseImage(opts, nil)
+		opts.handleCustomBaseImage(nil)
 	}
 
 	if in.Dockerfile != "" {
 		opts.addPythonRequirements()
 	}
 
-	imageId, err := is.builder.GetImageId(opts)
+	imageId, err := getImageID(opts)
 	if err != nil {
 		valid = false
 	}
@@ -229,7 +229,7 @@ func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
 				if strings.Contains(event.Key, common.RedisKeys.SchedulerContainerState("")) {
 					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), common.RedisKeys.SchedulerContainerState(""))
 
-					if is.rdb.Exists(ctx, Keys.imageBuildContainerTTL(containerId)).Val() == 0 {
+					if !is.containerRepo.HasBuildContainerTTL(containerId) {
 						is.builder.scheduler.Stop(&types.StopContainerArgs{
 							ContainerId: containerId,
 							Force:       true,
@@ -238,8 +238,8 @@ func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
 					}
 				}
 			case common.KeyOperationExpired:
-				if strings.Contains(event.Key, Keys.imageBuildContainerTTL("")) {
-					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), Keys.imageBuildContainerTTL(""))
+				if strings.Contains(event.Key, common.RedisKeys.ImageBuildContainerTTL("")) {
+					containerId := strings.TrimPrefix(is.keyEventManager.TrimKeyspacePrefix(event.Key), common.RedisKeys.ImageBuildContainerTTL(""))
 					is.builder.scheduler.Stop(&types.StopContainerArgs{
 						ContainerId: containerId,
 						Force:       true,
@@ -262,16 +262,4 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 		}
 	}
 	return steps
-}
-
-var (
-	imageBuildContainerTTL string = "image:build_container_ttl:%s"
-)
-
-var Keys = &keys{}
-
-type keys struct{}
-
-func (k *keys) imageBuildContainerTTL(containerId string) string {
-	return fmt.Sprintf(imageBuildContainerTTL, containerId)
 }

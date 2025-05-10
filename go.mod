@@ -127,6 +127,7 @@ require (
 	github.com/mattn/go-ieproxy v0.0.0-20190805055040-f9202b1cfdeb // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/satori/go.uuid v1.2.1-0.20181028125025-b2ce2384e17b // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/winfsp/cgofuse v1.5.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.49.0 // indirect
