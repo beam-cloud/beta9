@@ -9,7 +9,7 @@ import (
 	"github.com/mitchellh/hashstructure/v2"
 )
 
-type ImageIdHash struct {
+type ImageIDHash struct {
 	BaseImageName   string
 	BaseImageTag    string
 	UserImageTag    string
@@ -40,7 +40,7 @@ func getImageID(opts *BuildOpts) (string, error) {
 	}
 	commandListHash := hex.EncodeToString(h.Sum(nil))
 
-	bodyToHash := &ImageIdHash{
+	bodyToHash := &ImageIDHash{
 		BaseImageName:   opts.BaseImageName,
 		BaseImageTag:    getImageTagOrDigest(opts.BaseImageDigest, opts.BaseImageTag),
 		PythonVersion:   opts.PythonVersion,
