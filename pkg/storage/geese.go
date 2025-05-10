@@ -86,7 +86,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.StagedWritePath = s.config.StagedWritePath
 	flags.StagedWriteDebounce = s.config.StagedWriteDebounce
 	flags.EventCallback = func(event cfg.EventType, data map[string]interface{}) {
-		log.Info().Str("local_path", localPath).Str("geese_event", string(event)).Interface("data", data)
+		log.Info().Str("local_path", localPath).Str("geesefs_event", string(event)).Interface("data", data).Msg("geesefs: event callback fired")
 	}
 
 	if s.config.DisableVolumeCaching {
