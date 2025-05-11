@@ -388,6 +388,11 @@ func (s *Worker) shouldShutDown(lastContainerRequest time.Time) bool {
 		return true
 	default:
 		if (time.Since(lastContainerRequest).Seconds() > defaultWorkerSpindownTimeS) && s.containerInstances.Len() == 0 {
+			err := s.storageManager.Cleanup()
+			if err != nil {
+				log.Error().Err(err).Msg("failed to cleanup workspace storage")
+			}
+
 			s.cancel() // Stops goroutines
 			return true
 		}
