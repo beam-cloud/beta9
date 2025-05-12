@@ -127,20 +127,44 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 		return err
 	}
 
+	log.Info().Str("workspace_name", workspaceName).Msg("we unmounted the storage dir")
+
 	os.RemoveAll(localPath)
 	s.mounts.Delete(workspaceName)
 
+	log.Info().Str("workspace_name", workspaceName).Msg("we deleted the storage dir")
 	return nil
 }
 
 func (s *WorkspaceStorageManager) Cleanup() error {
-	s.mounts.Range(func(workspaceName string, value storage.Storage) bool {
-		s.Unmount(workspaceName)
-		log.Info().Str("workspace_name", workspaceName).Msg("unmounted storage")
+	mountsToDelete := []string{}
+	activeWorkspaceNames := []string{}
+
+	s.containerInstances.Range(func(containerInstanceId string, value *ContainerInstance) bool {
+		activeWorkspaceNames = append(activeWorkspaceNames, value.Request.Workspace.Name)
 		return true
 	})
 
-	log.Info().Msg("cleaned up storage")
+	s.mounts.Range(func(workspaceName string, value storage.Storage) bool {
+		if !slices.Contains(activeWorkspaceNames, workspaceName) {
+			log.Info().Str("workspace_name", workspaceName).Msg("unmounting storage")
+			mountsToDelete = append(mountsToDelete, workspaceName)
+		}
+
+		return true
+	})
+
+	for _, workspaceName := range mountsToDelete {
+		log.Info().Str("workspace_name", workspaceName).Msg("unmounting storage")
+
+		err := s.Unmount(workspaceName)
+		if err != nil {
+			log.Error().Str("workspace_name", workspaceName).Err(err).Msg("failed to unmount storage")
+		}
+
+		log.Info().Str("workspace_name", workspaceName).Msg("unmounted storage")
+	}
+
 	return nil
 }
 
@@ -153,25 +177,9 @@ func (s *WorkspaceStorageManager) cleanupUnusedMounts() {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
-			mountsToDelete := []string{}
-			activeWorkspaceNames := []string{}
-
-			s.containerInstances.Range(func(containerInstanceId string, value *ContainerInstance) bool {
-				activeWorkspaceNames = append(activeWorkspaceNames, value.Request.Workspace.Name)
-				return true
-			})
-
-			s.mounts.Range(func(workspaceName string, value storage.Storage) bool {
-				if !slices.Contains(activeWorkspaceNames, workspaceName) {
-					log.Info().Str("workspace_name", workspaceName).Msg("unmounting storage")
-					mountsToDelete = append(mountsToDelete, workspaceName)
-				}
-
-				return true
-			})
-
-			for _, workspaceName := range mountsToDelete {
-				s.Unmount(workspaceName)
+			err := s.Cleanup()
+			if err != nil {
+				log.Error().Err(err).Msg("failed to cleanup unused mounts")
 			}
 		}
 	}
