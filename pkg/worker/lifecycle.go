@@ -181,7 +181,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
-	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(ctx, &pb.SetWorkerAddressRequest{
+	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
 		ContainerId: containerId,
 		Address:     hostname,
 	}))
@@ -261,7 +261,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[0])
-	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(ctx, &pb.SetContainerAddressRequest{
+	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
 		ContainerId: request.ContainerId,
 		Address:     containerAddr,
 	}))
@@ -276,7 +276,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		for idx, containerPort := range request.Ports {
 			addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
 		}
-		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(ctx, &pb.SetContainerAddressMapRequest{
+		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
 			ContainerId: request.ContainerId,
 			AddressMap:  addressMap,
 		}))
