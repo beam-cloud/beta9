@@ -155,6 +155,7 @@ func (s *WorkspaceStorageManager) Cleanup() error {
 		err := s.Unmount(workspaceName)
 		if err != nil {
 			log.Error().Str("workspace_name", workspaceName).Err(err).Msg("failed to unmount storage")
+			continue
 		}
 		log.Info().Str("workspace_name", workspaceName).Msg("unmounted storage")
 	}
