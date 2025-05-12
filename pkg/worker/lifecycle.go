@@ -45,14 +45,27 @@ var cgroupV2Parameters map[string]string = map[string]string{
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
 func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
-	s.containerLock.Lock()
-	defer s.containerLock.Unlock()
-
 	stopArgs, err := types.ToStopContainerArgs(event.Args)
 	if err != nil {
 		log.Error().Str("worker_id", s.workerId).Msgf("failed to parse stop container args: %v", err)
 		return false
 	}
+
+	if stopArgs.Reason == types.StopContainerReasonUser {
+		// No matter what a stop message needs to be buffered
+		stopChan, exists := s.containerStopChannels.Get(stopArgs.ContainerId)
+		if !exists {
+			log.Info().Str("container_id", stopArgs.ContainerId).Msg("creating stop container channel in handler")
+			stopChan = make(chan struct{}, 1)
+			s.containerStopChannels.Set(stopArgs.ContainerId, stopChan)
+		}
+
+		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
+		stopChan <- struct{}{}
+	}
+
+	s.containerLock.Lock()
+	defer s.containerLock.Unlock()
 
 	if containerInstance, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
 		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
@@ -80,7 +93,8 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	}
 
 	err := s.runcHandle.Kill(context.Background(), instance.Id, signal, &runc.KillOpts{All: true})
-	if err != nil {
+	if err != nil && !strings.HasSuffix(err.Error(), "\"container does not exist\"\n") {
+		log.Info().Str("err", err.Error()).Msg("error stopping container")
 		log.Error().Str("container_id", containerId).Msgf("error stopping container: %v", err)
 		s.containerNetworkManager.TearDown(containerId)
 		return nil
@@ -180,7 +194,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
-	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
+	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(ctx, &pb.SetWorkerAddressRequest{
 		ContainerId: containerId,
 		Address:     hostname,
 	}))
@@ -260,7 +274,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[0])
-	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
+	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(ctx, &pb.SetContainerAddressRequest{
 		ContainerId: request.ContainerId,
 		Address:     containerAddr,
 	}))
@@ -275,7 +289,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		for idx, containerPort := range request.Ports {
 			addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
 		}
-		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
+		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(ctx, &pb.SetContainerAddressMapRequest{
 			ContainerId: request.ContainerId,
 			AddressMap:  addressMap,
 		}))
@@ -288,13 +302,8 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	go s.containerWg.Add(1)
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-		// Start the container
-		go s.spawn(request, spec, outputLogger, opts)
-	}
+	// Start the container
+	go s.spawn(ctx, request, spec, outputLogger, opts)
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
@@ -513,9 +522,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
-	ctx, cancel := context.WithCancel(s.ctx)
-
+func (s *Worker) spawn(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
 		WorkerId:    s.workerId,
 		ContainerId: request.ContainerId,
@@ -526,8 +533,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		WorkerId:    s.workerId,
 		ContainerId: request.ContainerId,
 	})
-
-	defer cancel()
 
 	exitCode := -1
 	containerId := request.ContainerId
@@ -568,7 +573,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+		resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(ctx, &pb.GetContainerStateRequest{ContainerId: containerId}))
 		if err != nil {
 			notFoundErr := &types.ErrContainerStateNotFound{}
 
@@ -706,7 +711,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
-	if exists {
+	if exists && containerInstance.StopReason != "" {
 		stopReason = types.StopContainerReason(containerInstance.StopReason)
 	}
 

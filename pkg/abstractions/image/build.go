@@ -832,17 +832,31 @@ func extractPackageName(pkg string) string {
 }
 
 func (b *Builder) stopBuild(containerId string) error {
-	_, err := b.eventBus.Send(&common.Event{
-		Type:          common.StopBuildEventType(containerId),
-		Args:          map[string]any{"container_id": containerId},
-		LockAndDelete: false,
-	})
+	err := b.containerRepo.UpdateContainerStatus(containerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
 	if err != nil {
-		log.Error().Err(err).Msg("failed to send stop build event")
 		return err
 	}
 
-	log.Info().Str("container_id", containerId).Msg("sent stop build event")
+	stopArgs := &types.StopContainerArgs{
+		ContainerId: containerId,
+		Reason:      types.StopContainerReasonUser,
+	}
+	eventArgs, err := stopArgs.ToMap()
+	if err != nil {
+		return err
+	}
+
+	_, err = b.eventBus.Send(&common.Event{
+		Type:          common.EventTypeStopContainer,
+		Args:          eventArgs,
+		LockAndDelete: false,
+	})
+	if err != nil {
+		log.Error().Err(err).Msg("could not stop container")
+		return err
+	}
+
+	log.Info().Str("container_id", containerId).Msg("sent stop container event for build")
 	return nil
 }
 
