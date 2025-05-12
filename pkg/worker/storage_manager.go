@@ -127,12 +127,9 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 		return err
 	}
 
-	log.Info().Str("workspace_name", workspaceName).Msg("we unmounted the storage dir")
-
 	os.RemoveAll(localPath)
 	s.mounts.Delete(workspaceName)
 
-	log.Info().Str("workspace_name", workspaceName).Msg("we deleted the storage dir")
 	return nil
 }
 
@@ -147,7 +144,6 @@ func (s *WorkspaceStorageManager) Cleanup() error {
 
 	s.mounts.Range(func(workspaceName string, value storage.Storage) bool {
 		if !slices.Contains(activeWorkspaceNames, workspaceName) {
-			log.Info().Str("workspace_name", workspaceName).Msg("unmounting storage")
 			mountsToDelete = append(mountsToDelete, workspaceName)
 		}
 
@@ -156,12 +152,10 @@ func (s *WorkspaceStorageManager) Cleanup() error {
 
 	for _, workspaceName := range mountsToDelete {
 		log.Info().Str("workspace_name", workspaceName).Msg("unmounting storage")
-
 		err := s.Unmount(workspaceName)
 		if err != nil {
 			log.Error().Str("workspace_name", workspaceName).Err(err).Msg("failed to unmount storage")
 		}
-
 		log.Info().Str("workspace_name", workspaceName).Msg("unmounted storage")
 	}
 
