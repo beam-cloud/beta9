@@ -45,23 +45,14 @@ var cgroupV2Parameters map[string]string = map[string]string{
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
 func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
+	s.containerLock.Lock()
+	defer s.containerLock.Unlock()
+
 	stopArgs, err := types.ToStopContainerArgs(event.Args)
 	if err != nil {
 		log.Error().Str("worker_id", s.workerId).Msgf("failed to parse stop container args: %v", err)
 		return false
 	}
-
-	log.Info().Str("container_id", stopArgs.ContainerId).Str("pool", s.poolName).Msgf("received stop container event: %v", stopArgs.Reason)
-
-	if stopArgs.Reason == types.StopContainerReasonBuild {
-		stopChan, exists := s.containerStopChannels.Get(stopArgs.ContainerId)
-		if exists {
-			stopChan <- struct{}{}
-		}
-	}
-
-	s.containerLock.Lock()
-	defer s.containerLock.Unlock()
 
 	if containerInstance, exists := s.containerInstances.Get(stopArgs.ContainerId); exists {
 		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")

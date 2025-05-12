@@ -54,7 +54,6 @@ type Worker struct {
 	imageClient             *ImageClient
 	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
-	containerStopChannels   *common.SafeMap[chan struct{}]
 	containerLock           sync.Mutex
 	containerWg             sync.WaitGroup
 	containerLogger         *ContainerLogger
@@ -103,7 +102,6 @@ func NewWorker() (*Worker, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	containerInstances := common.NewSafeMap[*ContainerInstance]()
-	containerStopChannels := common.NewSafeMap[chan struct{}]()
 
 	gpuType := os.Getenv("GPU_TYPE")
 	workerId := os.Getenv("WORKER_ID")
@@ -240,7 +238,6 @@ func NewWorker() (*Worker, error) {
 		podHostName:             podHostName,
 		eventBus:                nil,
 		containerInstances:      containerInstances,
-		containerStopChannels:   containerStopChannels,
 		containerLock:           sync.Mutex{},
 		containerWg:             sync.WaitGroup{},
 		containerLogger: &ContainerLogger{
@@ -319,7 +316,7 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	if request.IsBuildRequest() {
-		go s.listenForStopBuildEvent(cancel, containerId)
+		go s.listenForStopBuildEvent(ctx, cancel, containerId)
 	}
 
 	// If isolated workspace storage is available, mount it
@@ -362,19 +359,14 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 }
 
 // listenForStopBuildEvent listens for a stop build event and cancels the context
-func (s *Worker) listenForStopBuildEvent(cancel context.CancelFunc, containerId string) {
-	stopChan, exists := s.containerStopChannels.Get(containerId)
-	if !exists {
-		log.Info().Str("container_id", containerId).Msg("creating stop build event channel")
-		stopChan = make(chan struct{}, 1)
-		s.containerStopChannels.Set(containerId, stopChan)
-	}
-
-	go func() {
-		<-stopChan
+func (s *Worker) listenForStopBuildEvent(ctx context.Context, cancel context.CancelFunc, containerId string) {
+	eventbus := common.NewEventBus(s.redisClient, common.EventBusSubscriber{Type: common.StopBuildEventType(containerId), Callback: func(e *common.Event) bool {
+		log.Info().Str("container_id", containerId).Msg("received stop build event")
 		cancel()
-		s.containerStopChannels.Delete(containerId)
-	}()
+		return true
+	}})
+	go eventbus.ReceiveEvents(ctx)
+
 }
 
 // listenForShutdown listens for SIGINT and SIGTERM signals and cancels the worker context

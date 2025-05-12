@@ -49,6 +49,10 @@ const (
 	EventTypeReloadInstance EventType = "RELOAD_INSTANCE"
 )
 
+func StopBuildEventType(containerId string) EventType {
+	return EventType("stop-build-" + containerId)
+}
+
 // Send an event over the bus
 func (eb *EventBus) Send(event *Event) (string, error) {
 	serializedEvent, err := eb.serialize(event)
