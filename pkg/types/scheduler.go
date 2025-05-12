@@ -548,6 +548,8 @@ const (
 	StopContainerReasonTtl StopContainerReason = "TTL"
 	// StopContainerReasonUser is used when a container is stopped by a user request
 	StopContainerReasonUser StopContainerReason = "USER"
+	// StopContainerReasonBuild is used when a build container is being stopped
+	StopContainerReasonBuild StopContainerReason = "BUILD"
 	// StopContainerReasonScheduler is used when a container is stopped by the scheduler
 	StopContainerReasonScheduler StopContainerReason = "SCHEDULER"
 	// StopContainerReasonAdmin is used when a container is stopped by an admin request (i.e. draining a worker)

@@ -835,7 +835,7 @@ func (b *Builder) stopBuild(containerId string) error {
 
 	stopArgs := &types.StopContainerArgs{
 		ContainerId: containerId,
-		Reason:      types.StopContainerReasonUser,
+		Reason:      types.StopContainerReasonBuild,
 	}
 	eventArgs, err := stopArgs.ToMap()
 	if err != nil {

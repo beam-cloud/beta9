@@ -51,17 +51,13 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 		return false
 	}
 
-	if stopArgs.Reason == types.StopContainerReasonUser {
-		// No matter what a stop message needs to be buffered
-		stopChan, exists := s.containerStopChannels.Get(stopArgs.ContainerId)
-		if !exists {
-			log.Info().Str("container_id", stopArgs.ContainerId).Msg("creating stop container channel in handler")
-			stopChan = make(chan struct{}, 1)
-			s.containerStopChannels.Set(stopArgs.ContainerId, stopChan)
-		}
+	log.Info().Str("container_id", stopArgs.ContainerId).Str("pool", s.poolName).Msgf("received stop container event: %v", stopArgs.Reason)
 
-		log.Info().Str("container_id", stopArgs.ContainerId).Msg("received stop container event")
-		stopChan <- struct{}{}
+	if stopArgs.Reason == types.StopContainerReasonBuild {
+		stopChan, exists := s.containerStopChannels.Get(stopArgs.ContainerId)
+		if exists {
+			stopChan <- struct{}{}
+		}
 	}
 
 	s.containerLock.Lock()
