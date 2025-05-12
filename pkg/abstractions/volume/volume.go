@@ -481,8 +481,9 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 			return nil, err
 		}
 
-		volumePath = path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
-		objects, err := storageClient.ListDirectory(ctx, volumePath)
+		rootVolumePath := path.Join(types.DefaultVolumesPrefix, volume.ExternalId)
+		fullvolumePath := path.Join(rootVolumePath, volumePath)
+		objects, err := storageClient.ListDirectory(ctx, fullvolumePath)
 		if err != nil {
 			return nil, errors.New("unable to list files")
 		}
@@ -492,13 +493,8 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 		for _, obj := range objects {
 			isDir := strings.HasSuffix(*obj.Key, "/")
 
-			path := strings.TrimPrefix(*obj.Key, volumePath+"/")
-			if isDir {
-				path = strings.TrimSuffix(path, "/")
-			}
-
 			files = append(files, FileInfo{
-				Path:    path,
+				Path:    strings.TrimPrefix(*obj.Key, rootVolumePath+"/"),
 				Size:    uint64(*obj.Size),
 				ModTime: obj.LastModified.Unix(),
 				IsDir:   isDir,
