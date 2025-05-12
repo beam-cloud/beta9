@@ -494,7 +494,7 @@ func (vs *GlobalVolumeService) listPath(ctx context.Context, inputPath string, w
 			isDir := strings.HasSuffix(*obj.Key, "/")
 
 			files = append(files, FileInfo{
-				Path:    strings.TrimPrefix(*obj.Key, rootVolumePath+"/"),
+				Path:    strings.TrimSuffix(strings.TrimPrefix(*obj.Key, rootVolumePath+"/"), "/"),
 				Size:    uint64(*obj.Size),
 				ModTime: obj.LastModified.Unix(),
 				IsDir:   isDir,
