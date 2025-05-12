@@ -309,54 +309,53 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 
 	s.containerLock.Lock()
 	_, exists := s.containerInstances.Get(containerId)
-	if !exists {
-		log.Info().Str("container_id", containerId).Msg("running container")
+	if exists {
+		return
+	}
+	log.Info().Str("container_id", containerId).Msg("running container")
 
-		ctx, cancel := context.WithCancel(s.ctx)
-
-		if request.IsBuildRequest() {
-			go s.listenForStopBuildEvent(ctx, cancel, containerId)
-		}
-
-		// If isolated workspace storage is available, mount it
-		if request.StorageAvailable() {
-			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
-
-			_, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
-			if err != nil {
-				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
-				return
-			}
-		}
-
-		if err := s.RunContainer(ctx, request); err != nil {
-			s.containerLock.Unlock()
-
-			log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
-
-			// Set a non-zero exit code for the container (both in memory, and in repo)
-			exitCode := 1
-
-			serr, ok := err.(*types.ExitCodeError)
-			if ok {
-				exitCode = int(serr.ExitCode)
-			}
-
-			_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
-				ContainerId: containerId,
-				ExitCode:    int32(exitCode),
-			}))
-			if err != nil {
-				log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
-			}
-
-			s.clearContainer(containerId, request, exitCode)
-			return
-		}
-
-		s.containerLock.Unlock()
+	ctx, cancel := context.WithCancel(s.ctx)
+	if request.IsBuildRequest() {
+		go s.listenForStopBuildEvent(ctx, cancel, containerId)
 	}
 
+	// If isolated workspace storage is available, mount it
+	if request.StorageAvailable() {
+		log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
+
+		_, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
+		if err != nil {
+			log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
+			return
+		}
+	}
+
+	if err := s.RunContainer(ctx, request); err != nil {
+		s.containerLock.Unlock()
+
+		log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
+
+		// Set a non-zero exit code for the container (both in memory, and in repo)
+		exitCode := 1
+
+		serr, ok := err.(*types.ExitCodeError)
+		if ok {
+			exitCode = int(serr.ExitCode)
+		}
+
+		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
+			ContainerId: containerId,
+			ExitCode:    int32(exitCode),
+		}))
+		if err != nil {
+			log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+		}
+
+		s.clearContainer(containerId, request, exitCode)
+		return
+	}
+
+	s.containerLock.Unlock()
 }
 
 // listenForStopBuildEvent listens for a stop build event and cancels the context
@@ -367,6 +366,7 @@ func (s *Worker) listenForStopBuildEvent(ctx context.Context, cancel context.Can
 		return true
 	}})
 	go eventbus.ReceiveEvents(ctx)
+
 }
 
 // listenForShutdown listens for SIGINT and SIGTERM signals and cancels the worker context
