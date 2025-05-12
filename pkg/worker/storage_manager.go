@@ -136,9 +136,11 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 func (s *WorkspaceStorageManager) Cleanup() error {
 	s.mounts.Range(func(workspaceName string, value storage.Storage) bool {
 		s.Unmount(workspaceName)
+		log.Info().Str("workspace_name", workspaceName).Msg("unmounted storage")
 		return true
 	})
 
+	log.Info().Msg("cleaned up storage")
 	return nil
 }
 
