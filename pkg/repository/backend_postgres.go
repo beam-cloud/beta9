@@ -1920,7 +1920,7 @@ func (r *PostgresBackendRepository) GetTaskMetrics(ctx context.Context, periodSt
 func (r *PostgresBackendRepository) GetOrCreateApp(ctx context.Context, workspaceId uint, appName string) (*types.App, error) {
 	// Check if the app already exists
 	var app types.App
-	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM app WHERE name=$1 and workspace_id=$2;`
+	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM app WHERE name=$1 and workspace_id=$2 and deleted_at is null;`
 	err := r.client.GetContext(ctx, &app, query, appName, workspaceId)
 	if err == nil {
 		return &app, nil
