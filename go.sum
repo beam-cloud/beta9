@@ -140,6 +140,8 @@ github.com/beam-cloud/clip v0.0.0-20250508182911-dfe900a56cae h1:JYBmCTC3G6Y9Qrq
 github.com/beam-cloud/clip v0.0.0-20250508182911-dfe900a56cae/go.mod h1:rAFvVA8o1J/9AFstujTTCpuTTJCOQ4tqdCRNyMF4Wno=
 github.com/beam-cloud/clip v0.0.0-20250509192908-fa69461f2268 h1:p59xHmUsjhFuTFDVEW2LdnqbrX1kS1Ht1MhzVU2sYrU=
 github.com/beam-cloud/clip v0.0.0-20250509192908-fa69461f2268/go.mod h1:rAFvVA8o1J/9AFstujTTCpuTTJCOQ4tqdCRNyMF4Wno=
+github.com/beam-cloud/clip v0.0.0-20250513172600-ed01fdc5bba5 h1:pp13MtgAzECzsiKcufmjfWVG6VrtcQy0vtRMuP4/5K8=
+github.com/beam-cloud/clip v0.0.0-20250513172600-ed01fdc5bba5/go.mod h1:rAFvVA8o1J/9AFstujTTCpuTTJCOQ4tqdCRNyMF4Wno=
 github.com/beam-cloud/geesefs v0.0.0-20250509141505-906ff17992cb h1:QMvSwcxYyTgD63G+1UfEObY7VL92qDZ4RHB7N0zipr0=
 github.com/beam-cloud/geesefs v0.0.0-20250509141505-906ff17992cb/go.mod h1:utihEuMyzBOeZ6oU2ozzZkJmyzbYBuYrxsLUo1DfZXs=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250509141505-906ff17992cb h1:cqPAJ24M0rhPwMvXN4zSR35WOiQHC5qZ5iPM9ccmyws=

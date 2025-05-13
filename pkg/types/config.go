@@ -180,6 +180,7 @@ type S3ImageRegistry struct {
 	Region         string `key:"region" json:"region"`
 	Endpoint       string `key:"endpoint" json:"endpoint"`
 	ForcePathStyle bool   `key:"forcePathStyle" json:"force_path_style"`
+	Public         bool   `key:"public" json:"public"`
 }
 
 type RunnerConfig struct {

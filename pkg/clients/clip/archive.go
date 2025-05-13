@@ -109,6 +109,7 @@ func CreateArchive(ctx context.Context, options CreateArchiveOptions) error {
 				Region:    options.S3Config.Region,
 				Bucket:    options.S3Config.BucketName,
 				Endpoint:  options.S3Config.Endpoint,
+				Public:    options.S3Config.Public,
 			}
 			createOpts.StorageType = clipCommon.StorageModeS3
 			err = clipv2.CreateArchive(createOpts)
