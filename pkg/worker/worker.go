@@ -330,7 +330,7 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 		}
 	}
 
-	if err := s.RunContainer(ctx, request); err != nil {
+	if err := s.RunContainer(ctx, cancel, request); err != nil {
 		s.containerLock.Unlock()
 
 		log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
