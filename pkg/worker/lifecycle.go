@@ -510,8 +510,6 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 
 // spawn a container using runc binary
 func (s *Worker) spawn(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
 		WorkerId:    s.workerId,
 		ContainerId: request.ContainerId,
@@ -562,7 +560,7 @@ func (s *Worker) spawn(ctx context.Context, request *types.ContainerRequest, spe
 			return
 		}
 
-		resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+		resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(ctx, &pb.GetContainerStateRequest{ContainerId: containerId}))
 		if err != nil {
 			notFoundErr := &types.ErrContainerStateNotFound{}
 
