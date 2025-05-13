@@ -167,7 +167,7 @@ func (s *Worker) deleteContainer(containerId string) {
 }
 
 // Spawn a single container and stream output to stdout/stderr
-func (s *Worker) RunContainer(ctx context.Context, cancel context.CancelFunc, request *types.ContainerRequest) error {
+func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 
 	s.containerInstances.Set(containerId, &ContainerInstance{
@@ -290,7 +290,7 @@ func (s *Worker) RunContainer(ctx context.Context, cancel context.CancelFunc, re
 	go s.containerWg.Add(1)
 
 	// Start the container
-	go s.spawn(ctx, cancel, request, spec, outputLogger, opts)
+	go s.spawn(ctx, request, spec, outputLogger, opts)
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
@@ -509,7 +509,8 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 }
 
 // spawn a container using runc binary
-func (s *Worker) spawn(ctx context.Context, cancel context.CancelFunc, request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
+func (s *Worker) spawn(ctx context.Context, request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
 		WorkerId:    s.workerId,
