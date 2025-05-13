@@ -343,7 +343,7 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 			exitCode = int(serr.ExitCode)
 		}
 
-		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(ctx, &pb.SetContainerExitCodeRequest{
 			ContainerId: containerId,
 			ExitCode:    int32(exitCode),
 		}))
