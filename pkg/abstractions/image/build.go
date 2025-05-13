@@ -271,8 +271,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 	}()
 
-	go b.keepAlive(ctx, containerId, ctx.Done())
-
 	err = b.scheduler.Run(containerRequest)
 	if err != nil {
 		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: err.Error() + "\n"}
@@ -284,6 +282,14 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Failed to connect to build container.\n"}
 		return err
 	}
+
+	err = b.rdb.Set(ctx, Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second).Err()
+	if err != nil {
+		outputChan <- common.OutputMsg{Done: true, Success: success.Load(), Msg: "Failed to connect to build container.\n"}
+		return err
+	}
+
+	go b.keepAlive(ctx, containerId, ctx.Done())
 
 	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, b.tailscale, b.config.Tailscale)
 	if err != nil {
@@ -541,8 +547,6 @@ func (b *Builder) Exists(ctx context.Context, imageId string) bool {
 }
 
 func (b *Builder) keepAlive(ctx context.Context, containerId string, done <-chan struct{}) {
-	b.rdb.Set(context.Background(), Keys.imageBuildContainerTTL(containerId), "1", time.Duration(imageContainerTtlS)*time.Second)
-
 	ticker := time.NewTicker(time.Duration(buildContainerKeepAliveIntervalS) * time.Second)
 	defer ticker.Stop()
 
@@ -837,6 +841,7 @@ func (b *Builder) stopBuild(containerId string) error {
 		log.Error().Err(err).Msg("failed to send stop build event")
 		return err
 	}
+
 	log.Info().Str("container_id", containerId).Msg("sent stop build event")
 	return nil
 }
