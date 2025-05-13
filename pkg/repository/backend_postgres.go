@@ -1944,7 +1944,7 @@ func (r *PostgresBackendRepository) GetOrCreateApp(ctx context.Context, workspac
 func (r *PostgresBackendRepository) ListApps(ctx context.Context, workspaceId uint) ([]types.App, error) {
 	var apps []types.App
 
-	query := `SELECT * FROM app WHERE workspace_id = $1;`
+	query := `SELECT * FROM app WHERE workspace_id = $1 and deleted_at is null`
 	err := r.client.SelectContext(ctx, &apps, query, workspaceId)
 	if err != nil {
 		return nil, err
@@ -1964,8 +1964,14 @@ func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId
 	return &app, nil
 }
 
+func (r *PostgresBackendRepository) DeleteApp(ctx context.Context, appId string) error {
+	query := `UPDATE app set deleted_at=NOW() where external_id=$1`
+	_, err := r.client.ExecContext(ctx, query, appId)
+	return err
+}
+
 func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId})
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId}).Where(squirrel.Eq{"deleted_at": nil})
 
 	if filters.Name != "" {
 		qb = qb.Where(squirrel.Like{"LOWER(a.name)": fmt.Sprintf("%%%s%%", strings.ToLower(filters.Name))})
