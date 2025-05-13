@@ -62,7 +62,8 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 
 	switch reason {
 	case types.TaskExpired:
-		task.Status = types.TaskStatusExpired
+		// For endpoints, we set the task status to timeout on expiryfor clarity
+		task.Status = types.TaskStatusTimeout
 	case types.TaskExceededRetryLimit:
 		task.Status = types.TaskStatusError
 	case types.TaskRequestCancelled:
