@@ -837,6 +837,7 @@ func (b *Builder) stopBuild(containerId string) error {
 		log.Error().Err(err).Msg("failed to send stop build event")
 		return err
 	}
+
 	log.Info().Str("container_id", containerId).Msg("sent stop build event")
 	return nil
 }
