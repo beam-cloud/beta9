@@ -22,7 +22,7 @@ import (
 
 type RuncClient interface {
 	Exec(containerId string, command string, env []string) (*pb.RunCExecResponse, error)
-	Archive(ctx context.Context, containerId string, imageId string, outputChan chan common.OutputMsg) error
+	Archive(ctx context.Context, containerId string, imageId string, clipVersion uint32, outputChan chan common.OutputMsg) error
 	Kill(containerId string) (*pb.RunCKillResponse, error)
 	Status(containerId string) (*pb.RunCStatusResponse, error)
 	StreamLogs(ctx context.Context, containerId string, outputChan chan common.OutputMsg) error
@@ -183,7 +183,7 @@ func (b *Build) executeCommands() error {
 }
 
 func (b *Build) archive() error {
-	if err := b.runcClient.Archive(b.ctx, b.containerID, b.imageID, b.outputChan); err != nil {
+	if err := b.runcClient.Archive(b.ctx, b.containerID, b.imageID, b.opts.ClipVersion, b.outputChan); err != nil {
 		b.log(true, err.Error()+"\n")
 		return err
 	}
@@ -288,6 +288,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
+		ClipVersion: b.opts.ClipVersion,
 	}
 
 	if b.opts.Gpu != "" {

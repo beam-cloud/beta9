@@ -155,6 +155,7 @@ type ImageServiceConfig struct {
 	BuildContainerPoolSelector     string                `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
 	Runner                         RunnerConfig          `key:"runner" json:"runner"`
 	ArchiveNanosecondsPerByte      int64                 `key:"archiveNanosecondsPerByte" json:"archive_nanoseconds_per_byte"`
+	ClipVersion                    uint8                 `key:"clipVersion" json:"clip_version"`
 }
 
 type ImageRegistriesConfig struct {
@@ -179,6 +180,7 @@ type S3ImageRegistry struct {
 	Region         string `key:"region" json:"region"`
 	Endpoint       string `key:"endpoint" json:"endpoint"`
 	ForcePathStyle bool   `key:"forcePathStyle" json:"force_path_style"`
+	Public         bool   `key:"public" json:"public"`
 }
 
 type RunnerConfig struct {

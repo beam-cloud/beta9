@@ -167,6 +167,7 @@ func (s *Worker) deleteContainer(containerId string) {
 
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
+	log.Info().Int("clip_version", int(request.ClipVersion)).Msgf("Running container %s", request.ContainerId)
 	containerId := request.ContainerId
 
 	s.containerInstances.Set(containerId, &ContainerInstance{
@@ -196,7 +197,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Attempt to pull image
 	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
+	elapsed, err := s.imageClient.SetupClipMount(ctx, request, outputLogger)
 	if err != nil {
 		if !request.IsBuildRequest() {
 			return err
@@ -207,16 +208,19 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 			return nil
 		default:
 			if err := s.buildOrPullBaseImage(ctx, request, containerId, outputLogger); err != nil {
+				log.Error().Str("container_id", containerId).Msgf("failed to build or pull base image: %v", err)
 				return err
 			}
-			elapsed, err = s.imageClient.PullLazy(ctx, request, outputLogger)
+			elapsed, err = s.imageClient.SetupClipMount(ctx, request, outputLogger)
 			if err != nil {
+				log.Error().Str("container_id", containerId).Msgf("failed to pull image: %v", err)
 				return err
 			}
 		}
 	}
 	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
 
+	log.Info().Str("container_id", containerId).Msg("pulled image")
 	// Determine how many ports we need to expose
 	portsToExpose := len(request.Ports)
 	if portsToExpose == 0 {

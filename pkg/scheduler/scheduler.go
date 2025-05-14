@@ -9,6 +9,8 @@ import (
 	"sort"
 	"time"
 
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
+
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -127,6 +129,15 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	quota, err := s.getConcurrencyLimit(request)
 	if err != nil {
 		return err
+	}
+
+	if request.ClipVersion == 0 {
+		clipVersion, err := s.backendRepo.GetImageClipVersion(s.ctx, request.ImageId)
+		if err != nil && err != sql.ErrNoRows {
+			log.Warn().Str("image_id", request.ImageId).Err(err).Msg("failed to get image clip version, assuming v1")
+			clipVersion = uint32(clipCommon.ClipFileFormatVersion)
+		}
+		request.ClipVersion = clipVersion
 	}
 
 	err = s.containerRepo.SetContainerStateWithConcurrencyLimit(quota, request)
