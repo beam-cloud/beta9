@@ -160,6 +160,7 @@ type EventTaskSchema struct {
 	WorkspaceID string     `json:"workspace_id"`
 	StubID      string     `json:"stub_id"`
 	CreatedAt   time.Time  `json:"created_at"`
+	AppID       string     `json:"app_id"`
 }
 
 var EventStubStateSchemaVersion = "1.0"
