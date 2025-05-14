@@ -287,6 +287,7 @@ func (t *TCPEventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
 		CreatedAt:   task.CreatedAt.Time,
 		StubID:      task.Stub.ExternalId,
 		WorkspaceID: task.Workspace.ExternalId,
+		AppID:       task.App.ExternalId,
 	}
 
 	if task.StartedAt.Valid {
@@ -312,6 +313,7 @@ func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 		CreatedAt:   task.CreatedAt.Time,
 		StubID:      task.Stub.ExternalId,
 		WorkspaceID: task.Workspace.ExternalId,
+		AppID:       task.App.ExternalId,
 	}
 
 	if task.StartedAt.Valid {
