@@ -132,10 +132,10 @@ github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563 h1:kn8/lBy
 github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563/go.mod h1:RrA2ruMma4/dN9Sa6wwhyAO1uI6di+tlLB5wuM7TuvQ=
 github.com/beam-cloud/clip v0.0.0-20250424185136-5f40b560b510 h1:CoYog6ZQ81/Kvs1n41RTCj2LhnJuIjWyPi2Jw+qkwKM=
 github.com/beam-cloud/clip v0.0.0-20250424185136-5f40b560b510/go.mod h1:GtCHH6ik2SkIFo+GdN/l0+kAzxhLTUjSboIB+7Br6dk=
-github.com/beam-cloud/geesefs v0.0.0-20250514131424-ae2c76f457f6 h1:CbPa40kllSJuAFnO4Mlixj3gfQSv+l/Q8/EOH0kTcaA=
-github.com/beam-cloud/geesefs v0.0.0-20250514131424-ae2c76f457f6/go.mod h1:utihEuMyzBOeZ6oU2ozzZkJmyzbYBuYrxsLUo1DfZXs=
-github.com/beam-cloud/geesefs/s3ext v0.0.0-20250514131424-ae2c76f457f6 h1:Z3vF0FgneoYxMKhOocVgC5y1Z3EbdasrjMCmgQqP0ic=
-github.com/beam-cloud/geesefs/s3ext v0.0.0-20250514131424-ae2c76f457f6/go.mod h1:YT41ScwaZw9hYfM0WbYZ64sQLNhPxWZFOXJOPug7O5M=
+github.com/beam-cloud/geesefs v0.0.0-20250514135810-483dc1734c35 h1:QWW2mO2cOHe0EDBHBs3VxHtgo9s0PCoT6KxY/gqBJ4Y=
+github.com/beam-cloud/geesefs v0.0.0-20250514135810-483dc1734c35/go.mod h1:utihEuMyzBOeZ6oU2ozzZkJmyzbYBuYrxsLUo1DfZXs=
+github.com/beam-cloud/geesefs/s3ext v0.0.0-20250514135810-483dc1734c35 h1:gOr+dnequXa1coZKrrinORqm7pLrAmi9qB0xqMX/a9I=
+github.com/beam-cloud/geesefs/s3ext v0.0.0-20250514135810-483dc1734c35/go.mod h1:YT41ScwaZw9hYfM0WbYZ64sQLNhPxWZFOXJOPug7O5M=
 github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737 h1:9dvNZag3gegzIl5i8W861lsnhnwz4joHr40K1HPcpmw=
 github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324 h1:2BWf8G8CaZ8vN0rST9uu5BL8P/bDUBwXJYVLwWwaLVU=
