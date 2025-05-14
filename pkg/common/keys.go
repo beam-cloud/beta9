@@ -88,6 +88,10 @@ var (
 	containerName string = "%s-%s-%s" // prefix, stub-id, containerId
 )
 
+var (
+	imageBuildContainerTTL string = "image:build_container_ttl:%s"
+)
+
 var RedisKeys = &redisKeys{}
 
 type redisKeys struct{}
@@ -322,4 +326,8 @@ func (rk *redisKeys) ProviderMachineLock(providerName, poolName, machineId strin
 
 func (rk *redisKeys) ContainerName(prefix string, stubId string, containerId string) string {
 	return fmt.Sprintf(containerName, prefix, stubId, containerId)
+}
+
+func (rk *redisKeys) ImageBuildContainerTTL(containerId string) string {
+	return fmt.Sprintf(imageBuildContainerTTL, containerId)
 }

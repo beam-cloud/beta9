@@ -245,7 +245,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		startupCommand,
 	}
 
-	err = ss.rdb.Set(ctx, Keys.shellContainerTTL(containerId), "1", time.Duration(shellContainerTtlS)*time.Second).Err()
+	err = ss.rdb.Set(ctx, Keys.shellContainerTTL(containerId), "1", containerWaitTimeoutDurationS).Err()
 	if err != nil {
 		return &pb.CreateShellResponse{
 			Ok:     false,
