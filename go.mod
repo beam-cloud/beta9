@@ -340,9 +340,9 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )
 
-replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20250514205247-26580aeb1d8d
+replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20250514214259-1e3929ab6acf
 
-replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250514205247-26580aeb1d8d
+replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250514214259-1e3929ab6acf
 
 replace github.com/winfsp/cgofuse => github.com/vitalif/cgofuse v0.0.0-20230609211427-22e8fa44f6b8
 
