@@ -109,7 +109,7 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 	process.Cwd = instance.Spec.Process.Cwd
 
 	instanceSpec := instance.Spec.Process
-	process.Env = append(instanceSpec.Env, "DEBIAN_FRONTEND=noninteractive")
+	process.Env = append(instanceSpec.Env, in.Env...)
 
 	if instance.Request.IsBuildRequest() {
 		/*

@@ -162,6 +162,18 @@
 			]
 		},
 		{
+			"destination": "/usr/local/bin/uv",
+			"type": "bind",
+			"source": "/usr/local/bin/uv",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
 			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
