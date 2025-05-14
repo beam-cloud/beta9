@@ -82,6 +82,10 @@ RUN go mod download
 COPY --exclude=sdk . .
 RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
+# uv
+# ========================
+FROM golang AS uv
+RUN curl -LsSf https://astral.sh/uv/0.6.13/install.sh | sh
 
 # final image
 # ========================
@@ -183,6 +187,7 @@ fi
 
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
 COPY ./sdk/src/beta9 /workspace/sdk
+COPY --from=uv /root/.local/bin/uv /usr/local/bin/uv
 
 VOLUME "/usr/lib/x86_64-linux-gnu"
 VOLUME "/usr/lib/aarch64-linux-gnu"
