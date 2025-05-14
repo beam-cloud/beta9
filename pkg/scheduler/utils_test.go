@@ -194,22 +194,10 @@ func TestParseGPUType(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "valid gpu a100-80 (with hyphen)",
-			gpuType: "A100-80",
-			wantVal: types.GPU_A100_80,
-			wantErr: false,
-		},
-		{
 			name:    "valid gpu rtx4090",
 			gpuType: "RTX4090",
 			wantVal: types.GPU_RTX4090,
 			wantErr: false,
-		},
-		{
-			name:    "invalid gpu a100_80 (with underscore)",
-			gpuType: "A100_80",
-			wantVal: types.GpuType(""),
-			wantErr: true,
 		},
 		{
 			name:    "invalid gpu type 3060 (as str)",

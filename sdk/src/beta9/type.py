@@ -93,9 +93,7 @@ class GpuType(str, Enum):
     L4 = "L4"
     A10G = "A10G"
     A100_40 = "A100-40"
-    A100_80 = "A100-80"
     H100 = "H100"
-    A6000 = "A6000"
     RTX4090 = "RTX4090"
     L40S = "L40S"
 
@@ -109,9 +107,7 @@ GpuTypeLiteral = Literal[
     "L4",
     "A10G",
     "A100-40",
-    "A100-80",
     "H100",
-    "A6000",
     "RTX4090",
     "L40S",
 ]

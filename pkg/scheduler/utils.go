@@ -81,8 +81,6 @@ func ParseGPUType(gpu interface{}) (types.GpuType, error) {
 	switch fmt.Sprintf("%v", gpu) {
 	case string(types.GPU_A100_40):
 		return types.GPU_A100_40, nil
-	case string(types.GPU_A100_80):
-		return types.GPU_A100_80, nil
 	case string(types.GPU_A10G):
 		return types.GPU_A10G, nil
 	case string(types.GPU_L4):
@@ -91,8 +89,6 @@ func ParseGPUType(gpu interface{}) (types.GpuType, error) {
 		return types.GPU_T4, nil
 	case string(types.GPU_H100):
 		return types.GPU_H100, nil
-	case string(types.GPU_A6000):
-		return types.GPU_A6000, nil
 	case string(types.GPU_RTX4090):
 		return types.GPU_RTX4090, nil
 	case string(types.GPU_L40S):
