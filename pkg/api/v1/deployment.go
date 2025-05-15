@@ -140,7 +140,16 @@ func (g *DeploymentGroup) StopDeployment(ctx echo.Context) error {
 		return HTTPBadRequest("Deployment not found")
 	}
 
-	return g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx)
+	if err = stopDeployments(ctx.Request().Context(), []types.DeploymentWithRelated{*deploymentWithRelated}, CommonClients{
+		containerRepo: g.containerRepo,
+		backendRepo:   g.backendRepo,
+		scheduler:     g.scheduler,
+		redisClient:   g.redisClient,
+	}); err != nil {
+		return HTTPInternalServerError(err.Error())
+	}
+
+	return ctx.NoContent(http.StatusOK)
 }
 
 func (g *DeploymentGroup) StartDeployment(ctx echo.Context) error {
@@ -191,7 +200,16 @@ func (g *DeploymentGroup) StopAllActiveDeployments(ctx echo.Context) error {
 		return HTTPBadRequest("Failed to get deployments")
 	}
 
-	return g.stopDeployments(deployments, ctx)
+	if err = stopDeployments(ctx.Request().Context(), deployments, CommonClients{
+		containerRepo: g.containerRepo,
+		backendRepo:   g.backendRepo,
+		scheduler:     g.scheduler,
+		redisClient:   g.redisClient,
+	}); err != nil {
+		return HTTPInternalServerError(err.Error())
+	}
+
+	return ctx.NoContent(http.StatusOK)
 }
 
 func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
@@ -214,7 +232,12 @@ func (g *DeploymentGroup) DeleteDeployment(ctx echo.Context) error {
 	}
 
 	// Stop deployment
-	if err := g.stopDeployments([]types.DeploymentWithRelated{*deploymentWithRelated}, ctx); err != nil {
+	if err := stopDeployments(ctx.Request().Context(), []types.DeploymentWithRelated{*deploymentWithRelated}, CommonClients{
+		containerRepo: g.containerRepo,
+		backendRepo:   g.backendRepo,
+		scheduler:     g.scheduler,
+		redisClient:   g.redisClient,
+	}); err != nil {
 		return HTTPInternalServerError("Failed to stop deployment")
 	}
 
@@ -285,42 +308,6 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 
 	path := getPackagePath(workspace.Name, object.ExternalId)
 	return ctx.File(path)
-}
-
-func (g *DeploymentGroup) stopDeployments(deployments []types.DeploymentWithRelated, ctx echo.Context) error {
-	for _, deployment := range deployments {
-		// Stop scheduled job
-		if deployment.StubType == types.StubTypeScheduledJobDeployment {
-			if scheduledJob, err := g.backendRepo.GetScheduledJob(ctx.Request().Context(), deployment.Id); err == nil {
-				g.backendRepo.DeleteScheduledJob(ctx.Request().Context(), scheduledJob)
-			}
-		}
-
-		// Stop active containers
-		containers, err := g.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
-		if err == nil {
-			for _, container := range containers {
-				g.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId})
-			}
-		}
-
-		// Disable deployment
-		deployment.Active = false
-		_, err = g.backendRepo.UpdateDeployment(ctx.Request().Context(), deployment.Deployment)
-		if err != nil {
-			return HTTPInternalServerError("Failed to disable deployment")
-		}
-
-		// Publish reload instance event
-		eventBus := common.NewEventBus(g.redisClient)
-		eventBus.Send(&common.Event{Type: common.EventTypeReloadInstance, Retries: 3, LockAndDelete: false, Args: map[string]any{
-			"stub_id":   deployment.Stub.ExternalId,
-			"stub_type": deployment.StubType,
-			"timestamp": time.Now().Unix(),
-		}})
-	}
-
-	return ctx.NoContent(http.StatusOK)
 }
 
 func getPackagePath(workspaceName, objectId string) string {
