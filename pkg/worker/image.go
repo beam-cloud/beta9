@@ -369,9 +369,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	outputLogger.Info("Building image from Dockerfile\n")
 	startTime := time.Now()
 
-	buildCtxPath, err := getBuildContext(request)
+	buildCtxPath, err := getBuildContext(c.config.Storage.WorkspaceStorage.BaseMountPath, request)
 	if err != nil {
 		return err
+	}
+
+	if request.StorageAvailable() {
+		// Remove temporarily unpacked build context
+		defer os.RemoveAll(buildCtxPath)
 	}
 
 	buildPath, err := os.MkdirTemp("", "")
@@ -611,11 +616,25 @@ func umociUnpackOptions() layer.UnpackOptions {
 	return unpackOptions
 }
 
-func getBuildContext(request *types.ContainerRequest) (string, error) {
+func getBuildContext(workspaceStorageMountPath string, request *types.ContainerRequest) (string, error) {
+	var err error
 	buildCtxPath := "."
+
 	if request.BuildOptions.BuildCtxObject != nil {
+		log.Info().Str("build_ctx_object", *request.BuildOptions.BuildCtxObject).Msg("building with build context object")
+
 		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
 		objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
+
+		if request.StorageAvailable() {
+			// Overwrite the paths if workspace storage is available
+			objectPath = path.Join(workspaceStorageMountPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
+			buildCtxPath, err = os.MkdirTemp("", "")
+			if err != nil {
+				return "", err
+			}
+		}
+
 		err := common.ExtractObjectFile(context.TODO(), objectPath, buildCtxPath)
 		if err != nil {
 			return "", err

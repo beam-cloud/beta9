@@ -200,6 +200,7 @@ class FileSyncer:
 
             terminal.header("Uploading")
             if head_response.use_workspace_storage:
+                terminal.warn("Using workspace storage")
                 create_object_response: CreateObjectResponse = self.gateway_stub.create_object(
                     CreateObjectRequest(
                         object_metadata=metadata, hash=hash, size=size, overwrite=True
