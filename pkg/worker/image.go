@@ -631,6 +631,7 @@ func (c *ImageClient) getBuildContext(request *types.ContainerRequest) (string, 
 			if err != nil {
 				return "", err
 			}
+			buildCtxPath = path.Join(buildCtxPath, "build-ctx")
 		}
 
 		err := common.ExtractObjectFile(context.TODO(), objectPath, buildCtxPath)
