@@ -49,6 +49,22 @@ func (c *ContainerGroup) ListContainersByWorkspaceId(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to get containers")
 	}
 
+	stubIdsToAppIds := make(map[string]string)
+	for i, containerState := range containerStates {
+		if appId, ok := stubIdsToAppIds[containerState.StubId]; ok {
+			containerState.AppId = appId
+			continue
+		}
+
+		app, err := c.backendRepo.RetrieveAppByStubExternalId(ctx.Request().Context(), containerState.StubId)
+		if err != nil {
+			return HTTPInternalServerError("Failed to get app")
+		}
+
+		containerStates[i].AppId = app.ExternalId
+		stubIdsToAppIds[containerState.StubId] = app.ExternalId
+	}
+
 	return ctx.JSON(http.StatusOK, containerStates)
 }
 
