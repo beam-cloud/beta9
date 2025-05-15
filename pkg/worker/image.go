@@ -369,16 +369,17 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	outputLogger.Info("Building image from Dockerfile\n")
 	startTime := time.Now()
 
-	buildCtxPath, err := getBuildContext(request)
-	if err != nil {
-		return err
-	}
-
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(buildPath)
+
+	buildCtxPath, err := c.getBuildContext(buildPath, request)
+	if err != nil {
+		return err
+	}
+
 	tempDockerFile := filepath.Join(buildPath, "Dockerfile")
 	f, err := os.Create(tempDockerFile)
 	if err != nil {
@@ -611,15 +612,23 @@ func umociUnpackOptions() layer.UnpackOptions {
 	return unpackOptions
 }
 
-func getBuildContext(request *types.ContainerRequest) (string, error) {
-	buildCtxPath := "."
-	if request.BuildOptions.BuildCtxObject != nil {
-		buildCtxPath = filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
-		objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
-		err := common.ExtractObjectFile(context.TODO(), objectPath, buildCtxPath)
-		if err != nil {
-			return "", err
-		}
+func (c *ImageClient) getBuildContext(buildPath string, request *types.ContainerRequest) (string, error) {
+	if request.BuildOptions.BuildCtxObject == nil {
+		return ".", nil
+	}
+
+	buildCtxPath := filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
+	objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
+
+	if request.StorageAvailable() {
+		// Overwrite the path if workspace storage is available
+		objectPath = path.Join(c.config.Storage.WorkspaceStorage.BaseMountPath, request.Workspace.Name, "objects", *request.BuildOptions.BuildCtxObject)
+		buildCtxPath = path.Join(buildPath, "build-ctx")
+	}
+
+	err := common.ExtractObjectFile(context.TODO(), objectPath, buildCtxPath)
+	if err != nil {
+		return "", err
 	}
 
 	return buildCtxPath, nil
