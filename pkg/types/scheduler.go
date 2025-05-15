@@ -147,7 +147,6 @@ type ContainerState struct {
 	Cpu         int64           `redis:"cpu" json:"cpu"`
 	Memory      int64           `redis:"memory" json:"memory"`
 	StartedAt   int64           `redis:"started_at" json:"started_at"`
-	AppId       string          `redis:"app_id" json:"app_id"`
 }
 
 // @go2proto
