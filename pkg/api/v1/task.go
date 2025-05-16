@@ -226,7 +226,7 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 			Force:       true,
 		})
 		if err != nil {
-			log.Warn().Err(err).Msg("failed to stop container")
+			log.Error().Str("container_id", task.ContainerId).Msgf("failed to stop container: %v", err)
 		}
 	}
 
