@@ -30,6 +30,10 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 		return &pb.StartTaskResponse{Ok: false}, nil
 	}
 
+	if task.Status.IsCompleted() {
+		return &pb.StartTaskResponse{Ok: false}, nil
+	}
+
 	task.StartedAt = types.NullTime{}.Now()
 	task.Status = types.TaskStatusRunning
 
