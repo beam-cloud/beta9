@@ -36,6 +36,7 @@ const (
 	imageBundlePath    string = "/dev/shm/images"
 	imageTmpDir        string = "/tmp"
 	metricsSourceLabel        = "image_client"
+	pullLazyBackoff           = 1000 * time.Millisecond
 )
 
 var (
@@ -184,7 +185,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
 
 		// Create constant backoff
-		b := backoff.NewConstantBackOff(5000 * time.Millisecond)
+		b := backoff.NewConstantBackOff(pullLazyBackoff)
 
 		operation := func() error {
 			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
