@@ -166,6 +166,7 @@ type BackendRepository interface {
 	GetTaskMetrics(ctx context.Context, periodStart time.Time, periodEnd time.Time) (types.TaskMetrics, error)
 	GetOrCreateApp(ctx context.Context, workspaceId uint, appName string) (*types.App, error)
 	RetrieveApp(ctx context.Context, workspaceId uint, appId string) (*types.App, error)
+	RetrieveAppByStubExternalId(ctx context.Context, stubExternalId string) (*types.App, error)
 	ListApps(ctx context.Context, workspaceId uint) ([]types.App, error)
 	ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error)
 }

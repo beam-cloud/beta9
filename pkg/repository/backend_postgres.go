@@ -1967,6 +1967,17 @@ func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId
 	return &app, nil
 }
 
+func (r *PostgresBackendRepository) RetrieveAppByStubExternalId(ctx context.Context, stubExternalId string) (*types.App, error) {
+	var app types.App
+	query := `SELECT a.id, a.external_id, a.name, a.workspace_id, a.created_at, a.updated_at, a.description, a.deleted_at FROM app a JOIN stub s ON a.id = s.app_id WHERE s.external_id = $1;`
+	err := r.client.GetContext(ctx, &app, query, stubExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &app, nil
+}
+
 func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
 	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId})
 
