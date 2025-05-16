@@ -201,6 +201,11 @@ func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionSer
 			log.Error().Err(err).Msg("error cancelling task")
 		}
 
+		err = fs.taskDispatcher.Complete(context.Background(), authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId)
+		if err != nil {
+			log.Error().Err(err).Msg("error completing task")
+		}
+
 		err = fs.rdb.Publish(context.Background(), common.RedisKeys.TaskCancel(authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId), task.Message().TaskId).Err()
 		if err != nil {
 			log.Error().Err(err).Msg("error publishing task cancel event")

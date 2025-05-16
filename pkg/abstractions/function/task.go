@@ -203,6 +203,17 @@ func (t *FunctionTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		return err
 	}
 
+	if t.containerId != "" {
+		err = t.fs.scheduler.Stop(&types.StopContainerArgs{
+			ContainerId: t.containerId,
+			Reason:      types.StopContainerReasonUser,
+			Force:       true,
+		})
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
