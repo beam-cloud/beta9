@@ -184,8 +184,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
 
 		// Create constant backoff
-		b := backoff.NewConstantBackOff(300 * time.Millisecond)
-		imageLocked := false
+		b := backoff.NewConstantBackOff(5000 * time.Millisecond)
 
 		operation := func() error {
 			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
@@ -200,11 +199,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 			pullStartTime := time.Now()
 
-			// If the image was previously locked, don't try to cache it again, just wait until the caching is complete
-			if imageLocked {
-				return errors.New("image locked")
-			}
-
 			_, err := c.cacheClient.StoreContentFromFUSE(struct {
 				Path string
 			}{
@@ -218,7 +212,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			})
 			if err != nil {
 				if err == blobcache.ErrUnableToAcquireLock {
-					imageLocked = true
+					log.Error().Str("image_id", imageId).Msg("unable to acquire lock on image, retrying...")
 					return err
 				}
 
