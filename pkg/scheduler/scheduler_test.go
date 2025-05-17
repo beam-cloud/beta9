@@ -621,16 +621,16 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 				{
 					Cpu:        1000,
 					Memory:     1000,
-					GpuRequest: []string{"T4", "A6000"},
+					GpuRequest: []string{"T4", "A10G"},
 				},
 				{
 					Cpu:        1000,
 					Memory:     1000,
-					GpuRequest: []string{"A10G", "T4", "A6000"},
+					GpuRequest: []string{"A10G", "T4", "H100"},
 				},
 			},
-			expectedGpuResults: []string{"A10G", "T4", "A6000"},
-			gpus:               []string{"A10G", "T4", "A6000"},
+			expectedGpuResults: []string{"A10G", "T4", "H100"},
+			gpus:               []string{"A10G", "T4", "H100"},
 		},
 		{
 			name: "not enough backup GPUs",
@@ -652,7 +652,7 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 				},
 			},
 			expectedGpuResults: []string{"A10G", "T4", ""},
-			gpus:               []string{"A10G", "T4", "A6000"},
+			gpus:               []string{"A10G", "T4", "H100"},
 		},
 		{
 			name: "backward compatibility",
@@ -681,8 +681,8 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 					GpuRequest: []string{"any"},
 				},
 			},
-			expectedGpuResults: []string{"A10G", "T4", "A6000", "H100"},
-			gpus:               []string{"A10G", "T4", "A6000", "H100"},
+			expectedGpuResults: []string{"A10G", "T4", "H100"},
+			gpus:               []string{"A10G", "T4", "H100"},
 		},
 	}
 
