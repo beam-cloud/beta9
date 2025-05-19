@@ -9,6 +9,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/worker"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	_ "go.uber.org/automaxprocs"
 )
 
 func main() {
