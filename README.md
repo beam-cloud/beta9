@@ -3,7 +3,9 @@
 <img alt="Logo" src="static/beam-logo.jpeg" width="20%">
 </p>
 
-## Run Cloud Containers from Python
+## Ultrafast AI Inference
+
+### Scalable Infrastructure for Running Your AI Workloads at Scale
 
 <p align="center">
   <a href="https://github.com/beam-cloud/beta9/stargazers">
@@ -33,12 +35,12 @@ pip install beam-client
 
 ## Features
 
-- **Extremely fast**: launches runc containers in ~800ms
-- **Parallelization and concurrency**: fan out workloads to 100s of containers
-- **First-class developer experience**: hot-reloading, webhooks, and scheduled jobs
-- **Scale-to-zero**: Workloads are serverless by default
-- **Volume Storage**: mount distributed storage volumes
-- **GPU support**: run on our cloud, or connect your own hardware
+- **Extremely Fast**: Launch runc containers in ~800ms
+- **Parallelization and Concurrency**: Fan out workloads to 100s of containers
+- **First-Class Developer Experience**: Hot-reloading, webhooks, and scheduled jobs
+- **Scale-to-Zero**: Workloads are serverless by default
+- **Volume Storage**: Mount distributed storage volumes
+- **GPU Support**: Run on our cloud (4090s, H100s, and more) or connect your own hardware
 
 ## Quickstart
 
