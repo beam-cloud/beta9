@@ -57,6 +57,7 @@ storage:
       stagedWriteModeEnabled: true
       stagedWritePath: /tmp/geesefs-staged-write
       stagedWriteDebounce: 30s
+      cacheStreamingEnabled: false
 gateway:
   host: beta9-gateway
   invokeURLType: path

@@ -249,6 +249,7 @@ type GeeseConfig struct {
 	StagedWriteModeEnabled bool          `key:"stagedWriteModeEnabled" json:"staged_write_mode_enabled"`
 	StagedWritePath        string        `key:"stagedWritePath" json:"staged_write_path"`
 	StagedWriteDebounce    time.Duration `key:"stagedWriteDebounce" json:"staged_write_debounce"`
+	CacheStreamingEnabled  bool          `key:"cacheStreamingEnabled" json:"cache_streaming_enabled"`
 }
 
 // @go2proto
