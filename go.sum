@@ -132,10 +132,10 @@ github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563 h1:kn8/lBy
 github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563/go.mod h1:RrA2ruMma4/dN9Sa6wwhyAO1uI6di+tlLB5wuM7TuvQ=
 github.com/beam-cloud/clip v0.0.0-20250424185136-5f40b560b510 h1:CoYog6ZQ81/Kvs1n41RTCj2LhnJuIjWyPi2Jw+qkwKM=
 github.com/beam-cloud/clip v0.0.0-20250424185136-5f40b560b510/go.mod h1:GtCHH6ik2SkIFo+GdN/l0+kAzxhLTUjSboIB+7Br6dk=
-github.com/beam-cloud/geesefs v0.0.0-20250513160328-b95c7f0c368a h1:Lp6EBzpCUs6z3r+tTq9erxL9qgSJzFHUDVajEuqJ2es=
-github.com/beam-cloud/geesefs v0.0.0-20250513160328-b95c7f0c368a/go.mod h1:utihEuMyzBOeZ6oU2ozzZkJmyzbYBuYrxsLUo1DfZXs=
-github.com/beam-cloud/geesefs/s3ext v0.0.0-20250513160328-b95c7f0c368a h1:HuSqNNHWu2pabayP/gEJdXjL+22Gnb9QbuCmU6ariZ4=
-github.com/beam-cloud/geesefs/s3ext v0.0.0-20250513160328-b95c7f0c368a/go.mod h1:YT41ScwaZw9hYfM0WbYZ64sQLNhPxWZFOXJOPug7O5M=
+github.com/beam-cloud/geesefs v0.0.0-20250520002500-739af713f8df h1:DTtUo1utn8GRWJbwAP/FFZ8YLJSI/ghp5EOx4xY1gzY=
+github.com/beam-cloud/geesefs v0.0.0-20250520002500-739af713f8df/go.mod h1:utihEuMyzBOeZ6oU2ozzZkJmyzbYBuYrxsLUo1DfZXs=
+github.com/beam-cloud/geesefs/s3ext v0.0.0-20250520002500-739af713f8df h1:VzH3Rjg3Czzje+J/+Dz0nrjQTvmEha/KMzXkwc6ItT4=
+github.com/beam-cloud/geesefs/s3ext v0.0.0-20250520002500-739af713f8df/go.mod h1:YT41ScwaZw9hYfM0WbYZ64sQLNhPxWZFOXJOPug7O5M=
 github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737 h1:9dvNZag3gegzIl5i8W861lsnhnwz4joHr40K1HPcpmw=
 github.com/beam-cloud/go-runc v0.0.0-20250226192420-34dad0fdc737/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324 h1:2BWf8G8CaZ8vN0rST9uu5BL8P/bDUBwXJYVLwWwaLVU=
@@ -617,6 +617,8 @@ github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRI
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b h1:0LFwY6Q3gMACTjAbMZBjXAqTOzOwFaj2Ld6cjeQ7Rig=
 github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b/go.mod h1:OmDBASR4679mdNQnz2pUhc2G8CO2JrUAVFDRBDP/hJE=
+github.com/prashantv/gostub v1.1.0 h1:BTyx3RfQjRHnUWaGF9oQos79AlQ5k8WNktv7VGvVH4g=
+github.com/prashantv/gostub v1.1.0/go.mod h1:A5zLQHz7ieHGG7is6LLXLz7I8+3LZzsrV0P1IAHhP5U=
 github.com/pressly/goose/v3 v3.21.1 h1:5SSAKKWej8LVVzNLuT6KIvP1eFDuPvxa+B6H0w78buQ=
 github.com/pressly/goose/v3 v3.21.1/go.mod h1:sqthmzV8PitchEkjecFJII//l43dLOCzfWh8pHEe+vE=
 github.com/prometheus-community/pro-bing v0.4.0 h1:YMbv+i08gQz97OZZBwLyvmmQEEzyfyrrjEaAchdy3R4=
@@ -690,6 +692,7 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
 github.com/stretchr/objx v0.1.1/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/objx v0.4.0/go.mod h1:YvHI0jy2hoMjB+UWwv71VJQ9isScKT/TqJzVSSt89Yw=
 github.com/stretchr/objx v0.5.0/go.mod h1:Yh+to48EsGEfYuaHDzXPcE3xhTkx73EhmCGUpEOglKo=
+github.com/stretchr/objx v0.5.2 h1:xuMeJ0Sdp5ZMRXx/aWO6RZxdr3beISkG5/G/aIRr3pY=
 github.com/stretchr/objx v0.5.2/go.mod h1:FRsXN1f5AsAjCGJKqEizvkpNtU+EGNCLh3NxZ/8L+MA=
 github.com/stretchr/testify v1.2.2/go.mod h1:a8OnRcib4nhh0OaRAV+Yts87kKdq0PP7pXfy6kDkUVs=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
@@ -833,6 +836,8 @@ go.opentelemetry.io/otel/trace v1.34.0 h1:+ouXS2V8Rd4hp4580a8q23bg0azF2nI8cqLYnC
 go.opentelemetry.io/otel/trace v1.34.0/go.mod h1:Svm7lSjQD7kG7KJ/MUHPVXSDGz2OX4h0M2jHBhmSfRE=
 go.opentelemetry.io/proto/otlp v1.4.0 h1:TA9WRvW6zMwP+Ssb6fLoUIuirti1gGbP28GcKG1jgeg=
 go.opentelemetry.io/proto/otlp v1.4.0/go.mod h1:PPBWZIP98o2ElSqI35IHfu7hIhSwvc5N38Jw8pXuGFY=
+go.uber.org/automaxprocs v1.6.0 h1:O3y2/QNTOdbF+e/dpXNNW7Rx2hZ4sTIPyybbxyNqTUs=
+go.uber.org/automaxprocs v1.6.0/go.mod h1:ifeIMSnPZuznNm6jmdzmU3/bfk01Fe2fotchwEFJ8r8=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=
 go.uber.org/goleak v1.3.0/go.mod h1:CoHD4mav9JJNrW/WLlf7HGZPjdw8EucARQHekz1X6bE=
 go.uber.org/multierr v1.11.0 h1:blXXJkSxSSfBVBlC76pxqeO+LN3aDfLQo+309xJstO0=

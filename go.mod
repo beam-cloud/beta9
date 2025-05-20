@@ -76,6 +76,7 @@ require (
 	go.opentelemetry.io/otel/sdk/log v0.7.0
 	go.opentelemetry.io/otel/sdk/metric v1.34.0
 	go.opentelemetry.io/otel/trace v1.34.0
+	go.uber.org/automaxprocs v1.6.0
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56
 	golang.org/x/net v0.35.0
 	golang.org/x/sync v0.11.0
@@ -127,6 +128,7 @@ require (
 	github.com/mattn/go-ieproxy v0.0.0-20190805055040-f9202b1cfdeb // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/satori/go.uuid v1.2.1-0.20181028125025-b2ce2384e17b // indirect
+	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/winfsp/cgofuse v1.5.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.49.0 // indirect
@@ -339,9 +341,9 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )
 
-replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20250513160328-b95c7f0c368a
+replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20250520002500-739af713f8df
 
-replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250513160328-b95c7f0c368a
+replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250520002500-739af713f8df
 
 replace github.com/winfsp/cgofuse => github.com/vitalif/cgofuse v0.0.0-20230609211427-22e8fa44f6b8
 

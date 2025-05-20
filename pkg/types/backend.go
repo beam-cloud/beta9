@@ -318,6 +318,7 @@ type TaskWithRelated struct {
 	Stats     TaskStats    `json:"stats" serializer:"stats"`
 	Workspace Workspace    `db:"workspace" json:"workspace" serializer:"workspace"`
 	Stub      Stub         `db:"stub" json:"stub" serializer:"stub"`
+	App       App          `db:"app" json:"app" serializer:"app"`
 }
 
 type TaskCountPerDeployment struct {

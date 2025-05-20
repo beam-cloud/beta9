@@ -90,11 +90,13 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 			MountOptions:           s.config.WorkspaceStorage.Geese.MountOptions,
 			ReadAheadKB:            s.config.WorkspaceStorage.Geese.ReadAheadKB,
 			ReadAheadLargeKB:       s.config.WorkspaceStorage.Geese.ReadAheadLargeKB,
+			ReadAheadParallelKB:    s.config.WorkspaceStorage.Geese.ReadAheadParallelKB,
 			FuseReadAheadKB:        s.config.WorkspaceStorage.Geese.FuseReadAheadKB,
 			DisableVolumeCaching:   s.config.WorkspaceStorage.Geese.DisableVolumeCaching,
 			StagedWriteModeEnabled: s.config.WorkspaceStorage.Geese.StagedWriteModeEnabled,
 			StagedWritePath:        s.config.WorkspaceStorage.Geese.StagedWritePath,
 			StagedWriteDebounce:    s.config.WorkspaceStorage.Geese.StagedWriteDebounce,
+			CacheStreamingEnabled:  s.config.WorkspaceStorage.Geese.CacheStreamingEnabled,
 		},
 	}, s.cacheClient)
 	if err != nil {

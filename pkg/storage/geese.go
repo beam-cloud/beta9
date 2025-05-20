@@ -105,9 +105,14 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		flags.FuseReadAheadKB = uint64(s.config.FuseReadAheadKB)
 	}
 
+	if s.config.ReadAheadParallelKB > 0 {
+		flags.ReadAheadParallelKB = uint64(s.config.ReadAheadParallelKB)
+	}
+
 	// If we have a cache client available, use it
 	if s.cacheClient != nil {
 		flags.ExternalCacheClient = s.cacheClient
+		flags.ExternalCacheStreamingEnabled = s.config.CacheStreamingEnabled
 	}
 
 	fs, mfs, err := core.MountFuse(context.Background(), s.config.BucketName, flags)

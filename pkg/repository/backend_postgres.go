@@ -561,10 +561,13 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
 	var taskWithRelated types.TaskWithRelated
 	query := `
     SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name",
-           s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", t.*
+           s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", 
+					 s.app_id AS "app.id", a.external_id AS "app.external_id", a.name AS "app.name",
+					 t.*
     FROM task t
     JOIN workspace w ON t.workspace_id = w.id
     JOIN stub s ON t.stub_id = s.id
+		JOIN app a ON s.app_id = a.id
     WHERE t.external_id = $1;
     `
 	err := r.client.GetContext(ctx, &taskWithRelated, query, externalId)
@@ -1968,6 +1971,17 @@ func (r *PostgresBackendRepository) DeleteApp(ctx context.Context, appId string)
 	query := `UPDATE app set deleted_at=NOW() where external_id=$1`
 	_, err := r.client.ExecContext(ctx, query, appId)
 	return err
+}
+
+func (r *PostgresBackendRepository) RetrieveAppByStubExternalId(ctx context.Context, stubExternalId string) (*types.App, error) {
+	var app types.App
+	query := `SELECT a.id, a.external_id, a.name, a.workspace_id, a.created_at, a.updated_at, a.description, a.deleted_at FROM app a JOIN stub s ON a.id = s.app_id WHERE s.external_id = $1;`
+	err := r.client.GetContext(ctx, &app, query, stubExternalId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &app, nil
 }
 
 func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
