@@ -112,6 +112,7 @@ require (
 	github.com/Azure/go-autorest/logger v0.2.1 // indirect
 	github.com/Azure/go-autorest/tracing v0.6.0 // indirect
 	github.com/aws/aws-sdk-go v1.55.6 // indirect
+	github.com/beam-cloud/go2proto v0.0.0-20250430200435-9ab86de13137 // indirect
 	github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8 // indirect
 	github.com/dimchansky/utfbom v1.1.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -123,6 +124,7 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
 	github.com/googleapis/gax-go/v2 v2.12.3 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
+	github.com/iancoleman/strcase v0.3.0 // indirect
 	github.com/jacobsa/fuse v0.0.0-20230810134708-ab21db1af836 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-ieproxy v0.0.0-20190805055040-f9202b1cfdeb // indirect
@@ -341,9 +343,9 @@ require (
 	tags.cncf.io/container-device-interface/specs-go v0.8.0 // indirect
 )
 
-replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20250520002500-739af713f8df
+replace github.com/yandex-cloud/geesefs => github.com/beam-cloud/geesefs v0.0.0-20250520180855-b3dd39b4d619
 
-replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250520002500-739af713f8df
+replace github.com/aws/aws-sdk-go => github.com/beam-cloud/geesefs/s3ext v0.0.0-20250520180855-b3dd39b4d619
 
 replace github.com/winfsp/cgofuse => github.com/vitalif/cgofuse v0.0.0-20230609211427-22e8fa44f6b8
 

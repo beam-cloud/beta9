@@ -158,6 +158,15 @@ class TaskPolicy:
     ttl: int = 0
 
 
+@dataclass
+class PricingPolicy:
+    public: bool = True
+    max_in_flight: int = 10
+    cost_model: str = "task"
+    cost_per_task: float = 0.000000000000000000
+    cost_per_ms: float = 0.000000000000000000
+
+
 _AUTOSCALER_TYPES: Dict[Type[Autoscaler], str] = {
     QueueDepthAutoscaler: QUEUE_DEPTH_AUTOSCALER_TYPE,
 }

@@ -125,6 +125,14 @@ message Object {
   google.protobuf.Timestamp created_at = 6;
 }
 
+message PricingPolicy {
+  bool public = 1;
+  int64 max_in_flight = 2;
+  string cost_model = 3;
+  double cost_per_task = 4;
+  double cost_per_ms = 5;
+}
+
 message Stub {
   uint32 id = 1;
   string external_id = 2;

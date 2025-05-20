@@ -140,6 +140,15 @@ class Object(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class PricingPolicy(betterproto.Message):
+    public: bool = betterproto.bool_field(1)
+    max_in_flight: int = betterproto.int64_field(2)
+    cost_model: str = betterproto.string_field(3)
+    cost_per_task: float = betterproto.double_field(4)
+    cost_per_ms: float = betterproto.double_field(5)
+
+
+@dataclass(eq=False, repr=False)
 class Stub(betterproto.Message):
     id: int = betterproto.uint32_field(1)
     external_id: str = betterproto.string_field(2)

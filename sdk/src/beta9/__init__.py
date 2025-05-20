@@ -15,7 +15,7 @@ from .abstractions.pod import Pod
 from .abstractions.queue import SimpleQueue as Queue
 from .abstractions.taskqueue import TaskQueue as task_queue
 from .abstractions.volume import CloudBucket, CloudBucketConfig, Volume
-from .type import GpuType, PythonVersion, QueueDepthAutoscaler, TaskPolicy
+from .type import GpuType, PricingPolicy, PythonVersion, QueueDepthAutoscaler, TaskPolicy
 
 __all__ = [
     "Map",
@@ -44,4 +44,5 @@ __all__ = [
     "BotEventType",
     "BotContext",
     "Pod",
+    "PricingPolicy",
 ]

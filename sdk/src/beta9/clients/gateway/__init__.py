@@ -313,6 +313,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     ports: List[int] = betterproto.uint32_field(31)
     env: List[str] = betterproto.string_field(32)
     app_name: str = betterproto.string_field(33)
+    pricing: "_types__.PricingPolicy" = betterproto.message_field(34)
 
 
 @dataclass(eq=False, repr=False)

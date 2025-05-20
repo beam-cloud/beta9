@@ -21,6 +21,7 @@ from ...clients.gateway import (
 )
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
+from ...clients.types import PricingPolicy as PricingPolicyProto
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import, is_notebook_env
 from ...sync import FileSyncer
@@ -29,6 +30,7 @@ from ...type import (
     Autoscaler,
     GpuType,
     GpuTypeAlias,
+    PricingPolicy,
     QueueDepthAutoscaler,
     TaskPolicy,
 )
@@ -102,6 +104,7 @@ class RunnerAbstraction(BaseAbstraction):
         checkpoint_enabled: bool = False,
         entrypoint: Optional[List[str]] = None,
         ports: Optional[List[int]] = [],
+        pricing: Optional[PricingPolicy] = None,
     ) -> None:
         super().__init__()
 
@@ -162,6 +165,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.tmp_files: List[TempFile] = []
         self.is_websocket: bool = False
         self.ports: List[int] = ports or []
+        self.pricing: Optional[PricingPolicy] = pricing
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
@@ -445,6 +449,14 @@ class RunnerAbstraction(BaseAbstraction):
                 extra=json.dumps(self.extra),
                 entrypoint=self.entrypoint,
                 ports=self.ports,
+                pricing=PricingPolicyProto(
+                    public=self.pricing.public,
+                    cost_per_task=self.pricing.cost_per_task,
+                    cost_model=self.pricing.cost_model,
+                    max_in_flight=self.pricing.max_in_flight,
+                )
+                if self.pricing
+                else None,
             )
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
