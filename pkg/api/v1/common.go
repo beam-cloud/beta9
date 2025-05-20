@@ -31,7 +31,7 @@ func stopDeployments(ctx context.Context, deployments []types.DeploymentWithRela
 		containers, err := clients.containerRepo.GetActiveContainersByStubId(deployment.Stub.ExternalId)
 		if err == nil {
 			for _, container := range containers {
-				clients.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId})
+				clients.scheduler.Stop(&types.StopContainerArgs{ContainerId: container.ContainerId, Force: true})
 			}
 		}
 
