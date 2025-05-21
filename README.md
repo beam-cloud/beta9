@@ -47,29 +47,25 @@ pip install beam-client
 1. Create an account at https://beam.cloud
 2. Follow our [Getting Started Guide](https://platform.beam.cloud/onboarding)
 
-## Creating your first app
+## Creating your first inference endpoint
 
 With Beam, everything is Python-native—no YAML, no config files, just code:
 
 ```python
-from beam import Pod, Image
+from beam import Image, endpoint
 
 
-pod = Pod(
+@endpoint(
     image=Image(python_version="python3.11"),
     gpu="A10G",
-    ports=[8000],
     cpu=1,
     memory=1024,
-    entrypoint=["python3", "-m", "http.server", "8000"],
 )
-
-instance = pod.create()
-
-print("✨ Container hosted at:", instance.url)
+def handler():
+    return {"label": "cat", "confidence": 0.97}
 ```
 
-This single Python snippet launches a container, automatically load-balanced and exposed via HTTPS.
+This snippet deploys your code to a GPU-backed container with an HTTPS endpoint—ready to serve requests immediately (`https://my-model-v1.app.beam.cloud/`)
 
 > ## Self-Hosting vs Cloud
 >
