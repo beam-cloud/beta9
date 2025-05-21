@@ -640,6 +640,32 @@
 				"mode=0755",
 				"size=65536k"
 			]
+		},
+		{
+			"type": "bind",
+			"source": "/workspace/etc/hosts",
+			"destination": "/etc/hosts",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"type": "bind",
+			"source": "/workspace/etc/nsswitch.conf",
+			"destination": "/etc/nsswitch.conf",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
 		}
 	],
 	"hooks": {},
