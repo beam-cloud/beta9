@@ -168,7 +168,11 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		return
 	}
 
-	targetHost := container.addressMap[int32(port)]
+	targetHost, ok := container.addressMap[int32(port)]
+	if !ok {
+		conn.ctx.String(http.StatusServiceUnavailable, "Port not available")
+		return
+	}
 
 	subPath := conn.ctx.Param("subPath")
 	if subPath != "" && subPath[0] != '/' {
@@ -196,6 +200,9 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
 		return
 	}
+
+	request.URL.Scheme = "http"
+	request.URL.Host = targetHost
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	proxy.Transport = &http.Transport{
