@@ -206,6 +206,8 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 			return conn, err
 		},
 	}
+	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
+	}
 
 	proxy.ServeHTTP(response, request)
 	close(conn.done)
