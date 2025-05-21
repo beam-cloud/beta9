@@ -169,6 +169,7 @@ type BackendRepository interface {
 	RetrieveAppByStubExternalId(ctx context.Context, stubExternalId string) (*types.App, error)
 	ListApps(ctx context.Context, workspaceId uint) ([]types.App, error)
 	ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error)
+	DeleteApp(ctx context.Context, appId string) error
 }
 
 type TaskRepository interface {

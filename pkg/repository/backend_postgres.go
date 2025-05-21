@@ -1923,7 +1923,7 @@ func (r *PostgresBackendRepository) GetTaskMetrics(ctx context.Context, periodSt
 func (r *PostgresBackendRepository) GetOrCreateApp(ctx context.Context, workspaceId uint, appName string) (*types.App, error) {
 	// Check if the app already exists
 	var app types.App
-	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM app WHERE name=$1 and workspace_id=$2;`
+	query := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM app WHERE name=$1 and workspace_id=$2 and deleted_at is null;`
 	err := r.client.GetContext(ctx, &app, query, appName, workspaceId)
 	if err == nil {
 		return &app, nil
@@ -1947,7 +1947,7 @@ func (r *PostgresBackendRepository) GetOrCreateApp(ctx context.Context, workspac
 func (r *PostgresBackendRepository) ListApps(ctx context.Context, workspaceId uint) ([]types.App, error) {
 	var apps []types.App
 
-	query := `SELECT * FROM app WHERE workspace_id = $1;`
+	query := `SELECT * FROM app WHERE workspace_id = $1 and deleted_at is null`
 	err := r.client.SelectContext(ctx, &apps, query, workspaceId)
 	if err != nil {
 		return nil, err
@@ -1967,6 +1967,12 @@ func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId
 	return &app, nil
 }
 
+func (r *PostgresBackendRepository) DeleteApp(ctx context.Context, appId string) error {
+	query := `UPDATE app set deleted_at=NOW() where external_id=$1`
+	_, err := r.client.ExecContext(ctx, query, appId)
+	return err
+}
+
 func (r *PostgresBackendRepository) RetrieveAppByStubExternalId(ctx context.Context, stubExternalId string) (*types.App, error) {
 	var app types.App
 	query := `SELECT a.id, a.external_id, a.name, a.workspace_id, a.created_at, a.updated_at, a.description, a.deleted_at FROM app a JOIN stub s ON a.id = s.app_id WHERE s.external_id = $1;`
@@ -1979,7 +1985,7 @@ func (r *PostgresBackendRepository) RetrieveAppByStubExternalId(ctx context.Cont
 }
 
 func (r *PostgresBackendRepository) ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error) {
-	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId})
+	qb := squirrel.StatementBuilder.PlaceholderFormat(squirrel.Dollar).Select("a.*").From("app a").Where(squirrel.Eq{"workspace_id": workspaceId}).Where(squirrel.Eq{"deleted_at": nil})
 
 	if filters.Name != "" {
 		qb = qb.Where(squirrel.Like{"LOWER(a.name)": fmt.Sprintf("%%%s%%", strings.ToLower(filters.Name))})
