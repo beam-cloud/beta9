@@ -111,7 +111,7 @@ func (b *Build) resolvePythonVersionRequirement() error {
 		return nil
 	}
 
-	if b.opts.IgnorePython {
+	if b.opts.IgnorePython && len(b.opts.PythonPackages) == 0 {
 		b.opts.PythonVersion = ""
 		return nil
 	}

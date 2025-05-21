@@ -195,7 +195,16 @@ func (g *Gateway) initHttp() error {
 		pprof.Register(e)
 	}
 
-	e.Pre(middleware.RemoveTrailingSlash())
+	skipSubdomainRoutes := func(c echo.Context) bool {
+		baseDomain := gatewaymiddleware.ParseHostFromURL(g.Config.GatewayService.HTTP.GetExternalURL())
+		subdomain := gatewaymiddleware.ParseSubdomain(c.Request().Host, baseDomain)
+		return subdomain != ""
+	}
+
+	e.Pre(middleware.RemoveTrailingSlashWithConfig(middleware.TrailingSlashConfig{
+		Skipper: skipSubdomainRoutes,
+	}))
+
 	configureEchoLogger(e, g.Config.GatewayService.HTTP.EnablePrettyLogs)
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: g.Config.GatewayService.HTTP.CORS.AllowedOrigins,
