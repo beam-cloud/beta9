@@ -15,7 +15,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -81,7 +80,6 @@ func Subdomain(externalURL string, backendRepo SubdomainBackendRepo, redisClient
 				}
 
 				handlerPath = buildHandlerPath(stub, fields)
-				log.Info().Msgf("handlerPath: %s", handlerPath)
 				if fields.Version > 0 || fields.StubId != "" {
 					redisClient.Set(ctx.Request().Context(), handlerKey, handlerPath, handlerKeyTtl)
 				}
