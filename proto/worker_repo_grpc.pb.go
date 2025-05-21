@@ -35,6 +35,8 @@ const (
 	WorkerRepositoryService_GetContainerIp_FullMethodName            = "/WorkerRepositoryService/GetContainerIp"
 	WorkerRepositoryService_GetContainerIps_FullMethodName           = "/WorkerRepositoryService/GetContainerIps"
 	WorkerRepositoryService_RemoveContainerIp_FullMethodName         = "/WorkerRepositoryService/RemoveContainerIp"
+	WorkerRepositoryService_SetImageChunkPriority_FullMethodName     = "/WorkerRepositoryService/SetImageChunkPriority"
+	WorkerRepositoryService_GetImageChunkPriority_FullMethodName     = "/WorkerRepositoryService/GetImageChunkPriority"
 )
 
 // WorkerRepositoryServiceClient is the client API for WorkerRepositoryService service.
@@ -57,6 +59,8 @@ type WorkerRepositoryServiceClient interface {
 	GetContainerIp(ctx context.Context, in *GetContainerIpRequest, opts ...grpc.CallOption) (*GetContainerIpResponse, error)
 	GetContainerIps(ctx context.Context, in *GetContainerIpsRequest, opts ...grpc.CallOption) (*GetContainerIpsResponse, error)
 	RemoveContainerIp(ctx context.Context, in *RemoveContainerIpRequest, opts ...grpc.CallOption) (*RemoveContainerIpResponse, error)
+	SetImageChunkPriority(ctx context.Context, in *SetImageChunkPriorityRequest, opts ...grpc.CallOption) (*SetImageChunkPriorityResponse, error)
+	GetImageChunkPriority(ctx context.Context, in *GetImageChunkPriorityRequest, opts ...grpc.CallOption) (*GetImageChunkPriorityResponse, error)
 }
 
 type workerRepositoryServiceClient struct {
@@ -234,6 +238,24 @@ func (c *workerRepositoryServiceClient) RemoveContainerIp(ctx context.Context, i
 	return out, nil
 }
 
+func (c *workerRepositoryServiceClient) SetImageChunkPriority(ctx context.Context, in *SetImageChunkPriorityRequest, opts ...grpc.CallOption) (*SetImageChunkPriorityResponse, error) {
+	out := new(SetImageChunkPriorityResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_SetImageChunkPriority_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *workerRepositoryServiceClient) GetImageChunkPriority(ctx context.Context, in *GetImageChunkPriorityRequest, opts ...grpc.CallOption) (*GetImageChunkPriorityResponse, error) {
+	out := new(GetImageChunkPriorityResponse)
+	err := c.cc.Invoke(ctx, WorkerRepositoryService_GetImageChunkPriority_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerRepositoryServiceServer is the server API for WorkerRepositoryService service.
 // All implementations must embed UnimplementedWorkerRepositoryServiceServer
 // for forward compatibility
@@ -254,6 +276,8 @@ type WorkerRepositoryServiceServer interface {
 	GetContainerIp(context.Context, *GetContainerIpRequest) (*GetContainerIpResponse, error)
 	GetContainerIps(context.Context, *GetContainerIpsRequest) (*GetContainerIpsResponse, error)
 	RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error)
+	SetImageChunkPriority(context.Context, *SetImageChunkPriorityRequest) (*SetImageChunkPriorityResponse, error)
+	GetImageChunkPriority(context.Context, *GetImageChunkPriorityRequest) (*GetImageChunkPriorityResponse, error)
 	mustEmbedUnimplementedWorkerRepositoryServiceServer()
 }
 
@@ -308,6 +332,12 @@ func (UnimplementedWorkerRepositoryServiceServer) GetContainerIps(context.Contex
 }
 func (UnimplementedWorkerRepositoryServiceServer) RemoveContainerIp(context.Context, *RemoveContainerIpRequest) (*RemoveContainerIpResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveContainerIp not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) SetImageChunkPriority(context.Context, *SetImageChunkPriorityRequest) (*SetImageChunkPriorityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetImageChunkPriority not implemented")
+}
+func (UnimplementedWorkerRepositoryServiceServer) GetImageChunkPriority(context.Context, *GetImageChunkPriorityRequest) (*GetImageChunkPriorityResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetImageChunkPriority not implemented")
 }
 func (UnimplementedWorkerRepositoryServiceServer) mustEmbedUnimplementedWorkerRepositoryServiceServer() {
 }
@@ -614,6 +644,42 @@ func _WorkerRepositoryService_RemoveContainerIp_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerRepositoryService_SetImageChunkPriority_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetImageChunkPriorityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).SetImageChunkPriority(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_SetImageChunkPriority_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).SetImageChunkPriority(ctx, req.(*SetImageChunkPriorityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WorkerRepositoryService_GetImageChunkPriority_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetImageChunkPriorityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerRepositoryServiceServer).GetImageChunkPriority(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerRepositoryService_GetImageChunkPriority_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerRepositoryServiceServer).GetImageChunkPriority(ctx, req.(*GetImageChunkPriorityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WorkerRepositoryService_ServiceDesc is the grpc.ServiceDesc for WorkerRepositoryService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -680,6 +746,14 @@ var WorkerRepositoryService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveContainerIp",
 			Handler:    _WorkerRepositoryService_RemoveContainerIp_Handler,
+		},
+		{
+			MethodName: "SetImageChunkPriority",
+			Handler:    _WorkerRepositoryService_SetImageChunkPriority_Handler,
+		},
+		{
+			MethodName: "GetImageChunkPriority",
+			Handler:    _WorkerRepositoryService_GetImageChunkPriority_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

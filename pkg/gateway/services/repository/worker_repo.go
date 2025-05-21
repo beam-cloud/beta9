@@ -201,3 +201,21 @@ func (s *WorkerRepositoryService) RemoveContainerIp(ctx context.Context, req *pb
 
 	return &pb.RemoveContainerIpResponse{Ok: true}, nil
 }
+
+func (s *WorkerRepositoryService) SetImageChunkPriority(ctx context.Context, req *pb.SetImageChunkPriorityRequest) (*pb.SetImageChunkPriorityResponse, error) {
+	err := s.workerRepo.SetImageChunkPriority(req.ImageId, req.PriorityChunks)
+	if err != nil {
+		return &pb.SetImageChunkPriorityResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.SetImageChunkPriorityResponse{Ok: true}, nil
+}
+
+func (s *WorkerRepositoryService) GetImageChunkPriority(ctx context.Context, req *pb.GetImageChunkPriorityRequest) (*pb.GetImageChunkPriorityResponse, error) {
+	priority, err := s.workerRepo.GetImageChunkPriority(req.ImageId)
+	if err != nil {
+		return &pb.GetImageChunkPriorityResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.GetImageChunkPriorityResponse{Ok: true, PriorityChunks: priority}, nil
+}

@@ -92,6 +92,10 @@ var (
 	imageBuildContainerTTL string = "image:build_container_ttl:%s"
 )
 
+var (
+	imageChunkPriority string = "image:chunk_priority:%s"
+)
+
 var RedisKeys = &redisKeys{}
 
 type redisKeys struct{}
@@ -330,4 +334,8 @@ func (rk *redisKeys) ContainerName(prefix string, stubId string, containerId str
 
 func (rk *redisKeys) ImageBuildContainerTTL(containerId string) string {
 	return fmt.Sprintf(imageBuildContainerTTL, containerId)
+}
+
+func (rk *redisKeys) ImageChunkPriority(imageId string) string {
+	return fmt.Sprintf(imageChunkPriority, imageId)
 }

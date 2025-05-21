@@ -88,6 +88,7 @@ class ContainerRequest(betterproto.Message):
     cost_per_ms: float = betterproto.double_field(22)
     app_id: str = betterproto.string_field(23)
     clip_version: int = betterproto.uint32_field(24)
+    priority_chunks: List[str] = betterproto.string_field(25)
 
 
 @dataclass(eq=False, repr=False)
@@ -127,7 +128,8 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    null_time: "NullTime" = betterproto.message_field(1)
+    time: datetime = betterproto.message_field(1)
+    valid: bool = betterproto.bool_field(2)
 
 
 @dataclass(eq=False, repr=False)

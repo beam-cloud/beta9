@@ -291,6 +291,19 @@ func (c *ImageClient) SetupClipMount(ctx context.Context, request *types.Contain
 		V2: clip.V2MountArchiveOptions{
 			// FIXME: this should be in config or something
 			StorageType: clip.StorageModeS3,
+			WarmChunks:  true,
+			SetPriorityChunksCallback: func(chunks []string) error {
+				_, err := handleGRPCResponse(c.workerRepoClient.SetImageChunkPriority(context.Background(), &pb.SetImageChunkPriorityRequest{
+					ImageId:        imageId,
+					PriorityChunks: chunks,
+				}))
+				if err != nil {
+					return err
+				}
+				return nil
+			},
+			PriorityChunks:          request.PriorityChunks,
+			PriorityChunkSampleTime: 15 * time.Second,
 		},
 	})
 	if err != nil {
@@ -562,12 +575,15 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageID
 		BundlePath:        bundlePath.Path,
 		BundleSize:        bundlePath.GetSize(),
 		ArchivePath:       archivePath,
-		Verbose:           true,
+		Verbose:           false,
 		ProgressChan:      progressChan,
 		S3Config:          c.config.ImageService.Registries.S3.Primary,
 		V2: clip.V2CreateArchiveOptions{
 			// FIXME: this should be in config
-			MaxChunkSize: 32 * 1024 * 1024,
+			MaxChunkSize: 256 * 1024 * 1024,
+		},
+		V1: clip.V1CreateArchiveOptions{
+			PrimaryRegistry: c.primaryRegistry,
 		},
 	}); err != nil {
 		log.Error().Err(err).Msg("unable to create archive")

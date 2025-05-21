@@ -224,6 +224,7 @@ type ContainerRequest struct {
 	CostPerMs         float64         `json:"cost_per_ms"`
 	AppId             string          `json:"app_id"`
 	ClipVersion       uint32          `json:"clip_version"`
+	PriorityChunks    []string        `json:"priority_chunks"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -291,6 +292,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		BuildOptions:      buildOptions,
 		Ports:             c.Ports,
 		ClipVersion:       uint32(c.ClipVersion),
+		PriorityChunks:    c.PriorityChunks,
 	}
 }
 
@@ -334,6 +336,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		BuildOptions:      bo,
 		Ports:             in.Ports,
 		ClipVersion:       uint32(in.ClipVersion),
+		PriorityChunks:    in.PriorityChunks,
 	}
 }
 

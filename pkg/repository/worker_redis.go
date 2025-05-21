@@ -659,3 +659,11 @@ func (r *WorkerRedisRepository) RemoveContainerIp(networkPrefix string, containe
 
 	return nil
 }
+
+func (r *WorkerRedisRepository) SetImageChunkPriority(imageId string, chunkPriority []string) error {
+	return r.rdb.SAdd(context.TODO(), common.RedisKeys.ImageChunkPriority(imageId), chunkPriority).Err()
+}
+
+func (r *WorkerRedisRepository) GetImageChunkPriority(imageId string) ([]string, error) {
+	return r.rdb.SMembers(context.TODO(), common.RedisKeys.ImageChunkPriority(imageId)).Result()
+}

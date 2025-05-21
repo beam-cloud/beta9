@@ -79,6 +79,7 @@ message ContainerRequest {
   double cost_per_ms = 22;
   string app_id = 23;
   uint32 clip_version = 24;
+  repeated string priority_chunks = 25;
 }
 
 message ContainerState {
@@ -114,7 +115,8 @@ message MountPointConfig {
 }
 
 message NullTime {
-  NullTime null_time = 1;
+  google.protobuf.Timestamp time = 1;
+  bool valid = 2;
 }
 
 message Object {

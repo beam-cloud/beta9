@@ -68,7 +68,7 @@ func CreateArchive(ctx context.Context, options CreateArchiveOptions) error {
 			}
 			createOpts.ProgressChan = options.ProgressChan
 
-			err = clipv1.CreateAndUploadArchive(ctx, createOpts, clipCommon.S3StorageInfo{
+			err = clipv1.CreateAndUploadArchive(ctx, createOpts, &clipCommon.S3StorageInfo{
 				Bucket:         options.S3Config.BucketName,
 				Region:         options.S3Config.Region,
 				Endpoint:       options.S3Config.Endpoint,

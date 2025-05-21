@@ -9,13 +9,13 @@ import (
 	"sort"
 	"time"
 
-	clipCommon "github.com/beam-cloud/clip/pkg/common"
-
+	"github.com/beam-cloud/beta9/pkg/clients/clip"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/rs/zerolog/log"
 )
 
@@ -143,6 +143,14 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 	err = s.containerRepo.SetContainerStateWithConcurrencyLimit(quota, request)
 	if err != nil {
 		return err
+	}
+
+	if request.ClipVersion == clip.ClipFileFormatVersion2 {
+		priority, err := s.workerRepo.GetImageChunkPriority(request.ImageId)
+		if err == nil {
+			// Only set the chunk priority if it exists (it will get set by the callback if chunk warming is enabled)
+			request.PriorityChunks = priority
+		}
 	}
 
 	return s.addRequestToBacklog(request)

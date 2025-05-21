@@ -40,6 +40,8 @@ type WorkerRepository interface {
 	GetGpuAvailability() (map[string]bool, error)
 	GetFreeGpuCounts() (map[string]int, error)
 	GetPreemptibleGpus() []string
+	SetImageChunkPriority(imageId string, chunkPriority []string) error
+	GetImageChunkPriority(imageId string) ([]string, error)
 }
 
 type ContainerRepository interface {

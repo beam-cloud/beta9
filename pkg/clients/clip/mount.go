@@ -3,6 +3,7 @@ package clip
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -25,7 +26,11 @@ type V1MountArchiveOptions struct {
 }
 
 type V2MountArchiveOptions struct {
-	StorageType clipCommon.StorageMode
+	StorageType               clipCommon.StorageMode
+	WarmChunks                bool
+	PriorityChunks            []string
+	SetPriorityChunksCallback func(chunks []string) error
+	PriorityChunkSampleTime   time.Duration
 }
 
 type MountArchiveOptions struct {
@@ -80,9 +85,13 @@ func MountArchive(ctx context.Context, options MountArchiveOptions) (func() erro
 					SecretKey:      options.S3Config.SecretKey,
 				},
 			},
-			MountPoint:            fmt.Sprintf("%s/%s", options.ImageMountPath, options.ImageID),
-			ContentCache:          options.ContentCache,
-			ContentCacheAvailable: options.ContentCacheAvailable,
+			MountPoint:                fmt.Sprintf("%s/%s", options.ImageMountPath, options.ImageID),
+			ContentCache:              options.ContentCache,
+			ContentCacheAvailable:     options.ContentCacheAvailable,
+			WarmChunks:                options.V2.WarmChunks,
+			PriorityChunks:            options.V2.PriorityChunks,
+			SetPriorityChunksCallback: options.V2.SetPriorityChunksCallback,
+			PriorityChunkSampleTime:   options.V2.PriorityChunkSampleTime,
 		})
 	}
 

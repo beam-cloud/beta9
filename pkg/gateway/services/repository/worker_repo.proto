@@ -31,6 +31,10 @@ service WorkerRepositoryService {
       returns (GetContainerIpsResponse) {}
   rpc RemoveContainerIp(RemoveContainerIpRequest)
       returns (RemoveContainerIpResponse) {}
+  rpc SetImageChunkPriority(SetImageChunkPriorityRequest)
+      returns (SetImageChunkPriorityResponse) {}
+  rpc GetImageChunkPriority(GetImageChunkPriorityRequest)
+      returns (GetImageChunkPriorityResponse) {}
 }
 
 message GetNextContainerRequestRequest { string worker_id = 1; }
@@ -187,4 +191,22 @@ message RemoveContainerIpRequest {
 message RemoveContainerIpResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message SetImageChunkPriorityRequest {
+  string image_id = 1;
+  repeated string priority_chunks = 2;
+}
+
+message SetImageChunkPriorityResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message GetImageChunkPriorityRequest { string image_id = 1; }
+
+message GetImageChunkPriorityResponse {
+  bool ok = 1;
+  repeated string priority_chunks = 2;
+  string error_msg = 3;
 }
