@@ -170,6 +170,8 @@ type BackendRepository interface {
 	ListApps(ctx context.Context, workspaceId uint) ([]types.App, error)
 	ListAppsPaginated(ctx context.Context, workspaceId uint, filters types.AppFilter) (common.CursorPaginationInfo[types.App], error)
 	DeleteApp(ctx context.Context, appId string) error
+	GetImageClipVersion(ctx context.Context, imageId string) (uint32, error)
+	CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error)
 }
 
 type TaskRepository interface {

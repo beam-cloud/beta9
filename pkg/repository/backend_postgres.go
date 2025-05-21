@@ -260,7 +260,7 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	SELECT t.id, t.external_id, t.key, t.created_at, t.updated_at, t.active, t.disabled_by_cluster_admin , t.token_type, t.reusable, t.workspace_id,
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at",
 		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled", w.storage_id "workspace.storage_id",
-		   ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", 
+		   ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key",
 		   ws.secret_key AS "workspace.storage.secret_key", ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
@@ -561,7 +561,7 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
 	var taskWithRelated types.TaskWithRelated
 	query := `
     SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name",
-           s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", 
+           s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config",
 					 s.app_id AS "app.id", a.external_id AS "app.external_id", a.name AS "app.name",
 					 t.*
     FROM task t
@@ -924,7 +924,7 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 	    o.id AS "object.id", o.external_id AS "object.external_id", o.hash AS "object.hash", o.size AS "object.size", o.workspace_id AS "object.workspace_id", o.created_at AS "object.created_at",
 			a.id as "app.id", a.external_id as "app.external_id", a.name as "app.name"
 		`,
-		`ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", ws.secret_key AS "workspace.storage.secret_key", 
+		`ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", ws.secret_key AS "workspace.storage.secret_key",
 		ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"`,
 	).
 		From("stub s").
@@ -2097,4 +2097,24 @@ func (r *PostgresBackendRepository) encryptFields(row interface{}) error {
 	}
 
 	return nil
+}
+
+func (r *PostgresBackendRepository) GetImageClipVersion(ctx context.Context, imageId string) (uint32, error) {
+	var clipVersion uint32
+	query := `SELECT clip_version FROM image WHERE id=$1;`
+	err := r.client.GetContext(ctx, &clipVersion, query, imageId)
+	if err == nil {
+		return clipVersion, nil
+	}
+
+	return 0, err
+}
+
+func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error) {
+	query := `INSERT INTO image (id, clip_version) VALUES ($1, $2);`
+	if _, err := r.client.ExecContext(ctx, query, imageId, clipVersion); err != nil {
+		return 0, err
+	}
+
+	return clipVersion, nil
 }
