@@ -156,6 +156,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	container := pb.availableContainers[0]
 	pb.availableContainersLock.RUnlock()
+	defer close(conn.done)
 
 	request := conn.ctx.Request()
 	response := conn.ctx.Response()
@@ -206,11 +207,8 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 			return conn, err
 		},
 	}
-	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
-	}
-
+	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {}
 	proxy.ServeHTTP(response, request)
-	close(conn.done)
 }
 
 func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, addr string, path string) error {
