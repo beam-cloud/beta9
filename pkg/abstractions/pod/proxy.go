@@ -2,7 +2,6 @@ package pod
 
 import (
 	"context"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -20,7 +19,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -218,6 +216,7 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 		CheckOrigin: func(r *http.Request) bool {
 			return true // Allow all origins
 		},
+		Subprotocols: conn.ctx.Request().Header["Sec-Websocket-Protocol"],
 	}
 
 	clientConn, err := upgrader.Upgrade(conn.ctx.Response().Writer, conn.ctx.Request(), nil)
@@ -240,27 +239,24 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 
-	forwardWSConn := func(src net.Conn, dst net.Conn) {
+	proxyMessages := func(src, dst *websocket.Conn) {
 		defer wg.Done()
 
-		defer func() {
-			src.Close()
-			dst.Close()
-		}()
-
-		written, err := io.Copy(src, dst)
-		if err != nil {
-			log.Error().Err(err).Msg("error copying websocket connection")
-			return
+		for {
+			messageType, message, err := src.ReadMessage()
+			if err != nil {
+				break
+			}
+			if err := dst.WriteMessage(messageType, message); err != nil {
+				break
+			}
 		}
-
-		log.Info().Msgf("copied %d bytes", written)
 	}
 
-	go forwardWSConn(clientConn.NetConn(), serverConn.NetConn())
-	go forwardWSConn(serverConn.NetConn(), clientConn.NetConn())
-
+	go proxyMessages(clientConn, serverConn)
+	go proxyMessages(serverConn, clientConn)
 	wg.Wait()
+
 	return nil
 }
 
