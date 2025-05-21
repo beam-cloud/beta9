@@ -1,6 +1,6 @@
 <div align="center">
 <p align="center">
-<img alt="Logo" src="static/beam-logo.jpeg" width="20%">
+<img alt="Logo" src="static/beam-logo-white.png" width="30%">
 </p>
 
 ## Ultrafast AI Inference
@@ -35,12 +35,12 @@ pip install beam-client
 
 ## Features
 
-- **Extremely Fast**: Launch runc containers in ~800ms
+- **Extremely Fast**: Launch containers in 200ms using a custom `runc` runtime
 - **Parallelization and Concurrency**: Fan out workloads to 100s of containers
 - **First-Class Developer Experience**: Hot-reloading, webhooks, and scheduled jobs
 - **Scale-to-Zero**: Workloads are serverless by default
 - **Volume Storage**: Mount distributed storage volumes
-- **GPU Support**: Run on our cloud (4090s, H100s, and more) or connect your own hardware
+- **GPU Support**: Run on our cloud (4090s, H100s, and more) or bring your own GPUs
 
 ## Quickstart
 
@@ -49,10 +49,10 @@ pip install beam-client
 
 ## Creating your first app
 
-With Beta9, everything is Python-native—no YAML, no config files, just code:
+With Beam, everything is Python-native—no YAML, no config files, just code:
 
 ```python
-from beta9 import Pod, Image
+from beam import Pod, Image
 
 
 pod = Pod(
@@ -71,7 +71,7 @@ print("✨ Container hosted at:", instance.url)
 
 This single Python snippet launches a container, automatically load-balanced and exposed via HTTPS.
 
-> ## Relationship to Beam
+> ## Self-Hosting vs Cloud
 >
 > Beta9 is the open-source engine powering [Beam](https://beam.cloud), our fully-managed cloud platform. You can self-host Beta9 for free or choose managed cloud hosting through Beam.
 
