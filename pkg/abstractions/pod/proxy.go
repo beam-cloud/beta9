@@ -2,14 +2,13 @@ package pod
 
 import (
 	"context"
-	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sort"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -202,119 +201,67 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	proxy.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, networkType, addr string) (net.Conn, error) {
-			return network.ConnectToHost(ctx, addr, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+			conn, err := network.ConnectToHost(ctx, addr, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+			if err == nil {
+				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, connectionReadTimeout)
+			}
+			return conn, err
 		},
 	}
-	proxy.ServeHTTP(response, request)
 
+	proxy.ServeHTTP(response, request)
 	close(conn.done)
 }
 
 func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, addr string, path string) error {
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
-			// Allow all origins
-			return true
+			return true // Allow all origins
 		},
 	}
 
-	w := conn.ctx.Response().Writer
-	req := conn.ctx.Request()
+	clientConn, err := upgrader.Upgrade(conn.ctx.Response().Writer, conn.ctx.Request(), nil)
+	if err != nil {
+		return err
+	}
+	defer clientConn.Close()
 
+	wsURL := url.URL{Scheme: "ws", Host: addr, Path: path, RawQuery: conn.ctx.Request().URL.RawQuery}
 	dstDialer := websocket.Dialer{
 		NetDialContext: network.GetDialer(addr, pb.tailscale, pb.tsConfig),
 	}
 
-	clientConn, err := upgrader.Upgrade(w, req, nil)
+	serverConn, _, err := dstDialer.Dial(wsURL.String(), nil)
 	if err != nil {
 		return err
 	}
+	defer serverConn.Close()
 
-	wsURL := url.URL{
-		Scheme:   "ws",
-		Host:     addr,
-		Path:     path,
-		RawQuery: req.URL.RawQuery,
-	}
+	wg := sync.WaitGroup{}
+	wg.Add(2)
 
-	serverConn, resp, err := dstDialer.Dial(wsURL.String(), nil)
-	if err != nil {
-		return err
-	}
+	forwardWSConn := func(src net.Conn, dst net.Conn) {
+		defer wg.Done()
 
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
-	}
-
-	abstractions.SetConnOptions(serverConn.NetConn(), true, connectionKeepAliveInterval, connectionReadTimeout)
-	abstractions.SetConnOptions(clientConn.NetConn(), true, connectionKeepAliveInterval, connectionReadTimeout)
-
-	pb.proxyWebSocketBidirectional(clientConn, serverConn)
-	return nil
-}
-
-func (pb *PodProxyBuffer) proxyWebSocketBidirectional(a, b *websocket.Conn) {
-	var wg sync.WaitGroup
-	var once sync.Once
-
-	closeBoth := func() {
-		a.Close()
-		b.Close()
-	}
-
-	proxy := func(src, dst *websocket.Conn, direction string) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				mt, msg, err := src.ReadMessage()
-				if err != nil {
-					log.Error().
-						Str("stubId", pb.stubId).
-						Str("workspace", pb.workspace.Name).
-						Str("direction", direction).
-						Err(err).
-						Msg("Failed to read message from WebSocket connection")
-					once.Do(closeBoth)
-					break
-				}
-
-				if err := dst.WriteMessage(mt, msg); err != nil {
-					log.Error().
-						Str("stubId", pb.stubId).
-						Str("workspace", pb.workspace.Name).
-						Str("direction", direction).
-						Err(err).
-						Msg("Failed to write message to WebSocket connection")
-					once.Do(closeBoth)
-					break
-				}
-			}
+		defer func() {
+			src.Close()
+			dst.Close()
 		}()
-	}
 
-	proxy(a, b, "client->server")
-	proxy(b, a, "server->client")
-	wg.Wait()
-}
-
-func filterWebSocketHeaders(src http.Header) http.Header {
-	excluded := map[string]struct{}{
-		"connection":               {},
-		"upgrade":                  {},
-		"sec-websocket-key":        {},
-		"sec-websocket-version":    {},
-		"sec-websocket-extensions": {},
-		"sec-websocket-protocol":   {},
-		"sec-websocket-accept":     {},
-	}
-	dst := http.Header{}
-	for k, v := range src {
-		if _, skip := excluded[strings.ToLower(k)]; !skip {
-			dst[k] = v
+		written, err := io.Copy(src, dst)
+		if err != nil {
+			log.Error().Err(err).Msg("error copying websocket connection")
+			return
 		}
+
+		log.Info().Msgf("copied %d bytes", written)
 	}
-	return dst
+
+	go forwardWSConn(clientConn.NetConn(), serverConn.NetConn())
+	go forwardWSConn(serverConn.NetConn(), clientConn.NetConn())
+
+	wg.Wait()
+	return nil
 }
 
 func (pb *PodProxyBuffer) discoverContainers() {
