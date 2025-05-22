@@ -4,6 +4,8 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"sort"
 	"strconv"
 	"sync"
@@ -11,10 +13,10 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 	"github.com/redis/go-redis/v9"
 )
@@ -154,23 +156,10 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	container := pb.availableContainers[0]
 	pb.availableContainersLock.RUnlock()
+	defer close(conn.done)
 
-	// Capture headers and other metadata
 	request := conn.ctx.Request()
-
-	// Hijack the connection
-	hijacker, ok := conn.ctx.Response().Writer.(http.Hijacker)
-	if !ok {
-		conn.ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
-		return
-	}
-
-	clientConn, _, err := hijacker.Hijack()
-	if err != nil {
-		conn.ctx.String(http.StatusInternalServerError, "Failed to hijack connection")
-		return
-	}
-	defer clientConn.Close()
+	response := conn.ctx.Response()
 
 	portStr := conn.ctx.Param("port")
 	port, err := strconv.Atoi(portStr)
@@ -179,18 +168,19 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		return
 	}
 
-	start := time.Now()
-	containerConn, err := network.ConnectToHost(request.Context(), container.addressMap[int32(port)], containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
-	if err != nil {
-		conn.ctx.String(http.StatusServiceUnavailable, "Failed to connect to service")
+	targetHost, ok := container.addressMap[int32(port)]
+	if !ok {
+		conn.ctx.String(http.StatusServiceUnavailable, "Port not available")
 		return
 	}
-	metrics.RecordDialTime(time.Since(start), container.addressMap[int32(port)])
-	defer containerConn.Close()
 
-	abstractions.SetConnOptions(containerConn, true, connectionKeepAliveInterval, connectionReadTimeout)
-	abstractions.SetConnOptions(clientConn, true, connectionKeepAliveInterval, connectionReadTimeout)
+	subPath := conn.ctx.Param("subPath")
+	if subPath != "" && subPath[0] != '/' {
+		subPath = "/" + subPath
+	}
+	request.URL.Path = subPath
 
+	// Increment container connections
 	err = pb.incrementContainerConnections(container.id)
 	if err != nil {
 		pb.buffer.Push(conn, true)
@@ -198,58 +188,84 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	}
 	defer pb.decrementContainerConnections(container.id)
 
-	// Ensure the request URL is correctly formatted
-	// by setting the container.address to the Host and subPath into the Path field
-	request.URL.Scheme = "http"
-	request.URL.Host = container.addressMap[int32(port)]
-
-	// Get subPath, ensure it starts with a slash, and assign it to the path portion
-	subPath := conn.ctx.Param("subPath")
-	if subPath != "" && subPath[0] != '/' {
-		subPath = "/" + subPath
-	}
-	request.URL.Path = subPath
-
-	// Send the request to the container
-	if err := request.Write(containerConn); err != nil {
+	// If it's a websocket request, upgrade the connection
+	if websocket.IsWebSocketUpgrade(request) {
+		pb.proxyWebSocket(conn, container, targetHost, subPath)
 		return
 	}
 
-	// Start proxying data
-	var wg sync.WaitGroup
+	// Otherwise, use regular HTTP proxying
+	targetURL, err := url.Parse("http://" + targetHost)
+	if err != nil {
+		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
+		return
+	}
+
+	request.URL.Scheme = "http"
+	request.URL.Host = targetHost
+
+	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+	proxy.Transport = &http.Transport{
+		DialContext: func(ctx context.Context, networkType, addr string) (net.Conn, error) {
+			conn, err := network.ConnectToHost(ctx, addr, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+			if err == nil {
+				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, connectionReadTimeout)
+			}
+			return conn, err
+		},
+	}
+
+	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {}
+	proxy.ServeHTTP(response, request)
+}
+
+func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, addr string, path string) error {
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true // Allow all origins
+		},
+		Subprotocols: conn.ctx.Request().Header["Sec-Websocket-Protocol"],
+	}
+
+	clientConn, err := upgrader.Upgrade(conn.ctx.Response().Writer, conn.ctx.Request(), nil)
+	if err != nil {
+		return err
+	}
+	defer clientConn.Close()
+
+	wsURL := url.URL{Scheme: "ws", Host: addr, Path: path, RawQuery: conn.ctx.Request().URL.RawQuery}
+	dstDialer := websocket.Dialer{
+		NetDialContext: network.GetDialer(addr, pb.tailscale, pb.tsConfig),
+	}
+
+	serverConn, _, err := dstDialer.Dial(wsURL.String(), nil)
+	if err != nil {
+		return err
+	}
+	defer serverConn.Close()
+
+	wg := sync.WaitGroup{}
 	wg.Add(2)
 
-	var once sync.Once
-	closeConnections := func() {
-		clientConn.Close()
-		containerConn.Close()
-		close(conn.done)
+	proxyMessages := func(src, dst *websocket.Conn) {
+		defer wg.Done()
+
+		for {
+			messageType, message, err := src.ReadMessage()
+			if err != nil {
+				break
+			}
+			if err := dst.WriteMessage(messageType, message); err != nil {
+				break
+			}
+		}
 	}
 
-	// Proxy the connection in both directions
-	for _, pair := range []struct {
-		src net.Conn
-		dst net.Conn
-	}{
-		{containerConn, clientConn},
-		{clientConn, containerConn},
-	} {
-		go func(src, dst net.Conn) {
-			defer wg.Done()
-			abstractions.ProxyConn(src, dst, conn.done, connectionBufferSize)
-			once.Do(closeConnections)
-		}(pair.src, pair.dst)
-	}
-
+	go proxyMessages(clientConn, serverConn)
+	go proxyMessages(serverConn, clientConn)
 	wg.Wait()
-	select {
-	case <-conn.done:
-		return
-	case <-request.Context().Done():
-		return
-	case <-pb.ctx.Done():
-		return
-	}
+
+	return nil
 }
 
 func (pb *PodProxyBuffer) discoverContainers() {

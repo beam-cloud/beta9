@@ -208,7 +208,7 @@ func TestParseSubdomain(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.host, func(t *testing.T) {
-			assert.Equal(t, test.expected, parseSubdomain(test.host, test.base))
+			assert.Equal(t, test.expected, ParseSubdomain(test.host, test.base))
 		})
 	}
 }
@@ -360,7 +360,7 @@ func TestParseHostFromURL(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.url, func(t *testing.T) {
-			assert.Equal(t, test.expected, parseHostFromURL(test.url))
+			assert.Equal(t, test.expected, ParseHostFromURL(test.url))
 		})
 	}
 }
