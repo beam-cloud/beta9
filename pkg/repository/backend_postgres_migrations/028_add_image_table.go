@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/pressly/goose/v3"
+	"github.com/rs/zerolog/log"
 )
 
 func init() {
@@ -17,7 +18,8 @@ func init() {
 func upCreateImageTable(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS image (
-			id TEXT PRIMARY KEY,
+			id SERIAL PRIMARY KEY,
+			image_id TEXT NOT NULL UNIQUE,
 			clip_version INT NOT NULL
 		);
 	`)
@@ -38,7 +40,7 @@ func upCreateImageTable(ctx context.Context, tx *sql.Tx) error {
 	for rows.Next() {
 		var configJSON []byte
 		if err := rows.Scan(&configJSON); err != nil {
-			fmt.Printf("Error scanning config: %v\n", err)
+			log.Info().Msgf("Error scanning config: %v\n", err)
 			continue
 		}
 
@@ -48,7 +50,7 @@ func upCreateImageTable(ctx context.Context, tx *sql.Tx) error {
 
 		var configs []map[string]interface{}
 		if err := json.Unmarshal(configJSON, &configs); err != nil {
-			fmt.Printf("Error unmarshalling config JSON: %v, json: %s\n", err, string(configJSON))
+			log.Info().Msgf("Error unmarshalling config JSON: %v, json: %s\n", err, string(configJSON))
 			continue
 		}
 
@@ -87,9 +89,9 @@ func upCreateImageTable(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	insertQuery := fmt.Sprintf(`
-		INSERT INTO image (id, clip_version)
+		INSERT INTO image (image_id, clip_version)
 		VALUES %s
-		ON CONFLICT (id) DO NOTHING;
+		ON CONFLICT (image_id) DO NOTHING;
 	`, strings.Join(valueStrings, ","))
 
 	_, err = tx.ExecContext(ctx, insertQuery, valueArgs...)
