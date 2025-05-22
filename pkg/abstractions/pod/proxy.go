@@ -324,13 +324,12 @@ func (pb *PodProxyBuffer) discoverContainers() {
 	}
 }
 
-// checkContainerAvailable checks if a container is available (meaning you can connect to it via a TCP dial)
 func (pb *PodProxyBuffer) checkContainerAvailable(containerAddress string) bool {
 	conn, err := network.ConnectToHost(pb.ctx, containerAddress, containerAvailableTimeout, pb.tailscale, pb.tsConfig)
 	if err != nil {
 		return false
 	}
-
+	defer conn.Close()
 	return conn != nil
 }
 

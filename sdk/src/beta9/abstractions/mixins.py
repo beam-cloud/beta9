@@ -8,7 +8,7 @@ from ..abstractions.base.container import Container
 from ..abstractions.base.runner import SHELL_STUB_TYPE
 from ..channel import with_grpc_error_handling
 from ..clients.gateway import DeployStubRequest, DeployStubResponse, GetUrlRequest, GetUrlResponse
-from ..clients.shell import CreateShellRequest
+from ..clients.shell import CreateShellInExistingContainerRequest, CreateStandaloneShellRequest
 from ..config import ConfigContext
 from .base.runner import RunnerAbstraction
 from .shell import SSHShell
@@ -94,7 +94,9 @@ class DeployableMixin:
             terminal.header(f"Stopped syncing directory '{sync_dir}'")
 
     @with_grpc_error_handling
-    def shell(self, url_type: str = "", sync_dir: Optional[str] = None):
+    def shell(
+        self, url_type: str = "", sync_dir: Optional[str] = None, container_id: Optional[str] = None
+    ):
         stub_type = SHELL_STUB_TYPE
 
         if not self.parent.prepare_runtime(
@@ -103,14 +105,36 @@ class DeployableMixin:
             return False
 
         # First, spin up the shell container
-        with terminal.progress("Creating shell..."):
-            create_shell_response = self.parent.shell_stub.create_shell(
-                CreateShellRequest(
+        username = "root"
+        password = ""
+
+        if container_id:
+            with terminal.progress("Creating shell..."):
+                create_shell_response = self.parent.shell_stub.create_shell_in_existing_container(
+                    CreateShellInExistingContainerRequest(
+                        container_id=container_id,
+                    )
+                )
+
+                if not create_shell_response.ok:
+                    return terminal.error(
+                        f"Failed to create shell: {create_shell_response.err_msg} ❌"
+                    )
+
+                username = create_shell_response.username
+                password = create_shell_response.password
+        else:
+            create_shell_response = self.parent.shell_stub.create_standalone_shell(
+                CreateStandaloneShellRequest(
                     stub_id=self.parent.stub_id,
                 )
             )
             if not create_shell_response.ok:
                 return terminal.error(f"Failed to create shell: {create_shell_response.err_msg} ❌")
+
+            container_id = create_shell_response.container_id
+            username = create_shell_response.username
+            password = create_shell_response.password
 
         # Then, we can retrieve the URL and establish a tunnel
         res: GetUrlResponse = self.parent.gateway_stub.get_url(
@@ -126,8 +150,6 @@ class DeployableMixin:
         # Parse the URL to extract the container_id
         parsed_url = urllib.parse.urlparse(res.url)
         proxy_host, proxy_port = parsed_url.hostname, parsed_url.port
-        container_id = create_shell_response.container_id
-        ssh_token = create_shell_response.token
 
         if not proxy_port:
             proxy_port = 443 if parsed_url.scheme == "https" else 80
@@ -146,7 +168,7 @@ class DeployableMixin:
             container_id=container_id,
             stub_id=self.parent.stub_id,
             auth_token=self.parent.config_context.token,
-            username="root",
-            password=ssh_token,
+            username=username,
+            password=password,
         ) as shell:
             shell.start()

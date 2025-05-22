@@ -300,9 +300,11 @@ app = Pod(
             os.remove(f"pod-{self._id}.py")
 
     @with_grpc_error_handling
-    def shell(self, url_type: str = "", sync_dir: Optional[str] = None):
+    def shell(
+        self, url_type: str = "", sync_dir: Optional[str] = None, container_id: Optional[str] = None
+    ):
         self.authorized = True
-        super().shell(url_type=url_type, sync_dir=sync_dir)
+        super().shell(url_type=url_type, sync_dir=sync_dir, container_id=container_id)
 
     def serve(self, **kwargs):
         terminal.error("Serve has not yet been implemented for Pods.")
