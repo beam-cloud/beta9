@@ -2098,3 +2098,23 @@ func (r *PostgresBackendRepository) encryptFields(row interface{}) error {
 
 	return nil
 }
+
+func (r *PostgresBackendRepository) GetImageClipVersion(ctx context.Context, imageId string) (uint32, error) {
+	var clipVersion uint32
+	query := `SELECT clip_version FROM image WHERE image_id=$1;`
+	err := r.client.GetContext(ctx, &clipVersion, query, imageId)
+	if err == nil {
+		return clipVersion, nil
+	}
+
+	return 0, err
+}
+
+func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error) {
+	query := `INSERT INTO image (image_id, clip_version) VALUES ($1, $2);`
+	if _, err := r.client.ExecContext(ctx, query, imageId, clipVersion); err != nil {
+		return 0, err
+	}
+
+	return clipVersion, nil
+}

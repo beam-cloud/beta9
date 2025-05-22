@@ -27,6 +27,7 @@ type BuildOpts struct {
 	BuildSecrets       []string
 	Gpu                string
 	IgnorePython       bool
+	ClipVersion        uint32
 }
 
 func (o *BuildOpts) String() string {
