@@ -17,9 +17,7 @@ import (
 )
 
 const (
-	baseFileCachePath     string = "/cache"
-	additionalPreloadPath        = "/usr/local/lib/ipbind.so"
-	specialPreloadPath           = "/usr/local/lib/volume_cache.so"
+	baseFileCachePath string = "/cache"
 )
 
 type FileCacheManager struct {
