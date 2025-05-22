@@ -684,28 +684,10 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 
 	// IPv6
 	if m.ipt6 != nil {
-		// Accept forwarded IPv6 traffic to the container's IPv6 address/port
-		err = m.ipt6.AppendUnique("filter", "FORWARD",
-			"-p", "tcp",
-			"-d", containerIp_IPv6,
-			"--dport", fmt.Sprintf("%d", containerPort),
-			"-j", "ACCEPT",
-			"-m", "comment", "--comment", comment)
+		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
 		if err != nil {
-			return fmt.Errorf("failed to add ip6tables FORWARD rule: %w", err)
+			return err
 		}
-
-		// DNAT incoming IPv6 traffic to the container's IPv6 address/port
-		err = m.ipt6.InsertUnique("nat", "PREROUTING", 1,
-			"-p", "tcp",
-			"--dport", fmt.Sprintf("%d", hostPort),
-			"-j", "DNAT",
-			"--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort),
-			"-m", "comment", "--comment", comment)
-		if err != nil {
-			return fmt.Errorf("failed to add ip6tables DNAT rule: %w", err)
-		}
-
 	}
 
 	return nil

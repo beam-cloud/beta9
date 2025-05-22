@@ -501,10 +501,6 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		"PYTHONUNBUFFERED=1",
 	}
 
-	if podIP := os.Getenv("POD_IP"); podIP != "" {
-		env = append(env, fmt.Sprintf("POD_IP=%s", podIP))
-	}
-
 	// Add env vars from request
 	env = append(request.Env, env...)
 
