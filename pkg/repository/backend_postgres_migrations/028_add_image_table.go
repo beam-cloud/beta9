@@ -48,27 +48,19 @@ func upCreateImageTable(ctx context.Context, tx *sql.Tx) error {
 			continue
 		}
 
-		var configs []map[string]interface{}
-		if err := json.Unmarshal(configJSON, &configs); err != nil {
+		var config map[string]interface{}
+		if err := json.Unmarshal(configJSON, &config); err != nil {
 			log.Info().Msgf("Error unmarshalling config JSON: %v, json: %s\n", err, string(configJSON))
 			continue
 		}
 
-		for _, configEntry := range configs {
-			for _, itemData := range configEntry {
-				itemMap, ok := itemData.(map[string]interface{})
-				if !ok {
-					continue
-				}
-				runtimeData, ok := itemMap["runtime"].(map[string]interface{})
-				if !ok {
-					continue
-				}
-				imageID, ok := runtimeData["image_id"].(string)
-				if ok && imageID != "" {
-					imageIDs[imageID] = struct{}{}
-				}
-			}
+		runtimeData, ok := config["runtime"].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		imageID, ok := runtimeData["image_id"].(string)
+		if ok && imageID != "" {
+			imageIDs[imageID] = struct{}{}
 		}
 	}
 	if err := rows.Err(); err != nil {
