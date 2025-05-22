@@ -52,10 +52,12 @@ storage:
       readAheadKB: 32768
       readAheadLargeKB: 131072
       fuseReadAheadKB: 32768
+      readAheadParallelKB: 4096
       mountOptions: []
       stagedWriteModeEnabled: true
       stagedWritePath: /tmp/geesefs-staged-write
       stagedWriteDebounce: 30s
+      cacheStreamingEnabled: false
 gateway:
   host: beta9-gateway
   invokeURLType: path

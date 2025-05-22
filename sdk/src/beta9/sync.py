@@ -205,11 +205,12 @@ class FileSyncer:
                         object_metadata=metadata, hash=hash, size=size, overwrite=True
                     )
                 )
-                if create_object_response.ok and self.is_workspace_dir:
+                if create_object_response.ok:
                     presigned_url = create_object_response.presigned_url
                     response = _upload_object()
                     if response.status_code == HTTPStatus.OK:
-                        set_workspace_object_id(create_object_response.object_id)
+                        if self.is_workspace_dir:
+                            set_workspace_object_id(create_object_response.object_id)
                         object_id = create_object_response.object_id
                     else:
                         terminal.error("File sync failed ☠️")

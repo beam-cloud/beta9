@@ -3,15 +3,17 @@ package apiv1
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/output"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/beta9/pkg/types/serializer"
@@ -28,9 +30,10 @@ type TaskGroup struct {
 	containerRepo  repository.ContainerRepository
 	redisClient    *common.RedisClient
 	taskDispatcher *task.Dispatcher
+	scheduler      *scheduler.Scheduler
 }
 
-func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, config types.AppConfig) *TaskGroup {
+func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, scheduler *scheduler.Scheduler, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
 		backendRepo:    backendRepo,
 		taskRepo:       taskRepo,
@@ -38,6 +41,7 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 		config:         config,
 		redisClient:    redisClient,
 		taskDispatcher: taskDispatcher,
+		scheduler:      scheduler,
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListTasksPaginated))
@@ -214,6 +218,18 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 		return errors.New("failed to cancel task")
 	}
 
+	// If the stub type is function and we have the container id, force stop the container immediately
+	if task.Stub.Type.Kind() == types.StubTypeFunction && task.ContainerId != "" {
+		err = g.scheduler.Stop(&types.StopContainerArgs{
+			ContainerId: task.ContainerId,
+			Reason:      types.StopContainerReasonUser,
+			Force:       true,
+		})
+		if err != nil {
+			log.Error().Str("container_id", task.ContainerId).Msgf("failed to stop container: %v", err)
+		}
+	}
+
 	task.Status = types.TaskStatusCancelled
 	task.EndedAt = types.NullTime{}.Now()
 	if _, err := g.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
@@ -235,10 +251,7 @@ func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, erro
 		return nil, HTTPBadRequest("Failed to decode query parameters")
 	}
 
-	log.Println(filters.AppId)
-
 	filters.WorkspaceID = workspace.Id
-
 	return &filters, nil
 }
 

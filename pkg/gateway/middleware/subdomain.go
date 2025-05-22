@@ -56,11 +56,11 @@ type SubdomainBackendRepo interface {
 // - {subdomain}-v{version}.app.example.com       // Routes to a specific version of a deployment
 // - {stubId}.app.example.com                     // Routes to a specified stub, typically used for serves
 func Subdomain(externalURL string, backendRepo SubdomainBackendRepo, redisClient *common.RedisClient) echo.MiddlewareFunc {
-	baseDomain := parseHostFromURL(externalURL)
+	baseDomain := ParseHostFromURL(externalURL)
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(ctx echo.Context) error {
-			subdomain := parseSubdomain(ctx.Request().Host, baseDomain)
+			subdomain := ParseSubdomain(ctx.Request().Host, baseDomain)
 			if subdomain == "" {
 				return next(ctx)
 			}
@@ -85,9 +85,15 @@ func Subdomain(externalURL string, backendRepo SubdomainBackendRepo, redisClient
 				}
 			}
 
-			handlerPathFull := path.Join("/", handlerPath, ctx.Request().URL.Path)
-			ctx.Echo().Router().Find(ctx.Request().Method, handlerPathFull, ctx)
+			originalPath := ctx.Request().URL.Path
+			hasTrailingSlash := strings.HasSuffix(originalPath, "/") && originalPath != "/"
 
+			handlerPathFull := path.Join("/", handlerPath, originalPath)
+			if hasTrailingSlash && !strings.HasSuffix(handlerPathFull, "/") {
+				handlerPathFull += "/"
+			}
+
+			ctx.Echo().Router().Find(ctx.Request().Method, handlerPathFull, ctx)
 			if handler := ctx.Handler(); handler != nil {
 				ctx.Request().URL.Path = handlerPathFull
 				return handler(ctx)
@@ -106,7 +112,7 @@ type SubdomainFields struct {
 	Port      uint32
 }
 
-func parseSubdomain(host, baseDomain string) string {
+func ParseSubdomain(host, baseDomain string) string {
 	// Remove port if present
 	h, _, err := net.SplitHostPort(host)
 	if err != nil {
@@ -178,7 +184,6 @@ func getStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields 
 	}
 
 	fields.Name = deployment.Name
-
 	return &deployment.Stub, nil
 }
 
@@ -222,7 +227,7 @@ func buildHandlerPath(stub *types.Stub, fields *SubdomainFields, extraPaths ...s
 	return path.Join(pathSegments...)
 }
 
-func parseHostFromURL(s string) string {
+func ParseHostFromURL(s string) string {
 	if !strings.HasPrefix(s, "http://") && !strings.HasPrefix(s, "https://") {
 		// Add a scheme to the URL so that it can be parsed correctly.
 		s = "http://" + s

@@ -507,7 +507,7 @@ func (s *Worker) manageWorkerCapacity() {
 }
 
 func (s *Worker) processCompletedRequest(request *types.ContainerRequest) error {
-	_, err := handleGRPCResponse(s.workerRepoClient.UpdateWorkerCapacity(s.ctx, &pb.UpdateWorkerCapacityRequest{
+	_, err := handleGRPCResponse(s.workerRepoClient.UpdateWorkerCapacity(context.Background(), &pb.UpdateWorkerCapacityRequest{
 		WorkerId:         s.workerId,
 		CapacityChange:   int64(types.AddCapacity),
 		ContainerRequest: request.ToProto(),

@@ -198,12 +198,17 @@ func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionSer
 
 		err = task.Cancel(context.Background(), types.TaskRequestCancelled)
 		if err != nil {
-			log.Error().Err(err).Msg("error cancelling task")
+			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error cancelling task")
+		}
+
+		err = fs.taskDispatcher.Complete(context.Background(), authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId)
+		if err != nil {
+			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error completing task")
 		}
 
 		err = fs.rdb.Publish(context.Background(), common.RedisKeys.TaskCancel(authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId), task.Message().TaskId).Err()
 		if err != nil {
-			log.Error().Err(err).Msg("error publishing task cancel event")
+			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error publishing task cancel event")
 		}
 	}()
 

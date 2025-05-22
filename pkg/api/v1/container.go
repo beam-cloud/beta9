@@ -42,6 +42,11 @@ func NewContainerGroup(
 	return group
 }
 
+type ContainerStateWithAppId struct {
+	types.ContainerState
+	AppId string `json:"app_id"`
+}
+
 func (c *ContainerGroup) ListContainersByWorkspaceId(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	containerStates, err := c.containerRepo.GetActiveContainersByWorkspaceId(workspaceId)
@@ -49,7 +54,26 @@ func (c *ContainerGroup) ListContainersByWorkspaceId(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to get containers")
 	}
 
-	return ctx.JSON(http.StatusOK, containerStates)
+	containerStatesWithAppId := make([]ContainerStateWithAppId, len(containerStates))
+	stubIdsToAppIds := make(map[string]string)
+	for i, containerState := range containerStates {
+		if appId, ok := stubIdsToAppIds[containerState.StubId]; ok {
+			containerStatesWithAppId[i].AppId = appId
+			containerStatesWithAppId[i].ContainerState = containerState
+			continue
+		}
+
+		app, err := c.backendRepo.RetrieveAppByStubExternalId(ctx.Request().Context(), containerState.StubId)
+		if err != nil {
+			return HTTPInternalServerError("Failed to get app")
+		}
+
+		containerStatesWithAppId[i].AppId = app.ExternalId
+		containerStatesWithAppId[i].ContainerState = containerState
+		stubIdsToAppIds[containerState.StubId] = app.ExternalId
+	}
+
+	return ctx.JSON(http.StatusOK, containerStatesWithAppId)
 }
 
 func (c *ContainerGroup) GetContainer(ctx echo.Context) error {
