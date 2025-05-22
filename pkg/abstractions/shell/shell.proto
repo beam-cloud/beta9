@@ -5,14 +5,27 @@ option go_package = "github.com/beam-cloud/beta9/proto";
 package shell;
 
 service ShellService {
-  rpc CreateShell(CreateShellRequest) returns (CreateShellResponse) {}
+  rpc CreateStandaloneShell(CreateStandaloneShellRequest) returns (CreateStandaloneShellResponse) {}
+  rpc CreateShellInExistingContainer(CreateShellInExistingContainerRequest) returns (CreateShellInExistingContainerResponse) {}
 }
 
-message CreateShellRequest { string stub_id = 1; }
+message CreateStandaloneShellRequest { string stub_id = 1; }
 
-message CreateShellResponse {
+message CreateStandaloneShellResponse {
   bool ok = 1;
   string container_id = 2;
-  string token = 3;
+  string username = 3;
+  string password = 4;
+  string err_msg = 5;
+}
+
+message CreateShellInExistingContainerRequest {
+  string container_id = 1;
+}
+
+message CreateShellInExistingContainerResponse {
+  bool ok = 1;
+  string username = 2;
+  string password = 3;
   string err_msg = 4;
 }

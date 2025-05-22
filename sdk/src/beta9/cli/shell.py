@@ -39,6 +39,11 @@ def common(**_):
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@click.option(
+    "--container-id",
+    help="The ID of the container to connect to.",
+    type=str,
+)
 @override_config_options
 @extraclick.pass_service_client
 @click.pass_context
@@ -47,6 +52,7 @@ def shell(
     service: ServiceClient,
     handler: str,
     url_type: str = "path",
+    container_id: str = None,
     **kwargs,
 ):
     entrypoint = kwargs["entrypoint"]
@@ -56,7 +62,7 @@ def shell(
         if hasattr(user_obj, "set_handler"):
             user_obj.set_handler(f"{module_name}:{obj_name}")
 
-    elif entrypoint:
+    elif entrypoint or container_id:
         user_obj = Pod(entrypoint=entrypoint)
 
     else:
@@ -65,4 +71,4 @@ def shell(
     if not handle_config_override(user_obj, kwargs):
         return
 
-    user_obj.shell(url_type=url_type)  # type:ignore
+    user_obj.shell(url_type=url_type, container_id=container_id)  # type:ignore
