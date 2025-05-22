@@ -36,6 +36,7 @@ const (
 	containerBridgeAddressIPv6   string = "fd00:abcd::1"
 
 	containerNetworkCleanupInterval time.Duration = time.Minute * 1
+	containerIPBindPath             string        = "/usr/local/lib/ipbind.so"
 )
 
 type ContainerNetworkManager struct {

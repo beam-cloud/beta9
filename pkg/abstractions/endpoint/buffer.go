@@ -207,6 +207,7 @@ func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 		return false
 	}
 	defer resp.Body.Close()
+	defer httpClient.CloseIdleConnections()
 
 	return resp.StatusCode == http.StatusOK
 }

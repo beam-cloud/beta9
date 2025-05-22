@@ -6,6 +6,7 @@
 !go.sum
 !sdk
 !bin/volume_cache_*
+!bin/ipbind_*
 **/__pycache__
 *.pyc
 .venv

@@ -458,7 +458,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	// Configure resolv.conf
 	resolvMount := specs.Mount{
 		Type:        "none",
-		Source:      "/workspace/resolv.conf",
+		Source:      "/workspace/etc/resolv.conf",
 		Destination: "/etc/resolv.conf",
 		Options: []string{
 			"ro",
@@ -498,6 +498,7 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
 		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)),
 		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
+		fmt.Sprintf("LD_PRELOAD=%s", containerIPBindPath),
 		"PYTHONUNBUFFERED=1",
 	}
 

@@ -169,20 +169,30 @@ RUN apt-get remove -y curl && \
 
 
 ENV BUILDAH_RUNTIME=/usr/local/sbin/runc
-RUN echo "nameserver 8.8.8.8" > /workspace/resolv.conf
+
+RUN mkdir -p /workspace/etc
+RUN echo "nameserver 8.8.8.8" > /workspace/etc/resolv.conf
+RUN echo '127.0.0.1 localhost' > /workspace/etc/hosts
+RUN echo 'hosts: files dns' > /workspace/etc/nsswitch.conf
+
 COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
 COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 
+# LD_PRELOAD libraries
 COPY ./bin/volume_cache_x86.so /usr/local/lib/volume_cache_x86.so
 COPY ./bin/volume_cache_arm.so /usr/local/lib/volume_cache_arm.so
+COPY ./bin/ipbind_x86.so /usr/local/lib/ipbind_x86.so
+COPY ./bin/ipbind_arm.so /usr/local/lib/ipbind_arm.so
 
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
     cp /usr/local/lib/volume_cache_x86.so /usr/local/lib/volume_cache.so; \
+    cp /usr/local/lib/ipbind_x86.so /usr/local/lib/ipbind.so; \
 else \
     cp /usr/local/lib/volume_cache_arm.so /usr/local/lib/volume_cache.so; \
+    cp /usr/local/lib/ipbind_arm.so /usr/local/lib/ipbind.so; \
 fi
 
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
