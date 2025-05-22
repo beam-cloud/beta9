@@ -181,13 +181,18 @@ COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 
+# LD_PRELOAD libraries
 COPY ./bin/volume_cache_x86.so /usr/local/lib/volume_cache_x86.so
 COPY ./bin/volume_cache_arm.so /usr/local/lib/volume_cache_arm.so
+COPY ./bin/ipbind_x86.so /usr/local/lib/ipbind_x86.so
+COPY ./bin/ipbind_arm.so /usr/local/lib/ipbind_arm.so
 
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
     cp /usr/local/lib/volume_cache_x86.so /usr/local/lib/volume_cache.so; \
+    cp /usr/local/lib/ipbind_x86.so /usr/local/lib/ipbind.so; \
 else \
     cp /usr/local/lib/volume_cache_arm.so /usr/local/lib/volume_cache.so; \
+    cp /usr/local/lib/ipbind_arm.so /usr/local/lib/ipbind.so; \
 fi
 
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker

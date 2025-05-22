@@ -188,13 +188,13 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	}
 	defer pb.decrementContainerConnections(container.id)
 
-	// Check if it's a WebSocket upgrade request
+	// If it's a websocket request, upgrade the connection
 	if websocket.IsWebSocketUpgrade(request) {
 		pb.proxyWebSocket(conn, container, targetHost, subPath)
 		return
 	}
 
-	// Use regular HTTP proxying if it's not a WS
+	// Otherwise, use regular HTTP proxying
 	targetURL, err := url.Parse("http://" + targetHost)
 	if err != nil {
 		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
@@ -214,6 +214,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 			return conn, err
 		},
 	}
+
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {}
 	proxy.ServeHTTP(response, request)
 }

@@ -642,7 +642,7 @@
 			]
 		},
 		{
-			"type": "bind",
+			"type": "none",
 			"source": "/workspace/etc/hosts",
 			"destination": "/etc/hosts",
 			"options": [
@@ -655,7 +655,7 @@
 			]
 		},
 		{
-			"type": "bind",
+			"type": "none",
 			"source": "/workspace/etc/nsswitch.conf",
 			"destination": "/etc/nsswitch.conf",
 			"options": [
@@ -664,6 +664,18 @@
 				"rprivate",
 				"nosuid",
 				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"type": "none",
+			"source": "/usr/local/lib/ipbind.so",
+			"destination": "/usr/local/lib/ipbind.so",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
 				"nodev"
 			]
 		}
