@@ -303,7 +303,7 @@ func (c *ImageClient) SetupClipMount(ctx context.Context, request *types.Contain
 				return nil
 			},
 			PriorityChunks:          request.PriorityChunks,
-			PriorityChunkSampleTime: 15 * time.Second,
+			PriorityChunkSampleTime: 30 * time.Second,
 		},
 	})
 	if err != nil {
@@ -580,7 +580,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageID
 		S3Config:          c.config.ImageService.Registries.S3.Primary,
 		V2: clip.V2CreateArchiveOptions{
 			// FIXME: this should be in config
-			MaxChunkSize: 256 * 1024 * 1024,
+			MaxChunkSize: 16 * 1024 * 1024,
 		},
 		V1: clip.V1CreateArchiveOptions{
 			PrimaryRegistry: c.primaryRegistry,
