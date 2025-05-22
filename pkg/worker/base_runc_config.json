@@ -666,18 +666,6 @@
 				"noexec",
 				"nodev"
 			]
-		},
-		{
-			"type": "none",
-			"source": "/usr/local/lib/ipbind.so",
-			"destination": "/usr/local/lib/ipbind.so",
-			"options": [
-				"ro",
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev"
-			]
 		}
 	],
 	"hooks": {},

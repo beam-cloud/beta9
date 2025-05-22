@@ -498,7 +498,6 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
 		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)),
 		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
-		fmt.Sprintf("LD_PRELOAD=%s", containerIPBindPath),
 		"PYTHONUNBUFFERED=1",
 	}
 
