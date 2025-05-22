@@ -41,8 +41,6 @@ const (
 	createUserScript              string        = `set -e; useradd -m -s /bin/bash $USERNAME 2>> /etc/dropbear/logs-user.txt; echo "$USERNAME:$PASSWORD" | chpasswd 2>> /etc/dropbear/logs-user.txt`
 )
 
-/*set -e; echo "root:%s" | chpasswd; echo "if [ -f /root/.bashrc ]; then . /root/.bashrc; fi" >> /root/.profile; echo "cd /mnt/code" >> /root/.profile; echo "export TERM=xterm-256color" >> /root/.bashrc; */
-
 type ShellService interface {
 	pb.ShellServiceServer
 	CreateStandaloneShell(ctx context.Context, in *pb.CreateStandaloneShellRequest) (*pb.CreateStandaloneShellResponse, error)
@@ -154,7 +152,7 @@ func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, contai
 		return false
 	}
 
-	addr, ok := addressMap[int32(sshServerPort)]
+	addr, ok := addressMap[sshServerPort]
 	if !ok {
 		return false
 	}
