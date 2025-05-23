@@ -178,6 +178,9 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	if subPath != "" && subPath[0] != '/' {
 		subPath = "/" + subPath
 	}
+
+	request.URL.Scheme = "http"
+	request.URL.Host = targetHost
 	request.URL.Path = subPath
 
 	// Increment container connections
@@ -200,9 +203,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		conn.ctx.String(http.StatusInternalServerError, "Invalid target URL")
 		return
 	}
-
-	request.URL.Scheme = "http"
-	request.URL.Host = targetHost
 
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	proxy.Transport = &http.Transport{
