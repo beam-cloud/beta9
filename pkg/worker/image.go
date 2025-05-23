@@ -576,7 +576,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageID
 		S3Config:          c.config.ImageService.Registries.S3.Primary,
 		V2: clip.V2CreateArchiveOptions{
 			// FIXME: this should be in config
-			MaxChunkSize: 16 * 1024 * 1024,
+			MaxChunkSize: 64 * 1024 * 1024,
 		},
 		V1: clip.V1CreateArchiveOptions{
 			PrimaryRegistry: c.primaryRegistry,
