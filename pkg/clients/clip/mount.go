@@ -88,7 +88,7 @@ func MountArchive(ctx context.Context, options MountArchiveOptions) (func() erro
 			MountPoint:                fmt.Sprintf("%s/%s", options.ImageMountPath, options.ImageID),
 			ContentCache:              options.ContentCache,
 			ContentCacheAvailable:     options.ContentCacheAvailable,
-			WarmChunks:                options.V2.WarmChunks,
+			WarmChunks:                false,
 			PriorityChunks:            options.V2.PriorityChunks,
 			SetPriorityChunksCallback: options.V2.SetPriorityChunksCallback,
 			PriorityChunkSampleTime:   options.V2.PriorityChunkSampleTime,
