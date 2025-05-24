@@ -65,11 +65,9 @@ func GpuTypesToStrings(gpus []GpuType) []string {
 const (
 	GPU_A10G    GpuType = "A10G"
 	GPU_A100_40 GpuType = "A100-40"
-	GPU_A100_80 GpuType = "A100-80"
 	GPU_L4      GpuType = "L4"
 	GPU_T4      GpuType = "T4"
 	GPU_H100    GpuType = "H100"
-	GPU_A6000   GpuType = "A6000"
 	GPU_RTX4090 GpuType = "RTX4090"
 	GPU_L40S    GpuType = "L40S"
 
@@ -78,7 +76,7 @@ const (
 )
 
 func AllGPUTypes() []GpuType {
-	return []GpuType{GPU_A10G, GPU_A100_40, GPU_A100_80, GPU_L4, GPU_T4, GPU_H100, GPU_A6000, GPU_RTX4090, GPU_L40S, GPU_ANY}
+	return []GpuType{GPU_A10G, GPU_A100_40, GPU_L4, GPU_T4, GPU_H100, GPU_RTX4090, GPU_L40S, GPU_ANY}
 }
 
 func GpuTypesToSlice(gpuTypes []GpuType) []string {
