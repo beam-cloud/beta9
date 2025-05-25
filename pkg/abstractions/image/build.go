@@ -307,7 +307,7 @@ func genContainerId() string {
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	command := "uv pip install"
+	command := "uv-b9 pip install"
 	if strings.Contains(pythonVersion, "micromamba") {
 		command = fmt.Sprintf("%s -m pip install", pythonVersion)
 	}
