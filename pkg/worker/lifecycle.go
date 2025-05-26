@@ -188,7 +188,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return err
 	}
 
-	logChan := make(chan common.LogRecord)
+	logChan := make(chan common.LogRecord, 1000)
 	outputLogger := slog.New(common.NewChannelHandler(logChan))
 
 	// Handle stdout/stderr
