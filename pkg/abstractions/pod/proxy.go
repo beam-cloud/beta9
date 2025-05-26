@@ -219,7 +219,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error().Err(err).Str("stubId", pb.stubId).Str("workspace", pb.workspace.Name).Msg("handled abort in proxy")
+			log.Error().Err(err).Str("stubId", pb.stubId).Str("workspace", pb.workspace.Name).Msg("handled abort in pod proxy")
 		}
 	}()
 
