@@ -400,6 +400,7 @@ class Image(BaseAbstraction):
                 build_ctx_object=self.build_ctx_object,
                 secrets=self.secrets,
                 gpu=self.gpu,
+                ignore_python=self.ignore_python,
             )
         )
 
