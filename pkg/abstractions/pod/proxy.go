@@ -277,7 +277,6 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 	go proxyMessages(serverConn, clientConn)
 
 	wg.Wait()
-
 	return nil
 }
 

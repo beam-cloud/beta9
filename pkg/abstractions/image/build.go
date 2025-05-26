@@ -60,6 +60,10 @@ type Build struct {
 func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg, config types.AppConfig) (*Build, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if opts.IgnorePython && len(opts.PythonPackages) == 0 {
+		opts.PythonVersion = ""
+	}
+
 	return &Build{
 		ctx:         ctx,
 		config:      config,
