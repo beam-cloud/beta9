@@ -16,6 +16,7 @@ func NewStubGroupForTest() *StubGroup {
 	config := types.AppConfig{
 		GatewayService: types.GatewayServiceConfig{
 			StubLimits: types.StubLimits{
+				Cpu:         128000,
 				Memory:      40000,
 				MaxGpuCount: 2,
 			},
