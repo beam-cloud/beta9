@@ -126,8 +126,7 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    time: datetime = betterproto.message_field(1)
-    valid: bool = betterproto.bool_field(2)
+    null_time: "NullTime" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)
