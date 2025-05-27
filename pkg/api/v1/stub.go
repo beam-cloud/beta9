@@ -432,6 +432,11 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		return nil, HTTPInternalServerError("Failed to decode stub config")
 	}
 
+	valid, errorMsg := types.ValidateCpuAndMemory(stubConfig.Runtime.Cpu, stubConfig.Runtime.Memory, g.config.GatewayService.StubLimits)
+	if !valid {
+		return nil, HTTPBadRequest(errorMsg)
+	}
+
 	parentSecrets := stubConfig.Secrets
 	stubConfig.Secrets = []types.Secret{}
 

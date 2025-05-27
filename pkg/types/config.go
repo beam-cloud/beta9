@@ -112,9 +112,38 @@ type CORSConfig struct {
 }
 
 type StubLimits struct {
+	Cpu         uint64 `key:"cpu" json:"cpu"`
 	Memory      uint64 `key:"memory" json:"memory"`
 	MaxReplicas uint64 `key:"maxReplicas" json:"max_replicas"`
 	MaxGpuCount uint32 `key:"maxGpuCount" json:"max_gpu_count"`
+}
+
+// ValidateCpuAndMemory checks and sets defaults for CPU and memory, and enforces limits
+func ValidateCpuAndMemory(cpu, memory int64, stubLimits StubLimits) (valid bool, errorMsg string) {
+	valid = true
+	errorMsg = ""
+	if cpu <= 0 {
+		valid = false
+		errorMsg = "CPU must be greater than 0."
+	}
+
+	if memory <= 0 {
+		valid = false
+		errorMsg = "Memory must be greater than 0."
+	}
+
+	// Enforce upper limits
+	if memory > int64(stubLimits.Memory) {
+		valid = false
+		errorMsg = fmt.Sprintf("Memory must be %dGiB or less.", stubLimits.Memory/1024)
+	}
+
+	if cpu > int64(stubLimits.Cpu) {
+		valid = false
+		errorMsg = fmt.Sprintf("CPU must be %d or less.", stubLimits.Cpu)
+	}
+
+	return valid, errorMsg
 }
 
 type ContainerCostHookConfig struct {
