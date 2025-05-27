@@ -121,8 +121,8 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolCont
 	}
 
 	for _, worker := range workers {
-		// Exclude disabled workers from the capacity calculation
-		if worker.Status == types.WorkerStatusDisabled {
+		// Exclude disabled and pending workers from the capacity calculation
+		if worker.Status == types.WorkerStatusDisabled || worker.Status == types.WorkerStatusPending {
 			continue
 		}
 
