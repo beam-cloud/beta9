@@ -59,6 +59,16 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 			shouldAddWorker: false,
 		},
 		{
+			name:   "should not add worker when pending capacity is sufficient",
+			config: config,
+			freeCapacity: &WorkerPoolCapacity{
+				PendingCpu:    10000,
+				PendingMemory: 5000,
+				PendingGpu:    0,
+			},
+			shouldAddWorker: false,
+		},
+		{
 			name:   "should add worker when capacity is not sufficient",
 			config: config,
 			freeCapacity: &WorkerPoolCapacity{
@@ -75,6 +85,19 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 				FreeCpu:    5000,
 				FreeMemory: 1000,
 				FreeGpu:    1,
+			},
+			shouldAddWorker: true,
+		},
+		{
+			name:   "should add worker when free + pending CPU is not sufficient GPU",
+			config: configWithGpu,
+			freeCapacity: &WorkerPoolCapacity{
+				PendingCpu:    2500,
+				PendingMemory: 500,
+				PendingGpu:    1,
+				FreeCpu:       2500,
+				FreeMemory:    500,
+				FreeGpu:       1,
 			},
 			shouldAddWorker: true,
 		},

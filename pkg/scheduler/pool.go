@@ -54,9 +54,12 @@ type WorkerPoolConfig struct {
 }
 
 type WorkerPoolCapacity struct {
-	FreeCpu    int64
-	FreeMemory int64
-	FreeGpu    uint
+	FreeCpu       int64
+	FreeMemory    int64
+	FreeGpu       uint
+	PendingCpu    int64
+	PendingMemory int64
+	PendingGpu    uint
 }
 
 type WorkerPoolControllerOptions struct {
@@ -121,16 +124,21 @@ func freePoolCapacity(workerRepo repository.WorkerRepository, wpc WorkerPoolCont
 	}
 
 	for _, worker := range workers {
-		// Exclude disabled and pending workers from the capacity calculation
-		if worker.Status == types.WorkerStatusDisabled || worker.Status == types.WorkerStatusPending {
+		switch worker.Status {
+		case types.WorkerStatusDisabled:
 			continue
-		}
-
-		capacity.FreeCpu += worker.FreeCpu
-		capacity.FreeMemory += worker.FreeMemory
-
-		if worker.Gpu != "" && (worker.FreeCpu > 0 && worker.FreeMemory > 0) {
-			capacity.FreeGpu += uint(worker.FreeGpuCount)
+		case types.WorkerStatusPending:
+			capacity.PendingCpu += worker.FreeCpu
+			capacity.PendingMemory += worker.FreeMemory
+			if worker.Gpu != "" && worker.FreeCpu > 0 && worker.FreeMemory > 0 {
+				capacity.PendingGpu += uint(worker.TotalGpuCount)
+			}
+		default:
+			capacity.FreeCpu += worker.FreeCpu
+			capacity.FreeMemory += worker.FreeMemory
+			if worker.Gpu != "" && (worker.FreeCpu > 0 && worker.FreeMemory > 0) {
+				capacity.FreeGpu += uint(worker.FreeGpuCount)
+			}
 		}
 	}
 
