@@ -61,7 +61,7 @@ func (t *EndpointTask) trackTaskCost(start time.Time, instance *endpointInstance
 	instance.AutoscaledInstance.UsageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
 		"stub_id":      instance.Stub.ExternalId,
 		"app_id":       instance.Stub.App.ExternalId,
-		"workspace_id": instance.Stub.Workspace.ExternalId,
+		"workspace_id": authInfo.Workspace.ExternalId,
 		"task_id":      t.msg.TaskId,
 		"value":        totalCostCents,
 	}, totalCostCents)
