@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
@@ -16,7 +17,9 @@ type EndpointTask struct {
 
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
 	var err error = nil
+
 	echoCtx := options[0].(echo.Context)
+	authInfo := options[1].(*auth.AuthInfo)
 
 	instance, err := t.es.getOrCreateEndpointInstance(ctx, t.msg.StubId)
 	if err != nil {
@@ -34,21 +37,25 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 
 	if instance.StubConfig.Pricing != nil {
 		start := time.Now()
-		defer t.trackTaskCost(start, instance)
+		defer t.trackTaskCost(start, instance, authInfo)
 	}
 
 	return instance.buffer.ForwardRequest(echoCtx, t)
 }
 
-func (t *EndpointTask) trackTaskCost(start time.Time, instance *endpointInstance) {
+func (t *EndpointTask) trackTaskCost(start time.Time, instance *endpointInstance, authInfo *auth.AuthInfo) {
+	if authInfo.Workspace.ExternalId == instance.Workspace.ExternalId {
+		return
+	}
+
 	elapsed := time.Since(start)
 	pricingConfig := instance.StubConfig.Pricing
 
-	totalCost := 0.0
+	totalCostCents := 0.0
 	if pricingConfig.CostModel == string(types.PricingPolicyCostModelTask) {
-		totalCost = pricingConfig.CostPerTask
+		totalCostCents = pricingConfig.CostPerTask * 100
 	} else if pricingConfig.CostModel == string(types.PricingPolicyCostModelDuration) {
-		totalCost = pricingConfig.CostPerTaskDurationMs * float64(elapsed.Milliseconds())
+		totalCostCents = pricingConfig.CostPerTaskDurationMs * float64(elapsed.Milliseconds()) * 100
 	}
 
 	instance.AutoscaledInstance.UsageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
@@ -56,8 +63,8 @@ func (t *EndpointTask) trackTaskCost(start time.Time, instance *endpointInstance
 		"app_id":       instance.Stub.App.ExternalId,
 		"workspace_id": instance.Stub.Workspace.ExternalId,
 		"task_id":      t.msg.TaskId,
-		"value":        totalCost,
-	}, totalCost)
+		"value":        totalCostCents,
+	}, totalCostCents)
 }
 
 func (t *EndpointTask) Retry(ctx context.Context) error {

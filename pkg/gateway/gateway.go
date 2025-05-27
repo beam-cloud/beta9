@@ -320,17 +320,18 @@ func (g *Gateway) registerServices() error {
 
 	// Register task queue service
 	tq, err := taskqueue.NewRedisTaskQueueService(g.ctx, taskqueue.TaskQueueServiceOpts{
-		Config:         g.Config,
-		RedisClient:    g.RedisClient,
-		BackendRepo:    g.BackendRepo,
-		WorkspaceRepo:  g.WorkspaceRepo,
-		TaskRepo:       g.TaskRepo,
-		ContainerRepo:  g.ContainerRepo,
-		Scheduler:      g.Scheduler,
-		Tailscale:      g.Tailscale,
-		RouteGroup:     g.rootRouteGroup,
-		TaskDispatcher: g.TaskDispatcher,
-		EventRepo:      g.EventRepo,
+		Config:           g.Config,
+		RedisClient:      g.RedisClient,
+		BackendRepo:      g.BackendRepo,
+		WorkspaceRepo:    g.WorkspaceRepo,
+		TaskRepo:         g.TaskRepo,
+		ContainerRepo:    g.ContainerRepo,
+		Scheduler:        g.Scheduler,
+		Tailscale:        g.Tailscale,
+		RouteGroup:       g.rootRouteGroup,
+		TaskDispatcher:   g.TaskDispatcher,
+		EventRepo:        g.EventRepo,
+		UsageMetricsRepo: g.UsageMetricsRepo,
 	})
 	if err != nil {
 		return err

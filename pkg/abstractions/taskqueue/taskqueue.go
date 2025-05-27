@@ -32,17 +32,18 @@ type TaskQueueService interface {
 }
 
 type TaskQueueServiceOpts struct {
-	Config         types.AppConfig
-	RedisClient    *common.RedisClient
-	BackendRepo    repository.BackendRepository
-	WorkspaceRepo  repository.WorkspaceRepository
-	TaskRepo       repository.TaskRepository
-	ContainerRepo  repository.ContainerRepository
-	Scheduler      *scheduler.Scheduler
-	Tailscale      *network.Tailscale
-	RouteGroup     *echo.Group
-	TaskDispatcher *task.Dispatcher
-	EventRepo      repository.EventRepository
+	Config           types.AppConfig
+	RedisClient      *common.RedisClient
+	BackendRepo      repository.BackendRepository
+	WorkspaceRepo    repository.WorkspaceRepository
+	TaskRepo         repository.TaskRepository
+	ContainerRepo    repository.ContainerRepository
+	Scheduler        *scheduler.Scheduler
+	Tailscale        *network.Tailscale
+	RouteGroup       *echo.Group
+	TaskDispatcher   *task.Dispatcher
+	EventRepo        repository.EventRepository
+	UsageMetricsRepo repository.UsageMetricsRepository
 }
 
 const (
@@ -65,12 +66,13 @@ type RedisTaskQueue struct {
 	backendRepo     repository.BackendRepository
 	scheduler       *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
-	queueInstances  *common.SafeMap[*taskQueueInstance]
-	keyEventManager *common.KeyEventManager
-	queueClient     *taskQueueClient
-	tailscale       *network.Tailscale
-	eventRepo       repository.EventRepository
-	controller      *abstractions.InstanceController
+	queueInstances   *common.SafeMap[*taskQueueInstance]
+	keyEventManager  *common.KeyEventManager
+	queueClient      *taskQueueClient
+	tailscale        *network.Tailscale
+	eventRepo        repository.EventRepository
+	usageMetricsRepo repository.UsageMetricsRepository
+	controller       *abstractions.InstanceController
 }
 
 func NewRedisTaskQueueService(
@@ -83,22 +85,23 @@ func NewRedisTaskQueueService(
 	}
 
 	tq := &RedisTaskQueue{
-		ctx:             ctx,
-		mu:              sync.Mutex{},
-		config:          opts.Config,
-		rdb:             opts.RedisClient,
-		scheduler:       opts.Scheduler,
-		stubConfigCache: common.NewSafeMap[*types.StubConfigV1](),
-		keyEventManager: keyEventManager,
-		workspaceRepo:   opts.WorkspaceRepo,
-		taskDispatcher:  opts.TaskDispatcher,
-		taskRepo:        opts.TaskRepo,
-		containerRepo:   opts.ContainerRepo,
-		backendRepo:     opts.BackendRepo,
-		queueClient:     newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
-		queueInstances:  common.NewSafeMap[*taskQueueInstance](),
-		tailscale:       opts.Tailscale,
-		eventRepo:       opts.EventRepo,
+		ctx:              ctx,
+		mu:               sync.Mutex{},
+		config:           opts.Config,
+		rdb:              opts.RedisClient,
+		scheduler:        opts.Scheduler,
+		stubConfigCache:  common.NewSafeMap[*types.StubConfigV1](),
+		keyEventManager:  keyEventManager,
+		workspaceRepo:    opts.WorkspaceRepo,
+		taskDispatcher:   opts.TaskDispatcher,
+		taskRepo:         opts.TaskRepo,
+		containerRepo:    opts.ContainerRepo,
+		backendRepo:      opts.BackendRepo,
+		queueClient:      newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
+		queueInstances:   common.NewSafeMap[*taskQueueInstance](),
+		tailscale:        opts.Tailscale,
+		eventRepo:        opts.EventRepo,
+		usageMetricsRepo: opts.UsageMetricsRepo,
 	}
 
 	// Listen for container events with a certain prefix
@@ -174,7 +177,12 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 		return "", err
 	}
 
-	tasksInFlight, err := tq.taskRepo.TasksInFlight(ctx, authInfo.Workspace.Name, stubId)
+	instance, err := tq.getOrCreateQueueInstance(stubId)
+	if err != nil {
+		return "", err
+	}
+
+	tasksInFlight, err := tq.taskRepo.TasksInFlight(ctx, instance.Workspace.Name, stubId)
 	if err != nil {
 		return "", err
 	}
@@ -190,12 +198,21 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 	}
 	policy.Expires = time.Now().Add(time.Duration(policy.TTL) * time.Second)
 
-	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), authInfo, stubId, payload, policy)
+	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), &auth.AuthInfo{
+		Workspace: instance.Workspace,
+		Token:     instance.Token,
+	}, stubId, payload, policy)
 	if err != nil {
 		return "", err
 	}
 
 	meta := task.Metadata()
+
+	// && instance.Workspace.ExternalId != authInfo.Workspace.ExternalId
+	if stubConfig.Pricing != nil {
+		tq.rdb.Set(ctx, Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, stubId, meta.TaskId), instance.Workspace.ExternalId, time.Duration(stubConfig.TaskPolicy.Timeout)*time.Second)
+	}
+
 	return meta.TaskId, nil
 }
 
@@ -311,6 +328,13 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
+	stubConfig, err := tq.getStubConfig(in.StubId)
+	if err != nil {
+		return &pb.TaskQueueCompleteResponse{
+			Ok: false,
+		}, nil
+	}
+
 	if in.KeepWarmSeconds > 0 {
 		err = tq.rdb.SetEx(ctx, Keys.taskQueueKeepWarmLock(authInfo.Workspace.Name, in.StubId, in.ContainerId), 1, time.Duration(in.KeepWarmSeconds)*time.Second).Err()
 		if err != nil {
@@ -355,10 +379,45 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
+	// If this task is associated with a different workspace, we need to track the cost
+	externalWorkspaceId, err := tq.rdb.Get(context.Background(), Keys.taskQueueTaskExternalWorkspace(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Result()
+	if err == nil && externalWorkspaceId != "" {
+		defer tq.trackTaskCost(time.Now(), stubConfig, task, in.StubId, externalWorkspaceId)
+	}
+
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	return &pb.TaskQueueCompleteResponse{
 		Ok: err == nil,
 	}, nil
+}
+
+func (tq *RedisTaskQueue) trackTaskCost(start time.Time, stubConfig *types.StubConfigV1, task *types.Task, stubId string, externalWorkspaceId string) {
+	elapsed := time.Since(start)
+
+	pricingConfig := stubConfig.Pricing
+
+	totalCostCents := 0.0
+	if pricingConfig.CostModel == string(types.PricingPolicyCostModelTask) {
+		totalCostCents = pricingConfig.CostPerTask * 100
+	} else if pricingConfig.CostModel == string(types.PricingPolicyCostModelDuration) {
+		totalCostCents = pricingConfig.CostPerTaskDurationMs * float64(elapsed.Milliseconds()) * 100
+	}
+
+	instance, err := tq.getOrCreateQueueInstance(stubId)
+	if err != nil {
+		log.Error().Err(err).Str("stub_id", stubId).Str("task_id", task.ExternalId).Msg("unable to track task cost")
+		return
+	}
+
+	tq.usageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
+		"stub_id":      instance.Stub.ExternalId,
+		"app_id":       instance.Stub.App.ExternalId,
+		"workspace_id": externalWorkspaceId,
+		"task_id":      task.ExternalId,
+		"value":        totalCostCents,
+	}, totalCostCents)
+
+	tq.rdb.Del(context.Background(), Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, stubId, task.ExternalId))
 }
 
 func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {

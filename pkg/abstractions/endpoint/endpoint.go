@@ -205,7 +205,7 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
-	return task.Execute(ctx.Request().Context(), ctx)
+	return task.Execute(ctx.Request().Context(), ctx, authInfo)
 }
 
 func (es *HttpEndpointService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
