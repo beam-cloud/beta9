@@ -46,7 +46,7 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
 	}
 
-	containerAddress, ok := addressMap[sshServerPort]
+	containerAddress, ok := addressMap[types.WorkerShellPort]
 	if !ok {
 		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
 	}

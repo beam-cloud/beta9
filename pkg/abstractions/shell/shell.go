@@ -36,7 +36,6 @@ const (
 	containerWaitTimeoutDurationS time.Duration = 5 * time.Minute
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
-	sshServerPort                 int32         = 2222
 	startupScript                 string        = `exec /usr/local/bin/dropbear -p 2222 -R -E -F 2> /etc/dropbear/logs.txt`
 	createUserScript              string        = `set -e; useradd -m -s /bin/bash $USERNAME 2>> /etc/dropbear/logs-user.txt; echo "$USERNAME:$PASSWORD" | chpasswd 2>> /etc/dropbear/logs-user.txt`
 )
@@ -152,7 +151,7 @@ func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, contai
 		return false
 	}
 
-	addr, ok := addressMap[sshServerPort]
+	addr, ok := addressMap[types.WorkerShellPort]
 	if !ok {
 		return false
 	}

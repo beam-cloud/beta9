@@ -225,7 +225,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	// Expose SSH port
-	request.Ports = append(request.Ports, uint32(2222))
+	request.Ports = append(request.Ports, uint32(types.WorkerShellPort))
 	portsToExpose++
 
 	bindPorts := make([]int, 0, portsToExpose)
