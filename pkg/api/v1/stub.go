@@ -236,10 +236,12 @@ func (g StubGroup) processStubOverrides(overrideConfig OverrideStubConfig, stub 
 	}
 
 	if overrideConfig.Memory != nil {
-		if *overrideConfig.Memory > int64(g.config.GatewayService.StubLimits.Memory) {
-			return HTTPBadRequest(fmt.Sprintf("Memory must be %dGiB or less.", g.config.GatewayService.StubLimits.Memory/1024))
-		}
 		stubConfig.Runtime.Memory = int64(*overrideConfig.Memory)
+	}
+
+	valid, errorMsg := types.ValidateCpuAndMemory(stubConfig.Runtime.Cpu, stubConfig.Runtime.Memory, g.config.GatewayService.StubLimits)
+	if !valid {
+		return HTTPBadRequest(errorMsg)
 	}
 
 	if overrideConfig.Gpu != nil {
@@ -430,11 +432,6 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 	stubConfig := &types.StubConfigV1{}
 	if err = json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return nil, HTTPInternalServerError("Failed to decode stub config")
-	}
-
-	valid, errorMsg := types.ValidateCpuAndMemory(stubConfig.Runtime.Cpu, stubConfig.Runtime.Memory, g.config.GatewayService.StubLimits)
-	if !valid {
-		return nil, HTTPBadRequest(errorMsg)
 	}
 
 	parentSecrets := stubConfig.Secrets
