@@ -72,7 +72,6 @@ func ParseAndValidateDeploymentStubId(
 		stubId = deployment.Stub.ExternalId
 	}
 
-	// Validate stub
 	if stubId != "" {
 		stub, err := backendRepo.GetStubByExternalId(ctx, stubId)
 		if err != nil {
