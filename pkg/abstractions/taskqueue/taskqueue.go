@@ -172,11 +172,6 @@ func (tq *RedisTaskQueue) getStubConfig(stubId string) (*types.StubConfigV1, err
 }
 
 func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (string, error) {
-	stubConfig, err := tq.getStubConfig(stubId)
-	if err != nil {
-		return "", err
-	}
-
 	instance, err := tq.getOrCreateQueueInstance(stubId)
 	if err != nil {
 		return "", err
@@ -187,11 +182,11 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 		return "", err
 	}
 
-	if tasksInFlight >= int(stubConfig.MaxPendingTasks) {
-		return "", &types.ErrExceededTaskLimit{MaxPendingTasks: stubConfig.MaxPendingTasks}
+	if tasksInFlight >= int(instance.StubConfig.MaxPendingTasks) {
+		return "", &types.ErrExceededTaskLimit{MaxPendingTasks: instance.StubConfig.MaxPendingTasks}
 	}
 
-	policy := stubConfig.TaskPolicy
+	policy := instance.StubConfig.TaskPolicy
 	if policy.TTL == 0 {
 		// Required for backwards compatibility
 		policy.TTL = DefaultTaskQueueTaskTTL
@@ -209,8 +204,8 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 	meta := task.Metadata()
 
 	// && instance.Workspace.ExternalId != authInfo.Workspace.ExternalId
-	if stubConfig.Pricing != nil {
-		tq.rdb.Set(ctx, Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, stubId, meta.TaskId), instance.Workspace.ExternalId, time.Duration(stubConfig.TaskPolicy.Timeout)*time.Second)
+	if instance.StubConfig.Pricing != nil {
+		tq.rdb.Set(ctx, Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, stubId, meta.TaskId), instance.Workspace.ExternalId, time.Duration(instance.StubConfig.TaskPolicy.Timeout)*time.Second)
 	}
 
 	return meta.TaskId, nil
@@ -382,7 +377,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	// If this task is associated with a different workspace, we need to track the cost
 	externalWorkspaceId, err := tq.rdb.Get(context.Background(), Keys.taskQueueTaskExternalWorkspace(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Result()
 	if err == nil && externalWorkspaceId != "" {
-		defer tq.trackTaskCost(time.Now(), stubConfig, task, in.StubId, externalWorkspaceId)
+		defer tq.trackTaskCost(in.TaskDuration, stubConfig, task, in.StubId, externalWorkspaceId)
 	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
@@ -391,8 +386,8 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}, nil
 }
 
-func (tq *RedisTaskQueue) trackTaskCost(start time.Time, stubConfig *types.StubConfigV1, task *types.Task, stubId string, externalWorkspaceId string) {
-	elapsed := time.Since(start)
+func (tq *RedisTaskQueue) trackTaskCost(durationMs float32, stubConfig *types.StubConfigV1, task *types.Task, stubId string, externalWorkspaceId string) {
+	elapsed := time.Duration(durationMs) * time.Second
 
 	pricingConfig := stubConfig.Pricing
 
