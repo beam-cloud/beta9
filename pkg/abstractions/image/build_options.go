@@ -27,6 +27,7 @@ type BuildOpts struct {
 	BuildSecrets       []string
 	Gpu                string
 	IgnorePython       bool
+	ClipVersion        uint32
 }
 
 func (o *BuildOpts) String() string {
@@ -79,6 +80,10 @@ func (o *BuildOpts) setCustomImageBuildOptions() error {
 // addPythonRequirements merges base Python requirements with user-specified packages,
 // ensuring no duplicates and base requirements take precedence
 func (o *BuildOpts) addPythonRequirements() {
+	if o.IgnorePython && len(o.PythonPackages) == 0 {
+		return
+	}
+
 	// Override any specified python packages with base requirements (to ensure we have what need in the image)
 	baseRequirementsSlice := strings.Split(strings.TrimSpace(basePythonRequirements), "\n")
 

@@ -162,7 +162,7 @@
 			]
 		},
 		{
-			"destination": "/usr/local/bin/uv",
+			"destination": "/usr/local/bin/uv-b9",
 			"type": "bind",
 			"source": "/usr/local/bin/uv",
 			"options": [
@@ -639,6 +639,32 @@
 				"noexec",
 				"mode=0755",
 				"size=65536k"
+			]
+		},
+		{
+			"type": "none",
+			"source": "/workspace/etc/hosts",
+			"destination": "/etc/hosts",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"type": "none",
+			"source": "/workspace/etc/nsswitch.conf",
+			"destination": "/etc/nsswitch.conf",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
 			]
 		}
 	],

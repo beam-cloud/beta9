@@ -60,6 +60,10 @@ type Build struct {
 func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg, config types.AppConfig) (*Build, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if opts.IgnorePython && len(opts.PythonPackages) == 0 {
+		opts.PythonVersion = ""
+	}
+
 	return &Build{
 		ctx:         ctx,
 		config:      config,
@@ -111,7 +115,7 @@ func (b *Build) resolvePythonVersionRequirement() error {
 		return nil
 	}
 
-	if b.opts.IgnorePython {
+	if b.opts.IgnorePython && len(b.opts.PythonPackages) == 0 {
 		b.opts.PythonVersion = ""
 		return nil
 	}
@@ -307,7 +311,7 @@ func genContainerId() string {
 func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	command := "uv pip install"
+	command := "uv-b9 pip install"
 	if strings.Contains(pythonVersion, "micromamba") {
 		command = fmt.Sprintf("%s -m pip install", pythonVersion)
 	}

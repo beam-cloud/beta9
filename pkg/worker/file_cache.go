@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/rs/zerolog/log"
@@ -101,7 +102,14 @@ func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCach
 	spec.Mounts = append(spec.Mounts, cacheMount)
 	spec.Mounts = append(spec.Mounts, interceptMount)
 
-	spec.Process.Env = append(spec.Process.Env, []string{fmt.Sprintf("VOLUME_CACHE_MAP=%s", volumeCacheMapStr), "LD_PRELOAD=/usr/local/lib/volume_cache.so"}...)
+	for i, envVar := range spec.Process.Env {
+		if strings.HasPrefix(envVar, "LD_PRELOAD=") {
+			spec.Process.Env[i] = fmt.Sprintf("%s:%s", envVar, "/usr/local/lib/volume_cache.so")
+			break
+		}
+	}
+
+	spec.Process.Env = append(spec.Process.Env, []string{fmt.Sprintf("VOLUME_CACHE_MAP=%s", volumeCacheMapStr)}...)
 	return nil
 }
 

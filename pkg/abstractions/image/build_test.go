@@ -69,7 +69,7 @@ func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 	assert.NoError(t, err)
 
 	expectedCommands := []string{
-		"uv pip install \"requests\" \"numpy\"",
+		"uv-b9 pip install \"requests\" \"numpy\"",
 		"echo hello",
 	}
 	assert.Equal(t, expectedCommands, build.commands)
@@ -96,7 +96,7 @@ func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Expect installation command based on PythonStandaloneConfig
-	expectedPipCmd := "uv pip install \"pandas\""
+	expectedPipCmd := "uv-b9 pip install \"pandas\""
 
 	// Installation command should contain arch, os, vendor derived from runtime and template
 	assert.Contains(t, build.commands[0], "installing python cpython-3.11.5+20230826")
@@ -270,12 +270,12 @@ func Test_parseBuildSteps(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"uv pip install \"requests\" \"numpy\"", // Coalesced pip
+		"uv-b9 pip install \"requests\" \"numpy\"", // Coalesced pip
 		"echo 'installing libs'",
 		"micromamba install -y -n beta9 -c pytorch \"conda-forge::pandas\" \"scipy\"", // Coalesced mamba (flags don't split mamba)
 		"echo 'done'",
-		"uv pip install --no-deps flask", // Flagged line isn't quoted
-		"uv pip install \"gunicorn\"",    // Second pip group
+		"uv-b9 pip install --no-deps flask", // Flagged line isn't quoted
+		"uv-b9 pip install \"gunicorn\"",    // Second pip group
 	}
 
 	result := parseBuildSteps(steps, pythonVersion)
