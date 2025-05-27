@@ -79,7 +79,7 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 			shouldAddWorker: true,
 		},
 		{
-			name:   "should add worker when CPU is not sufficient GPU",
+			name:   "should add worker (w/ GPU) when free CPU is not sufficient",
 			config: configWithGpu,
 			freeCapacity: &WorkerPoolCapacity{
 				FreeCpu:    5000,
@@ -89,7 +89,7 @@ func TestAddWorkerIfNeeded(t *testing.T) {
 			shouldAddWorker: true,
 		},
 		{
-			name:   "should add worker when free + pending CPU is not sufficient GPU",
+			name:   "should add worker (w/ GPU) when free + pending CPU is not sufficient",
 			config: configWithGpu,
 			freeCapacity: &WorkerPoolCapacity{
 				PendingCpu:    2500,
