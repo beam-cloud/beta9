@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
+
+	"github.com/rs/zerolog/log"
+
 	"strings"
 	"time"
 
@@ -36,6 +38,7 @@ const (
 	containerWaitTimeoutDurationS time.Duration = 5 * time.Minute
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
+	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
 	startupScript                 string        = `exec /usr/local/bin/dropbear -p 2222 -R -E -F 2> /etc/dropbear/logs.txt`
 	createUserScript              string        = `set -e; useradd -m -s /bin/bash $USERNAME 2>> /etc/dropbear/logs-user.txt; echo "$USERNAME:$PASSWORD" | chpasswd 2>> /etc/dropbear/logs-user.txt`
 )
@@ -162,8 +165,7 @@ func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, contai
 	}
 
 	// Set read timeout so it doesn't hang forever
-	deadline := time.Now().Add(2 * time.Second)
-	conn.SetReadDeadline(deadline)
+	conn.SetReadDeadline(time.Now().Add(sshBannerTimeoutDurationS))
 
 	// Read SSH banner line by line
 	// This check partially implements RFC 4253 Section 4.2 of the SSH protocol handshake
@@ -189,8 +191,8 @@ func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, contai
 			return true
 		}
 
-		// If we've read enough lines or hit timeout, give up
-		if n == 0 || time.Now().After(deadline) {
+		// If we've read enough lines, give up
+		if n == 0 {
 			return false
 		}
 	}
@@ -245,7 +247,7 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 			// This only dies if the container is stopped
 			_, err = runcClient.Exec(containerId, startupScript, []string{})
 			if err != nil {
-				log.Println("Failed to execute startup script:", err)
+				log.Error().Msgf("Failed to execute startup script: %v", err)
 			}
 		}()
 	}
