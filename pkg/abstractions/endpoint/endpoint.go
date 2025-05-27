@@ -149,19 +149,6 @@ func (es *HttpEndpointService) IsPublic(stubId string) (*types.Workspace, error)
 	return instance.Workspace, nil
 }
 
-func (es *HttpEndpointService) IsMetered(stubId string) (*types.Workspace, error) {
-	instance, err := es.getOrCreateEndpointInstance(es.ctx, stubId)
-	if err != nil {
-		return nil, err
-	}
-
-	if instance.StubConfig.Pricing == nil {
-		return nil, errors.New("unauthorized")
-	}
-
-	return instance.Workspace, nil
-}
-
 // Forward request to endpoint
 func (es *HttpEndpointService) forwardRequest(
 	ctx echo.Context,

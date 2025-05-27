@@ -97,27 +97,6 @@ func WithAssumedStubAuth(next func(ctx echo.Context) error, isPublic func(stubId
 	}
 }
 
-func WithMeteredAuth(next func(ctx echo.Context) error, isMetered func(stubId string) (*types.Workspace, error)) func(ctx echo.Context) error {
-	return func(ctx echo.Context) error {
-		stubId := ctx.Param("stubId")
-
-		workspace, err := isMetered(stubId)
-		if err != nil {
-			return ctx.JSON(http.StatusBadRequest, map[string]interface{}{
-				"error": "invalid stub id",
-			})
-		}
-
-		authInfo := &AuthInfo{
-			Workspace: workspace,
-			Token:     nil,
-		}
-
-		cc := &HttpAuthContext{ctx, authInfo}
-		return next(cc)
-	}
-}
-
 func WithWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
 	return func(ctx echo.Context) error {
 		workspaceId := ctx.Param("workspaceId")

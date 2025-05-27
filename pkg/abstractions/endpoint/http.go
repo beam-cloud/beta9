@@ -20,14 +20,12 @@ func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGro
 	g.POST("/:deploymentName/latest", auth.WithAuth(group.EndpointRequest))
 	g.POST("/:deploymentName/v:version", auth.WithAuth(group.EndpointRequest))
 	g.POST("/public/:stubId", auth.WithAssumedStubAuth(group.EndpointRequest, group.es.IsPublic))
-	g.POST("/metered/:stubId", auth.WithMeteredAuth(group.EndpointRequest, group.es.IsMetered))
 
 	g.GET("/id/:stubId", auth.WithAuth(group.EndpointRequest))
 	g.GET("/:deploymentName", auth.WithAuth(group.EndpointRequest))
 	g.GET("/:deploymentName/latest", auth.WithAuth(group.EndpointRequest))
 	g.GET("/:deploymentName/v:version", auth.WithAuth(group.EndpointRequest))
 	g.GET("/public/:stubId", auth.WithAssumedStubAuth(group.EndpointRequest, group.es.IsPublic))
-	g.GET("/metered/:stubId", auth.WithMeteredAuth(group.EndpointRequest, group.es.IsMetered))
 
 	g.POST("/id/:stubId/warmup", auth.WithAuth(group.WarmUpEndpoint))
 	g.POST("/:deploymentName/warmup", auth.WithAuth(group.WarmUpEndpoint))

@@ -158,10 +158,15 @@ class TaskPolicy:
     ttl: int = 0
 
 
+class PricingPolicyCostModel(str, Enum):
+    Task = "task"
+    Duration = "duration"
+
+
 @dataclass
 class PricingPolicy:
     max_in_flight: int = 10
-    cost_model: str = "task"
+    cost_model: PricingPolicyCostModel = PricingPolicyCostModel.Task
     cost_per_task: float = 0.000000000000000000
     cost_per_task_duration_ms: float = 0.000000000000000000
 
