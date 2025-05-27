@@ -162,21 +162,37 @@ func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, contai
 	}
 
 	// Set read timeout so it doesn't hang forever
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	deadline := time.Now().Add(2 * time.Second)
+	conn.SetReadDeadline(deadline)
 
-	// Read SSH banner
+	// Read SSH banner line by line
+	// This check partially implements RFC 4253 Section 4.2 of the SSH protocol handshake
 	buf := make([]byte, 256)
-	n, err := conn.Read(buf)
-	if err != nil {
-		fmt.Println("No banner received:", err)
-		return false
-	}
+	for {
+		// Clear buffer
+		for i := range buf {
+			buf[i] = 0
+		}
 
-	banner := string(buf[:n])
-	if len(banner) > 0 && banner[:4] == "SSH-" {
-		return true
-	} else {
-		return false
+		// Read one line
+		n, err := conn.Read(buf)
+		if err != nil {
+			return false
+		}
+
+		// Convert \r to \n if present
+		line := string(buf[:n])
+		line = strings.ReplaceAll(line, "\r", "\n")
+
+		// Check if this line contains the SSH banner
+		if strings.HasPrefix(line, "SSH-") {
+			return true
+		}
+
+		// If we've read enough lines or hit timeout, give up
+		if n == 0 || time.Now().After(deadline) {
+			return false
+		}
 	}
 }
 
