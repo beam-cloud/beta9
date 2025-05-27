@@ -23,10 +23,11 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	var warning string
 
-	if in.Memory > int64(gws.appConfig.GatewayService.StubLimits.Memory) {
+	valid, errorMsg := types.ValidateCpuAndMemory(in.Cpu, in.Memory, gws.appConfig.GatewayService.StubLimits)
+	if !valid {
 		return &pb.GetOrCreateStubResponse{
 			Ok:     false,
-			ErrMsg: fmt.Sprintf("Memory must be %dGiB or less.", gws.appConfig.GatewayService.StubLimits.Memory/1024),
+			ErrMsg: errorMsg,
 		}, nil
 	}
 
