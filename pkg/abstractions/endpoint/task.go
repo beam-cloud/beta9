@@ -23,21 +23,6 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
-	if instance.StubConfig.Pricing != nil {
-		start := time.Now()
-
-		defer func() {
-			elapsed := time.Since(start)
-
-			instance.AutoscaledInstance.UsageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
-				"stub_id":      instance.Stub.Id,
-				"app_id":       instance.Stub.AppId,
-				"workspace_id": instance.Stub.WorkspaceId,
-				"task_id":      t.msg.TaskId,
-			}, float64(elapsed.Milliseconds()))
-		}()
-	}
-
 	_, err = t.es.backendRepo.CreateTask(context.Background(), &types.TaskParams{
 		TaskId:      t.msg.TaskId,
 		StubId:      instance.Stub.Id,
@@ -47,7 +32,32 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
+	if instance.StubConfig.Pricing != nil {
+		start := time.Now()
+		defer t.trackTaskCost(start, instance)
+	}
+
 	return instance.buffer.ForwardRequest(echoCtx, t)
+}
+
+func (t *EndpointTask) trackTaskCost(start time.Time, instance *endpointInstance) {
+	elapsed := time.Since(start)
+	pricingConfig := instance.StubConfig.Pricing
+
+	totalCost := 0.0
+	if pricingConfig.CostModel == string(types.PricingPolicyCostModelTask) {
+		totalCost = pricingConfig.CostPerTask
+	} else if pricingConfig.CostModel == string(types.PricingPolicyCostModelDuration) {
+		totalCost = pricingConfig.CostPerTaskDurationMs * float64(elapsed.Milliseconds())
+	}
+
+	instance.AutoscaledInstance.UsageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
+		"stub_id":      instance.Stub.ExternalId,
+		"app_id":       instance.Stub.App.ExternalId,
+		"workspace_id": instance.Stub.Workspace.ExternalId,
+		"task_id":      t.msg.TaskId,
+		"value":        totalCost,
+	}, totalCost)
 }
 
 func (t *EndpointTask) Retry(ctx context.Context) error {
