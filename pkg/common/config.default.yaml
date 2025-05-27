@@ -80,7 +80,7 @@ gateway:
       allowMethods: "*"
   shutdownTimeout: 180s
   stubLimits:
-    cpu: 1280000
+    cpu: 128000
     memory: 32768
     maxReplicas: 10
     maxGpuCount: 2
