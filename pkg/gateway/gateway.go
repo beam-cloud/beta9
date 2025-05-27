@@ -67,8 +67,8 @@ type Gateway struct {
 	ProviderRepo         repository.ProviderRepository
 	WorkerPoolRepo       repository.WorkerPoolRepository
 	EventRepo            repository.EventRepository
+	UsageMetricsRepo     repository.UsageMetricsRepository
 	Tailscale            *network.Tailscale
-	usageMetricsRepo     repository.UsageMetricsRepository
 	workerRepo           repository.WorkerRepository
 	Storage              storage.Storage
 	DefaultStorageClient *clients.StorageClient
@@ -163,7 +163,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
 	gateway.TaskDispatcher = taskDispatcher
-	gateway.usageMetricsRepo = usageMetricsRepo
+	gateway.UsageMetricsRepo = usageMetricsRepo
 	gateway.EventRepo = eventRepo
 	gateway.workerRepo = workerRepo
 	gateway.DefaultStorageClient = storageClient
@@ -339,17 +339,18 @@ func (g *Gateway) registerServices() error {
 
 	// Register endpoint service
 	ws, err := endpoint.NewHTTPEndpointService(g.ctx, endpoint.EndpointServiceOpts{
-		Config:         g.Config,
-		ContainerRepo:  g.ContainerRepo,
-		BackendRepo:    g.BackendRepo,
-		WorkspaceRepo:  g.WorkspaceRepo,
-		TaskRepo:       g.TaskRepo,
-		RedisClient:    g.RedisClient,
-		Scheduler:      g.Scheduler,
-		RouteGroup:     g.rootRouteGroup,
-		Tailscale:      g.Tailscale,
-		TaskDispatcher: g.TaskDispatcher,
-		EventRepo:      g.EventRepo,
+		Config:           g.Config,
+		ContainerRepo:    g.ContainerRepo,
+		BackendRepo:      g.BackendRepo,
+		WorkspaceRepo:    g.WorkspaceRepo,
+		TaskRepo:         g.TaskRepo,
+		RedisClient:      g.RedisClient,
+		Scheduler:        g.Scheduler,
+		RouteGroup:       g.rootRouteGroup,
+		Tailscale:        g.Tailscale,
+		TaskDispatcher:   g.TaskDispatcher,
+		EventRepo:        g.EventRepo,
+		UsageMetricsRepo: g.UsageMetricsRepo,
 	})
 	if err != nil {
 		return err

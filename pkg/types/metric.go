@@ -8,6 +8,9 @@ var (
 	// Worker keys
 	UsageMetricsWorkerContainerDuration = "container_duration_milliseconds"
 	UsageMetricsWorkerContainerCost     = "container_cost_cents"
+
+	// Gateway keys
+	UsageMetricsPublicTaskCost = "public_task_cost_cents"
 )
 
 type TaskMetrics struct {

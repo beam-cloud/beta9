@@ -86,10 +86,10 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 	var pricing *types.PricingPolicy = nil
 	if in.Pricing != nil {
 		pricing = &types.PricingPolicy{
-			CostModel:   string(in.Pricing.CostModel),
-			MaxInFlight: int(in.Pricing.MaxInFlight),
-			CostPerTask: float64(in.Pricing.CostPerTask),
-			CostPerMs:   float64(in.Pricing.CostPerMs),
+			CostModel:             string(in.Pricing.CostModel),
+			MaxInFlight:           int(in.Pricing.MaxInFlight),
+			CostPerTask:           float64(in.Pricing.CostPerTask),
+			CostPerTaskDurationMs: float64(in.Pricing.CostPerTaskDurationMs),
 		}
 	}
 

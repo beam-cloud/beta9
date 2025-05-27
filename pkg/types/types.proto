@@ -113,7 +113,8 @@ message MountPointConfig {
 }
 
 message NullTime {
-  NullTime null_time = 1;
+  google.protobuf.Timestamp time = 1;
+  bool valid = 2;
 }
 
 message Object {
@@ -126,11 +127,10 @@ message Object {
 }
 
 message PricingPolicy {
-  bool public = 1;
-  int64 max_in_flight = 2;
-  string cost_model = 3;
-  double cost_per_task = 4;
-  double cost_per_ms = 5;
+  int64 max_in_flight = 1;
+  string cost_model = 2;
+  double cost_per_task = 3;
+  double cost_per_task_duration_ms = 4;
 }
 
 message Stub {

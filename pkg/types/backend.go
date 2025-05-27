@@ -345,11 +345,10 @@ type TaskStats struct {
 
 // @go2proto
 type PricingPolicy struct {
-	Public      bool    `json:"public"`
-	MaxInFlight int     `json:"max_in_flight"`
-	CostModel   string  `json:"cost_model"`
-	CostPerTask float64 `json:"cost_per_task"`
-	CostPerMs   float64 `json:"cost_per_ms"`
+	MaxInFlight           int     `json:"max_in_flight"`
+	CostModel             string  `json:"cost_model"`
+	CostPerTask           float64 `json:"cost_per_task"`
+	CostPerTaskDurationMs float64 `json:"cost_per_task_duration_ms"`
 }
 
 // @go2proto

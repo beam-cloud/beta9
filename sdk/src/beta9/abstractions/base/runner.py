@@ -450,8 +450,8 @@ class RunnerAbstraction(BaseAbstraction):
                 entrypoint=self.entrypoint,
                 ports=self.ports,
                 pricing=PricingPolicyProto(
-                    public=self.pricing.public,
                     cost_per_task=self.pricing.cost_per_task,
+                    cost_per_task_duration_ms=self.pricing.cost_per_task_duration_ms,
                     cost_model=self.pricing.cost_model,
                     max_in_flight=self.pricing.max_in_flight,
                 )

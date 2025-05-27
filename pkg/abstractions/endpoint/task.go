@@ -3,6 +3,7 @@ package endpoint
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -20,6 +21,21 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 	instance, err := t.es.getOrCreateEndpointInstance(ctx, t.msg.StubId)
 	if err != nil {
 		return err
+	}
+
+	if instance.StubConfig.Pricing != nil {
+		start := time.Now()
+
+		defer func() {
+			elapsed := time.Since(start)
+
+			instance.AutoscaledInstance.UsageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
+				"stub_id":      instance.Stub.Id,
+				"app_id":       instance.Stub.AppId,
+				"workspace_id": instance.Stub.WorkspaceId,
+				"task_id":      t.msg.TaskId,
+			}, float64(elapsed.Milliseconds()))
+		}()
 	}
 
 	_, err = t.es.backendRepo.CreateTask(context.Background(), &types.TaskParams{
