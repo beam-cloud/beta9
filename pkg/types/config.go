@@ -118,7 +118,7 @@ type StubLimits struct {
 	MaxGpuCount uint32 `key:"maxGpuCount" json:"max_gpu_count"`
 }
 
-// ValidateCpuAndMemory checks and sets defaults for CPU and memory, and enforces limits
+// ValidateCpuAndMemory enforces limits on CPU and memory (min and max)
 func ValidateCpuAndMemory(cpu, memory int64, stubLimits StubLimits) (valid bool, errorMsg string) {
 	if cpu <= 0 {
 		return false, "CPU must be greater than 0."
