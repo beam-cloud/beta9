@@ -37,6 +37,8 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 	}
 
 	if instance.StubConfig.Pricing != nil {
+		abstractions.TrackTaskCount(instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
+
 		start := time.Now()
 		defer func() {
 			abstractions.TrackTaskCost(time.Since(start), instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
