@@ -28,3 +28,16 @@ func TrackTaskCost(duration time.Duration, instance *AutoscaledInstance, taskId,
 		"value":        totalCostCents,
 	}, totalCostCents)
 }
+
+func TrackTaskCount(instance *AutoscaledInstance, taskId, externalWorkspaceId string) {
+	if instance.Workspace.ExternalId == externalWorkspaceId {
+		return
+	}
+
+	instance.UsageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCount, map[string]interface{}{
+		"stub_id":      instance.Stub.ExternalId,
+		"app_id":       instance.Stub.App.ExternalId,
+		"workspace_id": externalWorkspaceId,
+		"task_id":      taskId,
+	}, 1)
+}
