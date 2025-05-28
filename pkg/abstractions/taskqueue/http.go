@@ -8,16 +8,18 @@ import (
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 
+	expirable "github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/labstack/echo/v4"
 )
 
 type taskQueueGroup struct {
 	routeGroup *echo.Group
 	tq         *RedisTaskQueue
+	cache      *expirable.LRU[string, string]
 }
 
 func registerTaskQueueRoutes(g *echo.Group, tq *RedisTaskQueue) *taskQueueGroup {
-	group := &taskQueueGroup{routeGroup: g, tq: tq}
+	group := &taskQueueGroup{routeGroup: g, tq: tq, cache: abstractions.NewDeploymentStubCache()}
 
 	g.POST("/id/:stubId", auth.WithAuth(group.TaskQueuePut))
 	g.POST("/:deploymentName", auth.WithAuth(group.TaskQueuePut))
@@ -38,6 +40,7 @@ func (g *taskQueueGroup) TaskQueuePut(ctx echo.Context) error {
 
 	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
 		ctx.Request().Context(),
+		g.cache,
 		cc.AuthInfo,
 		ctx.Param("stubId"),
 		ctx.Param("deploymentName"),
@@ -79,6 +82,7 @@ func (g *taskQueueGroup) TaskQueueWarmUp(ctx echo.Context) error {
 
 	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
 		ctx.Request().Context(),
+		g.cache,
 		cc.AuthInfo,
 		ctx.Param("stubId"),
 		ctx.Param("deploymentName"),

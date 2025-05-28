@@ -22,7 +22,14 @@ from ..clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from ..env import is_local
-from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
+from ..type import (
+    Autoscaler,
+    GpuType,
+    GpuTypeAlias,
+    PricingPolicy,
+    QueueDepthAutoscaler,
+    TaskPolicy,
+)
 from .mixins import DeployableMixin
 
 
@@ -139,6 +146,7 @@ class TaskQueue(RunnerAbstraction):
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
         retry_for: Optional[List[Type[Exception]]] = None,
+        pricing: Optional[PricingPolicy] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -163,6 +171,7 @@ class TaskQueue(RunnerAbstraction):
             task_policy=task_policy,
             checkpoint_enabled=checkpoint_enabled,
             app=app,
+            pricing=pricing,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
         self.retry_for = retry_for or []

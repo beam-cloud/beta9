@@ -2178,38 +2178,39 @@ type GetOrCreateStubRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	ObjectId           string       `protobuf:"bytes,1,opt,name=object_id,json=objectId,proto3" json:"object_id,omitempty"`
-	ImageId            string       `protobuf:"bytes,2,opt,name=image_id,json=imageId,proto3" json:"image_id,omitempty"`
-	StubType           string       `protobuf:"bytes,3,opt,name=stub_type,json=stubType,proto3" json:"stub_type,omitempty"`
-	Name               string       `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	PythonVersion      string       `protobuf:"bytes,5,opt,name=python_version,json=pythonVersion,proto3" json:"python_version,omitempty"`
-	Cpu                int64        `protobuf:"varint,6,opt,name=cpu,proto3" json:"cpu,omitempty"`
-	Memory             int64        `protobuf:"varint,7,opt,name=memory,proto3" json:"memory,omitempty"`
-	Gpu                string       `protobuf:"bytes,8,opt,name=gpu,proto3" json:"gpu,omitempty"`
-	Handler            string       `protobuf:"bytes,9,opt,name=handler,proto3" json:"handler,omitempty"`
-	Retries            uint32       `protobuf:"varint,10,opt,name=retries,proto3" json:"retries,omitempty"`
-	Timeout            int64        `protobuf:"varint,11,opt,name=timeout,proto3" json:"timeout,omitempty"`
-	KeepWarmSeconds    float32      `protobuf:"fixed32,12,opt,name=keep_warm_seconds,json=keepWarmSeconds,proto3" json:"keep_warm_seconds,omitempty"`
-	Workers            uint32       `protobuf:"varint,13,opt,name=workers,proto3" json:"workers,omitempty"`
-	MaxPendingTasks    uint32       `protobuf:"varint,15,opt,name=max_pending_tasks,json=maxPendingTasks,proto3" json:"max_pending_tasks,omitempty"`
-	Volumes            []*Volume    `protobuf:"bytes,16,rep,name=volumes,proto3" json:"volumes,omitempty"`
-	ForceCreate        bool         `protobuf:"varint,17,opt,name=force_create,json=forceCreate,proto3" json:"force_create,omitempty"`
-	OnStart            string       `protobuf:"bytes,18,opt,name=on_start,json=onStart,proto3" json:"on_start,omitempty"`
-	CallbackUrl        string       `protobuf:"bytes,19,opt,name=callback_url,json=callbackUrl,proto3" json:"callback_url,omitempty"`
-	Authorized         bool         `protobuf:"varint,20,opt,name=authorized,proto3" json:"authorized,omitempty"`
-	Secrets            []*SecretVar `protobuf:"bytes,21,rep,name=secrets,proto3" json:"secrets,omitempty"`
-	Autoscaler         *Autoscaler  `protobuf:"bytes,22,opt,name=autoscaler,proto3" json:"autoscaler,omitempty"`
-	TaskPolicy         *TaskPolicy  `protobuf:"bytes,23,opt,name=task_policy,json=taskPolicy,proto3" json:"task_policy,omitempty"`
-	ConcurrentRequests uint32       `protobuf:"varint,24,opt,name=concurrent_requests,json=concurrentRequests,proto3" json:"concurrent_requests,omitempty"`
-	Extra              string       `protobuf:"bytes,25,opt,name=extra,proto3" json:"extra,omitempty"`
-	CheckpointEnabled  bool         `protobuf:"varint,26,opt,name=checkpoint_enabled,json=checkpointEnabled,proto3" json:"checkpoint_enabled,omitempty"`
-	GpuCount           uint32       `protobuf:"varint,27,opt,name=gpu_count,json=gpuCount,proto3" json:"gpu_count,omitempty"`
-	OnDeploy           string       `protobuf:"bytes,28,opt,name=on_deploy,json=onDeploy,proto3" json:"on_deploy,omitempty"`
-	OnDeployStubId     string       `protobuf:"bytes,29,opt,name=on_deploy_stub_id,json=onDeployStubId,proto3" json:"on_deploy_stub_id,omitempty"`
-	Entrypoint         []string     `protobuf:"bytes,30,rep,name=entrypoint,proto3" json:"entrypoint,omitempty"`
-	Ports              []uint32     `protobuf:"varint,31,rep,packed,name=ports,proto3" json:"ports,omitempty"`
-	Env                []string     `protobuf:"bytes,32,rep,name=env,proto3" json:"env,omitempty"`
-	AppName            string       `protobuf:"bytes,33,opt,name=app_name,json=appName,proto3" json:"app_name,omitempty"`
+	ObjectId           string         `protobuf:"bytes,1,opt,name=object_id,json=objectId,proto3" json:"object_id,omitempty"`
+	ImageId            string         `protobuf:"bytes,2,opt,name=image_id,json=imageId,proto3" json:"image_id,omitempty"`
+	StubType           string         `protobuf:"bytes,3,opt,name=stub_type,json=stubType,proto3" json:"stub_type,omitempty"`
+	Name               string         `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
+	PythonVersion      string         `protobuf:"bytes,5,opt,name=python_version,json=pythonVersion,proto3" json:"python_version,omitempty"`
+	Cpu                int64          `protobuf:"varint,6,opt,name=cpu,proto3" json:"cpu,omitempty"`
+	Memory             int64          `protobuf:"varint,7,opt,name=memory,proto3" json:"memory,omitempty"`
+	Gpu                string         `protobuf:"bytes,8,opt,name=gpu,proto3" json:"gpu,omitempty"`
+	Handler            string         `protobuf:"bytes,9,opt,name=handler,proto3" json:"handler,omitempty"`
+	Retries            uint32         `protobuf:"varint,10,opt,name=retries,proto3" json:"retries,omitempty"`
+	Timeout            int64          `protobuf:"varint,11,opt,name=timeout,proto3" json:"timeout,omitempty"`
+	KeepWarmSeconds    float32        `protobuf:"fixed32,12,opt,name=keep_warm_seconds,json=keepWarmSeconds,proto3" json:"keep_warm_seconds,omitempty"`
+	Workers            uint32         `protobuf:"varint,13,opt,name=workers,proto3" json:"workers,omitempty"`
+	MaxPendingTasks    uint32         `protobuf:"varint,15,opt,name=max_pending_tasks,json=maxPendingTasks,proto3" json:"max_pending_tasks,omitempty"`
+	Volumes            []*Volume      `protobuf:"bytes,16,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	ForceCreate        bool           `protobuf:"varint,17,opt,name=force_create,json=forceCreate,proto3" json:"force_create,omitempty"`
+	OnStart            string         `protobuf:"bytes,18,opt,name=on_start,json=onStart,proto3" json:"on_start,omitempty"`
+	CallbackUrl        string         `protobuf:"bytes,19,opt,name=callback_url,json=callbackUrl,proto3" json:"callback_url,omitempty"`
+	Authorized         bool           `protobuf:"varint,20,opt,name=authorized,proto3" json:"authorized,omitempty"`
+	Secrets            []*SecretVar   `protobuf:"bytes,21,rep,name=secrets,proto3" json:"secrets,omitempty"`
+	Autoscaler         *Autoscaler    `protobuf:"bytes,22,opt,name=autoscaler,proto3" json:"autoscaler,omitempty"`
+	TaskPolicy         *TaskPolicy    `protobuf:"bytes,23,opt,name=task_policy,json=taskPolicy,proto3" json:"task_policy,omitempty"`
+	ConcurrentRequests uint32         `protobuf:"varint,24,opt,name=concurrent_requests,json=concurrentRequests,proto3" json:"concurrent_requests,omitempty"`
+	Extra              string         `protobuf:"bytes,25,opt,name=extra,proto3" json:"extra,omitempty"`
+	CheckpointEnabled  bool           `protobuf:"varint,26,opt,name=checkpoint_enabled,json=checkpointEnabled,proto3" json:"checkpoint_enabled,omitempty"`
+	GpuCount           uint32         `protobuf:"varint,27,opt,name=gpu_count,json=gpuCount,proto3" json:"gpu_count,omitempty"`
+	OnDeploy           string         `protobuf:"bytes,28,opt,name=on_deploy,json=onDeploy,proto3" json:"on_deploy,omitempty"`
+	OnDeployStubId     string         `protobuf:"bytes,29,opt,name=on_deploy_stub_id,json=onDeployStubId,proto3" json:"on_deploy_stub_id,omitempty"`
+	Entrypoint         []string       `protobuf:"bytes,30,rep,name=entrypoint,proto3" json:"entrypoint,omitempty"`
+	Ports              []uint32       `protobuf:"varint,31,rep,packed,name=ports,proto3" json:"ports,omitempty"`
+	Env                []string       `protobuf:"bytes,32,rep,name=env,proto3" json:"env,omitempty"`
+	AppName            string         `protobuf:"bytes,33,opt,name=app_name,json=appName,proto3" json:"app_name,omitempty"`
+	Pricing            *PricingPolicy `protobuf:"bytes,34,opt,name=pricing,proto3" json:"pricing,omitempty"`
 }
 
 func (x *GetOrCreateStubRequest) Reset() {
@@ -2466,6 +2467,13 @@ func (x *GetOrCreateStubRequest) GetAppName() string {
 		return x.AppName
 	}
 	return ""
+}
+
+func (x *GetOrCreateStubRequest) GetPricing() *PricingPolicy {
+	if x != nil {
+		return x.Pricing
+	}
+	return nil
 }
 
 type GetOrCreateStubResponse struct {
@@ -5658,7 +5666,7 @@ var file_gateway_proto_rawDesc = []byte{
 	0x74, 0x12, 0x1f, 0x0a, 0x0b, 0x6d, 0x61, 0x78, 0x5f, 0x72, 0x65, 0x74, 0x72, 0x69, 0x65, 0x73,
 	0x18, 0x02, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x0a, 0x6d, 0x61, 0x78, 0x52, 0x65, 0x74, 0x72, 0x69,
 	0x65, 0x73, 0x12, 0x10, 0x0a, 0x03, 0x74, 0x74, 0x6c, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0d, 0x52,
-	0x03, 0x74, 0x74, 0x6c, 0x22, 0xa7, 0x08, 0x0a, 0x16, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72,
+	0x03, 0x74, 0x74, 0x6c, 0x22, 0xd7, 0x08, 0x0a, 0x16, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72,
 	0x65, 0x61, 0x74, 0x65, 0x53, 0x74, 0x75, 0x62, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12,
 	0x1b, 0x0a, 0x09, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01,
 	0x28, 0x09, 0x52, 0x08, 0x6f, 0x62, 0x6a, 0x65, 0x63, 0x74, 0x49, 0x64, 0x12, 0x19, 0x0a, 0x08,
@@ -5724,7 +5732,10 @@ var file_gateway_proto_rawDesc = []byte{
 	0x6f, 0x72, 0x74, 0x73, 0x18, 0x1f, 0x20, 0x03, 0x28, 0x0d, 0x52, 0x05, 0x70, 0x6f, 0x72, 0x74,
 	0x73, 0x12, 0x10, 0x0a, 0x03, 0x65, 0x6e, 0x76, 0x18, 0x20, 0x20, 0x03, 0x28, 0x09, 0x52, 0x03,
 	0x65, 0x6e, 0x76, 0x12, 0x19, 0x0a, 0x08, 0x61, 0x70, 0x70, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18,
-	0x21, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x61, 0x70, 0x70, 0x4e, 0x61, 0x6d, 0x65, 0x22, 0x76,
+	0x21, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x61, 0x70, 0x70, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x2e,
+	0x0a, 0x07, 0x70, 0x72, 0x69, 0x63, 0x69, 0x6e, 0x67, 0x18, 0x22, 0x20, 0x01, 0x28, 0x0b, 0x32,
+	0x14, 0x2e, 0x74, 0x79, 0x70, 0x65, 0x73, 0x2e, 0x50, 0x72, 0x69, 0x63, 0x69, 0x6e, 0x67, 0x50,
+	0x6f, 0x6c, 0x69, 0x63, 0x79, 0x52, 0x07, 0x70, 0x72, 0x69, 0x63, 0x69, 0x6e, 0x67, 0x22, 0x76,
 	0x0a, 0x17, 0x47, 0x65, 0x74, 0x4f, 0x72, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x53, 0x74, 0x75,
 	0x62, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18,
 	0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x17, 0x0a, 0x07, 0x73, 0x74, 0x75,
@@ -6360,8 +6371,9 @@ var file_gateway_proto_goTypes = []interface{}{
 	(*Container)(nil),                      // 86: types.Container
 	(*timestamppb.Timestamp)(nil),          // 87: google.protobuf.Timestamp
 	(*MountPointConfig)(nil),               // 88: types.MountPointConfig
-	(*WorkerPoolState)(nil),                // 89: types.WorkerPoolState
-	(*Worker)(nil),                         // 90: types.Worker
+	(*PricingPolicy)(nil),                  // 89: types.PricingPolicy
+	(*WorkerPoolState)(nil),                // 90: types.WorkerPoolState
+	(*Worker)(nil),                         // 91: types.Worker
 }
 var file_gateway_proto_depIdxs = []int32{
 	5,  // 0: gateway.HeadObjectResponse.object_metadata:type_name -> gateway.ObjectMetadata
@@ -6382,97 +6394,98 @@ var file_gateway_proto_depIdxs = []int32{
 	32, // 15: gateway.GetOrCreateStubRequest.secrets:type_name -> gateway.SecretVar
 	33, // 16: gateway.GetOrCreateStubRequest.autoscaler:type_name -> gateway.Autoscaler
 	34, // 17: gateway.GetOrCreateStubRequest.task_policy:type_name -> gateway.TaskPolicy
-	87, // 18: gateway.Deployment.created_at:type_name -> google.protobuf.Timestamp
-	87, // 19: gateway.Deployment.updated_at:type_name -> google.protobuf.Timestamp
-	83, // 20: gateway.ListDeploymentsRequest.filters:type_name -> gateway.ListDeploymentsRequest.FiltersEntry
-	39, // 21: gateway.ListDeploymentsResponse.deployments:type_name -> gateway.Deployment
-	89, // 22: gateway.Pool.state:type_name -> types.WorkerPoolState
-	84, // 23: gateway.ListPoolsRequest.filters:type_name -> gateway.ListPoolsRequest.FiltersEntry
-	50, // 24: gateway.ListPoolsResponse.pools:type_name -> gateway.Pool
-	54, // 25: gateway.Machine.machine_metrics:type_name -> gateway.MachineMetrics
-	53, // 26: gateway.ListMachinesResponse.machines:type_name -> gateway.Machine
-	85, // 27: gateway.ListMachinesResponse.gpus:type_name -> gateway.ListMachinesResponse.GpusEntry
-	53, // 28: gateway.CreateMachineResponse.machine:type_name -> gateway.Machine
-	87, // 29: gateway.Token.created_at:type_name -> google.protobuf.Timestamp
-	87, // 30: gateway.Token.updated_at:type_name -> google.protobuf.Timestamp
-	61, // 31: gateway.ListTokensResponse.tokens:type_name -> gateway.Token
-	61, // 32: gateway.CreateTokenResponse.token:type_name -> gateway.Token
-	61, // 33: gateway.ToggleTokenResponse.token:type_name -> gateway.Token
-	90, // 34: gateway.ListWorkersResponse.workers:type_name -> types.Worker
-	25, // 35: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
-	25, // 36: gateway.ListDeploymentsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	25, // 37: gateway.ListPoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
-	1,  // 38: gateway.GatewayService.Authorize:input_type -> gateway.AuthorizeRequest
-	3,  // 39: gateway.GatewayService.SignPayload:input_type -> gateway.SignPayloadRequest
-	6,  // 40: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
-	8,  // 41: gateway.GatewayService.CreateObject:input_type -> gateway.CreateObjectRequest
-	10, // 42: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
-	14, // 43: gateway.GatewayService.ListContainers:input_type -> gateway.ListContainersRequest
-	16, // 44: gateway.GatewayService.StopContainer:input_type -> gateway.StopContainerRequest
-	18, // 45: gateway.GatewayService.AttachToContainer:input_type -> gateway.ContainerStreamMessage
-	21, // 46: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
-	23, // 47: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
-	29, // 48: gateway.GatewayService.StopTasks:input_type -> gateway.StopTasksRequest
-	26, // 49: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
-	35, // 50: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
-	37, // 51: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
-	70, // 52: gateway.GatewayService.GetURL:input_type -> gateway.GetURLRequest
-	40, // 53: gateway.GatewayService.ListDeployments:input_type -> gateway.ListDeploymentsRequest
-	42, // 54: gateway.GatewayService.StopDeployment:input_type -> gateway.StopDeploymentRequest
-	44, // 55: gateway.GatewayService.StartDeployment:input_type -> gateway.StartDeploymentRequest
-	46, // 56: gateway.GatewayService.ScaleDeployment:input_type -> gateway.ScaleDeploymentRequest
-	48, // 57: gateway.GatewayService.DeleteDeployment:input_type -> gateway.DeleteDeploymentRequest
-	51, // 58: gateway.GatewayService.ListPools:input_type -> gateway.ListPoolsRequest
-	55, // 59: gateway.GatewayService.ListMachines:input_type -> gateway.ListMachinesRequest
-	57, // 60: gateway.GatewayService.CreateMachine:input_type -> gateway.CreateMachineRequest
-	59, // 61: gateway.GatewayService.DeleteMachine:input_type -> gateway.DeleteMachineRequest
-	62, // 62: gateway.GatewayService.ListTokens:input_type -> gateway.ListTokensRequest
-	64, // 63: gateway.GatewayService.CreateToken:input_type -> gateway.CreateTokenRequest
-	66, // 64: gateway.GatewayService.ToggleToken:input_type -> gateway.ToggleTokenRequest
-	68, // 65: gateway.GatewayService.DeleteToken:input_type -> gateway.DeleteTokenRequest
-	72, // 66: gateway.GatewayService.ListWorkers:input_type -> gateway.ListWorkersRequest
-	74, // 67: gateway.GatewayService.CordonWorker:input_type -> gateway.CordonWorkerRequest
-	76, // 68: gateway.GatewayService.UncordonWorker:input_type -> gateway.UncordonWorkerRequest
-	78, // 69: gateway.GatewayService.DrainWorker:input_type -> gateway.DrainWorkerRequest
-	80, // 70: gateway.GatewayService.ExportWorkspaceConfig:input_type -> gateway.ExportWorkspaceConfigRequest
-	2,  // 71: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
-	4,  // 72: gateway.GatewayService.SignPayload:output_type -> gateway.SignPayloadResponse
-	7,  // 73: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
-	9,  // 74: gateway.GatewayService.CreateObject:output_type -> gateway.CreateObjectResponse
-	11, // 75: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
-	15, // 76: gateway.GatewayService.ListContainers:output_type -> gateway.ListContainersResponse
-	17, // 77: gateway.GatewayService.StopContainer:output_type -> gateway.StopContainerResponse
-	20, // 78: gateway.GatewayService.AttachToContainer:output_type -> gateway.AttachToContainerResponse
-	22, // 79: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
-	24, // 80: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
-	30, // 81: gateway.GatewayService.StopTasks:output_type -> gateway.StopTasksResponse
-	28, // 82: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
-	36, // 83: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
-	38, // 84: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
-	71, // 85: gateway.GatewayService.GetURL:output_type -> gateway.GetURLResponse
-	41, // 86: gateway.GatewayService.ListDeployments:output_type -> gateway.ListDeploymentsResponse
-	43, // 87: gateway.GatewayService.StopDeployment:output_type -> gateway.StopDeploymentResponse
-	45, // 88: gateway.GatewayService.StartDeployment:output_type -> gateway.StartDeploymentResponse
-	47, // 89: gateway.GatewayService.ScaleDeployment:output_type -> gateway.ScaleDeploymentResponse
-	49, // 90: gateway.GatewayService.DeleteDeployment:output_type -> gateway.DeleteDeploymentResponse
-	52, // 91: gateway.GatewayService.ListPools:output_type -> gateway.ListPoolsResponse
-	56, // 92: gateway.GatewayService.ListMachines:output_type -> gateway.ListMachinesResponse
-	58, // 93: gateway.GatewayService.CreateMachine:output_type -> gateway.CreateMachineResponse
-	60, // 94: gateway.GatewayService.DeleteMachine:output_type -> gateway.DeleteMachineResponse
-	63, // 95: gateway.GatewayService.ListTokens:output_type -> gateway.ListTokensResponse
-	65, // 96: gateway.GatewayService.CreateToken:output_type -> gateway.CreateTokenResponse
-	67, // 97: gateway.GatewayService.ToggleToken:output_type -> gateway.ToggleTokenResponse
-	69, // 98: gateway.GatewayService.DeleteToken:output_type -> gateway.DeleteTokenResponse
-	73, // 99: gateway.GatewayService.ListWorkers:output_type -> gateway.ListWorkersResponse
-	75, // 100: gateway.GatewayService.CordonWorker:output_type -> gateway.CordonWorkerResponse
-	77, // 101: gateway.GatewayService.UncordonWorker:output_type -> gateway.UncordonWorkerResponse
-	79, // 102: gateway.GatewayService.DrainWorker:output_type -> gateway.DrainWorkerResponse
-	81, // 103: gateway.GatewayService.ExportWorkspaceConfig:output_type -> gateway.ExportWorkspaceConfigResponse
-	71, // [71:104] is the sub-list for method output_type
-	38, // [38:71] is the sub-list for method input_type
-	38, // [38:38] is the sub-list for extension type_name
-	38, // [38:38] is the sub-list for extension extendee
-	0,  // [0:38] is the sub-list for field type_name
+	89, // 18: gateway.GetOrCreateStubRequest.pricing:type_name -> types.PricingPolicy
+	87, // 19: gateway.Deployment.created_at:type_name -> google.protobuf.Timestamp
+	87, // 20: gateway.Deployment.updated_at:type_name -> google.protobuf.Timestamp
+	83, // 21: gateway.ListDeploymentsRequest.filters:type_name -> gateway.ListDeploymentsRequest.FiltersEntry
+	39, // 22: gateway.ListDeploymentsResponse.deployments:type_name -> gateway.Deployment
+	90, // 23: gateway.Pool.state:type_name -> types.WorkerPoolState
+	84, // 24: gateway.ListPoolsRequest.filters:type_name -> gateway.ListPoolsRequest.FiltersEntry
+	50, // 25: gateway.ListPoolsResponse.pools:type_name -> gateway.Pool
+	54, // 26: gateway.Machine.machine_metrics:type_name -> gateway.MachineMetrics
+	53, // 27: gateway.ListMachinesResponse.machines:type_name -> gateway.Machine
+	85, // 28: gateway.ListMachinesResponse.gpus:type_name -> gateway.ListMachinesResponse.GpusEntry
+	53, // 29: gateway.CreateMachineResponse.machine:type_name -> gateway.Machine
+	87, // 30: gateway.Token.created_at:type_name -> google.protobuf.Timestamp
+	87, // 31: gateway.Token.updated_at:type_name -> google.protobuf.Timestamp
+	61, // 32: gateway.ListTokensResponse.tokens:type_name -> gateway.Token
+	61, // 33: gateway.CreateTokenResponse.token:type_name -> gateway.Token
+	61, // 34: gateway.ToggleTokenResponse.token:type_name -> gateway.Token
+	91, // 35: gateway.ListWorkersResponse.workers:type_name -> types.Worker
+	25, // 36: gateway.ListTasksRequest.FiltersEntry.value:type_name -> gateway.StringList
+	25, // 37: gateway.ListDeploymentsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	25, // 38: gateway.ListPoolsRequest.FiltersEntry.value:type_name -> gateway.StringList
+	1,  // 39: gateway.GatewayService.Authorize:input_type -> gateway.AuthorizeRequest
+	3,  // 40: gateway.GatewayService.SignPayload:input_type -> gateway.SignPayloadRequest
+	6,  // 41: gateway.GatewayService.HeadObject:input_type -> gateway.HeadObjectRequest
+	8,  // 42: gateway.GatewayService.CreateObject:input_type -> gateway.CreateObjectRequest
+	10, // 43: gateway.GatewayService.PutObjectStream:input_type -> gateway.PutObjectRequest
+	14, // 44: gateway.GatewayService.ListContainers:input_type -> gateway.ListContainersRequest
+	16, // 45: gateway.GatewayService.StopContainer:input_type -> gateway.StopContainerRequest
+	18, // 46: gateway.GatewayService.AttachToContainer:input_type -> gateway.ContainerStreamMessage
+	21, // 47: gateway.GatewayService.StartTask:input_type -> gateway.StartTaskRequest
+	23, // 48: gateway.GatewayService.EndTask:input_type -> gateway.EndTaskRequest
+	29, // 49: gateway.GatewayService.StopTasks:input_type -> gateway.StopTasksRequest
+	26, // 50: gateway.GatewayService.ListTasks:input_type -> gateway.ListTasksRequest
+	35, // 51: gateway.GatewayService.GetOrCreateStub:input_type -> gateway.GetOrCreateStubRequest
+	37, // 52: gateway.GatewayService.DeployStub:input_type -> gateway.DeployStubRequest
+	70, // 53: gateway.GatewayService.GetURL:input_type -> gateway.GetURLRequest
+	40, // 54: gateway.GatewayService.ListDeployments:input_type -> gateway.ListDeploymentsRequest
+	42, // 55: gateway.GatewayService.StopDeployment:input_type -> gateway.StopDeploymentRequest
+	44, // 56: gateway.GatewayService.StartDeployment:input_type -> gateway.StartDeploymentRequest
+	46, // 57: gateway.GatewayService.ScaleDeployment:input_type -> gateway.ScaleDeploymentRequest
+	48, // 58: gateway.GatewayService.DeleteDeployment:input_type -> gateway.DeleteDeploymentRequest
+	51, // 59: gateway.GatewayService.ListPools:input_type -> gateway.ListPoolsRequest
+	55, // 60: gateway.GatewayService.ListMachines:input_type -> gateway.ListMachinesRequest
+	57, // 61: gateway.GatewayService.CreateMachine:input_type -> gateway.CreateMachineRequest
+	59, // 62: gateway.GatewayService.DeleteMachine:input_type -> gateway.DeleteMachineRequest
+	62, // 63: gateway.GatewayService.ListTokens:input_type -> gateway.ListTokensRequest
+	64, // 64: gateway.GatewayService.CreateToken:input_type -> gateway.CreateTokenRequest
+	66, // 65: gateway.GatewayService.ToggleToken:input_type -> gateway.ToggleTokenRequest
+	68, // 66: gateway.GatewayService.DeleteToken:input_type -> gateway.DeleteTokenRequest
+	72, // 67: gateway.GatewayService.ListWorkers:input_type -> gateway.ListWorkersRequest
+	74, // 68: gateway.GatewayService.CordonWorker:input_type -> gateway.CordonWorkerRequest
+	76, // 69: gateway.GatewayService.UncordonWorker:input_type -> gateway.UncordonWorkerRequest
+	78, // 70: gateway.GatewayService.DrainWorker:input_type -> gateway.DrainWorkerRequest
+	80, // 71: gateway.GatewayService.ExportWorkspaceConfig:input_type -> gateway.ExportWorkspaceConfigRequest
+	2,  // 72: gateway.GatewayService.Authorize:output_type -> gateway.AuthorizeResponse
+	4,  // 73: gateway.GatewayService.SignPayload:output_type -> gateway.SignPayloadResponse
+	7,  // 74: gateway.GatewayService.HeadObject:output_type -> gateway.HeadObjectResponse
+	9,  // 75: gateway.GatewayService.CreateObject:output_type -> gateway.CreateObjectResponse
+	11, // 76: gateway.GatewayService.PutObjectStream:output_type -> gateway.PutObjectResponse
+	15, // 77: gateway.GatewayService.ListContainers:output_type -> gateway.ListContainersResponse
+	17, // 78: gateway.GatewayService.StopContainer:output_type -> gateway.StopContainerResponse
+	20, // 79: gateway.GatewayService.AttachToContainer:output_type -> gateway.AttachToContainerResponse
+	22, // 80: gateway.GatewayService.StartTask:output_type -> gateway.StartTaskResponse
+	24, // 81: gateway.GatewayService.EndTask:output_type -> gateway.EndTaskResponse
+	30, // 82: gateway.GatewayService.StopTasks:output_type -> gateway.StopTasksResponse
+	28, // 83: gateway.GatewayService.ListTasks:output_type -> gateway.ListTasksResponse
+	36, // 84: gateway.GatewayService.GetOrCreateStub:output_type -> gateway.GetOrCreateStubResponse
+	38, // 85: gateway.GatewayService.DeployStub:output_type -> gateway.DeployStubResponse
+	71, // 86: gateway.GatewayService.GetURL:output_type -> gateway.GetURLResponse
+	41, // 87: gateway.GatewayService.ListDeployments:output_type -> gateway.ListDeploymentsResponse
+	43, // 88: gateway.GatewayService.StopDeployment:output_type -> gateway.StopDeploymentResponse
+	45, // 89: gateway.GatewayService.StartDeployment:output_type -> gateway.StartDeploymentResponse
+	47, // 90: gateway.GatewayService.ScaleDeployment:output_type -> gateway.ScaleDeploymentResponse
+	49, // 91: gateway.GatewayService.DeleteDeployment:output_type -> gateway.DeleteDeploymentResponse
+	52, // 92: gateway.GatewayService.ListPools:output_type -> gateway.ListPoolsResponse
+	56, // 93: gateway.GatewayService.ListMachines:output_type -> gateway.ListMachinesResponse
+	58, // 94: gateway.GatewayService.CreateMachine:output_type -> gateway.CreateMachineResponse
+	60, // 95: gateway.GatewayService.DeleteMachine:output_type -> gateway.DeleteMachineResponse
+	63, // 96: gateway.GatewayService.ListTokens:output_type -> gateway.ListTokensResponse
+	65, // 97: gateway.GatewayService.CreateToken:output_type -> gateway.CreateTokenResponse
+	67, // 98: gateway.GatewayService.ToggleToken:output_type -> gateway.ToggleTokenResponse
+	69, // 99: gateway.GatewayService.DeleteToken:output_type -> gateway.DeleteTokenResponse
+	73, // 100: gateway.GatewayService.ListWorkers:output_type -> gateway.ListWorkersResponse
+	75, // 101: gateway.GatewayService.CordonWorker:output_type -> gateway.CordonWorkerResponse
+	77, // 102: gateway.GatewayService.UncordonWorker:output_type -> gateway.UncordonWorkerResponse
+	79, // 103: gateway.GatewayService.DrainWorker:output_type -> gateway.DrainWorkerResponse
+	81, // 104: gateway.GatewayService.ExportWorkspaceConfig:output_type -> gateway.ExportWorkspaceConfigResponse
+	72, // [72:105] is the sub-list for method output_type
+	39, // [39:72] is the sub-list for method input_type
+	39, // [39:39] is the sub-list for extension type_name
+	39, // [39:39] is the sub-list for extension extendee
+	0,  // [0:39] is the sub-list for field type_name
 }
 
 func init() { file_gateway_proto_init() }

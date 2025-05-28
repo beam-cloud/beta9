@@ -83,6 +83,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	var pricing *types.PricingPolicy = nil
+	if in.Pricing != nil {
+		pricing = &types.PricingPolicy{
+			CostModel:             string(in.Pricing.CostModel),
+			MaxInFlight:           int(in.Pricing.MaxInFlight),
+			CostPerTask:           float64(in.Pricing.CostPerTask),
+			CostPerTaskDurationMs: float64(in.Pricing.CostPerTaskDurationMs),
+		}
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
@@ -111,6 +121,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		EntryPoint:         in.Entrypoint,
 		Ports:              in.Ports,
 		Env:                in.Env,
+		Pricing:            pricing,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required

@@ -42,6 +42,7 @@ type HttpEndpointService struct {
 	workspaceRepo     repository.WorkspaceRepository
 	containerRepo     repository.ContainerRepository
 	eventRepo         repository.EventRepository
+	usageMetricsRepo  repository.UsageMetricsRepository
 	taskRepo          repository.TaskRepository
 	endpointInstances *common.SafeMap[*endpointInstance]
 	tailscale         *network.Tailscale
@@ -62,17 +63,18 @@ var (
 )
 
 type EndpointServiceOpts struct {
-	Config         types.AppConfig
-	RedisClient    *common.RedisClient
-	BackendRepo    repository.BackendRepository
-	WorkspaceRepo  repository.WorkspaceRepository
-	TaskRepo       repository.TaskRepository
-	ContainerRepo  repository.ContainerRepository
-	Scheduler      *scheduler.Scheduler
-	RouteGroup     *echo.Group
-	Tailscale      *network.Tailscale
-	TaskDispatcher *task.Dispatcher
-	EventRepo      repository.EventRepository
+	Config           types.AppConfig
+	RedisClient      *common.RedisClient
+	BackendRepo      repository.BackendRepository
+	WorkspaceRepo    repository.WorkspaceRepository
+	TaskRepo         repository.TaskRepository
+	ContainerRepo    repository.ContainerRepository
+	Scheduler        *scheduler.Scheduler
+	RouteGroup       *echo.Group
+	Tailscale        *network.Tailscale
+	TaskDispatcher   *task.Dispatcher
+	EventRepo        repository.EventRepository
+	UsageMetricsRepo repository.UsageMetricsRepository
 }
 
 func NewHTTPEndpointService(
@@ -99,6 +101,7 @@ func NewHTTPEndpointService(
 		tailscale:         opts.Tailscale,
 		taskDispatcher:    opts.TaskDispatcher,
 		eventRepo:         opts.EventRepo,
+		usageMetricsRepo:  opts.UsageMetricsRepo,
 	}
 
 	// Listen for container events with a certain prefix
@@ -157,7 +160,7 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
-	tasksInFlight, err := es.taskRepo.TasksInFlight(ctx.Request().Context(), authInfo.Workspace.Name, stubId)
+	tasksInFlight, err := es.taskRepo.TasksInFlight(ctx.Request().Context(), instance.Workspace.Name, stubId)
 	if err != nil {
 		return ctx.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error": err.Error(),
@@ -177,7 +180,10 @@ func (es *HttpEndpointService) forwardRequest(
 		ttl = DefaultEndpointRequestTTL
 	}
 
-	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), authInfo, stubId, &types.TaskPayload{}, types.TaskPolicy{
+	task, err := es.taskDispatcher.Send(ctx.Request().Context(), string(types.ExecutorEndpoint), &auth.AuthInfo{
+		Workspace: instance.Workspace,
+		Token:     instance.Token,
+	}, stubId, &types.TaskPayload{}, types.TaskPolicy{
 		MaxRetries: 0,
 		Timeout:    instance.StubConfig.TaskPolicy.Timeout,
 		Expires:    time.Now().Add(time.Duration(ttl) * time.Second),
@@ -186,7 +192,7 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
-	return task.Execute(ctx.Request().Context(), ctx)
+	return task.Execute(ctx.Request().Context(), ctx, authInfo)
 }
 
 func (es *HttpEndpointService) InstanceFactory(ctx context.Context, stubId string, options ...func(abstractions.IAutoscaledInstance)) (abstractions.IAutoscaledInstance, error) {
@@ -251,6 +257,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		BackendRepo:         es.backendRepo,
 		EventRepo:           es.eventRepo,
 		TaskRepo:            es.taskRepo,
+		UsageMetricsRepo:    es.usageMetricsRepo,
 		InstanceLockKey:     Keys.endpointInstanceLock(stub.Workspace.Name, stubId),
 		StartContainersFunc: instance.startContainers,
 		StopContainersFunc:  instance.stopContainers,
