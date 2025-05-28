@@ -27,5 +27,6 @@ message CreateShellInExistingContainerResponse {
   bool ok = 1;
   string username = 2;
   string password = 3;
-  string err_msg = 4;
+  string stub_id = 4;
+  string err_msg = 5;
 }

@@ -97,13 +97,6 @@ class DeployableMixin:
     def shell(
         self, url_type: str = "", sync_dir: Optional[str] = None, container_id: Optional[str] = None
     ):
-        stub_type = SHELL_STUB_TYPE
-
-        if not self.parent.prepare_runtime(
-            func=self.func, stub_type=stub_type, force_create_stub=True
-        ):
-            return False
-
         # First, spin up the shell container
         username = "root"
         password = ""
@@ -123,7 +116,15 @@ class DeployableMixin:
 
                 username = create_shell_response.username
                 password = create_shell_response.password
+                self.parent.stub_id = create_shell_response.stub_id
         else:
+            stub_type = SHELL_STUB_TYPE
+
+            if not self.parent.prepare_runtime(
+                func=self.func, stub_type=stub_type, force_create_stub=True
+            ):
+                return False
+
             create_shell_response = self.parent.shell_stub.create_standalone_shell(
                 CreateStandaloneShellRequest(
                     stub_id=self.parent.stub_id,
@@ -141,7 +142,8 @@ class DeployableMixin:
             GetUrlRequest(
                 stub_id=self.parent.stub_id,
                 deployment_id=getattr(self, "deployment_id", ""),
-                url_type=url_type,
+                url_type="/path",
+                is_shell=True,
             )
         )
         if not res.ok:

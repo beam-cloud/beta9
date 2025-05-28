@@ -309,6 +309,7 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 			ErrMsg: "Unable to get stub",
 		}, nil
 	}
+
 	if stub == nil || stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
 		return &pb.GetURLResponse{
 			Ok:     false,
@@ -321,7 +322,11 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 	}
 
 	// Get URL for Serves, Shells, or Pods
-	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell {
+	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell || in.IsShell {
+		if in.IsShell {
+			stub.Type = types.StubType(types.StubTypeShell)
+		}
+
 		invokeUrl := common.BuildStubURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub)
 		return &pb.GetURLResponse{
 			Ok:  true,

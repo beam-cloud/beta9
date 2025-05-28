@@ -217,6 +217,36 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	containerId := in.ContainerId
 
+	containerState, err := ss.containerRepo.GetContainerState(containerId)
+	if err != nil {
+		return &pb.CreateShellInExistingContainerResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Failed to get container state: %s", err),
+		}, nil
+	}
+
+	if containerState.Status != types.ContainerStatusRunning {
+		return &pb.CreateShellInExistingContainerResponse{
+			Ok:     false,
+			ErrMsg: "Container is not running",
+		}, nil
+	}
+
+	stub, err := ss.backendRepo.GetStubByExternalId(ctx, containerState.StubId)
+	if err != nil {
+		return &pb.CreateShellInExistingContainerResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Failed to get stub: %s", err),
+		}, nil
+	}
+
+	if stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return &pb.CreateShellInExistingContainerResponse{
+			Ok:     false,
+			ErrMsg: "Container not found",
+		}, nil
+	}
+
 	containerAddr, err := ss.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
 		return &pb.CreateShellInExistingContainerResponse{
@@ -266,6 +296,7 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 		Ok:       true,
 		Username: username,
 		Password: password,
+		StubId:   stub.ExternalId,
 	}, nil
 }
 

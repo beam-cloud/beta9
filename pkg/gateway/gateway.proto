@@ -498,6 +498,7 @@ message GetURLRequest {
   string stub_id = 1;
   string deployment_id = 2;
   string url_type = 3;
+  bool is_shell = 4;
 }
 
 message GetURLResponse {
