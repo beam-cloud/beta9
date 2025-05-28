@@ -5,16 +5,18 @@ import (
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
+	expirable "github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/labstack/echo/v4"
 )
 
 type podGroup struct {
 	routeGroup *echo.Group
 	ps         *GenericPodService
+	cache      *expirable.LRU[string, string]
 }
 
 func registerPodGroup(g *echo.Group, ps *GenericPodService) *podGroup {
-	group := &podGroup{routeGroup: g, ps: ps}
+	group := &podGroup{routeGroup: g, ps: ps, cache: abstractions.NewDeploymentStubCache()}
 
 	g.Any("/id/:stubId/:port", auth.WithAuth(group.PodRequest))
 	g.Any("/id/:stubId/:port/:subPath", auth.WithAuth(group.PodRequest))
@@ -36,6 +38,7 @@ func (g *podGroup) PodRequest(ctx echo.Context) error {
 
 	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
 		ctx.Request().Context(),
+		g.cache,
 		cc.AuthInfo,
 		ctx.Param("stubId"),
 		ctx.Param("deploymentName"),

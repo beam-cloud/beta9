@@ -4,16 +4,18 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
+	expirable "github.com/hashicorp/golang-lru/v2/expirable"
 	"github.com/labstack/echo/v4"
 )
 
 type endpointGroup struct {
 	routeGroup *echo.Group
 	es         *HttpEndpointService
+	cache      *expirable.LRU[string, string]
 }
 
 func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGroup {
-	group := &endpointGroup{routeGroup: g, es: es}
+	group := &endpointGroup{routeGroup: g, es: es, cache: abstractions.NewDeploymentStubCache()}
 
 	g.POST("/id/:stubId", auth.WithAuth(group.EndpointRequest))
 	g.POST("/:deploymentName", auth.WithAuth(group.EndpointRequest))
@@ -62,6 +64,7 @@ func (g *endpointGroup) EndpointRequest(ctx echo.Context) error {
 
 	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
 		ctx.Request().Context(),
+		g.cache,
 		cc.AuthInfo,
 		ctx.Param("stubId"),
 		ctx.Param("deploymentName"),
@@ -81,6 +84,7 @@ func (g *endpointGroup) ASGIRequest(ctx echo.Context) error {
 
 	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
 		ctx.Request().Context(),
+		g.cache,
 		cc.AuthInfo,
 		ctx.Param("stubId"),
 		ctx.Param("deploymentName"),
@@ -111,6 +115,7 @@ func (g *endpointGroup) warmup(
 
 	stubId, err := abstractions.ParseAndValidateDeploymentStubId(
 		ctx.Request().Context(),
+		g.cache,
 		cc.AuthInfo,
 		ctx.Param("stubId"),
 		ctx.Param("deploymentName"),

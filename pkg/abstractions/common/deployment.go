@@ -15,11 +15,13 @@ import (
 )
 
 const (
-	deploymentStubCacheSize = 1000
+	deploymentStubCacheSize = 2000
 	deploymentStubCacheTTL  = time.Minute * 5
 )
 
-var deploymentStubCache = expirable.NewLRU[string, string](deploymentStubCacheSize, nil, deploymentStubCacheTTL)
+func NewDeploymentStubCache() *expirable.LRU[string, string] {
+	return expirable.NewLRU[string, string](deploymentStubCacheSize, nil, deploymentStubCacheTTL)
+}
 
 func makeCacheKey(authInfo *auth.AuthInfo, stubId, deploymentName, version, stubType string) string {
 	return fmt.Sprintf("%s|%s|%s|%s|%s", authInfo.Workspace.ExternalId, stubId, deploymentName, version, stubType)
@@ -27,6 +29,7 @@ func makeCacheKey(authInfo *auth.AuthInfo, stubId, deploymentName, version, stub
 
 func ParseAndValidateDeploymentStubId(
 	ctx context.Context,
+	deploymentStubCache *expirable.LRU[string, string],
 	authInfo *auth.AuthInfo,
 	stubId string,
 	deploymentName string,
@@ -86,7 +89,7 @@ func ParseAndValidateDeploymentStubId(
 		}
 
 		if stubConfig.Pricing == nil && authInfo.Workspace.ExternalId != stub.Workspace.ExternalId {
-			return "", apiv1.HTTPBadRequest("Invalid stub")
+			return "", apiv1.HTTPUnauthorized("Invalid token")
 		}
 	}
 
