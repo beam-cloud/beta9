@@ -39,5 +39,6 @@ func TrackTaskCount(instance *AutoscaledInstance, taskId, externalWorkspaceId st
 		"app_id":       instance.Stub.App.ExternalId,
 		"workspace_id": externalWorkspaceId,
 		"task_id":      taskId,
+		"value":        1,
 	}, 1)
 }
