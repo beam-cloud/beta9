@@ -89,13 +89,37 @@ func (b *Build) initializeBuildConfiguration() error {
 //   - Python packages and shell commands that are passed as parameters to the image in the sdk
 //   - Build steps that are chained to the image in the sdk
 func (b *Build) prepareCommands() error {
-	if err := b.resolvePythonVersionRequirement(); err != nil {
+	if b.micromamba {
+		b.commands = append(b.commands, "micromamba config set use_lockfiles False")
+	} else if b.opts.IgnorePython && len(b.opts.PythonPackages) == 0 {
+		b.opts.PythonVersion = ""
+	} else if err := b.setupDefaultPythonInstall(); err != nil {
 		return err
+	}
+
+	virtualEnv := false
+	// Check whether the python version belongs to a virtual environment
+	if b.opts.PythonVersion != "" {
+		checkVenvCmd := fmt.Sprintf(`%s -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, b.opts.PythonVersion)
+		if resp, err := b.runcClient.Exec(b.containerID, checkVenvCmd, buildEnv); err == nil && resp.Ok {
+			virtualEnv = true
+
+			// Modify the pyenv.cfg to use site-packages
+			// Find the python interpreter path and extract the venv directory
+			findVenvCmd := fmt.Sprintf(`%s -c "import sys; import os; venv_dir = os.path.dirname(os.path.dirname(sys.executable)); print(venv_dir)"`, b.opts.PythonVersion)
+			updatePyvenvCmd := fmt.Sprintf(`%s && echo "include-system-site-packages = true" >> $(dirname $(dirname $(%s -c "import sys; print(sys.executable)")))/pyvenv.cfg`, findVenvCmd, b.opts.PythonVersion)
+			b.commands = append(b.commands, updatePyvenvCmd)
+		}
+
+		// Conda type environments do not follow the same prefix != base_prefix convention
+		if b.micromamba {
+			virtualEnv = true
+		}
 	}
 
 	// Add pip install command from image's python package list
 	if len(b.opts.PythonPackages) > 0 && b.opts.PythonVersion != "" {
-		pipInstallCmd := generatePipInstallCommand(b.opts.PythonPackages, b.opts.PythonVersion)
+		pipInstallCmd := generatePipInstallCommand(b.opts.PythonPackages, b.opts.PythonVersion, virtualEnv)
 		b.commands = append(b.commands, pipInstallCmd)
 	}
 
@@ -103,31 +127,23 @@ func (b *Build) prepareCommands() error {
 	b.commands = append(b.commands, b.opts.Commands...)
 
 	// Add any additional build steps that were chained to the image
-	b.commands = append(b.commands, parseBuildSteps(b.opts.BuildSteps, b.opts.PythonVersion)...)
+	b.commands = append(b.commands, parseBuildSteps(b.opts.BuildSteps, b.opts.PythonVersion, virtualEnv)...)
 
 	return nil
 }
 
-// resolvePythonVersionRequirement ensures that if a python version is requested, it is installed.
-func (b *Build) resolvePythonVersionRequirement() error {
-	if b.micromamba {
-		b.commands = append(b.commands, "micromamba config set use_lockfiles False")
-		return nil
-	}
-
-	if b.opts.IgnorePython && len(b.opts.PythonPackages) == 0 {
-		b.opts.PythonVersion = ""
-		return nil
-	}
-
-	// If the requested python version is python3 (default), install the default python version from the image
-	// config if no python3 is found.
+// setupDefaultPythonInstall ensures that if a python version is requested, it is installed.
+func (b *Build) setupDefaultPythonInstall() error {
 	if b.opts.PythonVersion == types.Python3.String() {
+		// The provided python version is python3 (default). If "python3 --version" is successful then there is no need to install
+		// the current default python version.
 		checkPythonVersionCmd := fmt.Sprintf("%s --version", b.opts.PythonVersion)
 		if resp, err := b.runcClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
 			return nil
 		}
 
+		// Since no default python3 was found, specify the python version to be the default provided by the image config
+		// and generate the install command for it.
 		b.opts.PythonVersion = b.config.ImageService.PythonVersion
 		installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, b.opts.PythonVersion)
 		if err != nil {
@@ -308,12 +324,12 @@ func genContainerId() string {
 	return fmt.Sprintf("%s%s", types.BuildContainerPrefix, uuid.New().String()[:8])
 }
 
-func generatePipInstallCommand(pythonPackages []string, pythonVersion string) string {
+func generatePipInstallCommand(pythonPackages []string, pythonVersion string, virtualEnv bool) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
 	command := "uv-b9 pip install"
-	if strings.Contains(pythonVersion, "micromamba") {
-		command = fmt.Sprintf("%s -m pip install", pythonVersion)
+	if !virtualEnv {
+		command += " --system"
 	}
 
 	if len(flagLines) > 0 {
@@ -366,7 +382,7 @@ func parseFlagLinesAndPackages(pythonPackages []string) ([]string, []string) {
 
 // Generate the commands to run in the container. This function will coalesce pip and mamba commands
 // into a single command if they are adjacent to each other.
-func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
+func parseBuildSteps(buildSteps []BuildStep, pythonVersion string, virtualEnv bool) []string {
 	commands := []string{}
 	var (
 		mambaStart int = -1
@@ -384,7 +400,7 @@ func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
 
 		// Flush any pending pip or mamba groups
 		if pipStart != -1 && (step.Type != pipCommandType || flagCmd) {
-			pipStart, pipGroup = flushPipCommand(commands, pipStart, pipGroup, pythonVersion)
+			pipStart, pipGroup = flushPipCommand(commands, pipStart, pipGroup, pythonVersion, virtualEnv)
 		}
 
 		if mambaStart != -1 && (step.Type != micromambaCommandType || flagCmd) {
@@ -399,7 +415,7 @@ func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
 			pipGroup = append(pipGroup, step.Command)
 
 			if flagCmd {
-				pipStart, pipGroup = flushPipCommand(commands, pipStart, pipGroup, pythonVersion)
+				pipStart, pipGroup = flushPipCommand(commands, pipStart, pipGroup, pythonVersion, virtualEnv)
 			}
 		}
 
@@ -421,7 +437,7 @@ func parseBuildSteps(buildSteps []BuildStep, pythonVersion string) []string {
 	}
 
 	if pipStart != -1 {
-		commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion)
+		commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion, virtualEnv)
 	}
 
 	return commands
@@ -432,8 +448,8 @@ func flushMambaCommand(commands []string, mambaStart int, mambaGroup []string) (
 	return -1, nil
 }
 
-func flushPipCommand(commands []string, pipStart int, pipGroup []string, pythonVersion string) (int, []string) {
-	commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion)
+func flushPipCommand(commands []string, pipStart int, pipGroup []string, pythonVersion string, virtualEnv bool) (int, []string) {
+	commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion, virtualEnv)
 	return -1, nil
 }
 
