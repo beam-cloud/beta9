@@ -16,7 +16,7 @@ from ...config import ConfigContext
 from ...type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
 DEFAULT_VLLM_CACHE_DIR = "./vllm_cache"
-
+DEFAULT_VLLM_CACHE_ROOT = "./vllm_cache_root"
 
 # vllm/engine/arg_utils.py:EngineArgs
 @dataclass
@@ -149,6 +149,7 @@ class VLLMArgs:
     disable_chunked_mm_input: bool = False
     data_parallel_size: int = 1
     compilation_config: Optional[Any] = None
+    vllm_cache_root: Optional[str] = DEFAULT_VLLM_CACHE_ROOT
 
 
 class VLLM(ASGI):
@@ -190,9 +191,6 @@ class VLLM(ASGI):
             The autoscaler to use. Default is a queue depth autoscaler.
         vllm_args (VLLMArgs):
             The arguments for the vLLM model.
-        vllm_cache_root (Optional[str]):
-            The root directory for vLLM model caching. If specified, this will be set as the 
-            VLLM_CACHE_ROOT environment variable. Can be used with mounted volumes for caching.
 
     Example:
         ```python
@@ -223,15 +221,13 @@ class VLLM(ASGI):
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
-        vllm_args: VLLMArgs = VLLMArgs(),
-        vllm_cache_root: Optional[str] = None,
+        vllm_args: VLLMArgs = VLLMArgs()
     ):
         if vllm_args.download_dir == DEFAULT_VLLM_CACHE_DIR:
             # Add default vllm cache volume to preserve it if custom volumes are specified for chat templates
             volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
         
-        if vllm_cache_root and vllm_cache_root not in [v.mount_path for v in volumes]:
-            volumes.append(Volume(name="vllm_cache_root", mount_path=vllm_cache_root))
+        volumes.append(Volume(name="vllm_cache_root", mount_path=vllm_args.vllm_cache_root))
 
         image = image.add_python_packages(
             ["fastapi", "numpy", "vllm==0.8.4", "huggingface_hub==0.30.2"]
@@ -257,7 +253,6 @@ class VLLM(ASGI):
 
         self.chat_template_url = vllm_args.chat_template_url
         self.engine_args = vllm_args
-        self.vllm_cache_root = vllm_cache_root
         self.app_args = SimpleNamespace(
             model=vllm_args.model,
             served_model_name=vllm_args.served_model_name,
@@ -297,8 +292,8 @@ class VLLM(ASGI):
         from vllm.entrypoints.openai.tool_parsers import ToolParserManager
         from vllm.usage.usage_lib import UsageContext
 
-        if self.vllm_cache_root:
-            os.environ["VLLM_CACHE_ROOT"] = self.vllm_cache_root
+        if self.engine_args.vllm_cache_root:
+            os.environ["VLLM_CACHE_ROOT"] = self.engine_args.vllm_cache_root
 
         if self.chat_template_url:
             import requests
@@ -380,14 +375,6 @@ class VLLM(ASGI):
         ):
             terminal.error(
                 "The engine's download directory must match a mount path in the volumes list."
-            )
-
-        if (
-            self.vllm_cache_root 
-            and self.vllm_cache_root not in [v.mount_path for v in self.volumes]
-        ):
-            terminal.error(
-                f"The vLLM cache root directory '{self.vllm_cache_root}' must be mounted as a volume."
             )
 
         if context is not None:
