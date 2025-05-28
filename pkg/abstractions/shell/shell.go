@@ -39,8 +39,8 @@ const (
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
 	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
-	startupScript                 string        = `exec /usr/local/bin/dropbear -p $SHELL_PORT -R -E -F 2> /etc/dropbear/logs.txt`
-	createUserScript              string        = `set -e; useradd -m -s /bin/bash $USERNAME 2>> /etc/dropbear/logs-user.txt; echo "$USERNAME:$PASSWORD" | chpasswd 2>> /etc/dropbear/logs-user.txt`
+	startupScript                 string        = `exec /usr/local/bin/dropbear -p $SHELL_PORT -R -E -F 2>> /etc/dropbear/logs.txt`
+	createUserScript              string        = `set -e; useradd -m -s /bin/bash $USERNAME 2>> /etc/dropbear/logs.txt; echo "$USERNAME:$PASSWORD" | chpasswd 2>> /etc/dropbear/logs.txt`
 )
 
 type ShellService interface {
@@ -323,10 +323,16 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		}, nil
 	}
 
+	username := strings.Join(strings.Split(authInfo.Token.ExternalId, "-"), "")
+	password := authInfo.Token.Key
+
 	env := []string{
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
 		fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
+		fmt.Sprintf("USERNAME=%s", username),
+		fmt.Sprintf("PASSWORD=%s", password),
+		fmt.Sprintf("SHELL_PORT=%d", types.WorkerShellPort),
 	}
 
 	env = append(secrets, env...)
@@ -341,12 +347,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		gpuCount = 1
 	}
 
-	username := strings.Join(strings.Split(authInfo.Token.ExternalId, "-"), "")
-	password := authInfo.Token.Key
-
-	createUserCmd := fmt.Sprintf("USERNAME=%s && PASSWORD=%s; %s", username, password, createUserScript)
-	startupCommand := fmt.Sprintf("%s && %s", createUserCmd, startupScript)
-
+	startupCommand := fmt.Sprintf("%s && %s", createUserScript, startupScript)
 	entryPoint := []string{
 		"/bin/bash",
 		"-c",
