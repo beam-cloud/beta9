@@ -378,7 +378,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	externalWorkspaceId, err := tq.rdb.Get(context.Background(), Keys.taskQueueTaskExternalWorkspace(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Result()
 	if err == nil && externalWorkspaceId != "" {
 		defer func() {
-			abstractions.TrackTaskCost(time.Duration(in.TaskDuration)*time.Second, in.TaskId, instance.AutoscaledInstance, externalWorkspaceId)
+			abstractions.TrackTaskCost(time.Duration(in.TaskDuration)*time.Second, instance.AutoscaledInstance, in.TaskId, externalWorkspaceId)
 			tq.rdb.Del(context.Background(), Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, in.StubId, task.ExternalId))
 		}()
 	}

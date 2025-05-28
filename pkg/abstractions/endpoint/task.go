@@ -39,7 +39,7 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 	if instance.StubConfig.Pricing != nil {
 		start := time.Now()
 		defer func() {
-			abstractions.TrackTaskCost(time.Since(start), t.msg.TaskId, instance.AutoscaledInstance, authInfo.Workspace.ExternalId)
+			abstractions.TrackTaskCost(time.Since(start), instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
 		}()
 	}
 

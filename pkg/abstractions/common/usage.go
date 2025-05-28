@@ -6,7 +6,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func TrackTaskCost(duration time.Duration, taskId string, instance *AutoscaledInstance, externalWorkspaceId string) {
+func TrackTaskCost(duration time.Duration, instance *AutoscaledInstance, taskId, externalWorkspaceId string) {
 	if instance.Workspace.ExternalId == externalWorkspaceId {
 		return
 	}
