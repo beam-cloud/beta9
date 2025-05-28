@@ -27,6 +27,7 @@ message VerifyImageBuildRequest {
   string build_ctx_object = 9;
   repeated string secrets = 10;
   string gpu = 11;
+  bool ignore_python = 12;
 }
 
 message VerifyImageBuildResponse {

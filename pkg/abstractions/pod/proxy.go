@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -178,6 +180,9 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	if subPath != "" && subPath[0] != '/' {
 		subPath = "/" + subPath
 	}
+
+	request.URL.Scheme = "http"
+	request.URL.Host = targetHost
 	request.URL.Path = subPath
 
 	// Increment container connections
@@ -201,9 +206,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		return
 	}
 
-	request.URL.Scheme = "http"
-	request.URL.Host = targetHost
-
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	proxy.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, networkType, addr string) (net.Conn, error) {
@@ -215,16 +217,25 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 		},
 	}
 
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error().Err(err).Str("stubId", pb.stubId).Str("workspace", pb.workspace.Name).Msg("handled abort in pod proxy")
+		}
+	}()
+
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {}
 	proxy.ServeHTTP(response, request)
+
 }
 
 func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, addr string, path string) error {
+	subprotocols := websocket.Subprotocols(conn.ctx.Request())
+
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			return true // Allow all origins
 		},
-		Subprotocols: conn.ctx.Request().Header["Sec-Websocket-Protocol"],
+		Subprotocols: subprotocols,
 	}
 
 	clientConn, err := upgrader.Upgrade(conn.ctx.Response().Writer, conn.ctx.Request(), nil)
@@ -236,6 +247,7 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 	wsURL := url.URL{Scheme: "ws", Host: addr, Path: path, RawQuery: conn.ctx.Request().URL.RawQuery}
 	dstDialer := websocket.Dialer{
 		NetDialContext: network.GetDialer(addr, pb.tailscale, pb.tsConfig),
+		Subprotocols:   subprotocols,
 	}
 
 	serverConn, _, err := dstDialer.Dial(wsURL.String(), nil)
@@ -263,8 +275,8 @@ func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, 
 
 	go proxyMessages(clientConn, serverConn)
 	go proxyMessages(serverConn, clientConn)
-	wg.Wait()
 
+	wg.Wait()
 	return nil
 }
 

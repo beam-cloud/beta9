@@ -113,7 +113,8 @@ message MountPointConfig {
 }
 
 message NullTime {
-  NullTime null_time = 1;
+  google.protobuf.Timestamp time = 1;
+  bool valid = 2;
 }
 
 message Object {
@@ -123,6 +124,13 @@ message Object {
   int64 size = 4;
   uint32 workspace_id = 5;
   google.protobuf.Timestamp created_at = 6;
+}
+
+message PricingPolicy {
+  int64 max_in_flight = 1;
+  string cost_model = 2;
+  double cost_per_task = 3;
+  double cost_per_task_duration_ms = 4;
 }
 
 message Stub {

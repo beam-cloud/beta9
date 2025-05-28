@@ -45,6 +45,7 @@ type AutoscaledInstanceConfig struct {
 	BackendRepo         repository.BackendRepository
 	EventRepo           repository.EventRepository
 	TaskRepo            repository.TaskRepository
+	UsageMetricsRepo    repository.UsageMetricsRepository
 	StartContainersFunc func(containersToRun int) error
 	StopContainersFunc  func(containersToStop int) error
 }
@@ -75,10 +76,11 @@ type AutoscaledInstance struct {
 	Autoscaler         IAutoscaler
 
 	// Repositories
-	ContainerRepo repository.ContainerRepository
-	BackendRepo   repository.BackendRepository
-	TaskRepo      repository.TaskRepository
-	EventRepo     repository.EventRepository
+	ContainerRepo    repository.ContainerRepository
+	BackendRepo      repository.BackendRepository
+	TaskRepo         repository.TaskRepository
+	EventRepo        repository.EventRepository
+	UsageMetricsRepo repository.UsageMetricsRepository
 
 	// Keys
 	InstanceLockKey string
@@ -116,6 +118,7 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 		BackendRepo:              cfg.BackendRepo,
 		TaskRepo:                 cfg.TaskRepo,
 		EventRepo:                cfg.EventRepo,
+		UsageMetricsRepo:         cfg.UsageMetricsRepo,
 		Containers:               make(map[string]bool),
 		ContainerEventChan:       make(chan types.ContainerEvent, 1),
 		ScaleEventChan:           make(chan int, 1),

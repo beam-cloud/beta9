@@ -3,7 +3,10 @@ package endpoint
 import (
 	"context"
 	"fmt"
+	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
@@ -15,7 +18,9 @@ type EndpointTask struct {
 
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
 	var err error = nil
+
 	echoCtx := options[0].(echo.Context)
+	authInfo := options[1].(*auth.AuthInfo)
 
 	instance, err := t.es.getOrCreateEndpointInstance(ctx, t.msg.StubId)
 	if err != nil {
@@ -29,6 +34,15 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 	})
 	if err != nil {
 		return err
+	}
+
+	if instance.StubConfig.Pricing != nil {
+		abstractions.TrackTaskCount(instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
+
+		start := time.Now()
+		defer func() {
+			abstractions.TrackTaskCost(time.Since(start), instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
+		}()
 	}
 
 	return instance.buffer.ForwardRequest(echoCtx, t)

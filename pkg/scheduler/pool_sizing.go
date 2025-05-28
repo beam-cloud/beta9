@@ -147,30 +147,27 @@ func (s *WorkerPoolSizer) occupyAvailableMachines() error {
 }
 
 func (s *WorkerPoolSizer) addWorkerIfNeeded(freeCapacity *WorkerPoolCapacity) (*types.Worker, error) {
-	var err error = nil
-	var newWorker *types.Worker = nil
-
 	// Check if the free capacity is below the configured minimum and add a worker if needed
-	if shouldAddWorker(freeCapacity, s.workerPoolSizingConfig) {
-		newWorker, err = s.controller.AddWorker(
-			s.workerPoolSizingConfig.DefaultWorkerCpu,
-			s.workerPoolSizingConfig.DefaultWorkerMemory,
-			s.workerPoolSizingConfig.DefaultWorkerGpuCount,
-		)
-		if err != nil {
-			return nil, err
-		}
-
+	if !shouldAddWorker(freeCapacity, s.workerPoolSizingConfig) {
+		return nil, nil
 	}
 
-	return newWorker, nil
+	return s.controller.AddWorker(
+		s.workerPoolSizingConfig.DefaultWorkerCpu,
+		s.workerPoolSizingConfig.DefaultWorkerMemory,
+		s.workerPoolSizingConfig.DefaultWorkerGpuCount,
+	)
 }
 
 // shouldAddWorker checks if the conditions are met for a new worker to be added
 func shouldAddWorker(freeCapacity *WorkerPoolCapacity, config *types.WorkerPoolSizingConfig) bool {
-	return freeCapacity.FreeCpu < config.MinFreeCpu ||
-		freeCapacity.FreeMemory < config.MinFreeMemory ||
-		(config.MinFreeGpu > 0 && freeCapacity.FreeGpu < config.MinFreeGpu)
+	freeCpu := freeCapacity.FreeCpu + freeCapacity.PendingCpu
+	freeMemory := freeCapacity.FreeMemory + freeCapacity.PendingMemory
+	freeGpu := freeCapacity.FreeGpu + freeCapacity.PendingGpu
+
+	return freeCpu < config.MinFreeCpu ||
+		freeMemory < config.MinFreeMemory ||
+		(config.MinFreeGpu > 0 && freeGpu < config.MinFreeGpu)
 }
 
 // parsePoolSizingConfig converts a common.WorkerPoolJobSpecPoolSizingConfig to a types.WorkerPoolSizingConfig.

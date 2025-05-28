@@ -162,7 +162,7 @@
 			]
 		},
 		{
-			"destination": "/usr/local/bin/uv",
+			"destination": "/usr/local/bin/uv-b9",
 			"type": "bind",
 			"source": "/usr/local/bin/uv",
 			"options": [

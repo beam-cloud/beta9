@@ -126,7 +126,8 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    null_time: "NullTime" = betterproto.message_field(1)
+    time: datetime = betterproto.message_field(1)
+    valid: bool = betterproto.bool_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -137,6 +138,14 @@ class Object(betterproto.Message):
     size: int = betterproto.int64_field(4)
     workspace_id: int = betterproto.uint32_field(5)
     created_at: datetime = betterproto.message_field(6)
+
+
+@dataclass(eq=False, repr=False)
+class PricingPolicy(betterproto.Message):
+    max_in_flight: int = betterproto.int64_field(1)
+    cost_model: str = betterproto.string_field(2)
+    cost_per_task: float = betterproto.double_field(3)
+    cost_per_task_duration_ms: float = betterproto.double_field(4)
 
 
 @dataclass(eq=False, repr=False)

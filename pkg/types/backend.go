@@ -343,6 +343,22 @@ type TaskStats struct {
 	QueueDepth       uint32 `json:"queue_depth" serializer:"queue_depth"`
 }
 
+// @go2proto
+type PricingPolicy struct {
+	MaxInFlight           int     `json:"max_in_flight"`
+	CostModel             string  `json:"cost_model"`
+	CostPerTask           float64 `json:"cost_per_task"`
+	CostPerTaskDurationMs float64 `json:"cost_per_task_duration_ms"`
+}
+
+// @go2proto
+type PricingPolicyCostModel string
+
+const (
+	PricingPolicyCostModelTask     PricingPolicyCostModel = "task"
+	PricingPolicyCostModelDuration PricingPolicyCostModel = "duration"
+)
+
 type StubConfigV1 struct {
 	Runtime            Runtime         `json:"runtime"`
 	Handler            string          `json:"handler"`
@@ -366,6 +382,7 @@ type StubConfigV1 struct {
 	WorkDir            string          `json:"work_dir"`
 	EntryPoint         []string        `json:"entry_point"`
 	Ports              []uint32        `json:"ports"`
+	Pricing            *PricingPolicy  `json:"pricing"`
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {

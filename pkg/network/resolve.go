@@ -31,11 +31,11 @@ func ConnectToHost(ctx context.Context, host string, timeout time.Duration, tail
 }
 
 func GetDialer(host string, tailscale *Tailscale, tsConfig types.TailscaleConfig) func(ctx context.Context, network, address string) (net.Conn, error) {
-	if tsConfig.Enabled {
+	if tsConfig.Enabled && strings.Contains(host, tsConfig.HostName) {
 		return tailscale.Dial
 	}
 
-	dialer := &net.Dialer{}
+	dialer := &net.Dialer{DualStack: true}
 	return dialer.DialContext
 }
 
