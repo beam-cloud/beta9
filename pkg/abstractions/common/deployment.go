@@ -88,7 +88,7 @@ func ParseAndValidateDeploymentStubId(
 			return "", apiv1.HTTPBadRequest("Invalid stub")
 		}
 
-		if stubConfig.Pricing == nil && authInfo.Workspace.ExternalId != stub.Workspace.ExternalId {
+		if stubConfig.Pricing == nil && stubConfig.Authorized && authInfo.Workspace.ExternalId != stub.Workspace.ExternalId {
 			return "", apiv1.HTTPUnauthorized("Invalid token")
 		}
 	}

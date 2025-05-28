@@ -323,7 +323,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 		}, nil
 	}
 
-	stubConfig, err := tq.getStubConfig(in.StubId)
+	instance, err := tq.getOrCreateQueueInstance(in.StubId)
 	if err != nil {
 		return &pb.TaskQueueCompleteResponse{
 			Ok: false,
@@ -377,42 +377,16 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	// If this task is associated with a different workspace, we need to track the cost
 	externalWorkspaceId, err := tq.rdb.Get(context.Background(), Keys.taskQueueTaskExternalWorkspace(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Result()
 	if err == nil && externalWorkspaceId != "" {
-		defer tq.trackTaskCost(in.TaskDuration, stubConfig, task, in.StubId, externalWorkspaceId)
+		defer func() {
+			abstractions.TrackTaskCost(time.Duration(in.TaskDuration)*time.Second, in.TaskId, instance.AutoscaledInstance, externalWorkspaceId)
+			tq.rdb.Del(context.Background(), Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, in.StubId, task.ExternalId))
+		}()
 	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
 	return &pb.TaskQueueCompleteResponse{
 		Ok: err == nil,
 	}, nil
-}
-
-func (tq *RedisTaskQueue) trackTaskCost(durationMs float32, stubConfig *types.StubConfigV1, task *types.Task, stubId string, externalWorkspaceId string) {
-	elapsed := time.Duration(durationMs) * time.Second
-
-	pricingConfig := stubConfig.Pricing
-
-	totalCostCents := 0.0
-	if pricingConfig.CostModel == string(types.PricingPolicyCostModelTask) {
-		totalCostCents = pricingConfig.CostPerTask * 100
-	} else if pricingConfig.CostModel == string(types.PricingPolicyCostModelDuration) {
-		totalCostCents = pricingConfig.CostPerTaskDurationMs * float64(elapsed.Milliseconds()) * 100
-	}
-
-	instance, err := tq.getOrCreateQueueInstance(stubId)
-	if err != nil {
-		log.Error().Err(err).Str("stub_id", stubId).Str("task_id", task.ExternalId).Msg("unable to track task cost")
-		return
-	}
-
-	tq.usageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
-		"stub_id":      instance.Stub.ExternalId,
-		"app_id":       instance.Stub.App.ExternalId,
-		"workspace_id": externalWorkspaceId,
-		"task_id":      task.ExternalId,
-		"value":        totalCostCents,
-	}, totalCostCents)
-
-	tq.rdb.Del(context.Background(), Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, stubId, task.ExternalId))
 }
 
 func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {

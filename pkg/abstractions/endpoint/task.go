@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
@@ -37,34 +38,12 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 
 	if instance.StubConfig.Pricing != nil {
 		start := time.Now()
-		defer t.trackTaskCost(start, instance, authInfo)
+		defer func() {
+			abstractions.TrackTaskCost(time.Since(start), t.msg.TaskId, instance.AutoscaledInstance, authInfo.Workspace.ExternalId)
+		}()
 	}
 
 	return instance.buffer.ForwardRequest(echoCtx, t)
-}
-
-func (t *EndpointTask) trackTaskCost(start time.Time, instance *endpointInstance, authInfo *auth.AuthInfo) {
-	if authInfo.Workspace.ExternalId == instance.Workspace.ExternalId {
-		return
-	}
-
-	elapsed := time.Since(start)
-	pricingConfig := instance.StubConfig.Pricing
-
-	totalCostCents := 0.0
-	if pricingConfig.CostModel == string(types.PricingPolicyCostModelTask) {
-		totalCostCents = pricingConfig.CostPerTask * 100
-	} else if pricingConfig.CostModel == string(types.PricingPolicyCostModelDuration) {
-		totalCostCents = pricingConfig.CostPerTaskDurationMs * float64(elapsed.Milliseconds()) * 100
-	}
-
-	instance.AutoscaledInstance.UsageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
-		"stub_id":      instance.Stub.ExternalId,
-		"app_id":       instance.Stub.App.ExternalId,
-		"workspace_id": authInfo.Workspace.ExternalId,
-		"task_id":      t.msg.TaskId,
-		"value":        totalCostCents,
-	}, totalCostCents)
 }
 
 func (t *EndpointTask) Retry(ctx context.Context) error {
