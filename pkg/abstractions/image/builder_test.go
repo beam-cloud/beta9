@@ -155,7 +155,7 @@ func TestGeneratePipInstallCommand(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		cmd := generatePipInstallCommand(tc.opts.PythonPackages, tc.opts.PythonVersion)
+		cmd := generatePipInstallCommand(tc.opts.PythonPackages, tc.opts.PythonVersion, false)
 		assert.Equal(t, tc.want, cmd)
 	}
 }
@@ -261,7 +261,7 @@ func TestParseBuildSteps(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
-		got := parseBuildSteps(tc.steps, "micromamba3.10")
+		got := parseBuildSteps(tc.steps, "micromamba3.10", false)
 		assert.Equal(t, tc.want, got)
 	}
 }

@@ -278,6 +278,6 @@ func Test_parseBuildSteps(t *testing.T) {
 		"uv-b9 pip install \"gunicorn\"",    // Second pip group
 	}
 
-	result := parseBuildSteps(steps, pythonVersion)
+	result := parseBuildSteps(steps, pythonVersion, false)
 	assert.Equal(t, expected, result)
 }
