@@ -41,12 +41,16 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return apiv1.HTTPNotFound()
 	}
 
-	containerAddress, err := g.ss.containerRepo.GetContainerAddress(containerId)
+	addressMap, err := g.ss.containerRepo.GetContainerAddressMap(containerId)
 	if err != nil {
 		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
 	}
 
-	// Channel to signal when either connection is closed
+	containerAddress, ok := addressMap[types.WorkerShellPort]
+	if !ok {
+		return ctx.String(http.StatusBadGateway, "Failed to connect to container")
+	}
+
 	done := make(chan struct{})
 
 	go g.ss.keepAlive(ctx.Request().Context(), containerId, done)

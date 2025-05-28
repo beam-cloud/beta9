@@ -19,14 +19,16 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	ShellService_CreateShell_FullMethodName = "/shell.ShellService/CreateShell"
+	ShellService_CreateStandaloneShell_FullMethodName          = "/shell.ShellService/CreateStandaloneShell"
+	ShellService_CreateShellInExistingContainer_FullMethodName = "/shell.ShellService/CreateShellInExistingContainer"
 )
 
 // ShellServiceClient is the client API for ShellService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type ShellServiceClient interface {
-	CreateShell(ctx context.Context, in *CreateShellRequest, opts ...grpc.CallOption) (*CreateShellResponse, error)
+	CreateStandaloneShell(ctx context.Context, in *CreateStandaloneShellRequest, opts ...grpc.CallOption) (*CreateStandaloneShellResponse, error)
+	CreateShellInExistingContainer(ctx context.Context, in *CreateShellInExistingContainerRequest, opts ...grpc.CallOption) (*CreateShellInExistingContainerResponse, error)
 }
 
 type shellServiceClient struct {
@@ -37,9 +39,18 @@ func NewShellServiceClient(cc grpc.ClientConnInterface) ShellServiceClient {
 	return &shellServiceClient{cc}
 }
 
-func (c *shellServiceClient) CreateShell(ctx context.Context, in *CreateShellRequest, opts ...grpc.CallOption) (*CreateShellResponse, error) {
-	out := new(CreateShellResponse)
-	err := c.cc.Invoke(ctx, ShellService_CreateShell_FullMethodName, in, out, opts...)
+func (c *shellServiceClient) CreateStandaloneShell(ctx context.Context, in *CreateStandaloneShellRequest, opts ...grpc.CallOption) (*CreateStandaloneShellResponse, error) {
+	out := new(CreateStandaloneShellResponse)
+	err := c.cc.Invoke(ctx, ShellService_CreateStandaloneShell_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *shellServiceClient) CreateShellInExistingContainer(ctx context.Context, in *CreateShellInExistingContainerRequest, opts ...grpc.CallOption) (*CreateShellInExistingContainerResponse, error) {
+	out := new(CreateShellInExistingContainerResponse)
+	err := c.cc.Invoke(ctx, ShellService_CreateShellInExistingContainer_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +61,8 @@ func (c *shellServiceClient) CreateShell(ctx context.Context, in *CreateShellReq
 // All implementations must embed UnimplementedShellServiceServer
 // for forward compatibility
 type ShellServiceServer interface {
-	CreateShell(context.Context, *CreateShellRequest) (*CreateShellResponse, error)
+	CreateStandaloneShell(context.Context, *CreateStandaloneShellRequest) (*CreateStandaloneShellResponse, error)
+	CreateShellInExistingContainer(context.Context, *CreateShellInExistingContainerRequest) (*CreateShellInExistingContainerResponse, error)
 	mustEmbedUnimplementedShellServiceServer()
 }
 
@@ -58,8 +70,11 @@ type ShellServiceServer interface {
 type UnimplementedShellServiceServer struct {
 }
 
-func (UnimplementedShellServiceServer) CreateShell(context.Context, *CreateShellRequest) (*CreateShellResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CreateShell not implemented")
+func (UnimplementedShellServiceServer) CreateStandaloneShell(context.Context, *CreateStandaloneShellRequest) (*CreateStandaloneShellResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateStandaloneShell not implemented")
+}
+func (UnimplementedShellServiceServer) CreateShellInExistingContainer(context.Context, *CreateShellInExistingContainerRequest) (*CreateShellInExistingContainerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateShellInExistingContainer not implemented")
 }
 func (UnimplementedShellServiceServer) mustEmbedUnimplementedShellServiceServer() {}
 
@@ -74,20 +89,38 @@ func RegisterShellServiceServer(s grpc.ServiceRegistrar, srv ShellServiceServer)
 	s.RegisterService(&ShellService_ServiceDesc, srv)
 }
 
-func _ShellService_CreateShell_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(CreateShellRequest)
+func _ShellService_CreateStandaloneShell_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateStandaloneShellRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(ShellServiceServer).CreateShell(ctx, in)
+		return srv.(ShellServiceServer).CreateStandaloneShell(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: ShellService_CreateShell_FullMethodName,
+		FullMethod: ShellService_CreateStandaloneShell_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ShellServiceServer).CreateShell(ctx, req.(*CreateShellRequest))
+		return srv.(ShellServiceServer).CreateStandaloneShell(ctx, req.(*CreateStandaloneShellRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ShellService_CreateShellInExistingContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateShellInExistingContainerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ShellServiceServer).CreateShellInExistingContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ShellService_CreateShellInExistingContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ShellServiceServer).CreateShellInExistingContainer(ctx, req.(*CreateShellInExistingContainerRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -100,8 +133,12 @@ var ShellService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*ShellServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "CreateShell",
-			Handler:    _ShellService_CreateShell_Handler,
+			MethodName: "CreateStandaloneShell",
+			Handler:    _ShellService_CreateStandaloneShell_Handler,
+		},
+		{
+			MethodName: "CreateShellInExistingContainer",
+			Handler:    _ShellService_CreateShellInExistingContainer_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

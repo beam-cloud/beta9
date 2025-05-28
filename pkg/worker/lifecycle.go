@@ -224,6 +224,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		request.Ports = []uint32{uint32(containerInnerPort)}
 	}
 
+	// Expose SSH port
+	request.Ports = append(request.Ports, uint32(types.WorkerShellPort))
+	portsToExpose++
+
 	bindPorts := make([]int, 0, portsToExpose)
 	for i := 0; i < portsToExpose; i++ {
 		bindPort, err := getRandomFreePort()
@@ -269,22 +273,19 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 	log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
 
-	// For pod stubs, set the container address map - this is a mapping of worker ports -> container ports
-	if request.Stub.Type.Kind() == types.StubTypePod {
-		addressMap := make(map[int32]string)
-		for idx, containerPort := range request.Ports {
-			addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
-		}
-		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
-			ContainerId: request.ContainerId,
-			AddressMap:  addressMap,
-		}))
-		if err != nil {
-			return err
-		}
-
-		log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
+	addressMap := make(map[int32]string)
+	for idx, containerPort := range request.Ports {
+		addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
 	}
+	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
+		ContainerId: request.ContainerId,
+		AddressMap:  addressMap,
+	}))
+	if err != nil {
+		return err
+	}
+
+	log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
 
 	go s.containerWg.Add(1)
 
@@ -609,12 +610,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
-	}
-
-	portsToExpose := len(request.Ports)
-	if portsToExpose == 0 {
-		portsToExpose = 1
-		request.Ports = []uint32{uint32(containerInnerPort)}
 	}
 
 	if request.RequiresGPU() {
