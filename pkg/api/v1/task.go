@@ -50,7 +50,7 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
 	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
 	g.GET("/metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
-	g.GET("/admin", auth.WithClusterAdminAuth(group.ListAnyTasksPaginated))
+	g.GET("/any", auth.WithClusterAdminAuth(group.ListAnyTasksPaginated))
 
 	return group
 }
