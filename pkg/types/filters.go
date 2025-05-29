@@ -45,20 +45,22 @@ type DeploymentFilter struct {
 
 type TaskFilter struct {
 	BaseFilter
-	WorkspaceID    uint        `query:"workspace_id"`
-	TaskIds        StringSlice `query:"task_ids"`
-	StubIds        StringSlice `query:"stub_ids"`
-	StubNames      StringSlice `query:"stub_names"`
-	StubTypes      StringSlice `query:"stub_types"`
-	Status         string      `query:"status"`
-	ContainerIds   StringSlice `query:"container_ids"`
-	CreatedAtStart string      `query:"created_at_start"`
-	CreatedAtEnd   string      `query:"created_at_end"`
-	MinDuration    uint        `query:"min_duration"`
-	MaxDuration    uint        `query:"max_duration"`
-	Interval       string      `query:"interval"`
-	Cursor         string      `query:"cursor"`
-	AppId          string      `query:"app_id"`
+	WorkspaceID         uint        `query:"workspace_id"`
+	ExternalWorkspaceID uint        `query:"external_workspace_id"`
+	TaskIds             StringSlice `query:"task_ids"`
+	StubIds             StringSlice `query:"stub_ids"`
+	StubNames           StringSlice `query:"stub_names"`
+	StubTypes           StringSlice `query:"stub_types"`
+	Status              string      `query:"status"`
+	ContainerIds        StringSlice `query:"container_ids"`
+	CreatedAtStart      string      `query:"created_at_start"`
+	CreatedAtEnd        string      `query:"created_at_end"`
+	MinDuration         uint        `query:"min_duration"`
+	MaxDuration         uint        `query:"max_duration"`
+	Interval            string      `query:"interval"`
+	Cursor              string      `query:"cursor"`
+	AppId               string      `query:"app_id"`
+	Public              bool        `query:"public"`
 }
 
 // Struct that includes the custom type

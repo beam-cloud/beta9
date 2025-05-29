@@ -27,22 +27,28 @@ func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
-	_, err = t.es.backendRepo.CreateTask(context.Background(), &types.TaskParams{
-		TaskId:      t.msg.TaskId,
-		StubId:      instance.Stub.Id,
-		WorkspaceId: instance.Stub.WorkspaceId,
-	})
-	if err != nil {
-		return err
-	}
-
+	var externalWorkspaceId *uint
 	if instance.StubConfig.Pricing != nil {
 		abstractions.TrackTaskCount(instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
+
+		if instance.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+			externalWorkspaceId = &authInfo.Workspace.Id
+		}
 
 		start := time.Now()
 		defer func() {
 			abstractions.TrackTaskCost(time.Since(start), instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
 		}()
+	}
+
+	_, err = t.es.backendRepo.CreateTask(context.Background(), &types.TaskParams{
+		TaskId:              t.msg.TaskId,
+		StubId:              instance.Stub.Id,
+		WorkspaceId:         instance.Stub.WorkspaceId,
+		ExternalWorkspaceId: externalWorkspaceId,
+	})
+	if err != nil {
+		return err
 	}
 
 	return instance.buffer.ForwardRequest(echoCtx, t)

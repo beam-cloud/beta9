@@ -123,8 +123,16 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 		return HTTPBadRequest("Invalid workspace ID")
 	}
 
+	var retrieveTaskFunc func(ctx context.Context, taskId string, workspace *types.Workspace) (*types.TaskWithRelated, error)
+	public, _ := strconv.ParseBool(ctx.QueryParam("public"))
+	if public {
+		retrieveTaskFunc = g.backendRepo.GetPublicTaskByWorkspace
+	} else {
+		retrieveTaskFunc = g.backendRepo.GetTaskByWorkspace
+	}
+
 	taskId := ctx.Param("taskId")
-	if task, err := g.backendRepo.GetTaskByWorkspace(ctx.Request().Context(), taskId, &workspace); err != nil {
+	if task, err := retrieveTaskFunc(ctx.Request().Context(), taskId, &workspace); err != nil {
 		return HTTPInternalServerError("Failed to retrieve task")
 	} else {
 		if task == nil {
@@ -251,7 +259,14 @@ func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, erro
 		return nil, HTTPBadRequest("Failed to decode query parameters")
 	}
 
-	filters.WorkspaceID = workspace.Id
+	public, _ := strconv.ParseBool(ctx.QueryParam("public"))
+	if public {
+		filters.ExternalWorkspaceID = workspace.Id
+		filters.WorkspaceID = 0
+	} else {
+		filters.WorkspaceID = workspace.Id
+	}
+
 	return &filters, nil
 }
 

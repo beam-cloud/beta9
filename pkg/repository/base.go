@@ -116,6 +116,7 @@ type BackendRepository interface {
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
 	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)
 	GetTaskByWorkspace(ctx context.Context, externalId string, workspace *types.Workspace) (*types.TaskWithRelated, error)
+	GetPublicTaskByWorkspace(ctx context.Context, externalId string, externalWorkspace *types.Workspace) (*types.TaskWithRelated, error)
 	CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error)
 	UpdateTask(ctx context.Context, externalId string, updatedTask types.Task) (*types.Task, error)
 	DeleteTask(ctx context.Context, externalId string) error
