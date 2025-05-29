@@ -46,7 +46,8 @@ class CreateShellInExistingContainerResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     username: str = betterproto.string_field(2)
     password: str = betterproto.string_field(3)
-    err_msg: str = betterproto.string_field(4)
+    stub_id: str = betterproto.string_field(4)
+    err_msg: str = betterproto.string_field(5)
 
 
 class ShellServiceStub(SyncServiceStub):

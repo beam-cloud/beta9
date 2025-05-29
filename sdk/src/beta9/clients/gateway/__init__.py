@@ -584,6 +584,7 @@ class GetUrlRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     deployment_id: str = betterproto.string_field(2)
     url_type: str = betterproto.string_field(3)
+    is_shell: bool = betterproto.bool_field(4)
 
 
 @dataclass(eq=False, repr=False)
