@@ -305,6 +305,7 @@ type Task struct {
 	WorkspaceId         uint       `db:"workspace_id" json:"workspace_id,omitempty"`                   // Foreign key to Workspace
 	ExternalWorkspaceId *uint      `db:"external_workspace_id" json:"external_workspace_id,omitempty"` // Foreign key to Workspace
 	StubId              uint       `db:"stub_id" json:"stub_id,omitempty"`                             // Foreign key to Stub
+	AppId               uint       `db:"app_id" json:"app_id,omitempty"`                               // Foreign key to App
 	CreatedAt           Time       `db:"created_at" json:"created_at,omitempty" serializer:"created_at"`
 	UpdatedAt           Time       `db:"updated_at" json:"updated_at,omitempty" serializer:"updated_at"`
 }
