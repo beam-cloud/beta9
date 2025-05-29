@@ -118,12 +118,20 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		Gpu:               in.Gpu,
 	}
 
+	if in.IgnorePython {
+		opts.IgnorePython = true
+	}
+
 	if in.ExistingImageUri != "" {
 		opts.handleCustomBaseImage(nil)
 	}
 
 	if in.Dockerfile != "" {
 		opts.addPythonRequirements()
+	}
+
+	if opts.IgnorePython && len(opts.PythonPackages) == 0 {
+		opts.PythonVersion = ""
 	}
 
 	imageId, err := getImageID(opts)
@@ -216,7 +224,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		return errors.New("build failed")
 	}
 
-	_, err = is.backendRepo.CreateImage(ctx, lastMessage.ImageId, clipVersion)
+	_, err = is.backendRepo.CreateImage(context.Background(), lastMessage.ImageId, clipVersion)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create image record")
 		return errors.New("failed to create image record")

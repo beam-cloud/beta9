@@ -288,31 +288,34 @@ const (
 )
 
 type TaskParams struct {
-	TaskId      string
-	ContainerId string
-	StubId      uint
-	WorkspaceId uint
+	TaskId              string
+	ContainerId         string
+	StubId              uint
+	WorkspaceId         uint
+	ExternalWorkspaceId *uint
 }
 
 type Task struct {
-	Id          uint       `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
-	ExternalId  string     `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
-	Status      TaskStatus `db:"status" json:"status,omitempty" serializer:"status"`
-	ContainerId string     `db:"container_id" json:"container_id,omitempty" serializer:"container_id"`
-	StartedAt   NullTime   `db:"started_at" json:"started_at,omitempty" serializer:"started_at"`
-	EndedAt     NullTime   `db:"ended_at" json:"ended_at,omitempty" serializer:"ended_at"`
-	WorkspaceId uint       `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
-	StubId      uint       `db:"stub_id" json:"stub_id,omitempty"`           // Foreign key to Stub
-	CreatedAt   Time       `db:"created_at" json:"created_at,omitempty" serializer:"created_at"`
-	UpdatedAt   Time       `db:"updated_at" json:"updated_at,omitempty" serializer:"updated_at"`
+	Id                  uint       `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
+	ExternalId          string     `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
+	Status              TaskStatus `db:"status" json:"status,omitempty" serializer:"status"`
+	ContainerId         string     `db:"container_id" json:"container_id,omitempty" serializer:"container_id"`
+	StartedAt           NullTime   `db:"started_at" json:"started_at,omitempty" serializer:"started_at"`
+	EndedAt             NullTime   `db:"ended_at" json:"ended_at,omitempty" serializer:"ended_at"`
+	WorkspaceId         uint       `db:"workspace_id" json:"workspace_id,omitempty"`                   // Foreign key to Workspace
+	ExternalWorkspaceId *uint      `db:"external_workspace_id" json:"external_workspace_id,omitempty"` // Foreign key to Workspace
+	StubId              uint       `db:"stub_id" json:"stub_id,omitempty"`                             // Foreign key to Stub
+	AppId               uint       `db:"app_id" json:"app_id,omitempty"`                               // Foreign key to App
+	CreatedAt           Time       `db:"created_at" json:"created_at,omitempty" serializer:"created_at"`
+	UpdatedAt           Time       `db:"updated_at" json:"updated_at,omitempty" serializer:"updated_at"`
 }
 
 type TaskWithRelated struct {
 	Task
 	Deployment struct {
-		ExternalId *string `db:"external_id" json:"external_id"`
-		Name       *string `db:"name" json:"name"`
-		Version    *uint   `db:"version" json:"version"`
+		ExternalId *string `db:"external_id" json:"external_id" serializer:"id"`
+		Name       *string `db:"name" json:"name" serializer:"name"`
+		Version    *uint   `db:"version" json:"version" serializer:"version"`
 	} `db:"deployment" json:"deployment" serializer:"deployment"`
 	Outputs   []TaskOutput `json:"outputs" serializer:"outputs"`
 	Stats     TaskStats    `json:"stats" serializer:"stats"`
@@ -343,6 +346,22 @@ type TaskStats struct {
 	QueueDepth       uint32 `json:"queue_depth" serializer:"queue_depth"`
 }
 
+// @go2proto
+type PricingPolicy struct {
+	MaxInFlight           int     `json:"max_in_flight"`
+	CostModel             string  `json:"cost_model"`
+	CostPerTask           float64 `json:"cost_per_task"`
+	CostPerTaskDurationMs float64 `json:"cost_per_task_duration_ms"`
+}
+
+// @go2proto
+type PricingPolicyCostModel string
+
+const (
+	PricingPolicyCostModelTask     PricingPolicyCostModel = "task"
+	PricingPolicyCostModelDuration PricingPolicyCostModel = "duration"
+)
+
 type StubConfigV1 struct {
 	Runtime            Runtime         `json:"runtime"`
 	Handler            string          `json:"handler"`
@@ -366,6 +385,7 @@ type StubConfigV1 struct {
 	WorkDir            string          `json:"work_dir"`
 	EntryPoint         []string        `json:"entry_point"`
 	Ports              []uint32        `json:"ports"`
+	Pricing            *PricingPolicy  `json:"pricing"`
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {

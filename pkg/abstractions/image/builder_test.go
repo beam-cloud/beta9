@@ -150,7 +150,7 @@ func TestGeneratePipInstallCommand(t *testing.T) {
 			opts: &BuildOpts{
 				PythonPackages: []string{"--extra-index-url https://download.pytorch.org/whl/cu121", "numpy==1.18", "scipy>1.4", "pandas>=1.0,<2.0", "matplotlib<=2.2", "seaborn"},
 			},
-			want: `uv pip install --extra-index-url https://download.pytorch.org/whl/cu121 "numpy==1.18" "scipy>1.4" "pandas>=1.0,<2.0" "matplotlib<=2.2" "seaborn"`,
+			want: `uv-b9 pip install --extra-index-url https://download.pytorch.org/whl/cu121 "numpy==1.18" "scipy>1.4" "pandas>=1.0,<2.0" "matplotlib<=2.2" "seaborn"`,
 		},
 	}
 

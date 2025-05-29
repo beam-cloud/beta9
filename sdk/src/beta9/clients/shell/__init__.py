@@ -23,24 +23,48 @@ if TYPE_CHECKING:
 
 
 @dataclass(eq=False, repr=False)
-class CreateShellRequest(betterproto.Message):
+class CreateStandaloneShellRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)
-class CreateShellResponse(betterproto.Message):
+class CreateStandaloneShellResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     container_id: str = betterproto.string_field(2)
-    token: str = betterproto.string_field(3)
+    username: str = betterproto.string_field(3)
+    password: str = betterproto.string_field(4)
+    err_msg: str = betterproto.string_field(5)
+
+
+@dataclass(eq=False, repr=False)
+class CreateShellInExistingContainerRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class CreateShellInExistingContainerResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    username: str = betterproto.string_field(2)
+    password: str = betterproto.string_field(3)
     err_msg: str = betterproto.string_field(4)
 
 
 class ShellServiceStub(SyncServiceStub):
-    def create_shell(
-        self, create_shell_request: "CreateShellRequest"
-    ) -> "CreateShellResponse":
+    def create_standalone_shell(
+        self, create_standalone_shell_request: "CreateStandaloneShellRequest"
+    ) -> "CreateStandaloneShellResponse":
         return self._unary_unary(
-            "/shell.ShellService/CreateShell",
-            CreateShellRequest,
-            CreateShellResponse,
-        )(create_shell_request)
+            "/shell.ShellService/CreateStandaloneShell",
+            CreateStandaloneShellRequest,
+            CreateStandaloneShellResponse,
+        )(create_standalone_shell_request)
+
+    def create_shell_in_existing_container(
+        self,
+        create_shell_in_existing_container_request: "CreateShellInExistingContainerRequest",
+    ) -> "CreateShellInExistingContainerResponse":
+        return self._unary_unary(
+            "/shell.ShellService/CreateShellInExistingContainer",
+            CreateShellInExistingContainerRequest,
+            CreateShellInExistingContainerResponse,
+        )(create_shell_in_existing_container_request)

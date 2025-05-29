@@ -284,6 +284,7 @@ message GetOrCreateStubRequest {
   repeated uint32 ports = 31;
   repeated string env = 32;
   string app_name = 33;
+  types.PricingPolicy pricing = 34;
 }
 
 message GetOrCreateStubResponse {

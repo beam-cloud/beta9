@@ -3,7 +3,10 @@ package endpoint
 import (
 	"context"
 	"fmt"
+	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
@@ -15,17 +18,34 @@ type EndpointTask struct {
 
 func (t *EndpointTask) Execute(ctx context.Context, options ...interface{}) error {
 	var err error = nil
+
 	echoCtx := options[0].(echo.Context)
+	authInfo := options[1].(*auth.AuthInfo)
 
 	instance, err := t.es.getOrCreateEndpointInstance(ctx, t.msg.StubId)
 	if err != nil {
 		return err
 	}
 
+	var externalWorkspaceId *uint
+	if instance.StubConfig.Pricing != nil {
+		abstractions.TrackTaskCount(instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
+
+		if instance.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+			externalWorkspaceId = &authInfo.Workspace.Id
+		}
+
+		start := time.Now()
+		defer func() {
+			abstractions.TrackTaskCost(time.Since(start), instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
+		}()
+	}
+
 	_, err = t.es.backendRepo.CreateTask(context.Background(), &types.TaskParams{
-		TaskId:      t.msg.TaskId,
-		StubId:      instance.Stub.Id,
-		WorkspaceId: instance.Stub.WorkspaceId,
+		TaskId:              t.msg.TaskId,
+		StubId:              instance.Stub.Id,
+		WorkspaceId:         instance.Stub.WorkspaceId,
+		ExternalWorkspaceId: externalWorkspaceId,
 	})
 	if err != nil {
 		return err

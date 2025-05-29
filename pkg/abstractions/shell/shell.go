@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+
+	"github.com/rs/zerolog/log"
+
 	"strings"
 	"time"
 
@@ -35,11 +38,15 @@ const (
 	containerWaitTimeoutDurationS time.Duration = 5 * time.Minute
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
+	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
+	startupScript                 string        = `exec /usr/local/bin/dropbear -p $SHELL_PORT -R -E -F 2>> /etc/dropbear/logs.txt`
+	createUserScript              string        = `set -e; useradd -m -s /bin/bash $USERNAME 2>> /etc/dropbear/logs.txt; echo "$USERNAME:$PASSWORD" | chpasswd 2>> /etc/dropbear/logs.txt`
 )
 
 type ShellService interface {
 	pb.ShellServiceServer
-	CreateShell(ctx context.Context, in *pb.CreateShellRequest) (*pb.CreateShellResponse, error)
+	CreateStandaloneShell(ctx context.Context, in *pb.CreateStandaloneShellRequest) (*pb.CreateStandaloneShellResponse, error)
+	CreateShellInExistingContainer(ctx context.Context, in *pb.CreateShellInExistingContainerRequest) (*pb.CreateShellInExistingContainerResponse, error)
 }
 
 type SSHShellService struct {
@@ -141,12 +148,133 @@ func (ss *SSHShellService) handleTTLEvents() {
 	}
 }
 
-func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRequest) (*pb.CreateShellResponse, error) {
+func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, containerId string) bool {
+	addressMap, err := ss.containerRepo.GetContainerAddressMap(containerId)
+	if err != nil {
+		return false
+	}
+
+	addr, ok := addressMap[types.WorkerShellPort]
+	if !ok {
+		return false
+	}
+
+	conn, err := network.ConnectToHost(ctx, addr, time.Second*30, ss.tailscale, ss.config.Tailscale)
+	if err != nil {
+		return false
+	}
+
+	// Set read timeout so it doesn't hang forever
+	conn.SetReadDeadline(time.Now().Add(sshBannerTimeoutDurationS))
+
+	// Read SSH banner line by line
+	// This check partially implements RFC 4253 Section 4.2 of the SSH protocol handshake
+	buf := make([]byte, 256)
+	for {
+		// Clear buffer
+		for i := range buf {
+			buf[i] = 0
+		}
+
+		// Read one line
+		n, err := conn.Read(buf)
+		if err != nil {
+			return false
+		}
+
+		// Convert \r to \n if present
+		line := string(buf[:n])
+		line = strings.ReplaceAll(line, "\r", "\n")
+
+		// Check if this line contains the SSH banner
+		if strings.HasPrefix(line, "SSH-") {
+			return true
+		}
+
+		// If we've read enough lines, give up
+		if n == 0 {
+			return false
+		}
+	}
+}
+
+func (ss *SSHShellService) getOrCreateSSHUser(ctx context.Context, containerId string, client *common.RunCClient) (string, string, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	// remove dashes from the token external id
+	username := strings.Join(strings.Split(authInfo.Token.ExternalId, "-"), "")
+	password := authInfo.Token.Key
+
+	_, err := client.Exec(containerId, "id $USERNAME && exit 0 ;"+createUserScript, []string{fmt.Sprintf("USERNAME=%s", username), fmt.Sprintf("PASSWORD=%s", password)})
+	if err != nil {
+		return "", "", err
+	}
+
+	return username, password, nil
+}
+
+func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, in *pb.CreateShellInExistingContainerRequest) (*pb.CreateShellInExistingContainerResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	containerId := in.ContainerId
+
+	containerAddr, err := ss.containerRepo.GetWorkerAddress(ctx, containerId)
+	if err != nil {
+		return &pb.CreateShellInExistingContainerResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Failed to get container address: %s", err),
+		}, nil
+	}
+
+	conn, err := network.ConnectToHost(ctx, containerAddr, time.Second*30, ss.tailscale, ss.config.Tailscale)
+	if err != nil {
+		return &pb.CreateShellInExistingContainerResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Failed to connect to container: %s", err),
+		}, nil
+	}
+
+	runcClient, err := common.NewRunCClient(containerAddr, authInfo.Token.Key, conn)
+	if err != nil {
+		return &pb.CreateShellInExistingContainerResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Failed to create runc client: %s", err),
+		}, nil
+	}
+
+	ok := ss.checkForExistingSSHServer(ctx, containerAddr)
+	if !ok {
+		go func() {
+			// This only dies if the container is stopped
+			_, err = runcClient.Exec(containerId, startupScript, []string{
+				fmt.Sprintf("SHELL_PORT=%d", types.WorkerShellPort),
+			})
+			if err != nil {
+				log.Error().Msgf("Failed to execute startup script: %v", err)
+			}
+		}()
+	}
+
+	username, password, err := ss.getOrCreateSSHUser(ctx, containerId, runcClient)
+	if err != nil {
+		return &pb.CreateShellInExistingContainerResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Failed to create new SSH user: %s", err),
+		}, nil
+	}
+
+	return &pb.CreateShellInExistingContainerResponse{
+		Ok:       true,
+		Username: username,
+		Password: password,
+	}, nil
+}
+
+func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.CreateStandaloneShellRequest) (*pb.CreateStandaloneShellResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	stub, err := ss.backendRepo.GetStubByExternalId(ctx, in.StubId)
 	if err != nil {
-		return &pb.CreateShellResponse{
+		return &pb.CreateStandaloneShellResponse{
 			Ok: false,
 		}, nil
 	}
@@ -156,7 +284,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
 	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
 	if err != nil {
-		return &pb.CreateShellResponse{
+		return &pb.CreateStandaloneShellResponse{
 			Ok: false,
 		}, nil
 	}
@@ -180,7 +308,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		stub.ExternalId,
 	)
 	if err != nil {
-		return &pb.CreateShellResponse{
+		return &pb.CreateStandaloneShellResponse{
 			Ok: false,
 		}, nil
 	}
@@ -190,15 +318,21 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		stubConfig,
 	)
 	if err != nil {
-		return &pb.CreateShellResponse{
+		return &pb.CreateStandaloneShellResponse{
 			Ok: false,
 		}, nil
 	}
+
+	username := strings.Join(strings.Split(authInfo.Token.ExternalId, "-"), "")
+	password := authInfo.Token.Key
 
 	env := []string{
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
 		fmt.Sprintf("BETA9_TOKEN=%s", authInfo.Token.Key),
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
+		fmt.Sprintf("USERNAME=%s", username),
+		fmt.Sprintf("PASSWORD=%s", password),
+		fmt.Sprintf("SHELL_PORT=%d", types.WorkerShellPort),
 	}
 
 	env = append(secrets, env...)
@@ -213,32 +347,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		gpuCount = 1
 	}
 
-	token, err := generateToken(16)
-	if err != nil {
-		return &pb.CreateShellResponse{
-			Ok: false,
-		}, nil
-	}
-
-	startupCommand := fmt.Sprintf(`
-    set -e;
-    USERNAME='root';
-    TOKEN='%s';
-    echo "$USERNAME:$TOKEN" | chpasswd;
-    echo "if [ -f /root/.bashrc ]; then . /root/.bashrc; fi" >> "/root/.profile";
-    echo "cd /mnt/code" >> "/root/.profile";
-    echo "export TERM=xterm-256color" >> "/root/.bashrc";
-    echo "alias ls='ls --color=auto'" >> "/root/.bashrc";
-	echo "alias ll='ls -lart --color=auto'" >> "/root/.bashrc";
-    sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config;
-    sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config;
-    sed -i 's/^#PubkeyAuthentication.*/PubkeyAuthentication no/' /etc/ssh/sshd_config;
-    echo "AllowUsers $USERNAME" >> /etc/ssh/sshd_config;
-    echo "PermitUserEnvironment yes" >> /etc/ssh/sshd_config;
-    printenv > /etc/environment;
-    exec /usr/sbin/sshd -D -p 8001
-    `, token)
-
+	startupCommand := fmt.Sprintf("%s && %s", createUserScript, startupScript)
 	entryPoint := []string{
 		"/bin/bash",
 		"-c",
@@ -247,7 +356,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 
 	err = ss.rdb.Set(ctx, Keys.shellContainerTTL(containerId), "1", containerWaitTimeoutDurationS).Err()
 	if err != nil {
-		return &pb.CreateShellResponse{
+		return &pb.CreateStandaloneShellResponse{
 			Ok:     false,
 			ErrMsg: "Failed to set shell container ttl",
 		}, nil
@@ -270,7 +379,7 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 		Stub:        *stub,
 	})
 	if err != nil {
-		return &pb.CreateShellResponse{
+		return &pb.CreateStandaloneShellResponse{
 			Ok:     false,
 			ErrMsg: "Failed to run shell container",
 		}, nil
@@ -284,16 +393,17 @@ func (ss *SSHShellService) CreateShell(ctx context.Context, in *pb.CreateShellRe
 			Reason:      types.StopContainerReasonTtl,
 		})
 
-		return &pb.CreateShellResponse{
+		return &pb.CreateStandaloneShellResponse{
 			Ok:     false,
 			ErrMsg: "Failed to wait for shell container",
 		}, nil
 	}
 
-	return &pb.CreateShellResponse{
+	return &pb.CreateStandaloneShellResponse{
 		Ok:          true,
 		ContainerId: containerId,
-		Token:       token,
+		Username:    username,
+		Password:    password,
 	}, nil
 }
 

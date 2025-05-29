@@ -17,6 +17,7 @@ const (
 	WorkerContainerVolumePath      string        = "/volumes"
 	WorkerDurationEmissionInterval time.Duration = 30 * time.Second
 	WorkerKeepAliveInterval        time.Duration = 15 * time.Second
+	WorkerShellPort                int32         = 2222
 )
 
 const (

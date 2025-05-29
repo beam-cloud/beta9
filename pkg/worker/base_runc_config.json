@@ -162,7 +162,7 @@
 			]
 		},
 		{
-			"destination": "/usr/local/bin/uv",
+			"destination": "/usr/local/bin/uv-b9",
 			"type": "bind",
 			"source": "/usr/local/bin/uv",
 			"options": [
@@ -171,6 +171,30 @@
 				"rprivate",
 				"nosuid",
 				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/bin/dropbear",
+			"type": "bind",
+			"source": "/usr/local/bin/dropbear",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/etc/dropbear",
+			"type": "tmpfs",
+			"source": "tmpfs",
+			"options": [
+				"nosuid",
+				"nodev",
+				"noexec",
+				"mode=0755",
+				"size=65536k"
 			]
 		},
 		{

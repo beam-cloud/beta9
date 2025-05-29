@@ -26,7 +26,14 @@ from ..clients.endpoint import (
     StartEndpointServeResponse,
 )
 from ..env import is_local
-from ..type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler, TaskPolicy
+from ..type import (
+    Autoscaler,
+    GpuType,
+    GpuTypeAlias,
+    PricingPolicy,
+    QueueDepthAutoscaler,
+    TaskPolicy,
+)
 from .mixins import DeployableMixin
 
 
@@ -139,6 +146,7 @@ class Endpoint(RunnerAbstraction):
         callback_url: Optional[str] = None,
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
+        pricing: Optional[PricingPolicy] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -164,6 +172,7 @@ class Endpoint(RunnerAbstraction):
             concurrent_requests=self.concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
             app=app,
+            pricing=pricing,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None
@@ -299,6 +308,7 @@ class ASGI(Endpoint):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
+        pricing: Optional[PricingPolicy] = None,
     ):
         self.concurrent_requests = concurrent_requests
         super().__init__(
@@ -322,6 +332,7 @@ class ASGI(Endpoint):
             callback_url=callback_url,
             checkpoint_enabled=checkpoint_enabled,
             app=app,
+            pricing=pricing,
         )
 
         self.is_asgi = True
@@ -435,6 +446,7 @@ class RealtimeASGI(ASGI):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         callback_url: Optional[str] = None,
         checkpoint_enabled: bool = False,
+        pricing: Optional[PricingPolicy] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -457,6 +469,7 @@ class RealtimeASGI(ASGI):
             callback_url=callback_url,
             concurrent_requests=concurrent_requests,
             checkpoint_enabled=checkpoint_enabled,
+            pricing=pricing,
         )
         self.is_websocket = True
 
