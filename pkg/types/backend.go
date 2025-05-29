@@ -313,9 +313,9 @@ type Task struct {
 type TaskWithRelated struct {
 	Task
 	Deployment struct {
-		ExternalId *string `db:"external_id" json:"external_id"`
-		Name       *string `db:"name" json:"name"`
-		Version    *uint   `db:"version" json:"version"`
+		ExternalId *string `db:"external_id" json:"external_id" serializer:"id"`
+		Name       *string `db:"name" json:"name" serializer:"name"`
+		Version    *uint   `db:"version" json:"version" serializer:"version"`
 	} `db:"deployment" json:"deployment" serializer:"deployment"`
 	Outputs   []TaskOutput `json:"outputs" serializer:"outputs"`
 	Stats     TaskStats    `json:"stats" serializer:"stats"`
