@@ -196,19 +196,12 @@ func (tq *RedisTaskQueue) put(ctx context.Context, authInfo *auth.AuthInfo, stub
 	task, err := tq.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorTaskQueue), &auth.AuthInfo{
 		Workspace: instance.Workspace,
 		Token:     instance.Token,
-	}, stubId, payload, policy)
+	}, stubId, payload, policy, authInfo)
 	if err != nil {
 		return "", err
 	}
 
 	meta := task.Metadata()
-
-	// If the task is being executed by a different workspace, we need to track who invoked the task
-	if instance.StubConfig.Pricing != nil && instance.Workspace.ExternalId != authInfo.Workspace.ExternalId {
-		abstractions.TrackTaskCount(instance.AutoscaledInstance, meta.TaskId, authInfo.Workspace.ExternalId)
-		tq.rdb.SetEx(ctx, Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, stubId, meta.TaskId), authInfo.Workspace.ExternalId, time.Duration(instance.StubConfig.TaskPolicy.Timeout)*time.Second)
-	}
-
 	return meta.TaskId, nil
 }
 

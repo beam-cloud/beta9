@@ -2,7 +2,10 @@ package taskqueue
 
 import (
 	"context"
+	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -12,15 +15,25 @@ type TaskQueueTask struct {
 }
 
 func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) error {
+	authInfo := options[0].(*auth.AuthInfo)
+
 	instance, err := t.tq.getOrCreateQueueInstance(t.msg.StubId)
 	if err != nil {
 		return err
 	}
 
+	var externalWorkspaceId *uint
+	if instance.StubConfig.Pricing != nil && instance.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		abstractions.TrackTaskCount(instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
+		externalWorkspaceId = &authInfo.Workspace.Id
+		t.tq.rdb.SetEx(ctx, Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, instance.Stub.ExternalId, t.msg.TaskId), authInfo.Workspace.ExternalId, time.Duration(instance.StubConfig.TaskPolicy.Timeout)*time.Second)
+	}
+
 	_, err = t.tq.backendRepo.CreateTask(ctx, &types.TaskParams{
-		TaskId:      t.msg.TaskId,
-		StubId:      instance.Stub.Id,
-		WorkspaceId: instance.Stub.WorkspaceId,
+		TaskId:              t.msg.TaskId,
+		StubId:              instance.Stub.Id,
+		WorkspaceId:         instance.Stub.WorkspaceId,
+		ExternalWorkspaceId: externalWorkspaceId,
 	})
 	if err != nil {
 		return err

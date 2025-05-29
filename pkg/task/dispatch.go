@@ -63,13 +63,13 @@ func (d *Dispatcher) Register(executor string, taskFactory func(ctx context.Cont
 	d.executors.Set(executor, taskFactory)
 }
 
-func (d *Dispatcher) SendAndExecute(ctx context.Context, executor string, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
+func (d *Dispatcher) SendAndExecute(ctx context.Context, executor string, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload, policy types.TaskPolicy, options ...interface{}) (types.TaskInterface, error) {
 	task, err := d.Send(ctx, executor, authInfo, stubId, payload, policy)
 	if err != nil {
 		return nil, err
 	}
 
-	return task, task.Execute(ctx)
+	return task, task.Execute(ctx, options...)
 }
 
 func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload, policy types.TaskPolicy) (types.TaskInterface, error) {
