@@ -505,14 +505,14 @@ func (r *PostgresBackendRepository) CreateTask(ctx context.Context, params *type
 	}
 
 	query := `
-    INSERT INTO task (external_id, container_id, workspace_id, stub_id)
-    VALUES ($1, $2, $3, $4)
-    RETURNING id, external_id, status, container_id, workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
+    INSERT INTO task (external_id, container_id, workspace_id, external_workspace_id, stub_id)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING id, external_id, status, container_id, workspace_id, external_workspace_id, stub_id, started_at, ended_at, created_at, updated_at;
     `
 
 	var newTask types.Task
 
-	if err := r.client.GetContext(ctx, &newTask, query, params.TaskId, params.ContainerId, params.WorkspaceId, params.StubId); err != nil {
+	if err := r.client.GetContext(ctx, &newTask, query, params.TaskId, params.ContainerId, params.WorkspaceId, params.ExternalWorkspaceId, params.StubId); err != nil {
 		return &types.Task{}, err
 	}
 
@@ -633,6 +633,10 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 	// Apply filters
 	if filters.WorkspaceID > 0 {
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
+	}
+
+	if filters.ExternalWorkspaceID > 0 {
+		qb = qb.Where(squirrel.Eq{"t.external_workspace_id": filters.ExternalWorkspaceID})
 	}
 
 	if len(filters.StubIds) > 0 {

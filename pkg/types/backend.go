@@ -288,23 +288,25 @@ const (
 )
 
 type TaskParams struct {
-	TaskId      string
-	ContainerId string
-	StubId      uint
-	WorkspaceId uint
+	TaskId              string
+	ContainerId         string
+	StubId              uint
+	WorkspaceId         uint
+	ExternalWorkspaceId *uint
 }
 
 type Task struct {
-	Id          uint       `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
-	ExternalId  string     `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
-	Status      TaskStatus `db:"status" json:"status,omitempty" serializer:"status"`
-	ContainerId string     `db:"container_id" json:"container_id,omitempty" serializer:"container_id"`
-	StartedAt   NullTime   `db:"started_at" json:"started_at,omitempty" serializer:"started_at"`
-	EndedAt     NullTime   `db:"ended_at" json:"ended_at,omitempty" serializer:"ended_at"`
-	WorkspaceId uint       `db:"workspace_id" json:"workspace_id,omitempty"` // Foreign key to Workspace
-	StubId      uint       `db:"stub_id" json:"stub_id,omitempty"`           // Foreign key to Stub
-	CreatedAt   Time       `db:"created_at" json:"created_at,omitempty" serializer:"created_at"`
-	UpdatedAt   Time       `db:"updated_at" json:"updated_at,omitempty" serializer:"updated_at"`
+	Id                  uint       `db:"id" json:"id,omitempty" serializer:"id,source:external_id"`
+	ExternalId          string     `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
+	Status              TaskStatus `db:"status" json:"status,omitempty" serializer:"status"`
+	ContainerId         string     `db:"container_id" json:"container_id,omitempty" serializer:"container_id"`
+	StartedAt           NullTime   `db:"started_at" json:"started_at,omitempty" serializer:"started_at"`
+	EndedAt             NullTime   `db:"ended_at" json:"ended_at,omitempty" serializer:"ended_at"`
+	WorkspaceId         uint       `db:"workspace_id" json:"workspace_id,omitempty"`                   // Foreign key to Workspace
+	ExternalWorkspaceId *uint      `db:"external_workspace_id" json:"external_workspace_id,omitempty"` // Foreign key to Workspace
+	StubId              uint       `db:"stub_id" json:"stub_id,omitempty"`                             // Foreign key to Stub
+	CreatedAt           Time       `db:"created_at" json:"created_at,omitempty" serializer:"created_at"`
+	UpdatedAt           Time       `db:"updated_at" json:"updated_at,omitempty" serializer:"updated_at"`
 }
 
 type TaskWithRelated struct {
