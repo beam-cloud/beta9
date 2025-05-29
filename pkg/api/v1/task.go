@@ -50,6 +50,7 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
 	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
 	g.GET("/metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
+	g.GET("/admin", auth.WithClusterAdminAuth(group.ListAnyTasksPaginated))
 
 	return group
 }
@@ -102,6 +103,35 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 			if !skipDetails {
 				g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, &tasks.Data[i])
 				g.addStatsToTask(ctx.Request().Context(), workspace.Name, &tasks.Data[i])
+			}
+		}
+
+		serializedTasks, err := serializer.Serialize(tasks)
+		if err != nil {
+			return HTTPInternalServerError("Failed to serialize response")
+		}
+
+		return ctx.JSON(http.StatusOK, serializedTasks)
+	}
+}
+
+func (g *TaskGroup) ListAnyTasksPaginated(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	var filters types.TaskFilter
+
+	if err := ctx.Bind(&filters); err != nil {
+		return HTTPBadRequest("Failed to decode query parameters")
+	}
+
+	skipDetails, _ := strconv.ParseBool(ctx.QueryParam("skip_details"))
+	if tasks, err := g.backendRepo.ListTasksWithRelatedPaginated(ctx.Request().Context(), filters); err != nil {
+		return HTTPInternalServerError("Failed to list tasks")
+	} else {
+
+		for i := range tasks.Data {
+			tasks.Data[i].Stub.SanitizeConfig()
+			if !skipDetails {
+				g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, &tasks.Data[i])
 			}
 		}
 
