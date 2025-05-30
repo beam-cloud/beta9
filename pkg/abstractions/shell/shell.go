@@ -201,9 +201,7 @@ func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, contai
 func (ss *SSHShellService) getOrCreateSSHUser(ctx context.Context, containerId string, client *common.RunCClient) (string, string, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	// remove dashes from the token external id
-	username := strings.Join(strings.Split(authInfo.Token.ExternalId, "-"), "")
-	password := authInfo.Token.Key
+	username, password := ss.generateUsernamePassword(*authInfo.Token)
 
 	_, err := client.Exec(containerId, "id $USERNAME && exit 0 ;"+createUserScript, []string{fmt.Sprintf("USERNAME=%s", username), fmt.Sprintf("PASSWORD=%s", password)})
 	if err != nil {
@@ -354,8 +352,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		}, nil
 	}
 
-	username := strings.Join(strings.Split(authInfo.Token.ExternalId, "-"), "")
-	password := authInfo.Token.Key
+	username, password := ss.generateUsernamePassword(*authInfo.Token)
 
 	env := []string{
 		fmt.Sprintf("HANDLER=%s", stubConfig.Handler),
@@ -496,6 +493,10 @@ func generateToken(length int) (string, error) {
 
 	token := base64.URLEncoding.EncodeToString(randomBytes)
 	return token[:length], nil
+}
+
+func (ss *SSHShellService) generateUsernamePassword(token types.Token) (string, string) {
+	return strings.Join(strings.Split(token.ExternalId, "-"), "")[:6], token.Key
 }
 
 // Redis keys
