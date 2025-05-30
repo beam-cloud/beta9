@@ -210,6 +210,8 @@ class VLLM(ASGI):
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(python_version="python3.11"),
+        vllm_version: str = "0.8.4",
+        huggingface_hub_version: str = "0.30.2",
         workers: int = 1,
         concurrent_requests: int = 1,
         keep_warm_seconds: int = 60,
@@ -227,7 +229,7 @@ class VLLM(ASGI):
             volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
 
         image = image.add_python_packages(
-            ["fastapi", "numpy", "vllm==0.8.4", "huggingface_hub==0.30.2"]
+            ["fastapi", "numpy", f"vllm=={vllm_version}", f"huggingface_hub=={huggingface_hub_version}"]
         )
 
         super().__init__(
