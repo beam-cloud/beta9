@@ -89,37 +89,18 @@ func (b *Build) initializeBuildConfiguration() error {
 //   - Python packages and shell commands that are passed as parameters to the image in the sdk
 //   - Build steps that are chained to the image in the sdk
 func (b *Build) prepareCommands() error {
-	if b.micromamba {
-		b.commands = append(b.commands, "micromamba config set use_lockfiles False")
-	} else if b.opts.IgnorePython && len(b.opts.PythonPackages) == 0 {
-		b.opts.PythonVersion = ""
-	} else if err := b.setupDefaultPythonInstall(); err != nil {
+	if err := b.setupPythonEnv(); err != nil {
 		return err
 	}
 
-	virtualEnv := false
-	// Check whether the python version belongs to a virtual environment
-	if b.opts.PythonVersion != "" {
-		checkVenvCmd := fmt.Sprintf(`%s -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, b.opts.PythonVersion)
-		if resp, err := b.runcClient.Exec(b.containerID, checkVenvCmd, buildEnv); err == nil && resp.Ok {
-			virtualEnv = true
-
-			// Modify the pyenv.cfg to use site-packages
-			// Find the python interpreter path and extract the venv directory
-			findVenvCmd := fmt.Sprintf(`%s -c "import sys; import os; venv_dir = os.path.dirname(os.path.dirname(sys.executable)); print(venv_dir)"`, b.opts.PythonVersion)
-			updatePyvenvCmd := fmt.Sprintf(`%s && echo "include-system-site-packages = true" >> $(dirname $(dirname $(%s -c "import sys; print(sys.executable)")))/pyvenv.cfg`, findVenvCmd, b.opts.PythonVersion)
-			b.commands = append(b.commands, updatePyvenvCmd)
-		}
-
-		// Conda type environments do not follow the same prefix != base_prefix convention
-		if b.micromamba {
-			virtualEnv = true
-		}
+	isVirtualEnv := b.checkForVirtualEnv()
+	if isVirtualEnv {
+		b.commands = append(b.commands, updatePyvenvCmd(b.opts.PythonVersion))
 	}
 
 	// Add pip install command from image's python package list
 	if len(b.opts.PythonPackages) > 0 && b.opts.PythonVersion != "" {
-		pipInstallCmd := generatePipInstallCommand(b.opts.PythonPackages, b.opts.PythonVersion, virtualEnv)
+		pipInstallCmd := generatePipInstallCommand(b.opts.PythonPackages, b.opts.PythonVersion, isVirtualEnv)
 		b.commands = append(b.commands, pipInstallCmd)
 	}
 
@@ -127,13 +108,42 @@ func (b *Build) prepareCommands() error {
 	b.commands = append(b.commands, b.opts.Commands...)
 
 	// Add any additional build steps that were chained to the image
-	b.commands = append(b.commands, parseBuildSteps(b.opts.BuildSteps, b.opts.PythonVersion, virtualEnv)...)
+	b.commands = append(b.commands, parseBuildSteps(b.opts.BuildSteps, b.opts.PythonVersion, isVirtualEnv)...)
 
 	return nil
 }
 
-// setupDefaultPythonInstall ensures that if a python version is requested, it is installed.
-func (b *Build) setupDefaultPythonInstall() error {
+func (b *Build) checkForVirtualEnv() bool {
+	if b.opts.PythonVersion == "" {
+		return false
+	}
+
+	// Conda type environments do not follow the same prefix != base_prefix convention
+	if b.micromamba {
+		return true
+	}
+
+	// Check whether the python version belongs to a virtual environment
+	checkVenvCmd := fmt.Sprintf(`%s -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, b.opts.PythonVersion)
+	if resp, err := b.runcClient.Exec(b.containerID, checkVenvCmd, buildEnv); err == nil && resp.Ok {
+		return true
+	}
+
+	return false
+}
+
+// setupPythonEnv ensures that if a python version is requested, it is installed.
+func (b *Build) setupPythonEnv() error {
+	if b.micromamba {
+		b.commands = append(b.commands, "micromamba config set use_lockfiles False")
+		return nil
+	}
+
+	if b.opts.IgnorePython && len(b.opts.PythonPackages) == 0 {
+		b.opts.PythonVersion = ""
+		return nil
+	}
+
 	if b.opts.PythonVersion == types.Python3.String() {
 		// The provided python version is python3 (default). If "python3 --version" is successful then there is no need to install
 		// the current default python version.
@@ -536,4 +546,12 @@ func getPythonInstallCommand(config types.PythonStandaloneConfig, pythonVersion 
 	}
 
 	return output.String(), nil
+}
+
+// updatePyvenvCmd modifies the pyvenv.cfg to include system site packages so that the mounted beam and beta9
+// packages are available.
+func updatePyvenvCmd(pythonVersion string) string {
+	findVenvCmd := fmt.Sprintf(`%s -c "import sys; import os; venv_dir = os.path.dirname(os.path.dirname(sys.executable)); print(venv_dir)"`, pythonVersion)
+	updatePyvenvCmd := fmt.Sprintf(`%s && echo "include-system-site-packages = true" >> $(dirname $(dirname $(%s -c "import sys; print(sys.executable)")))/pyvenv.cfg`, findVenvCmd, pythonVersion)
+	return updatePyvenvCmd
 }
