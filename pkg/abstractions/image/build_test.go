@@ -193,9 +193,6 @@ func TestBuild_prepareSteps_Micromamba(t *testing.T) {
 	}
 	build, mockRuncClient, _ := setupTestBuild(t, opts)
 
-	// Mock virtual environment check for micromamba - this will fail but micromamba is always treated as venv
-	mockRuncClient.On("Exec", build.containerID, `micromamba-1.5 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(nil, errors.New("not found"))
-
 	err := build.prepareCommands()
 	assert.NoError(t, err)
 

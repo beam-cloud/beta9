@@ -94,7 +94,7 @@ func (b *Build) prepareCommands() error {
 	}
 
 	isVirtualEnv := b.checkForVirtualEnv()
-	if isVirtualEnv {
+	if isVirtualEnv && !b.micromamba {
 		b.commands = append(b.commands, updatePyvenvCmd(b.opts.PythonVersion))
 	}
 
