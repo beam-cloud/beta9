@@ -32,7 +32,7 @@ const (
 	dockerHubRegistry string = "docker.io"
 )
 
-var buildEnv []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_SYSTEM_PYTHON=true", "UV_COMPILE_BYTECODE=true"}
+var buildEnv []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_COMPILE_BYTECODE=true"}
 
 type Builder struct {
 	config        types.AppConfig

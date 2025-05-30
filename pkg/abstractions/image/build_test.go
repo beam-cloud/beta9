@@ -62,17 +62,48 @@ func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 	}
 	build, mockRuncClient, _ := setupTestBuild(t, opts)
 
-	// Mock python version check - python exists
+	// Mock python version check - python exists (setupDefaultPythonInstall)
 	mockRuncClient.On("Exec", build.containerID, "python3.10 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+	// Mock virtual environment check - python exists but NOT in venv
+	mockRuncClient.On("Exec", build.containerID, `python3.10 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(&pb.RunCExecResponse{Ok: false}, nil)
 
 	err := build.prepareCommands()
 	assert.NoError(t, err)
 
+	// When NOT in venv, expect pip install with --system
 	expectedCommands := []string{
-		"uv-b9 pip install \"requests\" \"numpy\"",
+		"uv-b9 pip install --system \"requests\" \"numpy\"",
 		"echo hello",
 	}
 	assert.Equal(t, expectedCommands, build.commands)
+	assert.NotEmpty(t, build.imageID)
+	mockRuncClient.AssertExpectations(t)
+}
+
+func TestBuild_prepareSteps_PythonExistsInVenv(t *testing.T) {
+	opts := &BuildOpts{
+		BaseImageRegistry: "docker.io",
+		BaseImageName:     "library/ubuntu",
+		BaseImageTag:      "latest",
+		PythonVersion:     "python3.10",
+		PythonPackages:    []string{"requests", "numpy"},
+		BuildSteps:        []BuildStep{{Command: "echo hello", Type: shellCommandType}},
+	}
+	build, mockRuncClient, _ := setupTestBuild(t, opts)
+
+	// Mock python version check - python exists (setupDefaultPythonInstall)
+	mockRuncClient.On("Exec", build.containerID, "python3.10 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+	// Mock virtual environment check - python exists and IS in venv
+	mockRuncClient.On("Exec", build.containerID, `python3.10 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+
+	err := build.prepareCommands()
+	assert.NoError(t, err)
+
+	// When in venv, expect the pyvenv.cfg update command and pip install without --system
+	assert.Len(t, build.commands, 3)
+	assert.Contains(t, build.commands[0], "include-system-site-packages = true")
+	assert.Equal(t, "uv-b9 pip install \"requests\" \"numpy\"", build.commands[1])
+	assert.Equal(t, "echo hello", build.commands[2])
 	assert.NotEmpty(t, build.imageID)
 	mockRuncClient.AssertExpectations(t)
 }
@@ -87,16 +118,18 @@ func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
 	}
 	build, mockRuncClient, outputChan := setupTestBuild(t, opts)
 
-	// Mock python version check - specific version doesn't exist
+	// Mock python version check - specific version doesn't exist (setupDefaultPythonInstall)
 	mockRuncClient.On("Exec", build.containerID, "python3.11 --version", buildEnv).Return(nil, errors.New("not found"))
 	// Mock general python3 check - it exists (so we show a warning)
 	mockRuncClient.On("Exec", build.containerID, "python3 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+	// Mock virtual environment check - after python install, check if it's in venv (it won't be)
+	mockRuncClient.On("Exec", build.containerID, `python3.11 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(&pb.RunCExecResponse{Ok: false}, nil)
 
 	err := build.prepareCommands()
 	assert.NoError(t, err)
 
 	// Expect installation command based on PythonStandaloneConfig
-	expectedPipCmd := "uv-b9 pip install \"pandas\""
+	expectedPipCmd := "uv-b9 pip install --system \"pandas\""
 
 	// Installation command should contain arch, os, vendor derived from runtime and template
 	assert.Contains(t, build.commands[0], "installing python cpython-3.11.5+20230826")
@@ -165,10 +198,10 @@ func TestBuild_prepareSteps_Micromamba(t *testing.T) {
 
 	expectedCommands := []string{
 		"micromamba config set use_lockfiles False",
-		"micromamba-1.5 -m pip install -c \"conda-forge::numpy\" \"pytorch\"", // From PythonPackages
-		"micromamba install -y -n beta9 \"scipy\"",                            // From BuildSteps (mamba)
+		"uv-b9 pip install -c \"conda-forge::numpy\" \"pytorch\"", // From PythonPackages
+		"micromamba install -y -n beta9 \"scipy\"",                // From BuildSteps (mamba)
 		"echo done mamba",
-		"micromamba-1.5 -m pip install \"requests\" \"beautifulsoup4\"", // From BuildSteps (pip)
+		"uv-b9 pip install \"requests\" \"beautifulsoup4\"", // From BuildSteps (pip)
 	}
 
 	assert.Equal(t, expectedCommands, build.commands)
@@ -270,14 +303,14 @@ func Test_parseBuildSteps(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"uv-b9 pip install \"requests\" \"numpy\"", // Coalesced pip
+		"uv-b9 pip install --system \"requests\" \"numpy\"", // Coalesced pip
 		"echo 'installing libs'",
 		"micromamba install -y -n beta9 -c pytorch \"conda-forge::pandas\" \"scipy\"", // Coalesced mamba (flags don't split mamba)
 		"echo 'done'",
-		"uv-b9 pip install --no-deps flask", // Flagged line isn't quoted
-		"uv-b9 pip install \"gunicorn\"",    // Second pip group
+		"uv-b9 pip install --system --no-deps flask", // Flagged line isn't quoted
+		"uv-b9 pip install --system \"gunicorn\"",    // Second pip group
 	}
 
-	result := parseBuildSteps(steps, pythonVersion)
+	result := parseBuildSteps(steps, pythonVersion, false)
 	assert.Equal(t, expected, result)
 }
