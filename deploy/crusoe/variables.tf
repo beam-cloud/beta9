@@ -22,5 +22,5 @@ variable "instance_type" {
       ```
   EOF
   type        = string
-  default     = "a100-80gb.1x"
+  default     = "a100.1x"
 }
