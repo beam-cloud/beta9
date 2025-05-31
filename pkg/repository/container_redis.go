@@ -451,13 +451,13 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 
 		if totalGpuCount+int(request.GpuCount) > int(quota.GPULimit) {
 			return &types.ThrottledByConcurrencyLimitError{
-				Reason: "gpu quota exceeded",
+				Reason: "GPU quota exceeded. Please upgrade your plan for higher limit\n\nUpgrade here: https://platform.beam.cloud/settings/plans",
 			}
 		}
 
 		if totalCpu+int(request.Cpu) > int(quota.CPUMillicoreLimit) {
 			return &types.ThrottledByConcurrencyLimitError{
-				Reason: "cpu quota exceeded",
+				Reason: "CPU quota exceeded. Please upgrade your plan for higher limit\n\nUpgrade here: https://platform.beam.cloud/settings/plans",
 			}
 		}
 	}
