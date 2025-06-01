@@ -1,6 +1,7 @@
 package serializer
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -135,6 +136,18 @@ func serialize(v interface{}) interface{} {
 
 		val = val.Elem()
 		return serialize(val.Interface())
+	}
+
+	if typ == reflect.TypeOf(json.RawMessage{}) {
+		rawMsg := val.Interface().(json.RawMessage)
+		if len(rawMsg) == 0 {
+			return nil
+		}
+		var result interface{}
+		if err := json.Unmarshal(rawMsg, &result); err != nil {
+			return string(rawMsg)
+		}
+		return result
 	}
 
 	switch val.Kind() {

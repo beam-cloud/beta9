@@ -282,6 +282,7 @@ class TaskQueueWorker:
         try:
             return json.dumps(result).encode("utf-8")
         except Exception:
+            print(f"Warning - Error serializing task result: {traceback.format_exc()}")
             return None
 
     @with_runner_context
@@ -342,7 +343,6 @@ class TaskQueueWorker:
                         print(traceback.format_exc())
 
                         task_status = TaskStatus.Error
-
                         if retry_on_errors(handler.parent_abstraction.retry_for, e):
                             print(f"retry_for error caught: {e!r}")
                             caught_exception = e.__class__.__name__

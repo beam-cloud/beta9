@@ -405,6 +405,7 @@ func (tq *RedisTaskQueue) storeTaskResult(authInfo *auth.AuthInfo, t *types.Task
 		if err != nil {
 			return err
 		}
+
 	}
 
 	return nil

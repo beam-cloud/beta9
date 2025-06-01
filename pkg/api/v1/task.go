@@ -12,6 +12,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/output"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -53,9 +54,8 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 	g.GET("/:workspaceId/aggregate-by-time-window", auth.WithWorkspaceAuth(group.AggregateTasksByTimeWindow))
 	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
 	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
+	g.GET("/:workspaceId/:taskId/subscribe", auth.WithWorkspaceAuth(group.SubscribeTask))
 	g.GET("/metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
-	g.GET("/subscribe/:taskId", auth.WithWorkspaceAuth(group.Subscribe))
-	g.GET("/result/:taskId", auth.WithWorkspaceAuth(group.GetTaskResult))
 
 	return group
 }
@@ -84,37 +84,6 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
 	}
-}
-
-func (g *TaskGroup) GetTaskResult(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-
-	taskId := ctx.Param("taskId")
-	if taskId == "" {
-		return HTTPBadRequest("Missing task ID")
-	}
-
-	task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId)
-	if err != nil {
-		return HTTPInternalServerError("Failed to retrieve task")
-	}
-
-	if task == nil {
-		return HTTPNotFound()
-	}
-
-	// on task completion, store result in bucket automatically
-	// using task result url, we can look it up, download it, and return it as a response
-
-	if task.Workspace.Id != cc.AuthInfo.Workspace.Id && *task.ExternalWorkspaceId != cc.AuthInfo.Workspace.Id {
-		return HTTPNotFound()
-	}
-
-	if task.Status.IsCompleted() {
-		return ctx.JSON(http.StatusOK, task)
-	}
-
-	return ctx.JSON(http.StatusOK, task)
 }
 
 func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
@@ -151,7 +120,7 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	}
 }
 
-func (g *TaskGroup) Subscribe(ctx echo.Context) error {
+func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	taskId := ctx.Param("taskId")
@@ -200,6 +169,7 @@ func (g *TaskGroup) Subscribe(ctx echo.Context) error {
 
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+		g.addResultToTask(ctx.Request().Context(), task, cc.AuthInfo)
 
 		status := task.Status
 		if status != lastStatus {
@@ -257,8 +227,10 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 			return HTTPNotFound()
 		}
 		task.Stub.SanitizeConfig()
+
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+		g.addResultToTask(ctx.Request().Context(), task, cc.AuthInfo)
 
 		serializedTask, err := serializer.Serialize(task)
 		if err != nil {
@@ -296,6 +268,32 @@ func (g *TaskGroup) addStatsToTask(ctx context.Context, workspaceName string, ta
 		return err
 	}
 	task.Stats.ActiveContainers = uint32(len(activeContainers))
+
+	return nil
+}
+
+func (g *TaskGroup) addResultToTask(ctx context.Context, t *types.TaskWithRelated, authInfo *auth.AuthInfo) error {
+	if authInfo.Workspace.StorageAvailable() {
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		if err != nil {
+			return err
+		}
+
+		fullPath := task.GetTaskResultPath(t.ExternalId)
+		result, err := storageClient.Download(ctx, fullPath)
+		if err != nil {
+			return err
+		}
+
+		if len(result) > 0 {
+			err = json.Unmarshal(result, &t.Result)
+			if err != nil {
+				return err
+			}
+
+			log.Info().Str("task_id", t.ExternalId).Str("result", string(result)).Msg("task result")
+		}
+	}
 
 	return nil
 }
