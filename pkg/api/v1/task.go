@@ -290,8 +290,6 @@ func (g *TaskGroup) addResultToTask(ctx context.Context, t *types.TaskWithRelate
 			if err != nil {
 				return err
 			}
-
-			log.Info().Str("task_id", t.ExternalId).Str("result", string(result)).Msg("task result")
 		}
 	}
 

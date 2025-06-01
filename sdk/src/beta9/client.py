@@ -21,7 +21,6 @@ class Result:
             "Authorization": f"Bearer {self.__token}",
             "Content-Type": "application/json",
         }
-        print(headers)
         response = requests.get(self.url, headers=headers)
         return response.json()
 
@@ -49,8 +48,6 @@ class Client:
             self.workspace_id = response["external_id"]
         else:
             raise Exception("Failed to load workspace")
-
-        return None
 
     def _get_base_url(self):
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
