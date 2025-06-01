@@ -278,6 +278,12 @@ class TaskQueueWorker:
             # If we reached here, the stream ended with no errors;
             # so we should restart the monitoring stream
 
+    def _serialize_result(self, result: Any) -> bytes:
+        try:
+            return json.dumps(result).encode("utf-8")
+        except Exception:
+            return None
+
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
         self.worker_startup_event.set()
@@ -357,6 +363,7 @@ class TaskQueueWorker:
                                         container_id=config.container_id,
                                         container_hostname=config.container_hostname,
                                         keep_warm_seconds=config.keep_warm_seconds,
+                                        result=self._serialize_result(result) if result else None,
                                     )
                                 )
                             )

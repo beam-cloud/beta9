@@ -14,6 +14,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+func GetTaskResultPath(taskId string) string {
+	return fmt.Sprintf("task/%s/result.json", taskId)
+}
+
 func NewDispatcher(ctx context.Context, taskRepo repository.TaskRepository) (*Dispatcher, error) {
 	d := &Dispatcher{
 		taskRepo:  taskRepo,

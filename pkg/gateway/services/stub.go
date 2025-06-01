@@ -299,18 +299,43 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	}, nil
 }
 
+func (gws *GatewayService) hasStubAccess(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, config *types.StubConfigV1) (bool, error) {
+	if !config.Authorized {
+		return true, nil
+	}
+
+	if config.Pricing != nil {
+		return true, nil
+	}
+
+	if stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return false, nil
+	}
+
+	return true, nil
+}
+
 func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*pb.GetURLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	stub, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
-	if err != nil {
+	if err != nil || stub == nil {
 		return &pb.GetURLResponse{
 			Ok:     false,
-			ErrMsg: "Unable to get stub",
+			ErrMsg: "Invalid stub ID",
 		}, nil
 	}
 
-	if stub == nil || stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return &pb.GetURLResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get stub config",
+		}, nil
+	}
+
+	hasAccess, err := gws.hasStubAccess(ctx, authInfo, stub, stubConfig)
+	if err != nil || !hasAccess {
 		return &pb.GetURLResponse{
 			Ok:     false,
 			ErrMsg: "Invalid stub ID",

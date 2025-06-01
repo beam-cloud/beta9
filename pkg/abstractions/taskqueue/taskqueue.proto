@@ -52,6 +52,7 @@ message TaskQueueCompleteRequest {
   string container_id = 5;
   string container_hostname = 6;
   float keep_warm_seconds = 7;
+  bytes result = 8;
 }
 
 message TaskQueueCompleteResponse {

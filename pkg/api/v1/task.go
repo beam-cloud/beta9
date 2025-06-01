@@ -2,6 +2,7 @@ package apiv1
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -20,7 +21,10 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-var DefaultTaskOutputExpirationS uint32 = 3600
+var (
+	DefaultTaskOutputExpirationS  uint32 = 3600
+	DefaultTaskSubscribeIntervalS uint32 = 1
+)
 
 type TaskGroup struct {
 	routerGroup    *echo.Group
@@ -50,6 +54,8 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
 	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
 	g.GET("/metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
+	g.GET("/subscribe/:taskId", auth.WithWorkspaceAuth(group.Subscribe))
+	g.GET("/result/:taskId", auth.WithWorkspaceAuth(group.GetTaskResult))
 
 	return group
 }
@@ -78,6 +84,37 @@ func (g *TaskGroup) AggregateTasksByTimeWindow(ctx echo.Context) error {
 	} else {
 		return ctx.JSON(http.StatusOK, tasks)
 	}
+}
+
+func (g *TaskGroup) GetTaskResult(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	taskId := ctx.Param("taskId")
+	if taskId == "" {
+		return HTTPBadRequest("Missing task ID")
+	}
+
+	task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve task")
+	}
+
+	if task == nil {
+		return HTTPNotFound()
+	}
+
+	// on task completion, store result in bucket automatically
+	// using task result url, we can look it up, download it, and return it as a response
+
+	if task.Workspace.Id != cc.AuthInfo.Workspace.Id && *task.ExternalWorkspaceId != cc.AuthInfo.Workspace.Id {
+		return HTTPNotFound()
+	}
+
+	if task.Status.IsCompleted() {
+		return ctx.JSON(http.StatusOK, task)
+	}
+
+	return ctx.JSON(http.StatusOK, task)
 }
 
 func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
@@ -112,6 +149,87 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 
 		return ctx.JSON(http.StatusOK, serializedTasks)
 	}
+}
+
+func (g *TaskGroup) Subscribe(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	taskId := ctx.Param("taskId")
+	if taskId == "" {
+		return HTTPBadRequest("Missing task ID")
+	}
+
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId)
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
+	}
+
+	ctx.Response().Header().Set(echo.HeaderContentType, "text/event-stream")
+	ctx.Response().Header().Set(echo.HeaderCacheControl, "no-cache")
+	ctx.Response().Header().Set(echo.HeaderConnection, "keep-alive")
+	ctx.Response().WriteHeader(http.StatusOK)
+	flusher, ok := ctx.Response().Writer.(http.Flusher)
+	if !ok {
+		return HTTPInternalServerError("Streaming unsupported")
+	}
+
+	var lastStatus types.TaskStatus
+	for {
+		select {
+		case <-ctx.Request().Context().Done():
+			return nil
+		default:
+		}
+
+		var retrieveTaskFunc func(ctx context.Context, taskId string, workspace *types.Workspace) (*types.TaskWithRelated, error)
+		public, _ := strconv.ParseBool(ctx.QueryParam("public"))
+		if public {
+			retrieveTaskFunc = g.backendRepo.GetPublicTaskByWorkspace
+		} else {
+			retrieveTaskFunc = g.backendRepo.GetTaskByWorkspace
+		}
+
+		task, err := retrieveTaskFunc(ctx.Request().Context(), taskId, &workspace)
+		if err != nil {
+			return HTTPInternalServerError("Failed to retrieve task")
+		}
+		if task == nil {
+			return HTTPNotFound()
+		}
+		task.Stub.SanitizeConfig()
+
+		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
+		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+
+		status := task.Status
+		if status != lastStatus {
+			serializedTask, err := serializer.Serialize(task)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize task")
+			}
+			jsonBytes, err := json.Marshal(serializedTask)
+			if err != nil {
+				return HTTPInternalServerError("Failed to marshal task to JSON")
+			}
+
+			// Write SSE event
+			ctx.Response().Write([]byte("event: status\n"))
+			ctx.Response().Write([]byte("data: "))
+			ctx.Response().Write(jsonBytes)
+			ctx.Response().Write([]byte("\n\n"))
+			flusher.Flush()
+			lastStatus = status
+		}
+
+		// If task is completed, break
+		if task.Status.IsCompleted() {
+			break
+		}
+
+		time.Sleep(time.Duration(DefaultTaskSubscribeIntervalS) * time.Second)
+	}
+
+	return nil
 }
 
 func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {

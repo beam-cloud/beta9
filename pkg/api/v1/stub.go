@@ -41,6 +41,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, event
 	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))               // Allows workspace admins to get the URL of a stub
 	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL)) // Allows workspace admins to get the URL of a stub by deployment Id
 	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                         // Allows users to clone a public stub
+	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                     // Allows users to get the URL of a stub
 
 	return group
 }
@@ -133,6 +134,9 @@ func (g *StubGroup) RetrieveStub(ctx echo.Context) error {
 }
 
 func (g *StubGroup) GetURL(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	authInfo := cc.AuthInfo
+
 	filter := &types.StubGetURLFilter{}
 	if err := ctx.Bind(filter); err != nil {
 		return HTTPBadRequest("Failed to decode query parameters")
@@ -142,12 +146,29 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 		filter.URLType = g.config.GatewayService.InvokeURLType
 	}
 
+	// TODO: HACK FOR LOCAL DEV, remove before merging
+	filter.URLType = "path"
+
 	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), filter.StubId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to lookup stub")
 	}
 	if stub == nil {
 		return HTTPBadRequest("Invalid stub ID")
+	}
+
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return HTTPInternalServerError("Failed to decode stub config")
+	}
+
+	// Allow public stubs to be accessed by any workspace
+	workspaceId := stub.WorkspaceId
+	if stubConfig.Pricing != nil {
+		filter.WorkspaceId = stub.Workspace.ExternalId
+		workspaceId = stub.Workspace.Id
+	} else if stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return HTTPNotFound()
 	}
 
 	// Get URL for Serves
@@ -169,12 +190,7 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 		return HTTPBadRequest("Deployment ID is required")
 	}
 
-	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), filter.WorkspaceId)
-	if err != nil {
-		return HTTPInternalServerError("Failed to lookup workspace")
-	}
-
-	deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspace.Id, filter.DeploymentId)
+	deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspaceId, filter.DeploymentId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to lookup deployment")
 	}
