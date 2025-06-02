@@ -581,35 +581,6 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
 	return &taskWithRelated, nil
 }
 
-func (r *PostgresBackendRepository) GetPublicTaskByWorkspace(ctx context.Context, externalId string, externalWorkspace *types.Workspace) (*types.TaskWithRelated, error) {
-	var taskWithRelated types.TaskWithRelated
-	query := `
-	SELECT
-		w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.updated_at AS "workspace.updated_at", w.created_at AS "workspace.created_at", t.*,
-		s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", s.type AS "stub.type", s.created_at AS "stub.created_at", s.updated_at AS "stub.updated_at",
-		d.name AS "deployment.name", d.version AS "deployment.version", d.external_id AS "deployment.external_id"
-	FROM task t
-	JOIN workspace w ON t.external_workspace_id = w.id
-	JOIN stub s ON t.stub_id = s.id
-	LEFT JOIN deployment d ON d.stub_id = s.id
-	WHERE
-		t.external_id = $1
-		AND w.id = $2;
-    `
-	err := r.client.GetContext(ctx, &taskWithRelated, query, externalId, externalWorkspace.Id)
-	if err != nil {
-		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
-			return nil, nil
-		}
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	return &taskWithRelated, nil
-}
-
 func (r *PostgresBackendRepository) GetTaskByWorkspace(ctx context.Context, externalId string, workspace *types.Workspace) (*types.TaskWithRelated, error) {
 	var taskWithRelated types.TaskWithRelated
 	query := `
