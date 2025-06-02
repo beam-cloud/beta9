@@ -16,7 +16,7 @@ from ...config import ConfigContext
 from ...type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 
 DEFAULT_VLLM_CACHE_DIR = "./vllm_cache"
-
+DEFAULT_VLLM_CACHE_ROOT = "./vllm_cache_root"
 
 # vllm/engine/arg_utils.py:EngineArgs
 @dataclass
@@ -149,6 +149,7 @@ class VLLMArgs:
     disable_chunked_mm_input: bool = False
     data_parallel_size: int = 1
     compilation_config: Optional[Any] = None
+    vllm_cache_root: Optional[str] = DEFAULT_VLLM_CACHE_ROOT
 
 
 class VLLM(ASGI):
@@ -220,11 +221,13 @@ class VLLM(ASGI):
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
-        vllm_args: VLLMArgs = VLLMArgs(),
+        vllm_args: VLLMArgs = VLLMArgs()
     ):
         if vllm_args.download_dir == DEFAULT_VLLM_CACHE_DIR:
             # Add default vllm cache volume to preserve it if custom volumes are specified for chat templates
             volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
+        
+        volumes.append(Volume(name="vllm_cache_root", mount_path=vllm_args.vllm_cache_root))
 
         image = image.add_python_packages(
             ["fastapi", "numpy", "vllm==0.8.4", "huggingface_hub==0.30.2"]
@@ -288,6 +291,9 @@ class VLLM(ASGI):
         from vllm.engine.async_llm_engine import AsyncLLMEngine
         from vllm.entrypoints.openai.tool_parsers import ToolParserManager
         from vllm.usage.usage_lib import UsageContext
+
+        if self.engine_args.vllm_cache_root:
+            os.environ["VLLM_CACHE_ROOT"] = self.engine_args.vllm_cache_root
 
         if self.chat_template_url:
             import requests
