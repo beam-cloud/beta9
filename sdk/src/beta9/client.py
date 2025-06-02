@@ -170,7 +170,7 @@ class Deployment:
 
         return None
 
-    def subscribe(self, *, id: str, args: dict = {}):
+    def subscribe(self, *, args: dict = {}):
         """ """
         url = _get_stub_url(token=self.token, url=self.base_url, id=id)
         if not url:
