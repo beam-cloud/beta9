@@ -564,22 +564,26 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
 		t.*,
 		w.external_id AS "workspace.external_id",
 		w.name AS "workspace.name",
+		w.created_at AS "workspace.created_at",
+		w.updated_at AS "workspace.updated_at",
+		ew.id AS "external_workspace.id",
+		ew.external_id AS "external_workspace.external_id",
+		ew.name AS "external_workspace.name",
 		s.external_id AS "stub.external_id",
 		s.name AS "stub.name",
 		s.config AS "stub.config",
 		s.app_id AS "app.id",
 		a.external_id AS "app.external_id",
 		a.name AS "app.name",
-		ew.id AS "external_workspace.id",
-		ew.external_id AS "external_workspace.external_id",
-		ew.name AS "external_workspace.name",
-		ew.created_at AS "external_workspace.created_at",
-		ew.updated_at AS "external_workspace.updated_at"
+		d.name AS "deployment.name",
+		d.version AS "deployment.version",
+		d.external_id AS "deployment.external_id"
 	FROM task t
 	JOIN workspace w ON t.workspace_id = w.id
 	JOIN stub s ON t.stub_id = s.id
 	JOIN app a ON s.app_id = a.id
 	LEFT JOIN workspace ew ON ew.id = t.external_workspace_id
+	LEFT JOIN deployment d ON d.stub_id = s.id
 	WHERE t.external_id = $1;
 	`
 
@@ -588,6 +592,11 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
 		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
 			return nil, nil
 		}
+
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+
 		return nil, err
 	}
 
