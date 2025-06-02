@@ -6,6 +6,7 @@ from typing import Union
 import requests
 
 from .exceptions import StubNotFoundError, TaskNotFoundError, WorkspaceNotFoundError
+from .type import TaskStatus
 
 
 @dataclass
@@ -59,9 +60,10 @@ class Result:
                             try:
                                 task_data = json.loads(data)
                                 yield task_data
-                                # Stop iteration if task is completed
+
+                                # Stop iteration if task is done running
                                 status = task_data.get("status")
-                                if status in ["COMPLETE", "ERROR", "CANCELLED"]:
+                                if TaskStatus(status).is_complete():
                                     return
 
                             except json.JSONDecodeError:
