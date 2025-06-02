@@ -38,7 +38,7 @@ func registerEndpointRoutes(g *echo.Group, es *HttpEndpointService) *endpointGro
 }
 
 func registerASGIRoutes(g *echo.Group, es *HttpEndpointService) *endpointGroup {
-	group := &endpointGroup{routeGroup: g, es: es}
+	group := &endpointGroup{routeGroup: g, es: es, cache: abstractions.NewDeploymentStubCache()}
 
 	g.Any("/id/:stubId", auth.WithAuth(group.ASGIRequest))
 	g.Any("/id/:stubId/:subPath", auth.WithAuth(group.ASGIRequest))
