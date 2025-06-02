@@ -298,6 +298,10 @@ func (t *TCPEventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
 		event.EndedAt = &task.EndedAt.Time
 	}
 
+	if task.ExternalWorkspace.ExternalId != nil {
+		event.ExternalWorkspaceID = *task.ExternalWorkspace.ExternalId
+	}
+
 	t.pushEvent(
 		types.EventTaskUpdated,
 		types.EventTaskSchemaVersion,
@@ -322,6 +326,10 @@ func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 
 	if task.EndedAt.Valid {
 		event.EndedAt = &task.EndedAt.Time
+	}
+
+	if task.ExternalWorkspace.ExternalId != nil {
+		event.ExternalWorkspaceID = *task.ExternalWorkspace.ExternalId
 	}
 
 	t.pushEvent(

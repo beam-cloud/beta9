@@ -560,22 +560,40 @@ func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId stri
 func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error) {
 	var taskWithRelated types.TaskWithRelated
 	query := `
-    SELECT w.external_id AS "workspace.external_id", w.name AS "workspace.name",
-           s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", 
-					 s.app_id AS "app.id", a.external_id AS "app.external_id", a.name AS "app.name",
-					 t.*
-    FROM task t
-    JOIN workspace w ON t.workspace_id = w.id
-    JOIN stub s ON t.stub_id = s.id
-		JOIN app a ON s.app_id = a.id
-    WHERE t.external_id = $1;
-    `
+	SELECT
+		t.*,
+		w.external_id AS "workspace.external_id",
+		w.name AS "workspace.name",
+		s.external_id AS "stub.external_id",
+		s.name AS "stub.name",
+		s.config AS "stub.config",
+		s.app_id AS "app.id",
+		a.external_id AS "app.external_id",
+		a.name AS "app.name",
+		ew.id AS "external_workspace.id",
+		ew.external_id AS "external_workspace.external_id",
+		ew.name AS "external_workspace.name",
+		ew.created_at AS "external_workspace.created_at",
+		ew.updated_at AS "external_workspace.updated_at"
+	FROM task t
+	JOIN workspace w ON t.workspace_id = w.id
+	JOIN stub s ON t.stub_id = s.id
+	JOIN app a ON s.app_id = a.id
+	LEFT JOIN workspace ew ON ew.id = t.external_workspace_id
+	WHERE t.external_id = $1;
+	`
+
 	err := r.client.GetContext(ctx, &taskWithRelated, query, externalId)
 	if err != nil {
 		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
 			return nil, nil
 		}
 		return nil, err
+	}
+
+	// If external_workspace.id is nil, set ExternalWorkspace to nil
+	if taskWithRelated.ExternalWorkspace != nil && taskWithRelated.ExternalWorkspace.Id == nil {
+		taskWithRelated.ExternalWorkspace = nil
 	}
 
 	return &taskWithRelated, nil

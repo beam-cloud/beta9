@@ -152,15 +152,16 @@ type EventStubSchema struct {
 var EventTaskSchemaVersion = "1.0"
 
 type EventTaskSchema struct {
-	ID          string     `json:"id"`
-	Status      TaskStatus `json:"status"`
-	ContainerID string     `json:"container_id"`
-	StartedAt   *time.Time `json:"started_at"`
-	EndedAt     *time.Time `json:"ended_at"`
-	WorkspaceID string     `json:"workspace_id"`
-	StubID      string     `json:"stub_id"`
-	CreatedAt   time.Time  `json:"created_at"`
-	AppID       string     `json:"app_id"`
+	ID                  string     `json:"id"`
+	Status              TaskStatus `json:"status"`
+	ContainerID         string     `json:"container_id"`
+	StartedAt           *time.Time `json:"started_at"`
+	EndedAt             *time.Time `json:"ended_at"`
+	WorkspaceID         string     `json:"workspace_id"`
+	ExternalWorkspaceID string     `json:"external_workspace_id"`
+	StubID              string     `json:"stub_id"`
+	CreatedAt           time.Time  `json:"created_at"`
+	AppID               string     `json:"app_id"`
 }
 
 var EventStubStateSchemaVersion = "1.0"
