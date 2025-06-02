@@ -168,6 +168,10 @@ class VLLM(ASGI):
         image (Union[Image, dict]):
             The container image used for the task execution. Whatever you pass here will have an additional `add_python_packages` call
             with `["fastapi", "vllm", "huggingface_hub"]` added to it to ensure that we can run vLLM in the container.
+        vllm_version (str):
+            The version of vLLM that will be installed from PyPI. As the configuration of the vLLM engine depends on the version of vLLM, using a non-default vllm_version might require subclassing VLLMArgs in order to add the missing configuration options. Default is version 0.8.4.
+        huggingface_hub_version (str):
+            The version of huggingface_hub that will be installed from PyPI. Different versions of vLLM require different versions of huggingface_hub, thus using a non-default vLLM version might require using a non-default version of huggingface_hub.  Default is version 0.30.2.
         workers (int):
             The number of workers to run in the container. Default is 1.
         concurrent_requests (int):
@@ -211,6 +215,8 @@ class VLLM(ASGI):
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(python_version="python3.11"),
+        vllm_version: str = "0.8.4",
+        huggingface_hub_version: str = "0.30.2",
         workers: int = 1,
         concurrent_requests: int = 1,
         keep_warm_seconds: int = 60,
@@ -230,7 +236,7 @@ class VLLM(ASGI):
         volumes.append(Volume(name="vllm_cache_root", mount_path=vllm_args.vllm_cache_root))
 
         image = image.add_python_packages(
-            ["fastapi", "numpy", "vllm==0.8.4", "huggingface_hub==0.30.2"]
+            ["fastapi", "numpy", f"vllm=={vllm_version}", f"huggingface_hub=={huggingface_hub_version}"]
         )
 
         super().__init__(
