@@ -317,11 +317,16 @@ type TaskWithRelated struct {
 		Name       *string `db:"name" json:"name" serializer:"name"`
 		Version    *uint   `db:"version" json:"version" serializer:"version"`
 	} `db:"deployment" json:"deployment" serializer:"deployment"`
-	Outputs   []TaskOutput `json:"outputs" serializer:"outputs"`
-	Stats     TaskStats    `json:"stats" serializer:"stats"`
-	Workspace Workspace    `db:"workspace" json:"workspace" serializer:"workspace"`
-	Stub      Stub         `db:"stub" json:"stub" serializer:"stub"`
-	App       App          `db:"app" json:"app" serializer:"app"`
+	Outputs           []TaskOutput `json:"outputs" serializer:"outputs"`
+	Stats             TaskStats    `json:"stats" serializer:"stats"`
+	Workspace         Workspace    `db:"workspace" json:"workspace" serializer:"workspace"`
+	ExternalWorkspace *struct {
+		Id         *uint   `db:"id" json:"id"`
+		ExternalId *string `db:"external_id" json:"external_id"`
+		Name       *string `db:"name" json:"name"`
+	} `db:"external_workspace" json:"external_workspace" serializer:"external_workspace"`
+	Stub Stub `db:"stub" json:"stub" serializer:"stub"`
+	App  App  `db:"app" json:"app" serializer:"app"`
 }
 
 type TaskCountPerDeployment struct {
