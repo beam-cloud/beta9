@@ -5,16 +5,19 @@ from typing import Union
 
 import requests
 
+from .exceptions import StubNotFoundError, TaskNotFoundError, WorkspaceNotFoundError
+
 
 @dataclass
 class Result:
     task_id: str
     url: str
 
-    def __init__(self, task_id: str, url: str, token: str):
+    def __init__(self, task_id: str, url: str, token: str, workspace_id: str):
         self.task_id = task_id
         self.url = url
         self.__token = token
+        self.__workspace_id = workspace_id
 
     def get(self):
         headers = {
@@ -23,6 +26,49 @@ class Result:
         }
         response = requests.get(self.url, headers=headers)
         return response.json()
+
+    def subscribe(self):
+        headers = {
+            "Authorization": f"Bearer {self.__token}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+
+        try:
+            with requests.get(f"{self.url}/subscribe", headers=headers, stream=True) as response:
+                response.raise_for_status()
+                buffer = ""
+
+                for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
+                    if not chunk:
+                        continue
+
+                    buffer += chunk
+                    while "\n\n" in buffer:
+                        event, buffer = buffer.split("\n\n", 1)
+                        event_type = None
+                        data = None
+
+                        for line in event.split("\n"):
+                            if line.startswith("event: "):
+                                event_type = line[7:]
+                            elif line.startswith("data: "):
+                                data = line[6:]
+
+                        if event_type == "status" and data:
+                            try:
+                                task_data = json.loads(data)
+                                yield task_data
+                                # Stop iteration if task is completed
+                                status = task_data.get("status")
+                                if status in ["COMPLETE", "ERROR", "CANCELLED"]:
+                                    return
+
+                            except json.JSONDecodeError:
+                                continue
+
+        except Exception as e:
+            yield {"error": str(e)}
 
 
 class Client:
@@ -47,7 +93,7 @@ class Client:
         if response and "external_id" in response:
             self.workspace_id = response["external_id"]
         else:
-            raise Exception("Failed to load workspace")
+            raise WorkspaceNotFoundError("Failed to load workspace")
 
     def _get_base_url(self):
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
@@ -73,22 +119,39 @@ class Client:
         return None
 
     def submit(self, *, id: str, args: dict = {}) -> Union[Result, None]:
-        """ """
         url = self._get_stub_url(id)
         if not url:
-            raise Exception("Failed to get retrieve URL")
+            raise TaskNotFoundError(f"Failed to get retrieve URL for task {id}")
 
         result = self._post(url=url, path="", data=args)
         if "task_id" in result:
-            retrieve_url = f"{self.base_url}/api/v1/task/{self.workspace_id}/{result['task_id']}"
-            return Result(task_id=result["task_id"], url=retrieve_url, token=self.token)
+            return Result(
+                task_id=result["task_id"],
+                url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{result['task_id']}",
+                token=self.token,
+                workspace_id=self.workspace_id,
+            )
 
         return None
 
     def subscribe(self, *, id: str, args: dict = {}):
         """ """
-        # result = self.submit(id=id, args=args)
-        pass
+        url = self._get_stub_url(id)
+        if not url:
+            raise StubNotFoundError(f"Failed to get retrieve URL for task {id}")
+
+        response = self._post(url=url, path="", data=args)
+        if "task_id" not in response:
+            raise TaskNotFoundError(f"Failed to get task ID from response for task {id}")
+
+        retrieve_url = f"{self.base_url}/api/v1/task/{self.workspace_id}/{response['task_id']}"
+        result = Result(
+            task_id=response["task_id"],
+            url=retrieve_url,
+            token=self.token,
+            workspace_id=self.workspace_id,
+        )
+        return result.subscribe()
 
     def status(self, *, task_id: str):
         """ """
