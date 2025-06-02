@@ -73,6 +73,29 @@ class Result:
             yield {"error": str(e)}
 
 
+def _make_request(*, token: str, url: str, method: str, path: str, data: dict = {}):
+    url = f"{url}/{path}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    response = requests.request(method, url, headers=headers, data=json.dumps(data))
+    return response.json()
+
+
+def _post(*, token: str, url: str, path: str, data: dict = {}):
+    return _make_request(token=token, url=url, method="POST", path=path, data=data)
+
+
+@lru_cache(maxsize=128)
+def _get_stub_url(*, token: str, url: str, id: str) -> Union[str, None]:
+    response = _make_request(token=token, url=url, method="GET", path=f"/api/v1/stub/{id}/url")
+    if response and "url" in response:
+        return response["url"]
+
+    return None
+
+
 class Client:
     def __init__(
         self,
@@ -90,7 +113,12 @@ class Client:
         self._load_workspace()
 
     def _load_workspace(self):
-        response = self._make_request(self.base_url, "GET", "/api/v1/workspace/current")
+        response = _make_request(
+            token=self.token,
+            url=self.base_url,
+            method="GET",
+            path="/api/v1/workspace/current",
+        )
 
         if response and "external_id" in response:
             self.workspace_id = response["external_id"]
@@ -100,32 +128,38 @@ class Client:
     def _get_base_url(self):
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
 
-    def _make_request(self, url: str, method: str, path: str, data: dict = {}):
-        url = f"{url}/{path}"
-        headers = {
-            "Authorization": f"Bearer {self.token}",
-            "Content-Type": "application/json",
-        }
-        response = requests.request(method, url, headers=headers, data=json.dumps(data))
-        return response.json()
+    def status(self, *, task_id: str):
+        result_url = f"{self.base_url}/api/v1/task/{self.workspace_id}/{task_id}"
+        return Result(task_id=task_id, url=result_url, token=self.token)
 
-    def _post(self, *, url: str, path: str, data: dict = {}):
-        return self._make_request(url, "POST", path, data)
+    def upload_file(self, *, file_path: str = ""):
+        """ """
+        pass
 
-    @lru_cache(maxsize=128)
-    def _get_stub_url(self, id: str) -> Union[str, None]:
-        response = self._make_request(self.base_url, "GET", f"/api/v1/stub/{id}/url")
-        if response and "url" in response:
-            return response["url"]
+    def get(self, *, name: str):
+        return Deployment(
+            base_url=self.base_url, id=name, token=self.token, workspace_id=self.workspace_id
+        )
 
-        return None
+    def get_by_id(self, id: str):
+        return Deployment(
+            base_url=self.base_url, id=id, token=self.token, workspace_id=self.workspace_id
+        )
 
-    def submit(self, *, id: str, args: dict = {}) -> Union[Result, None]:
-        url = self._get_stub_url(id)
+
+class Deployment:
+    def __init__(self, base_url: str, id: str, token: str, workspace_id: str):
+        self.id = id
+        self.token = token
+        self.workspace_id = workspace_id
+        self.base_url = base_url
+
+    def submit(self, *, args: dict = {}) -> Union[Result, None]:
+        url = _get_stub_url(token=self.token, url=self.base_url, id=self.id)
         if not url:
-            raise TaskNotFoundError(f"Failed to get retrieve URL for task {id}")
+            raise TaskNotFoundError(f"Failed to get retrieve URL for task {self.id}")
 
-        result = self._post(url=url, path="", data=args)
+        result = _post(token=self.token, url=url, path="", data=args)
         if "task_id" in result:
             return Result(
                 task_id=result["task_id"],
@@ -138,11 +172,11 @@ class Client:
 
     def subscribe(self, *, id: str, args: dict = {}):
         """ """
-        url = self._get_stub_url(id)
+        url = _get_stub_url(token=self.token, url=self.base_url, id=id)
         if not url:
             raise StubNotFoundError(f"Failed to get retrieve URL for task {id}")
 
-        response = self._post(url=url, path="", data=args)
+        response = _post(token=self.token, url=url, path="", data=args)
         if "task_id" not in response:
             raise TaskNotFoundError(f"Failed to get task ID from response for task {id}")
 
@@ -154,12 +188,3 @@ class Client:
             workspace_id=self.workspace_id,
         )
         return result.subscribe()
-
-    def status(self, *, task_id: str):
-        """ """
-        result_url = f"{self.base_url}/api/v1/task/{self.workspace_id}/{task_id}"
-        return Result(task_id=task_id, url=result_url, token=self.token)
-
-    def upload_file(self, *, file_path: str = ""):
-        """ """
-        pass
