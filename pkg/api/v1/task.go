@@ -128,11 +128,6 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 		return HTTPBadRequest("Missing task ID")
 	}
 
-	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), cc.AuthInfo.Workspace.ExternalId)
-	if err != nil {
-		return HTTPBadRequest("Invalid workspace ID")
-	}
-
 	ctx.Response().Header().Set(echo.HeaderContentType, "text/event-stream")
 	ctx.Response().Header().Set(echo.HeaderCacheControl, "no-cache")
 	ctx.Response().Header().Set(echo.HeaderConnection, "keep-alive")
@@ -150,21 +145,20 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 		default:
 		}
 
-		var retrieveTaskFunc func(ctx context.Context, taskId string, workspace *types.Workspace) (*types.TaskWithRelated, error)
-		public, _ := strconv.ParseBool(ctx.QueryParam("public"))
-		if public {
-			retrieveTaskFunc = g.backendRepo.GetPublicTaskByWorkspace
-		} else {
-			retrieveTaskFunc = g.backendRepo.GetTaskByWorkspace
-		}
-
-		task, err := retrieveTaskFunc(ctx.Request().Context(), taskId, &workspace)
+		task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId)
 		if err != nil {
 			return HTTPInternalServerError("Failed to retrieve task")
 		}
+
 		if task == nil {
 			return HTTPNotFound()
 		}
+
+		if task.WorkspaceId != cc.AuthInfo.Workspace.Id && *task.ExternalWorkspaceId != cc.AuthInfo.Workspace.Id {
+			return HTTPNotFound()
+		}
+
+		task.Workspace = *cc.AuthInfo.Workspace
 		task.Stub.SanitizeConfig()
 
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
