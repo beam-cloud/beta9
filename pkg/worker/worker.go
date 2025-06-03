@@ -315,7 +315,7 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 		ctx, cancel := context.WithCancel(s.ctx)
 
 		if request.IsBuildRequest() {
-			go s.listenForStopBuildEvent(ctx, cancel, containerId)
+			go s.checkForStoppedBuilds(ctx, cancel, containerId)
 		}
 
 		// If isolated workspace storage is available, mount it
@@ -359,8 +359,21 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 
 }
 
-// listenForStopBuildEvent listens for a stop build event and cancels the context
-func (s *Worker) listenForStopBuildEvent(ctx context.Context, cancel context.CancelFunc, containerId string) {
+// checkForStoppedBuilds checks if a build has been cancelled and cancels the context if it has.
+// If not it will listen for a stop build event.
+func (s *Worker) checkForStoppedBuilds(ctx context.Context, cancel context.CancelFunc, containerId string) {
+	containerState, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state")
+		return
+	}
+
+	if types.ContainerStatus(containerState.State.Status) == types.ContainerStatusStopping {
+		log.Info().Str("container_id", containerId).Msg("incoming container state is stopping, cancelling context")
+		cancel()
+		return
+	}
+
 	eventbus := common.NewEventBus(s.redisClient, common.EventBusSubscriber{Type: common.StopBuildEventType(containerId), Callback: func(e *common.Event) bool {
 		log.Info().Str("container_id", containerId).Msg("received stop build event")
 		cancel()
