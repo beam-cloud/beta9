@@ -15,7 +15,9 @@ from .abstractions.pod import Pod
 from .abstractions.queue import SimpleQueue as Queue
 from .abstractions.taskqueue import TaskQueue as task_queue
 from .abstractions.volume import CloudBucket, CloudBucketConfig, Volume
-from .client import Client, Result
+from .client.client import Client
+from .client.deployment import Deployment
+from .client.task import Task
 from .type import (
     GpuType,
     PricingPolicy,
@@ -55,5 +57,6 @@ __all__ = [
     "PricingPolicy",
     "PricingPolicyCostModel",
     "Client",
-    "Result",
+    "Task",
+    "Deployment",
 ]
