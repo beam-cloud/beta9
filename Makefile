@@ -2,7 +2,7 @@ SHELL := /bin/bash
 tag := latest
 workerTag := latest
 runnerTag := latest
-runnerPlatform := linux/amd64
+runnerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
 
 setup:
 	bash bin/setup.sh
