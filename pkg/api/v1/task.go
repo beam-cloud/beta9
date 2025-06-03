@@ -205,27 +205,19 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
-	workspaceId := ctx.Param("workspaceId")
-	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
-	if err != nil {
-		return HTTPBadRequest("Invalid workspace ID")
-	}
-
-	var retrieveTaskFunc func(ctx context.Context, taskId string, workspace *types.Workspace) (*types.TaskWithRelated, error)
-	public, _ := strconv.ParseBool(ctx.QueryParam("public"))
-	if public {
-		retrieveTaskFunc = g.backendRepo.GetPublicTaskByWorkspace
-	} else {
-		retrieveTaskFunc = g.backendRepo.GetTaskByWorkspace
-	}
-
 	taskId := ctx.Param("taskId")
-	if task, err := retrieveTaskFunc(ctx.Request().Context(), taskId, &workspace); err != nil {
+	if task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId); err != nil {
 		return HTTPInternalServerError("Failed to retrieve task")
 	} else {
 		if task == nil {
 			return HTTPNotFound()
 		}
+
+		if task.WorkspaceId != cc.AuthInfo.Workspace.Id && *task.ExternalWorkspaceId != cc.AuthInfo.Workspace.Id {
+			return HTTPNotFound()
+		}
+
+		task.Workspace = *cc.AuthInfo.Workspace
 		task.Stub.SanitizeConfig()
 
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
