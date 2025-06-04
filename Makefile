@@ -78,3 +78,25 @@ build-test:
 
 load-test:
 	cd e2e/load_tests && k6 run --env URL=$(URL) --env TOKEN=$(TOKEN) throughput.js
+
+sdk-init:
+	make -C sdk init
+
+sdk-docs:
+	make -C sdk docs
+
+sdk-tests:
+	make -C sdk tests
+
+sdk-format:
+	make -C sdk format
+
+sdk-build:
+	make -C sdk build
+
+sdk-clean:
+	make -C sdk clean
+
+sdk-publish:
+	make -C sdk publish
+
