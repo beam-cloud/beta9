@@ -170,6 +170,10 @@ func (a *AppGroup) RetrieveApp(ctx echo.Context) error {
 		return HTTPBadRequest("Failed to retrieve app")
 	}
 
+	if app == nil {
+		return HTTPNotFound()
+	}
+
 	serializedApp, err := serializer.Serialize(app)
 	if err != nil {
 		return HTTPInternalServerError("Failed to serialize response")
@@ -199,6 +203,10 @@ func (a *AppGroup) DeleteApp(ctx echo.Context) error {
 	)
 	if err != nil {
 		return HTTPBadRequest("Failed to retrieve app")
+	}
+
+	if app == nil {
+		return HTTPNotFound()
 	}
 
 	deploymentFilters := types.DeploymentFilter{

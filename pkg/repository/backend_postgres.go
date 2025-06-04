@@ -1997,7 +1997,11 @@ func (r *PostgresBackendRepository) RetrieveApp(ctx context.Context, workspaceId
 		return &app, nil
 	}
 
-	return &app, nil
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+
+	return nil, err
 }
 
 func (r *PostgresBackendRepository) DeleteApp(ctx context.Context, appId string) error {
