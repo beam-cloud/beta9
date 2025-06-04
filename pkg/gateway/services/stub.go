@@ -93,6 +93,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 	}
 
+	var inputs *types.Schema = nil
+	if in.Inputs != nil {
+		inputs = types.NewSchemaFromProto(in.Inputs)
+	}
+
+	var outputs *types.Schema = nil
+	if in.Outputs != nil {
+		outputs = types.NewSchemaFromProto(in.Outputs)
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
@@ -122,6 +132,8 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Ports:              in.Ports,
 		Env:                in.Env,
 		Pricing:            pricing,
+		Inputs:             inputs,
+		Outputs:            outputs,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required

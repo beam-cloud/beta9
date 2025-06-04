@@ -26,6 +26,7 @@ from ..clients.endpoint import (
     StartEndpointServeResponse,
 )
 from ..env import is_local
+from ..schema import Schema
 from ..type import (
     Autoscaler,
     GpuType,
@@ -103,6 +104,10 @@ class Endpoint(RunnerAbstraction):
             If enabled, the app will be checkpointed after the on_start function has completed.
             On next invocation, each container will restore from a checkpoint and resume execution instead of
             booting up from cold.
+        inputs (Optional[Schema]):
+            The input schema for the endpoint. Default is None.
+        outputs (Optional[Schema]):
+            The output model for the endpoint. Default is None.
     Example:
         ```python
         from beta9 import endpoint, Image
@@ -147,6 +152,8 @@ class Endpoint(RunnerAbstraction):
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
         pricing: Optional[PricingPolicy] = None,
+        inputs: Optional[Schema] = None,
+        outputs: Optional[Schema] = None,
     ):
         super().__init__(
             cpu=cpu,
@@ -173,6 +180,8 @@ class Endpoint(RunnerAbstraction):
             checkpoint_enabled=checkpoint_enabled,
             app=app,
             pricing=pricing,
+            inputs=inputs,
+            outputs=outputs,
         )
 
         self._endpoint_stub: Optional[EndpointServiceStub] = None

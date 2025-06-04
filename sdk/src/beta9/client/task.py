@@ -11,11 +11,10 @@ class Task:
     id: str
     url: str
 
-    def __init__(self, id: str, url: str, token: str, workspace_id: str):
+    def __init__(self, id: str, url: str, token: str):
         self.id = id
         self.url = url
         self.__token = token
-        self.__workspace_id = workspace_id
 
     def get(self):
         headers = {
@@ -66,5 +65,5 @@ class Task:
                             except json.JSONDecodeError:
                                 continue
 
-        except Exception as e:
+        except BaseException as e:
             yield {"error": str(e)}

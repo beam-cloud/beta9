@@ -392,6 +392,49 @@ type StubConfigV1 struct {
 	EntryPoint         []string        `json:"entry_point"`
 	Ports              []uint32        `json:"ports"`
 	Pricing            *PricingPolicy  `json:"pricing"`
+	Inputs             *Schema         `json:"inputs"`
+	Outputs            *Schema         `json:"outputs"`
+}
+
+type Schema struct {
+	Fields map[string]SchemaField `json:"fields"`
+}
+
+func (s *Schema) ToString() string {
+	json, err := json.Marshal(s)
+	if err != nil {
+		return ""
+	}
+	return string(json)
+}
+
+func (s *Schema) ToProto() *pb.Schema {
+	fields := make(map[string]*pb.SchemaField, len(s.Fields))
+	for k, v := range s.Fields {
+		fields[k] = &pb.SchemaField{
+			Type: v.Type,
+		}
+	}
+	return &pb.Schema{
+		Fields: fields,
+	}
+}
+
+func NewSchemaFromProto(in *pb.Schema) *Schema {
+	fields := make(map[string]SchemaField, len(in.Fields))
+	for k, v := range in.Fields {
+		fields[k] = SchemaField{
+			Type: v.Type,
+		}
+	}
+
+	return &Schema{
+		Fields: fields,
+	}
+}
+
+type SchemaField struct {
+	Type string `json:"type"`
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {

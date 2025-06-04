@@ -9,8 +9,8 @@ class Deployment:
     def __init__(self, base_url: str, id: str, token: str, workspace_id: str):
         self.id = id
         self.token = token
-        self.workspace_id = workspace_id
         self.base_url = base_url
+        self.workspace_id = workspace_id
 
     def submit(self, *, args: dict = {}) -> Union[Task, None]:
         url = get_stub_url(token=self.token, url=self.base_url, id=self.id)
@@ -23,7 +23,6 @@ class Deployment:
                 id=result["task_id"],
                 url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{result['task_id']}",
                 token=self.token,
-                workspace_id=self.workspace_id,
             )
 
         return None
@@ -42,6 +41,5 @@ class Deployment:
             id=response["task_id"],
             url=retrieve_url,
             token=self.token,
-            workspace_id=self.workspace_id,
         )
         return task.subscribe()

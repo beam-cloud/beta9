@@ -141,6 +141,8 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		fmt.Sprintf("BETA9_TOKEN=%s", token.Key),
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		fmt.Sprintf("CALLBACK_URL=%s", stubConfig.CallbackUrl),
+		fmt.Sprintf("BETA9_INPUTS=%s", stubConfig.Inputs.ToString()),
+		fmt.Sprintf("BETA9_OUTPUTS=%s", stubConfig.Outputs.ToString()),
 	}...)
 
 	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)

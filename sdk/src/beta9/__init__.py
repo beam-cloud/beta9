@@ -18,6 +18,7 @@ from .abstractions.volume import CloudBucket, CloudBucketConfig, Volume
 from .client.client import Client
 from .client.deployment import Deployment
 from .client.task import Task
+from .schema import Schema, SchemaField
 from .type import (
     GpuType,
     PricingPolicy,
@@ -59,4 +60,6 @@ __all__ = [
     "Client",
     "Task",
     "Deployment",
+    "Schema",
+    "SchemaField",
 ]

@@ -280,6 +280,18 @@ class TaskPolicy(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class Schema(betterproto.Message):
+    fields: Dict[str, "SchemaField"] = betterproto.map_field(
+        1, betterproto.TYPE_STRING, betterproto.TYPE_MESSAGE
+    )
+
+
+@dataclass(eq=False, repr=False)
+class SchemaField(betterproto.Message):
+    type: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
 class GetOrCreateStubRequest(betterproto.Message):
     object_id: str = betterproto.string_field(1)
     image_id: str = betterproto.string_field(2)
@@ -314,6 +326,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     env: List[str] = betterproto.string_field(32)
     app_name: str = betterproto.string_field(33)
     pricing: "_types__.PricingPolicy" = betterproto.message_field(34)
+    inputs: "Schema" = betterproto.message_field(35)
+    outputs: "Schema" = betterproto.message_field(36)
 
 
 @dataclass(eq=False, repr=False)

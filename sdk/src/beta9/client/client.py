@@ -36,20 +36,26 @@ class Client:
     def _get_base_url(self):
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
 
-    def task_status(self, *, task_id: str) -> Task:
-        result_url = f"{self.base_url}/api/v1/task/{self.workspace_id}/{task_id}"
-        return Task(id=task_id, url=result_url, token=self.token)
-
     def upload_file(self, *, file_path: str = ""):
-        """ """
         pass
 
-    def get(self, *, name: str) -> Deployment:
-        return Deployment(
-            base_url=self.base_url, id=name, token=self.token, workspace_id=self.workspace_id
+    def get_task_by_id(self, *, id: str) -> Task:
+        return Task(
+            id=id, url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}", token=self.token
         )
 
-    def get_by_id(self, id: str) -> Deployment:
+    def get_deployment_by_name(self, name: str) -> Deployment:
         return Deployment(
-            base_url=self.base_url, id=id, token=self.token, workspace_id=self.workspace_id
+            base_url=self.base_url,
+            id=name,
+            token=self.token,
+            workspace_id=self.workspace_id,
+        )
+
+    def get_deployment_by_id(self, id: str) -> Deployment:
+        return Deployment(
+            base_url=self.base_url,
+            id=id,
+            token=self.token,
+            workspace_id=self.workspace_id,
         )

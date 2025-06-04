@@ -22,6 +22,7 @@ from ..clients.taskqueue import (
     TaskQueueServiceStub,
 )
 from ..env import is_local
+from ..schema import Schema
 from ..type import (
     Autoscaler,
     GpuType,
@@ -107,6 +108,10 @@ class TaskQueue(RunnerAbstraction):
             If enabled, the app will be checkpointed after the on_start function has completed.
             On next invocation, each container will restore from a checkpoint and resume execution instead of
             booting up from cold.
+        inputs (Optional[Schema]):
+            The input schema for the task queue. Default is None.
+        outputs (Optional[Schema]):
+            The output schema for the task queue. Default is None.
     Example:
         ```python
         from beta9 import task_queue, Image
@@ -147,6 +152,8 @@ class TaskQueue(RunnerAbstraction):
         checkpoint_enabled: bool = False,
         retry_for: Optional[List[Type[Exception]]] = None,
         pricing: Optional[PricingPolicy] = None,
+        inputs: Optional[Schema] = None,
+        outputs: Optional[Schema] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -172,6 +179,8 @@ class TaskQueue(RunnerAbstraction):
             checkpoint_enabled=checkpoint_enabled,
             app=app,
             pricing=pricing,
+            inputs=inputs,
+            outputs=outputs,
         )
         self._taskqueue_stub: Optional[TaskQueueServiceStub] = None
         self.retry_for = retry_for or []
