@@ -306,6 +306,11 @@ func (b *Builder) handleBuildCancellation(ctx context.Context, build *Build) {
 		log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
 	}
 
+	err = b.containerRepo.UpdateContainerStatus(build.containerID, types.ContainerStatusStopping, time.Now().Unix())
+	if err != nil {
+		log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to update container status")
+	}
+
 	if err := build.killContainer(); err != nil {
 		log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to kill build container")
 	}
