@@ -576,6 +576,7 @@ func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, exte
 		s.app_id AS "app.id",
 		a.external_id AS "app.external_id",
 		a.name AS "app.name",
+		a.external_id AS "app.external_id",
 		d.name AS "deployment.name",
 		d.version AS "deployment.version",
 		d.external_id AS "deployment.external_id"

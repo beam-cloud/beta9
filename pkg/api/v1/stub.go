@@ -128,8 +128,12 @@ func (g *StubGroup) RetrieveStub(ctx echo.Context) error {
 		}
 	}
 
-	return ctx.JSON(http.StatusOK, stub)
+	serializedStub, err := serializer.Serialize(stub)
+	if err != nil {
+		return HTTPInternalServerError("Failed to serialize stub")
+	}
 
+	return ctx.JSON(http.StatusOK, serializedStub)
 }
 
 func (g *StubGroup) GetURL(ctx echo.Context) error {
