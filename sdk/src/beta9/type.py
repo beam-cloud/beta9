@@ -20,7 +20,7 @@ class TaskStatus(str, Enum):
         return self.value
 
     def is_complete(self) -> bool:
-        return self in [self.Complete, self.Error, self.Cancelled, self.Timeout]
+        return self.value in [self.Complete, self.Error, self.Cancelled, self.Timeout]
 
 
 class TaskExitCode:
