@@ -412,8 +412,8 @@ type Autoscaler struct {
 
 // @go2proto
 type App struct {
-	Id          uint     `db:"id" json:"id"`
-	ExternalId  string   `db:"external_id" json:"external_id,omitempty" serializer:"id"`
+	Id          uint     `db:"id" json:"id" serializer:"id,source:external_id"`
+	ExternalId  string   `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
 	Name        string   `db:"name" json:"name" serializer:"name"`
 	Description string   `db:"description" json:"description" serializer:"description"`
 	WorkspaceId uint     `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
