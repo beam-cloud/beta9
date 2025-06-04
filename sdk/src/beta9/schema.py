@@ -5,7 +5,16 @@ from typing import Any, Dict
 
 
 class ValidationError(Exception):
-    pass
+    def __init__(self, message, field=None):
+        super().__init__(message)
+        self.message = message
+        self.field = field
+
+    def to_dict(self):
+        error = {"error": "ValidationError", "message": self.message}
+        if self.field:
+            error["field"] = self.field
+        return error
 
 
 class SchemaField:

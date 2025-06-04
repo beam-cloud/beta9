@@ -27,7 +27,7 @@ from ..clients.gateway import (
 )
 from ..env import is_remote
 from ..exceptions import RunnerException
-from ..schema import Schema
+from ..schema import Schema, ValidationError
 
 USER_CODE_DIR = "/mnt/code"
 USER_VOLUMES_DIR = "/volumes"
@@ -264,7 +264,12 @@ class FunctionHandler:
             else:
                 input_data = kwargs
 
-            parsed_inputs = self.inputs.parse(input_data)
+            try:
+                parsed_inputs = self.inputs.parse(input_data)
+            except ValidationError as e:
+                print(f"Validation error: {e}")
+                return e.to_dict()
+
             handler_args = (parsed_inputs,)
             handler_kwargs = {}
         else:
@@ -278,7 +283,12 @@ class FunctionHandler:
         result = self.handler(*handler_args, **handler_kwargs)
 
         if self.outputs is not None:
-            parsed_outputs = self.outputs.parse(result)
+            try:
+                parsed_outputs = self.outputs.parse(result)
+            except ValidationError as e:
+                print(f"Validation error: {e}")
+                return e.to_dict()
+
             return parsed_outputs.dict()
 
         return result
