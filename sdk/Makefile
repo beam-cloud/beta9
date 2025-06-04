@@ -7,7 +7,7 @@ docs:
 	uv run ./bin/docgen.py 2>/dev/null
 
 tests:
-	uv run pytest -s
+	uv run --with pytest-cov pytest -s 
 	# open .htmlcov/index.html
 
 format:
