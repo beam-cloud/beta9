@@ -1,4 +1,4 @@
-from . import env
+from . import env, schema
 from .abstractions import experimental, integrations
 from .abstractions.base.container import Container
 from .abstractions.endpoint import ASGI as asgi
@@ -18,7 +18,6 @@ from .abstractions.volume import CloudBucket, CloudBucketConfig, Volume
 from .client.client import Client
 from .client.deployment import Deployment
 from .client.task import Task
-from .schema import Schema, SchemaField
 from .type import (
     GpuType,
     PricingPolicy,
@@ -60,6 +59,5 @@ __all__ = [
     "Client",
     "Task",
     "Deployment",
-    "Schema",
-    "SchemaField",
+    "schema",
 ]
