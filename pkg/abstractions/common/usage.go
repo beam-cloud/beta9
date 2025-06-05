@@ -3,15 +3,14 @@ package abstractions
 import (
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
-func TrackTaskCost(duration time.Duration, instance *AutoscaledInstance, taskId, externalWorkspaceId string) {
-	if instance.Workspace.ExternalId == externalWorkspaceId {
+func TrackTaskCost(duration time.Duration, stub *types.StubWithRelated, pricingConfig *types.PricingPolicy, usageMetricsRepo repository.UsageMetricsRepository, taskId, externalWorkspaceId string) {
+	if stub.Workspace.ExternalId == externalWorkspaceId {
 		return
 	}
-
-	pricingConfig := instance.StubConfig.Pricing
 
 	totalCostCents := 0.0
 	if pricingConfig.CostModel == string(types.PricingPolicyCostModelTask) {
@@ -20,23 +19,23 @@ func TrackTaskCost(duration time.Duration, instance *AutoscaledInstance, taskId,
 		totalCostCents = pricingConfig.CostPerTaskDurationMs * float64(duration.Milliseconds()) * 100
 	}
 
-	instance.UsageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
-		"stub_id":      instance.Stub.ExternalId,
-		"app_id":       instance.Stub.App.ExternalId,
+	usageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCost, map[string]interface{}{
+		"stub_id":      stub.ExternalId,
+		"app_id":       stub.App.ExternalId,
 		"workspace_id": externalWorkspaceId,
 		"task_id":      taskId,
 		"value":        totalCostCents,
 	}, totalCostCents)
 }
 
-func TrackTaskCount(instance *AutoscaledInstance, taskId, externalWorkspaceId string) {
-	if instance.Workspace.ExternalId == externalWorkspaceId {
+func TrackTaskCount(stub *types.StubWithRelated, usageMetricsRepo repository.UsageMetricsRepository, taskId, externalWorkspaceId string) {
+	if stub.Workspace.ExternalId == externalWorkspaceId {
 		return
 	}
 
-	instance.UsageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCount, map[string]interface{}{
-		"stub_id":      instance.Stub.ExternalId,
-		"app_id":       instance.Stub.App.ExternalId,
+	usageMetricsRepo.IncrementCounter(types.UsageMetricsPublicTaskCount, map[string]interface{}{
+		"stub_id":      stub.ExternalId,
+		"app_id":       stub.App.ExternalId,
 		"workspace_id": externalWorkspaceId,
 		"task_id":      taskId,
 		"value":        1,

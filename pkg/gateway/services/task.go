@@ -2,9 +2,12 @@ package gatewayservices
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
+	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -85,6 +88,17 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		task.ContainerId = in.ContainerId
 	}
 
+	// Track cost for external/public tasks
+	if task.ExternalWorkspaceId != nil {
+		duration := time.Duration(float64(in.TaskDuration) * float64(time.Millisecond))
+		err = gws.trackExternalTaskCost(task, duration)
+		if err != nil {
+			return &pb.EndTaskResponse{
+				Ok: false,
+			}, nil
+		}
+	}
+
 	err = gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, in.TaskId)
 	if err != nil {
 		return &pb.EndTaskResponse{
@@ -96,6 +110,27 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	return &pb.EndTaskResponse{
 		Ok: err == nil,
 	}, nil
+}
+
+func (gws *GatewayService) trackExternalTaskCost(task *types.TaskWithRelated, duration time.Duration) error {
+	externalWorkspace, err := gws.backendRepo.GetWorkspace(context.Background(), *task.ExternalWorkspaceId)
+	if err != nil {
+		return err
+	}
+
+	stubWithRelated, err := gws.backendRepo.GetStubByExternalId(context.Background(), task.Stub.ExternalId)
+	if err != nil {
+		return err
+	}
+
+	stubConfig := types.StubConfigV1{}
+	err = json.Unmarshal([]byte(task.Stub.Config), &stubConfig)
+	if err != nil {
+		return err
+	}
+
+	abstractions.TrackTaskCost(duration, stubWithRelated, stubConfig.Pricing, gws.usageMetricsRepo, task.ExternalId, externalWorkspace.ExternalId)
+	return nil
 }
 
 func (gws *GatewayService) ListTasks(ctx context.Context, in *pb.ListTasksRequest) (*pb.ListTasksResponse, error) {

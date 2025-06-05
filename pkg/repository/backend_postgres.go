@@ -169,7 +169,7 @@ func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceI
 	var workspace types.Workspace
 
 	query := `
-	SELECT w.id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
+	SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
 	ws.id "storage.id", ws.bucket_name "storage.bucket_name", ws.access_key "storage.access_key",
 	ws.secret_key "storage.secret_key", ws.endpoint_url "storage.endpoint_url", ws.region "storage.region",
 	ws.created_at "storage.created_at", ws.updated_at "storage.updated_at"

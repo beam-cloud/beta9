@@ -100,7 +100,7 @@ class TaskNotFoundError(RuntimeError):
 class WorkspaceNotFoundError(RuntimeError):
     def __init__(self, workspace_id: str):
         self.workspace_id = workspace_id
-        super().__init__(f"Workspace not found: {workspace_id=}")
+        super().__init__(f"Workspace not found: {workspace_id}")
 
 
 class StubNotFoundError(RuntimeError):

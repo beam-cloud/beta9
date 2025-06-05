@@ -372,18 +372,23 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}
 
 	// If this task is associated with a different workspace, we need to track the cost
-	externalWorkspaceId, err := tq.rdb.Get(context.Background(), Keys.taskQueueTaskExternalWorkspace(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Result()
-	if err == nil && externalWorkspaceId != "" {
+	if task.ExternalWorkspaceId != nil {
 		defer func() {
-			abstractions.TrackTaskCost(time.Duration(in.TaskDuration)*time.Second, instance.AutoscaledInstance, in.TaskId, externalWorkspaceId)
-			tq.rdb.Del(context.Background(), Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, in.StubId, task.ExternalId))
+			externalWorkspace, err := tq.backendRepo.GetWorkspace(context.Background(), *task.ExternalWorkspaceId)
+			if err != nil {
+				log.Error().Err(err).Msgf("error getting external workspace for task <%s>", task.ExternalId)
+				return
+			}
+
+			duration := time.Duration(float64(in.TaskDuration) * float64(time.Millisecond))
+			abstractions.TrackTaskCost(duration, instance.Stub, instance.StubConfig.Pricing, tq.usageMetricsRepo, in.TaskId, externalWorkspace.ExternalId)
 		}()
 	}
 
 	if in.Result != nil && authInfo.Workspace.StorageAvailable() {
 		err = tq.storeTaskResult(authInfo, task, in.Result)
 		if err != nil {
-			log.Error().Err(err).Msgf("error storing task result for task %s", task.ExternalId)
+			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
 		}
 	}
 

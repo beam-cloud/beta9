@@ -2,7 +2,6 @@ package taskqueue
 
 import (
 	"context"
-	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -24,9 +23,8 @@ func (t *TaskQueueTask) Execute(ctx context.Context, options ...interface{}) err
 
 	var externalWorkspaceId *uint
 	if instance.StubConfig.Pricing != nil && instance.Workspace.ExternalId != authInfo.Workspace.ExternalId {
-		abstractions.TrackTaskCount(instance.AutoscaledInstance, t.msg.TaskId, authInfo.Workspace.ExternalId)
+		abstractions.TrackTaskCount(instance.Stub, t.tq.usageMetricsRepo, t.msg.TaskId, authInfo.Workspace.ExternalId)
 		externalWorkspaceId = &authInfo.Workspace.Id
-		t.tq.rdb.SetEx(ctx, Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, instance.Stub.ExternalId, t.msg.TaskId), authInfo.Workspace.ExternalId, time.Duration(instance.StubConfig.TaskPolicy.Timeout)*time.Second)
 	}
 
 	_, err = t.tq.backendRepo.CreateTask(ctx, &types.TaskParams{
