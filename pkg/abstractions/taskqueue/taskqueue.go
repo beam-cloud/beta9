@@ -381,12 +381,10 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}
 
 	if in.Result != nil && authInfo.Workspace.StorageAvailable() {
-		go func() {
-			err = tq.storeTaskResult(authInfo, task, in.Result)
-			if err != nil {
-				log.Error().Err(err).Msgf("error storing task result for task %s", task.ExternalId)
-			}
-		}()
+		err = tq.storeTaskResult(authInfo, task, in.Result)
+		if err != nil {
+			log.Error().Err(err).Msgf("error storing task result for task %s", task.ExternalId)
+		}
 	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
