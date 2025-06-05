@@ -411,9 +411,13 @@ func (s *Schema) ToString() string {
 func (s *Schema) ToProto() *pb.Schema {
 	fields := make(map[string]*pb.SchemaField, len(s.Fields))
 	for k, v := range s.Fields {
-		fields[k] = &pb.SchemaField{
+		field := &pb.SchemaField{
 			Type: v.Type,
 		}
+		if v.Type == "object" && v.Fields != nil {
+			field.Fields = v.Fields.ToProto()
+		}
+		fields[k] = field
 	}
 	return &pb.Schema{
 		Fields: fields,
@@ -423,8 +427,13 @@ func (s *Schema) ToProto() *pb.Schema {
 func NewSchemaFromProto(in *pb.Schema) *Schema {
 	fields := make(map[string]SchemaField, len(in.Fields))
 	for k, v := range in.Fields {
+		var nested *Schema
+		if v.Type == "object" && v.Fields != nil {
+			nested = NewSchemaFromProto(v.Fields)
+		}
 		fields[k] = SchemaField{
-			Type: v.Type,
+			Type:   v.Type,
+			Fields: nested,
 		}
 	}
 
@@ -434,7 +443,8 @@ func NewSchemaFromProto(in *pb.Schema) *Schema {
 }
 
 type SchemaField struct {
-	Type string `json:"type"`
+	Type   string  `json:"type"`
+	Fields *Schema `json:"fields,omitempty"` // Only for type == "object"
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {

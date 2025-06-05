@@ -267,7 +267,7 @@ class FunctionHandler:
             try:
                 parsed_inputs = self.inputs.parse(input_data)
             except ValidationError as e:
-                print(f"Validation error: {e}")
+                print(f"Input validation error: {e}")
                 return e.to_dict()
 
             handler_args = (parsed_inputs,)
@@ -286,7 +286,7 @@ class FunctionHandler:
             try:
                 parsed_outputs = self.outputs.parse(result)
             except ValidationError as e:
-                print(f"Validation error: {e}")
+                print(f"Output validation error: {e}")
                 return e.to_dict()
 
             return parsed_outputs.dict()

@@ -289,6 +289,7 @@ class Schema(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class SchemaField(betterproto.Message):
     type: str = betterproto.string_field(1)
+    fields: "Schema" = betterproto.message_field(2)
 
 
 @dataclass(eq=False, repr=False)

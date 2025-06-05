@@ -360,10 +360,23 @@ class RunnerAbstraction(BaseAbstraction):
     def _schema_to_proto(self, py_schema):
         if py_schema is None:
             return None
+
+        def _field_to_proto(field_dict):
+            # Handle nested object fields
+            if field_dict["type"] == "Object":
+                # Recursively convert nested fields
+                nested_fields = field_dict.get("fields", {}).get("fields", {})
+                return SchemaFieldProto(
+                    type="object",
+                    fields=SchemaProto(
+                        fields={k: _field_to_proto(v) for k, v in nested_fields.items()}
+                    ),
+                )
+            else:
+                return SchemaFieldProto(type=field_dict["type"])
+
         fields_dict = py_schema.to_dict()["fields"]
-        return SchemaProto(
-            fields={k: SchemaFieldProto(type=v["type"]) for k, v in fields_dict.items()}
-        )
+        return SchemaProto(fields={k: _field_to_proto(v) for k, v in fields_dict.items()})
 
     def prepare_runtime(
         self,

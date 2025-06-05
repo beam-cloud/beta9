@@ -253,7 +253,10 @@ message TaskPolicy {
 
 message Schema { map<string, SchemaField> fields = 1; }
 
-message SchemaField { string type = 1; }
+message SchemaField {
+  string type = 1;
+  Schema fields = 2;
+}
 
 message GetOrCreateStubRequest {
   string object_id = 1;
