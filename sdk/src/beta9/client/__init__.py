@@ -4,6 +4,8 @@ from typing import Union
 
 import requests
 
+from ..exceptions import DeploymentNotFoundError, StubNotFoundError
+
 
 def make_request(*, token: str, url: str, method: str, path: str, data: dict = {}):
     url = f"{url}/{path}"
@@ -25,4 +27,13 @@ def get_stub_url(*, token: str, url: str, id: str) -> Union[str, None]:
     if response and "url" in response:
         return response["url"]
 
-    return None
+    raise StubNotFoundError(id)
+
+
+@lru_cache(maxsize=128)
+def get_deployment_url(*, token: str, url: str, id: str) -> Union[str, None]:
+    response = make_request(token=token, url=url, method="GET", path=f"/api/v1/deployment/{id}/url")
+    if response and "url" in response:
+        return response["url"]
+
+    raise DeploymentNotFoundError(id)

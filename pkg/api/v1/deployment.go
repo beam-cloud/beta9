@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"path"
@@ -54,6 +55,7 @@ func NewDeploymentGroup(
 	g.POST("/:workspaceId/start/:deploymentId", auth.WithWorkspaceAuth(group.StartDeployment))
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
 	g.DELETE("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.DeleteDeployment))
+	g.GET("/:deploymentId/url", auth.WithAuth(group.GetURL))
 
 	return group
 }
@@ -312,4 +314,39 @@ func (g *DeploymentGroup) DownloadDeploymentPackage(ctx echo.Context) error {
 
 func getPackagePath(workspaceName, objectId string) string {
 	return path.Join("/data/objects/", workspaceName, objectId)
+}
+
+func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	authInfo := cc.AuthInfo
+
+	deploymentId := ctx.Param("deploymentId")
+	deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), authInfo.Workspace.Id, deploymentId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to lookup deployment")
+	}
+	if deployment == nil {
+		return HTTPBadRequest("Invalid deployment ID")
+	}
+
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), deployment.Stub.ExternalId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to lookup stub")
+	}
+	if deployment == nil {
+		return HTTPBadRequest("Invalid deployment ID")
+	}
+
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(deployment.Stub.Config), &stub); err != nil {
+		return HTTPInternalServerError("Failed to decode deployment config")
+	}
+
+	// Allow public stubs to be accessed by any workspace
+	if stubConfig.Pricing == nil && deployment.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return HTTPNotFound()
+	}
+
+	invokeUrl := common.BuildDeploymentURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub, &deployment.Deployment)
+	return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 }

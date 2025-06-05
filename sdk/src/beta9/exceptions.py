@@ -107,3 +107,9 @@ class StubNotFoundError(RuntimeError):
     def __init__(self, stub_id: str):
         self.stub_id = stub_id
         super().__init__(f"Stub not found: {stub_id=}")
+
+
+class DeploymentNotFoundError(RuntimeError):
+    def __init__(self, deployment_id: str):
+        self.deployment_id = deployment_id
+        super().__init__(f"Deployment not found: {deployment_id=}")

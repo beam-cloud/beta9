@@ -44,7 +44,7 @@ class Client:
             id=id, url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}", token=self.token
         )
 
-    def get_deployment_by_name(self, name: str) -> Deployment:
+    def get_deployment_by_name(self, *, name: str) -> Deployment:
         return Deployment(
             base_url=self.base_url,
             id=name,
@@ -52,10 +52,20 @@ class Client:
             workspace_id=self.workspace_id,
         )
 
-    def get_deployment_by_id(self, id: str) -> Deployment:
+    def get_deployment_by_id(self, *, id: str) -> Deployment:
         return Deployment(
             base_url=self.base_url,
-            id=id,
+            deployment_id=id,
+            stub_id=None,
+            token=self.token,
+            workspace_id=self.workspace_id,
+        )
+
+    def get_deployment_by_stub_id(self, *, stub_id: str) -> Deployment:
+        return Deployment(
+            base_url=self.base_url,
+            deployment_id=None,
+            stub_id=stub_id,
             token=self.token,
             workspace_id=self.workspace_id,
         )
