@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -28,25 +29,27 @@ var (
 )
 
 type TaskGroup struct {
-	routerGroup    *echo.Group
-	config         types.AppConfig
-	backendRepo    repository.BackendRepository
-	taskRepo       repository.TaskRepository
-	containerRepo  repository.ContainerRepository
-	redisClient    *common.RedisClient
-	taskDispatcher *task.Dispatcher
-	scheduler      *scheduler.Scheduler
+	routerGroup        *echo.Group
+	config             types.AppConfig
+	backendRepo        repository.BackendRepository
+	taskRepo           repository.TaskRepository
+	containerRepo      repository.ContainerRepository
+	redisClient        *common.RedisClient
+	taskDispatcher     *task.Dispatcher
+	scheduler          *scheduler.Scheduler
+	storageClientCache sync.Map
 }
 
 func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, scheduler *scheduler.Scheduler, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
-		backendRepo:    backendRepo,
-		taskRepo:       taskRepo,
-		containerRepo:  containerRepo,
-		config:         config,
-		redisClient:    redisClient,
-		taskDispatcher: taskDispatcher,
-		scheduler:      scheduler,
+		backendRepo:        backendRepo,
+		taskRepo:           taskRepo,
+		containerRepo:      containerRepo,
+		config:             config,
+		redisClient:        redisClient,
+		taskDispatcher:     taskDispatcher,
+		scheduler:          scheduler,
+		storageClientCache: sync.Map{},
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListTasksPaginated))
@@ -259,10 +262,19 @@ func (g *TaskGroup) addStatsToTask(ctx context.Context, workspaceName string, ta
 }
 
 func (g *TaskGroup) addResultToTask(ctx context.Context, t *types.TaskWithRelated, authInfo *auth.AuthInfo) error {
+	var storageClient *clients.WorkspaceStorageClient
+	var err error
+
 	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
-		if err != nil {
-			return err
+		if cachedStorageClient, ok := g.storageClientCache.Load(authInfo.Workspace.Name); ok {
+			storageClient = cachedStorageClient.(*clients.WorkspaceStorageClient)
+		} else {
+			storageClient, err = clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+			if err != nil {
+				return err
+			}
+
+			g.storageClientCache.Store(authInfo.Workspace.Name, storageClient)
 		}
 
 		fullPath := task.GetTaskResultPath(t.ExternalId)
