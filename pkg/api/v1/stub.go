@@ -182,14 +182,13 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
 
-	// Get URL for Deployments
-	if filter.DeploymentId == "" {
-		return HTTPBadRequest("Deployment ID is required")
-	}
-
-	deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), workspaceId, filter.DeploymentId)
+	deployment, err := g.backendRepo.GetDeploymentByStubExternalId(ctx.Request().Context(), workspaceId, stub.ExternalId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to lookup deployment")
+	}
+
+	if deployment == nil {
+		return HTTPNotFound()
 	}
 
 	invokeUrl := common.BuildDeploymentURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub, &deployment.Deployment)

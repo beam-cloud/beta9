@@ -79,10 +79,9 @@ type AppFilter struct {
 }
 
 type StubGetURLFilter struct {
-	StubId       string `param:"stubId"`
-	WorkspaceId  string `param:"workspaceId"`
-	DeploymentId string `param:"deploymentId"`
-	URLType      string `query:"urlType"`
+	StubId      string `param:"stubId"`
+	WorkspaceId string `param:"workspaceId"`
+	URLType     string `query:"urlType"`
 }
 
 func ParseConditionFromQueryFilters(out interface{}, queryFilters ...QueryFilter) {

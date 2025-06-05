@@ -1,6 +1,6 @@
 from typing import Any, Union
 
-from ..exceptions import StubNotFoundError, TaskNotFoundError
+from ..exceptions import DeploymentNotFoundError, TaskNotFoundError
 from . import get_deployment_url, get_stub_url, post
 from .task import Task
 
@@ -41,7 +41,7 @@ class Deployment:
         """Submit a task to the deployment, and subscribe to the task. Yields updates as task status changes. Returns an iterable of JSON objects."""
 
         if not self.url:
-            raise StubNotFoundError(f"Failed to get retrieve URL for task {id}")
+            raise DeploymentNotFoundError(f"Failed to get retrieve URL for task {id}")
 
         response = post(token=self.token, url=self.url, path="", data=args)
         body = response.json()
