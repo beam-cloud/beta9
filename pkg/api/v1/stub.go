@@ -146,9 +146,6 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 		filter.URLType = g.config.GatewayService.InvokeURLType
 	}
 
-	// TODO: HACK FOR LOCAL DEV, remove before merging
-	filter.URLType = "path"
-
 	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), filter.StubId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to lookup stub")
