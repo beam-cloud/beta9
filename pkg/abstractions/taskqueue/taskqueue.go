@@ -10,7 +10,6 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
-	"github.com/beam-cloud/beta9/pkg/clients"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -386,7 +385,7 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}
 
 	if in.Result != nil && authInfo.Workspace.StorageAvailable() {
-		err = tq.storeTaskResult(authInfo, task, in.Result)
+		err = tq.taskDispatcher.StoreTaskResult(authInfo.Workspace, task.ExternalId, in.Result)
 		if err != nil {
 			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
 		}
@@ -396,32 +395,6 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	return &pb.TaskQueueCompleteResponse{
 		Ok: err == nil,
 	}, nil
-}
-
-func (tq *RedisTaskQueue) storeTaskResult(authInfo *auth.AuthInfo, t *types.Task, result []byte) error {
-	var err error
-	var storageClient *clients.WorkspaceStorageClient
-
-	if authInfo.Workspace.StorageAvailable() {
-		if cachedStorageClient, ok := tq.storageClientCache.Load(authInfo.Workspace.Name); ok {
-			storageClient = cachedStorageClient.(*clients.WorkspaceStorageClient)
-		} else {
-			storageClient, err = clients.NewWorkspaceStorageClient(tq.ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
-			if err != nil {
-				return err
-			}
-
-			tq.storageClientCache.Store(authInfo.Workspace.Name, storageClient)
-		}
-
-		fullPath := task.GetTaskResultPath(t.ExternalId)
-		err = storageClient.Upload(context.Background(), fullPath, result)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func (tq *RedisTaskQueue) TaskQueueMonitor(req *pb.TaskQueueMonitorRequest, stream pb.TaskQueueService_TaskQueueMonitorServer) error {
