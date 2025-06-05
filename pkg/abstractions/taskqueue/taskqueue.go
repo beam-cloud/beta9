@@ -67,13 +67,14 @@ type RedisTaskQueue struct {
 	backendRepo     repository.BackendRepository
 	scheduler       *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
-	queueInstances   *common.SafeMap[*taskQueueInstance]
-	keyEventManager  *common.KeyEventManager
-	queueClient      *taskQueueClient
-	tailscale        *network.Tailscale
-	eventRepo        repository.EventRepository
-	usageMetricsRepo repository.UsageMetricsRepository
-	controller       *abstractions.InstanceController
+	queueInstances     *common.SafeMap[*taskQueueInstance]
+	keyEventManager    *common.KeyEventManager
+	queueClient        *taskQueueClient
+	tailscale          *network.Tailscale
+	eventRepo          repository.EventRepository
+	usageMetricsRepo   repository.UsageMetricsRepository
+	controller         *abstractions.InstanceController
+	storageClientCache sync.Map
 }
 
 func NewRedisTaskQueueService(
@@ -86,23 +87,24 @@ func NewRedisTaskQueueService(
 	}
 
 	tq := &RedisTaskQueue{
-		ctx:              ctx,
-		mu:               sync.Mutex{},
-		config:           opts.Config,
-		rdb:              opts.RedisClient,
-		scheduler:        opts.Scheduler,
-		stubConfigCache:  common.NewSafeMap[*types.StubConfigV1](),
-		keyEventManager:  keyEventManager,
-		workspaceRepo:    opts.WorkspaceRepo,
-		taskDispatcher:   opts.TaskDispatcher,
-		taskRepo:         opts.TaskRepo,
-		containerRepo:    opts.ContainerRepo,
-		backendRepo:      opts.BackendRepo,
-		queueClient:      newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
-		queueInstances:   common.NewSafeMap[*taskQueueInstance](),
-		tailscale:        opts.Tailscale,
-		eventRepo:        opts.EventRepo,
-		usageMetricsRepo: opts.UsageMetricsRepo,
+		ctx:                ctx,
+		mu:                 sync.Mutex{},
+		config:             opts.Config,
+		rdb:                opts.RedisClient,
+		scheduler:          opts.Scheduler,
+		stubConfigCache:    common.NewSafeMap[*types.StubConfigV1](),
+		keyEventManager:    keyEventManager,
+		workspaceRepo:      opts.WorkspaceRepo,
+		taskDispatcher:     opts.TaskDispatcher,
+		taskRepo:           opts.TaskRepo,
+		containerRepo:      opts.ContainerRepo,
+		backendRepo:        opts.BackendRepo,
+		queueClient:        newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
+		queueInstances:     common.NewSafeMap[*taskQueueInstance](),
+		tailscale:          opts.Tailscale,
+		eventRepo:          opts.EventRepo,
+		usageMetricsRepo:   opts.UsageMetricsRepo,
+		storageClientCache: sync.Map{},
 	}
 
 	// Listen for container events with a certain prefix
@@ -394,10 +396,19 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 }
 
 func (tq *RedisTaskQueue) storeTaskResult(authInfo *auth.AuthInfo, t *types.Task, result []byte) error {
+	var err error
+	var storageClient *clients.WorkspaceStorageClient
+
 	if authInfo.Workspace.StorageAvailable() {
-		storageClient, err := clients.NewWorkspaceStorageClient(context.Background(), authInfo.Workspace.Name, authInfo.Workspace.Storage)
-		if err != nil {
-			return err
+		if cachedStorageClient, ok := tq.storageClientCache.Load(authInfo.Workspace.Name); ok {
+			storageClient = cachedStorageClient.(*clients.WorkspaceStorageClient)
+		} else {
+			storageClient, err = clients.NewWorkspaceStorageClient(tq.ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+			if err != nil {
+				return err
+			}
+
+			tq.storageClientCache.Store(authInfo.Workspace.Name, storageClient)
 		}
 
 		fullPath := task.GetTaskResultPath(t.ExternalId)
@@ -405,7 +416,6 @@ func (tq *RedisTaskQueue) storeTaskResult(authInfo *auth.AuthInfo, t *types.Task
 		if err != nil {
 			return err
 		}
-
 	}
 
 	return nil
