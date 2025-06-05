@@ -7,14 +7,15 @@ import requests
 from ..exceptions import DeploymentNotFoundError, StubNotFoundError
 
 
-def make_request(*, token: str, url: str, method: str, path: str, data: dict = {}):
+def make_request(
+    *, token: str, url: str, method: str, path: str, data: dict = {}
+) -> requests.Response:
     url = f"{url}/{path}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    response = requests.request(method, url, headers=headers, data=json.dumps(data))
-    return response.json()
+    return requests.request(method, url, headers=headers, data=json.dumps(data))
 
 
 def post(*, token: str, url: str, path: str, data: dict = {}):
@@ -24,8 +25,10 @@ def post(*, token: str, url: str, path: str, data: dict = {}):
 @lru_cache(maxsize=128)
 def get_stub_url(*, token: str, url: str, id: str) -> Union[str, None]:
     response = make_request(token=token, url=url, method="GET", path=f"/api/v1/stub/{id}/url")
-    if response and "url" in response:
-        return response["url"]
+    body = response.json()
+
+    if body and "url" in body:
+        return body["url"]
 
     raise StubNotFoundError(id)
 
@@ -33,7 +36,9 @@ def get_stub_url(*, token: str, url: str, id: str) -> Union[str, None]:
 @lru_cache(maxsize=128)
 def get_deployment_url(*, token: str, url: str, id: str) -> Union[str, None]:
     response = make_request(token=token, url=url, method="GET", path=f"/api/v1/deployment/{id}/url")
-    if response and "url" in response:
-        return response["url"]
+
+    body = response.json()
+    if body and "url" in body:
+        return body["url"]
 
     raise DeploymentNotFoundError(id)

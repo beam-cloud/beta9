@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Any, Union
 
 from ..exceptions import StubNotFoundError, TaskNotFoundError
 from . import get_deployment_url, get_stub_url, post
@@ -20,32 +20,33 @@ class Deployment:
         else:
             self.url = get_deployment_url(token=self.token, url=self.base_url, id=self.id)
 
-    def submit(self, *, args: dict = {}) -> Union[Task, None]:
+    def submit(self, *, args: dict = {}) -> Union[Task, Any]:
         if not self.url:
             raise TaskNotFoundError(f"Failed to get retrieve URL for task {self.id}")
 
-        result = post(token=self.token, url=self.url, path="", data=args)
-        if "task_id" in result:
+        response = post(token=self.token, url=self.url, path="", data=args)
+        body = response.json()
+        if "task_id" in body:
             return Task(
-                id=result["task_id"],
-                url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{result['task_id']}",
+                id=body["task_id"],
+                url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{body['task_id']}",
                 token=self.token,
             )
 
-        print(result)
-        return None
+        return body
 
     def subscribe(self, *, args: dict = {}):
         if not self.url:
             raise StubNotFoundError(f"Failed to get retrieve URL for task {id}")
 
         response = post(token=self.token, url=self.url, path="", data=args)
-        if "task_id" not in response:
-            raise TaskNotFoundError(f"Failed to get task ID from response for task {id}")
+        body = response.json()
+        if "task_id" not in body and body is not None:
+            return body
 
         task = Task(
-            id=response["task_id"],
-            url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{response['task_id']}",
+            id=body["task_id"],
+            url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{body['task_id']}",
             token=self.token,
         )
 

@@ -1,5 +1,7 @@
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from http import HTTPStatus
+from typing import Any, List, Optional
 
 import requests
 
@@ -10,19 +12,44 @@ from ..type import TaskStatus
 class Task:
     id: str
     url: str
+    _status: Optional[TaskStatus] = None
+    _result: Optional[Any] = None
+    _outputs: Optional[Any] = field(default_factory=list)
 
     def __init__(self, id: str, url: str, token: str):
         self.id = id
         self.url = url
         self.__token = token
+        self._get()
 
-    def get(self):
+    def _get(self):
         headers = {
             "Authorization": f"Bearer {self.__token}",
             "Content-Type": "application/json",
         }
         response = requests.get(self.url, headers=headers)
-        return response.json()
+        if response.status_code == HTTPStatus.OK:
+            body = response.json()
+            self._status = TaskStatus(body["status"])
+            self._result = body["result"]
+            self._outputs = body["outputs"]
+        else:
+            response.raise_for_status()
+
+    def status(self) -> TaskStatus:
+        self._get()
+        return self._status
+
+    def result(self) -> Any:
+        self._get()
+        return self._result
+
+    def outputs(self) -> List:
+        return self._outputs
+
+    def is_complete(self) -> bool:
+        self._get()
+        return self._status.is_complete()
 
     def subscribe(self):
         headers = {

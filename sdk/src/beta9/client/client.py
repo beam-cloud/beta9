@@ -28,15 +28,16 @@ class Client:
             path="/api/v1/workspace/current",
         )
 
-        if response and "external_id" in response:
-            self.workspace_id = response["external_id"]
+        body = response.json()
+        if body and "external_id" in body:
+            self.workspace_id = body["external_id"]
         else:
             raise WorkspaceNotFoundError("Failed to load workspace")
 
     def _get_base_url(self):
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
 
-    def upload_file(self, *, file_path: str = ""):
+    def upload_file(self, local_path: str = "") -> str:
         pass
 
     def get_task_by_id(self, *, id: str) -> Task:
@@ -44,7 +45,7 @@ class Client:
             id=id, url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}", token=self.token
         )
 
-    def get_deployment_by_name(self, *, name: str) -> Deployment:
+    def get_deployment_by_name(self, name: str) -> Deployment:
         return Deployment(
             base_url=self.base_url,
             id=name,
@@ -52,7 +53,7 @@ class Client:
             workspace_id=self.workspace_id,
         )
 
-    def get_deployment_by_id(self, *, id: str) -> Deployment:
+    def get_deployment_by_id(self, id: str) -> Deployment:
         return Deployment(
             base_url=self.base_url,
             deployment_id=id,
@@ -61,7 +62,7 @@ class Client:
             workspace_id=self.workspace_id,
         )
 
-    def get_deployment_by_stub_id(self, *, stub_id: str) -> Deployment:
+    def get_deployment_by_stub_id(self, stub_id: str) -> Deployment:
         return Deployment(
             base_url=self.base_url,
             deployment_id=None,
