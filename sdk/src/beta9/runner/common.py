@@ -283,6 +283,9 @@ class FunctionHandler:
         result = self.handler(*handler_args, **handler_kwargs)
 
         if self.outputs is not None:
+            if result is None:
+                result = {}
+
             try:
                 parsed_outputs = self.outputs.parse(result)
             except ValidationError as e:
