@@ -37,21 +37,32 @@ class Task:
             response.raise_for_status()
 
     def status(self) -> TaskStatus:
+        """Returns the status of the task"""
         self._get()
         return self._status
 
-    def result(self) -> Any:
+    def result(self, wait: bool = False) -> Any:
+        """Returns the JSON output of the task"""
+        if wait:
+            for event in self.subscribe():
+                status = TaskStatus(event.get("status", ""))
+                if status.is_complete():
+                    break
+
         self._get()
         return self._result
 
     def outputs(self) -> List:
+        """Returns a list of the Output() objects saved during the duration of the task"""
         return self._outputs
 
     def is_complete(self) -> bool:
+        """Returns True if the task is in a terminal state (COMPLETE, ERROR, TIMEOUT, CANCELLED)"""
         self._get()
         return self._status.is_complete()
 
     def subscribe(self):
+        """Subscribe to a task and yield updates as task status changes. Returns an iterable of JSON objects."""
         headers = {
             "Authorization": f"Bearer {self.__token}",
             "Content-Type": "application/json",
@@ -91,6 +102,7 @@ class Task:
 
                             except json.JSONDecodeError:
                                 continue
-
+        except GeneratorExit:
+            raise
         except BaseException as e:
             yield {"error": str(e)}

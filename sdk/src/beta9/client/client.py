@@ -38,14 +38,17 @@ class Client:
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
 
     def upload_file(self, local_path: str = "") -> str:
+        """Upload a file to use as an input for a task"""
         pass
 
     def get_task_by_id(self, *, id: str) -> Task:
+        """Retrieve a task by task ID"""
         return Task(
             id=id, url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}", token=self.token
         )
 
     def get_deployment_by_name(self, name: str) -> Deployment:
+        """Retrieve a deployment by name"""
         return Deployment(
             base_url=self.base_url,
             id=name,
@@ -54,6 +57,7 @@ class Client:
         )
 
     def get_deployment_by_id(self, id: str) -> Deployment:
+        """Retrieve a deployment by deployment ID"""
         return Deployment(
             base_url=self.base_url,
             deployment_id=id,
@@ -63,6 +67,7 @@ class Client:
         )
 
     def get_deployment_by_stub_id(self, stub_id: str) -> Deployment:
+        """Retrieve a deployment by stub ID"""
         return Deployment(
             base_url=self.base_url,
             deployment_id=None,
