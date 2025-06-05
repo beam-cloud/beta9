@@ -5,6 +5,7 @@ from typing import Any, List, Optional
 
 import requests
 
+from ..exceptions import TaskNotFoundError
 from ..type import TaskStatus
 
 
@@ -33,6 +34,8 @@ class Task:
             self._status = TaskStatus(body["status"])
             self._result = body["result"]
             self._outputs = body["outputs"]
+        elif response.status_code == HTTPStatus.NOT_FOUND:
+            raise TaskNotFoundError(self.id)
         else:
             response.raise_for_status()
 

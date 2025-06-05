@@ -17,7 +17,6 @@ class Client:
         self.gateway_port: int = gateway_port
         self.tls: bool = tls
         self.base_url: str = self._get_base_url()
-
         self._load_workspace()
 
     def _load_workspace(self):
@@ -41,7 +40,7 @@ class Client:
         """Upload a file to use as an input for a task"""
         pass
 
-    def get_task_by_id(self, *, id: str) -> Task:
+    def get_task_by_id(self, id: str) -> Task:
         """Retrieve a task by task ID"""
         return Task(
             id=id, url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}", token=self.token
@@ -57,7 +56,7 @@ class Client:
         )
 
     def get_deployment_by_id(self, id: str) -> Deployment:
-        """Retrieve a deployment by deployment ID"""
+        """Retrieve a deployment using its deployment ID"""
         return Deployment(
             base_url=self.base_url,
             deployment_id=id,
@@ -67,7 +66,7 @@ class Client:
         )
 
     def get_deployment_by_stub_id(self, stub_id: str) -> Deployment:
-        """Retrieve a deployment by stub ID"""
+        """Retrieve a deployment using the associated stub ID"""
         return Deployment(
             base_url=self.base_url,
             deployment_id=None,
