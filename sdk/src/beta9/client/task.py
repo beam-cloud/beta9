@@ -45,7 +45,7 @@ class Task:
         return self._status
 
     def result(self, wait: bool = False) -> Any:
-        """Returns the JSON output of the task"""
+        """Returns the JSON output of the task. If wait is True, blocks until the task is complete and returns the result."""
         if wait:
             for event in self.subscribe():
                 status = TaskStatus(event.get("status", ""))
