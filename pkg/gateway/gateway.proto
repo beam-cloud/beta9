@@ -191,6 +191,7 @@ message EndTaskRequest {
   string container_id = 4;
   string container_hostname = 5;
   float keep_warm_seconds = 6;
+  bytes result = 7;
 }
 
 message EndTaskResponse { bool ok = 1; }

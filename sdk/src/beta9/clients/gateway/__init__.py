@@ -196,6 +196,7 @@ class EndTaskRequest(betterproto.Message):
     container_id: str = betterproto.string_field(4)
     container_hostname: str = betterproto.string_field(5)
     keep_warm_seconds: float = betterproto.float_field(6)
+    result: bytes = betterproto.bytes_field(7)
 
 
 @dataclass(eq=False, repr=False)

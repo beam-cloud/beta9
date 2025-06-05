@@ -432,6 +432,14 @@ def send_callback(
         print(f"Unable to send callback: {traceback.format_exc()}")
 
 
+def serialize_result(result: Any) -> bytes:
+    try:
+        return json.dumps(result).encode("utf-8")
+    except Exception:
+        print(f"Warning - Error serializing task result: {traceback.format_exc()}")
+        return None
+
+
 def has_asgi3_signature(func) -> bool:
     sig = inspect.signature(func)
     own_parameters = {name for name in sig.parameters if name != "self"}

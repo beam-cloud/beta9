@@ -12,6 +12,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -86,6 +87,13 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 
 	if in.ContainerId != "" {
 		task.ContainerId = in.ContainerId
+	}
+
+	if in.Result != nil && authInfo.Workspace.StorageAvailable() {
+		err = gws.taskDispatcher.StoreTaskResult(authInfo.Workspace, task.ExternalId, in.Result)
+		if err != nil {
+			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
+		}
 	}
 
 	// Track cost for external/public tasks

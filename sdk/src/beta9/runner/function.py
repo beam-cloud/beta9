@@ -38,6 +38,7 @@ from ..runner.common import (
     config,
     end_task_and_send_callback,
     send_callback,
+    serialize_result,
 )
 from ..type import TaskExitCode, TaskStatus
 
@@ -289,6 +290,7 @@ def complete_task(
             container_id=container_id,
             container_hostname=container_hostname,
             keep_warm_seconds=keep_warm_seconds,
+            result=serialize_result(result.result) if result.result else None,
         ),
         override_callback_url=result.callback_url,
     )
