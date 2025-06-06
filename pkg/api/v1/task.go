@@ -2,8 +2,10 @@ package apiv1
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -286,7 +288,8 @@ func (g *TaskGroup) addResultToTask(ctx context.Context, t *types.TaskWithRelate
 		if len(result) > 0 {
 			err = json.Unmarshal(result, &t.Result)
 			if err != nil {
-				return err
+				t.Result = json.RawMessage(fmt.Sprintf(`{"base64":"%s"}`, base64.StdEncoding.EncodeToString(result)))
+				return nil
 			}
 		}
 	}

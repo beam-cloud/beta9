@@ -38,7 +38,6 @@ from ..runner.common import (
     config,
     end_task_and_send_callback,
     send_callback,
-    serialize_result,
 )
 from ..type import TaskExitCode, TaskStatus
 
@@ -46,6 +45,7 @@ from ..type import TaskExitCode, TaskStatus
 @dataclass
 class InvokeResult:
     result: Optional[str] = None
+    pickled_result: Optional[bytes] = None
     callback_url: Optional[str] = None
     exception: Optional[BaseException] = None
 
@@ -258,11 +258,13 @@ def invoke_function(
 
         return InvokeResult(
             result=result,
+            pickled_result=pickled_result,
             callback_url=callback_url,
         )
     except BaseException as e:
         return InvokeResult(
             result=result,
+            pickled_result=pickled_result,
             exception=e,
             callback_url=callback_url,
         )
@@ -290,7 +292,7 @@ def complete_task(
             container_id=container_id,
             container_hostname=container_hostname,
             keep_warm_seconds=keep_warm_seconds,
-            result=serialize_result(result.result) if result.result else None,
+            result=result.pickled_result,
         ),
         override_callback_url=result.callback_url,
     )

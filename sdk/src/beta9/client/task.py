@@ -1,8 +1,10 @@
+import base64
 import json
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from typing import Any, List, Optional
 
+import cloudpickle
 import requests
 
 from ..exceptions import TaskNotFoundError
@@ -38,6 +40,9 @@ class Task:
             raise TaskNotFoundError(self.id)
         else:
             response.raise_for_status()
+
+        if self._result and self._result.get("base64"):
+            self._result = cloudpickle.loads(base64.b64decode(self._result["base64"]))
 
     def status(self) -> TaskStatus:
         """Returns the status of the task"""

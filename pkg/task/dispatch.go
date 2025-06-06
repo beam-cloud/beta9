@@ -16,7 +16,7 @@ import (
 )
 
 func GetTaskResultPath(taskId string) string {
-	return fmt.Sprintf("task/%s/result.json", taskId)
+	return fmt.Sprintf("task/%s/result", taskId)
 }
 
 func NewDispatcher(ctx context.Context, taskRepo repository.TaskRepository) (*Dispatcher, error) {
