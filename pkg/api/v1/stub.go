@@ -168,8 +168,8 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	// Get URL for Serves
-	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell {
+	// Get URL for Serves, Pods, and public stubs
+	if stub.Type.IsServe() || stub.Type.Kind() == types.StubTypeShell || stubConfig.Pricing != nil {
 		invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub)
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	} else if stub.Type.Kind() == types.StubTypePod {
