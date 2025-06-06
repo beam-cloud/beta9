@@ -371,21 +371,27 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}
 
 	// If this task is associated with a different workspace, we need to track the cost
-	if task.ExternalWorkspaceId != nil {
-		defer func() {
-			externalWorkspace, err := tq.backendRepo.GetWorkspace(context.Background(), *task.ExternalWorkspaceId)
-			if err != nil {
-				log.Error().Err(err).Msgf("error getting external workspace for task <%s>", task.ExternalId)
-				return
-			}
+	var workspace *types.Workspace = authInfo.Workspace
 
-			duration := time.Duration(float64(in.TaskDuration) * float64(time.Millisecond))
-			abstractions.TrackTaskCost(duration, instance.Stub, instance.StubConfig.Pricing, tq.usageMetricsRepo, in.TaskId, externalWorkspace.ExternalId)
-		}()
+	if task.ExternalWorkspaceId != nil {
+		externalWorkspace, err := tq.backendRepo.GetWorkspace(context.Background(), *task.ExternalWorkspaceId)
+		if err != nil {
+			log.Error().Err(err).Msgf("error getting external workspace for task <%s>", task.ExternalId)
+		} else {
+			workspace = externalWorkspace
+			abstractions.TrackTaskCost(
+				time.Duration(float64(in.TaskDuration)*float64(time.Millisecond)),
+				instance.Stub,
+				instance.StubConfig.Pricing,
+				tq.usageMetricsRepo,
+				in.TaskId,
+				externalWorkspace.ExternalId,
+			)
+		}
 	}
 
-	if in.Result != nil && authInfo.Workspace.StorageAvailable() {
-		err = tq.taskDispatcher.StoreTaskResult(authInfo.Workspace, task.ExternalId, in.Result)
+	if in.Result != nil && workspace.StorageAvailable() {
+		err = tq.taskDispatcher.StoreTaskResult(workspace, task.ExternalId, in.Result)
 		if err != nil {
 			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
 		}

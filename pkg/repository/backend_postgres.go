@@ -548,7 +548,7 @@ func (r *PostgresBackendRepository) DeleteTask(ctx context.Context, externalId s
 
 func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId string) (*types.Task, error) {
 	var task types.Task
-	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
+	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, external_workspace_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &task, query, externalId)
 	if err != nil {
 		return &types.Task{}, err
