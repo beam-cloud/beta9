@@ -67,7 +67,13 @@ class Client:
                 if r.status_code != http.HTTPStatus.OK:
                     raise VolumeUploadError(f"Failed to upload file: {r.text}")
 
-            return f"{self.base_url}/volume/{self.workspace_id}/generate-download-url/{VOLUME_UPLOAD_PATH}/{volume_path}"
+        response = get(
+            token=self.token,
+            url=self.base_url,
+            path=f"/volume/{self.workspace_id}/generate-download-url/{VOLUME_UPLOAD_PATH}/{volume_path}",
+        )
+        response.raise_for_status()
+        return response.json()
 
     def get_task_by_id(self, id: str) -> Task:
         """Retrieve a task by task ID"""
