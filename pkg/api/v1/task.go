@@ -201,6 +201,18 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 	return nil
 }
 
+func (g *TaskGroup) hasTaskAccess(task *types.TaskWithRelated, authInfo *auth.AuthInfo) bool {
+	if task.WorkspaceId == authInfo.Workspace.Id {
+		return true
+	}
+
+	if task.ExternalWorkspaceId != nil && *task.ExternalWorkspaceId == authInfo.Workspace.Id {
+		return true
+	}
+
+	return false
+}
+
 func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
@@ -212,7 +224,7 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 			return HTTPNotFound()
 		}
 
-		if task.WorkspaceId != cc.AuthInfo.Workspace.Id && *task.ExternalWorkspaceId != cc.AuthInfo.Workspace.Id {
+		if !g.hasTaskAccess(task, cc.AuthInfo) {
 			return HTTPNotFound()
 		}
 
