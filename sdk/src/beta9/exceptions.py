@@ -113,3 +113,9 @@ class DeploymentNotFoundError(RuntimeError):
     def __init__(self, deployment_id: str):
         self.deployment_id = deployment_id
         super().__init__(f"Deployment not found: {deployment_id=}")
+
+
+class VolumeUploadError(RuntimeError):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(f"Unable to upload volume: {message}")

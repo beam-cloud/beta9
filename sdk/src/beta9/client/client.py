@@ -1,7 +1,15 @@
-from ..exceptions import WorkspaceNotFoundError
-from . import make_request
+import http
+import uuid
+from pathlib import Path
+
+import requests
+
+from ..exceptions import VolumeUploadError, WorkspaceNotFoundError
+from . import get, make_request
 from .deployment import Deployment
 from .task import Task
+
+VOLUME_UPLOAD_PATH = "/uploads"
 
 
 class Client:
@@ -37,8 +45,26 @@ class Client:
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
 
     def upload_file(self, local_path: str = "") -> str:
-        """Upload a file to use as an input for a task"""
-        pass
+        path = Path(local_path)
+        filename = f"{path.stem}_{uuid.uuid4()}{path.suffix}"
+        volume_path = str(path.parent / filename) if path.parent != Path(".") else filename
+        response = get(
+            token=self.token,
+            url=self.base_url,
+            path=f"/volume/{self.workspace_id}/generate-upload-url/{VOLUME_UPLOAD_PATH}/{volume_path}",
+        )
+
+        if response.status_code == http.HTTPStatus.OK:
+            presigned_url = response.json()
+
+            with open(local_path, "rb") as file:
+                r = requests.put(presigned_url, data=file)
+                if r.status_code != http.HTTPStatus.OK:
+                    raise VolumeUploadError(f"Failed to upload file: {r.text}")
+
+            return f"{self.base_url}/volume/{self.workspace_id}/generate-download-url{VOLUME_UPLOAD_PATH}/{volume_path}"
+        else:
+            raise VolumeUploadError(f"Failed to get upload URL: {response.text}")
 
     def get_task_by_id(self, id: str) -> Task:
         """Retrieve a task by task ID"""
