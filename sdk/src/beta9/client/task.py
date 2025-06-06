@@ -2,7 +2,7 @@ import base64
 import json
 from dataclasses import dataclass, field
 from http import HTTPStatus
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
 import cloudpickle
 import requests
@@ -52,10 +52,7 @@ class Task:
     def result(self, wait: bool = False) -> Any:
         """Returns the JSON output of the task. If wait is True, blocks until the task is complete and returns the result."""
         if wait:
-            for event in self.subscribe():
-                status = TaskStatus(event.get("status", ""))
-                if status.is_complete():
-                    break
+            return self.subscribe()
 
         self._get()
         return self._result
@@ -69,7 +66,7 @@ class Task:
         self._get()
         return self._status.is_complete()
 
-    def subscribe(self):
+    def subscribe(self, event_handler: Callable = None) -> Any:
         """Subscribe to a task and yield updates as task status changes. Returns an iterable of JSON objects."""
         headers = {
             "Authorization": f"Bearer {self.__token}",
@@ -101,16 +98,21 @@ class Task:
                         if event_type == "status" and data:
                             try:
                                 task_data = json.loads(data)
-                                yield task_data
+
+                                if event_handler:
+                                    event_handler(task_data)
 
                                 # Stop iteration if task is done running
-                                status = task_data.get("status")
-                                if TaskStatus(status).is_complete():
-                                    return
+                                status = TaskStatus(task_data.get("status"))
+                                if status.is_complete():
+                                    self._status = status
+                                    self._result = task_data.get("result")
+                                    self._outputs = task_data.get("outputs")
+                                    return self._result
 
                             except json.JSONDecodeError:
                                 continue
         except GeneratorExit:
             raise
         except BaseException as e:
-            yield {"error": str(e)}
+            return {"error": str(e)}

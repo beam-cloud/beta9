@@ -1,4 +1,4 @@
-from typing import Any, Union
+from typing import Any, Callable, Union
 
 from ..exceptions import DeploymentNotFoundError, TaskNotFoundError
 from . import get_deployment_url, get_stub_url, post
@@ -37,7 +37,7 @@ class Deployment:
 
         return body
 
-    def subscribe(self, *, args: dict = {}):
+    def subscribe(self, *, args: dict = {}, event_handler: Callable = None) -> Any:
         """Submit a task to the deployment, and subscribe to the task. Yields updates as task status changes. Returns an iterable of JSON objects."""
 
         if not self.url:
@@ -54,4 +54,4 @@ class Deployment:
             token=self.token,
         )
 
-        return task.subscribe()
+        return task.subscribe(event_handler=event_handler)
