@@ -108,6 +108,12 @@ class Task:
                                     self._status = status
                                     self._result = task_data.get("result")
                                     self._outputs = task_data.get("outputs")
+
+                                    if self._result and self._result.get("base64"):
+                                        self._result = cloudpickle.loads(
+                                            base64.b64decode(self._result["base64"])
+                                        )
+
                                     return self._result
 
                             except json.JSONDecodeError:

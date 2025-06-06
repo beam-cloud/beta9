@@ -20,13 +20,13 @@ class Deployment:
         else:
             self.url = get_deployment_url(token=self.token, url=self.base_url, id=self.id)
 
-    def submit(self, *, args: dict = {}) -> Union[Task, Any]:
+    def submit(self, *, input: dict = {}) -> Union[Task, Any]:
         """Submit a task to the deployment. Returns a Task object if the task runs asynchronously, otherwise blocks until the task is complete and returns the JSON response."""
 
         if not self.url:
             raise TaskNotFoundError(f"Failed to get retrieve URL for task {self.id}")
 
-        response = post(token=self.token, url=self.url, path="", data=args)
+        response = post(token=self.token, url=self.url, path="", data=input)
         body = response.json()
         if "task_id" in body:
             return Task(
@@ -37,13 +37,13 @@ class Deployment:
 
         return body
 
-    def subscribe(self, *, args: dict = {}, event_handler: Callable = None) -> Any:
+    def subscribe(self, *, input: dict = {}, event_handler: Callable = None) -> Any:
         """Submit a task to the deployment, and subscribe to the task. Yields updates as task status changes. Returns an iterable of JSON objects."""
 
         if not self.url:
             raise DeploymentNotFoundError(f"Failed to get retrieve URL for task {id}")
 
-        response = post(token=self.token, url=self.url, path="", data=args)
+        response = post(token=self.token, url=self.url, path="", data=input)
         body = response.json()
         if "task_id" not in body and body is not None:
             return body

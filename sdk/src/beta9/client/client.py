@@ -46,15 +46,6 @@ class Client:
             id=id, url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}", token=self.token
         )
 
-    def get_deployment_by_name(self, name: str) -> Deployment:
-        """Retrieve a deployment by name"""
-        return Deployment(
-            base_url=self.base_url,
-            id=name,
-            token=self.token,
-            workspace_id=self.workspace_id,
-        )
-
     def get_deployment_by_id(self, id: str) -> Deployment:
         """Retrieve a deployment using its deployment ID"""
         return Deployment(
