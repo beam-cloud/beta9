@@ -9,7 +9,7 @@ from . import get, make_request
 from .deployment import Deployment
 from .task import Task
 
-VOLUME_UPLOAD_PATH = "/uploads"
+VOLUME_UPLOAD_PATH = "uploads"
 
 
 class Client:
@@ -48,11 +48,16 @@ class Client:
         path = Path(local_path)
         filename = f"{path.stem}_{uuid.uuid4()}{path.suffix}"
         volume_path = str(path.parent / filename) if path.parent != Path(".") else filename
-        response = get(
-            token=self.token,
-            url=self.base_url,
-            path=f"/volume/{self.workspace_id}/generate-upload-url/{VOLUME_UPLOAD_PATH}/{volume_path}",
-        )
+
+        try:
+            response = get(
+                token=self.token,
+                url=self.base_url,
+                path=f"/volume/{self.workspace_id}/generate-upload-url/{VOLUME_UPLOAD_PATH}/{volume_path}",
+            )
+            response.raise_for_status()
+        except BaseException as e:
+            raise VolumeUploadError(f"Failed to get upload URL: {e}")
 
         if response.status_code == http.HTTPStatus.OK:
             presigned_url = response.json()
@@ -62,9 +67,7 @@ class Client:
                 if r.status_code != http.HTTPStatus.OK:
                     raise VolumeUploadError(f"Failed to upload file: {r.text}")
 
-            return f"{self.base_url}/volume/{self.workspace_id}/generate-download-url{VOLUME_UPLOAD_PATH}/{volume_path}"
-        else:
-            raise VolumeUploadError(f"Failed to get upload URL: {response.text}")
+            return f"{self.base_url}/volume/{self.workspace_id}/generate-download-url/{VOLUME_UPLOAD_PATH}/{volume_path}"
 
     def get_task_by_id(self, id: str) -> Task:
         """Retrieve a task by task ID"""

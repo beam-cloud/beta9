@@ -357,6 +357,7 @@ func (g *volumeGroup) generatePresignedURL(ctx context.Context, workspace *types
 	}
 
 	key := path.Join(types.DefaultVolumesPrefix, volume.ExternalId, volumePath)
+
 	var url string
 	switch urlType {
 	case http.MethodPut:

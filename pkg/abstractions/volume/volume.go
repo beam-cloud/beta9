@@ -542,6 +542,7 @@ func parseVolumeInput(input string) (string, string) {
 		volumeName = parts[0]
 		volumePath = strings.Join(parts[1:], string(os.PathSeparator))
 	}
+
 	return volumeName, filepath.Clean(volumePath)
 }
 
