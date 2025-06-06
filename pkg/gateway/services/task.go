@@ -89,21 +89,32 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		task.ContainerId = in.ContainerId
 	}
 
-	if in.Result != nil && authInfo.Workspace.StorageAvailable() {
-		err = gws.taskDispatcher.StoreTaskResult(authInfo.Workspace, task.ExternalId, in.Result)
-		if err != nil {
-			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
-		}
-	}
+	var workspace *types.Workspace = authInfo.Workspace
 
 	// Track cost for external/public tasks
 	if task.ExternalWorkspaceId != nil {
-		duration := time.Duration(float64(in.TaskDuration) * float64(time.Millisecond))
-		err = gws.trackExternalTaskCost(task, duration)
+		workspace, err = gws.backendRepo.GetWorkspace(context.Background(), *task.ExternalWorkspaceId)
 		if err != nil {
 			return &pb.EndTaskResponse{
 				Ok: false,
 			}, nil
+
+		}
+
+		duration := time.Duration(float64(in.TaskDuration) * float64(time.Millisecond))
+		err = gws.trackExternalTaskCost(task, workspace, duration)
+		if err != nil {
+			return &pb.EndTaskResponse{
+				Ok: false,
+			}, nil
+		}
+	}
+
+	// Store task result in persistent storage
+	if in.Result != nil && workspace.StorageAvailable() {
+		err = gws.taskDispatcher.StoreTaskResult(workspace, task.ExternalId, in.Result)
+		if err != nil {
+			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
 		}
 	}
 
@@ -120,12 +131,7 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	}, nil
 }
 
-func (gws *GatewayService) trackExternalTaskCost(task *types.TaskWithRelated, duration time.Duration) error {
-	externalWorkspace, err := gws.backendRepo.GetWorkspace(context.Background(), *task.ExternalWorkspaceId)
-	if err != nil {
-		return err
-	}
-
+func (gws *GatewayService) trackExternalTaskCost(task *types.TaskWithRelated, externalWorkspace *types.Workspace, duration time.Duration) error {
 	stubWithRelated, err := gws.backendRepo.GetStubByExternalId(context.Background(), task.Stub.ExternalId)
 	if err != nil {
 		return err

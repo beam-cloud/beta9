@@ -321,7 +321,7 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 	authInfo := cc.AuthInfo
 
 	deploymentId := ctx.Param("deploymentId")
-	deployment, err := g.backendRepo.GetDeploymentByExternalId(ctx.Request().Context(), authInfo.Workspace.Id, deploymentId)
+	deployment, err := g.backendRepo.GetAnyDeploymentByExternalId(ctx.Request().Context(), deploymentId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to lookup deployment")
 	}
@@ -338,13 +338,18 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 	}
 
 	stubConfig := &types.StubConfigV1{}
-	if err := json.Unmarshal([]byte(deployment.Stub.Config), &stub); err != nil {
+	if err := json.Unmarshal([]byte(deployment.Stub.Config), &stubConfig); err != nil {
 		return HTTPInternalServerError("Failed to decode deployment config")
 	}
 
-	// Allow public stubs to be accessed by any workspace
 	if stubConfig.Pricing == nil && deployment.Workspace.ExternalId != authInfo.Workspace.ExternalId {
 		return HTTPNotFound()
+	}
+
+	// If the stub is public, return the stub URL, not the deployment URL
+	if stubConfig.Pricing != nil {
+		invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub)
+		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
 
 	invokeUrl := common.BuildDeploymentURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub, &deployment.Deployment)
