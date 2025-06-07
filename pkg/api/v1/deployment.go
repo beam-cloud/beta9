@@ -353,6 +353,7 @@ func (g *DeploymentGroup) getDeployment(ctx echo.Context, workspaceId, stubType,
 
 var stubTypeMap = map[string]string{
 	"taskqueue": types.StubTypeTaskQueueDeployment,
+	"endpoint":  types.StubTypeEndpointDeployment,
 	"http":      types.StubTypeEndpointDeployment,
 	"asgi":      types.StubTypeASGIDeployment,
 	"function":  types.StubTypeFunctionDeployment,
@@ -380,7 +381,7 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 
 		deployment, err = g.getDeployment(ctx, workspaceId, stubType, deploymentName, version)
 		if err != nil {
-			return HTTPInternalServerError("Failed to lookup deployment")
+			return HTTPNotFound()
 		}
 
 		if deployment == nil {
@@ -389,7 +390,7 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 
 		stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), deployment.Stub.ExternalId)
 		if err != nil {
-			return HTTPInternalServerError("Failed to lookup stub")
+			return HTTPNotFound()
 		}
 
 		invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub)
@@ -398,7 +399,7 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 
 	deployment, err = g.backendRepo.GetAnyDeploymentByExternalId(ctx.Request().Context(), deploymentId)
 	if err != nil {
-		return HTTPInternalServerError("Failed to lookup deployment")
+		return HTTPNotFound()
 	}
 
 	if deployment == nil {
