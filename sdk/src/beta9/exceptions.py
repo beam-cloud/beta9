@@ -89,3 +89,33 @@ class StatPathError(RuntimeError):
         self.message = message.capitalize() if message else ""
         self.path = path
         super().__init__(f"Unable to stat path: {path=} {message=}")
+
+
+class TaskNotFoundError(RuntimeError):
+    def __init__(self, task_id: str):
+        self.task_id = task_id
+        super().__init__(f"Task not found: {task_id}")
+
+
+class WorkspaceNotFoundError(RuntimeError):
+    def __init__(self, workspace_id: str):
+        self.workspace_id = workspace_id
+        super().__init__(f"Workspace not found: {workspace_id}")
+
+
+class StubNotFoundError(RuntimeError):
+    def __init__(self, stub_id: str):
+        self.stub_id = stub_id
+        super().__init__(f"Stub not found: {stub_id=}")
+
+
+class DeploymentNotFoundError(RuntimeError):
+    def __init__(self, deployment_id: str):
+        self.deployment_id = deployment_id
+        super().__init__(f"Deployment not found: {deployment_id=}")
+
+
+class VolumeUploadError(RuntimeError):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(f"Unable to upload volume: {message}")

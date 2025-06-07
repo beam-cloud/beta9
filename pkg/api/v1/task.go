@@ -2,15 +2,20 @@ package apiv1
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/output"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -20,28 +25,33 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-var DefaultTaskOutputExpirationS uint32 = 3600
+var (
+	DefaultTaskOutputExpirationS  uint32 = 3600
+	DefaultTaskSubscribeIntervalS uint32 = 1
+)
 
 type TaskGroup struct {
-	routerGroup    *echo.Group
-	config         types.AppConfig
-	backendRepo    repository.BackendRepository
-	taskRepo       repository.TaskRepository
-	containerRepo  repository.ContainerRepository
-	redisClient    *common.RedisClient
-	taskDispatcher *task.Dispatcher
-	scheduler      *scheduler.Scheduler
+	routerGroup        *echo.Group
+	config             types.AppConfig
+	backendRepo        repository.BackendRepository
+	taskRepo           repository.TaskRepository
+	containerRepo      repository.ContainerRepository
+	redisClient        *common.RedisClient
+	taskDispatcher     *task.Dispatcher
+	scheduler          *scheduler.Scheduler
+	storageClientCache sync.Map
 }
 
 func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, scheduler *scheduler.Scheduler, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
-		backendRepo:    backendRepo,
-		taskRepo:       taskRepo,
-		containerRepo:  containerRepo,
-		config:         config,
-		redisClient:    redisClient,
-		taskDispatcher: taskDispatcher,
-		scheduler:      scheduler,
+		backendRepo:        backendRepo,
+		taskRepo:           taskRepo,
+		containerRepo:      containerRepo,
+		config:             config,
+		redisClient:        redisClient,
+		taskDispatcher:     taskDispatcher,
+		scheduler:          scheduler,
+		storageClientCache: sync.Map{},
 	}
 
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListTasksPaginated))
@@ -49,6 +59,7 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 	g.GET("/:workspaceId/aggregate-by-time-window", auth.WithWorkspaceAuth(group.AggregateTasksByTimeWindow))
 	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
 	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
+	g.GET("/:workspaceId/:taskId/subscribe", auth.WithWorkspaceAuth(group.SubscribeTask))
 	g.GET("/metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
 
 	return group
@@ -114,13 +125,36 @@ func (g *TaskGroup) ListTasksPaginated(ctx echo.Context) error {
 	}
 }
 
-func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
+func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 
 	taskId := ctx.Param("taskId")
-	if task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId); err != nil {
-		return HTTPInternalServerError("Failed to retrieve task")
-	} else {
+	if taskId == "" {
+		return HTTPBadRequest("Missing task ID")
+	}
+
+	ctx.Response().Header().Set(echo.HeaderContentType, "text/event-stream")
+	ctx.Response().Header().Set(echo.HeaderCacheControl, "no-cache")
+	ctx.Response().Header().Set(echo.HeaderConnection, "keep-alive")
+	ctx.Response().WriteHeader(http.StatusOK)
+	flusher, ok := ctx.Response().Writer.(http.Flusher)
+	if !ok {
+		return HTTPInternalServerError("Streaming unsupported")
+	}
+
+	var lastStatus types.TaskStatus
+	for {
+		select {
+		case <-ctx.Request().Context().Done():
+			return nil
+		default:
+		}
+
+		task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId)
+		if err != nil {
+			return HTTPInternalServerError("Failed to retrieve task")
+		}
+
 		if task == nil {
 			return HTTPNotFound()
 		}
@@ -134,6 +168,72 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 
 		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
 		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+		g.addResultToTask(ctx.Request().Context(), task, cc.AuthInfo)
+
+		status := task.Status
+		if status != lastStatus {
+			serializedTask, err := serializer.Serialize(task)
+			if err != nil {
+				return HTTPInternalServerError("Failed to serialize task")
+			}
+			jsonBytes, err := json.Marshal(serializedTask)
+			if err != nil {
+				return HTTPInternalServerError("Failed to marshal task to JSON")
+			}
+
+			// Write SSE event
+			ctx.Response().Write([]byte("event: status\n"))
+			ctx.Response().Write([]byte("data: "))
+			ctx.Response().Write(jsonBytes)
+			ctx.Response().Write([]byte("\n\n"))
+			flusher.Flush()
+			lastStatus = status
+		}
+
+		// If task is completed, break
+		if task.Status.IsCompleted() {
+			break
+		}
+
+		time.Sleep(time.Duration(DefaultTaskSubscribeIntervalS) * time.Second)
+	}
+
+	return nil
+}
+
+func (g *TaskGroup) hasTaskAccess(task *types.TaskWithRelated, authInfo *auth.AuthInfo) bool {
+	if task.WorkspaceId == authInfo.Workspace.Id {
+		return true
+	}
+
+	if task.ExternalWorkspaceId != nil && *task.ExternalWorkspaceId == authInfo.Workspace.Id {
+		return true
+	}
+
+	return false
+}
+
+func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	taskId := ctx.Param("taskId")
+	if task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId); err != nil {
+		return HTTPInternalServerError("Failed to retrieve task")
+	} else {
+		if task == nil {
+			return HTTPNotFound()
+		}
+
+		if !g.hasTaskAccess(task, cc.AuthInfo) {
+			return HTTPNotFound()
+		}
+
+		task.Workspace = *cc.AuthInfo.Workspace
+		task.Stub.SanitizeConfig()
+
+		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
+		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+		g.addResultToTask(ctx.Request().Context(), task, cc.AuthInfo)
 
 		serializedTask, err := serializer.Serialize(task)
 		if err != nil {
@@ -171,6 +271,40 @@ func (g *TaskGroup) addStatsToTask(ctx context.Context, workspaceName string, ta
 		return err
 	}
 	task.Stats.ActiveContainers = uint32(len(activeContainers))
+
+	return nil
+}
+
+func (g *TaskGroup) addResultToTask(ctx context.Context, t *types.TaskWithRelated, authInfo *auth.AuthInfo) error {
+	var storageClient *clients.WorkspaceStorageClient
+	var err error
+
+	if authInfo.Workspace.StorageAvailable() {
+		if cachedStorageClient, ok := g.storageClientCache.Load(authInfo.Workspace.Name); ok {
+			storageClient = cachedStorageClient.(*clients.WorkspaceStorageClient)
+		} else {
+			storageClient, err = clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+			if err != nil {
+				return err
+			}
+
+			g.storageClientCache.Store(authInfo.Workspace.Name, storageClient)
+		}
+
+		fullPath := task.GetTaskResultPath(t.ExternalId)
+		result, err := storageClient.Download(ctx, fullPath)
+		if err != nil {
+			return err
+		}
+
+		if len(result) > 0 {
+			err = json.Unmarshal(result, &t.Result)
+			if err != nil {
+				t.Result = json.RawMessage(fmt.Sprintf(`{"base64":"%s"}`, base64.StdEncoding.EncodeToString(result)))
+				return nil
+			}
+		}
+	}
 
 	return nil
 }

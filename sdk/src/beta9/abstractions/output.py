@@ -4,7 +4,7 @@ import uuid
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Generator, NamedTuple, Optional, Protocol, Union
+from typing import Any, BinaryIO, Dict, Generator, NamedTuple, Optional, Protocol, Union
 
 from betterproto import Casing
 
@@ -150,6 +150,27 @@ class Output(BaseAbstraction):
         self.path = self.path.rename(new_dir / self.path.name)
 
         return self
+
+    @classmethod
+    def from_file(cls, file_handle: BinaryIO) -> "Output":
+        """
+        Creates an instance of Output from a file-like object.
+
+        For example:
+
+            ```python
+            with open("myfile.txt", "rb") as f:
+                output = Output.from_file(f)
+                output.save()
+            ```
+        """
+        cls.prepare_tmp_dir()
+        path = cls._tmp_dir / str(uuid.uuid4())
+
+        with open(path, "wb") as tmp_file:
+            shutil.copyfileobj(file_handle, tmp_file)
+
+        return cls(path=path)
 
     @classmethod
     def prepare_tmp_dir(cls) -> None:

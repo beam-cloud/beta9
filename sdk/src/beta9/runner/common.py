@@ -27,6 +27,7 @@ from ..clients.gateway import (
 )
 from ..env import is_remote
 from ..exceptions import RunnerException
+from ..schema import Schema, ValidationError
 
 USER_CODE_DIR = "/mnt/code"
 USER_VOLUMES_DIR = "/volumes"
@@ -53,6 +54,8 @@ class Config:
     bind_port: int
     checkpoint_enabled: bool
     volume_cache_map: Dict
+    inputs: Dict
+    outputs: Dict
 
     @classmethod
     def load_from_env(cls) -> "Config":
@@ -71,6 +74,8 @@ class Config:
         timeout = int(os.getenv("TIMEOUT", 180))
         checkpoint_enabled = os.getenv("CHECKPOINT_ENABLED", "false").lower() == "true"
         volume_cache_map = json.loads(os.getenv("VOLUME_CACHE_MAP", "{}"))
+        inputs = json.loads(os.getenv("BETA9_INPUTS", "{}"))
+        outputs = json.loads(os.getenv("BETA9_OUTPUTS", "{}"))
 
         if workers <= 0:
             workers = 1
@@ -94,6 +99,8 @@ class Config:
             timeout=timeout,
             checkpoint_enabled=checkpoint_enabled,
             volume_cache_map=volume_cache_map,
+            inputs=inputs,
+            outputs=outputs,
         )
 
 
@@ -181,6 +188,8 @@ class FunctionHandler:
         self.handler_path: Optional[str] = handler_path
         self.handler: Optional[Callable] = None
         self.is_async: bool = False
+        self.inputs: Optional[Schema] = None
+        self.outputs: Optional[Schema] = None
         self._load()
 
     @contextmanager
@@ -207,6 +216,12 @@ class FunctionHandler:
     def _load(self):
         if sys.path[0] != USER_CODE_DIR:
             sys.path.insert(0, USER_CODE_DIR)
+
+        if config.inputs:
+            self.inputs = Schema.from_dict(config.inputs)
+
+        if config.outputs:
+            self.outputs = Schema.from_dict(config.outputs)
 
         try:
             module = None
@@ -238,11 +253,48 @@ class FunctionHandler:
         if self.handler is None:
             raise Exception("Handler not configured.")
 
+        handler_args = args
+        handler_kwargs = kwargs
+
+        if self.inputs is not None:
+            if len(kwargs) == 1:
+                key, value = next(iter(kwargs.items()))
+                if isinstance(value, dict):
+                    input_data = value
+                else:
+                    # Wrap the value in a dict with the expected field name
+                    input_data = {key: value}
+            else:
+                input_data = kwargs
+
+            try:
+                parsed_inputs = self.inputs.new(input_data)
+            except ValidationError as e:
+                print(f"Input validation error: {e}")
+                return e.to_dict()
+
+            handler_args = (parsed_inputs,)
+            handler_kwargs = {}
+
         if self.pass_context:
-            kwargs["context"] = context
+            handler_kwargs["context"] = context
 
         os.environ["TASK_ID"] = context.task_id or ""
-        return self.handler(*args, **kwargs)
+        result = self.handler(*handler_args, **handler_kwargs)
+
+        if self.outputs is not None:
+            if result is None:
+                result = {}
+
+            try:
+                parsed_outputs = self.outputs.new(result)
+            except ValidationError as e:
+                print(f"Output validation error: {e}")
+                return e.to_dict()
+
+            return parsed_outputs.dump()
+
+        return result
 
     @property
     def parent_abstraction(self) -> ParentAbstractionProxy:
@@ -378,6 +430,14 @@ def send_callback(
         print(f"Callback request took {time.time() - start} seconds")
     except BaseException:
         print(f"Unable to send callback: {traceback.format_exc()}")
+
+
+def serialize_result(result: Any) -> bytes:
+    try:
+        return json.dumps(result).encode("utf-8")
+    except Exception:
+        print(f"Warning - Error serializing task result: {traceback.format_exc()}")
+        return None
 
 
 def has_asgi3_signature(func) -> bool:

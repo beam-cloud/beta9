@@ -25,8 +25,9 @@ from ..clients.function import (
     FunctionServiceStub,
 )
 from ..env import called_on_import, is_local
+from ..schema import Schema
 from ..sync import FileSyncer
-from ..type import GpuType, GpuTypeAlias, TaskPolicy
+from ..type import GpuType, GpuTypeAlias, PricingPolicy, TaskPolicy
 from .mixins import DeployableMixin
 
 
@@ -74,6 +75,10 @@ class Function(RunnerAbstraction):
             Setting values here will override timeout and retries.
         headless (bool):
             Determines whether the function continues running in the background after the client disconnects. Default: False.
+        inputs (Optional[Schema]):
+            The input schema for the function. Default is None.
+        outputs (Optional[Schema]):
+            The output model for the function. Default is None.
     Example:
         ```python
         from beta9 import function, Image
@@ -111,6 +116,9 @@ class Function(RunnerAbstraction):
         task_policy: TaskPolicy = TaskPolicy(),
         on_deploy: Optional[AbstractCallableWrapper] = None,
         headless: bool = False,
+        pricing: Optional[PricingPolicy] = None,
+        inputs: Optional[Schema] = None,
+        outputs: Optional[Schema] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -128,6 +136,9 @@ class Function(RunnerAbstraction):
             task_policy=task_policy,
             on_deploy=on_deploy,
             app=app,
+            pricing=pricing,
+            inputs=inputs,
+            outputs=outputs,
         )
 
         self._function_stub: Optional[FunctionServiceStub] = None

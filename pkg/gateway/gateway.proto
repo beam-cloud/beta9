@@ -191,6 +191,7 @@ message EndTaskRequest {
   string container_id = 4;
   string container_hostname = 5;
   float keep_warm_seconds = 6;
+  bytes result = 7;
 }
 
 message EndTaskResponse { bool ok = 1; }
@@ -251,6 +252,13 @@ message TaskPolicy {
   uint32 ttl = 3;
 }
 
+message Schema { map<string, SchemaField> fields = 1; }
+
+message SchemaField {
+  string type = 1;
+  Schema fields = 2;
+}
+
 message GetOrCreateStubRequest {
   string object_id = 1;
   string image_id = 2;
@@ -285,6 +293,8 @@ message GetOrCreateStubRequest {
   repeated string env = 32;
   string app_name = 33;
   types.PricingPolicy pricing = 34;
+  Schema inputs = 35;
+  Schema outputs = 36;
 }
 
 message GetOrCreateStubResponse {

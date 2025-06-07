@@ -301,17 +301,18 @@ func (g *Gateway) registerServices() error {
 
 	// Register function service
 	fs, err := function.NewRuncFunctionService(g.ctx, function.FunctionServiceOpts{
-		Config:         g.Config,
-		RedisClient:    g.RedisClient,
-		BackendRepo:    g.BackendRepo,
-		WorkspaceRepo:  g.WorkspaceRepo,
-		TaskRepo:       g.TaskRepo,
-		ContainerRepo:  g.ContainerRepo,
-		Scheduler:      g.Scheduler,
-		Tailscale:      g.Tailscale,
-		RouteGroup:     g.rootRouteGroup,
-		TaskDispatcher: g.TaskDispatcher,
-		EventRepo:      g.EventRepo,
+		Config:           g.Config,
+		RedisClient:      g.RedisClient,
+		BackendRepo:      g.BackendRepo,
+		WorkspaceRepo:    g.WorkspaceRepo,
+		TaskRepo:         g.TaskRepo,
+		ContainerRepo:    g.ContainerRepo,
+		Scheduler:        g.Scheduler,
+		Tailscale:        g.Tailscale,
+		RouteGroup:       g.rootRouteGroup,
+		TaskDispatcher:   g.TaskDispatcher,
+		EventRepo:        g.EventRepo,
+		UsageMetricsRepo: g.UsageMetricsRepo,
 	})
 	if err != nil {
 		return err
@@ -450,18 +451,19 @@ func (g *Gateway) registerServices() error {
 	// Register gateway services
 	// (catch-all for external gateway grpc endpoints that don't fit into an abstraction)
 	gws, err := gatewayservices.NewGatewayService(&gatewayservices.GatewayServiceOpts{
-		Ctx:            g.ctx,
-		Config:         g.Config,
-		BackendRepo:    g.BackendRepo,
-		ContainerRepo:  g.ContainerRepo,
-		ProviderRepo:   g.ProviderRepo,
-		Scheduler:      g.Scheduler,
-		TaskDispatcher: g.TaskDispatcher,
-		RedisClient:    g.RedisClient,
-		EventRepo:      g.EventRepo,
-		WorkerRepo:     g.workerRepo,
-		WorkerPoolRepo: g.WorkerPoolRepo,
-		Tailscale:      g.Tailscale,
+		Ctx:              g.ctx,
+		Config:           g.Config,
+		BackendRepo:      g.BackendRepo,
+		ContainerRepo:    g.ContainerRepo,
+		ProviderRepo:     g.ProviderRepo,
+		Scheduler:        g.Scheduler,
+		TaskDispatcher:   g.TaskDispatcher,
+		RedisClient:      g.RedisClient,
+		EventRepo:        g.EventRepo,
+		WorkerRepo:       g.workerRepo,
+		WorkerPoolRepo:   g.WorkerPoolRepo,
+		UsageMetricsRepo: g.UsageMetricsRepo,
+		Tailscale:        g.Tailscale,
 	})
 	if err != nil {
 		return err

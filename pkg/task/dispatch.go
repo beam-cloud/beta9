@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
+	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -14,10 +15,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+func GetTaskResultPath(taskId string) string {
+	return fmt.Sprintf("task/%s/result", taskId)
+}
+
 func NewDispatcher(ctx context.Context, taskRepo repository.TaskRepository) (*Dispatcher, error) {
 	d := &Dispatcher{
-		taskRepo:  taskRepo,
-		executors: common.NewSafeMap[func(ctx context.Context, message types.TaskMessage) (types.TaskInterface, error)](),
+		ctx:                ctx,
+		taskRepo:           taskRepo,
+		executors:          common.NewSafeMap[func(ctx context.Context, message types.TaskMessage) (types.TaskInterface, error)](),
+		storageClientCache: sync.Map{},
 	}
 
 	go d.monitor(ctx)
@@ -25,8 +32,10 @@ func NewDispatcher(ctx context.Context, taskRepo repository.TaskRepository) (*Di
 }
 
 type Dispatcher struct {
-	taskRepo  repository.TaskRepository
-	executors *common.SafeMap[func(ctx context.Context, message types.TaskMessage) (types.TaskInterface, error)]
+	ctx                context.Context
+	taskRepo           repository.TaskRepository
+	executors          *common.SafeMap[func(ctx context.Context, message types.TaskMessage) (types.TaskInterface, error)]
+	storageClientCache sync.Map
 }
 
 var taskMessagePool = sync.Pool{
@@ -106,6 +115,32 @@ func (d *Dispatcher) Send(ctx context.Context, executor string, authInfo *auth.A
 	}
 
 	return task, nil
+}
+
+func (d *Dispatcher) StoreTaskResult(workspace *types.Workspace, taskId string, result []byte) error {
+	var err error
+	var storageClient *clients.WorkspaceStorageClient
+
+	if workspace.StorageAvailable() {
+		if cachedStorageClient, ok := d.storageClientCache.Load(workspace.Name); ok {
+			storageClient = cachedStorageClient.(*clients.WorkspaceStorageClient)
+		} else {
+			storageClient, err = clients.NewWorkspaceStorageClient(d.ctx, workspace.Name, workspace.Storage)
+			if err != nil {
+				return err
+			}
+
+			d.storageClientCache.Store(workspace.Name, storageClient)
+		}
+
+		fullPath := GetTaskResultPath(taskId)
+		err = storageClient.Upload(context.Background(), fullPath, result)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (d *Dispatcher) Retrieve(ctx context.Context, workspaceName, stubId, taskId string) (types.TaskInterface, error) {

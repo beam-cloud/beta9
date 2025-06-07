@@ -66,13 +66,14 @@ type RedisTaskQueue struct {
 	backendRepo     repository.BackendRepository
 	scheduler       *scheduler.Scheduler
 	pb.UnimplementedTaskQueueServiceServer
-	queueInstances   *common.SafeMap[*taskQueueInstance]
-	keyEventManager  *common.KeyEventManager
-	queueClient      *taskQueueClient
-	tailscale        *network.Tailscale
-	eventRepo        repository.EventRepository
-	usageMetricsRepo repository.UsageMetricsRepository
-	controller       *abstractions.InstanceController
+	queueInstances     *common.SafeMap[*taskQueueInstance]
+	keyEventManager    *common.KeyEventManager
+	queueClient        *taskQueueClient
+	tailscale          *network.Tailscale
+	eventRepo          repository.EventRepository
+	usageMetricsRepo   repository.UsageMetricsRepository
+	controller         *abstractions.InstanceController
+	storageClientCache sync.Map
 }
 
 func NewRedisTaskQueueService(
@@ -85,23 +86,24 @@ func NewRedisTaskQueueService(
 	}
 
 	tq := &RedisTaskQueue{
-		ctx:              ctx,
-		mu:               sync.Mutex{},
-		config:           opts.Config,
-		rdb:              opts.RedisClient,
-		scheduler:        opts.Scheduler,
-		stubConfigCache:  common.NewSafeMap[*types.StubConfigV1](),
-		keyEventManager:  keyEventManager,
-		workspaceRepo:    opts.WorkspaceRepo,
-		taskDispatcher:   opts.TaskDispatcher,
-		taskRepo:         opts.TaskRepo,
-		containerRepo:    opts.ContainerRepo,
-		backendRepo:      opts.BackendRepo,
-		queueClient:      newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
-		queueInstances:   common.NewSafeMap[*taskQueueInstance](),
-		tailscale:        opts.Tailscale,
-		eventRepo:        opts.EventRepo,
-		usageMetricsRepo: opts.UsageMetricsRepo,
+		ctx:                ctx,
+		mu:                 sync.Mutex{},
+		config:             opts.Config,
+		rdb:                opts.RedisClient,
+		scheduler:          opts.Scheduler,
+		stubConfigCache:    common.NewSafeMap[*types.StubConfigV1](),
+		keyEventManager:    keyEventManager,
+		workspaceRepo:      opts.WorkspaceRepo,
+		taskDispatcher:     opts.TaskDispatcher,
+		taskRepo:           opts.TaskRepo,
+		containerRepo:      opts.ContainerRepo,
+		backendRepo:        opts.BackendRepo,
+		queueClient:        newRedisTaskQueueClient(opts.RedisClient, opts.TaskRepo),
+		queueInstances:     common.NewSafeMap[*taskQueueInstance](),
+		tailscale:          opts.Tailscale,
+		eventRepo:          opts.EventRepo,
+		usageMetricsRepo:   opts.UsageMetricsRepo,
+		storageClientCache: sync.Map{},
 	}
 
 	// Listen for container events with a certain prefix
@@ -369,12 +371,30 @@ func (tq *RedisTaskQueue) TaskQueueComplete(ctx context.Context, in *pb.TaskQueu
 	}
 
 	// If this task is associated with a different workspace, we need to track the cost
-	externalWorkspaceId, err := tq.rdb.Get(context.Background(), Keys.taskQueueTaskExternalWorkspace(authInfo.Workspace.Name, in.StubId, task.ExternalId)).Result()
-	if err == nil && externalWorkspaceId != "" {
-		defer func() {
-			abstractions.TrackTaskCost(time.Duration(in.TaskDuration)*time.Second, instance.AutoscaledInstance, in.TaskId, externalWorkspaceId)
-			tq.rdb.Del(context.Background(), Keys.taskQueueTaskExternalWorkspace(instance.Workspace.Name, in.StubId, task.ExternalId))
-		}()
+	var workspace *types.Workspace = authInfo.Workspace
+
+	if task.ExternalWorkspaceId != nil {
+		externalWorkspace, err := tq.backendRepo.GetWorkspace(context.Background(), *task.ExternalWorkspaceId)
+		if err != nil {
+			log.Error().Err(err).Msgf("error getting external workspace for task <%s>", task.ExternalId)
+		} else {
+			workspace = externalWorkspace
+			abstractions.TrackTaskCost(
+				time.Duration(float64(in.TaskDuration)*float64(time.Millisecond)),
+				instance.Stub,
+				instance.StubConfig.Pricing,
+				tq.usageMetricsRepo,
+				in.TaskId,
+				externalWorkspace.ExternalId,
+			)
+		}
+	}
+
+	if in.Result != nil && workspace.StorageAvailable() {
+		err = tq.taskDispatcher.StoreTaskResult(workspace, task.ExternalId, in.Result)
+		if err != nil {
+			log.Error().Err(err).Msgf("error storing task result for task <%s>", task.ExternalId)
+		}
 	}
 
 	_, err = tq.backendRepo.UpdateTask(ctx, task.ExternalId, *task)

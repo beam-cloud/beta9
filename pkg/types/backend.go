@@ -317,9 +317,10 @@ type TaskWithRelated struct {
 		Name       *string `db:"name" json:"name" serializer:"name"`
 		Version    *uint   `db:"version" json:"version" serializer:"version"`
 	} `db:"deployment" json:"deployment" serializer:"deployment"`
-	Outputs           []TaskOutput `json:"outputs" serializer:"outputs"`
-	Stats             TaskStats    `json:"stats" serializer:"stats"`
-	Workspace         Workspace    `db:"workspace" json:"workspace" serializer:"workspace"`
+	Outputs           []TaskOutput    `json:"outputs" serializer:"outputs"`
+	Stats             TaskStats       `json:"stats" serializer:"stats"`
+	Result            json.RawMessage `json:"result" serializer:"result"`
+	Workspace         Workspace       `db:"workspace" json:"workspace" serializer:"workspace"`
 	ExternalWorkspace *struct {
 		Id         *uint   `db:"id" json:"id"`
 		ExternalId *string `db:"external_id" json:"external_id"`
@@ -391,6 +392,59 @@ type StubConfigV1 struct {
 	EntryPoint         []string        `json:"entry_point"`
 	Ports              []uint32        `json:"ports"`
 	Pricing            *PricingPolicy  `json:"pricing"`
+	Inputs             *Schema         `json:"inputs"`
+	Outputs            *Schema         `json:"outputs"`
+}
+
+type Schema struct {
+	Fields map[string]SchemaField `json:"fields"`
+}
+
+func (s *Schema) ToString() string {
+	json, err := json.Marshal(s)
+	if err != nil {
+		return ""
+	}
+	return string(json)
+}
+
+func (s *Schema) ToProto() *pb.Schema {
+	fields := make(map[string]*pb.SchemaField, len(s.Fields))
+	for k, v := range s.Fields {
+		field := &pb.SchemaField{
+			Type: v.Type,
+		}
+		if v.Type == "object" && v.Fields != nil {
+			field.Fields = v.Fields.ToProto()
+		}
+		fields[k] = field
+	}
+	return &pb.Schema{
+		Fields: fields,
+	}
+}
+
+func NewSchemaFromProto(in *pb.Schema) *Schema {
+	fields := make(map[string]SchemaField, len(in.Fields))
+	for k, v := range in.Fields {
+		var nested *Schema
+		if v.Type == "object" && v.Fields != nil {
+			nested = NewSchemaFromProto(v.Fields)
+		}
+		fields[k] = SchemaField{
+			Type:   v.Type,
+			Fields: nested,
+		}
+	}
+
+	return &Schema{
+		Fields: fields,
+	}
+}
+
+type SchemaField struct {
+	Type   string  `json:"type"`
+	Fields *Schema `json:"fields,omitempty"` // Only for type == "object"
 }
 
 func (c *StubConfigV1) RequiresGPU() bool {

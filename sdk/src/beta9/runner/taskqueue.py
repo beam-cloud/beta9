@@ -32,6 +32,7 @@ from ..runner.common import (
     config,
     execute_lifecycle_method,
     send_callback,
+    serialize_result,
     wait_for_checkpoint,
 )
 from ..runner.common import config as cfg
@@ -336,7 +337,6 @@ class TaskQueueWorker:
                         print(traceback.format_exc())
 
                         task_status = TaskStatus.Error
-
                         if retry_on_errors(handler.parent_abstraction.retry_for, e):
                             print(f"retry_for error caught: {e!r}")
                             caught_exception = e.__class__.__name__
@@ -357,6 +357,7 @@ class TaskQueueWorker:
                                         container_id=config.container_id,
                                         container_hostname=config.container_hostname,
                                         keep_warm_seconds=config.keep_warm_seconds,
+                                        result=serialize_result(result) if result else None,
                                     )
                                 )
                             )

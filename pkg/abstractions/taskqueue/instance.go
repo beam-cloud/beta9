@@ -50,6 +50,8 @@ func (i *taskQueueInstance) startContainers(containersToRun int) error {
 		fmt.Sprintf("PYTHON_VERSION=%s", i.StubConfig.PythonVersion),
 		fmt.Sprintf("CALLBACK_URL=%s", i.StubConfig.CallbackUrl),
 		fmt.Sprintf("TIMEOUT=%d", i.StubConfig.TaskPolicy.Timeout),
+		fmt.Sprintf("BETA9_INPUTS=%s", i.StubConfig.Inputs.ToString()),
+		fmt.Sprintf("BETA9_OUTPUTS=%s", i.StubConfig.Outputs.ToString()),
 	}...)
 
 	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)

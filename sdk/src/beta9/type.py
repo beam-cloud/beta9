@@ -19,6 +19,9 @@ class TaskStatus(str, Enum):
     def __str__(self) -> str:
         return self.value
 
+    def is_complete(self) -> bool:
+        return self.value in [self.Complete, self.Error, self.Cancelled, self.Timeout]
+
 
 class TaskExitCode:
     SigTerm = -15

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -24,16 +25,26 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
+	authInfo := options[0].(*auth.AuthInfo)
+	stubConfig := options[1].(types.StubConfigV1)
+
 	taskId := t.msg.TaskId
 	containerId := t.fs.genContainerId(taskId, stub.Type.Kind())
 
 	t.containerId = containerId
 
+	var externalWorkspaceId *uint
+	if stubConfig.Pricing != nil && stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		abstractions.TrackTaskCount(stub, t.fs.usageMetricsRepo, t.msg.TaskId, authInfo.Workspace.ExternalId)
+		externalWorkspaceId = &authInfo.Workspace.Id
+	}
+
 	_, err = t.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
-		WorkspaceId: stub.WorkspaceId,
-		StubId:      stub.Id,
-		TaskId:      taskId,
-		ContainerId: containerId,
+		WorkspaceId:         stub.WorkspaceId,
+		StubId:              stub.Id,
+		TaskId:              taskId,
+		ContainerId:         containerId,
+		ExternalWorkspaceId: externalWorkspaceId,
 	})
 	if err != nil {
 		return err
@@ -141,6 +152,8 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		fmt.Sprintf("BETA9_TOKEN=%s", token.Key),
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		fmt.Sprintf("CALLBACK_URL=%s", stubConfig.CallbackUrl),
+		fmt.Sprintf("BETA9_INPUTS=%s", stubConfig.Inputs.ToString()),
+		fmt.Sprintf("BETA9_OUTPUTS=%s", stubConfig.Outputs.ToString()),
 	}...)
 
 	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)

@@ -1,4 +1,5 @@
 import os
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, Optional
@@ -26,6 +27,7 @@ class TaskLifecycleData:
 
 
 async def run_task(request, func, func_args):
+    start_time = time.time()
     task_id = request.headers.get("X-TASK-ID")
     if not task_id:
         raise HTTPException(status_code=HTTPStatus.BAD_REQUEST, detail="Task ID missing")
@@ -70,6 +72,7 @@ async def run_task(request, func, func_args):
                     container_id=cfg.container_id,
                     keep_warm_seconds=cfg.keep_warm_seconds,
                     task_status=task_lifecycle_data.status,
+                    task_duration=time.time() - start_time,
                 ),
                 override_callback_url=task_lifecycle_data.override_callback_url,
             )

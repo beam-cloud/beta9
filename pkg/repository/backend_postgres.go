@@ -165,11 +165,11 @@ func (r *PostgresBackendRepository) GetWorkspaceByExternalId(ctx context.Context
 	return workspace, nil
 }
 
-func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceId uint) (types.Workspace, error) {
+func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceId uint) (*types.Workspace, error) {
 	var workspace types.Workspace
 
 	query := `
-	SELECT w.id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
+	SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
 	ws.id "storage.id", ws.bucket_name "storage.bucket_name", ws.access_key "storage.access_key",
 	ws.secret_key "storage.secret_key", ws.endpoint_url "storage.endpoint_url", ws.region "storage.region",
 	ws.created_at "storage.created_at", ws.updated_at "storage.updated_at"
@@ -180,16 +180,16 @@ func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceI
 
 	err := r.client.GetContext(ctx, &workspace, query, workspaceId)
 	if err != nil {
-		return types.Workspace{}, err
+		return nil, err
 	}
 
 	if workspace.StorageAvailable() {
 		if err := r.decryptFields(workspace.Storage); err != nil {
-			return types.Workspace{}, err
+			return nil, err
 		}
 	}
 
-	return workspace, nil
+	return &workspace, nil
 }
 
 func (r *PostgresBackendRepository) GetWorkspaceByExternalIdWithSigningKey(ctx context.Context, externalId string) (types.Workspace, error) {
@@ -548,7 +548,7 @@ func (r *PostgresBackendRepository) DeleteTask(ctx context.Context, externalId s
 
 func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId string) (*types.Task, error) {
 	var task types.Task
-	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
+	query := `SELECT id, external_id, status, container_id, started_at, ended_at, workspace_id, external_workspace_id, stub_id, created_at, updated_at FROM task WHERE external_id = $1;`
 	err := r.client.GetContext(ctx, &task, query, externalId)
 	if err != nil {
 		return &types.Task{}, err
@@ -1222,6 +1222,36 @@ func (c *PostgresBackendRepository) GetDeploymentByExternalId(ctx context.Contex
     `
 
 	err := c.client.GetContext(ctx, &deploymentWithRelated, query, workspaceId, deploymentExternalId)
+	if err != nil {
+		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
+			return nil, nil
+		}
+
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+
+		return nil, err
+	}
+
+	return &deploymentWithRelated, nil
+}
+
+func (c *PostgresBackendRepository) GetAnyDeploymentByExternalId(ctx context.Context, deploymentExternalId string) (*types.DeploymentWithRelated, error) {
+	var deploymentWithRelated types.DeploymentWithRelated
+
+	query := `
+        SELECT d.*,
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name",
+               s.id AS "stub.id", s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config", s.type AS "stub.type"
+        FROM deployment d
+        JOIN workspace w ON d.workspace_id = w.id
+        JOIN stub s ON d.stub_id = s.id
+        WHERE d.external_id = $1 and d.deleted_at IS NULL
+        LIMIT 1;
+    `
+
+	err := c.client.GetContext(ctx, &deploymentWithRelated, query, deploymentExternalId)
 	if err != nil {
 		if err, ok := err.(*pq.Error); ok && err.Code.Class() == PostgresDataError {
 			return nil, nil

@@ -42,33 +42,35 @@ const (
 
 type RunCFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
-	ctx             context.Context
-	taskDispatcher  *task.Dispatcher
-	backendRepo     repository.BackendRepository
-	workspaceRepo   repository.WorkspaceRepository
-	taskRepo        repository.TaskRepository
-	containerRepo   repository.ContainerRepository
-	scheduler       *scheduler.Scheduler
-	tailscale       *network.Tailscale
-	config          types.AppConfig
-	keyEventManager *common.KeyEventManager
-	rdb             *common.RedisClient
-	routeGroup      *echo.Group
-	eventRepo       repository.EventRepository
+	ctx              context.Context
+	taskDispatcher   *task.Dispatcher
+	backendRepo      repository.BackendRepository
+	workspaceRepo    repository.WorkspaceRepository
+	taskRepo         repository.TaskRepository
+	containerRepo    repository.ContainerRepository
+	eventRepo        repository.EventRepository
+	usageMetricsRepo repository.UsageMetricsRepository
+	scheduler        *scheduler.Scheduler
+	tailscale        *network.Tailscale
+	config           types.AppConfig
+	keyEventManager  *common.KeyEventManager
+	rdb              *common.RedisClient
+	routeGroup       *echo.Group
 }
 
 type FunctionServiceOpts struct {
-	Config         types.AppConfig
-	RedisClient    *common.RedisClient
-	BackendRepo    repository.BackendRepository
-	WorkspaceRepo  repository.WorkspaceRepository
-	TaskRepo       repository.TaskRepository
-	ContainerRepo  repository.ContainerRepository
-	Scheduler      *scheduler.Scheduler
-	Tailscale      *network.Tailscale
-	RouteGroup     *echo.Group
-	TaskDispatcher *task.Dispatcher
-	EventRepo      repository.EventRepository
+	Config           types.AppConfig
+	RedisClient      *common.RedisClient
+	BackendRepo      repository.BackendRepository
+	WorkspaceRepo    repository.WorkspaceRepository
+	TaskRepo         repository.TaskRepository
+	ContainerRepo    repository.ContainerRepository
+	Scheduler        *scheduler.Scheduler
+	Tailscale        *network.Tailscale
+	RouteGroup       *echo.Group
+	TaskDispatcher   *task.Dispatcher
+	EventRepo        repository.EventRepository
+	UsageMetricsRepo repository.UsageMetricsRepository
 }
 
 func NewRuncFunctionService(ctx context.Context,
@@ -80,19 +82,20 @@ func NewRuncFunctionService(ctx context.Context,
 	}
 
 	fs := &RunCFunctionService{
-		ctx:             ctx,
-		config:          opts.Config,
-		backendRepo:     opts.BackendRepo,
-		workspaceRepo:   opts.WorkspaceRepo,
-		taskRepo:        opts.TaskRepo,
-		containerRepo:   opts.ContainerRepo,
-		scheduler:       opts.Scheduler,
-		tailscale:       opts.Tailscale,
-		rdb:             opts.RedisClient,
-		keyEventManager: keyEventManager,
-		taskDispatcher:  opts.TaskDispatcher,
-		routeGroup:      opts.RouteGroup,
-		eventRepo:       opts.EventRepo,
+		ctx:              ctx,
+		config:           opts.Config,
+		backendRepo:      opts.BackendRepo,
+		workspaceRepo:    opts.WorkspaceRepo,
+		taskRepo:         opts.TaskRepo,
+		containerRepo:    opts.ContainerRepo,
+		scheduler:        opts.Scheduler,
+		tailscale:        opts.Tailscale,
+		rdb:              opts.RedisClient,
+		keyEventManager:  keyEventManager,
+		taskDispatcher:   opts.TaskDispatcher,
+		routeGroup:       opts.RouteGroup,
+		eventRepo:        opts.EventRepo,
+		usageMetricsRepo: opts.UsageMetricsRepo,
 	}
 
 	// Register task dispatcher
@@ -128,20 +131,27 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 		return nil, err
 	}
 
-	config := types.StubConfigV1{}
-	err = json.Unmarshal([]byte(stub.Config), &config)
+	stubConfig := types.StubConfigV1{}
+	err = json.Unmarshal([]byte(stub.Config), &stubConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	policy := config.TaskPolicy
+	policy := stubConfig.TaskPolicy
 	if policy.TTL == 0 {
 		// This is required for backward compatibility since older functions do not have a TTL set which defaults to 0
 		policy.TTL = DefaultFunctionTaskTTL
 	}
 	policy.Expires = time.Now().Add(time.Duration(policy.TTL) * time.Second)
 
-	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), authInfo, stubId, payload, policy)
+	// Functions called by external workspaces should not be retried if they fail
+	if stubConfig.Pricing != nil && stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		policy.MaxRetries = 0
+	}
+
+	task, err := fs.taskDispatcher.SendAndExecute(ctx, string(types.ExecutorFunction), &auth.AuthInfo{
+		Workspace: &stub.Workspace,
+	}, stubId, payload, policy, authInfo, stubConfig)
 	if err != nil {
 		return nil, err
 	}

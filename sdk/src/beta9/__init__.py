@@ -1,4 +1,4 @@
-from . import env
+from . import env, schema
 from .abstractions import experimental, integrations
 from .abstractions.base.container import Container
 from .abstractions.endpoint import ASGI as asgi
@@ -15,6 +15,9 @@ from .abstractions.pod import Pod
 from .abstractions.queue import SimpleQueue as Queue
 from .abstractions.taskqueue import TaskQueue as task_queue
 from .abstractions.volume import CloudBucket, CloudBucketConfig, Volume
+from .client.client import Client
+from .client.deployment import Deployment
+from .client.task import Task
 from .type import (
     GpuType,
     PricingPolicy,
@@ -53,4 +56,8 @@ __all__ = [
     "Pod",
     "PricingPolicy",
     "PricingPolicyCostModel",
+    "Client",
+    "Task",
+    "Deployment",
+    "schema",
 ]

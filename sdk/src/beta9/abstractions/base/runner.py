@@ -19,11 +19,18 @@ from ...clients.gateway import (
     GetUrlResponse,
     SecretVar,
 )
+from ...clients.gateway import (
+    Schema as SchemaProto,
+)
+from ...clients.gateway import (
+    SchemaField as SchemaFieldProto,
+)
 from ...clients.gateway import TaskPolicy as TaskPolicyProto
 from ...clients.shell import ShellServiceStub
 from ...clients.types import PricingPolicy as PricingPolicyProto
 from ...config import ConfigContext, SDKSettings, get_config_context, get_settings
 from ...env import called_on_import, is_notebook_env
+from ...schema import Schema
 from ...sync import FileSyncer
 from ...type import (
     _AUTOSCALER_TYPES,
@@ -105,6 +112,8 @@ class RunnerAbstraction(BaseAbstraction):
         entrypoint: Optional[List[str]] = None,
         ports: Optional[List[int]] = [],
         pricing: Optional[PricingPolicy] = None,
+        inputs: Optional[Schema] = None,
+        outputs: Optional[Schema] = None,
     ) -> None:
         super().__init__()
 
@@ -166,6 +175,8 @@ class RunnerAbstraction(BaseAbstraction):
         self.is_websocket: bool = False
         self.ports: List[int] = ports or []
         self.pricing: Optional[PricingPolicy] = pricing
+        self.inputs: Optional[Schema] = inputs
+        self.outputs: Optional[Schema] = outputs
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""
@@ -346,6 +357,27 @@ class RunnerAbstraction(BaseAbstraction):
 
         return func
 
+    def _schema_to_proto(self, py_schema):
+        if py_schema is None:
+            return None
+
+        def _field_to_proto(field_dict):
+            # Handle nested object fields
+            if field_dict["type"] == "Object":
+                # Recursively convert nested fields
+                nested_fields = field_dict.get("fields", {}).get("fields", {})
+                return SchemaFieldProto(
+                    type="object",
+                    fields=SchemaProto(
+                        fields={k: _field_to_proto(v) for k, v in nested_fields.items()}
+                    ),
+                )
+            else:
+                return SchemaFieldProto(type=field_dict["type"])
+
+        fields_dict = py_schema.to_dict()["fields"]
+        return SchemaProto(fields={k: _field_to_proto(v) for k, v in fields_dict.items()})
+
     def prepare_runtime(
         self,
         *,
@@ -408,6 +440,14 @@ class RunnerAbstraction(BaseAbstraction):
         if not self.app:
             self.app = self.name or os.path.basename(os.getcwd())
 
+        inputs = None
+        if self.inputs:
+            inputs = self._schema_to_proto(self.inputs)
+
+        outputs = None
+        if self.outputs:
+            outputs = self._schema_to_proto(self.outputs)
+
         if not self.stub_created:
             stub_request = GetOrCreateStubRequest(
                 object_id=self.object_id,
@@ -457,6 +497,8 @@ class RunnerAbstraction(BaseAbstraction):
                 )
                 if self.pricing
                 else None,
+                inputs=inputs,
+                outputs=outputs,
             )
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(

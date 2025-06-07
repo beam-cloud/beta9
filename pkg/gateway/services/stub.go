@@ -93,6 +93,16 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}
 	}
 
+	var inputs *types.Schema = nil
+	if in.Inputs != nil {
+		inputs = types.NewSchemaFromProto(in.Inputs)
+	}
+
+	var outputs *types.Schema = nil
+	if in.Outputs != nil {
+		outputs = types.NewSchemaFromProto(in.Outputs)
+	}
+
 	stubConfig := types.StubConfigV1{
 		Runtime: types.Runtime{
 			Cpu:      in.Cpu,
@@ -122,6 +132,8 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		Ports:              in.Ports,
 		Env:                in.Env,
 		Pricing:            pricing,
+		Inputs:             inputs,
+		Outputs:            outputs,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required
@@ -299,18 +311,43 @@ func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequ
 	}, nil
 }
 
+func (gws *GatewayService) hasStubAccess(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, config *types.StubConfigV1) (bool, error) {
+	if !config.Authorized {
+		return true, nil
+	}
+
+	if config.Pricing != nil {
+		return true, nil
+	}
+
+	if stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+		return false, nil
+	}
+
+	return true, nil
+}
+
 func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*pb.GetURLResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	stub, err := gws.backendRepo.GetStubByExternalId(ctx, in.StubId)
-	if err != nil {
+	if err != nil || stub == nil {
 		return &pb.GetURLResponse{
 			Ok:     false,
-			ErrMsg: "Unable to get stub",
+			ErrMsg: "Invalid stub ID",
 		}, nil
 	}
 
-	if stub == nil || stub.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return &pb.GetURLResponse{
+			Ok:     false,
+			ErrMsg: "Unable to get stub config",
+		}, nil
+	}
+
+	hasAccess, err := gws.hasStubAccess(ctx, authInfo, stub, stubConfig)
+	if err != nil || !hasAccess {
 		return &pb.GetURLResponse{
 			Ok:     false,
 			ErrMsg: "Invalid stub ID",
