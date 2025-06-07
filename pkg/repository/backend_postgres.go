@@ -1065,10 +1065,12 @@ func (c *PostgresBackendRepository) GetLatestDeploymentByName(ctx context.Contex
 	query := `
         SELECT
             d.*,
+            w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.id AS "workspace.id",
             s.external_id AS "stub.external_id",
             s.name AS "stub.name",
             s.config AS "stub.config"
         FROM deployment d
+		JOIN workspace w ON d.workspace_id = w.id
         JOIN stub s ON d.stub_id = s.id
         WHERE d.workspace_id = $1 AND d.name = $2 AND d.stub_type = $3 ` + filterDeletedQuery + `
         ORDER BY d.version DESC
@@ -1091,7 +1093,7 @@ func (c *PostgresBackendRepository) GetDeploymentByNameAndVersion(ctx context.Co
 
 	query := `
         SELECT d.*,
-               w.external_id AS "workspace.external_id", w.name AS "workspace.name",
+               w.external_id AS "workspace.external_id", w.name AS "workspace.name", w.id AS "workspace.id",
                s.external_id AS "stub.external_id", s.name AS "stub.name", s.config AS "stub.config"
         FROM deployment d
         JOIN workspace w ON d.workspace_id = w.id
