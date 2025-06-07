@@ -43,7 +43,7 @@ class Deployment:
 
         response = post(token=self.token, url=self.url, path="", data=input)
         body = response.json()
-        if "task_id" in body:
+        if body is not None and "task_id" in body:
             return Task(
                 id=body["task_id"],
                 url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{body['task_id']}",
@@ -60,7 +60,7 @@ class Deployment:
 
         response = post(token=self.token, url=self.url, path="", data=input)
         body = response.json()
-        if "task_id" not in body and body is not None:
+        if body is not None and "task_id" not in body:
             return body
 
         task = Task(
