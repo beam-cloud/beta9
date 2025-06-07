@@ -42,6 +42,8 @@ class Client:
             raise WorkspaceNotFoundError("Failed to load workspace")
 
     def _get_base_url(self):
+        if self.gateway_host.startswith(("http://", "https://")):
+            return f"{self.gateway_host}:{self.gateway_port}"
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
 
     def upload_file(self, local_path: str = "") -> str:

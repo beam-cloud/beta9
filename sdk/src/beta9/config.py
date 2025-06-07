@@ -13,8 +13,9 @@ from . import terminal
 DEFAULT_CLI_NAME = "Beta9"
 DEFAULT_CONTEXT_NAME = "default"
 DEFAULT_GATEWAY_HOST = "0.0.0.0"
-DEFAULT_API_HOST = "0.0.0.0:1994"
 DEFAULT_GATEWAY_PORT = 1993
+DEFAULT_API_HOST = "0.0.0.0"
+DEFAULT_API_PORT = 1994
 _SETTINGS: Optional["SDKSettings"] = None
 DEFAULT_ASCII_LOGO = """
            ,#@@&&&&&&&&&@&/
@@ -41,6 +42,7 @@ class SDKSettings:
     gateway_host: str = DEFAULT_GATEWAY_HOST
     gateway_port: int = DEFAULT_GATEWAY_PORT
     api_host: str = DEFAULT_API_HOST
+    api_port: int = DEFAULT_API_PORT
     config_path: Path = Path("~/.beta9/config.ini").expanduser()
     ascii_logo: str = DEFAULT_ASCII_LOGO
     use_defaults_in_prompt: bool = False
