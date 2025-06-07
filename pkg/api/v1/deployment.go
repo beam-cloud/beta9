@@ -57,7 +57,7 @@ func NewDeploymentGroup(
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
 	g.DELETE("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.DeleteDeployment))
 	g.GET("/:deploymentId/url", auth.WithAuth(group.GetURL))
-	g.GET("/:workspaceId/:stubType/:deploymentName/v:version/url", auth.WithAuth(group.GetURL))
+	g.GET("/:workspaceId/:stubType/:deploymentName/:version/url", auth.WithAuth(group.GetURL))
 
 	return group
 }
@@ -392,7 +392,7 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 			return HTTPInternalServerError("Failed to lookup stub")
 		}
 
-		invokeUrl := common.BuildDeploymentURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub, &deployment.Deployment)
+		invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub)
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
 
