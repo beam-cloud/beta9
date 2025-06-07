@@ -253,6 +253,9 @@ class FunctionHandler:
         if self.handler is None:
             raise Exception("Handler not configured.")
 
+        handler_args = args
+        handler_kwargs = kwargs
+
         if self.inputs is not None:
             if len(kwargs) == 1:
                 key, value = next(iter(kwargs.items()))
@@ -272,9 +275,6 @@ class FunctionHandler:
 
             handler_args = (parsed_inputs,)
             handler_kwargs = {}
-        else:
-            handler_args = args
-            handler_kwargs = kwargs
 
         if self.pass_context:
             handler_kwargs["context"] = context
