@@ -318,7 +318,7 @@ func getPackagePath(workspaceName, objectId string) string {
 	return path.Join("/data/objects/", workspaceName, objectId)
 }
 
-func (g *DeploymentGroup) getDeployment(ctx echo.Context, workspaceId, stubType, deploymentName, version string) (*types.DeploymentWithRelated, error) {
+func (g *DeploymentGroup) getDeploymentByNameAndVersion(ctx echo.Context, workspaceId, stubType, deploymentName, version string) (*types.DeploymentWithRelated, error) {
 	var deployment *types.DeploymentWithRelated
 	var err error
 
@@ -379,7 +379,7 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 			return HTTPBadRequest("Invalid stub type")
 		}
 
-		deployment, err = g.getDeployment(ctx, workspaceId, stubType, deploymentName, version)
+		deployment, err = g.getDeploymentByNameAndVersion(ctx, workspaceId, stubType, deploymentName, version)
 		if err != nil {
 			return HTTPNotFound()
 		}
@@ -390,6 +390,15 @@ func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 
 		stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), deployment.Stub.ExternalId)
 		if err != nil {
+			return HTTPNotFound()
+		}
+
+		stubConfig := &types.StubConfigV1{}
+		if err := json.Unmarshal([]byte(deployment.Stub.Config), &stubConfig); err != nil {
+			return HTTPInternalServerError("Failed to decode deployment config")
+		}
+
+		if stubConfig.Pricing == nil && deployment.Workspace.ExternalId != authInfo.Workspace.ExternalId {
 			return HTTPNotFound()
 		}
 
