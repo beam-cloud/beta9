@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"strconv"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -56,6 +57,7 @@ func NewDeploymentGroup(
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
 	g.DELETE("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.DeleteDeployment))
 	g.GET("/:deploymentId/url", auth.WithAuth(group.GetURL))
+	g.GET("/:workspaceId/:stubType/:deploymentName/:version/url", auth.WithAuth(group.GetURL))
 
 	return group
 }
@@ -316,15 +318,99 @@ func getPackagePath(workspaceName, objectId string) string {
 	return path.Join("/data/objects/", workspaceName, objectId)
 }
 
+func (g *DeploymentGroup) getDeploymentByNameAndVersion(ctx echo.Context, workspaceId, stubType, deploymentName, version string) (*types.DeploymentWithRelated, error) {
+	var deployment *types.DeploymentWithRelated
+	var err error
+
+	workspace, err := g.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	if version == "latest" {
+		version = ""
+	}
+
+	if version != "" {
+		version, err := strconv.Atoi(version)
+		if err != nil {
+			return nil, err
+		}
+
+		deployment, err = g.backendRepo.GetDeploymentByNameAndVersion(ctx.Request().Context(), workspace.Id, deploymentName, uint(version), stubType)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		deployment, err = g.backendRepo.GetLatestDeploymentByName(ctx.Request().Context(), workspace.Id, deploymentName, stubType, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return deployment, nil
+}
+
+var stubTypeMap = map[string]string{
+	"taskqueue": types.StubTypeTaskQueueDeployment,
+	"endpoint":  types.StubTypeEndpointDeployment,
+	"http":      types.StubTypeEndpointDeployment,
+	"asgi":      types.StubTypeASGIDeployment,
+	"function":  types.StubTypeFunctionDeployment,
+}
+
 func (g *DeploymentGroup) GetURL(ctx echo.Context) error {
 	cc, _ := ctx.(*auth.HttpAuthContext)
 	authInfo := cc.AuthInfo
 
+	var deployment *types.DeploymentWithRelated
+	var err error
+
 	deploymentId := ctx.Param("deploymentId")
-	deployment, err := g.backendRepo.GetAnyDeploymentByExternalId(ctx.Request().Context(), deploymentId)
-	if err != nil {
-		return HTTPInternalServerError("Failed to lookup deployment")
+	workspaceId := ctx.Param("workspaceId")
+	deploymentName := ctx.Param("deploymentName")
+	stubType := ctx.Param("stubType")
+	version := ctx.Param("version")
+
+	// Allow look ups by deployment name and version if these fields are provided
+	if workspaceId != "" && deploymentName != "" && stubType != "" {
+		stubType, ok := stubTypeMap[stubType]
+		if !ok {
+			return HTTPBadRequest("Invalid stub type")
+		}
+
+		deployment, err = g.getDeploymentByNameAndVersion(ctx, workspaceId, stubType, deploymentName, version)
+		if err != nil {
+			return HTTPNotFound()
+		}
+
+		if deployment == nil {
+			return HTTPBadRequest("Invalid deployment name and version")
+		}
+
+		stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), deployment.Stub.ExternalId)
+		if err != nil {
+			return HTTPNotFound()
+		}
+
+		stubConfig := &types.StubConfigV1{}
+		if err := json.Unmarshal([]byte(deployment.Stub.Config), &stubConfig); err != nil {
+			return HTTPInternalServerError("Failed to decode deployment config")
+		}
+
+		if stubConfig.Pricing == nil && deployment.Workspace.ExternalId != authInfo.Workspace.ExternalId {
+			return HTTPNotFound()
+		}
+
+		invokeUrl := common.BuildStubURL(g.config.GatewayService.HTTP.GetExternalURL(), g.config.GatewayService.InvokeURLType, stub)
+		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
+
+	deployment, err = g.backendRepo.GetAnyDeploymentByExternalId(ctx.Request().Context(), deploymentId)
+	if err != nil {
+		return HTTPNotFound()
+	}
+
 	if deployment == nil {
 		return HTTPBadRequest("Invalid deployment ID")
 	}

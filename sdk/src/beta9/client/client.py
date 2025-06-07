@@ -89,18 +89,16 @@ class Client:
         """Retrieve a deployment using its deployment ID."""
         return Deployment(
             base_url=self.base_url,
-            deployment_id=id,
-            stub_id=None,
             token=self.token,
             workspace_id=self.workspace_id,
+            deployment_id=id,
         )
 
     def get_deployment_by_stub_id(self, stub_id: str) -> Deployment:
         """Retrieve a deployment using the associated stub ID."""
         return Deployment(
             base_url=self.base_url,
-            deployment_id=None,
-            stub_id=stub_id,
             token=self.token,
             workspace_id=self.workspace_id,
+            stub_id=stub_id,
         )
