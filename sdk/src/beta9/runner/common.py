@@ -265,7 +265,7 @@ class FunctionHandler:
                 input_data = kwargs
 
             try:
-                parsed_inputs = self.inputs.parse(input_data)
+                parsed_inputs = self.inputs.new(input_data)
             except ValidationError as e:
                 print(f"Input validation error: {e}")
                 return e.to_dict()
@@ -287,12 +287,12 @@ class FunctionHandler:
                 result = {}
 
             try:
-                parsed_outputs = self.outputs.parse(result)
+                parsed_outputs = self.outputs.new(result)
             except ValidationError as e:
                 print(f"Output validation error: {e}")
                 return e.to_dict()
 
-            return parsed_outputs.dict()
+            return parsed_outputs.dump()
 
         return result
 

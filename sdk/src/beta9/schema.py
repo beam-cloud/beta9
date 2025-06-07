@@ -1,9 +1,14 @@
 import ast
 import base64
+import binascii
 import inspect
 import json
+import os
+import tempfile
+import urllib.request
 from io import BytesIO
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 
 class ValidationError(Exception):
@@ -14,8 +19,10 @@ class ValidationError(Exception):
 
     def to_dict(self):
         error = {"error": "ValidationError", "message": self.message}
+
         if self.field:
             error["field"] = self.field
+
         return error
 
 
@@ -23,10 +30,7 @@ class SchemaField:
     def validate(self, value: Any) -> Any:
         raise NotImplementedError()
 
-    def serialize(self, value: Any) -> Any:
-        return value
-
-    def deserialize(self, value: Any) -> Any:
+    def dump(self, value: Any) -> Any:
         return value
 
     def to_dict(self) -> Dict[str, Any]:
@@ -72,10 +76,82 @@ class Integer(SchemaField):
 
 
 class File(SchemaField):
+    def dump(self, value: Any) -> str:
+        from .abstractions.output import Output
+
+        o = Output.from_file(value)
+        o.save()
+        return o.public_url()
+
+    def _is_url(self, value: str) -> bool:
+        try:
+            result = urlparse(value)
+            return all([result.scheme, result.netloc])
+        except (ValueError, AttributeError):
+            return False
+
+    def _download_url(self, url: str) -> Any:
+        temp_file = tempfile.NamedTemporaryFile(delete=False)
+        try:
+            with urllib.request.urlopen(url) as response:
+                while True:
+                    chunk = response.read(8192)
+                    if not chunk:
+                        break
+                    temp_file.write(chunk)
+
+            temp_file.close()
+
+            return open(temp_file.name, "rb")
+        except (urllib.error.URLError, urllib.error.HTTPError, IOError) as e:
+            temp_file.close()
+            os.unlink(temp_file.name)
+            raise ValidationError(f"Failed to download file from URL: {e}")
+
+    def _decode_base64(self, value: str) -> Any:
+        try:
+            temp_file = tempfile.NamedTemporaryFile(delete=False)
+
+            try:
+                decoded_data = base64.b64decode(value)
+                temp_file.write(decoded_data)
+                temp_file.close()
+                return open(temp_file.name, "rb")
+            except (IOError, OSError) as e:
+                temp_file.close()
+                os.unlink(temp_file.name)
+                raise ValidationError(f"Failed to decode base64 data: {e}")
+        except (ValueError, binascii.Error) as e:
+            raise ValidationError(f"Invalid base64 data: {e}")
+
     def validate(self, value: Any) -> Any:
-        if not hasattr(value, "read"):
-            raise ValidationError("Expected file-like object")
-        return value
+        if hasattr(value, "read"):
+            return value
+
+        if isinstance(value, str):
+            # Check if it's a URL first
+            if self._is_url(value):
+                return self._download_url(value)
+
+            # If not a URL, try to decode as base64
+            try:
+                return self._decode_base64(value)
+            except ValidationError:
+                raise ValidationError(
+                    "String input must be either a valid URL or base64 encoded data"
+                )
+
+        raise ValidationError(
+            "Input must be a file-like object, URL string, or base64 encoded string"
+        )
+
+    def __del__(self):
+        if hasattr(self, "_temp_file") and self._temp_file:
+            try:
+                self._temp_file.close()
+                os.unlink(self._temp_file.name)
+            except (OSError, IOError):
+                pass
 
 
 class Image(SchemaField):
@@ -102,7 +178,7 @@ class Image(SchemaField):
                 f"Expected PIL.Image or base64 string, got {type(value).__name__}"
             )
 
-    def serialize(self, value: Any) -> str:
+    def dump(self, value: Any) -> str:
         PILImage = self._import_pil()
         if not isinstance(value, PILImage.Image):
             raise ValidationError(
@@ -111,14 +187,6 @@ class Image(SchemaField):
         buffered = BytesIO()
         value.save(buffered, format="PNG")
         return base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-    def deserialize(self, value: str) -> Any:
-        PILImage = self._import_pil()
-        try:
-            image_data = base64.b64decode(value)
-            return PILImage.open(BytesIO(image_data))
-        except Exception as e:
-            raise ValidationError(f"Invalid base64 image data: {e}")
 
 
 class Object(SchemaField):
@@ -135,15 +203,10 @@ class Object(SchemaField):
                 f"Expected dict or {self.schema_cls.__name__}, got {type(value).__name__}"
             )
 
-    def serialize(self, value: Any) -> Any:
+    def dump(self, value: Any) -> Dict[str, Any]:
         if isinstance(value, self.schema_cls):
-            return value.dict()
+            return value.dump()
         raise ValidationError(f"Expected {self.schema_cls.__name__} for serialization")
-
-    def deserialize(self, value: Any) -> Any:
-        if isinstance(value, dict):
-            return self.schema_cls(**value)
-        raise ValidationError("Expected dict for deserialization")
 
 
 class SchemaMeta(type):
@@ -172,17 +235,32 @@ class Schema(metaclass=SchemaMeta):
         return validated
 
     @classmethod
-    def parse(cls, data: Dict[str, Any]) -> "Schema":
+    def new(cls, data: Dict[str, Any]) -> "Schema":
         return cls(**data)
+
+    def dump(self) -> Dict[str, Any]:
+        result = {}
+
+        for key in self._fields:
+            value = getattr(self, key)
+            if isinstance(value, Schema):
+                result[key] = value.dump()
+            else:
+                field = self._fields[key]
+                result[key] = field.dump(value)
+
+        return result
 
     def dict(self) -> Dict[str, Any]:
         result = {}
+
         for key in self._fields:
             value = getattr(self, key)
             if isinstance(value, Schema):
                 result[key] = value.dict()
             else:
                 result[key] = value
+
         return result
 
     def json(self) -> str:
@@ -195,17 +273,7 @@ class Schema(metaclass=SchemaMeta):
         attrs = {
             name: SchemaField.from_dict(field_dict) for name, field_dict in fields_config.items()
         }
-        print(f"Attrs: {attrs}")
-        # Dynamically create a new Schema subclass with these fields
         return SchemaMeta("DynamicSchema", (Schema,), attrs)
-
-    @classmethod
-    def serialize(cls, data: Dict[str, Any]) -> Dict[str, Any]:
-        return {key: field.serialize(data[key]) for key, field in cls._fields.items()}
-
-    @classmethod
-    def deserialize(cls, data: Dict[str, Any]) -> Dict[str, Any]:
-        return {key: field.deserialize(data[key]) for key, field in cls._fields.items()}
 
     @classmethod
     def to_json(cls) -> str:
