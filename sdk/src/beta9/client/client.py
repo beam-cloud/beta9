@@ -45,6 +45,8 @@ class Client:
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
 
     def upload_file(self, local_path: str = "") -> str:
+        """Upload a file to to be used as an input to some function or deployment."""
+
         path = Path(local_path)
         filename = f"{path.stem}_{uuid.uuid4()}{path.suffix}"
         volume_path = str(path.parent / filename) if path.parent != Path(".") else filename
@@ -76,13 +78,13 @@ class Client:
         return response.json()
 
     def get_task_by_id(self, id: str) -> Task:
-        """Retrieve a task by task ID"""
+        """Retrieve a task by task ID."""
         return Task(
             id=id, url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}", token=self.token
         )
 
     def get_deployment_by_id(self, id: str) -> Deployment:
-        """Retrieve a deployment using its deployment ID"""
+        """Retrieve a deployment using its deployment ID."""
         return Deployment(
             base_url=self.base_url,
             deployment_id=id,
@@ -92,7 +94,7 @@ class Client:
         )
 
     def get_deployment_by_stub_id(self, stub_id: str) -> Deployment:
-        """Retrieve a deployment using the associated stub ID"""
+        """Retrieve a deployment using the associated stub ID."""
         return Deployment(
             base_url=self.base_url,
             deployment_id=None,
