@@ -236,6 +236,7 @@ def invoke_function(
 ) -> InvokeResult:
     result: Any = None
     callback_url = None
+    pickled_result = None
 
     try:
         get_args_resp = function_stub.function_get_args(FunctionGetArgsRequest(task_id=task_id))
