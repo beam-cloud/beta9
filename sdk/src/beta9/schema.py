@@ -7,7 +7,7 @@ import os
 import tempfile
 import urllib.request
 from io import BytesIO
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 
@@ -165,9 +165,9 @@ class Image(SchemaField):
 
     def __init__(
         self,
-        max_size: tuple[int, int] = None,
-        min_size: tuple[int, int] = None,
-        allowed_formats: list[str] = None,
+        max_size: Optional[Tuple[int, int]] = None,
+        min_size: Optional[Tuple[int, int]] = None,
+        allowed_formats: Optional[List[str]] = None,
         quality: int = 85,
         preserve_metadata: bool = False,
     ):
