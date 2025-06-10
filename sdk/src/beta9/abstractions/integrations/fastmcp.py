@@ -62,6 +62,8 @@ class MCPServer(ASGI):
             The secrets to pass to the MCP server container.
         autoscaler (Autoscaler):
             The autoscaler to use. Default is a queue depth autoscaler.
+        on_start (Callable[..., None]):
+            A function to call when the MCP server app is started. Default is None.
         fastmcp_args (Optional[MCPServerArgs]):
             The arguments for the underlying FastMCP server. If not specified, the default arguments will be used.
 
@@ -93,6 +95,7 @@ class MCPServer(ASGI):
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         fastmcp_args: MCPServerArgs = MCPServerArgs(),
+        on_start: Optional[Callable[..., None]] = None,
     ):
         image = image.add_python_packages(
             [
@@ -116,6 +119,7 @@ class MCPServer(ASGI):
             volumes=volumes,
             secrets=secrets,
             autoscaler=autoscaler,
+            on_start=on_start,
         )
 
         self.fastmcp_server = server
