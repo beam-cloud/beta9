@@ -333,7 +333,6 @@ class Image(SchemaField):
         try:
             value.save(temp_file, format=output_format, **save_params)
             temp_file.close()
-
             from .abstractions.output import Output
 
             o = Output.from_file(open(temp_file.name, "rb"))
