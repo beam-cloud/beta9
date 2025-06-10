@@ -18,6 +18,7 @@ from ...type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
 DEFAULT_VLLM_CACHE_DIR = "./vllm_cache"
 DEFAULT_VLLM_CACHE_ROOT = "./vllm_cache_root"
 
+
 # vllm/engine/arg_utils.py:EngineArgs
 @dataclass
 class VLLMArgs:
@@ -227,16 +228,21 @@ class VLLM(ASGI):
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
-        vllm_args: VLLMArgs = VLLMArgs()
+        vllm_args: VLLMArgs = VLLMArgs(),
     ):
         if vllm_args.download_dir == DEFAULT_VLLM_CACHE_DIR:
             # Add default vllm cache volume to preserve it if custom volumes are specified for chat templates
             volumes.append(Volume(name="vllm_cache", mount_path=DEFAULT_VLLM_CACHE_DIR))
-        
+
         volumes.append(Volume(name="vllm_cache_root", mount_path=vllm_args.vllm_cache_root))
 
         image = image.add_python_packages(
-            ["fastapi", "numpy", f"vllm=={vllm_version}", f"huggingface_hub=={huggingface_hub_version}"]
+            [
+                "fastapi",
+                "numpy",
+                f"vllm=={vllm_version}",
+                f"huggingface_hub=={huggingface_hub_version}",
+            ]
         )
 
         super().__init__(
@@ -411,9 +417,7 @@ class VLLM(ASGI):
     def serve(self, timeout: int = 0, url_type: str = ""):
         stub_type = ASGI_SERVE_STUB_TYPE
 
-        if not self.parent.prepare_runtime(
-            func=self.func, stub_type=stub_type, force_create_stub=True
-        ):
+        if not self.prepare_runtime(func=self.func, stub_type=stub_type, force_create_stub=True):
             return False
 
         try:
@@ -427,9 +431,9 @@ class VLLM(ASGI):
             os._exit(0)  # kills all threads immediately
 
     def _serve(self, *, dir: str, timeout: int = 0):
-        r: StartEndpointServeResponse = self.parent.endpoint_stub.start_endpoint_serve(
+        r: StartEndpointServeResponse = self.endpoint_stub.start_endpoint_serve(
             StartEndpointServeRequest(
-                stub_id=self.parent.stub_id,
+                stub_id=self.stub_id,
                 timeout=timeout,
             )
         )
