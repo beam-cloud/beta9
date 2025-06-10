@@ -186,8 +186,6 @@ class EndpointManager:
             async def health():
                 return Response(status_code=HTTPStatus.OK)
         else:
-            from http import HTTPStatus
-
             from starlette.responses import Response as StarletteResponse
             from starlette.routing import Route
 
