@@ -18,4 +18,4 @@ dev:
     - 6379:redis-master:6379
     persistentVolume:
       enabled: false
-      # size: 10Gi
+      size: 10Gi
