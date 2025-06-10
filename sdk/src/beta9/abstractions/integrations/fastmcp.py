@@ -31,6 +31,8 @@ class MCPServer(ASGI):
     Parameters:
         server (FastMCP):
             The FastMCP class instance to serve/deploy.
+        args (Optional[MCPServerArgs]):
+            The arguments for the underlying FastMCP server. If not specified, the default arguments will be used.
         cpu (Union[int, float, str]):
             The number of CPU cores allocated to the container. Default is 1.0.
         memory (Union[int, str]):
@@ -64,8 +66,7 @@ class MCPServer(ASGI):
             The autoscaler to use. Default is a queue depth autoscaler.
         on_start (Callable[..., None]):
             A function to call when the MCP server app is started. Default is None.
-        fastmcp_args (Optional[MCPServerArgs]):
-            The arguments for the underlying FastMCP server. If not specified, the default arguments will be used.
+
 
     Example:
         ```python
@@ -79,6 +80,7 @@ class MCPServer(ASGI):
     def __init__(
         self,
         server: "FastMCP",
+        args: MCPServerArgs = MCPServerArgs(),
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
@@ -94,12 +96,11 @@ class MCPServer(ASGI):
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
-        fastmcp_args: MCPServerArgs = MCPServerArgs(),
         on_start: Optional[Callable[..., None]] = None,
     ):
         image = image.add_python_packages(
             [
-                f"fastmcp=={fastmcp_args.fastmcp_version}",
+                f"fastmcp=={args.fastmcp_version}",
             ]
         )
 
@@ -123,7 +124,7 @@ class MCPServer(ASGI):
         )
 
         self.fastmcp_server = server
-        self.fastmcp_args = fastmcp_args
+        self.fastmcp_args = args
 
     def __name__(self) -> str:
         return self.name or f"fastmcp=={self.fastmcp_args.fastmcp_version}"
