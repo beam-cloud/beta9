@@ -79,7 +79,7 @@ class MCPServer(ASGI):
 
     def __init__(
         self,
-        server: "FastMCP",
+        server: "FastMCP",  # type: ignore  # noqa: F821
         args: MCPServerArgs = MCPServerArgs(),
         cpu: Union[int, float, str] = 1.0,
         memory: Union[int, str] = 128,
