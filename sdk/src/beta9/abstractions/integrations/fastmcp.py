@@ -67,7 +67,6 @@ class MCPServer(ASGI):
         on_start (Callable[..., None]):
             A function to call when the MCP server app is started. Default is None.
 
-
     Example:
         ```python
         from beta9 import integrations, MCPServerArgs, MCPServer
@@ -97,6 +96,7 @@ class MCPServer(ASGI):
         secrets: Optional[List[str]] = None,
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         on_start: Optional[Callable[..., None]] = None,
+        pricing: Optional[PricingPolicy] = None,
     ):
         image = image.add_python_packages(
             [
@@ -121,6 +121,7 @@ class MCPServer(ASGI):
             secrets=secrets,
             autoscaler=autoscaler,
             on_start=on_start,
+            pricing=pricing,
         )
 
         self.fastmcp_server = server
