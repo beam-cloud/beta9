@@ -180,9 +180,21 @@ class EndpointManager:
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
 
-        @self.app.get("/health")
-        async def health():
-            return Response(status_code=HTTPStatus.OK)
+        if hasattr(self.app, "get"):
+
+            @self.app.get("/health")
+            async def health():
+                return Response(status_code=HTTPStatus.OK)
+        else:
+            from http import HTTPStatus
+
+            from starlette.responses import Response as StarletteResponse
+            from starlette.routing import Route
+
+            async def health(request):
+                return StarletteResponse(status_code=HTTPStatus.OK)
+
+            self.app.router.routes.append(Route("/health", health))
 
         if self.is_asgi_stub:
             return
