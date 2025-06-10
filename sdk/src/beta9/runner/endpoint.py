@@ -180,7 +180,6 @@ class EndpointManager:
         # Register signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
 
-        # Add /health endpoint in a framework-compatible way
         if hasattr(self.app, "get"):
 
             @self.app.get("/health")
