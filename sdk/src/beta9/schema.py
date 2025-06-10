@@ -335,7 +335,7 @@ class Image(SchemaField):
             temp_file.close()
             from .abstractions.output import Output
 
-            o = Output.from_file(temp_file.name)
+            o = Output.from_file(open(temp_file.name, "rb"))
             o.save()
             return o.public_url()
         finally:

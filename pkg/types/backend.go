@@ -396,6 +396,15 @@ type StubConfigV1 struct {
 	Outputs            *Schema         `json:"outputs"`
 }
 
+type StubConfigLimitedValues struct {
+	Pricing       *PricingPolicy `json:"pricing"`
+	Inputs        *Schema        `json:"inputs"`
+	Outputs       *Schema        `json:"outputs"`
+	TaskPolicy    TaskPolicy     `json:"task_policy"`
+	PythonVersion string         `json:"python_version"`
+	Runtime       Runtime        `json:"runtime"`
+}
+
 type Schema struct {
 	Fields map[string]SchemaField `json:"fields"`
 }

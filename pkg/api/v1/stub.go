@@ -42,6 +42,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, event
 	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL)) // Allows workspace admins to get the URL of a stub by deployment Id
 	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                         // Allows users to clone a public stub
 	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                     // Allows users to get the URL of a stub
+	g.GET("/:stubId/config", group.GetConfig)                                              // Allows users to get the config of a stub
 
 	return group
 }
@@ -500,4 +501,42 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 	go g.eventRepo.PushCloneStubEvent(workspace.ExternalId, &newStub, &stub.Stub)
 
 	return &newStub, nil
+}
+
+func (g *StubGroup) GetConfig(ctx echo.Context) error {
+	stubID := ctx.Param("stubId")
+	cc, _ := ctx.(*auth.HttpAuthContext)
+
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve stub")
+	} else if stub == nil {
+		return HTTPNotFound()
+	}
+
+	err = stub.Stub.SanitizeConfig()
+	if err != nil {
+		return HTTPInternalServerError("Failed to sanitize stub config")
+	}
+
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return HTTPInternalServerError("Failed to decode stub config")
+	}
+
+	// If there is no pricing policy, only allow access to the config if the user is the owner of the stub
+	if stubConfig.Pricing == nil && cc != nil && cc.AuthInfo != nil && cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
+		return HTTPNotFound()
+	}
+
+	limitedConfig := &types.StubConfigLimitedValues{
+		Pricing:       stubConfig.Pricing,
+		Inputs:        stubConfig.Inputs,
+		Outputs:       stubConfig.Outputs,
+		TaskPolicy:    stubConfig.TaskPolicy,
+		PythonVersion: stubConfig.PythonVersion,
+		Runtime:       stubConfig.Runtime,
+	}
+
+	return ctx.JSON(http.StatusOK, limitedConfig)
 }
