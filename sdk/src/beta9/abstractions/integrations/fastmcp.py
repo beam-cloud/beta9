@@ -12,7 +12,7 @@ from ...channel import with_grpc_error_handling
 from ...clients.endpoint import StartEndpointServeRequest, StartEndpointServeResponse
 from ...clients.gateway import DeployStubRequest, DeployStubResponse
 from ...config import ConfigContext
-from ...type import Autoscaler, GpuType, GpuTypeAlias, QueueDepthAutoscaler
+from ...type import Autoscaler, GpuType, GpuTypeAlias, PricingPolicy, QueueDepthAutoscaler
 
 
 @dataclass
@@ -137,8 +137,7 @@ class MCPServer(ASGI):
         pass
 
     def __call__(self, *args: Any, **kwargs: Any):
-        http_app = self.fastmcp_server.http_app(transport="sse", path="/sse")
-        return http_app
+        return self.fastmcp_server.http_app(transport="sse", path="/sse")
 
     def deploy(
         self,
