@@ -192,6 +192,8 @@ func (es *HttpEndpointService) forwardRequest(
 		return err
 	}
 
+	ctx.Response().Header().Set("Access-Control-Expose-Headers", "X-Task-Id")
+	ctx.Response().Header().Set("X-Task-Id", task.Message().TaskId)
 	return task.Execute(ctx.Request().Context(), ctx, authInfo)
 }
 
