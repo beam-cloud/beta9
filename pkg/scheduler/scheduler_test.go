@@ -995,7 +995,7 @@ func TestConcurrencyLimit(t *testing.T) {
 				},
 			},
 			errorToMatch: &types.ThrottledByConcurrencyLimitError{
-				Reason: "cpu quota exceeded",
+				Reason: "CPU quota exceeded. Please upgrade your plan for higher limit\n\nUpgrade here: https://platform.beam.cloud/settings/plans",
 			},
 		},
 		{
@@ -1025,7 +1025,7 @@ func TestConcurrencyLimit(t *testing.T) {
 				},
 			},
 			errorToMatch: &types.ThrottledByConcurrencyLimitError{
-				Reason: "cpu quota exceeded",
+				Reason: "CPU quota exceeded. Please upgrade your plan for higher limit\n\nUpgrade here: https://platform.beam.cloud/settings/plans",
 			},
 		},
 		{
@@ -1058,7 +1058,7 @@ func TestConcurrencyLimit(t *testing.T) {
 				},
 			},
 			errorToMatch: &types.ThrottledByConcurrencyLimitError{
-				Reason: "gpu quota exceeded",
+				Reason: "GPU quota exceeded. Please upgrade your plan for higher limit\n\nUpgrade here: https://platform.beam.cloud/settings/plans",
 			},
 		},
 		{
@@ -1094,7 +1094,7 @@ func TestConcurrencyLimit(t *testing.T) {
 				},
 			},
 			errorToMatch: &types.ThrottledByConcurrencyLimitError{
-				Reason: "gpu quota exceeded",
+				Reason: "GPU quota exceeded. Please upgrade your plan for higher limit\n\nUpgrade here: https://platform.beam.cloud/settings/plans",
 			},
 		},
 	}
