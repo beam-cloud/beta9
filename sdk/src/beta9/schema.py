@@ -335,9 +335,10 @@ class Image(SchemaField):
             temp_file.close()
             from .abstractions.output import Output
 
-            o = Output.from_file(open(temp_file.name, "rb"))
-            o.save()
-            return o.public_url()
+            with open(temp_file.name, "rb") as f:
+                o = Output.from_file(f)
+                o.save()
+                return o.public_url()
         finally:
             try:
                 os.unlink(temp_file.name)
