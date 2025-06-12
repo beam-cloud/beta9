@@ -20,6 +20,8 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	PodService_CreatePod_FullMethodName = "/pod.PodService/CreatePod"
+	PodService_Exec_FullMethodName      = "/pod.PodService/Exec"
+	PodService_SendStdin_FullMethodName = "/pod.PodService/SendStdin"
 )
 
 // PodServiceClient is the client API for PodService service.
@@ -27,6 +29,8 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PodServiceClient interface {
 	CreatePod(ctx context.Context, in *CreatePodRequest, opts ...grpc.CallOption) (*CreatePodResponse, error)
+	Exec(ctx context.Context, in *PodExecRequest, opts ...grpc.CallOption) (PodService_ExecClient, error)
+	SendStdin(ctx context.Context, in *PodSendStdinRequest, opts ...grpc.CallOption) (*PodSendStdinResponse, error)
 }
 
 type podServiceClient struct {
@@ -46,11 +50,54 @@ func (c *podServiceClient) CreatePod(ctx context.Context, in *CreatePodRequest, 
 	return out, nil
 }
 
+func (c *podServiceClient) Exec(ctx context.Context, in *PodExecRequest, opts ...grpc.CallOption) (PodService_ExecClient, error) {
+	stream, err := c.cc.NewStream(ctx, &PodService_ServiceDesc.Streams[0], PodService_Exec_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &podServiceExecClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type PodService_ExecClient interface {
+	Recv() (*PodExecResponse, error)
+	grpc.ClientStream
+}
+
+type podServiceExecClient struct {
+	grpc.ClientStream
+}
+
+func (x *podServiceExecClient) Recv() (*PodExecResponse, error) {
+	m := new(PodExecResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+func (c *podServiceClient) SendStdin(ctx context.Context, in *PodSendStdinRequest, opts ...grpc.CallOption) (*PodSendStdinResponse, error) {
+	out := new(PodSendStdinResponse)
+	err := c.cc.Invoke(ctx, PodService_SendStdin_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PodServiceServer is the server API for PodService service.
 // All implementations must embed UnimplementedPodServiceServer
 // for forward compatibility
 type PodServiceServer interface {
 	CreatePod(context.Context, *CreatePodRequest) (*CreatePodResponse, error)
+	Exec(*PodExecRequest, PodService_ExecServer) error
+	SendStdin(context.Context, *PodSendStdinRequest) (*PodSendStdinResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
 
@@ -60,6 +107,12 @@ type UnimplementedPodServiceServer struct {
 
 func (UnimplementedPodServiceServer) CreatePod(context.Context, *CreatePodRequest) (*CreatePodResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreatePod not implemented")
+}
+func (UnimplementedPodServiceServer) Exec(*PodExecRequest, PodService_ExecServer) error {
+	return status.Errorf(codes.Unimplemented, "method Exec not implemented")
+}
+func (UnimplementedPodServiceServer) SendStdin(context.Context, *PodSendStdinRequest) (*PodSendStdinResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SendStdin not implemented")
 }
 func (UnimplementedPodServiceServer) mustEmbedUnimplementedPodServiceServer() {}
 
@@ -92,6 +145,45 @@ func _PodService_CreatePod_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PodService_Exec_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(PodExecRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(PodServiceServer).Exec(m, &podServiceExecServer{stream})
+}
+
+type PodService_ExecServer interface {
+	Send(*PodExecResponse) error
+	grpc.ServerStream
+}
+
+type podServiceExecServer struct {
+	grpc.ServerStream
+}
+
+func (x *podServiceExecServer) Send(m *PodExecResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func _PodService_SendStdin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSendStdinRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SendStdin(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SendStdin_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SendStdin(ctx, req.(*PodSendStdinRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PodService_ServiceDesc is the grpc.ServiceDesc for PodService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -103,7 +195,17 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "CreatePod",
 			Handler:    _PodService_CreatePod_Handler,
 		},
+		{
+			MethodName: "SendStdin",
+			Handler:    _PodService_SendStdin_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Exec",
+			Handler:       _PodService_Exec_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "pod.proto",
 }

@@ -6,7 +6,9 @@
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
+    AsyncIterator,
     Dict,
+    Iterator,
     Optional,
 )
 
@@ -34,6 +36,33 @@ class CreatePodResponse(betterproto.Message):
     error_msg: str = betterproto.string_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class PodExecRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    command: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodExecResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    exit_code: int = betterproto.int32_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSendStdinRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    pid: str = betterproto.string_field(2)
+    data: bytes = betterproto.bytes_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSendStdinResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    exit_code: int = betterproto.int32_field(3)
+
+
 class PodServiceStub(SyncServiceStub):
     def create_pod(self, create_pod_request: "CreatePodRequest") -> "CreatePodResponse":
         return self._unary_unary(
@@ -41,3 +70,20 @@ class PodServiceStub(SyncServiceStub):
             CreatePodRequest,
             CreatePodResponse,
         )(create_pod_request)
+
+    def exec(self, pod_exec_request: "PodExecRequest") -> Iterator["PodExecResponse"]:
+        for response in self._unary_stream(
+            "/pod.PodService/Exec",
+            PodExecRequest,
+            PodExecResponse,
+        )(pod_exec_request):
+            yield response
+
+    def send_stdin(
+        self, pod_send_stdin_request: "PodSendStdinRequest"
+    ) -> "PodSendStdinResponse":
+        return self._unary_unary(
+            "/pod.PodService/SendStdin",
+            PodSendStdinRequest,
+            PodSendStdinResponse,
+        )(pod_send_stdin_request)

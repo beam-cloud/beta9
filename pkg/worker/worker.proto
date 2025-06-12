@@ -8,12 +8,14 @@ package runc;
 
 service RunCService {
   rpc RunCKill(RunCKillRequest) returns (RunCKillResponse) {}
-  rpc RunCExec(RunCExecRequest) returns (RunCExecResponse) {}
   rpc RunCStatus(RunCStatusRequest) returns (RunCStatusResponse) {}
+  rpc RunCExec(RunCExecRequest) returns (RunCExecResponse) {}
   rpc RunCStreamLogs(RunCStreamLogsRequest) returns (stream RunCLogEntry) {}
   rpc RunCArchive(RunCArchiveRequest) returns (stream RunCArchiveResponse) {}
   rpc RunCSyncWorkspace(gateway.SyncContainerWorkspaceRequest)
       returns (gateway.SyncContainerWorkspaceResponse) {}
+  rpc RunCSandboxExec(RunCSandboxExecRequest)
+      returns (RunCSandboxExecResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -46,4 +48,24 @@ message RunCArchiveResponse {
   bool success = 2;
   int32 progress = 3;
   string error_msg = 4;
+}
+
+message RunCSandboxExecRequest {
+  string container_id = 1;
+  string cmd = 2;
+  repeated string env = 3;
+
+  // Exec mode options - exactly one should be true
+  bool get_pid = 4;     // Returns immediately with PID
+  bool blocking = 5;    // Waits for completion and returns output
+  bool interactive = 6; // Sets up interactive IO streams
+
+  // For interactive mode
+  bytes stdin = 7; // Only used in interactive mode
+}
+
+message RunCSandboxExecResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  int32 pid = 3;
 }

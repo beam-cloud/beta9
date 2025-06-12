@@ -6,6 +6,8 @@ package pod;
 
 service PodService {
   rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {}
+  rpc Exec(PodExecRequest) returns (stream PodExecResponse) {}
+  rpc SendStdin(PodSendStdinRequest) returns (PodSendStdinResponse) {}
 }
 
 message CreatePodRequest { string stub_id = 1; }
@@ -14,4 +16,27 @@ message CreatePodResponse {
   bool ok = 1;
   string container_id = 2;
   string error_msg = 3;
+}
+
+message PodExecRequest {
+  string container_id = 1;
+  string command = 2;
+}
+
+message PodExecResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  int32 exit_code = 3;
+}
+
+message PodSendStdinRequest {
+  string container_id = 1;
+  string pid = 2;
+  bytes data = 3;
+}
+
+message PodSendStdinResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  int32 exit_code = 3;
 }

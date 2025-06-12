@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -337,6 +339,46 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		Ok:          true,
 		ContainerId: containerId,
 	}, nil
+}
+
+func (s *GenericPodService) Exec(in *pb.PodExecRequest, stream pb.PodService_ExecServer) error {
+	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
+
+	hostname, err := s.containerRepo.GetWorkerAddress(stream.Context(), in.ContainerId)
+	if err != nil {
+		return stream.Send(&pb.PodExecResponse{
+			Ok:       false,
+			ErrorMsg: "Container not found",
+		})
+	}
+
+	conn, err := network.ConnectToHost(stream.Context(), hostname, time.Second*30, s.tailscale, s.config.Tailscale)
+	if err != nil {
+		return stream.Send(&pb.PodExecResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to worker",
+		})
+	}
+
+	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
+	if err != nil {
+		return stream.Send(&pb.PodExecResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to create RunC client",
+		})
+	}
+
+	resp, err := client.SandboxExec(in.ContainerId, in.Command, []string{})
+	if err != nil {
+		return stream.Send(&pb.PodExecResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to execute command",
+		})
+	}
+
+	log.Info().Msgf("resp: %+v", resp)
+
+	return nil
 }
 
 func (s *GenericPodService) generateContainerId(stubId string) string {

@@ -20,11 +20,12 @@ const _ = grpc.SupportPackageIsVersion7
 
 const (
 	RunCService_RunCKill_FullMethodName          = "/runc.RunCService/RunCKill"
-	RunCService_RunCExec_FullMethodName          = "/runc.RunCService/RunCExec"
 	RunCService_RunCStatus_FullMethodName        = "/runc.RunCService/RunCStatus"
+	RunCService_RunCExec_FullMethodName          = "/runc.RunCService/RunCExec"
 	RunCService_RunCStreamLogs_FullMethodName    = "/runc.RunCService/RunCStreamLogs"
 	RunCService_RunCArchive_FullMethodName       = "/runc.RunCService/RunCArchive"
 	RunCService_RunCSyncWorkspace_FullMethodName = "/runc.RunCService/RunCSyncWorkspace"
+	RunCService_RunCSandboxExec_FullMethodName   = "/runc.RunCService/RunCSandboxExec"
 )
 
 // RunCServiceClient is the client API for RunCService service.
@@ -32,11 +33,12 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type RunCServiceClient interface {
 	RunCKill(ctx context.Context, in *RunCKillRequest, opts ...grpc.CallOption) (*RunCKillResponse, error)
-	RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error)
 	RunCStatus(ctx context.Context, in *RunCStatusRequest, opts ...grpc.CallOption) (*RunCStatusResponse, error)
+	RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error)
 	RunCStreamLogs(ctx context.Context, in *RunCStreamLogsRequest, opts ...grpc.CallOption) (RunCService_RunCStreamLogsClient, error)
 	RunCArchive(ctx context.Context, in *RunCArchiveRequest, opts ...grpc.CallOption) (RunCService_RunCArchiveClient, error)
 	RunCSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error)
+	RunCSandboxExec(ctx context.Context, in *RunCSandboxExecRequest, opts ...grpc.CallOption) (*RunCSandboxExecResponse, error)
 }
 
 type runCServiceClient struct {
@@ -56,18 +58,18 @@ func (c *runCServiceClient) RunCKill(ctx context.Context, in *RunCKillRequest, o
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error) {
-	out := new(RunCExecResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCExec_FullMethodName, in, out, opts...)
+func (c *runCServiceClient) RunCStatus(ctx context.Context, in *RunCStatusRequest, opts ...grpc.CallOption) (*RunCStatusResponse, error) {
+	out := new(RunCStatusResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCStatus_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCStatus(ctx context.Context, in *RunCStatusRequest, opts ...grpc.CallOption) (*RunCStatusResponse, error) {
-	out := new(RunCStatusResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCStatus_FullMethodName, in, out, opts...)
+func (c *runCServiceClient) RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error) {
+	out := new(RunCExecResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCExec_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -147,16 +149,26 @@ func (c *runCServiceClient) RunCSyncWorkspace(ctx context.Context, in *SyncConta
 	return out, nil
 }
 
+func (c *runCServiceClient) RunCSandboxExec(ctx context.Context, in *RunCSandboxExecRequest, opts ...grpc.CallOption) (*RunCSandboxExecResponse, error) {
+	out := new(RunCSandboxExecResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxExec_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunCServiceServer is the server API for RunCService service.
 // All implementations must embed UnimplementedRunCServiceServer
 // for forward compatibility
 type RunCServiceServer interface {
 	RunCKill(context.Context, *RunCKillRequest) (*RunCKillResponse, error)
-	RunCExec(context.Context, *RunCExecRequest) (*RunCExecResponse, error)
 	RunCStatus(context.Context, *RunCStatusRequest) (*RunCStatusResponse, error)
+	RunCExec(context.Context, *RunCExecRequest) (*RunCExecResponse, error)
 	RunCStreamLogs(*RunCStreamLogsRequest, RunCService_RunCStreamLogsServer) error
 	RunCArchive(*RunCArchiveRequest, RunCService_RunCArchiveServer) error
 	RunCSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error)
+	RunCSandboxExec(context.Context, *RunCSandboxExecRequest) (*RunCSandboxExecResponse, error)
 	mustEmbedUnimplementedRunCServiceServer()
 }
 
@@ -167,11 +179,11 @@ type UnimplementedRunCServiceServer struct {
 func (UnimplementedRunCServiceServer) RunCKill(context.Context, *RunCKillRequest) (*RunCKillResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCKill not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCExec(context.Context, *RunCExecRequest) (*RunCExecResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCExec not implemented")
-}
 func (UnimplementedRunCServiceServer) RunCStatus(context.Context, *RunCStatusRequest) (*RunCStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCStatus not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCExec(context.Context, *RunCExecRequest) (*RunCExecResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCExec not implemented")
 }
 func (UnimplementedRunCServiceServer) RunCStreamLogs(*RunCStreamLogsRequest, RunCService_RunCStreamLogsServer) error {
 	return status.Errorf(codes.Unimplemented, "method RunCStreamLogs not implemented")
@@ -181,6 +193,9 @@ func (UnimplementedRunCServiceServer) RunCArchive(*RunCArchiveRequest, RunCServi
 }
 func (UnimplementedRunCServiceServer) RunCSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCSyncWorkspace not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxExec(context.Context, *RunCSandboxExecRequest) (*RunCSandboxExecResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxExec not implemented")
 }
 func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
 
@@ -213,24 +228,6 @@ func _RunCService_RunCKill_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCExecRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCExec(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: RunCService_RunCExec_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCExec(ctx, req.(*RunCExecRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _RunCService_RunCStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RunCStatusRequest)
 	if err := dec(in); err != nil {
@@ -245,6 +242,24 @@ func _RunCService_RunCStatus_Handler(srv interface{}, ctx context.Context, dec f
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(RunCServiceServer).RunCStatus(ctx, req.(*RunCStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCExecRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCExec(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCExec_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCExec(ctx, req.(*RunCExecRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -309,6 +324,24 @@ func _RunCService_RunCSyncWorkspace_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RunCService_RunCSandboxExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxExecRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxExec(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxExec_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxExec(ctx, req.(*RunCSandboxExecRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RunCService_ServiceDesc is the grpc.ServiceDesc for RunCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -321,16 +354,20 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _RunCService_RunCKill_Handler,
 		},
 		{
-			MethodName: "RunCExec",
-			Handler:    _RunCService_RunCExec_Handler,
-		},
-		{
 			MethodName: "RunCStatus",
 			Handler:    _RunCService_RunCStatus_Handler,
 		},
 		{
+			MethodName: "RunCExec",
+			Handler:    _RunCService_RunCExec_Handler,
+		},
+		{
 			MethodName: "RunCSyncWorkspace",
 			Handler:    _RunCService_RunCSyncWorkspace_Handler,
+		},
+		{
+			MethodName: "RunCSandboxExec",
+			Handler:    _RunCService_RunCSandboxExec_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
