@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rs/zerolog/log"
-
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -341,44 +339,124 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	}, nil
 }
 
-func (s *GenericPodService) Exec(in *pb.PodExecRequest, stream pb.PodService_ExecServer) error {
-	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
+func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	hostname, err := s.containerRepo.GetWorkerAddress(stream.Context(), in.ContainerId)
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
 	if err != nil {
-		return stream.Send(&pb.PodExecResponse{
+		return &pb.PodSandboxExecResponse{
 			Ok:       false,
-			ErrorMsg: "Container not found",
-		})
-	}
-
-	conn, err := network.ConnectToHost(stream.Context(), hostname, time.Second*30, s.tailscale, s.config.Tailscale)
-	if err != nil {
-		return stream.Send(&pb.PodExecResponse{
-			Ok:       false,
-			ErrorMsg: "Failed to connect to worker",
-		})
-	}
-
-	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
-	if err != nil {
-		return stream.Send(&pb.PodExecResponse{
-			Ok:       false,
-			ErrorMsg: "Failed to create RunC client",
-		})
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
 	}
 
 	resp, err := client.SandboxExec(in.ContainerId, in.Command, []string{})
 	if err != nil {
-		return stream.Send(&pb.PodExecResponse{
+		return &pb.PodSandboxExecResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to execute command",
-		})
+		}, nil
 	}
 
-	log.Info().Msgf("resp: %+v", resp)
+	return &pb.PodSandboxExecResponse{
+		Ok:  true,
+		Pid: resp.Pid,
+	}, nil
+}
 
-	return nil
+func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandboxStatusRequest) (*pb.PodSandboxStatusResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxStatusResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxStatus(in.ContainerId, in.Pid)
+	if err != nil {
+		return &pb.PodSandboxStatusResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to get sandbox status",
+		}, nil
+	}
+
+	return &pb.PodSandboxStatusResponse{
+		Ok:       true,
+		Status:   resp.Status,
+		ExitCode: resp.ExitCode,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxStdout(ctx context.Context, in *pb.PodSandboxStdoutRequest) (*pb.PodSandboxStdoutResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxStdoutResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxStdout(in.ContainerId, in.Pid)
+	if err != nil {
+		return &pb.PodSandboxStdoutResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to get sandbox stdout",
+		}, nil
+	}
+
+	return &pb.PodSandboxStdoutResponse{
+		Ok:     true,
+		Stdout: resp.Stdout,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandboxStderrRequest) (*pb.PodSandboxStderrResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxStderrResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxStderr(in.ContainerId, in.Pid)
+	if err != nil {
+		return &pb.PodSandboxStderrResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to get sandbox stdout",
+		}, nil
+	}
+
+	return &pb.PodSandboxStderrResponse{
+		Ok:     true,
+		Stderr: resp.Stderr,
+	}, nil
+}
+
+func (s *GenericPodService) getClient(ctx context.Context, containerId, token string) (*common.RunCClient, error) {
+	hostname, err := s.containerRepo.GetWorkerAddress(ctx, containerId)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, s.tailscale, s.config.Tailscale)
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := common.NewRunCClient(hostname, token, conn)
+	if err != nil {
+		return nil, err
+	}
+
+	return client, nil
 }
 
 func (s *GenericPodService) generateContainerId(stubId string) string {

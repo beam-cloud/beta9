@@ -104,6 +104,30 @@ func (c *RunCClient) SandboxExec(containerId, cmd string, env []string) (*pb.Run
 	return resp, nil
 }
 
+func (c *RunCClient) SandboxStatus(containerId string, pid int32) (*pb.RunCSandboxStatusResponse, error) {
+	resp, err := c.client.RunCSandboxStatus(context.TODO(), &pb.RunCSandboxStatusRequest{ContainerId: containerId, Pid: pid})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxStdout(containerId string, pid int32) (*pb.RunCSandboxStdoutResponse, error) {
+	resp, err := c.client.RunCSandboxStdout(context.TODO(), &pb.RunCSandboxStdoutRequest{ContainerId: containerId, Pid: pid})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxStderr(containerId string, pid int32) (*pb.RunCSandboxStderrResponse, error) {
+	resp, err := c.client.RunCSandboxStderr(context.TODO(), &pb.RunCSandboxStderrRequest{ContainerId: containerId, Pid: pid})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
 func (c *RunCClient) Kill(containerId string) (*pb.RunCKillResponse, error) {
 	resp, err := c.client.RunCKill(context.TODO(), &pb.RunCKillRequest{ContainerId: containerId})
 	if err != nil {

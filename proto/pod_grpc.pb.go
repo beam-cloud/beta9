@@ -19,9 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	PodService_CreatePod_FullMethodName = "/pod.PodService/CreatePod"
-	PodService_Exec_FullMethodName      = "/pod.PodService/Exec"
-	PodService_SendStdin_FullMethodName = "/pod.PodService/SendStdin"
+	PodService_CreatePod_FullMethodName     = "/pod.PodService/CreatePod"
+	PodService_SandboxExec_FullMethodName   = "/pod.PodService/SandboxExec"
+	PodService_SandboxStatus_FullMethodName = "/pod.PodService/SandboxStatus"
+	PodService_SandboxStdout_FullMethodName = "/pod.PodService/SandboxStdout"
+	PodService_SandboxStderr_FullMethodName = "/pod.PodService/SandboxStderr"
 )
 
 // PodServiceClient is the client API for PodService service.
@@ -29,8 +31,10 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PodServiceClient interface {
 	CreatePod(ctx context.Context, in *CreatePodRequest, opts ...grpc.CallOption) (*CreatePodResponse, error)
-	Exec(ctx context.Context, in *PodExecRequest, opts ...grpc.CallOption) (PodService_ExecClient, error)
-	SendStdin(ctx context.Context, in *PodSendStdinRequest, opts ...grpc.CallOption) (*PodSendStdinResponse, error)
+	SandboxExec(ctx context.Context, in *PodSandboxExecRequest, opts ...grpc.CallOption) (*PodSandboxExecResponse, error)
+	SandboxStatus(ctx context.Context, in *PodSandboxStatusRequest, opts ...grpc.CallOption) (*PodSandboxStatusResponse, error)
+	SandboxStdout(ctx context.Context, in *PodSandboxStdoutRequest, opts ...grpc.CallOption) (*PodSandboxStdoutResponse, error)
+	SandboxStderr(ctx context.Context, in *PodSandboxStderrRequest, opts ...grpc.CallOption) (*PodSandboxStderrResponse, error)
 }
 
 type podServiceClient struct {
@@ -50,41 +54,36 @@ func (c *podServiceClient) CreatePod(ctx context.Context, in *CreatePodRequest, 
 	return out, nil
 }
 
-func (c *podServiceClient) Exec(ctx context.Context, in *PodExecRequest, opts ...grpc.CallOption) (PodService_ExecClient, error) {
-	stream, err := c.cc.NewStream(ctx, &PodService_ServiceDesc.Streams[0], PodService_Exec_FullMethodName, opts...)
+func (c *podServiceClient) SandboxExec(ctx context.Context, in *PodSandboxExecRequest, opts ...grpc.CallOption) (*PodSandboxExecResponse, error) {
+	out := new(PodSandboxExecResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxExec_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &podServiceExecClient{stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxStatus(ctx context.Context, in *PodSandboxStatusRequest, opts ...grpc.CallOption) (*PodSandboxStatusResponse, error) {
+	out := new(PodSandboxStatusResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxStatus_FullMethodName, in, out, opts...)
+	if err != nil {
 		return nil, err
 	}
-	if err := x.ClientStream.CloseSend(); err != nil {
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxStdout(ctx context.Context, in *PodSandboxStdoutRequest, opts ...grpc.CallOption) (*PodSandboxStdoutResponse, error) {
+	out := new(PodSandboxStdoutResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxStdout_FullMethodName, in, out, opts...)
+	if err != nil {
 		return nil, err
 	}
-	return x, nil
+	return out, nil
 }
 
-type PodService_ExecClient interface {
-	Recv() (*PodExecResponse, error)
-	grpc.ClientStream
-}
-
-type podServiceExecClient struct {
-	grpc.ClientStream
-}
-
-func (x *podServiceExecClient) Recv() (*PodExecResponse, error) {
-	m := new(PodExecResponse)
-	if err := x.ClientStream.RecvMsg(m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-func (c *podServiceClient) SendStdin(ctx context.Context, in *PodSendStdinRequest, opts ...grpc.CallOption) (*PodSendStdinResponse, error) {
-	out := new(PodSendStdinResponse)
-	err := c.cc.Invoke(ctx, PodService_SendStdin_FullMethodName, in, out, opts...)
+func (c *podServiceClient) SandboxStderr(ctx context.Context, in *PodSandboxStderrRequest, opts ...grpc.CallOption) (*PodSandboxStderrResponse, error) {
+	out := new(PodSandboxStderrResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxStderr_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -96,8 +95,10 @@ func (c *podServiceClient) SendStdin(ctx context.Context, in *PodSendStdinReques
 // for forward compatibility
 type PodServiceServer interface {
 	CreatePod(context.Context, *CreatePodRequest) (*CreatePodResponse, error)
-	Exec(*PodExecRequest, PodService_ExecServer) error
-	SendStdin(context.Context, *PodSendStdinRequest) (*PodSendStdinResponse, error)
+	SandboxExec(context.Context, *PodSandboxExecRequest) (*PodSandboxExecResponse, error)
+	SandboxStatus(context.Context, *PodSandboxStatusRequest) (*PodSandboxStatusResponse, error)
+	SandboxStdout(context.Context, *PodSandboxStdoutRequest) (*PodSandboxStdoutResponse, error)
+	SandboxStderr(context.Context, *PodSandboxStderrRequest) (*PodSandboxStderrResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
 
@@ -108,11 +109,17 @@ type UnimplementedPodServiceServer struct {
 func (UnimplementedPodServiceServer) CreatePod(context.Context, *CreatePodRequest) (*CreatePodResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreatePod not implemented")
 }
-func (UnimplementedPodServiceServer) Exec(*PodExecRequest, PodService_ExecServer) error {
-	return status.Errorf(codes.Unimplemented, "method Exec not implemented")
+func (UnimplementedPodServiceServer) SandboxExec(context.Context, *PodSandboxExecRequest) (*PodSandboxExecResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxExec not implemented")
 }
-func (UnimplementedPodServiceServer) SendStdin(context.Context, *PodSendStdinRequest) (*PodSendStdinResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SendStdin not implemented")
+func (UnimplementedPodServiceServer) SandboxStatus(context.Context, *PodSandboxStatusRequest) (*PodSandboxStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxStatus not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxStdout(context.Context, *PodSandboxStdoutRequest) (*PodSandboxStdoutResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxStdout not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxStderr(context.Context, *PodSandboxStderrRequest) (*PodSandboxStderrResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxStderr not implemented")
 }
 func (UnimplementedPodServiceServer) mustEmbedUnimplementedPodServiceServer() {}
 
@@ -145,41 +152,74 @@ func _PodService_CreatePod_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PodService_Exec_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(PodExecRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(PodServiceServer).Exec(m, &podServiceExecServer{stream})
-}
-
-type PodService_ExecServer interface {
-	Send(*PodExecResponse) error
-	grpc.ServerStream
-}
-
-type podServiceExecServer struct {
-	grpc.ServerStream
-}
-
-func (x *podServiceExecServer) Send(m *PodExecResponse) error {
-	return x.ServerStream.SendMsg(m)
-}
-
-func _PodService_SendStdin_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PodSendStdinRequest)
+func _PodService_SandboxExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxExecRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PodServiceServer).SendStdin(ctx, in)
+		return srv.(PodServiceServer).SandboxExec(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PodService_SendStdin_FullMethodName,
+		FullMethod: PodService_SandboxExec_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PodServiceServer).SendStdin(ctx, req.(*PodSendStdinRequest))
+		return srv.(PodServiceServer).SandboxExec(ctx, req.(*PodSandboxExecRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxStatus(ctx, req.(*PodSandboxStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxStdout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxStdoutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxStdout(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxStdout_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxStdout(ctx, req.(*PodSandboxStdoutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxStderr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxStderrRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxStderr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxStderr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxStderr(ctx, req.(*PodSandboxStderrRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -196,16 +236,22 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PodService_CreatePod_Handler,
 		},
 		{
-			MethodName: "SendStdin",
-			Handler:    _PodService_SendStdin_Handler,
+			MethodName: "SandboxExec",
+			Handler:    _PodService_SandboxExec_Handler,
 		},
-	},
-	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "Exec",
-			Handler:       _PodService_Exec_Handler,
-			ServerStreams: true,
+			MethodName: "SandboxStatus",
+			Handler:    _PodService_SandboxStatus_Handler,
+		},
+		{
+			MethodName: "SandboxStdout",
+			Handler:    _PodService_SandboxStdout_Handler,
+		},
+		{
+			MethodName: "SandboxStderr",
+			Handler:    _PodService_SandboxStderr_Handler,
 		},
 	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "pod.proto",
 }

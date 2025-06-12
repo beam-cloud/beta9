@@ -16,6 +16,12 @@ service RunCService {
       returns (gateway.SyncContainerWorkspaceResponse) {}
   rpc RunCSandboxExec(RunCSandboxExecRequest)
       returns (RunCSandboxExecResponse) {}
+  rpc RunCSandboxStatus(RunCSandboxStatusRequest)
+      returns (RunCSandboxStatusResponse) {}
+  rpc RunCSandboxStdout(RunCSandboxStdoutRequest)
+      returns (RunCSandboxStdoutResponse) {}
+  rpc RunCSandboxStderr(RunCSandboxStderrRequest)
+      returns (RunCSandboxStderrResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -54,18 +60,45 @@ message RunCSandboxExecRequest {
   string container_id = 1;
   string cmd = 2;
   repeated string env = 3;
-
-  // Exec mode options - exactly one should be true
-  bool get_pid = 4;     // Returns immediately with PID
-  bool blocking = 5;    // Waits for completion and returns output
-  bool interactive = 6; // Sets up interactive IO streams
-
-  // For interactive mode
-  bytes stdin = 7; // Only used in interactive mode
+  bool interactive = 4;
 }
 
 message RunCSandboxExecResponse {
   bool ok = 1;
   string error_msg = 2;
   int32 pid = 3;
+}
+
+message RunCSandboxStatusRequest {
+  string container_id = 1;
+  int32 pid = 2;
+}
+
+message RunCSandboxStatusResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string status = 3;
+  int32 exit_code = 4;
+}
+
+message RunCSandboxStdoutRequest {
+  string container_id = 1;
+  int32 pid = 2;
+}
+
+message RunCSandboxStdoutResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string stdout = 3;
+}
+
+message RunCSandboxStderrRequest {
+  string container_id = 1;
+  int32 pid = 2;
+}
+
+message RunCSandboxStderrResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string stderr = 3;
 }

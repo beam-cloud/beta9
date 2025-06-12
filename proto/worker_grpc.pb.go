@@ -26,6 +26,9 @@ const (
 	RunCService_RunCArchive_FullMethodName       = "/runc.RunCService/RunCArchive"
 	RunCService_RunCSyncWorkspace_FullMethodName = "/runc.RunCService/RunCSyncWorkspace"
 	RunCService_RunCSandboxExec_FullMethodName   = "/runc.RunCService/RunCSandboxExec"
+	RunCService_RunCSandboxStatus_FullMethodName = "/runc.RunCService/RunCSandboxStatus"
+	RunCService_RunCSandboxStdout_FullMethodName = "/runc.RunCService/RunCSandboxStdout"
+	RunCService_RunCSandboxStderr_FullMethodName = "/runc.RunCService/RunCSandboxStderr"
 )
 
 // RunCServiceClient is the client API for RunCService service.
@@ -39,6 +42,9 @@ type RunCServiceClient interface {
 	RunCArchive(ctx context.Context, in *RunCArchiveRequest, opts ...grpc.CallOption) (RunCService_RunCArchiveClient, error)
 	RunCSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error)
 	RunCSandboxExec(ctx context.Context, in *RunCSandboxExecRequest, opts ...grpc.CallOption) (*RunCSandboxExecResponse, error)
+	RunCSandboxStatus(ctx context.Context, in *RunCSandboxStatusRequest, opts ...grpc.CallOption) (*RunCSandboxStatusResponse, error)
+	RunCSandboxStdout(ctx context.Context, in *RunCSandboxStdoutRequest, opts ...grpc.CallOption) (*RunCSandboxStdoutResponse, error)
+	RunCSandboxStderr(ctx context.Context, in *RunCSandboxStderrRequest, opts ...grpc.CallOption) (*RunCSandboxStderrResponse, error)
 }
 
 type runCServiceClient struct {
@@ -158,6 +164,33 @@ func (c *runCServiceClient) RunCSandboxExec(ctx context.Context, in *RunCSandbox
 	return out, nil
 }
 
+func (c *runCServiceClient) RunCSandboxStatus(ctx context.Context, in *RunCSandboxStatusRequest, opts ...grpc.CallOption) (*RunCSandboxStatusResponse, error) {
+	out := new(RunCSandboxStatusResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxStatus_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runCServiceClient) RunCSandboxStdout(ctx context.Context, in *RunCSandboxStdoutRequest, opts ...grpc.CallOption) (*RunCSandboxStdoutResponse, error) {
+	out := new(RunCSandboxStdoutResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxStdout_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runCServiceClient) RunCSandboxStderr(ctx context.Context, in *RunCSandboxStderrRequest, opts ...grpc.CallOption) (*RunCSandboxStderrResponse, error) {
+	out := new(RunCSandboxStderrResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxStderr_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunCServiceServer is the server API for RunCService service.
 // All implementations must embed UnimplementedRunCServiceServer
 // for forward compatibility
@@ -169,6 +202,9 @@ type RunCServiceServer interface {
 	RunCArchive(*RunCArchiveRequest, RunCService_RunCArchiveServer) error
 	RunCSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error)
 	RunCSandboxExec(context.Context, *RunCSandboxExecRequest) (*RunCSandboxExecResponse, error)
+	RunCSandboxStatus(context.Context, *RunCSandboxStatusRequest) (*RunCSandboxStatusResponse, error)
+	RunCSandboxStdout(context.Context, *RunCSandboxStdoutRequest) (*RunCSandboxStdoutResponse, error)
+	RunCSandboxStderr(context.Context, *RunCSandboxStderrRequest) (*RunCSandboxStderrResponse, error)
 	mustEmbedUnimplementedRunCServiceServer()
 }
 
@@ -196,6 +232,15 @@ func (UnimplementedRunCServiceServer) RunCSyncWorkspace(context.Context, *SyncCo
 }
 func (UnimplementedRunCServiceServer) RunCSandboxExec(context.Context, *RunCSandboxExecRequest) (*RunCSandboxExecResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxExec not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxStatus(context.Context, *RunCSandboxStatusRequest) (*RunCSandboxStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxStatus not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxStdout(context.Context, *RunCSandboxStdoutRequest) (*RunCSandboxStdoutResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxStdout not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxStderr(context.Context, *RunCSandboxStderrRequest) (*RunCSandboxStderrResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxStderr not implemented")
 }
 func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
 
@@ -342,6 +387,60 @@ func _RunCService_RunCSandboxExec_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RunCService_RunCSandboxStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxStatus(ctx, req.(*RunCSandboxStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCSandboxStdout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxStdoutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxStdout(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxStdout_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxStdout(ctx, req.(*RunCSandboxStdoutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCSandboxStderr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxStderrRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxStderr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxStderr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxStderr(ctx, req.(*RunCSandboxStderrRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RunCService_ServiceDesc is the grpc.ServiceDesc for RunCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -368,6 +467,18 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunCSandboxExec",
 			Handler:    _RunCService_RunCSandboxExec_Handler,
+		},
+		{
+			MethodName: "RunCSandboxStatus",
+			Handler:    _RunCService_RunCSandboxStatus_Handler,
+		},
+		{
+			MethodName: "RunCSandboxStdout",
+			Handler:    _RunCService_RunCSandboxStdout_Handler,
+		},
+		{
+			MethodName: "RunCSandboxStderr",
+			Handler:    _RunCService_RunCSandboxStderr_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

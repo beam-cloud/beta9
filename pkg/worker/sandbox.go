@@ -1,9 +1,19 @@
 package worker
 
 import (
+	"bytes"
 	"io"
 	"os/exec"
+	"sync"
 	"time"
+)
+
+type SandboxProcessStatus string
+
+const (
+	SandboxProcessStatusRunning SandboxProcessStatus = "running"
+	SandboxProcessStatusExited  SandboxProcessStatus = "exited"
+	SandboxProcessStatusError   SandboxProcessStatus = "error"
 )
 
 type SandboxProcessState struct {
@@ -15,8 +25,11 @@ type SandboxProcessState struct {
 	Stderr    io.ReadCloser
 	StartTime time.Time
 	EndTime   time.Time
-	Status    string // "running", "exited", "error"
+	Status    SandboxProcessStatus
 	Error     error
+	StdoutBuf *bytes.Buffer // buffer for stdout
+	StderrBuf *bytes.Buffer // buffer for stderr
+	mu        sync.Mutex
 }
 
 type SandboxProcessIO struct {

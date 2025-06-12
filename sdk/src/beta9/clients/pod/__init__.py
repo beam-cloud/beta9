@@ -6,9 +6,7 @@
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
-    AsyncIterator,
     Dict,
-    Iterator,
     Optional,
 )
 
@@ -37,30 +35,56 @@ class CreatePodResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PodExecRequest(betterproto.Message):
+class PodSandboxExecRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     command: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class PodExecResponse(betterproto.Message):
+class PodSandboxExecResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
-    exit_code: int = betterproto.int32_field(3)
+    pid: int = betterproto.int32_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class PodSendStdinRequest(betterproto.Message):
+class PodSandboxStatusRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
-    pid: str = betterproto.string_field(2)
-    data: bytes = betterproto.bytes_field(3)
+    pid: int = betterproto.int32_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class PodSendStdinResponse(betterproto.Message):
+class PodSandboxStatusResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
-    exit_code: int = betterproto.int32_field(3)
+    status: str = betterproto.string_field(3)
+    exit_code: int = betterproto.int32_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxStdoutRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    pid: int = betterproto.int32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxStdoutResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    stdout: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxStderrRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    pid: int = betterproto.int32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxStderrResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    stderr: str = betterproto.string_field(3)
 
 
 class PodServiceStub(SyncServiceStub):
@@ -71,19 +95,38 @@ class PodServiceStub(SyncServiceStub):
             CreatePodResponse,
         )(create_pod_request)
 
-    def exec(self, pod_exec_request: "PodExecRequest") -> Iterator["PodExecResponse"]:
-        for response in self._unary_stream(
-            "/pod.PodService/Exec",
-            PodExecRequest,
-            PodExecResponse,
-        )(pod_exec_request):
-            yield response
-
-    def send_stdin(
-        self, pod_send_stdin_request: "PodSendStdinRequest"
-    ) -> "PodSendStdinResponse":
+    def sandbox_exec(
+        self, pod_sandbox_exec_request: "PodSandboxExecRequest"
+    ) -> "PodSandboxExecResponse":
         return self._unary_unary(
-            "/pod.PodService/SendStdin",
-            PodSendStdinRequest,
-            PodSendStdinResponse,
-        )(pod_send_stdin_request)
+            "/pod.PodService/SandboxExec",
+            PodSandboxExecRequest,
+            PodSandboxExecResponse,
+        )(pod_sandbox_exec_request)
+
+    def sandbox_status(
+        self, pod_sandbox_status_request: "PodSandboxStatusRequest"
+    ) -> "PodSandboxStatusResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxStatus",
+            PodSandboxStatusRequest,
+            PodSandboxStatusResponse,
+        )(pod_sandbox_status_request)
+
+    def sandbox_stdout(
+        self, pod_sandbox_stdout_request: "PodSandboxStdoutRequest"
+    ) -> "PodSandboxStdoutResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxStdout",
+            PodSandboxStdoutRequest,
+            PodSandboxStdoutResponse,
+        )(pod_sandbox_stdout_request)
+
+    def sandbox_stderr(
+        self, pod_sandbox_stderr_request: "PodSandboxStderrRequest"
+    ) -> "PodSandboxStderrResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxStderr",
+            PodSandboxStderrRequest,
+            PodSandboxStderrResponse,
+        )(pod_sandbox_stderr_request)

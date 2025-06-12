@@ -6,8 +6,13 @@ package pod;
 
 service PodService {
   rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {}
-  rpc Exec(PodExecRequest) returns (stream PodExecResponse) {}
-  rpc SendStdin(PodSendStdinRequest) returns (PodSendStdinResponse) {}
+  rpc SandboxExec(PodSandboxExecRequest) returns (PodSandboxExecResponse) {}
+  rpc SandboxStatus(PodSandboxStatusRequest)
+      returns (PodSandboxStatusResponse) {}
+  rpc SandboxStdout(PodSandboxStdoutRequest)
+      returns (PodSandboxStdoutResponse) {}
+  rpc SandboxStderr(PodSandboxStderrRequest)
+      returns (PodSandboxStderrResponse) {}
 }
 
 message CreatePodRequest { string stub_id = 1; }
@@ -18,25 +23,47 @@ message CreatePodResponse {
   string error_msg = 3;
 }
 
-message PodExecRequest {
+message PodSandboxExecRequest {
   string container_id = 1;
   string command = 2;
 }
 
-message PodExecResponse {
+message PodSandboxExecResponse {
   bool ok = 1;
   string error_msg = 2;
-  int32 exit_code = 3;
+  int32 pid = 3;
 }
 
-message PodSendStdinRequest {
+message PodSandboxStatusRequest {
   string container_id = 1;
-  string pid = 2;
-  bytes data = 3;
+  int32 pid = 2;
 }
 
-message PodSendStdinResponse {
+message PodSandboxStatusResponse {
   bool ok = 1;
   string error_msg = 2;
-  int32 exit_code = 3;
+  string status = 3;
+  int32 exit_code = 4;
+}
+
+message PodSandboxStdoutRequest {
+  string container_id = 1;
+  int32 pid = 2;
+}
+
+message PodSandboxStdoutResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string stdout = 3;
+}
+
+message PodSandboxStderrRequest {
+  string container_id = 1;
+  int32 pid = 2;
+}
+
+message PodSandboxStderrResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string stderr = 3;
 }

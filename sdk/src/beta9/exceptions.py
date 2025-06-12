@@ -119,3 +119,9 @@ class VolumeUploadError(RuntimeError):
     def __init__(self, message: str):
         self.message = message
         super().__init__(f"Unable to upload volume: {message}")
+
+
+class SandboxProcessError(RuntimeError):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(f"Unable to launch sandbox process: {message}")
