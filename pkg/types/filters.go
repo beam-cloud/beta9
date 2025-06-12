@@ -61,6 +61,7 @@ type TaskFilter struct {
 	Cursor              string      `query:"cursor"`
 	AppId               string      `query:"app_id"`
 	Public              bool        `query:"public"`
+	All                 bool        `query:"all"`
 }
 
 // Struct that includes the custom type
