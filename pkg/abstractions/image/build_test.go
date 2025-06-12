@@ -170,9 +170,8 @@ func TestBuild_prepareSteps_IgnorePython(t *testing.T) {
 	err := build.prepareCommands()
 	assert.NoError(t, err)
 
-	// No python install or pip commands should be added
 	assert.Equal(t, []string{"apt update"}, build.commands)
-	assert.Equal(t, "", build.opts.PythonVersion, "PythonVersion should be cleared if IgnorePython is true and python is not found")
+	assert.Equal(t, []string{}, build.opts.PythonPackages, "PythonPackages should be cleared if IgnorePython is true and python is not found")
 	assert.NotEmpty(t, build.imageID)
 	mockRuncClient.AssertExpectations(t)
 }

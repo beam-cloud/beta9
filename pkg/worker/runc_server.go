@@ -393,7 +393,6 @@ func (s *RunCServer) RunCSandboxExec(ctx context.Context, in *pb.RunCSandboxExec
 	}
 
 	process.Env = append(instance.Spec.Process.Env, formattedEnv...)
-
 	return s.handleSandboxExec(ctx, in, instance, process)
 }
 
@@ -465,6 +464,7 @@ func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxEx
 			ps.Status = SandboxProcessStatusExited
 			ps.EndTime = time.Now()
 			instance.SandboxProcesses.Store(int32(pid), ps)
+
 			log.Info().Str("container_id", in.ContainerId).Int("pid", pid).Int("exit_code", exitCode).Msg("sandbox process exited")
 		}
 	}()
