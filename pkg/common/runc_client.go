@@ -96,8 +96,8 @@ func (c *RunCClient) Exec(containerId, cmd string, env []string) (*pb.RunCExecRe
 	return resp, nil
 }
 
-func (c *RunCClient) SandboxExec(containerId, cmd string, env []string) (*pb.RunCSandboxExecResponse, error) {
-	resp, err := c.client.RunCSandboxExec(context.TODO(), &pb.RunCSandboxExecRequest{ContainerId: containerId, Cmd: cmd, Env: env})
+func (c *RunCClient) SandboxExec(containerId, cmd string, env map[string]string, cwd string) (*pb.RunCSandboxExecResponse, error) {
+	resp, err := c.client.RunCSandboxExec(context.TODO(), &pb.RunCSandboxExecRequest{ContainerId: containerId, Cmd: cmd, Env: env, Cwd: cwd})
 	if err != nil {
 		return resp, err
 	}

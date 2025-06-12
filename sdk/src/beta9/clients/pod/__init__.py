@@ -38,6 +38,10 @@ class CreatePodResponse(betterproto.Message):
 class PodSandboxExecRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     command: str = betterproto.string_field(2)
+    cwd: str = betterproto.string_field(3)
+    env: Dict[str, str] = betterproto.map_field(
+        4, betterproto.TYPE_STRING, betterproto.TYPE_STRING
+    )
 
 
 @dataclass(eq=False, repr=False)

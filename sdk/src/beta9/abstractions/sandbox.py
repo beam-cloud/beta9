@@ -1,3 +1,4 @@
+import io
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
@@ -40,9 +41,7 @@ class Sandbox(Pod):
             The container image used for the task execution. Whatever you pass here will have an additional `add_python_packages` call
             with `["fastapi", "vllm", "huggingface_hub"]` added to it to ensure that we can run vLLM in the container.
         keep_warm_seconds (int):
-            The number of seconds to keep the container warm after the last request. Default is 60.
-        timeout (int):
-            The maximum number of seconds to wait for the container to start. Default is 3600.
+            The number of seconds to keep the sandbox around. Default is -1 (requires manual termination).
         name (str):
             The name of the Sandbox app. Default is none, which means you must provide it during deployment.
         volumes (List[Union[Volume, CloudBucket]]):
@@ -58,12 +57,14 @@ class Sandbox(Pod):
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(python_version="python3.11"),
-        keep_warm_seconds: int = 60,
+        keep_warm_seconds: int = -1,
         authorized: bool = False,
         name: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
         secrets: Optional[List[str]] = None,
     ):
+        self.debug_buffer = io.StringIO()
+
         super().__init__(
             cpu=cpu,
             memory=memory,
@@ -77,6 +78,9 @@ class Sandbox(Pod):
             secrets=secrets,
         )
 
+    def debug(self):
+        print(self.debug_buffer.getvalue())
+
     def create(self) -> "SandboxInstance":
         """
         Create a new sandbox instance.
@@ -85,41 +89,46 @@ class Sandbox(Pod):
 
         self.entrypoint = ["tail", "-f", "/dev/null"]
 
-        if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
-            return SandboxInstance(
-                container_id="",
-                url="",
-                ok=False,
-                error_msg="Failed to prepare runtime",
-            )
-
-        terminal.header("Creating container")
-        create_response: CreatePodResponse = self.stub.create_pod(
-            CreatePodRequest(
-                stub_id=self.stub_id,
-            )
-        )
-
-        url = ""
-        if create_response.ok:
-            terminal.header(f"Container created successfully ===> {create_response.container_id}")
-
-            if self.keep_warm_seconds < 0:
-                terminal.header("This container has no timeout, it will run until it completes.")
-            else:
-                terminal.header(
-                    f"This container will timeout after {self.keep_warm_seconds} seconds."
+        with terminal.redirect_terminal_to_buffer(self.debug_buffer):
+            if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
+                return SandboxInstance(
+                    container_id="",
+                    url="",
+                    ok=False,
+                    error_msg="Failed to prepare runtime",
                 )
 
-            url_res = self.print_invocation_snippet()
-            url = url_res.url
+            terminal.header("Creating container")
+            create_response: CreatePodResponse = self.stub.create_pod(
+                CreatePodRequest(
+                    stub_id=self.stub_id,
+                )
+            )
 
-        return SandboxInstance(
-            container_id=create_response.container_id,
-            url=url,
-            ok=create_response.ok,
-            error_msg=create_response.error_msg,
-        )
+            url = ""
+            if create_response.ok:
+                terminal.header(
+                    f"Container created successfully ===> {create_response.container_id}"
+                )
+
+                if self.keep_warm_seconds < 0:
+                    terminal.header(
+                        "This container has no timeout, it will run until it completes."
+                    )
+                else:
+                    terminal.header(
+                        f"This container will timeout after {self.keep_warm_seconds} seconds."
+                    )
+
+                url_res = self.print_invocation_snippet()
+                url = url_res.url
+
+            return SandboxInstance(
+                container_id=create_response.container_id,
+                url=url,
+                ok=create_response.ok,
+                error_msg=create_response.error_msg,
+            )
 
 
 @dataclass
@@ -166,7 +175,7 @@ class SandboxProcessResponse:
     ):
         self.pid = pid
         self.exit_code = exit_code
-        self.result = stdout.read() + stderr.read()
+        self.result: str = stdout.read() + stderr.read()
 
 
 class SandboxProcessManager:
@@ -174,31 +183,45 @@ class SandboxProcessManager:
         self.sandbox_instance: SandboxInstance = sandbox_instance
         self.processes: Dict[int, SandboxProcess] = {}
 
-    def run_code(self, code: str, blocking: bool = True) -> "SandboxProcessResponse":
-        process = self._exec("python3", "-c", f"'{code}'")
+    def run_code(
+        self,
+        code: str,
+        blocking: bool = True,
+        cwd: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
+    ) -> Union["SandboxProcessResponse", "SandboxProcess"]:
+        process = self._exec("python3", "-c", f"'{code}'", cwd=cwd, env=env)
 
         if blocking:
             process.wait()
+            return SandboxProcessResponse(
+                pid=process.pid,
+                exit_code=process.exit_code,
+                stdout=process.stdout,
+                stderr=process.stderr,
+            )
 
-        return SandboxProcessResponse(
-            pid=process.pid,
-            exit_code=process.exit_code,
-            stdout=process.stdout,
-            stderr=process.stderr,
-        )
+        return process
 
-    def exec(self, *args) -> "SandboxProcess":
+    def exec(
+        self, *args, cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None
+    ) -> "SandboxProcess":
         args = list(args)
         args = ["bash", "-c", "'" + " ".join(args) + "'"]
-        return self._exec(args)
+        return self._exec(args, cwd=cwd, env=env)
 
-    def _exec(self, *args) -> "SandboxProcess":
+    def _exec(
+        self, *args, cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None
+    ) -> "SandboxProcess":
         command = list(args) if not isinstance(args[0], list) else args[0]
         shell_command = " ".join(command)
 
         response = self.sandbox_instance.stub.sandbox_exec(
             PodSandboxExecRequest(
-                container_id=self.sandbox_instance.container_id, command=shell_command
+                container_id=self.sandbox_instance.container_id,
+                command=shell_command,
+                cwd=cwd,
+                env=env,
             )
         )
         if not response.ok or response.pid <= 0:
@@ -245,6 +268,11 @@ class SandboxProcessStream:
             else:
                 exit_code, _ = self.process.status()
                 if exit_code >= 0:
+                    last_chunk = self._fetch_next_chunk()
+                    if last_chunk:
+                        self._buffer += last_chunk
+                        continue
+
                     self._closed = True
                 else:
                     time.sleep(0.1)

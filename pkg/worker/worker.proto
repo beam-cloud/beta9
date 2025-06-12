@@ -59,8 +59,9 @@ message RunCArchiveResponse {
 message RunCSandboxExecRequest {
   string container_id = 1;
   string cmd = 2;
-  repeated string env = 3;
-  bool interactive = 4;
+  string cwd = 3;
+  map<string, string> env = 4;
+  bool interactive = 5;
 }
 
 message RunCSandboxExecResponse {

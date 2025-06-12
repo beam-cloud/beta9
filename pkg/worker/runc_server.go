@@ -355,35 +355,44 @@ func (s *RunCServer) RunCSandboxExec(ctx context.Context, in *pb.RunCSandboxExec
 		return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
-	if instance.Spec == nil {
-		for {
-			instance, exists = s.containerInstances.Get(in.ContainerId)
-			if !exists {
-				return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: "Container not found"}, nil
-			}
-
-			state, err := s.runcHandle.State(ctx, in.ContainerId)
-			if err != nil {
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
-
-			if state.Pid != 0 {
-				break
-			}
-
-			if state.Status == types.RuncContainerStatusRunning {
-				break
-			}
-
-			time.Sleep(100 * time.Millisecond)
+	for {
+		instance, exists = s.containerInstances.Get(in.ContainerId)
+		if !exists {
+			return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 		}
+
+		if instance.Spec == nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		state, err := s.runcHandle.State(ctx, in.ContainerId)
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		if state.Pid != 0 && state.Status == types.RuncContainerStatusRunning {
+			break
+		}
+
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	process := s.baseConfigSpec.Process
 	process.Args = parsedCmd
 	process.Cwd = instance.Spec.Process.Cwd
-	process.Env = append(instance.Spec.Process.Env, in.Env...)
+
+	if in.Cwd != "" {
+		process.Cwd = in.Cwd
+	}
+
+	formattedEnv := []string{}
+	for key, value := range in.Env {
+		formattedEnv = append(formattedEnv, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	process.Env = append(instance.Spec.Process.Env, formattedEnv...)
 
 	return s.handleSandboxExec(ctx, in, instance, process)
 }

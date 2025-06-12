@@ -26,6 +26,8 @@ message CreatePodResponse {
 message PodSandboxExecRequest {
   string container_id = 1;
   string command = 2;
+  string cwd = 3;
+  map<string, string> env = 4;
 }
 
 message PodSandboxExecResponse {

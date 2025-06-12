@@ -59,6 +59,7 @@ type GenericPodService struct {
 	eventRepo       repository.EventRepository
 	controller      *abstractions.InstanceController
 	podInstances    *common.SafeMap[*podInstance]
+	clientCache     sync.Map
 }
 
 func NewPodService(
@@ -350,7 +351,7 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 		}, nil
 	}
 
-	resp, err := client.SandboxExec(in.ContainerId, in.Command, []string{})
+	resp, err := client.SandboxExec(in.ContainerId, in.Command, in.Env, in.Cwd)
 	if err != nil {
 		return &pb.PodSandboxExecResponse{
 			Ok:       false,
@@ -441,6 +442,13 @@ func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandbox
 }
 
 func (s *GenericPodService) getClient(ctx context.Context, containerId, token string) (*common.RunCClient, error) {
+	cacheKey := containerId + ":" + token
+	if cached, ok := s.clientCache.Load(cacheKey); ok {
+		if client, ok := cached.(*common.RunCClient); ok {
+			return client, nil
+		}
+	}
+
 	hostname, err := s.containerRepo.GetWorkerAddress(ctx, containerId)
 	if err != nil {
 		return nil, err
@@ -456,6 +464,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 		return nil, err
 	}
 
+	s.clientCache.Store(cacheKey, client)
 	return client, nil
 }
 

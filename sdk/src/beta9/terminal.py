@@ -253,3 +253,14 @@ def StyledProgress() -> CustomProgress:
         refresh_per_second=60,
         disable=False,
     )
+
+
+@contextmanager
+def redirect_terminal_to_buffer(buffer):
+    global _console
+    original_console = _console
+    _console = Console(file=buffer, force_terminal=False)
+    try:
+        yield
+    finally:
+        _console = original_console
