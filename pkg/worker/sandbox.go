@@ -8,6 +8,7 @@ import (
 
 type SandboxProcessState struct {
 	Pid       int
+	Args      []string
 	ExitCode  int
 	Stdin     io.WriteCloser
 	Stdout    io.ReadCloser
@@ -25,6 +26,7 @@ type SandboxProcessIO struct {
 	stdoutW io.WriteCloser
 	stderrR io.ReadCloser
 	stderrW io.WriteCloser
+	done    chan int // channel to signal process completion and exit code
 }
 
 func NewSandboxProcessIO() *SandboxProcessIO {
@@ -39,6 +41,7 @@ func NewSandboxProcessIO() *SandboxProcessIO {
 		stdoutW: stdoutW,
 		stderrR: stderrR,
 		stderrW: stderrW,
+		done:    make(chan int, 1),
 	}
 }
 
@@ -55,6 +58,7 @@ func (p *SandboxProcessIO) Close() error {
 func (p *SandboxProcessIO) Stdin() io.WriteCloser { return p.stdinW }
 func (p *SandboxProcessIO) Stdout() io.ReadCloser { return p.stdoutR }
 func (p *SandboxProcessIO) Stderr() io.ReadCloser { return p.stderrR }
+func (p *SandboxProcessIO) Done() <-chan int      { return p.done }
 
 func (p *SandboxProcessIO) Set(cmd *exec.Cmd) {
 	cmd.Stdin = p.stdinR

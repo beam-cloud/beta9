@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -360,44 +361,44 @@ func (s *RunCServer) RunCSandboxExec(ctx context.Context, in *pb.RunCSandboxExec
 	process.Cwd = instance.Spec.Process.Cwd
 	process.Env = append(instance.Spec.Process.Env, in.Env...)
 
-	return s.handleSandboxExec(ctx, in.ContainerId, instance, process)
+	return s.handleSandboxExec(ctx, in, instance, process)
 }
 
-func (s *RunCServer) handleSandboxExec(ctx context.Context, containerId string, instance *ContainerInstance, process *specs.Process) (*pb.RunCSandboxExecResponse, error) {
+func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxExecRequest, instance *ContainerInstance, process *specs.Process) (*pb.RunCSandboxExecResponse, error) {
 	started := make(chan int, 1)
-	exitCode := make(chan int, 1)
 
 	processIO := NewSandboxProcessIO()
-	execOpts := &runc.ExecOpts{
-		IO:           processIO,
-		Started:      started,
-		OutputWriter: instance.OutputWriter,
+	opts := &runc.ExecOpts{
+		IO:      processIO,
+		Started: started,
+	}
+
+	var stdoutBuf, stderrBuf bytes.Buffer
+	go func() {
+		io.Copy(io.MultiWriter(&stdoutBuf, io.Discard), processIO.Stdout())
+	}()
+
+	go func() {
+		io.Copy(io.MultiWriter(&stderrBuf, io.Discard), processIO.Stderr())
+	}()
+
+	if !in.Interactive {
+		processIO.Stdin().Close()
 	}
 
 	go func() {
-		err := s.runcHandle.Exec(context.Background(), containerId, *process, execOpts)
+		err := s.runcHandle.Exec(context.Background(), in.ContainerId, *process, opts)
 		if err != nil {
-			log.Error().Err(err).Str("container_id", containerId).Msg("error starting sandbox process")
-			started <- -1
-			exitCode <- -1
+			if exitErr, ok := err.(*runc.ExitError); ok {
+				processIO.done <- exitErr.Status
+			} else {
+				processIO.done <- 1
+			}
+
 			return
 		}
 
-		// Wait for the process to complete and get its exit code
-		state, err := s.runcHandle.State(context.Background(), containerId)
-		if err != nil {
-			exitCode <- -1
-			return
-		}
-
-		code := <-exitCode
-		if newState, ok := instance.SandboxProcesses.Load(state.Pid); ok {
-			ps := newState.(*SandboxProcessState)
-			ps.ExitCode = code
-			ps.Status = "exited"
-			ps.EndTime = time.Now()
-			instance.SandboxProcesses.Store(state.Pid, ps)
-		}
+		processIO.done <- 0
 	}()
 
 	pid := <-started
@@ -408,8 +409,10 @@ func (s *RunCServer) handleSandboxExec(ctx context.Context, containerId string, 
 		}, nil
 	}
 
+	// Store initial process state
 	processState := &SandboxProcessState{
 		Pid:       pid,
+		Args:      process.Args,
 		Stdin:     processIO.Stdin(),
 		Stdout:    processIO.Stdout(),
 		Stderr:    processIO.Stderr(),
@@ -417,6 +420,18 @@ func (s *RunCServer) handleSandboxExec(ctx context.Context, containerId string, 
 		Status:    "running",
 	}
 	instance.SandboxProcesses.Store(pid, processState)
+
+	go func() {
+		exitCode := <-processIO.Done()
+		if state, ok := instance.SandboxProcesses.Load(pid); ok {
+			ps := state.(*SandboxProcessState)
+			ps.ExitCode = exitCode
+			ps.Status = "exited"
+			ps.EndTime = time.Now()
+			instance.SandboxProcesses.Store(pid, ps)
+			log.Info().Str("container_id", in.ContainerId).Int("pid", pid).Int("exit_code", exitCode).Msg("sandbox process exited")
+		}
+	}()
 
 	return &pb.RunCSandboxExecResponse{
 		Ok:  true,
