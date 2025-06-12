@@ -660,11 +660,14 @@ func (c *PostgresBackendRepository) listTaskWithRelatedQueryBuilder(filters type
 		OrderBy("t.id DESC")
 
 	// Apply filters
-	if filters.WorkspaceID > 0 {
+	if filters.All {
+		qb = qb.Where(squirrel.Or{
+			squirrel.Eq{"t.external_workspace_id": filters.WorkspaceID},
+			squirrel.Eq{"t.workspace_id": filters.WorkspaceID},
+		})
+	} else if filters.WorkspaceID > 0 {
 		qb = qb.Where(squirrel.Eq{"t.workspace_id": filters.WorkspaceID})
-	}
-
-	if filters.ExternalWorkspaceID > 0 {
+	} else if filters.ExternalWorkspaceID > 0 {
 		qb = qb.Where(squirrel.Eq{"t.external_workspace_id": filters.ExternalWorkspaceID})
 	}
 

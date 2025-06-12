@@ -387,7 +387,8 @@ func (g *TaskGroup) preprocessFilters(ctx echo.Context) (*types.TaskFilter, erro
 	}
 
 	public, _ := strconv.ParseBool(ctx.QueryParam("public"))
-	if public {
+
+	if public && !filters.All {
 		filters.ExternalWorkspaceID = workspace.Id
 		filters.WorkspaceID = 0
 	} else {
