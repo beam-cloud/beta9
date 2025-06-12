@@ -441,6 +441,79 @@ func (s *GenericPodService) SandboxStderr(ctx context.Context, in *pb.PodSandbox
 	}, nil
 }
 
+func (s *GenericPodService) SandboxKill(ctx context.Context, in *pb.PodSandboxKillRequest) (*pb.PodSandboxKillResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxKillResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxKill(in.ContainerId, in.Pid)
+	if err != nil {
+		return &pb.PodSandboxKillResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to kill sandbox process",
+		}, nil
+	}
+
+	return &pb.PodSandboxKillResponse{
+		Ok: resp.Ok,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxUploadFile(ctx context.Context, in *pb.PodSandboxUploadFileRequest) (*pb.PodSandboxUploadFileResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxUploadFileResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxUploadFile(in.ContainerId, in.ContainerPath, in.Data, in.Mode)
+	if err != nil {
+		return &pb.PodSandboxUploadFileResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to upload file to sandbox",
+		}, nil
+	}
+
+	return &pb.PodSandboxUploadFileResponse{
+		Ok: resp.Ok,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxDownloadFile(ctx context.Context, in *pb.PodSandboxDownloadFileRequest) (*pb.PodSandboxDownloadFileResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxDownloadFileResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxDownloadFile(in.ContainerId, in.ContainerPath)
+	if err != nil {
+		return &pb.PodSandboxDownloadFileResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to download file from sandbox",
+		}, nil
+	}
+
+	return &pb.PodSandboxDownloadFileResponse{
+		Ok:   resp.Ok,
+		Data: resp.Data,
+	}, nil
+}
+
 func (s *GenericPodService) getClient(ctx context.Context, containerId, token string) (*common.RunCClient, error) {
 	cacheKey := containerId + ":" + token
 	if cached, ok := s.clientCache.Load(cacheKey); ok {

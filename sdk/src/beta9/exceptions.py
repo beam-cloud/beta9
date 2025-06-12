@@ -125,3 +125,9 @@ class SandboxProcessError(RuntimeError):
     def __init__(self, message: str):
         self.message = message
         super().__init__(f"Unable to launch sandbox process: {message}")
+
+
+class SandboxFileSystemError(RuntimeError):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(f"Unable to perform sandbox filesystem operation: {message}")

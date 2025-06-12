@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Dict,
+    List,
     Optional,
 )
 
@@ -91,6 +92,106 @@ class PodSandboxStderrResponse(betterproto.Message):
     stderr: str = betterproto.string_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class PodSandboxKillRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    pid: int = betterproto.int32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxKillResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxListProcessesRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxListProcessesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    pids: List[int] = betterproto.int32_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxUploadFileRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    container_path: str = betterproto.string_field(2)
+    mode: int = betterproto.int32_field(3)
+    data: bytes = betterproto.bytes_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxUploadFileResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxDownloadFileRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    container_path: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxDownloadFileResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    data: bytes = betterproto.bytes_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxListFilesRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    path: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxListFilesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    files: List[str] = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxDeleteFileRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    path: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxDeleteFileResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxCreateDirectoryRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    path: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxCreateDirectoryResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxDeleteDirectoryRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    path: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxDeleteDirectoryResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
 class PodServiceStub(SyncServiceStub):
     def create_pod(self, create_pod_request: "CreatePodRequest") -> "CreatePodResponse":
         return self._unary_unary(
@@ -134,3 +235,75 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxStderrRequest,
             PodSandboxStderrResponse,
         )(pod_sandbox_stderr_request)
+
+    def sandbox_kill(
+        self, pod_sandbox_kill_request: "PodSandboxKillRequest"
+    ) -> "PodSandboxKillResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxKill",
+            PodSandboxKillRequest,
+            PodSandboxKillResponse,
+        )(pod_sandbox_kill_request)
+
+    def sandbox_list_processes(
+        self, pod_sandbox_list_processes_request: "PodSandboxListProcessesRequest"
+    ) -> "PodSandboxListProcessesResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxListProcesses",
+            PodSandboxListProcessesRequest,
+            PodSandboxListProcessesResponse,
+        )(pod_sandbox_list_processes_request)
+
+    def sandbox_upload_file(
+        self, pod_sandbox_upload_file_request: "PodSandboxUploadFileRequest"
+    ) -> "PodSandboxUploadFileResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxUploadFile",
+            PodSandboxUploadFileRequest,
+            PodSandboxUploadFileResponse,
+        )(pod_sandbox_upload_file_request)
+
+    def sandbox_download_file(
+        self, pod_sandbox_download_file_request: "PodSandboxDownloadFileRequest"
+    ) -> "PodSandboxDownloadFileResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxDownloadFile",
+            PodSandboxDownloadFileRequest,
+            PodSandboxDownloadFileResponse,
+        )(pod_sandbox_download_file_request)
+
+    def sandbox_list_files(
+        self, pod_sandbox_list_files_request: "PodSandboxListFilesRequest"
+    ) -> "PodSandboxListFilesResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxListFiles",
+            PodSandboxListFilesRequest,
+            PodSandboxListFilesResponse,
+        )(pod_sandbox_list_files_request)
+
+    def sandbox_delete_file(
+        self, pod_sandbox_delete_file_request: "PodSandboxDeleteFileRequest"
+    ) -> "PodSandboxDeleteFileResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxDeleteFile",
+            PodSandboxDeleteFileRequest,
+            PodSandboxDeleteFileResponse,
+        )(pod_sandbox_delete_file_request)
+
+    def sandbox_create_directory(
+        self, pod_sandbox_create_directory_request: "PodSandboxCreateDirectoryRequest"
+    ) -> "PodSandboxCreateDirectoryResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxCreateDirectory",
+            PodSandboxCreateDirectoryRequest,
+            PodSandboxCreateDirectoryResponse,
+        )(pod_sandbox_create_directory_request)
+
+    def sandbox_delete_directory(
+        self, pod_sandbox_delete_directory_request: "PodSandboxDeleteDirectoryRequest"
+    ) -> "PodSandboxDeleteDirectoryResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxDeleteDirectory",
+            PodSandboxDeleteDirectoryRequest,
+            PodSandboxDeleteDirectoryResponse,
+        )(pod_sandbox_delete_directory_request)

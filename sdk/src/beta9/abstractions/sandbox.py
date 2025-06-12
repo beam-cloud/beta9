@@ -15,13 +15,16 @@ from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopCont
 from ..clients.pod import (
     CreatePodRequest,
     CreatePodResponse,
+    PodSandboxDownloadFileRequest,
     PodSandboxExecRequest,
+    PodSandboxKillRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
     PodSandboxStdoutRequest,
+    PodSandboxUploadFileRequest,
     PodServiceStub,
 )
-from ..exceptions import SandboxProcessError
+from ..exceptions import SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias
 
 
@@ -164,6 +167,9 @@ class SandboxInstance(BaseAbstraction):
         )
         return res.ok
 
+    def expose_port(self, port: int):
+        raise NotImplementedError("Expose port not implemented")
+
 
 class SandboxProcessResponse:
     def __init__(
@@ -236,6 +242,9 @@ class SandboxProcessManager:
         return list(self.processes.values())
 
     def get_process(self, pid: int) -> "SandboxProcess":
+        if pid not in self.processes:
+            raise SandboxProcessError(f"Process with pid {pid} not found")
+
         return self.processes[pid]
 
 
@@ -311,6 +320,13 @@ class SandboxProcess:
 
         return self.exit_code
 
+    def kill(self):
+        response = self.sandbox_instance.stub.sandbox_kill(
+            PodSandboxKillRequest(container_id=self.sandbox_instance.container_id, pid=self.pid)
+        )
+        if not response.ok:
+            raise SandboxProcessError(response.error_msg)
+
     def status(self) -> Tuple[int, str]:
         response = self.sandbox_instance.stub.sandbox_status(
             PodSandboxStatusRequest(container_id=self.sandbox_instance.container_id, pid=self.pid)
@@ -320,9 +336,6 @@ class SandboxProcess:
             raise SandboxProcessError(response.error_msg)
 
         return response.exit_code, response.status
-
-    def kill(self):
-        pass
 
     @property
     def stdout(self):
@@ -355,11 +368,44 @@ class SandboxFileSystem:
     def __init__(self, sandbox_instance: SandboxInstance):
         self.sandbox_instance = sandbox_instance
 
-    def upload_file(self, local_path: str, container_path: str):
-        pass
+    def upload_file(self, local_path: str, sandbox_path: str):
+        with open(local_path, "rb") as f:
+            content = f.read()
+
+            response = self.sandbox_instance.stub.sandbox_upload_file(
+                PodSandboxUploadFileRequest(
+                    container_id=self.sandbox_instance.container_id,
+                    container_path=sandbox_path,
+                    data=content,
+                    mode=644,
+                )
+            )
+
+            if not response.ok:
+                raise SandboxFileSystemError(response.error_msg)
 
     def download_file(self, container_path: str, local_path: str):
-        pass
+        response = self.sandbox_instance.stub.sandbox_download_file(
+            PodSandboxDownloadFileRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=container_path,
+            )
+        )
+
+        if not response.ok:
+            raise SandboxFileSystemError(response.error_msg)
+
+        with open(local_path, "wb") as f:
+            f.write(response.data)
 
     def list_files(self, container_path: str):
-        pass
+        raise NotImplementedError("List files not implemented")
+
+    def create_directory(self, container_path: str):
+        raise NotImplementedError("Create directory not implemented")
+
+    def delete_file(self, container_path: str):
+        raise NotImplementedError("Delete file not implemented")
+
+    def delete_directory(self, container_path: str):
+        raise NotImplementedError("Delete directory not implemented")

@@ -19,16 +19,23 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	RunCService_RunCKill_FullMethodName          = "/runc.RunCService/RunCKill"
-	RunCService_RunCStatus_FullMethodName        = "/runc.RunCService/RunCStatus"
-	RunCService_RunCExec_FullMethodName          = "/runc.RunCService/RunCExec"
-	RunCService_RunCStreamLogs_FullMethodName    = "/runc.RunCService/RunCStreamLogs"
-	RunCService_RunCArchive_FullMethodName       = "/runc.RunCService/RunCArchive"
-	RunCService_RunCSyncWorkspace_FullMethodName = "/runc.RunCService/RunCSyncWorkspace"
-	RunCService_RunCSandboxExec_FullMethodName   = "/runc.RunCService/RunCSandboxExec"
-	RunCService_RunCSandboxStatus_FullMethodName = "/runc.RunCService/RunCSandboxStatus"
-	RunCService_RunCSandboxStdout_FullMethodName = "/runc.RunCService/RunCSandboxStdout"
-	RunCService_RunCSandboxStderr_FullMethodName = "/runc.RunCService/RunCSandboxStderr"
+	RunCService_RunCKill_FullMethodName                   = "/runc.RunCService/RunCKill"
+	RunCService_RunCStatus_FullMethodName                 = "/runc.RunCService/RunCStatus"
+	RunCService_RunCExec_FullMethodName                   = "/runc.RunCService/RunCExec"
+	RunCService_RunCStreamLogs_FullMethodName             = "/runc.RunCService/RunCStreamLogs"
+	RunCService_RunCArchive_FullMethodName                = "/runc.RunCService/RunCArchive"
+	RunCService_RunCSyncWorkspace_FullMethodName          = "/runc.RunCService/RunCSyncWorkspace"
+	RunCService_RunCSandboxExec_FullMethodName            = "/runc.RunCService/RunCSandboxExec"
+	RunCService_RunCSandboxStatus_FullMethodName          = "/runc.RunCService/RunCSandboxStatus"
+	RunCService_RunCSandboxStdout_FullMethodName          = "/runc.RunCService/RunCSandboxStdout"
+	RunCService_RunCSandboxStderr_FullMethodName          = "/runc.RunCService/RunCSandboxStderr"
+	RunCService_RunCSandboxKill_FullMethodName            = "/runc.RunCService/RunCSandboxKill"
+	RunCService_RunCSandboxListFiles_FullMethodName       = "/runc.RunCService/RunCSandboxListFiles"
+	RunCService_RunCSandboxUploadFile_FullMethodName      = "/runc.RunCService/RunCSandboxUploadFile"
+	RunCService_RunCSandboxDownloadFile_FullMethodName    = "/runc.RunCService/RunCSandboxDownloadFile"
+	RunCService_RunCSandboxDeleteFile_FullMethodName      = "/runc.RunCService/RunCSandboxDeleteFile"
+	RunCService_RunCSandboxCreateDirectory_FullMethodName = "/runc.RunCService/RunCSandboxCreateDirectory"
+	RunCService_RunCSandboxDeleteDirectory_FullMethodName = "/runc.RunCService/RunCSandboxDeleteDirectory"
 )
 
 // RunCServiceClient is the client API for RunCService service.
@@ -45,6 +52,13 @@ type RunCServiceClient interface {
 	RunCSandboxStatus(ctx context.Context, in *RunCSandboxStatusRequest, opts ...grpc.CallOption) (*RunCSandboxStatusResponse, error)
 	RunCSandboxStdout(ctx context.Context, in *RunCSandboxStdoutRequest, opts ...grpc.CallOption) (*RunCSandboxStdoutResponse, error)
 	RunCSandboxStderr(ctx context.Context, in *RunCSandboxStderrRequest, opts ...grpc.CallOption) (*RunCSandboxStderrResponse, error)
+	RunCSandboxKill(ctx context.Context, in *RunCSandboxKillRequest, opts ...grpc.CallOption) (*RunCSandboxKillResponse, error)
+	RunCSandboxListFiles(ctx context.Context, in *RunCSandboxListFilesRequest, opts ...grpc.CallOption) (*RunCSandboxListFilesResponse, error)
+	RunCSandboxUploadFile(ctx context.Context, in *RunCSandboxUploadFileRequest, opts ...grpc.CallOption) (*RunCSandboxUploadFileResponse, error)
+	RunCSandboxDownloadFile(ctx context.Context, in *RunCSandboxDownloadFileRequest, opts ...grpc.CallOption) (*RunCSandboxDownloadFileResponse, error)
+	RunCSandboxDeleteFile(ctx context.Context, in *RunCSandboxDeleteFileRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteFileResponse, error)
+	RunCSandboxCreateDirectory(ctx context.Context, in *RunCSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxCreateDirectoryResponse, error)
+	RunCSandboxDeleteDirectory(ctx context.Context, in *RunCSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteDirectoryResponse, error)
 }
 
 type runCServiceClient struct {
@@ -191,6 +205,69 @@ func (c *runCServiceClient) RunCSandboxStderr(ctx context.Context, in *RunCSandb
 	return out, nil
 }
 
+func (c *runCServiceClient) RunCSandboxKill(ctx context.Context, in *RunCSandboxKillRequest, opts ...grpc.CallOption) (*RunCSandboxKillResponse, error) {
+	out := new(RunCSandboxKillResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxKill_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runCServiceClient) RunCSandboxListFiles(ctx context.Context, in *RunCSandboxListFilesRequest, opts ...grpc.CallOption) (*RunCSandboxListFilesResponse, error) {
+	out := new(RunCSandboxListFilesResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxListFiles_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runCServiceClient) RunCSandboxUploadFile(ctx context.Context, in *RunCSandboxUploadFileRequest, opts ...grpc.CallOption) (*RunCSandboxUploadFileResponse, error) {
+	out := new(RunCSandboxUploadFileResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxUploadFile_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runCServiceClient) RunCSandboxDownloadFile(ctx context.Context, in *RunCSandboxDownloadFileRequest, opts ...grpc.CallOption) (*RunCSandboxDownloadFileResponse, error) {
+	out := new(RunCSandboxDownloadFileResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxDownloadFile_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runCServiceClient) RunCSandboxDeleteFile(ctx context.Context, in *RunCSandboxDeleteFileRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteFileResponse, error) {
+	out := new(RunCSandboxDeleteFileResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxDeleteFile_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runCServiceClient) RunCSandboxCreateDirectory(ctx context.Context, in *RunCSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxCreateDirectoryResponse, error) {
+	out := new(RunCSandboxCreateDirectoryResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxCreateDirectory_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runCServiceClient) RunCSandboxDeleteDirectory(ctx context.Context, in *RunCSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteDirectoryResponse, error) {
+	out := new(RunCSandboxDeleteDirectoryResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxDeleteDirectory_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunCServiceServer is the server API for RunCService service.
 // All implementations must embed UnimplementedRunCServiceServer
 // for forward compatibility
@@ -205,6 +282,13 @@ type RunCServiceServer interface {
 	RunCSandboxStatus(context.Context, *RunCSandboxStatusRequest) (*RunCSandboxStatusResponse, error)
 	RunCSandboxStdout(context.Context, *RunCSandboxStdoutRequest) (*RunCSandboxStdoutResponse, error)
 	RunCSandboxStderr(context.Context, *RunCSandboxStderrRequest) (*RunCSandboxStderrResponse, error)
+	RunCSandboxKill(context.Context, *RunCSandboxKillRequest) (*RunCSandboxKillResponse, error)
+	RunCSandboxListFiles(context.Context, *RunCSandboxListFilesRequest) (*RunCSandboxListFilesResponse, error)
+	RunCSandboxUploadFile(context.Context, *RunCSandboxUploadFileRequest) (*RunCSandboxUploadFileResponse, error)
+	RunCSandboxDownloadFile(context.Context, *RunCSandboxDownloadFileRequest) (*RunCSandboxDownloadFileResponse, error)
+	RunCSandboxDeleteFile(context.Context, *RunCSandboxDeleteFileRequest) (*RunCSandboxDeleteFileResponse, error)
+	RunCSandboxCreateDirectory(context.Context, *RunCSandboxCreateDirectoryRequest) (*RunCSandboxCreateDirectoryResponse, error)
+	RunCSandboxDeleteDirectory(context.Context, *RunCSandboxDeleteDirectoryRequest) (*RunCSandboxDeleteDirectoryResponse, error)
 	mustEmbedUnimplementedRunCServiceServer()
 }
 
@@ -241,6 +325,27 @@ func (UnimplementedRunCServiceServer) RunCSandboxStdout(context.Context, *RunCSa
 }
 func (UnimplementedRunCServiceServer) RunCSandboxStderr(context.Context, *RunCSandboxStderrRequest) (*RunCSandboxStderrResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxStderr not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxKill(context.Context, *RunCSandboxKillRequest) (*RunCSandboxKillResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxKill not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxListFiles(context.Context, *RunCSandboxListFilesRequest) (*RunCSandboxListFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxListFiles not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxUploadFile(context.Context, *RunCSandboxUploadFileRequest) (*RunCSandboxUploadFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxUploadFile not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxDownloadFile(context.Context, *RunCSandboxDownloadFileRequest) (*RunCSandboxDownloadFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxDownloadFile not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxDeleteFile(context.Context, *RunCSandboxDeleteFileRequest) (*RunCSandboxDeleteFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxDeleteFile not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxCreateDirectory(context.Context, *RunCSandboxCreateDirectoryRequest) (*RunCSandboxCreateDirectoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxCreateDirectory not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxDeleteDirectory(context.Context, *RunCSandboxDeleteDirectoryRequest) (*RunCSandboxDeleteDirectoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxDeleteDirectory not implemented")
 }
 func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
 
@@ -441,6 +546,132 @@ func _RunCService_RunCSandboxStderr_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RunCService_RunCSandboxKill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxKillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxKill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxKill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxKill(ctx, req.(*RunCSandboxKillRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCSandboxListFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxListFilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxListFiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxListFiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxListFiles(ctx, req.(*RunCSandboxListFilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCSandboxUploadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxUploadFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxUploadFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxUploadFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxUploadFile(ctx, req.(*RunCSandboxUploadFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCSandboxDownloadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxDownloadFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxDownloadFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxDownloadFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxDownloadFile(ctx, req.(*RunCSandboxDownloadFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCSandboxDeleteFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxDeleteFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxDeleteFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxDeleteFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxDeleteFile(ctx, req.(*RunCSandboxDeleteFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCSandboxCreateDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxCreateDirectoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxCreateDirectory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxCreateDirectory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxCreateDirectory(ctx, req.(*RunCSandboxCreateDirectoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCSandboxDeleteDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxDeleteDirectoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxDeleteDirectory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxDeleteDirectory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxDeleteDirectory(ctx, req.(*RunCSandboxDeleteDirectoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RunCService_ServiceDesc is the grpc.ServiceDesc for RunCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -479,6 +710,34 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunCSandboxStderr",
 			Handler:    _RunCService_RunCSandboxStderr_Handler,
+		},
+		{
+			MethodName: "RunCSandboxKill",
+			Handler:    _RunCService_RunCSandboxKill_Handler,
+		},
+		{
+			MethodName: "RunCSandboxListFiles",
+			Handler:    _RunCService_RunCSandboxListFiles_Handler,
+		},
+		{
+			MethodName: "RunCSandboxUploadFile",
+			Handler:    _RunCService_RunCSandboxUploadFile_Handler,
+		},
+		{
+			MethodName: "RunCSandboxDownloadFile",
+			Handler:    _RunCService_RunCSandboxDownloadFile_Handler,
+		},
+		{
+			MethodName: "RunCSandboxDeleteFile",
+			Handler:    _RunCService_RunCSandboxDeleteFile_Handler,
+		},
+		{
+			MethodName: "RunCSandboxCreateDirectory",
+			Handler:    _RunCService_RunCSandboxCreateDirectory_Handler,
+		},
+		{
+			MethodName: "RunCSandboxDeleteDirectory",
+			Handler:    _RunCService_RunCSandboxDeleteDirectory_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

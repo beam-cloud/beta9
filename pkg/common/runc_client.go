@@ -128,6 +128,30 @@ func (c *RunCClient) SandboxStderr(containerId string, pid int32) (*pb.RunCSandb
 	return resp, nil
 }
 
+func (c *RunCClient) SandboxKill(containerId string, pid int32) (*pb.RunCSandboxKillResponse, error) {
+	resp, err := c.client.RunCSandboxKill(context.TODO(), &pb.RunCSandboxKillRequest{ContainerId: containerId, Pid: pid})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxUploadFile(containerId, path string, data []byte, mode int32) (*pb.RunCSandboxUploadFileResponse, error) {
+	resp, err := c.client.RunCSandboxUploadFile(context.TODO(), &pb.RunCSandboxUploadFileRequest{ContainerId: containerId, ContainerPath: path, Data: data, Mode: mode})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxDownloadFile(containerId, containerPath string) (*pb.RunCSandboxDownloadFileResponse, error) {
+	resp, err := c.client.RunCSandboxDownloadFile(context.TODO(), &pb.RunCSandboxDownloadFileRequest{ContainerId: containerId, ContainerPath: containerPath})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
 func (c *RunCClient) Kill(containerId string) (*pb.RunCKillResponse, error) {
 	resp, err := c.client.RunCKill(context.TODO(), &pb.RunCKillRequest{ContainerId: containerId})
 	if err != nil {

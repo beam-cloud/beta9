@@ -342,6 +342,34 @@ func (s *RunCServer) RunCSyncWorkspace(ctx context.Context, in *pb.SyncContainer
 	return &pb.SyncContainerWorkspaceResponse{Ok: true}, nil
 }
 
+func (s *RunCServer) waitForContainer(ctx context.Context, containerId string) error {
+	for {
+		instance, exists := s.containerInstances.Get(containerId)
+		if !exists {
+			return errors.New("container not found")
+		}
+
+		if instance.Spec == nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		state, err := s.runcHandle.State(ctx, containerId)
+		if err != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		if state.Pid != 0 && state.Status == types.RuncContainerStatusRunning {
+			break
+		}
+
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	return nil
+}
+
 func (s *RunCServer) RunCSandboxExec(ctx context.Context, in *pb.RunCSandboxExecRequest) (*pb.RunCSandboxExecResponse, error) {
 	log.Info().Str("container_id", in.ContainerId).Str("cmd", in.Cmd).Msg("running sandbox command")
 
@@ -355,28 +383,9 @@ func (s *RunCServer) RunCSandboxExec(ctx context.Context, in *pb.RunCSandboxExec
 		return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
-	for {
-		instance, exists = s.containerInstances.Get(in.ContainerId)
-		if !exists {
-			return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: "Container not found"}, nil
-		}
-
-		if instance.Spec == nil {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		state, err := s.runcHandle.State(ctx, in.ContainerId)
-		if err != nil {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-
-		if state.Pid != 0 && state.Status == types.RuncContainerStatusRunning {
-			break
-		}
-
-		time.Sleep(100 * time.Millisecond)
+	err = s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, err
 	}
 
 	process := s.baseConfigSpec.Process
@@ -558,4 +567,74 @@ func (s *RunCServer) RunCSandboxStderr(ctx context.Context, in *pb.RunCSandboxSt
 		Ok:     true,
 		Stderr: stderr,
 	}, nil
+}
+
+func (s *RunCServer) RunCSandboxKill(ctx context.Context, in *pb.RunCSandboxKillRequest) (*pb.RunCSandboxKillResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxKillResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	processState, ok := instance.SandboxProcesses.Load(int32(in.Pid))
+	if !ok {
+		return &pb.RunCSandboxKillResponse{Ok: false, ErrorMsg: "Process not found"}, nil
+	}
+
+	ps := processState.(*SandboxProcessState)
+
+	ps.mu.Lock()
+	ps.Status = SandboxProcessStatusExited
+	ps.EndTime = time.Now()
+	ps.mu.Unlock()
+
+	syscall.Kill(ps.Pid, syscall.SIGTERM)
+	return &pb.RunCSandboxKillResponse{Ok: true}, nil
+}
+
+func (s *RunCServer) RunCSandboxUploadFile(ctx context.Context, in *pb.RunCSandboxUploadFileRequest) (*pb.RunCSandboxUploadFileResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxUploadFileResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxUploadFileResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	err = os.WriteFile(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), in.Data, os.FileMode(in.Mode))
+	if err != nil {
+		return &pb.RunCSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, err
+	}
+
+	return &pb.RunCSandboxUploadFileResponse{Ok: true}, nil
+}
+
+func (s *RunCServer) RunCSandboxDownloadFile(ctx context.Context, in *pb.RunCSandboxDownloadFileRequest) (*pb.RunCSandboxDownloadFileResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: err.Error()}, err
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	data, err := os.ReadFile(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)))
+	if err != nil {
+		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: err.Error()}, err
+	}
+
+	return &pb.RunCSandboxDownloadFileResponse{Ok: true, Data: data}, nil
 }

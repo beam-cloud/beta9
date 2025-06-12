@@ -164,6 +164,7 @@ func TestBuild_prepareSteps_IgnorePython(t *testing.T) {
 		PythonVersion:     "python3.10",
 		IgnorePython:      true,
 		Commands:          []string{"apt update"},
+		PythonPackages:    []string{},
 	}
 	build, mockRuncClient, _ := setupTestBuild(t, opts)
 

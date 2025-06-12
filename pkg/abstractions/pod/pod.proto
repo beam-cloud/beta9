@@ -13,6 +13,21 @@ service PodService {
       returns (PodSandboxStdoutResponse) {}
   rpc SandboxStderr(PodSandboxStderrRequest)
       returns (PodSandboxStderrResponse) {}
+  rpc SandboxKill(PodSandboxKillRequest) returns (PodSandboxKillResponse) {}
+  rpc SandboxListProcesses(PodSandboxListProcessesRequest)
+      returns (PodSandboxListProcessesResponse) {}
+  rpc SandboxUploadFile(PodSandboxUploadFileRequest)
+      returns (PodSandboxUploadFileResponse) {}
+  rpc SandboxDownloadFile(PodSandboxDownloadFileRequest)
+      returns (PodSandboxDownloadFileResponse) {}
+  rpc SandboxListFiles(PodSandboxListFilesRequest)
+      returns (PodSandboxListFilesResponse) {}
+  rpc SandboxDeleteFile(PodSandboxDeleteFileRequest)
+      returns (PodSandboxDeleteFileResponse) {}
+  rpc SandboxCreateDirectory(PodSandboxCreateDirectoryRequest)
+      returns (PodSandboxCreateDirectoryResponse) {}
+  rpc SandboxDeleteDirectory(PodSandboxDeleteDirectoryRequest)
+      returns (PodSandboxDeleteDirectoryResponse) {}
 }
 
 message CreatePodRequest { string stub_id = 1; }
@@ -68,4 +83,86 @@ message PodSandboxStderrResponse {
   bool ok = 1;
   string error_msg = 2;
   string stderr = 3;
+}
+
+message PodSandboxKillRequest {
+  string container_id = 1;
+  int32 pid = 2;
+}
+
+message PodSandboxKillResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message PodSandboxListProcessesRequest { string container_id = 1; }
+
+message PodSandboxListProcessesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated int32 pids = 3;
+}
+
+message PodSandboxUploadFileRequest {
+  string container_id = 1;
+  string container_path = 2;
+  int32 mode = 3;
+  bytes data = 4;
+}
+
+message PodSandboxUploadFileResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message PodSandboxDownloadFileRequest {
+  string container_id = 1;
+  string container_path = 2;
+}
+
+message PodSandboxDownloadFileResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  bytes data = 3;
+}
+
+message PodSandboxListFilesRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message PodSandboxListFilesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated string files = 3;
+}
+
+message PodSandboxDeleteFileRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message PodSandboxDeleteFileResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message PodSandboxCreateDirectoryRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message PodSandboxCreateDirectoryResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message PodSandboxDeleteDirectoryRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message PodSandboxDeleteDirectoryResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }

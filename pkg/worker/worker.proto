@@ -22,6 +22,20 @@ service RunCService {
       returns (RunCSandboxStdoutResponse) {}
   rpc RunCSandboxStderr(RunCSandboxStderrRequest)
       returns (RunCSandboxStderrResponse) {}
+  rpc RunCSandboxKill(RunCSandboxKillRequest)
+      returns (RunCSandboxKillResponse) {}
+  rpc RunCSandboxListFiles(RunCSandboxListFilesRequest)
+      returns (RunCSandboxListFilesResponse) {}
+  rpc RunCSandboxUploadFile(RunCSandboxUploadFileRequest)
+      returns (RunCSandboxUploadFileResponse) {}
+  rpc RunCSandboxDownloadFile(RunCSandboxDownloadFileRequest)
+      returns (RunCSandboxDownloadFileResponse) {}
+  rpc RunCSandboxDeleteFile(RunCSandboxDeleteFileRequest)
+      returns (RunCSandboxDeleteFileResponse) {}
+  rpc RunCSandboxCreateDirectory(RunCSandboxCreateDirectoryRequest)
+      returns (RunCSandboxCreateDirectoryResponse) {}
+  rpc RunCSandboxDeleteDirectory(RunCSandboxDeleteDirectoryRequest)
+      returns (RunCSandboxDeleteDirectoryResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -102,4 +116,78 @@ message RunCSandboxStderrResponse {
   bool ok = 1;
   string error_msg = 2;
   string stderr = 3;
+}
+
+message RunCSandboxKillRequest {
+  string container_id = 1;
+  int32 pid = 2;
+}
+
+message RunCSandboxKillResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RunCSandboxListFilesRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message RunCSandboxListFilesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated string files = 3;
+}
+
+message RunCSandboxDeleteFileRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message RunCSandboxDeleteFileResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RunCSandboxCreateDirectoryRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message RunCSandboxCreateDirectoryResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RunCSandboxDeleteDirectoryRequest {
+  string container_id = 1;
+  string path = 2;
+}
+
+message RunCSandboxDeleteDirectoryResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RunCSandboxUploadFileRequest {
+  string container_id = 1;
+  string container_path = 2;
+  bytes data = 3;
+  int32 mode = 4;
+}
+
+message RunCSandboxUploadFileResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RunCSandboxDownloadFileRequest {
+  string container_id = 1;
+  string container_path = 2;
+}
+
+message RunCSandboxDownloadFileResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  bytes data = 3;
 }
