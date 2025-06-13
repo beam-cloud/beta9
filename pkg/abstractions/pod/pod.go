@@ -279,20 +279,11 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 	}
 
 	ttl := time.Duration(stubConfig.KeepWarmSeconds) * time.Second
-	if stubConfig.KeepWarmSeconds <= 0 {
-		s.rdb.Set(
-			context.Background(),
-			Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId),
-			1,
-			0,
-		) // Never expire
+	key := Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId)
+	if ttl <= 0 {
+		s.rdb.Set(context.Background(), key, 1, 0) // Never expire
 	} else {
-		s.rdb.SetEx(
-			context.Background(),
-			Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId),
-			1,
-			ttl,
-		)
+		s.rdb.SetEx(context.Background(), key, 1, ttl)
 	}
 
 	err = s.scheduler.Run(&types.ContainerRequest{
