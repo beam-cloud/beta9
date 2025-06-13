@@ -19,7 +19,19 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	PodService_CreatePod_FullMethodName = "/pod.PodService/CreatePod"
+	PodService_CreatePod_FullMethodName              = "/pod.PodService/CreatePod"
+	PodService_SandboxExec_FullMethodName            = "/pod.PodService/SandboxExec"
+	PodService_SandboxStatus_FullMethodName          = "/pod.PodService/SandboxStatus"
+	PodService_SandboxStdout_FullMethodName          = "/pod.PodService/SandboxStdout"
+	PodService_SandboxStderr_FullMethodName          = "/pod.PodService/SandboxStderr"
+	PodService_SandboxKill_FullMethodName            = "/pod.PodService/SandboxKill"
+	PodService_SandboxListProcesses_FullMethodName   = "/pod.PodService/SandboxListProcesses"
+	PodService_SandboxUploadFile_FullMethodName      = "/pod.PodService/SandboxUploadFile"
+	PodService_SandboxDownloadFile_FullMethodName    = "/pod.PodService/SandboxDownloadFile"
+	PodService_SandboxListFiles_FullMethodName       = "/pod.PodService/SandboxListFiles"
+	PodService_SandboxDeleteFile_FullMethodName      = "/pod.PodService/SandboxDeleteFile"
+	PodService_SandboxCreateDirectory_FullMethodName = "/pod.PodService/SandboxCreateDirectory"
+	PodService_SandboxDeleteDirectory_FullMethodName = "/pod.PodService/SandboxDeleteDirectory"
 )
 
 // PodServiceClient is the client API for PodService service.
@@ -27,6 +39,18 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type PodServiceClient interface {
 	CreatePod(ctx context.Context, in *CreatePodRequest, opts ...grpc.CallOption) (*CreatePodResponse, error)
+	SandboxExec(ctx context.Context, in *PodSandboxExecRequest, opts ...grpc.CallOption) (*PodSandboxExecResponse, error)
+	SandboxStatus(ctx context.Context, in *PodSandboxStatusRequest, opts ...grpc.CallOption) (*PodSandboxStatusResponse, error)
+	SandboxStdout(ctx context.Context, in *PodSandboxStdoutRequest, opts ...grpc.CallOption) (*PodSandboxStdoutResponse, error)
+	SandboxStderr(ctx context.Context, in *PodSandboxStderrRequest, opts ...grpc.CallOption) (*PodSandboxStderrResponse, error)
+	SandboxKill(ctx context.Context, in *PodSandboxKillRequest, opts ...grpc.CallOption) (*PodSandboxKillResponse, error)
+	SandboxListProcesses(ctx context.Context, in *PodSandboxListProcessesRequest, opts ...grpc.CallOption) (*PodSandboxListProcessesResponse, error)
+	SandboxUploadFile(ctx context.Context, in *PodSandboxUploadFileRequest, opts ...grpc.CallOption) (*PodSandboxUploadFileResponse, error)
+	SandboxDownloadFile(ctx context.Context, in *PodSandboxDownloadFileRequest, opts ...grpc.CallOption) (*PodSandboxDownloadFileResponse, error)
+	SandboxListFiles(ctx context.Context, in *PodSandboxListFilesRequest, opts ...grpc.CallOption) (*PodSandboxListFilesResponse, error)
+	SandboxDeleteFile(ctx context.Context, in *PodSandboxDeleteFileRequest, opts ...grpc.CallOption) (*PodSandboxDeleteFileResponse, error)
+	SandboxCreateDirectory(ctx context.Context, in *PodSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxCreateDirectoryResponse, error)
+	SandboxDeleteDirectory(ctx context.Context, in *PodSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxDeleteDirectoryResponse, error)
 }
 
 type podServiceClient struct {
@@ -46,11 +70,131 @@ func (c *podServiceClient) CreatePod(ctx context.Context, in *CreatePodRequest, 
 	return out, nil
 }
 
+func (c *podServiceClient) SandboxExec(ctx context.Context, in *PodSandboxExecRequest, opts ...grpc.CallOption) (*PodSandboxExecResponse, error) {
+	out := new(PodSandboxExecResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxExec_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxStatus(ctx context.Context, in *PodSandboxStatusRequest, opts ...grpc.CallOption) (*PodSandboxStatusResponse, error) {
+	out := new(PodSandboxStatusResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxStatus_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxStdout(ctx context.Context, in *PodSandboxStdoutRequest, opts ...grpc.CallOption) (*PodSandboxStdoutResponse, error) {
+	out := new(PodSandboxStdoutResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxStdout_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxStderr(ctx context.Context, in *PodSandboxStderrRequest, opts ...grpc.CallOption) (*PodSandboxStderrResponse, error) {
+	out := new(PodSandboxStderrResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxStderr_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxKill(ctx context.Context, in *PodSandboxKillRequest, opts ...grpc.CallOption) (*PodSandboxKillResponse, error) {
+	out := new(PodSandboxKillResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxKill_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxListProcesses(ctx context.Context, in *PodSandboxListProcessesRequest, opts ...grpc.CallOption) (*PodSandboxListProcessesResponse, error) {
+	out := new(PodSandboxListProcessesResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxListProcesses_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxUploadFile(ctx context.Context, in *PodSandboxUploadFileRequest, opts ...grpc.CallOption) (*PodSandboxUploadFileResponse, error) {
+	out := new(PodSandboxUploadFileResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxUploadFile_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxDownloadFile(ctx context.Context, in *PodSandboxDownloadFileRequest, opts ...grpc.CallOption) (*PodSandboxDownloadFileResponse, error) {
+	out := new(PodSandboxDownloadFileResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxDownloadFile_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxListFiles(ctx context.Context, in *PodSandboxListFilesRequest, opts ...grpc.CallOption) (*PodSandboxListFilesResponse, error) {
+	out := new(PodSandboxListFilesResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxListFiles_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxDeleteFile(ctx context.Context, in *PodSandboxDeleteFileRequest, opts ...grpc.CallOption) (*PodSandboxDeleteFileResponse, error) {
+	out := new(PodSandboxDeleteFileResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxDeleteFile_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxCreateDirectory(ctx context.Context, in *PodSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxCreateDirectoryResponse, error) {
+	out := new(PodSandboxCreateDirectoryResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxCreateDirectory_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxDeleteDirectory(ctx context.Context, in *PodSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxDeleteDirectoryResponse, error) {
+	out := new(PodSandboxDeleteDirectoryResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxDeleteDirectory_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PodServiceServer is the server API for PodService service.
 // All implementations must embed UnimplementedPodServiceServer
 // for forward compatibility
 type PodServiceServer interface {
 	CreatePod(context.Context, *CreatePodRequest) (*CreatePodResponse, error)
+	SandboxExec(context.Context, *PodSandboxExecRequest) (*PodSandboxExecResponse, error)
+	SandboxStatus(context.Context, *PodSandboxStatusRequest) (*PodSandboxStatusResponse, error)
+	SandboxStdout(context.Context, *PodSandboxStdoutRequest) (*PodSandboxStdoutResponse, error)
+	SandboxStderr(context.Context, *PodSandboxStderrRequest) (*PodSandboxStderrResponse, error)
+	SandboxKill(context.Context, *PodSandboxKillRequest) (*PodSandboxKillResponse, error)
+	SandboxListProcesses(context.Context, *PodSandboxListProcessesRequest) (*PodSandboxListProcessesResponse, error)
+	SandboxUploadFile(context.Context, *PodSandboxUploadFileRequest) (*PodSandboxUploadFileResponse, error)
+	SandboxDownloadFile(context.Context, *PodSandboxDownloadFileRequest) (*PodSandboxDownloadFileResponse, error)
+	SandboxListFiles(context.Context, *PodSandboxListFilesRequest) (*PodSandboxListFilesResponse, error)
+	SandboxDeleteFile(context.Context, *PodSandboxDeleteFileRequest) (*PodSandboxDeleteFileResponse, error)
+	SandboxCreateDirectory(context.Context, *PodSandboxCreateDirectoryRequest) (*PodSandboxCreateDirectoryResponse, error)
+	SandboxDeleteDirectory(context.Context, *PodSandboxDeleteDirectoryRequest) (*PodSandboxDeleteDirectoryResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
 
@@ -60,6 +204,42 @@ type UnimplementedPodServiceServer struct {
 
 func (UnimplementedPodServiceServer) CreatePod(context.Context, *CreatePodRequest) (*CreatePodResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreatePod not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxExec(context.Context, *PodSandboxExecRequest) (*PodSandboxExecResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxExec not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxStatus(context.Context, *PodSandboxStatusRequest) (*PodSandboxStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxStatus not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxStdout(context.Context, *PodSandboxStdoutRequest) (*PodSandboxStdoutResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxStdout not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxStderr(context.Context, *PodSandboxStderrRequest) (*PodSandboxStderrResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxStderr not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxKill(context.Context, *PodSandboxKillRequest) (*PodSandboxKillResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxKill not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxListProcesses(context.Context, *PodSandboxListProcessesRequest) (*PodSandboxListProcessesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxListProcesses not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxUploadFile(context.Context, *PodSandboxUploadFileRequest) (*PodSandboxUploadFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxUploadFile not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxDownloadFile(context.Context, *PodSandboxDownloadFileRequest) (*PodSandboxDownloadFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxDownloadFile not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxListFiles(context.Context, *PodSandboxListFilesRequest) (*PodSandboxListFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxListFiles not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxDeleteFile(context.Context, *PodSandboxDeleteFileRequest) (*PodSandboxDeleteFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxDeleteFile not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxCreateDirectory(context.Context, *PodSandboxCreateDirectoryRequest) (*PodSandboxCreateDirectoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxCreateDirectory not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxDeleteDirectory(context.Context, *PodSandboxDeleteDirectoryRequest) (*PodSandboxDeleteDirectoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxDeleteDirectory not implemented")
 }
 func (UnimplementedPodServiceServer) mustEmbedUnimplementedPodServiceServer() {}
 
@@ -92,6 +272,222 @@ func _PodService_CreatePod_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PodService_SandboxExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxExecRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxExec(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxExec_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxExec(ctx, req.(*PodSandboxExecRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxStatus(ctx, req.(*PodSandboxStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxStdout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxStdoutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxStdout(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxStdout_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxStdout(ctx, req.(*PodSandboxStdoutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxStderr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxStderrRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxStderr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxStderr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxStderr(ctx, req.(*PodSandboxStderrRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxKill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxKillRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxKill(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxKill_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxKill(ctx, req.(*PodSandboxKillRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxListProcesses_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxListProcessesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxListProcesses(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxListProcesses_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxListProcesses(ctx, req.(*PodSandboxListProcessesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxUploadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxUploadFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxUploadFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxUploadFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxUploadFile(ctx, req.(*PodSandboxUploadFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxDownloadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxDownloadFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxDownloadFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxDownloadFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxDownloadFile(ctx, req.(*PodSandboxDownloadFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxListFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxListFilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxListFiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxListFiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxListFiles(ctx, req.(*PodSandboxListFilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxDeleteFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxDeleteFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxDeleteFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxDeleteFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxDeleteFile(ctx, req.(*PodSandboxDeleteFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxCreateDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxCreateDirectoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxCreateDirectory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxCreateDirectory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxCreateDirectory(ctx, req.(*PodSandboxCreateDirectoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxDeleteDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxDeleteDirectoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxDeleteDirectory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxDeleteDirectory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxDeleteDirectory(ctx, req.(*PodSandboxDeleteDirectoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PodService_ServiceDesc is the grpc.ServiceDesc for PodService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -102,6 +498,54 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreatePod",
 			Handler:    _PodService_CreatePod_Handler,
+		},
+		{
+			MethodName: "SandboxExec",
+			Handler:    _PodService_SandboxExec_Handler,
+		},
+		{
+			MethodName: "SandboxStatus",
+			Handler:    _PodService_SandboxStatus_Handler,
+		},
+		{
+			MethodName: "SandboxStdout",
+			Handler:    _PodService_SandboxStdout_Handler,
+		},
+		{
+			MethodName: "SandboxStderr",
+			Handler:    _PodService_SandboxStderr_Handler,
+		},
+		{
+			MethodName: "SandboxKill",
+			Handler:    _PodService_SandboxKill_Handler,
+		},
+		{
+			MethodName: "SandboxListProcesses",
+			Handler:    _PodService_SandboxListProcesses_Handler,
+		},
+		{
+			MethodName: "SandboxUploadFile",
+			Handler:    _PodService_SandboxUploadFile_Handler,
+		},
+		{
+			MethodName: "SandboxDownloadFile",
+			Handler:    _PodService_SandboxDownloadFile_Handler,
+		},
+		{
+			MethodName: "SandboxListFiles",
+			Handler:    _PodService_SandboxListFiles_Handler,
+		},
+		{
+			MethodName: "SandboxDeleteFile",
+			Handler:    _PodService_SandboxDeleteFile_Handler,
+		},
+		{
+			MethodName: "SandboxCreateDirectory",
+			Handler:    _PodService_SandboxCreateDirectory_Handler,
+		},
+		{
+			MethodName: "SandboxDeleteDirectory",
+			Handler:    _PodService_SandboxDeleteDirectory_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

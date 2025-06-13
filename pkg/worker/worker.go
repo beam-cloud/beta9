@@ -72,18 +72,19 @@ type Worker struct {
 }
 
 type ContainerInstance struct {
-	Id           string
-	StubId       string
-	BundlePath   string
-	Overlay      *common.ContainerOverlay
-	Spec         *specs.Spec
-	Err          error
-	ExitCode     int
-	Port         int
-	OutputWriter *common.OutputWriter
-	LogBuffer    *common.LogBuffer
-	Request      *types.ContainerRequest
-	StopReason   types.StopContainerReason
+	Id               string
+	StubId           string
+	BundlePath       string
+	Overlay          *common.ContainerOverlay
+	Spec             *specs.Spec
+	Err              error
+	ExitCode         int
+	Port             int
+	OutputWriter     *common.OutputWriter
+	LogBuffer        *common.LogBuffer
+	Request          *types.ContainerRequest
+	StopReason       types.StopContainerReason
+	SandboxProcesses sync.Map
 }
 
 type ContainerOptions struct {

@@ -96,6 +96,62 @@ func (c *RunCClient) Exec(containerId, cmd string, env []string) (*pb.RunCExecRe
 	return resp, nil
 }
 
+func (c *RunCClient) SandboxExec(containerId, cmd string, env map[string]string, cwd string) (*pb.RunCSandboxExecResponse, error) {
+	resp, err := c.client.RunCSandboxExec(context.TODO(), &pb.RunCSandboxExecRequest{ContainerId: containerId, Cmd: cmd, Env: env, Cwd: cwd})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxStatus(containerId string, pid int32) (*pb.RunCSandboxStatusResponse, error) {
+	resp, err := c.client.RunCSandboxStatus(context.TODO(), &pb.RunCSandboxStatusRequest{ContainerId: containerId, Pid: pid})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxStdout(containerId string, pid int32) (*pb.RunCSandboxStdoutResponse, error) {
+	resp, err := c.client.RunCSandboxStdout(context.TODO(), &pb.RunCSandboxStdoutRequest{ContainerId: containerId, Pid: pid})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxStderr(containerId string, pid int32) (*pb.RunCSandboxStderrResponse, error) {
+	resp, err := c.client.RunCSandboxStderr(context.TODO(), &pb.RunCSandboxStderrRequest{ContainerId: containerId, Pid: pid})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxKill(containerId string, pid int32) (*pb.RunCSandboxKillResponse, error) {
+	resp, err := c.client.RunCSandboxKill(context.TODO(), &pb.RunCSandboxKillRequest{ContainerId: containerId, Pid: pid})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxUploadFile(containerId, path string, data []byte, mode int32) (*pb.RunCSandboxUploadFileResponse, error) {
+	resp, err := c.client.RunCSandboxUploadFile(context.TODO(), &pb.RunCSandboxUploadFileRequest{ContainerId: containerId, ContainerPath: path, Data: data, Mode: mode})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxDownloadFile(containerId, containerPath string) (*pb.RunCSandboxDownloadFileResponse, error) {
+	resp, err := c.client.RunCSandboxDownloadFile(context.TODO(), &pb.RunCSandboxDownloadFileRequest{ContainerId: containerId, ContainerPath: containerPath})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
 func (c *RunCClient) Kill(containerId string) (*pb.RunCKillResponse, error) {
 	resp, err := c.client.RunCKill(context.TODO(), &pb.RunCKillRequest{ContainerId: containerId})
 	if err != nil {

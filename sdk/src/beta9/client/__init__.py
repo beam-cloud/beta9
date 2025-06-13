@@ -10,7 +10,7 @@ from ..exceptions import DeploymentNotFoundError, StubNotFoundError
 def make_request(
     *, token: str, url: str, method: str, path: str, data: dict = {}, params: dict = None
 ) -> requests.Response:
-    url = f"{url}/{path}"
+    url = f"{url}{path}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",

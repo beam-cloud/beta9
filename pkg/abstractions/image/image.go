@@ -90,7 +90,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 	baseImageTag, ok := is.config.ImageService.Runner.Tags[tag]
 	if !ok {
-		return nil, errors.Errorf("Python version not supportted: %s", in.PythonVersion)
+		return nil, errors.Errorf("Python version not supported: %s", in.PythonVersion)
 	}
 
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
@@ -125,10 +125,6 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 	if in.Dockerfile != "" {
 		opts.addPythonRequirements()
-	}
-
-	if opts.IgnorePython && len(opts.PythonPackages) == 0 {
-		opts.PythonVersion = ""
 	}
 
 	imageId, err := getImageID(opts)

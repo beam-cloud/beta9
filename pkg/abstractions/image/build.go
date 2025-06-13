@@ -60,10 +60,6 @@ type Build struct {
 func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg, config types.AppConfig) (*Build, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if opts.IgnorePython && len(opts.PythonPackages) == 0 {
-		opts.PythonVersion = ""
-	}
-
 	return &Build{
 		ctx:         ctx,
 		config:      config,
@@ -89,6 +85,12 @@ func (b *Build) initializeBuildConfiguration() error {
 //   - Python packages and shell commands that are passed as parameters to the image in the sdk
 //   - Build steps that are chained to the image in the sdk
 func (b *Build) prepareCommands() error {
+	if b.opts.IgnorePython && len(b.opts.PythonPackages) == 0 {
+		b.commands = append(b.commands, b.opts.Commands...)
+		b.commands = append(b.commands, parseBuildSteps(b.opts.BuildSteps, b.opts.PythonVersion, false)...)
+		return nil
+	}
+
 	if err := b.setupPythonEnv(); err != nil {
 		return err
 	}
@@ -140,7 +142,6 @@ func (b *Build) setupPythonEnv() error {
 	}
 
 	if b.opts.IgnorePython && len(b.opts.PythonPackages) == 0 {
-		b.opts.PythonVersion = ""
 		return nil
 	}
 
