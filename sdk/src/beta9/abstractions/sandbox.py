@@ -370,6 +370,36 @@ class SandboxProcess:
             ).stderr,
         )
 
+    @property
+    def logs(self):
+        """
+        Returns a combined stream of both stdout and stderr.
+        This is a convenience property that combines both output streams.
+        """
+
+        class CombinedStream:
+            def __init__(self, process):
+                self.process = process
+                self._stdout = process.stdout
+                self._stderr = process.stderr
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                try:
+                    return next(self._stdout)
+                except StopIteration:
+                    try:
+                        return next(self._stderr)
+                    except StopIteration:
+                        raise StopIteration
+
+            def read(self):
+                return self._stdout.read() + self._stderr.read()
+
+        return CombinedStream(self)
+
 
 class SandboxFileSystem:
     """

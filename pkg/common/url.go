@@ -74,9 +74,9 @@ func BuildSandboxURL(externalUrl, urlType string, stub *types.StubWithRelated, p
 	url := ""
 
 	if urlType == InvokeUrlTypeHost {
-		url = fmt.Sprintf("%s://%s-%s.%s", parsedUrl.Scheme, stub.ExternalId, port, parsedUrl.Host)
+		url = fmt.Sprintf("%s://%s-%d.%s", parsedUrl.Scheme, stub.ExternalId, port, parsedUrl.Host)
 	} else {
-		url = fmt.Sprintf("%s://%s/%s/id/%s/%s", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), stub.ExternalId, port)
+		url = fmt.Sprintf("%s://%s/%s/id/%s/%d", parsedUrl.Scheme, parsedUrl.Host, stub.Type.Kind(), stub.ExternalId, port)
 	}
 
 	return url
