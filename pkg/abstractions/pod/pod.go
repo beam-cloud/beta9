@@ -277,15 +277,13 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		ports = stubConfig.Ports
 	}
 
-	// Set container timeout if keepwarm is > 0
-	if stubConfig.KeepWarmSeconds > 0 {
-		s.rdb.SetEx(
-			context.Background(),
-			Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId),
-			1,
-			time.Duration(stubConfig.KeepWarmSeconds)*time.Second,
-		)
-	}
+	// Set container timeout
+	s.rdb.SetEx(
+		context.Background(),
+		Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId),
+		1,
+		time.Duration(stubConfig.KeepWarmSeconds)*time.Second,
+	)
 
 	err = s.scheduler.Run(&types.ContainerRequest{
 		ContainerId:       containerId,
