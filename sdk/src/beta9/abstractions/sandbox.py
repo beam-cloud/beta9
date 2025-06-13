@@ -419,20 +419,24 @@ class SandboxProcess:
                 return self
 
             def __next__(self):
-                # If queue is empty, try to fill it
-                if not self._queue:
-                    self._fill_queue()
-                    # If still empty after trying to fill, we're done
-                    if not self._queue and all(s["exhausted"] for s in self._streams.values()):
-                        raise StopIteration
-
-                    # If queue is still empty but streams aren't exhausted, try again
+                while True:
+                    # If queue is empty, try to fill it
                     if not self._queue:
-                        time.sleep(0.1)
-                        return self.__next__()
+                        self._fill_queue()
+                        # If still empty after trying to fill, we're done
+                        if not self._queue and all(s["exhausted"] for s in self._streams.values()):
+                            raise StopIteration
 
-                # Return the next line from the queue
-                return self._queue.pop(0)
+                        # If queue is still empty but streams aren't exhausted, wait and try again
+                        if not self._queue:
+                            try:
+                                time.sleep(0.1)
+                                continue
+                            except KeyboardInterrupt:
+                                raise
+
+                    # Return the next line from the queue
+                    return self._queue.pop(0)
 
             def read(self):
                 stdout_data = self._stdout.read()
