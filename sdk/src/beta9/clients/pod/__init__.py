@@ -146,7 +146,7 @@ class PodSandboxDownloadFileResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class PodSandboxListFilesRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
-    path: str = betterproto.string_field(2)
+    container_path: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -159,7 +159,7 @@ class PodSandboxListFilesResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class PodSandboxDeleteFileRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
-    path: str = betterproto.string_field(2)
+    container_path: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -171,7 +171,7 @@ class PodSandboxDeleteFileResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class PodSandboxCreateDirectoryRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
-    path: str = betterproto.string_field(2)
+    container_path: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
@@ -183,7 +183,7 @@ class PodSandboxCreateDirectoryResponse(betterproto.Message):
 @dataclass(eq=False, repr=False)
 class PodSandboxDeleteDirectoryRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
-    path: str = betterproto.string_field(2)
+    container_path: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)

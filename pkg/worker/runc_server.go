@@ -645,6 +645,30 @@ func (s *RunCServer) RunCSandboxDownloadFile(ctx context.Context, in *pb.RunCSan
 	return &pb.RunCSandboxDownloadFileResponse{Ok: true, Data: data}, nil
 }
 
+func (s *RunCServer) RunCSandboxDeleteFile(ctx context.Context, in *pb.RunCSandboxDeleteFileRequest) (*pb.RunCSandboxDeleteFileResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxDeleteFileResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxDeleteFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	err = os.RemoveAll(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)))
+	if err != nil {
+		return &pb.RunCSandboxDeleteFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.RunCSandboxDeleteFileResponse{Ok: true}, nil
+}
+
 func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandboxExposePortRequest) (*pb.RunCSandboxExposePortResponse, error) {
 	_, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
@@ -664,8 +688,6 @@ func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandb
 	}
 
 	addressMap := getAddressMapResponse.AddressMap
-
-	// Check if port is already exposed
 	if _, exists := addressMap[int32(in.Port)]; exists {
 		return &pb.RunCSandboxExposePortResponse{
 			Ok:       false,
@@ -689,12 +711,10 @@ func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandb
 		ContainerId: in.ContainerId,
 		AddressMap:  addressMap,
 	}))
-
-	log.Info().Str("container_id", in.ContainerId).Msgf("exposed port %d to %s", in.Port, addressMap[int32(in.Port)])
-
 	if err != nil {
 		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[int32(in.Port)])
 	return &pb.RunCSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err
 }

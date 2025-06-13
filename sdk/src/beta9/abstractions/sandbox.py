@@ -15,6 +15,7 @@ from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopCont
 from ..clients.pod import (
     CreatePodRequest,
     CreatePodResponse,
+    PodSandboxDeleteFileRequest,
     PodSandboxDownloadFileRequest,
     PodSandboxExecRequest,
     PodSandboxExposePortRequest,
@@ -491,7 +492,15 @@ class SandboxFileSystem:
         raise NotImplementedError("Create directory not implemented")
 
     def delete_file(self, container_path: str):
-        raise NotImplementedError("Delete file not implemented")
+        response = self.sandbox_instance.stub.sandbox_delete_file(
+            PodSandboxDeleteFileRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=container_path,
+            )
+        )
+
+        if not response.ok:
+            raise SandboxFileSystemError(response.error_msg)
 
     def delete_directory(self, container_path: str):
         raise NotImplementedError("Delete directory not implemented")

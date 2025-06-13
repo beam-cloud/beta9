@@ -130,7 +130,7 @@ message PodSandboxDownloadFileResponse {
 
 message PodSandboxListFilesRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message PodSandboxListFilesResponse {
@@ -141,7 +141,7 @@ message PodSandboxListFilesResponse {
 
 message PodSandboxDeleteFileRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message PodSandboxDeleteFileResponse {
@@ -151,7 +151,7 @@ message PodSandboxDeleteFileResponse {
 
 message PodSandboxCreateDirectoryRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message PodSandboxCreateDirectoryResponse {
@@ -161,7 +161,7 @@ message PodSandboxCreateDirectoryResponse {
 
 message PodSandboxDeleteDirectoryRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message PodSandboxDeleteDirectoryResponse {

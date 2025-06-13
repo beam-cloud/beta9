@@ -152,6 +152,14 @@ func (c *RunCClient) SandboxDownloadFile(containerId, containerPath string) (*pb
 	return resp, nil
 }
 
+func (c *RunCClient) SandboxDeleteFile(containerId, containerPath string) (*pb.RunCSandboxDeleteFileResponse, error) {
+	resp, err := c.client.RunCSandboxDeleteFile(context.TODO(), &pb.RunCSandboxDeleteFileRequest{ContainerId: containerId, ContainerPath: containerPath})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
 func (c *RunCClient) SandboxExposePort(containerId string, port int32) (*pb.RunCSandboxExposePortResponse, error) {
 	resp, err := c.client.RunCSandboxExposePort(context.TODO(), &pb.RunCSandboxExposePortRequest{ContainerId: containerId, Port: port})
 	if err != nil {

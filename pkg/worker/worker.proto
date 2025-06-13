@@ -132,7 +132,7 @@ message RunCSandboxKillResponse {
 
 message RunCSandboxListFilesRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message RunCSandboxListFilesResponse {
@@ -143,7 +143,7 @@ message RunCSandboxListFilesResponse {
 
 message RunCSandboxDeleteFileRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message RunCSandboxDeleteFileResponse {
@@ -153,7 +153,7 @@ message RunCSandboxDeleteFileResponse {
 
 message RunCSandboxCreateDirectoryRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message RunCSandboxCreateDirectoryResponse {
@@ -163,7 +163,7 @@ message RunCSandboxCreateDirectoryResponse {
 
 message RunCSandboxDeleteDirectoryRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message RunCSandboxDeleteDirectoryResponse {
