@@ -375,6 +375,8 @@ class SandboxProcess:
         """
         Returns a combined stream of both stdout and stderr.
         This is a convenience property that combines both output streams.
+        The streams are read concurrently, so if one stream is empty, it won't block
+        the other stream from being read.
         """
 
         class CombinedStream:
@@ -382,21 +384,60 @@ class SandboxProcess:
                 self.process = process
                 self._stdout = process.stdout
                 self._stderr = process.stderr
+                self._queue = []
+                self._streams = {
+                    "stdout": {"stream": self._stdout, "buffer": "", "exhausted": False},
+                    "stderr": {"stream": self._stderr, "buffer": "", "exhausted": False},
+                }
+
+            def _process_stream(self, stream_name):
+                """Process a single stream, adding any complete lines to the queue."""
+                stream_info = self._streams[stream_name]
+                if stream_info["exhausted"]:
+                    return
+
+                chunk = stream_info["stream"]._fetch_next_chunk()
+                if chunk:
+                    stream_info["buffer"] += chunk
+
+                    while "\n" in stream_info["buffer"]:  # Process any complete lines
+                        line, stream_info["buffer"] = stream_info["buffer"].split("\n", 1)
+                        self._queue.append(line + "\n")
+
+                elif self.process.exit_code >= 0:  # Process has exited
+                    if stream_info["buffer"]:
+                        self._queue.append(stream_info["buffer"])
+                        stream_info["buffer"] = ""
+
+                    stream_info["exhausted"] = True
+
+            def _fill_queue(self):
+                self._process_stream("stdout")
+                self._process_stream("stderr")
 
             def __iter__(self):
                 return self
 
             def __next__(self):
-                try:
-                    return next(self._stdout)
-                except StopIteration:
-                    try:
-                        return next(self._stderr)
-                    except StopIteration:
+                # If queue is empty, try to fill it
+                if not self._queue:
+                    self._fill_queue()
+                    # If still empty after trying to fill, we're done
+                    if not self._queue and all(s["exhausted"] for s in self._streams.values()):
                         raise StopIteration
 
+                    # If queue is still empty but streams aren't exhausted, try again
+                    if not self._queue:
+                        time.sleep(0.1)
+                        return self.__next__()
+
+                # Return the next line from the queue
+                return self._queue.pop(0)
+
             def read(self):
-                return self._stdout.read() + self._stderr.read()
+                stdout_data = self._stdout.read()
+                stderr_data = self._stderr.read()
+                return stdout_data + stderr_data
 
         return CombinedStream(self)
 
