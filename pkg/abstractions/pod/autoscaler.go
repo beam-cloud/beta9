@@ -40,7 +40,7 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
 
-	if i.Stub.Type == types.StubType(types.StubTypePodRun) {
+	if i.Stub.Type == types.StubType(types.StubTypePodRun) || i.Stub.Type == types.StubType(types.StubTypeSandbox) {
 		if s.CurrentContainers == 0 {
 			desiredContainers = 0
 		} else if s.CurrentContainers > 0 && i.StubConfig.KeepWarmSeconds > 0 {

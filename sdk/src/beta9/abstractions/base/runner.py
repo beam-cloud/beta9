@@ -67,6 +67,7 @@ BOT_SERVE_STUB_TYPE = "bot/serve"
 
 POD_DEPLOYMENT_STUB_TYPE = "pod/deployment"
 POD_RUN_STUB_TYPE = "pod/run"
+SANDBOX_STUB_TYPE = "sandbox"
 
 _stub_creation_lock = threading.Lock()
 _stub_created_for_workspace = False

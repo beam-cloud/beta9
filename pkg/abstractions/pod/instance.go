@@ -86,8 +86,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			Ports:             ports,
 		}
 
-		// Set initial keepwarm to prevent rapid spin-up/spin-down of containers
-		i.Rdb.SetEx(
+		i.Rdb.Set(
 			context.Background(),
 			Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, runRequest.ContainerId),
 			1,

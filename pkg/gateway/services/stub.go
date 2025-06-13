@@ -369,7 +369,7 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 			Ok:  true,
 			Url: invokeUrl,
 		}, nil
-	} else if stub.Type.Kind() == types.StubTypePod {
+	} else if stub.Type.Kind() == types.StubTypePod || stub.Type.Kind() == types.StubTypeSandbox {
 		stubConfig := &types.StubConfigV1{}
 		if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 			return &pb.GetURLResponse{
