@@ -34,6 +34,7 @@ type PodServiceOpts struct {
 
 const (
 	podContainerPrefix            string = "pod"
+	sandboxContainerPrefix        string = "sandbox"
 	podRoutePrefix                string = "/pod"
 	podContainerConnectionTimeout        = 600 * time.Second
 	podProxyBufferSize                   = 300
@@ -234,7 +235,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		return "", err
 	}
 
-	containerId := s.generateContainerId(stub.ExternalId)
+	containerId := s.generateContainerId(stub.ExternalId, stub.Type)
 
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		containerId,
@@ -277,13 +278,13 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		ports = stubConfig.Ports
 	}
 
-	// Set container timeout
-	s.rdb.SetEx(
-		context.Background(),
-		Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId),
-		1,
-		time.Duration(stubConfig.KeepWarmSeconds)*time.Second,
-	)
+	ttl := time.Duration(stubConfig.KeepWarmSeconds) * time.Second
+	key := Keys.podKeepWarmLock(authInfo.Workspace.Name, stub.ExternalId, containerId)
+	if ttl <= 0 {
+		s.rdb.Set(context.Background(), key, 1, 0) // Never expire
+	} else {
+		s.rdb.SetEx(context.Background(), key, 1, ttl)
+	}
 
 	err = s.scheduler.Run(&types.ContainerRequest{
 		ContainerId:       containerId,
@@ -539,6 +540,11 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 	return client, nil
 }
 
-func (s *GenericPodService) generateContainerId(stubId string) string {
-	return fmt.Sprintf("%s-%s-%s", podContainerPrefix, stubId, uuid.New().String()[:8])
+func (s *GenericPodService) generateContainerId(stubId string, stubType types.StubType) string {
+	switch string(stubType) {
+	case string(types.StubTypeSandbox):
+		return fmt.Sprintf("%s-%s-%s", sandboxContainerPrefix, stubId, uuid.New().String()[:8])
+	default:
+		return fmt.Sprintf("%s-%s-%s", podContainerPrefix, stubId, uuid.New().String()[:8])
+	}
 }

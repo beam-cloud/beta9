@@ -519,6 +519,7 @@ const (
 	StubTypePod                    string = "pod"
 	StubTypePodDeployment          string = "pod/deployment"
 	StubTypePodRun                 string = "pod/run"
+	StubTypeSandbox                string = "sandbox"
 )
 
 // @go2proto

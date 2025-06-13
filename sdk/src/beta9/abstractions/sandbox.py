@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
-    POD_RUN_STUB_TYPE,
+    SANDBOX_STUB_TYPE,
     BaseAbstraction,
 )
 from ..abstractions.image import Image
@@ -93,7 +93,7 @@ class Sandbox(Pod):
         self.entrypoint = ["tail", "-f", "/dev/null"]
 
         if not self.prepare_runtime(
-            stub_type=POD_RUN_STUB_TYPE,
+            stub_type=SANDBOX_STUB_TYPE,
             force_create_stub=True,
         ):
             return SandboxInstance(
