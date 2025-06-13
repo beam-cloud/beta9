@@ -92,43 +92,39 @@ class Sandbox(Pod):
 
         self.entrypoint = ["tail", "-f", "/dev/null"]
 
-        with terminal.redirect_terminal_to_buffer(self.debug_buffer):
-            if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
-                return SandboxInstance(
-                    container_id="",
-                    url="",
-                    ok=False,
-                    error_msg="Failed to prepare runtime",
-                )
-
-            terminal.header("Creating container")
-            create_response: CreatePodResponse = self.stub.create_pod(
-                CreatePodRequest(
-                    stub_id=self.stub_id,
-                )
+        if not self.prepare_runtime(
+            stub_type=POD_RUN_STUB_TYPE,
+            force_create_stub=True,
+        ):
+            return SandboxInstance(
+                container_id="",
+                url="",
+                ok=False,
+                error_msg="Failed to prepare runtime",
             )
 
-            url = ""
-            if create_response.ok:
+        terminal.header("Creating sandbox")
+
+        create_response: CreatePodResponse = self.stub.create_pod(
+            CreatePodRequest(
+                stub_id=self.stub_id,
+            )
+        )
+
+        if create_response.ok:
+            terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
+
+            if self.keep_warm_seconds < 0:
                 terminal.header(
-                    f"Container created successfully ===> {create_response.container_id}"
+                    "This sandbox has no timeout, it will run until it is shut down manually."
                 )
-
-                if self.keep_warm_seconds < 0:
-                    terminal.header(
-                        "This container has no timeout, it will run until it completes."
-                    )
-                else:
-                    terminal.header(
-                        f"This container will timeout after {self.keep_warm_seconds} seconds."
-                    )
-
-                url_res = self.print_invocation_snippet()
-                url = url_res.url
+            else:
+                terminal.header(
+                    f"This sandbox will timeout after {self.keep_warm_seconds} seconds."
+                )
 
             return SandboxInstance(
                 container_id=create_response.container_id,
-                url=url,
                 ok=create_response.ok,
                 error_msg=create_response.error_msg,
             )
@@ -145,7 +141,6 @@ class SandboxInstance(BaseAbstraction):
     """
 
     container_id: str
-    url: str
     ok: bool = field(default=False)
     error_msg: str = field(default="")
     gateway_stub: "GatewayServiceStub" = field(init=False)
