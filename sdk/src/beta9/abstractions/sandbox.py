@@ -17,6 +17,8 @@ from ..clients.pod import (
     CreatePodResponse,
     PodSandboxDownloadFileRequest,
     PodSandboxExecRequest,
+    PodSandboxExposePortRequest,
+    PodSandboxExposePortResponse,
     PodSandboxKillRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
@@ -124,6 +126,7 @@ class Sandbox(Pod):
                 )
 
             return SandboxInstance(
+                stub_id=self.stub_id,
                 container_id=create_response.container_id,
                 ok=create_response.ok,
                 error_msg=create_response.error_msg,
@@ -141,6 +144,7 @@ class SandboxInstance(BaseAbstraction):
     """
 
     container_id: str
+    stub_id: str
     ok: bool = field(default=False)
     error_msg: str = field(default="")
     gateway_stub: "GatewayServiceStub" = field(init=False)
@@ -162,8 +166,20 @@ class SandboxInstance(BaseAbstraction):
         )
         return res.ok
 
-    def expose_port(self, port: int):
-        raise NotImplementedError("Expose port not implemented")
+    def expose_port(self, port: int) -> str:
+        """
+        Dynamically expose a port to the internet. Returns an SSL terminated endpoint to access the sandbox.
+        """
+        res: "PodSandboxExposePortResponse" = self.stub.sandbox_expose_port(
+            PodSandboxExposePortRequest(
+                container_id=self.container_id, stub_id=self.stub_id, port=port
+            )
+        )
+
+        if res.ok:
+            return res.url
+
+        raise SandboxProcessError("Failed to expose port")
 
 
 class SandboxProcessResponse:

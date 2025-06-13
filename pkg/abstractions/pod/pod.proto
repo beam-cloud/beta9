@@ -28,6 +28,8 @@ service PodService {
       returns (PodSandboxCreateDirectoryResponse) {}
   rpc SandboxDeleteDirectory(PodSandboxDeleteDirectoryRequest)
       returns (PodSandboxDeleteDirectoryResponse) {}
+  rpc SandboxExposePort(PodSandboxExposePortRequest)
+      returns (PodSandboxExposePortResponse) {}
 }
 
 message CreatePodRequest { string stub_id = 1; }
@@ -165,4 +167,16 @@ message PodSandboxDeleteDirectoryRequest {
 message PodSandboxDeleteDirectoryResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message PodSandboxExposePortRequest {
+  string container_id = 1;
+  string stub_id = 2;
+  int32 port = 3;
+}
+
+message PodSandboxExposePortResponse {
+  bool ok = 1;
+  string url = 2;
+  string error_msg = 3;
 }

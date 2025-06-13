@@ -33,12 +33,15 @@ type RunCServer struct {
 	runcHandle     runc.Runc
 	baseConfigSpec specs.Spec
 	pb.UnimplementedRunCServiceServer
-	containerInstances *common.SafeMap[*ContainerInstance]
-	imageClient        *ImageClient
-	port               int
+	containerInstances      *common.SafeMap[*ContainerInstance]
+	containerRepoClient     pb.ContainerRepositoryServiceClient
+	containerNetworkManager *ContainerNetworkManager
+	imageClient             *ImageClient
+	port                    int
+	podAddr                 string
 }
 
-func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], imageClient *ImageClient) (*RunCServer, error) {
+func NewRunCServer(podAddr string, containerInstances *common.SafeMap[*ContainerInstance], imageClient *ImageClient, containerRepoClient pb.ContainerRepositoryServiceClient, containerNetworkManager *ContainerNetworkManager) (*RunCServer, error) {
 	var baseConfigSpec specs.Spec
 	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
 	err := json.Unmarshal([]byte(specTemplate), &baseConfigSpec)
@@ -47,10 +50,13 @@ func NewRunCServer(containerInstances *common.SafeMap[*ContainerInstance], image
 	}
 
 	return &RunCServer{
-		runcHandle:         runc.Runc{},
-		baseConfigSpec:     baseConfigSpec,
-		containerInstances: containerInstances,
-		imageClient:        imageClient,
+		podAddr:                 podAddr,
+		runcHandle:              runc.Runc{},
+		baseConfigSpec:          baseConfigSpec,
+		containerInstances:      containerInstances,
+		imageClient:             imageClient,
+		containerRepoClient:     containerRepoClient,
+		containerNetworkManager: containerNetworkManager,
 	}, nil
 }
 
@@ -375,7 +381,7 @@ func (s *RunCServer) RunCSandboxExec(ctx context.Context, in *pb.RunCSandboxExec
 
 	parsedCmd, err := shlex.Split(in.Cmd)
 	if err != nil {
-		return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, err
+		return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	instance, exists := s.containerInstances.Get(in.ContainerId)
@@ -385,7 +391,7 @@ func (s *RunCServer) RunCSandboxExec(ctx context.Context, in *pb.RunCSandboxExec
 
 	err = s.waitForContainer(ctx, in.ContainerId)
 	if err != nil {
-		return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, err
+		return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	process := s.baseConfigSpec.Process
@@ -609,7 +615,7 @@ func (s *RunCServer) RunCSandboxUploadFile(ctx context.Context, in *pb.RunCSandb
 
 	err = os.WriteFile(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), in.Data, os.FileMode(in.Mode))
 	if err != nil {
-		return &pb.RunCSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, err
+		return &pb.RunCSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	return &pb.RunCSandboxUploadFileResponse{Ok: true}, nil
@@ -623,7 +629,7 @@ func (s *RunCServer) RunCSandboxDownloadFile(ctx context.Context, in *pb.RunCSan
 
 	err := s.waitForContainer(ctx, in.ContainerId)
 	if err != nil {
-		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: err.Error()}, err
+		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	containerPath := in.ContainerPath
@@ -633,8 +639,62 @@ func (s *RunCServer) RunCSandboxDownloadFile(ctx context.Context, in *pb.RunCSan
 
 	data, err := os.ReadFile(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)))
 	if err != nil {
-		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: err.Error()}, err
+		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	return &pb.RunCSandboxDownloadFileResponse{Ok: true, Data: data}, nil
+}
+
+func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandboxExposePortRequest) (*pb.RunCSandboxExposePortResponse, error) {
+	_, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	getAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerAddressMap(context.Background(), &pb.GetContainerAddressMapRequest{
+		ContainerId: in.ContainerId,
+	}))
+	if err != nil {
+		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	addressMap := getAddressMapResponse.AddressMap
+
+	// Check if port is already exposed
+	if _, exists := addressMap[int32(in.Port)]; exists {
+		return &pb.RunCSandboxExposePortResponse{
+			Ok:       false,
+			ErrorMsg: fmt.Sprintf("Port %d is already exposed", in.Port),
+		}, nil
+	}
+
+	bindPort, err := getRandomFreePort()
+	if err != nil {
+		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	err = s.containerNetworkManager.ExposePort(in.ContainerId, bindPort, int(in.Port))
+	if err != nil {
+		log.Error().Str("container_id", in.ContainerId).Msgf("failed to expose container bind port: %v", err)
+		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	addressMap[int32(in.Port)] = fmt.Sprintf("%s:%d", s.podAddr, bindPort)
+	setAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
+		ContainerId: in.ContainerId,
+		AddressMap:  addressMap,
+	}))
+
+	log.Info().Str("container_id", in.ContainerId).Msgf("exposed port %d to %s", in.Port, addressMap[int32(in.Port)])
+
+	if err != nil {
+		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.RunCSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err
 }

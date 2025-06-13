@@ -36,6 +36,8 @@ service RunCService {
       returns (RunCSandboxCreateDirectoryResponse) {}
   rpc RunCSandboxDeleteDirectory(RunCSandboxDeleteDirectoryRequest)
       returns (RunCSandboxDeleteDirectoryResponse) {}
+  rpc RunCSandboxExposePort(RunCSandboxExposePortRequest)
+      returns (RunCSandboxExposePortResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -190,4 +192,14 @@ message RunCSandboxDownloadFileResponse {
   bool ok = 1;
   string error_msg = 2;
   bytes data = 3;
+}
+
+message RunCSandboxExposePortRequest {
+  string container_id = 1;
+  int32 port = 2;
+}
+
+message RunCSandboxExposePortResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }

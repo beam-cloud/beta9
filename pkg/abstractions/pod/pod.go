@@ -36,6 +36,7 @@ const (
 	podContainerPrefix            string = "pod"
 	sandboxContainerPrefix        string = "sandbox"
 	podRoutePrefix                string = "/pod"
+	sandboxRoutePrefix            string = "/sandbox"
 	podContainerConnectionTimeout        = 600 * time.Second
 	podProxyBufferSize                   = 300
 )
@@ -103,7 +104,9 @@ func NewPodService(
 	}
 
 	authMiddleware := auth.AuthMiddleware(ps.backendRepo, ps.workspaceRepo)
+
 	registerPodGroup(opts.RouteGroup.Group(podRoutePrefix, authMiddleware), ps)
+	registerPodGroup(opts.RouteGroup.Group(sandboxRoutePrefix, authMiddleware), ps)
 
 	return ps, nil
 }
@@ -510,6 +513,43 @@ func (s *GenericPodService) SandboxDownloadFile(ctx context.Context, in *pb.PodS
 	return &pb.PodSandboxDownloadFileResponse{
 		Ok:   resp.Ok,
 		Data: resp.Data,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxExposePort(ctx context.Context, in *pb.PodSandboxExposePortRequest) (*pb.PodSandboxExposePortResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxExposePortResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxExposePort(in.ContainerId, in.Port)
+	if err != nil {
+		return &pb.PodSandboxExposePortResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to expose port",
+		}, nil
+	}
+
+	if !resp.Ok {
+		return &pb.PodSandboxExposePortResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+
+	instance, err := s.getOrCreatePodInstance(in.StubId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.PodSandboxExposePortResponse{
+		Ok:  resp.Ok,
+		Url: common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), s.config.GatewayService.InvokeURLType, instance.Stub, in.Port),
 	}, nil
 }
 

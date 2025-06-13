@@ -192,6 +192,20 @@ class PodSandboxDeleteDirectoryResponse(betterproto.Message):
     error_msg: str = betterproto.string_field(2)
 
 
+@dataclass(eq=False, repr=False)
+class PodSandboxExposePortRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    stub_id: str = betterproto.string_field(2)
+    port: int = betterproto.int32_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxExposePortResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    url: str = betterproto.string_field(2)
+    error_msg: str = betterproto.string_field(3)
+
+
 class PodServiceStub(SyncServiceStub):
     def create_pod(self, create_pod_request: "CreatePodRequest") -> "CreatePodResponse":
         return self._unary_unary(
@@ -307,3 +321,12 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxDeleteDirectoryRequest,
             PodSandboxDeleteDirectoryResponse,
         )(pod_sandbox_delete_directory_request)
+
+    def sandbox_expose_port(
+        self, pod_sandbox_expose_port_request: "PodSandboxExposePortRequest"
+    ) -> "PodSandboxExposePortResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxExposePort",
+            PodSandboxExposePortRequest,
+            PodSandboxExposePortResponse,
+        )(pod_sandbox_expose_port_request)
