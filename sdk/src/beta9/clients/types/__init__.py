@@ -104,6 +104,19 @@ class ContainerState(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class FileInfo(betterproto.Message):
+    name: str = betterproto.string_field(1)
+    is_dir: bool = betterproto.bool_field(2)
+    size: int = betterproto.int64_field(3)
+    mode: int = betterproto.int32_field(4)
+    mod_time: int = betterproto.int64_field(5)
+    owner: str = betterproto.string_field(6)
+    group: str = betterproto.string_field(7)
+    path: str = betterproto.string_field(8)
+    permissions: int = betterproto.uint32_field(9)
+
+
+@dataclass(eq=False, repr=False)
 class Mount(betterproto.Message):
     local_path: str = betterproto.string_field(1)
     mount_path: str = betterproto.string_field(2)

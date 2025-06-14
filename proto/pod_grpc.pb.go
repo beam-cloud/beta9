@@ -28,6 +28,7 @@ const (
 	PodService_SandboxListProcesses_FullMethodName   = "/pod.PodService/SandboxListProcesses"
 	PodService_SandboxUploadFile_FullMethodName      = "/pod.PodService/SandboxUploadFile"
 	PodService_SandboxDownloadFile_FullMethodName    = "/pod.PodService/SandboxDownloadFile"
+	PodService_SandboxStatFile_FullMethodName        = "/pod.PodService/SandboxStatFile"
 	PodService_SandboxListFiles_FullMethodName       = "/pod.PodService/SandboxListFiles"
 	PodService_SandboxDeleteFile_FullMethodName      = "/pod.PodService/SandboxDeleteFile"
 	PodService_SandboxCreateDirectory_FullMethodName = "/pod.PodService/SandboxCreateDirectory"
@@ -48,6 +49,7 @@ type PodServiceClient interface {
 	SandboxListProcesses(ctx context.Context, in *PodSandboxListProcessesRequest, opts ...grpc.CallOption) (*PodSandboxListProcessesResponse, error)
 	SandboxUploadFile(ctx context.Context, in *PodSandboxUploadFileRequest, opts ...grpc.CallOption) (*PodSandboxUploadFileResponse, error)
 	SandboxDownloadFile(ctx context.Context, in *PodSandboxDownloadFileRequest, opts ...grpc.CallOption) (*PodSandboxDownloadFileResponse, error)
+	SandboxStatFile(ctx context.Context, in *PodSandboxStatFileRequest, opts ...grpc.CallOption) (*PodSandboxStatFileResponse, error)
 	SandboxListFiles(ctx context.Context, in *PodSandboxListFilesRequest, opts ...grpc.CallOption) (*PodSandboxListFilesResponse, error)
 	SandboxDeleteFile(ctx context.Context, in *PodSandboxDeleteFileRequest, opts ...grpc.CallOption) (*PodSandboxDeleteFileResponse, error)
 	SandboxCreateDirectory(ctx context.Context, in *PodSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxCreateDirectoryResponse, error)
@@ -144,6 +146,15 @@ func (c *podServiceClient) SandboxDownloadFile(ctx context.Context, in *PodSandb
 	return out, nil
 }
 
+func (c *podServiceClient) SandboxStatFile(ctx context.Context, in *PodSandboxStatFileRequest, opts ...grpc.CallOption) (*PodSandboxStatFileResponse, error) {
+	out := new(PodSandboxStatFileResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxStatFile_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *podServiceClient) SandboxListFiles(ctx context.Context, in *PodSandboxListFilesRequest, opts ...grpc.CallOption) (*PodSandboxListFilesResponse, error) {
 	out := new(PodSandboxListFilesResponse)
 	err := c.cc.Invoke(ctx, PodService_SandboxListFiles_FullMethodName, in, out, opts...)
@@ -202,6 +213,7 @@ type PodServiceServer interface {
 	SandboxListProcesses(context.Context, *PodSandboxListProcessesRequest) (*PodSandboxListProcessesResponse, error)
 	SandboxUploadFile(context.Context, *PodSandboxUploadFileRequest) (*PodSandboxUploadFileResponse, error)
 	SandboxDownloadFile(context.Context, *PodSandboxDownloadFileRequest) (*PodSandboxDownloadFileResponse, error)
+	SandboxStatFile(context.Context, *PodSandboxStatFileRequest) (*PodSandboxStatFileResponse, error)
 	SandboxListFiles(context.Context, *PodSandboxListFilesRequest) (*PodSandboxListFilesResponse, error)
 	SandboxDeleteFile(context.Context, *PodSandboxDeleteFileRequest) (*PodSandboxDeleteFileResponse, error)
 	SandboxCreateDirectory(context.Context, *PodSandboxCreateDirectoryRequest) (*PodSandboxCreateDirectoryResponse, error)
@@ -240,6 +252,9 @@ func (UnimplementedPodServiceServer) SandboxUploadFile(context.Context, *PodSand
 }
 func (UnimplementedPodServiceServer) SandboxDownloadFile(context.Context, *PodSandboxDownloadFileRequest) (*PodSandboxDownloadFileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxDownloadFile not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxStatFile(context.Context, *PodSandboxStatFileRequest) (*PodSandboxStatFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxStatFile not implemented")
 }
 func (UnimplementedPodServiceServer) SandboxListFiles(context.Context, *PodSandboxListFilesRequest) (*PodSandboxListFilesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxListFiles not implemented")
@@ -431,6 +446,24 @@ func _PodService_SandboxDownloadFile_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PodService_SandboxStatFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxStatFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxStatFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxStatFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxStatFile(ctx, req.(*PodSandboxStatFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _PodService_SandboxListFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(PodSandboxListFilesRequest)
 	if err := dec(in); err != nil {
@@ -563,6 +596,10 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SandboxDownloadFile",
 			Handler:    _PodService_SandboxDownloadFile_Handler,
+		},
+		{
+			MethodName: "SandboxStatFile",
+			Handler:    _PodService_SandboxStatFile_Handler,
 		},
 		{
 			MethodName: "SandboxListFiles",

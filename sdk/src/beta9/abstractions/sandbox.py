@@ -21,6 +21,8 @@ from ..clients.pod import (
     PodSandboxExposePortRequest,
     PodSandboxExposePortResponse,
     PodSandboxKillRequest,
+    PodSandboxListFilesRequest,
+    PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
     PodSandboxStdoutRequest,
@@ -447,11 +449,19 @@ class SandboxProcess:
         return CombinedStream(self)
 
 
-class SandboxFileSystem:
-    """
-    A SandboxFileSystem is a wrapper around the SandboxFileSystem library that allows you to deploy it as an ASGI app.
-    """
+@dataclass
+class SandboxFileInfo:
+    name: str
+    is_dir: bool
+    size: int
+    mode: int
+    mod_time: int
+    permissions: int
+    owner: str
+    group: str
 
+
+class SandboxFileSystem:
     def __init__(self, sandbox_instance: SandboxInstance):
         self.sandbox_instance = sandbox_instance
 
@@ -471,11 +481,11 @@ class SandboxFileSystem:
             if not response.ok:
                 raise SandboxFileSystemError(response.error_msg)
 
-    def download_file(self, container_path: str, local_path: str):
+    def download_file(self, sandbox_path: str, local_path: str):
         response = self.sandbox_instance.stub.sandbox_download_file(
             PodSandboxDownloadFileRequest(
                 container_id=self.sandbox_instance.container_id,
-                container_path=container_path,
+                container_path=sandbox_path,
             )
         )
 
@@ -485,20 +495,66 @@ class SandboxFileSystem:
         with open(local_path, "wb") as f:
             f.write(response.data)
 
-    def list_files(self, container_path: str):
-        raise NotImplementedError("List files not implemented")
+    def stat_file(self, sandbox_path: str) -> "SandboxFileInfo":
+        response = self.sandbox_instance.stub.sandbox_stat_file(
+            PodSandboxStatFileRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+            )
+        )
+        if not response.ok:
+            raise SandboxFileSystemError(response.error_msg)
 
-    def create_directory(self, container_path: str):
+        return SandboxFileInfo(
+            **{
+                "name": response.file_info.name,
+                "is_dir": response.file_info.is_dir,
+                "size": response.file_info.size,
+                "mode": response.file_info.mode,
+                "mod_time": response.file_info.mod_time,
+                "owner": response.file_info.owner,
+                "group": response.file_info.group,
+                "permissions": response.file_info.permissions,
+            }
+        )
+
+    def list_files(self, sandbox_path: str) -> List["SandboxFileInfo"]:
+        response = self.sandbox_instance.stub.sandbox_list_files(
+            PodSandboxListFilesRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+            )
+        )
+        if not response.ok:
+            raise SandboxFileSystemError(response.error_msg)
+
+        file_infos = []
+        for file in response.files:
+            f = {
+                "name": file.name,
+                "is_dir": file.is_dir,
+                "size": file.size,
+                "mode": file.mode,
+                "mod_time": file.mod_time,
+                "owner": file.owner,
+                "group": file.group,
+                "permissions": file.permissions,
+            }
+            file_infos.append(SandboxFileInfo(**f))
+
+        return file_infos
+
+    def create_directory(self, sandbox_path: str):
         raise NotImplementedError("Create directory not implemented")
 
-    def delete_directory(self, container_path: str):
+    def delete_directory(self, sandbox_path: str):
         raise NotImplementedError("Delete directory not implemented")
 
-    def delete_file(self, container_path: str):
+    def delete_file(self, sandbox_path: str):
         response = self.sandbox_instance.stub.sandbox_delete_file(
             PodSandboxDeleteFileRequest(
                 container_id=self.sandbox_instance.container_id,
-                container_path=container_path,
+                container_path=sandbox_path,
             )
         )
 

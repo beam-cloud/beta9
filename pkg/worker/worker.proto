@@ -3,6 +3,7 @@ syntax = "proto3";
 option go_package = "github.com/beam-cloud/beta9/proto";
 
 import "gateway.proto";
+import "types.proto";
 
 package runc;
 
@@ -30,6 +31,8 @@ service RunCService {
       returns (RunCSandboxUploadFileResponse) {}
   rpc RunCSandboxDownloadFile(RunCSandboxDownloadFileRequest)
       returns (RunCSandboxDownloadFileResponse) {}
+  rpc RunCSandboxStatFile(RunCSandboxStatFileRequest)
+      returns (RunCSandboxStatFileResponse) {}
   rpc RunCSandboxDeleteFile(RunCSandboxDeleteFileRequest)
       returns (RunCSandboxDeleteFileResponse) {}
   rpc RunCSandboxCreateDirectory(RunCSandboxCreateDirectoryRequest)
@@ -138,7 +141,7 @@ message RunCSandboxListFilesRequest {
 message RunCSandboxListFilesResponse {
   bool ok = 1;
   string error_msg = 2;
-  repeated string files = 3;
+  repeated types.FileInfo files = 3;
 }
 
 message RunCSandboxDeleteFileRequest {
@@ -202,4 +205,15 @@ message RunCSandboxExposePortRequest {
 message RunCSandboxExposePortResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message RunCSandboxStatFileRequest {
+  string container_id = 1;
+  string container_path = 2;
+}
+
+message RunCSandboxStatFileResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  types.FileInfo file_info = 3;
 }

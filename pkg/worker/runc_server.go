@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"sync"
@@ -667,6 +668,82 @@ func (s *RunCServer) RunCSandboxDeleteFile(ctx context.Context, in *pb.RunCSandb
 	}
 
 	return &pb.RunCSandboxDeleteFileResponse{Ok: true}, nil
+}
+
+func (s *RunCServer) RunCSandboxStatFile(ctx context.Context, in *pb.RunCSandboxStatFileRequest) (*pb.RunCSandboxStatFileResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxStatFileResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxStatFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	stat, err := os.Stat(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)))
+	if err != nil {
+		return &pb.RunCSandboxStatFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.RunCSandboxStatFileResponse{Ok: true, FileInfo: &pb.FileInfo{
+		Mode:        int32(stat.Mode()),
+		Size:        stat.Size(),
+		ModTime:     stat.ModTime().Unix(),
+		Permissions: uint32(stat.Mode()),
+		Owner:       strconv.Itoa(int(stat.Sys().(*syscall.Stat_t).Uid)),
+		Group:       strconv.Itoa(int(stat.Sys().(*syscall.Stat_t).Gid)),
+		IsDir:       stat.IsDir(),
+		Name:        stat.Name(),
+	}}, nil
+}
+
+func (s *RunCServer) RunCSandboxListFiles(ctx context.Context, in *pb.RunCSandboxListFilesRequest) (*pb.RunCSandboxListFilesResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxListFilesResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxListFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	files, err := os.ReadDir(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)))
+	if err != nil {
+		return &pb.RunCSandboxListFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	responseFiles := make([]*pb.FileInfo, 0)
+	for _, file := range files {
+		stat, err := file.Info()
+		if err != nil {
+			return &pb.RunCSandboxListFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+
+		responseFiles = append(responseFiles, &pb.FileInfo{
+			Mode:        int32(stat.Mode()),
+			Size:        stat.Size(),
+			ModTime:     stat.ModTime().Unix(),
+			Permissions: uint32(stat.Mode()),
+			Owner:       strconv.Itoa(int(stat.Sys().(*syscall.Stat_t).Uid)),
+			Group:       strconv.Itoa(int(stat.Sys().(*syscall.Stat_t).Gid)),
+			IsDir:       stat.IsDir(),
+			Name:        file.Name(),
+		})
+	}
+
+	return &pb.RunCSandboxListFilesResponse{Ok: true, Files: responseFiles}, nil
 }
 
 func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandboxExposePortRequest) (*pb.RunCSandboxExposePortResponse, error) {

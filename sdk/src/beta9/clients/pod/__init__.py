@@ -153,7 +153,7 @@ class PodSandboxListFilesRequest(betterproto.Message):
 class PodSandboxListFilesResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
-    files: List[str] = betterproto.string_field(3)
+    files: List["PodSandboxFileInfo"] = betterproto.message_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -190,6 +190,31 @@ class PodSandboxDeleteDirectoryRequest(betterproto.Message):
 class PodSandboxDeleteDirectoryResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxStatFileRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    container_path: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxStatFileResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    file_info: "PodSandboxFileInfo" = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxFileInfo(betterproto.Message):
+    mode: int = betterproto.int32_field(1)
+    size: int = betterproto.int64_field(2)
+    mod_time: int = betterproto.int64_field(3)
+    owner: str = betterproto.string_field(4)
+    group: str = betterproto.string_field(5)
+    is_dir: bool = betterproto.bool_field(6)
+    name: str = betterproto.string_field(7)
+    permissions: int = betterproto.uint32_field(8)
 
 
 @dataclass(eq=False, repr=False)
@@ -285,6 +310,15 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxDownloadFileRequest,
             PodSandboxDownloadFileResponse,
         )(pod_sandbox_download_file_request)
+
+    def sandbox_stat_file(
+        self, pod_sandbox_stat_file_request: "PodSandboxStatFileRequest"
+    ) -> "PodSandboxStatFileResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxStatFile",
+            PodSandboxStatFileRequest,
+            PodSandboxStatFileResponse,
+        )(pod_sandbox_stat_file_request)
 
     def sandbox_list_files(
         self, pod_sandbox_list_files_request: "PodSandboxListFilesRequest"

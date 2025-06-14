@@ -245,6 +245,88 @@ func (s *GenericPodService) SandboxExposePort(ctx context.Context, in *pb.PodSan
 	}, nil
 }
 
+func (s *GenericPodService) SandboxStatFile(ctx context.Context, in *pb.PodSandboxStatFileRequest) (*pb.PodSandboxStatFileResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxStatFileResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxStatFile(in.ContainerId, in.ContainerPath)
+	if err != nil {
+		return &pb.PodSandboxStatFileResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to get file info",
+		}, nil
+	}
+
+	if !resp.Ok {
+		return &pb.PodSandboxStatFileResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+
+	fileInfo := &pb.PodSandboxFileInfo{
+		Mode:        resp.FileInfo.Mode,
+		Size:        resp.FileInfo.Size,
+		ModTime:     resp.FileInfo.ModTime,
+		Permissions: resp.FileInfo.Permissions,
+		Owner:       resp.FileInfo.Owner,
+		Group:       resp.FileInfo.Group,
+		IsDir:       resp.FileInfo.IsDir,
+		Name:        resp.FileInfo.Name,
+	}
+
+	return &pb.PodSandboxStatFileResponse{
+		Ok:       true,
+		FileInfo: fileInfo,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxListFiles(ctx context.Context, in *pb.PodSandboxListFilesRequest) (*pb.PodSandboxListFilesResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxListFilesResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxListFiles(in.ContainerId, in.ContainerPath)
+	if err != nil {
+		return &pb.PodSandboxListFilesResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to list files",
+		}, nil
+	}
+
+	files := make([]*pb.PodSandboxFileInfo, 0)
+	for _, file := range resp.Files {
+		files = append(files, &pb.PodSandboxFileInfo{
+			Mode:        file.Mode,
+			Size:        file.Size,
+			ModTime:     file.ModTime,
+			Permissions: file.Permissions,
+			Owner:       file.Owner,
+			Group:       file.Group,
+			IsDir:       file.IsDir,
+			Name:        file.Name,
+		})
+	}
+
+	return &pb.PodSandboxListFilesResponse{
+		Ok:    true,
+		Files: files,
+	}, nil
+}
+
 func (s *GenericPodService) getClient(ctx context.Context, containerId, token string) (*common.RunCClient, error) {
 	cacheKey := containerId + ":" + token
 	if cached, ok := s.clientCache.Load(cacheKey); ok {

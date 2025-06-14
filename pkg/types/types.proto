@@ -93,6 +93,18 @@ message ContainerState {
   int64 started_at = 10;
 }
 
+message FileInfo {
+  string name = 1;
+  bool is_dir = 2;
+  int64 size = 3;
+  int32 mode = 4;
+  int64 mod_time = 5;
+  string owner = 6;
+  string group = 7;
+  string path = 8;
+  uint32 permissions = 9;
+}
+
 message Mount {
   string local_path = 1;
   string mount_path = 2;

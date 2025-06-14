@@ -20,6 +20,8 @@ service PodService {
       returns (PodSandboxUploadFileResponse) {}
   rpc SandboxDownloadFile(PodSandboxDownloadFileRequest)
       returns (PodSandboxDownloadFileResponse) {}
+  rpc SandboxStatFile(PodSandboxStatFileRequest)
+      returns (PodSandboxStatFileResponse) {}
   rpc SandboxListFiles(PodSandboxListFilesRequest)
       returns (PodSandboxListFilesResponse) {}
   rpc SandboxDeleteFile(PodSandboxDeleteFileRequest)
@@ -136,7 +138,7 @@ message PodSandboxListFilesRequest {
 message PodSandboxListFilesResponse {
   bool ok = 1;
   string error_msg = 2;
-  repeated string files = 3;
+  repeated PodSandboxFileInfo files = 3;
 }
 
 message PodSandboxDeleteFileRequest {
@@ -167,6 +169,28 @@ message PodSandboxDeleteDirectoryRequest {
 message PodSandboxDeleteDirectoryResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message PodSandboxStatFileRequest {
+  string container_id = 1;
+  string container_path = 2;
+}
+
+message PodSandboxStatFileResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  PodSandboxFileInfo file_info = 3;
+}
+
+message PodSandboxFileInfo {
+  int32 mode = 1;
+  int64 size = 2;
+  int64 mod_time = 3;
+  string owner = 4;
+  string group = 5;
+  bool is_dir = 6;
+  string name = 7;
+  uint32 permissions = 8;
 }
 
 message PodSandboxExposePortRequest {
