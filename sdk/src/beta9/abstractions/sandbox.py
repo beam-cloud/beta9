@@ -460,6 +460,10 @@ class SandboxFileInfo:
     owner: str
     group: str
 
+    def __str__(self):
+        octal_perms = oct(self.permissions & 0o7777)
+        return f"SandboxFileInfo(name='{self.name}', is_dir={self.is_dir}, size={self.size}, mode={self.mode}, mod_time={self.mod_time}, permissions={octal_perms}, owner='{self.owner}', group='{self.group}')"
+
 
 class SandboxFileSystem:
     def __init__(self, sandbox_instance: SandboxInstance):
