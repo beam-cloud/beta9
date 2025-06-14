@@ -315,17 +315,17 @@ func (pb *PodProxyBuffer) discoverContainers() {
 
 					connections := currentConnections
 
-					for _, port := range pb.stubConfig.Ports {
-						if pb.checkContainerAvailable(addressMap[int32(port)]) {
+					for _, address := range addressMap {
+						if pb.checkContainerAvailable(address) {
 							availableContainersChan <- container{
 								id:          cs.ContainerId,
 								addressMap:  addressMap,
 								connections: connections,
 							}
-
 							return
 						}
 					}
+
 				}(containerState)
 			}
 

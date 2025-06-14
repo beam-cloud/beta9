@@ -3,6 +3,7 @@ syntax = "proto3";
 option go_package = "github.com/beam-cloud/beta9/proto";
 
 import "gateway.proto";
+import "types.proto";
 
 package runc;
 
@@ -30,12 +31,16 @@ service RunCService {
       returns (RunCSandboxUploadFileResponse) {}
   rpc RunCSandboxDownloadFile(RunCSandboxDownloadFileRequest)
       returns (RunCSandboxDownloadFileResponse) {}
+  rpc RunCSandboxStatFile(RunCSandboxStatFileRequest)
+      returns (RunCSandboxStatFileResponse) {}
   rpc RunCSandboxDeleteFile(RunCSandboxDeleteFileRequest)
       returns (RunCSandboxDeleteFileResponse) {}
   rpc RunCSandboxCreateDirectory(RunCSandboxCreateDirectoryRequest)
       returns (RunCSandboxCreateDirectoryResponse) {}
   rpc RunCSandboxDeleteDirectory(RunCSandboxDeleteDirectoryRequest)
       returns (RunCSandboxDeleteDirectoryResponse) {}
+  rpc RunCSandboxExposePort(RunCSandboxExposePortRequest)
+      returns (RunCSandboxExposePortResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -130,18 +135,18 @@ message RunCSandboxKillResponse {
 
 message RunCSandboxListFilesRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message RunCSandboxListFilesResponse {
   bool ok = 1;
   string error_msg = 2;
-  repeated string files = 3;
+  repeated types.FileInfo files = 3;
 }
 
 message RunCSandboxDeleteFileRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message RunCSandboxDeleteFileResponse {
@@ -151,7 +156,7 @@ message RunCSandboxDeleteFileResponse {
 
 message RunCSandboxCreateDirectoryRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message RunCSandboxCreateDirectoryResponse {
@@ -161,7 +166,7 @@ message RunCSandboxCreateDirectoryResponse {
 
 message RunCSandboxDeleteDirectoryRequest {
   string container_id = 1;
-  string path = 2;
+  string container_path = 2;
 }
 
 message RunCSandboxDeleteDirectoryResponse {
@@ -190,4 +195,25 @@ message RunCSandboxDownloadFileResponse {
   bool ok = 1;
   string error_msg = 2;
   bytes data = 3;
+}
+
+message RunCSandboxExposePortRequest {
+  string container_id = 1;
+  int32 port = 2;
+}
+
+message RunCSandboxExposePortResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RunCSandboxStatFileRequest {
+  string container_id = 1;
+  string container_path = 2;
+}
+
+message RunCSandboxStatFileResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  types.FileInfo file_info = 3;
 }

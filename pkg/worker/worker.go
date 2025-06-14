@@ -191,17 +191,19 @@ func NewWorker() (*Worker, error) {
 		}
 	}
 
-	runcServer, err := NewRunCServer(containerInstances, imageClient)
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, config)
 	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	runcServer, err := NewRunCServer(podAddr, containerInstances, imageClient, containerRepoClient, containerNetworkManager)
+	if err != nil {
+		cancel()
 		return nil, err
 	}
 
 	err = runcServer.Start()
-	if err != nil {
-		return nil, err
-	}
-
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, config)
 	if err != nil {
 		cancel()
 		return nil, err

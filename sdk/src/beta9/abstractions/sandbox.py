@@ -15,9 +15,14 @@ from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopCont
 from ..clients.pod import (
     CreatePodRequest,
     CreatePodResponse,
+    PodSandboxDeleteFileRequest,
     PodSandboxDownloadFileRequest,
     PodSandboxExecRequest,
+    PodSandboxExposePortRequest,
+    PodSandboxExposePortResponse,
     PodSandboxKillRequest,
+    PodSandboxListFilesRequest,
+    PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
     PodSandboxStdoutRequest,
@@ -124,6 +129,7 @@ class Sandbox(Pod):
                 )
 
             return SandboxInstance(
+                stub_id=self.stub_id,
                 container_id=create_response.container_id,
                 ok=create_response.ok,
                 error_msg=create_response.error_msg,
@@ -141,6 +147,7 @@ class SandboxInstance(BaseAbstraction):
     """
 
     container_id: str
+    stub_id: str
     ok: bool = field(default=False)
     error_msg: str = field(default="")
     gateway_stub: "GatewayServiceStub" = field(init=False)
@@ -162,8 +169,20 @@ class SandboxInstance(BaseAbstraction):
         )
         return res.ok
 
-    def expose_port(self, port: int):
-        raise NotImplementedError("Expose port not implemented")
+    def expose_port(self, port: int) -> str:
+        """
+        Dynamically expose a port to the internet. Returns an SSL terminated endpoint to access the sandbox.
+        """
+        res: "PodSandboxExposePortResponse" = self.stub.sandbox_expose_port(
+            PodSandboxExposePortRequest(
+                container_id=self.container_id, stub_id=self.stub_id, port=port
+            )
+        )
+
+        if res.ok:
+            return res.url
+
+        raise SandboxProcessError("Failed to expose port")
 
 
 class SandboxProcessResponse:
@@ -354,12 +373,99 @@ class SandboxProcess:
             ).stderr,
         )
 
+    @property
+    def logs(self):
+        """
+        Returns a combined stream of both stdout and stderr.
+        This is a convenience property that combines both output streams.
+        The streams are read concurrently, so if one stream is empty, it won't block
+        the other stream from being read.
+        """
+
+        class CombinedStream:
+            def __init__(self, process):
+                self.process = process
+                self._stdout = process.stdout
+                self._stderr = process.stderr
+                self._queue = []
+                self._streams = {
+                    "stdout": {"stream": self._stdout, "buffer": "", "exhausted": False},
+                    "stderr": {"stream": self._stderr, "buffer": "", "exhausted": False},
+                }
+
+            def _process_stream(self, stream_name):
+                """Process a single stream, adding any complete lines to the queue."""
+                stream_info = self._streams[stream_name]
+                if stream_info["exhausted"]:
+                    return
+
+                chunk = stream_info["stream"]._fetch_next_chunk()
+                if chunk:
+                    stream_info["buffer"] += chunk
+
+                    while "\n" in stream_info["buffer"]:  # Process any complete lines
+                        line, stream_info["buffer"] = stream_info["buffer"].split("\n", 1)
+                        self._queue.append(line + "\n")
+
+                elif self.process.exit_code >= 0:  # Process has exited
+                    if stream_info["buffer"]:
+                        self._queue.append(stream_info["buffer"])
+                        stream_info["buffer"] = ""
+
+                    stream_info["exhausted"] = True
+
+            def _fill_queue(self):
+                self._process_stream("stdout")
+                self._process_stream("stderr")
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                while True:
+                    # If queue is empty, try to fill it
+                    if not self._queue:
+                        self._fill_queue()
+                        # If still empty after trying to fill, we're done
+                        if not self._queue and all(s["exhausted"] for s in self._streams.values()):
+                            raise StopIteration
+
+                        # If queue is still empty but streams aren't exhausted, wait and try again
+                        if not self._queue:
+                            try:
+                                time.sleep(0.1)
+                                continue
+                            except KeyboardInterrupt:
+                                raise
+
+                    # Return the next line from the queue
+                    return self._queue.pop(0)
+
+            def read(self):
+                stdout_data = self._stdout.read()
+                stderr_data = self._stderr.read()
+                return stdout_data + stderr_data
+
+        return CombinedStream(self)
+
+
+@dataclass
+class SandboxFileInfo:
+    name: str
+    is_dir: bool
+    size: int
+    mode: int
+    mod_time: int
+    permissions: int
+    owner: str
+    group: str
+
+    def __str__(self):
+        octal_perms = oct(self.permissions & 0o7777)
+        return f"SandboxFileInfo(name='{self.name}', is_dir={self.is_dir}, size={self.size}, mode={self.mode}, mod_time={self.mod_time}, permissions={octal_perms}, owner='{self.owner}', group='{self.group}')"
+
 
 class SandboxFileSystem:
-    """
-    A SandboxFileSystem is a wrapper around the SandboxFileSystem library that allows you to deploy it as an ASGI app.
-    """
-
     def __init__(self, sandbox_instance: SandboxInstance):
         self.sandbox_instance = sandbox_instance
 
@@ -379,11 +485,11 @@ class SandboxFileSystem:
             if not response.ok:
                 raise SandboxFileSystemError(response.error_msg)
 
-    def download_file(self, container_path: str, local_path: str):
+    def download_file(self, sandbox_path: str, local_path: str):
         response = self.sandbox_instance.stub.sandbox_download_file(
             PodSandboxDownloadFileRequest(
                 container_id=self.sandbox_instance.container_id,
-                container_path=container_path,
+                container_path=sandbox_path,
             )
         )
 
@@ -393,14 +499,68 @@ class SandboxFileSystem:
         with open(local_path, "wb") as f:
             f.write(response.data)
 
-    def list_files(self, container_path: str):
-        raise NotImplementedError("List files not implemented")
+    def stat_file(self, sandbox_path: str) -> "SandboxFileInfo":
+        response = self.sandbox_instance.stub.sandbox_stat_file(
+            PodSandboxStatFileRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+            )
+        )
+        if not response.ok:
+            raise SandboxFileSystemError(response.error_msg)
 
-    def create_directory(self, container_path: str):
+        return SandboxFileInfo(
+            **{
+                "name": response.file_info.name,
+                "is_dir": response.file_info.is_dir,
+                "size": response.file_info.size,
+                "mode": response.file_info.mode,
+                "mod_time": response.file_info.mod_time,
+                "owner": response.file_info.owner,
+                "group": response.file_info.group,
+                "permissions": response.file_info.permissions,
+            }
+        )
+
+    def list_files(self, sandbox_path: str) -> List["SandboxFileInfo"]:
+        response = self.sandbox_instance.stub.sandbox_list_files(
+            PodSandboxListFilesRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+            )
+        )
+        if not response.ok:
+            raise SandboxFileSystemError(response.error_msg)
+
+        file_infos = []
+        for file in response.files:
+            f = {
+                "name": file.name,
+                "is_dir": file.is_dir,
+                "size": file.size,
+                "mode": file.mode,
+                "mod_time": file.mod_time,
+                "owner": file.owner,
+                "group": file.group,
+                "permissions": file.permissions,
+            }
+            file_infos.append(SandboxFileInfo(**f))
+
+        return file_infos
+
+    def create_directory(self, sandbox_path: str):
         raise NotImplementedError("Create directory not implemented")
 
-    def delete_file(self, container_path: str):
-        raise NotImplementedError("Delete file not implemented")
-
-    def delete_directory(self, container_path: str):
+    def delete_directory(self, sandbox_path: str):
         raise NotImplementedError("Delete directory not implemented")
+
+    def delete_file(self, sandbox_path: str):
+        response = self.sandbox_instance.stub.sandbox_delete_file(
+            PodSandboxDeleteFileRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+            )
+        )
+
+        if not response.ok:
+            raise SandboxFileSystemError(response.error_msg)

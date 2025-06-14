@@ -24,3 +24,16 @@ type AvailableHost struct {
 	Hostname    string
 	ContainerId string
 }
+
+// @go2proto
+type FileInfo struct {
+	Name        string
+	IsDir       bool
+	Size        int64
+	Mode        int32
+	ModTime     int64
+	Owner       string
+	Group       string
+	Path        string
+	Permissions uint32
+}
