@@ -357,6 +357,7 @@ type WorkerConfig struct {
 	TmpSizeLimit                 string                        `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLinesPerHour     int                           `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
 	Failover                     FailoverConfig                `key:"failover" json:"failover"`
+	ContainerRuntime             string                      `key:"containerRuntime" json:"container_runtime"`
 }
 
 type ContainerResourceLimitsConfig struct {

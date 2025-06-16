@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -26,22 +25,12 @@ import (
 )
 
 const (
-	baseConfigPath            string        = "/tmp"
-	defaultContainerDirectory string        = types.WorkerUserCodeVolume
-	specBaseName              string        = "config.json"
-	initialSpecBaseName       string        = "initial_config.json"
-	runcEventsInterval        time.Duration = 5 * time.Second
-	containerInnerPort        int           = 8001 // Use a fixed port inside the container
+	baseConfigPath            string = "/tmp"
+	defaultContainerDirectory string = types.WorkerUserCodeVolume
+	specBaseName              string = "config.json"
+	initialSpecBaseName       string = "initial_config.json"
+	containerInnerPort        int    = 8001 // Use a fixed port inside the container
 )
-
-//go:embed base_runc_config.json
-var baseRuncConfigRaw string
-
-// These parameters are set when runcResourcesEnforced is enabled in the worker config
-var cgroupV2Parameters map[string]string = map[string]string{
-	// When an OOM occurs within a runc container, the kernel will kill the container and all procceses within it.
-	"memory.oom.group": "1",
-}
 
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
@@ -80,7 +69,7 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		signal = int(syscall.SIGKILL)
 	}
 
-	err := s.runcHandle.Kill(context.Background(), instance.Id, signal, &runc.KillOpts{All: true})
+	err := s.containerRuntime.Kill(context.Background(), instance.Id, signal, &KillOpts{All: true})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("error stopping container: %v", err)
 		s.containerNetworkManager.TearDown(containerId)
@@ -144,7 +133,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		}
 
 		// If the container is still running, stop it. This happens when a sigterm is detected.
-		container, err := s.runcHandle.State(context.TODO(), containerId)
+		container, err := s.containerRuntime.State(context.TODO(), containerId)
 		if err == nil && container.Status == types.RuncContainerStatusRunning {
 			if err := s.stopContainer(containerId, true); err != nil {
 				log.Error().Str("container_id", containerId).Msgf("failed to stop container: %v", err)
@@ -390,12 +379,17 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if throttlingEnabled && (s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced) {
 		spec.Linux.Resources.Unified = cgroupV2Parameters
 
-		if s.config.Worker.ContainerResourceLimits.CPUEnforced {
-			spec.Linux.Resources.CPU = getLinuxCPU(request)
-		}
-
-		if s.config.Worker.ContainerResourceLimits.MemoryEnforced {
-			spec.Linux.Resources.Memory = getLinuxMemory(request)
+		if s.config.Worker.ResourceLimits.CPUEnforced || s.config.Worker.ResourceLimits.MemoryEnforced {
+			resources, err := s.getContainerResources(request)
+			if err != nil {
+				return nil, err
+			}
+			if resources.CPU != nil {
+				spec.Linux.Resources.CPU = resources.CPU
+			}
+			if resources.Memory != nil {
+				spec.Linux.Resources.Memory = resources.Memory
+			}
 		}
 	}
 
@@ -637,7 +631,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}()
 
 	// Setup container overlay filesystem
-	err := containerInstance.Overlay.Setup()
+	var err error
+	err = containerInstance.Overlay.Setup()
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup overlay: %v", err)
 		return
@@ -800,7 +795,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d, stop reason: %s", exitCode, stopReason)
 	outputLogger.Info("", "done", true, "success", exitCode == 0)
 	if containerId != "" {
-		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+		err = s.containerRuntime.Delete(s.ctx, containerId, &DeleteOpts{Force: true})
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
 		}
@@ -848,7 +843,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	bundlePath := filepath.Dir(request.ConfigPath)
-	exitCode, err := s.runcHandle.Run(ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
+	exitCode, err := s.containerRuntime.Run(ctx, request.ContainerId, bundlePath, &ContainerRuntimeOpts{
 		OutputWriter: outputWriter,
 		Started:      startedChan,
 	})
@@ -893,7 +888,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 	case <-ctx.Done():
 		return
 	default:
-		ch, err = s.runcHandle.Events(eventsCtx, containerId, time.Second)
+		ch, err = s.containerRuntime.Events(ctx, containerId, time.Second)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to open runc events channel: %v", err)
 			return
@@ -927,7 +922,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 				case <-ctx.Done():
 					return
 				case <-time.After(backoff):
-					ch, err = s.runcHandle.Events(eventsCtx, containerId, time.Second)
+					ch, err = s.containerRuntime.Events(ctx, containerId, time.Second)
 					if err != nil {
 						log.Error().Str("container_id", containerId).Msgf("failed to open runc events channel: %v", err)
 					}
@@ -958,4 +953,18 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 			}
 		}
 	}
+}
+
+func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.LinuxResources, error) {
+	var resources ContainerResources
+	if s.containerRuntime.Name() == "gvisor" {
+		resources = NewGvisorResources()
+	} else {
+		resources = NewRuncResources()
+	}
+
+	return &specs.LinuxResources{
+		CPU:    resources.GetCPU(request),
+		Memory: resources.GetMemory(request),
+	}, nil
 }

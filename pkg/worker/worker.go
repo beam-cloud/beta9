@@ -14,7 +14,6 @@ import (
 	"time"
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
-	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 
@@ -47,8 +46,8 @@ type Worker struct {
 	podAddr                 string
 	podHostName             string
 	imageMountPath          string
-	runcHandle              runc.Runc
-	runcServer              *RunCServer
+	containerRuntime        ContainerRuntime
+	runcServer              *RuncServer
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
 	containerNetworkManager *ContainerNetworkManager
@@ -142,6 +141,17 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
+	// Create container runtime based on config
+	runtimeType := RuntimeType(config.Worker.ContainerRuntime)
+	containerRuntime, err := NewContainerRuntime(runtimeType, config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create container runtime: %v", err)
+	}
+
+	if !containerRuntime.Available() {
+		return nil, fmt.Errorf("container runtime %s is not available", runtimeType)
+	}
+
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
 	if err != nil {
 		return nil, err
@@ -226,7 +236,7 @@ func NewWorker() (*Worker, error) {
 		memoryLimit:             memoryLimit,
 		gpuType:                 gpuType,
 		gpuCount:                uint32(gpuCount),
-		runcHandle:              runc.Runc{Debug: config.DebugMode},
+		containerRuntime:        containerRuntime,
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
