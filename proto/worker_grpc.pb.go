@@ -38,6 +38,7 @@ const (
 	RunCService_RunCSandboxCreateDirectory_FullMethodName = "/runc.RunCService/RunCSandboxCreateDirectory"
 	RunCService_RunCSandboxDeleteDirectory_FullMethodName = "/runc.RunCService/RunCSandboxDeleteDirectory"
 	RunCService_RunCSandboxExposePort_FullMethodName      = "/runc.RunCService/RunCSandboxExposePort"
+	RunCService_RunCSandboxReplaceInFile_FullMethodName   = "/runc.RunCService/RunCSandboxReplaceInFile"
 )
 
 // RunCServiceClient is the client API for RunCService service.
@@ -63,6 +64,7 @@ type RunCServiceClient interface {
 	RunCSandboxCreateDirectory(ctx context.Context, in *RunCSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxCreateDirectoryResponse, error)
 	RunCSandboxDeleteDirectory(ctx context.Context, in *RunCSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteDirectoryResponse, error)
 	RunCSandboxExposePort(ctx context.Context, in *RunCSandboxExposePortRequest, opts ...grpc.CallOption) (*RunCSandboxExposePortResponse, error)
+	RunCSandboxReplaceInFile(ctx context.Context, in *RunCSandboxReplaceInFileRequest, opts ...grpc.CallOption) (*RunCSandboxReplaceInFileResponse, error)
 }
 
 type runCServiceClient struct {
@@ -290,6 +292,15 @@ func (c *runCServiceClient) RunCSandboxExposePort(ctx context.Context, in *RunCS
 	return out, nil
 }
 
+func (c *runCServiceClient) RunCSandboxReplaceInFile(ctx context.Context, in *RunCSandboxReplaceInFileRequest, opts ...grpc.CallOption) (*RunCSandboxReplaceInFileResponse, error) {
+	out := new(RunCSandboxReplaceInFileResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxReplaceInFile_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunCServiceServer is the server API for RunCService service.
 // All implementations must embed UnimplementedRunCServiceServer
 // for forward compatibility
@@ -313,6 +324,7 @@ type RunCServiceServer interface {
 	RunCSandboxCreateDirectory(context.Context, *RunCSandboxCreateDirectoryRequest) (*RunCSandboxCreateDirectoryResponse, error)
 	RunCSandboxDeleteDirectory(context.Context, *RunCSandboxDeleteDirectoryRequest) (*RunCSandboxDeleteDirectoryResponse, error)
 	RunCSandboxExposePort(context.Context, *RunCSandboxExposePortRequest) (*RunCSandboxExposePortResponse, error)
+	RunCSandboxReplaceInFile(context.Context, *RunCSandboxReplaceInFileRequest) (*RunCSandboxReplaceInFileResponse, error)
 	mustEmbedUnimplementedRunCServiceServer()
 }
 
@@ -376,6 +388,9 @@ func (UnimplementedRunCServiceServer) RunCSandboxDeleteDirectory(context.Context
 }
 func (UnimplementedRunCServiceServer) RunCSandboxExposePort(context.Context, *RunCSandboxExposePortRequest) (*RunCSandboxExposePortResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxExposePort not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxReplaceInFile(context.Context, *RunCSandboxReplaceInFileRequest) (*RunCSandboxReplaceInFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxReplaceInFile not implemented")
 }
 func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
 
@@ -738,6 +753,24 @@ func _RunCService_RunCSandboxExposePort_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RunCService_RunCSandboxReplaceInFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxReplaceInFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxReplaceInFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxReplaceInFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxReplaceInFile(ctx, req.(*RunCSandboxReplaceInFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RunCService_ServiceDesc is the grpc.ServiceDesc for RunCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -812,6 +845,10 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunCSandboxExposePort",
 			Handler:    _RunCService_RunCSandboxExposePort_Handler,
+		},
+		{
+			MethodName: "RunCSandboxReplaceInFile",
+			Handler:    _RunCService_RunCSandboxReplaceInFile_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

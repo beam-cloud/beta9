@@ -304,3 +304,11 @@ func (c *RunCClient) SyncWorkspace(ctx context.Context, request *pb.SyncContaine
 
 	return resp, nil
 }
+
+func (c *RunCClient) ReplaceInFile(containerId, containerPath, oldString, newString string) (*pb.RunCSandboxReplaceInFileResponse, error) {
+	resp, err := c.client.RunCSandboxReplaceInFile(context.TODO(), &pb.RunCSandboxReplaceInFileRequest{ContainerId: containerId, ContainerPath: containerPath, OldString: oldString, NewString: newString})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}

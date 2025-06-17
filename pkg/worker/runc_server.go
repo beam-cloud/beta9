@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -794,4 +795,80 @@ func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandb
 
 	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[int32(in.Port)])
 	return &pb.RunCSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err
+}
+
+type StagedFile struct {
+	Path    string
+	Content string
+}
+
+func stageFilesForReplacement(basePath string, tmpPath string, stringToReplace string, stringToReplaceWith string) ([]StagedFile, error) {
+	stagedFiles := []StagedFile{}
+	regex, err := regexp.Compile(stringToReplace)
+	if err != nil {
+		return nil, err
+	}
+
+	filepath.WalkDir(basePath, func(path string, d os.DirEntry, err error) error {
+		if err != nil && os.IsNotExist(err) {
+			return nil
+		}
+
+		if !d.IsDir() {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			content, err := io.ReadAll(file)
+			if err != nil {
+				return err
+			}
+
+			if regex.Match(content) {
+				content = regex.ReplaceAll(content, []byte(stringToReplaceWith))
+			}
+
+			stagedFiles = append(stagedFiles, StagedFile{
+				Path:    path,
+				Content: string(content),
+			})
+		}
+
+		return nil
+	})
+
+	return stagedFiles, nil
+}
+
+func (s *RunCServer) RunCSandboxReplaceInFile(ctx context.Context, in *pb.RunCSandboxReplaceInFileRequest) (*pb.RunCSandboxReplaceInFileResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxReplaceInFileResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxReplaceInFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	stagedFiles, err := stageFilesForReplacement(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), in.OldString, in.NewString)
+	if err != nil {
+		return &pb.RunCSandboxReplaceInFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	for _, stagedFile := range stagedFiles {
+		err = os.WriteFile(stagedFile.Path, []byte(stagedFile.Content), 0644)
+		if err != nil {
+			return &pb.RunCSandboxReplaceInFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+	}
+
+	return &pb.RunCSandboxReplaceInFileResponse{Ok: true}, nil
 }

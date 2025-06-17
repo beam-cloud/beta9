@@ -327,6 +327,30 @@ func (s *GenericPodService) SandboxListFiles(ctx context.Context, in *pb.PodSand
 	}, nil
 }
 
+func (s *GenericPodService) SandboxReplaceInFile(ctx context.Context, in *pb.PodSandboxReplaceInFileRequest) (*pb.PodSandboxReplaceInFileResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key)
+	if err != nil {
+		return &pb.PodSandboxReplaceInFileResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.ReplaceInFile(in.ContainerId, in.ContainerPath, in.OldString, in.NewString)
+	if err != nil {
+		return &pb.PodSandboxReplaceInFileResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to replace in file",
+		}, nil
+	}
+
+	return &pb.PodSandboxReplaceInFileResponse{
+		Ok: resp.Ok,
+	}, nil
+}
+
 func (s *GenericPodService) getClient(ctx context.Context, containerId, token string) (*common.RunCClient, error) {
 	cacheKey := containerId + ":" + token
 	if cached, ok := s.clientCache.Load(cacheKey); ok {
