@@ -133,7 +133,6 @@ func createHttpClient() *http.Client {
 	transport := createHttpTransport(maxIdleConns, maxIdleConnsPerHost, maxConnsPerHost, nil)
 	return &http.Client{
 		Transport: transport,
-		Timeout:   0,
 	}
 }
 
@@ -422,7 +421,6 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*
 
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   0,
 	}
 
 	rb.clientCache.Store(address, client)
