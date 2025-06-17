@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	readyCheckInterval             time.Duration = 500 * time.Millisecond
+	readyCheckInterval             time.Duration = 1000 * time.Millisecond
 	connectToHostTimeout           time.Duration = 2 * time.Second
 	requestProcessingInterval      time.Duration = time.Millisecond * 100
 	httpConnectionTimeout          time.Duration = 2 * time.Second
@@ -421,6 +421,7 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*
 
 	client := &http.Client{
 		Transport: transport,
+		Timeout:   0,
 	}
 
 	rb.clientCache.Store(address, client)
