@@ -842,15 +842,15 @@ func stageFilesForReplacement(basePath string, tmpPath string, stringToReplace s
 	return stagedFiles, nil
 }
 
-func (s *RunCServer) RunCSandboxReplaceInFile(ctx context.Context, in *pb.RunCSandboxReplaceInFileRequest) (*pb.RunCSandboxReplaceInFileResponse, error) {
+func (s *RunCServer) RunCSandboxReplaceInFiles(ctx context.Context, in *pb.RunCSandboxReplaceInFilesRequest) (*pb.RunCSandboxReplaceInFilesResponse, error) {
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
-		return &pb.RunCSandboxReplaceInFileResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
 	err := s.waitForContainer(ctx, in.ContainerId)
 	if err != nil {
-		return &pb.RunCSandboxReplaceInFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	containerPath := in.ContainerPath
@@ -860,15 +860,15 @@ func (s *RunCServer) RunCSandboxReplaceInFile(ctx context.Context, in *pb.RunCSa
 
 	stagedFiles, err := stageFilesForReplacement(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), in.OldString, in.NewString)
 	if err != nil {
-		return &pb.RunCSandboxReplaceInFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	for _, stagedFile := range stagedFiles {
 		err = os.WriteFile(stagedFile.Path, []byte(stagedFile.Content), 0644)
 		if err != nil {
-			return &pb.RunCSandboxReplaceInFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
 	}
 
-	return &pb.RunCSandboxReplaceInFileResponse{Ok: true}, nil
+	return &pb.RunCSandboxReplaceInFilesResponse{Ok: true}, nil
 }

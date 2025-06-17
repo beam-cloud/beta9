@@ -218,7 +218,7 @@ class PodSandboxFileInfo(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxReplaceInFileRequest(betterproto.Message):
+class PodSandboxReplaceInFilesRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     container_path: str = betterproto.string_field(2)
     old_string: str = betterproto.string_field(3)
@@ -226,7 +226,7 @@ class PodSandboxReplaceInFileRequest(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxReplaceInFileResponse(betterproto.Message):
+class PodSandboxReplaceInFilesResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
 
@@ -379,11 +379,11 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxExposePortResponse,
         )(pod_sandbox_expose_port_request)
 
-    def sandbox_replace_in_file(
-        self, pod_sandbox_replace_in_file_request: "PodSandboxReplaceInFileRequest"
-    ) -> "PodSandboxReplaceInFileResponse":
+    def sandbox_replace_in_files(
+        self, pod_sandbox_replace_in_files_request: "PodSandboxReplaceInFilesRequest"
+    ) -> "PodSandboxReplaceInFilesResponse":
         return self._unary_unary(
-            "/pod.PodService/SandboxReplaceInFile",
-            PodSandboxReplaceInFileRequest,
-            PodSandboxReplaceInFileResponse,
-        )(pod_sandbox_replace_in_file_request)
+            "/pod.PodService/SandboxReplaceInFiles",
+            PodSandboxReplaceInFilesRequest,
+            PodSandboxReplaceInFilesResponse,
+        )(pod_sandbox_replace_in_files_request)

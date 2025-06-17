@@ -22,7 +22,6 @@ from ..clients.pod import (
     PodSandboxExposePortResponse,
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
-    PodSandboxReplaceInFileRequest,
     PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
@@ -566,9 +565,9 @@ class SandboxFileSystem:
         if not response.ok:
             raise SandboxFileSystemError(response.error_msg)
 
-    def replace_in_file(self, sandbox_path: str, old_string: str, new_string: str):
-        response = self.sandbox_instance.stub.sandbox_replace_in_file(
-            PodSandboxReplaceInFileRequest(
+    def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
+        response = self.sandbox_instance.stub.sandbox_replace_in_files(
+            PodSandboxReplaceInFilesRequest(
                 container_id=self.sandbox_instance.container_id,
                 container_path=sandbox_path,
                 old_string=old_string,

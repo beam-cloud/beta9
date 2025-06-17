@@ -34,7 +34,7 @@ const (
 	PodService_SandboxCreateDirectory_FullMethodName = "/pod.PodService/SandboxCreateDirectory"
 	PodService_SandboxDeleteDirectory_FullMethodName = "/pod.PodService/SandboxDeleteDirectory"
 	PodService_SandboxExposePort_FullMethodName      = "/pod.PodService/SandboxExposePort"
-	PodService_SandboxReplaceInFile_FullMethodName   = "/pod.PodService/SandboxReplaceInFile"
+	PodService_SandboxReplaceInFiles_FullMethodName  = "/pod.PodService/SandboxReplaceInFiles"
 )
 
 // PodServiceClient is the client API for PodService service.
@@ -56,7 +56,7 @@ type PodServiceClient interface {
 	SandboxCreateDirectory(ctx context.Context, in *PodSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxCreateDirectoryResponse, error)
 	SandboxDeleteDirectory(ctx context.Context, in *PodSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxDeleteDirectoryResponse, error)
 	SandboxExposePort(ctx context.Context, in *PodSandboxExposePortRequest, opts ...grpc.CallOption) (*PodSandboxExposePortResponse, error)
-	SandboxReplaceInFile(ctx context.Context, in *PodSandboxReplaceInFileRequest, opts ...grpc.CallOption) (*PodSandboxReplaceInFileResponse, error)
+	SandboxReplaceInFiles(ctx context.Context, in *PodSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*PodSandboxReplaceInFilesResponse, error)
 }
 
 type podServiceClient struct {
@@ -202,9 +202,9 @@ func (c *podServiceClient) SandboxExposePort(ctx context.Context, in *PodSandbox
 	return out, nil
 }
 
-func (c *podServiceClient) SandboxReplaceInFile(ctx context.Context, in *PodSandboxReplaceInFileRequest, opts ...grpc.CallOption) (*PodSandboxReplaceInFileResponse, error) {
-	out := new(PodSandboxReplaceInFileResponse)
-	err := c.cc.Invoke(ctx, PodService_SandboxReplaceInFile_FullMethodName, in, out, opts...)
+func (c *podServiceClient) SandboxReplaceInFiles(ctx context.Context, in *PodSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*PodSandboxReplaceInFilesResponse, error) {
+	out := new(PodSandboxReplaceInFilesResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxReplaceInFiles_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +230,7 @@ type PodServiceServer interface {
 	SandboxCreateDirectory(context.Context, *PodSandboxCreateDirectoryRequest) (*PodSandboxCreateDirectoryResponse, error)
 	SandboxDeleteDirectory(context.Context, *PodSandboxDeleteDirectoryRequest) (*PodSandboxDeleteDirectoryResponse, error)
 	SandboxExposePort(context.Context, *PodSandboxExposePortRequest) (*PodSandboxExposePortResponse, error)
-	SandboxReplaceInFile(context.Context, *PodSandboxReplaceInFileRequest) (*PodSandboxReplaceInFileResponse, error)
+	SandboxReplaceInFiles(context.Context, *PodSandboxReplaceInFilesRequest) (*PodSandboxReplaceInFilesResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
 
@@ -283,8 +283,8 @@ func (UnimplementedPodServiceServer) SandboxDeleteDirectory(context.Context, *Po
 func (UnimplementedPodServiceServer) SandboxExposePort(context.Context, *PodSandboxExposePortRequest) (*PodSandboxExposePortResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxExposePort not implemented")
 }
-func (UnimplementedPodServiceServer) SandboxReplaceInFile(context.Context, *PodSandboxReplaceInFileRequest) (*PodSandboxReplaceInFileResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SandboxReplaceInFile not implemented")
+func (UnimplementedPodServiceServer) SandboxReplaceInFiles(context.Context, *PodSandboxReplaceInFilesRequest) (*PodSandboxReplaceInFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxReplaceInFiles not implemented")
 }
 func (UnimplementedPodServiceServer) mustEmbedUnimplementedPodServiceServer() {}
 
@@ -569,20 +569,20 @@ func _PodService_SandboxExposePort_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PodService_SandboxReplaceInFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PodSandboxReplaceInFileRequest)
+func _PodService_SandboxReplaceInFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxReplaceInFilesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PodServiceServer).SandboxReplaceInFile(ctx, in)
+		return srv.(PodServiceServer).SandboxReplaceInFiles(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PodService_SandboxReplaceInFile_FullMethodName,
+		FullMethod: PodService_SandboxReplaceInFiles_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PodServiceServer).SandboxReplaceInFile(ctx, req.(*PodSandboxReplaceInFileRequest))
+		return srv.(PodServiceServer).SandboxReplaceInFiles(ctx, req.(*PodSandboxReplaceInFilesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -655,8 +655,8 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PodService_SandboxExposePort_Handler,
 		},
 		{
-			MethodName: "SandboxReplaceInFile",
-			Handler:    _PodService_SandboxReplaceInFile_Handler,
+			MethodName: "SandboxReplaceInFiles",
+			Handler:    _PodService_SandboxReplaceInFiles_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -32,8 +32,8 @@ service PodService {
       returns (PodSandboxDeleteDirectoryResponse) {}
   rpc SandboxExposePort(PodSandboxExposePortRequest)
       returns (PodSandboxExposePortResponse) {}
-  rpc SandboxReplaceInFile(PodSandboxReplaceInFileRequest)
-      returns (PodSandboxReplaceInFileResponse) {}
+  rpc SandboxReplaceInFiles(PodSandboxReplaceInFilesRequest)
+      returns (PodSandboxReplaceInFilesResponse) {}
 }
 
 message CreatePodRequest { string stub_id = 1; }
@@ -195,14 +195,14 @@ message PodSandboxFileInfo {
   uint32 permissions = 8;
 }
 
-message PodSandboxReplaceInFileRequest {
+message PodSandboxReplaceInFilesRequest {
   string container_id = 1;
   string container_path = 2;
   string old_string = 3;
   string new_string = 4;
 }
 
-message PodSandboxReplaceInFileResponse {
+message PodSandboxReplaceInFilesResponse {
   bool ok = 1;
   string error_msg = 2;
 }
