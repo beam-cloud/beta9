@@ -37,10 +37,10 @@ const (
 	maxIdleConns          = 100
 	maxIdleConnsPerHost   = 10
 	maxConnsPerHost       = 100
-	idleConnTimeout       = 90 * time.Second
+	idleConnTimeout       = 180 * time.Second
 	responseHeaderTimeout = 30 * time.Second
 	expectContinueTimeout = 1 * time.Second
-	dialTimeout           = 30 * time.Second
+	dialTimeout           = 2 * time.Second
 	dialKeepAlive         = 30 * time.Second
 	tsMaxIdleConns        = 1
 	tsMaxIdleConnsPerHost = 1
@@ -154,8 +154,8 @@ func createHttpTransport(maxIdleConns, maxIdleConnsPerHost, maxConnsPerHost int,
 		transport.DialContext = dialContext
 	} else {
 		transport.DialContext = (&net.Dialer{
-			Timeout:   dialTimeout,   // Connection establishment timeout
-			KeepAlive: dialKeepAlive, // Keep-alive period
+			Timeout:   dialTimeout,
+			KeepAlive: dialKeepAlive,
 		}).DialContext
 	}
 
