@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -276,8 +277,31 @@ func GetTaskOutputPath(workspaceName string, task *types.TaskWithRelated, output
 	return filepath.Join(types.DefaultOutputsPath, workspaceName, task.Stub.ExternalId, task.ExternalId, outputId, filepath.Base(filename))
 }
 
-func GetTaskOutputFiles(workspaceName string, task *types.TaskWithRelated) map[string]string {
+func GetTaskOutputFiles(ctx context.Context, authInfo *auth.AuthInfo, workspaceName string, task *types.TaskWithRelated) (map[string]string, error) {
 	outputPath := GetTaskOutputRootPath(workspaceName, task)
+
+	if authInfo.Workspace.StorageAvailable() {
+		outputPath = path.Join(types.DefaultOutputsPrefix, task.Stub.ExternalId, task.ExternalId)
+		storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+		if err != nil {
+			return nil, err
+		}
+
+		objects, err := storageClient.ListWithPrefix(ctx, outputPath)
+		if err != nil {
+			return nil, err
+		}
+
+		filePaths := map[string]string{}
+
+		for _, object := range objects {
+			if object.Key != nil && !strings.HasSuffix(*object.Key, "/") {
+				filePaths[filepath.Base(filepath.Dir(*object.Key))] = filepath.Base(*object.Key)
+			}
+		}
+
+		return filePaths, nil
+	}
 
 	filePaths := map[string]string{}
 	filepath.WalkDir(outputPath, func(path string, d os.DirEntry, err error) error {
@@ -292,7 +316,7 @@ func GetTaskOutputFiles(workspaceName string, task *types.TaskWithRelated) map[s
 		return nil
 	})
 
-	return filePaths
+	return filePaths, nil
 }
 
 // Redis keys
