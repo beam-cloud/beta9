@@ -33,6 +33,18 @@ const (
 	httpConnectionTimeout          time.Duration = 2 * time.Second
 	checkAddressIsReadyTimeout     time.Duration = 2 * time.Second
 	handleHttpRequestClientTimeout time.Duration = 175 * time.Second
+
+	maxIdleConns          = 100
+	maxIdleConnsPerHost   = 10
+	maxConnsPerHost       = 100
+	idleConnTimeout       = 180 * time.Second
+	responseHeaderTimeout = 30 * time.Second
+	expectContinueTimeout = 1 * time.Second
+	dialTimeout           = 2 * time.Second
+	dialKeepAlive         = 30 * time.Second
+	tsMaxIdleConns        = 1
+	tsMaxIdleConnsPerHost = 1
+	tsMaxConnsPerHost     = 1
 )
 
 type request struct {
@@ -93,7 +105,7 @@ func NewRequestBuffer(
 		containerRepo:           containerRepo,
 		keyEventManager:         keyEventManager,
 		keyEventChan:            make(chan common.KeyEvent),
-		httpClient:              &http.Client{},
+		httpClient:              createHttpClient(),
 		tailscale:               tailscale,
 		tsConfig:                tsConfig,
 		maxTokens:               int(stubConfig.Workers),
@@ -112,7 +124,42 @@ func NewRequestBuffer(
 	go rb.keyEventManager.ListenForPattern(rb.ctx, Keys.endpointRequestHeartbeat(rb.workspace.Name, rb.stubId, "*", "*"), rb.keyEventChan)
 	go rb.handleHeartbeatEvents()
 
+	go rb.cleanupOnContextDone()
+
 	return rb
+}
+
+func createHttpClient() *http.Client {
+	transport := createHttpTransport(maxIdleConns, maxIdleConnsPerHost, maxConnsPerHost, nil)
+	return &http.Client{
+		Transport: transport,
+	}
+}
+
+func createHttpTransport(maxIdleConns, maxIdleConnsPerHost, maxConnsPerHost int, dialContext func(context.Context, string, string) (net.Conn, error)) *http.Transport {
+	transport := &http.Transport{
+		MaxIdleConns:          maxIdleConns,
+		MaxIdleConnsPerHost:   maxIdleConnsPerHost,
+		MaxConnsPerHost:       maxConnsPerHost,
+		IdleConnTimeout:       idleConnTimeout,
+		DisableCompression:    false,
+		ResponseHeaderTimeout: responseHeaderTimeout,
+		ExpectContinueTimeout: expectContinueTimeout,
+		DisableKeepAlives:     false,
+		ForceAttemptHTTP2:     true,
+	}
+
+	// Use custom dial context if provided, otherwise use default
+	if dialContext != nil {
+		transport.DialContext = dialContext
+	} else {
+		transport.DialContext = (&net.Dialer{
+			Timeout:   dialTimeout,
+			KeepAlive: dialKeepAlive,
+		}).DialContext
+	}
+
+	return transport
 }
 
 func (rb *RequestBuffer) handleHeartbeatEvents() {
@@ -357,6 +404,12 @@ func (rb *RequestBuffer) releaseRequestToken(containerId, taskId string) error {
 }
 
 func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*http.Client, error) {
+	if cachedClient, exists := rb.clientCache.Load(address); exists {
+		if client, ok := cachedClient.(*http.Client); ok {
+			return client, nil
+		}
+	}
+
 	// If it isn't an tailnet address, just return the standard http client
 	if !rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName) {
 		return rb.httpClient, nil
@@ -378,8 +431,10 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*
 
 	client := &http.Client{
 		Transport: transport,
+		Timeout:   0,
 	}
 
+	rb.clientCache.Store(address, client)
 	return client, nil
 }
 
@@ -666,4 +721,18 @@ func forwardWSConn(src net.Conn, dst net.Conn) {
 	if err != nil {
 		return
 	}
+}
+
+func (rb *RequestBuffer) cleanupOnContextDone() {
+	<-rb.ctx.Done()
+	rb.cleanup()
+}
+
+func (rb *RequestBuffer) cleanup() {
+	rb.clientCache.Range(func(key, value interface{}) bool {
+		if client, ok := value.(*http.Client); ok && client != nil {
+			client.CloseIdleConnections()
+		}
+		return true
+	})
 }
