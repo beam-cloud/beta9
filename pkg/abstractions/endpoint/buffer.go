@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	readyCheckInterval             time.Duration = 500 * time.Millisecond
+	readyCheckInterval             time.Duration = 1000 * time.Millisecond
 	connectToHostTimeout           time.Duration = 2 * time.Second
 	requestProcessingInterval      time.Duration = time.Millisecond * 100
 	httpConnectionTimeout          time.Duration = 2 * time.Second
@@ -65,6 +65,7 @@ type RequestBuffer struct {
 	isASGI                  bool
 	keyEventManager         *common.KeyEventManager
 	keyEventChan            chan common.KeyEvent
+	healthCheckClientCache  sync.Map
 }
 
 func NewRequestBuffer(
@@ -189,7 +190,7 @@ func (rb *RequestBuffer) processRequests() {
 }
 
 func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
-	httpClient, err := rb.getHttpClient(address, checkAddressIsReadyTimeout)
+	httpClient, err := rb.getHealthCheckClient(address)
 	if err != nil {
 		return false
 	}
@@ -199,17 +200,23 @@ func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("http://%s/health", address), nil)
 	if err != nil {
+		rb.healthCheckClientCache.Delete(address)
 		return false
 	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		rb.healthCheckClientCache.Delete(address)
 		return false
 	}
 	defer resp.Body.Close()
-	defer httpClient.CloseIdleConnections()
 
-	return resp.StatusCode == http.StatusOK
+	if resp.StatusCode != http.StatusOK {
+		rb.healthCheckClientCache.Delete(address)
+		return false
+	}
+
+	return true
 }
 
 func (rb *RequestBuffer) discoverContainers() {
@@ -363,7 +370,6 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*
 	metrics.RecordDialTime(time.Since(start), address)
 
 	// Create a custom transport that uses the established connection
-	// Either using tailscale or not
 	transport := &http.Transport{
 		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
 			return conn, nil
@@ -374,6 +380,41 @@ func (rb *RequestBuffer) getHttpClient(address string, timeout time.Duration) (*
 		Transport: transport,
 	}
 
+	return client, nil
+}
+
+func (rb *RequestBuffer) getHealthCheckClient(address string) (*http.Client, error) {
+	// Check if we have a cached health check client
+	if cachedClient, exists := rb.healthCheckClientCache.Load(address); exists {
+		if client, ok := cachedClient.(*http.Client); ok {
+			return client, nil
+		}
+	}
+
+	// If it isn't an tailnet address, just return the standard http client
+	if !rb.tsConfig.Enabled || !strings.Contains(address, rb.tsConfig.HostName) {
+		return rb.httpClient, nil
+	}
+
+	start := time.Now()
+	conn, err := network.ConnectToHost(rb.ctx, address, checkAddressIsReadyTimeout, rb.tailscale, rb.tsConfig)
+	if err != nil {
+		return nil, err
+	}
+	metrics.RecordDialTime(time.Since(start), address)
+
+	// Create a custom transport that uses the established connection
+	transport := &http.Transport{
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			return conn, nil
+		},
+	}
+
+	client := &http.Client{
+		Transport: transport,
+	}
+
+	rb.healthCheckClientCache.Store(address, client)
 	return client, nil
 }
 
