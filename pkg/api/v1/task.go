@@ -246,7 +246,10 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 
 func (g *TaskGroup) addOutputsToTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
 	task.Outputs = []types.TaskOutput{}
-	outputFiles := output.GetTaskOutputFiles(authInfo.Workspace.Name, task)
+	outputFiles, err := output.GetTaskOutputFiles(ctx, authInfo, authInfo.Workspace.Name, task)
+	if err != nil {
+		return err
+	}
 
 	for outputId, fileName := range outputFiles {
 		url, err := output.SetPublicURL(ctx, g.config, g.backendRepo, g.redisClient, authInfo, task.ExternalId, outputId, fileName, DefaultTaskOutputExpirationS)
