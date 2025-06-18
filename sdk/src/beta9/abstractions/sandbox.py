@@ -1,4 +1,5 @@
 import io
+import shlex
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
@@ -210,10 +211,11 @@ class SandboxProcessManager:
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
     ) -> Union["SandboxProcessResponse", "SandboxProcess"]:
-        process = self._exec("python3", "-c", f"'{code}'", cwd=cwd, env=env)
+        process = self._exec("python3", "-c", shlex.quote(code), cwd=cwd, env=env)
 
         if blocking:
             process.wait()
+
             return SandboxProcessResponse(
                 pid=process.pid,
                 exit_code=process.exit_code,
