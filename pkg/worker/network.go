@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -594,6 +595,13 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	}))
 	if err != nil {
 		return err
+	}
+
+	// Flush ARP cache on the bridge device
+	cmd := exec.Command("ip", "neigh", "flush", "dev", containerBridgeLinkName)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Debug().Err(err).Str("output", string(output)).Msg("failed to flush ARP entries")
 	}
 
 	return nil
