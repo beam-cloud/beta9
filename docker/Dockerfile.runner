@@ -181,7 +181,7 @@ set -eux
 apt-get install -y python3.8 python3.8-dev python3.8-distutils
 
 # Get the latest pip version
-curl -sS https://bootstrap.pypa.io/get-pip.py | python3.8
+curl -sS https://bootstrap.pypa.io/pip/3.8/get-pip.py | python3.8
 python3.8 -m pip install setuptools==70.3.0
 python3.8 -m pip install --upgrade distlib pip
 python3.8 -m pip install -r /workspace/requirements.txt
