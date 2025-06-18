@@ -1,4 +1,5 @@
 import io
+import shlex
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
@@ -210,10 +211,11 @@ class SandboxProcessManager:
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
     ) -> Union["SandboxProcessResponse", "SandboxProcess"]:
-        process = self._exec("python3", "-c", f"'{code}'", cwd=cwd, env=env)
+        process = self._exec("python3", "-c", code, cwd=cwd, env=env)
 
         if blocking:
             process.wait()
+
             return SandboxProcessResponse(
                 pid=process.pid,
                 exit_code=process.exit_code,
@@ -226,15 +228,13 @@ class SandboxProcessManager:
     def exec(
         self, *args, cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None
     ) -> "SandboxProcess":
-        args = list(args)
-        args = ["bash", "-c", "'" + " ".join(args) + "'"]
-        return self._exec(args, cwd=cwd, env=env)
+        return self._exec(*args, cwd=cwd, env=env)
 
     def _exec(
         self, *args, cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None
     ) -> "SandboxProcess":
         command = list(args) if not isinstance(args[0], list) else args[0]
-        shell_command = " ".join(command)
+        shell_command = " ".join(shlex.quote(arg) for arg in command)
 
         response = self.sandbox_instance.stub.sandbox_exec(
             PodSandboxExecRequest(
