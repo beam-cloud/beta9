@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y curl git
 FROM ubuntu:20.04 as dropbear
 RUN apt update && apt install curl bzip2 zlib1g-dev make gcc -y  
 RUN mkdir /dropbear &&  curl https://dropbear.nl/mirror/releases/dropbear-2025.88.tar.bz2 -o /dropbear/dropbear-2025.88.tar.bz2
-RUN cd /dropbear && tar -xvf dropbear-2025.88.tar.bz2 && cd dropbear-2025.88  && ./configure && make PROGRAMS="dropbear" && mv dropbear /usr/local/bin/dropbear
+RUN cd /dropbear && tar -xvf dropbear-2025.88.tar.bz2 && cd dropbear-2025.88  && ./configure && make PROGRAMS="dropbear" && mv dropbear /usr/local/bin/dropbear 
 
 # runc
 # ========================
@@ -112,7 +112,7 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
-RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion 
+RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
 
 RUN apt-get install -y libbtrfs-dev libgpgme11-dev
 RUN mkdir -p /etc/containers/registries.conf.d
