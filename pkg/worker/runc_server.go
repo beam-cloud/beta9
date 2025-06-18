@@ -803,7 +803,7 @@ type StagedFile struct {
 	Content string
 }
 
-func stageFilesForReplacement(basePath string, tmpPath string, stringToReplace string, stringToReplaceWith string) ([]StagedFile, error) {
+func stageFilesForReplacement(basePath string, stringToReplace string, stringToReplaceWith string) ([]StagedFile, error) {
 	stagedFiles := []StagedFile{}
 	regex, err := regexp.Compile(stringToReplace)
 	if err != nil {
@@ -859,7 +859,7 @@ func (s *RunCServer) RunCSandboxReplaceInFiles(ctx context.Context, in *pb.RunCS
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	stagedFiles, err := stageFilesForReplacement(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), in.Pattern, in.NewString)
+	stagedFiles, err := stageFilesForReplacement(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), in.Pattern, in.NewString)
 	if err != nil {
 		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
