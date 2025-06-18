@@ -231,6 +231,30 @@ class PodSandboxExposePortResponse(betterproto.Message):
     error_msg: str = betterproto.string_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class PodSandboxConnectRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxConnectResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    stub_id: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxUpdateTtlRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    ttl: int = betterproto.int32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxUpdateTtlResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
 class PodServiceStub(SyncServiceStub):
     def create_pod(self, create_pod_request: "CreatePodRequest") -> "CreatePodResponse":
         return self._unary_unary(
@@ -364,3 +388,21 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxExposePortRequest,
             PodSandboxExposePortResponse,
         )(pod_sandbox_expose_port_request)
+
+    def sandbox_connect(
+        self, pod_sandbox_connect_request: "PodSandboxConnectRequest"
+    ) -> "PodSandboxConnectResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxConnect",
+            PodSandboxConnectRequest,
+            PodSandboxConnectResponse,
+        )(pod_sandbox_connect_request)
+
+    def sandbox_update_ttl(
+        self, pod_sandbox_update_ttl_request: "PodSandboxUpdateTtlRequest"
+    ) -> "PodSandboxUpdateTtlResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxUpdateTTL",
+            PodSandboxUpdateTtlRequest,
+            PodSandboxUpdateTtlResponse,
+        )(pod_sandbox_update_ttl_request)

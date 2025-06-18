@@ -34,6 +34,8 @@ const (
 	PodService_SandboxCreateDirectory_FullMethodName = "/pod.PodService/SandboxCreateDirectory"
 	PodService_SandboxDeleteDirectory_FullMethodName = "/pod.PodService/SandboxDeleteDirectory"
 	PodService_SandboxExposePort_FullMethodName      = "/pod.PodService/SandboxExposePort"
+	PodService_SandboxConnect_FullMethodName         = "/pod.PodService/SandboxConnect"
+	PodService_SandboxUpdateTTL_FullMethodName       = "/pod.PodService/SandboxUpdateTTL"
 )
 
 // PodServiceClient is the client API for PodService service.
@@ -55,6 +57,8 @@ type PodServiceClient interface {
 	SandboxCreateDirectory(ctx context.Context, in *PodSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxCreateDirectoryResponse, error)
 	SandboxDeleteDirectory(ctx context.Context, in *PodSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxDeleteDirectoryResponse, error)
 	SandboxExposePort(ctx context.Context, in *PodSandboxExposePortRequest, opts ...grpc.CallOption) (*PodSandboxExposePortResponse, error)
+	SandboxConnect(ctx context.Context, in *PodSandboxConnectRequest, opts ...grpc.CallOption) (*PodSandboxConnectResponse, error)
+	SandboxUpdateTTL(ctx context.Context, in *PodSandboxUpdateTTLRequest, opts ...grpc.CallOption) (*PodSandboxUpdateTTLResponse, error)
 }
 
 type podServiceClient struct {
@@ -200,6 +204,24 @@ func (c *podServiceClient) SandboxExposePort(ctx context.Context, in *PodSandbox
 	return out, nil
 }
 
+func (c *podServiceClient) SandboxConnect(ctx context.Context, in *PodSandboxConnectRequest, opts ...grpc.CallOption) (*PodSandboxConnectResponse, error) {
+	out := new(PodSandboxConnectResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxConnect_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *podServiceClient) SandboxUpdateTTL(ctx context.Context, in *PodSandboxUpdateTTLRequest, opts ...grpc.CallOption) (*PodSandboxUpdateTTLResponse, error) {
+	out := new(PodSandboxUpdateTTLResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxUpdateTTL_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PodServiceServer is the server API for PodService service.
 // All implementations must embed UnimplementedPodServiceServer
 // for forward compatibility
@@ -219,6 +241,8 @@ type PodServiceServer interface {
 	SandboxCreateDirectory(context.Context, *PodSandboxCreateDirectoryRequest) (*PodSandboxCreateDirectoryResponse, error)
 	SandboxDeleteDirectory(context.Context, *PodSandboxDeleteDirectoryRequest) (*PodSandboxDeleteDirectoryResponse, error)
 	SandboxExposePort(context.Context, *PodSandboxExposePortRequest) (*PodSandboxExposePortResponse, error)
+	SandboxConnect(context.Context, *PodSandboxConnectRequest) (*PodSandboxConnectResponse, error)
+	SandboxUpdateTTL(context.Context, *PodSandboxUpdateTTLRequest) (*PodSandboxUpdateTTLResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
 
@@ -270,6 +294,12 @@ func (UnimplementedPodServiceServer) SandboxDeleteDirectory(context.Context, *Po
 }
 func (UnimplementedPodServiceServer) SandboxExposePort(context.Context, *PodSandboxExposePortRequest) (*PodSandboxExposePortResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxExposePort not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxConnect(context.Context, *PodSandboxConnectRequest) (*PodSandboxConnectResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxConnect not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxUpdateTTL(context.Context, *PodSandboxUpdateTTLRequest) (*PodSandboxUpdateTTLResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxUpdateTTL not implemented")
 }
 func (UnimplementedPodServiceServer) mustEmbedUnimplementedPodServiceServer() {}
 
@@ -554,6 +584,42 @@ func _PodService_SandboxExposePort_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PodService_SandboxConnect_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxConnectRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxConnect(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxConnect_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxConnect(ctx, req.(*PodSandboxConnectRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _PodService_SandboxUpdateTTL_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxUpdateTTLRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxUpdateTTL(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxUpdateTTL_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxUpdateTTL(ctx, req.(*PodSandboxUpdateTTLRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PodService_ServiceDesc is the grpc.ServiceDesc for PodService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -620,6 +686,14 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SandboxExposePort",
 			Handler:    _PodService_SandboxExposePort_Handler,
+		},
+		{
+			MethodName: "SandboxConnect",
+			Handler:    _PodService_SandboxConnect_Handler,
+		},
+		{
+			MethodName: "SandboxUpdateTTL",
+			Handler:    _PodService_SandboxUpdateTTL_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -1,3 +1,4 @@
+import atexit
 import io
 import shlex
 import time
@@ -16,6 +17,8 @@ from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopCont
 from ..clients.pod import (
     CreatePodRequest,
     CreatePodResponse,
+    PodSandboxConnectRequest,
+    PodSandboxConnectResponse,
     PodSandboxDeleteFileRequest,
     PodSandboxDownloadFileRequest,
     PodSandboxExecRequest,
@@ -27,10 +30,12 @@ from ..clients.pod import (
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
     PodSandboxStdoutRequest,
+    PodSandboxUpdateTtlRequest,
+    PodSandboxUpdateTtlResponse,
     PodSandboxUploadFileRequest,
     PodServiceStub,
 )
-from ..exceptions import SandboxFileSystemError, SandboxProcessError
+from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias
 
 
@@ -50,7 +55,7 @@ class Sandbox(Pod):
             The container image used for the task execution. Whatever you pass here will have an additional `add_python_packages` call
             with `["fastapi", "vllm", "huggingface_hub"]` added to it to ensure that we can run vLLM in the container.
         keep_warm_seconds (int):
-            The number of seconds to keep the sandbox around. Default is -1 (requires manual termination).
+            The number of seconds to keep the sandbox around. Default is 10 minutes (600s). Use -1 for sandboxes that never timeout.
         name (str):
             The name of the Sandbox app. Default is none, which means you must provide it during deployment.
         volumes (List[Union[Volume, CloudBucket]]):
@@ -66,7 +71,7 @@ class Sandbox(Pod):
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,
         image: Image = Image(python_version="python3.11"),
-        keep_warm_seconds: int = -1,
+        keep_warm_seconds: int = 600,
         authorized: bool = False,
         name: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
@@ -90,6 +95,23 @@ class Sandbox(Pod):
     def debug(self):
         print(self.debug_buffer.getvalue())
 
+    def connect(self, id: str) -> "SandboxInstance":
+        response: "PodSandboxConnectResponse" = self.stub.sandbox_connect(
+            PodSandboxConnectRequest(
+                container_id=id,
+            )
+        )
+
+        if not response.ok:
+            raise SandboxConnectionError(response.error_msg)
+
+        return SandboxInstance(
+            container_id=id,
+            ok=True,
+            error_msg="",
+            stub_id=response.stub_id,
+        )
+
     def create(self) -> "SandboxInstance":
         """
         Create a new sandbox instance.
@@ -104,7 +126,6 @@ class Sandbox(Pod):
         ):
             return SandboxInstance(
                 container_id="",
-                url="",
                 ok=False,
                 error_msg="Failed to prepare runtime",
             )
@@ -160,6 +181,17 @@ class SandboxInstance(BaseAbstraction):
         self.stub = PodServiceStub(self.channel)
         self.fs = SandboxFileSystem(self)
         self.process = SandboxProcessManager(self)
+        self.terminated = False
+        atexit.register(self._cleanup)
+
+    def _cleanup(self):
+        try:
+            if hasattr(self, "container_id") and self.container_id and not self.terminated:
+                terminal.warn(
+                    f'WARNING: {self.container_id} is still running, to terminate use Sandbox().connect("{self.container_id}").terminate()'
+                )
+        except BaseException as e:
+            terminal.warn(f"Error during sandbox cleanup: {e}")
 
     def terminate(self) -> bool:
         """
@@ -168,7 +200,25 @@ class SandboxInstance(BaseAbstraction):
         res: "StopContainerResponse" = self.gateway_stub.stop_container(
             StopContainerRequest(container_id=self.container_id)
         )
+
+        if res.ok:
+            self.terminated = True
+
         return res.ok
+
+    def sandbox_id(self) -> str:
+        return self.container_id
+
+    def update_ttl(self, ttl: int):
+        """
+        Update the keep warm setting of the sandbox. TTL is the number of seconds to keep the sandbox alive - if you pass -1, the sandbox will never shut down (unless you manually terminate it).
+        """
+        res: "PodSandboxUpdateTtlResponse" = self.stub.sandbox_update_ttl(
+            PodSandboxUpdateTtlRequest(container_id=self.container_id, ttl=ttl)
+        )
+
+        if not res.ok:
+            raise SandboxProcessError(res.error_msg)
 
     def expose_port(self, port: int) -> str:
         """
