@@ -38,6 +38,10 @@ service PodService {
       returns (PodSandboxReplaceInFilesResponse) {}
   rpc SandboxFindFiles(PodSandboxFindFilesRequest)
       returns (PodSandboxFindFilesResponse) {}
+  rpc SandboxConnect(PodSandboxConnectRequest)
+      returns (PodSandboxConnectResponse) {}
+  rpc SandboxUpdateTTL(PodSandboxUpdateTTLRequest)
+      returns (PodSandboxUpdateTTLResponse) {}
 }
 
 message CreatePodRequest { string stub_id = 1; }
@@ -233,4 +237,22 @@ message PodSandboxFindFilesResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated types.FileSearchResult results = 3;
+}
+
+message PodSandboxConnectRequest { string container_id = 1; }
+
+message PodSandboxConnectResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string stub_id = 3;
+}
+
+message PodSandboxUpdateTTLRequest {
+  string container_id = 1;
+  int32 ttl = 2;
+}
+
+message PodSandboxUpdateTTLResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }
