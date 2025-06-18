@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -594,6 +595,32 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	}))
 	if err != nil {
 		return err
+	}
+
+	// Remove ARP cache entries
+	if err := m.removeARPEntries(containerIp, ipv6Address); err != nil {
+		log.Warn().Err(err).Str("container_id", containerId).Msg("failed to remove ARP entries")
+	}
+
+	return nil
+}
+
+// removeARPEntries removes ARP cache entries from the bridge device
+func (m *ContainerNetworkManager) removeARPEntries(ipv4Addr, ipv6Addr string) error {
+	// Remove IPv4 ARP entry
+	if ipv4Addr != "" {
+		cmd := exec.Command("ip", "neigh", "del", ipv4Addr, "dev", containerBridgeLinkName)
+		if err := cmd.Run(); err != nil {
+			log.Debug().Err(err).Str("ip", ipv4Addr).Msg("failed to remove IPv4 ARP entry")
+		}
+	}
+
+	// Remove IPv6 entry
+	if ipv6Addr != "" && m.ipt6 != nil {
+		cmd := exec.Command("ip", "neigh", "del", ipv6Addr, "dev", containerBridgeLinkName)
+		if err := cmd.Run(); err != nil {
+			log.Debug().Err(err).Str("ip", ipv6Addr).Msg("failed to remove IPv6 neighbor entry")
+		}
 	}
 
 	return nil
