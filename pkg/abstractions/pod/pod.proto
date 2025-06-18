@@ -34,6 +34,7 @@ service PodService {
       returns (PodSandboxExposePortResponse) {}
   rpc SandboxReplaceInFiles(PodSandboxReplaceInFilesRequest)
       returns (PodSandboxReplaceInFilesResponse) {}
+  rpc SandboxFindFiles
 }
 
 message CreatePodRequest { string stub_id = 1; }

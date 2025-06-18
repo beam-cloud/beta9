@@ -22,6 +22,7 @@ from ..clients.pod import (
     PodSandboxExposePortResponse,
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
+    PodSandboxReplaceInFilesRequest,
     PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
