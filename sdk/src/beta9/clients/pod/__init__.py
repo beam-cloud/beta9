@@ -16,6 +16,8 @@ import grpc
 from betterproto.grpcstub.grpcio_client import SyncServiceStub
 from betterproto.grpcstub.grpclib_server import ServiceBase
 
+from .. import types as _types__
+
 
 if TYPE_CHECKING:
     import grpclib.server
@@ -221,7 +223,7 @@ class PodSandboxFileInfo(betterproto.Message):
 class PodSandboxReplaceInFilesRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     container_path: str = betterproto.string_field(2)
-    old_string: str = betterproto.string_field(3)
+    pattern: str = betterproto.string_field(3)
     new_string: str = betterproto.string_field(4)
 
 
@@ -243,6 +245,20 @@ class PodSandboxExposePortResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     url: str = betterproto.string_field(2)
     error_msg: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxFindFilesRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    container_path: str = betterproto.string_field(2)
+    pattern: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxFindFilesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    results: List["_types__.FileSearchResult"] = betterproto.message_field(3)
 
 
 class PodServiceStub(SyncServiceStub):
@@ -387,3 +403,12 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxReplaceInFilesRequest,
             PodSandboxReplaceInFilesResponse,
         )(pod_sandbox_replace_in_files_request)
+
+    def sandbox_find_files(
+        self, pod_sandbox_find_files_request: "PodSandboxFindFilesRequest"
+    ) -> "PodSandboxFindFilesResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxFindFiles",
+            PodSandboxFindFilesRequest,
+            PodSandboxFindFilesResponse,
+        )(pod_sandbox_find_files_request)

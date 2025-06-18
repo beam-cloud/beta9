@@ -37,3 +37,27 @@ type FileInfo struct {
 	Path        string
 	Permissions uint32
 }
+
+// @go2proto
+type FileSearchPosition struct {
+	Line   int32
+	Column int32
+}
+
+// @go2proto
+type FileSearchRange struct {
+	Start FileSearchPosition
+	End   FileSearchPosition
+}
+
+// @go2proto
+type FileSearchMatch struct {
+	Range   FileSearchRange
+	Content string
+}
+
+// @go2proto
+type FileSearchResult struct {
+	Path    string
+	Matches []FileSearchMatch
+}

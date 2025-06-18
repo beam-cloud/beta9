@@ -1,8 +1,10 @@
 syntax = "proto3";
 
-option go_package = "github.com/beam-cloud/beam/proto";
+option go_package = "github.com/beam-cloud/beta9/proto";
 
 package pod;
+
+import "types.proto";
 
 service PodService {
   rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {}
@@ -34,7 +36,8 @@ service PodService {
       returns (PodSandboxExposePortResponse) {}
   rpc SandboxReplaceInFiles(PodSandboxReplaceInFilesRequest)
       returns (PodSandboxReplaceInFilesResponse) {}
-  rpc SandboxFindFiles
+  rpc SandboxFindFiles(PodSandboxFindFilesRequest)
+      returns (PodSandboxFindFilesResponse) {}
 }
 
 message CreatePodRequest { string stub_id = 1; }
@@ -199,7 +202,7 @@ message PodSandboxFileInfo {
 message PodSandboxReplaceInFilesRequest {
   string container_id = 1;
   string container_path = 2;
-  string old_string = 3;
+  string pattern = 3;
   string new_string = 4;
 }
 
@@ -220,3 +223,14 @@ message PodSandboxExposePortResponse {
   string error_msg = 3;
 }
 
+message PodSandboxFindFilesRequest {
+  string container_id = 1;
+  string container_path = 2;
+  string pattern = 3;
+}
+
+message PodSandboxFindFilesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated types.FileSearchResult results = 3;
+}

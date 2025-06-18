@@ -927,6 +927,226 @@ func (x *FileInfo) GetPermissions() uint32 {
 	return 0
 }
 
+type FileSearchMatch struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Range   *FileSearchRange `protobuf:"bytes,1,opt,name=range,proto3" json:"range,omitempty"`
+	Content string           `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+}
+
+func (x *FileSearchMatch) Reset() {
+	*x = FileSearchMatch{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_types_proto_msgTypes[8]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *FileSearchMatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileSearchMatch) ProtoMessage() {}
+
+func (x *FileSearchMatch) ProtoReflect() protoreflect.Message {
+	mi := &file_types_proto_msgTypes[8]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileSearchMatch.ProtoReflect.Descriptor instead.
+func (*FileSearchMatch) Descriptor() ([]byte, []int) {
+	return file_types_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *FileSearchMatch) GetRange() *FileSearchRange {
+	if x != nil {
+		return x.Range
+	}
+	return nil
+}
+
+func (x *FileSearchMatch) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+type FileSearchPosition struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Line   int32 `protobuf:"varint,1,opt,name=line,proto3" json:"line,omitempty"`
+	Column int32 `protobuf:"varint,2,opt,name=column,proto3" json:"column,omitempty"`
+}
+
+func (x *FileSearchPosition) Reset() {
+	*x = FileSearchPosition{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_types_proto_msgTypes[9]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *FileSearchPosition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileSearchPosition) ProtoMessage() {}
+
+func (x *FileSearchPosition) ProtoReflect() protoreflect.Message {
+	mi := &file_types_proto_msgTypes[9]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileSearchPosition.ProtoReflect.Descriptor instead.
+func (*FileSearchPosition) Descriptor() ([]byte, []int) {
+	return file_types_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *FileSearchPosition) GetLine() int32 {
+	if x != nil {
+		return x.Line
+	}
+	return 0
+}
+
+func (x *FileSearchPosition) GetColumn() int32 {
+	if x != nil {
+		return x.Column
+	}
+	return 0
+}
+
+type FileSearchRange struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Start *FileSearchPosition `protobuf:"bytes,1,opt,name=start,proto3" json:"start,omitempty"`
+	End   *FileSearchPosition `protobuf:"bytes,2,opt,name=end,proto3" json:"end,omitempty"`
+}
+
+func (x *FileSearchRange) Reset() {
+	*x = FileSearchRange{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_types_proto_msgTypes[10]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *FileSearchRange) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileSearchRange) ProtoMessage() {}
+
+func (x *FileSearchRange) ProtoReflect() protoreflect.Message {
+	mi := &file_types_proto_msgTypes[10]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileSearchRange.ProtoReflect.Descriptor instead.
+func (*FileSearchRange) Descriptor() ([]byte, []int) {
+	return file_types_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *FileSearchRange) GetStart() *FileSearchPosition {
+	if x != nil {
+		return x.Start
+	}
+	return nil
+}
+
+func (x *FileSearchRange) GetEnd() *FileSearchPosition {
+	if x != nil {
+		return x.End
+	}
+	return nil
+}
+
+type FileSearchResult struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Path    string             `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Matches []*FileSearchMatch `protobuf:"bytes,2,rep,name=matches,proto3" json:"matches,omitempty"`
+}
+
+func (x *FileSearchResult) Reset() {
+	*x = FileSearchResult{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_types_proto_msgTypes[11]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *FileSearchResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileSearchResult) ProtoMessage() {}
+
+func (x *FileSearchResult) ProtoReflect() protoreflect.Message {
+	mi := &file_types_proto_msgTypes[11]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileSearchResult.ProtoReflect.Descriptor instead.
+func (*FileSearchResult) Descriptor() ([]byte, []int) {
+	return file_types_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *FileSearchResult) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *FileSearchResult) GetMatches() []*FileSearchMatch {
+	if x != nil {
+		return x.Matches
+	}
+	return nil
+}
+
 type Mount struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -943,7 +1163,7 @@ type Mount struct {
 func (x *Mount) Reset() {
 	*x = Mount{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[8]
+		mi := &file_types_proto_msgTypes[12]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -956,7 +1176,7 @@ func (x *Mount) String() string {
 func (*Mount) ProtoMessage() {}
 
 func (x *Mount) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[8]
+	mi := &file_types_proto_msgTypes[12]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -969,7 +1189,7 @@ func (x *Mount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Mount.ProtoReflect.Descriptor instead.
 func (*Mount) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{8}
+	return file_types_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Mount) GetLocalPath() string {
@@ -1031,7 +1251,7 @@ type MountPointConfig struct {
 func (x *MountPointConfig) Reset() {
 	*x = MountPointConfig{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[9]
+		mi := &file_types_proto_msgTypes[13]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1044,7 +1264,7 @@ func (x *MountPointConfig) String() string {
 func (*MountPointConfig) ProtoMessage() {}
 
 func (x *MountPointConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[9]
+	mi := &file_types_proto_msgTypes[13]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1057,7 +1277,7 @@ func (x *MountPointConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MountPointConfig.ProtoReflect.Descriptor instead.
 func (*MountPointConfig) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{9}
+	return file_types_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *MountPointConfig) GetBucketName() string {
@@ -1114,14 +1334,13 @@ type NullTime struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Time  *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=time,proto3" json:"time,omitempty"`
-	Valid bool                   `protobuf:"varint,2,opt,name=valid,proto3" json:"valid,omitempty"`
+	NullTime *NullTime `protobuf:"bytes,1,opt,name=null_time,json=nullTime,proto3" json:"null_time,omitempty"`
 }
 
 func (x *NullTime) Reset() {
 	*x = NullTime{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[10]
+		mi := &file_types_proto_msgTypes[14]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1134,7 +1353,7 @@ func (x *NullTime) String() string {
 func (*NullTime) ProtoMessage() {}
 
 func (x *NullTime) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[10]
+	mi := &file_types_proto_msgTypes[14]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1147,21 +1366,14 @@ func (x *NullTime) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NullTime.ProtoReflect.Descriptor instead.
 func (*NullTime) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{10}
+	return file_types_proto_rawDescGZIP(), []int{14}
 }
 
-func (x *NullTime) GetTime() *timestamppb.Timestamp {
+func (x *NullTime) GetNullTime() *NullTime {
 	if x != nil {
-		return x.Time
+		return x.NullTime
 	}
 	return nil
-}
-
-func (x *NullTime) GetValid() bool {
-	if x != nil {
-		return x.Valid
-	}
-	return false
 }
 
 type Object struct {
@@ -1180,7 +1392,7 @@ type Object struct {
 func (x *Object) Reset() {
 	*x = Object{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[11]
+		mi := &file_types_proto_msgTypes[15]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1193,7 +1405,7 @@ func (x *Object) String() string {
 func (*Object) ProtoMessage() {}
 
 func (x *Object) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[11]
+	mi := &file_types_proto_msgTypes[15]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1206,7 +1418,7 @@ func (x *Object) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Object.ProtoReflect.Descriptor instead.
 func (*Object) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{11}
+	return file_types_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Object) GetId() uint32 {
@@ -1265,7 +1477,7 @@ type PricingPolicy struct {
 func (x *PricingPolicy) Reset() {
 	*x = PricingPolicy{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[12]
+		mi := &file_types_proto_msgTypes[16]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1278,7 +1490,7 @@ func (x *PricingPolicy) String() string {
 func (*PricingPolicy) ProtoMessage() {}
 
 func (x *PricingPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[12]
+	mi := &file_types_proto_msgTypes[16]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1291,7 +1503,7 @@ func (x *PricingPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PricingPolicy.ProtoReflect.Descriptor instead.
 func (*PricingPolicy) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{12}
+	return file_types_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *PricingPolicy) GetMaxInFlight() int64 {
@@ -1344,7 +1556,7 @@ type Stub struct {
 func (x *Stub) Reset() {
 	*x = Stub{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[13]
+		mi := &file_types_proto_msgTypes[17]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1357,7 +1569,7 @@ func (x *Stub) String() string {
 func (*Stub) ProtoMessage() {}
 
 func (x *Stub) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[13]
+	mi := &file_types_proto_msgTypes[17]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1370,7 +1582,7 @@ func (x *Stub) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Stub.ProtoReflect.Descriptor instead.
 func (*Stub) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{13}
+	return file_types_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Stub) GetId() uint32 {
@@ -1471,7 +1683,7 @@ type StubWithRelated struct {
 func (x *StubWithRelated) Reset() {
 	*x = StubWithRelated{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[14]
+		mi := &file_types_proto_msgTypes[18]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1484,7 +1696,7 @@ func (x *StubWithRelated) String() string {
 func (*StubWithRelated) ProtoMessage() {}
 
 func (x *StubWithRelated) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[14]
+	mi := &file_types_proto_msgTypes[18]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1497,7 +1709,7 @@ func (x *StubWithRelated) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StubWithRelated.ProtoReflect.Descriptor instead.
 func (*StubWithRelated) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{14}
+	return file_types_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *StubWithRelated) GetStub() *Stub {
@@ -1555,7 +1767,7 @@ type Worker struct {
 func (x *Worker) Reset() {
 	*x = Worker{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[15]
+		mi := &file_types_proto_msgTypes[19]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1568,7 +1780,7 @@ func (x *Worker) String() string {
 func (*Worker) ProtoMessage() {}
 
 func (x *Worker) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[15]
+	mi := &file_types_proto_msgTypes[19]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1581,7 +1793,7 @@ func (x *Worker) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Worker.ProtoReflect.Descriptor instead.
 func (*Worker) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{15}
+	return file_types_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *Worker) GetId() string {
@@ -1725,7 +1937,7 @@ type WorkerPoolState struct {
 func (x *WorkerPoolState) Reset() {
 	*x = WorkerPoolState{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[16]
+		mi := &file_types_proto_msgTypes[20]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1738,7 +1950,7 @@ func (x *WorkerPoolState) String() string {
 func (*WorkerPoolState) ProtoMessage() {}
 
 func (x *WorkerPoolState) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[16]
+	mi := &file_types_proto_msgTypes[20]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1751,7 +1963,7 @@ func (x *WorkerPoolState) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkerPoolState.ProtoReflect.Descriptor instead.
 func (*WorkerPoolState) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{16}
+	return file_types_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *WorkerPoolState) GetStatus() string {
@@ -1860,7 +2072,7 @@ type Workspace struct {
 func (x *Workspace) Reset() {
 	*x = Workspace{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[17]
+		mi := &file_types_proto_msgTypes[21]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1873,7 +2085,7 @@ func (x *Workspace) String() string {
 func (*Workspace) ProtoMessage() {}
 
 func (x *Workspace) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[17]
+	mi := &file_types_proto_msgTypes[21]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1886,7 +2098,7 @@ func (x *Workspace) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Workspace.ProtoReflect.Descriptor instead.
 func (*Workspace) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{17}
+	return file_types_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Workspace) GetId() uint32 {
@@ -1992,7 +2204,7 @@ type WorkspaceStorage struct {
 func (x *WorkspaceStorage) Reset() {
 	*x = WorkspaceStorage{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_types_proto_msgTypes[18]
+		mi := &file_types_proto_msgTypes[22]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2005,7 +2217,7 @@ func (x *WorkspaceStorage) String() string {
 func (*WorkspaceStorage) ProtoMessage() {}
 
 func (x *WorkspaceStorage) ProtoReflect() protoreflect.Message {
-	mi := &file_types_proto_msgTypes[18]
+	mi := &file_types_proto_msgTypes[22]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2018,7 +2230,7 @@ func (x *WorkspaceStorage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceStorage.ProtoReflect.Descriptor instead.
 func (*WorkspaceStorage) Descriptor() ([]byte, []int) {
-	return file_types_proto_rawDescGZIP(), []int{18}
+	return file_types_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *WorkspaceStorage) GetId() uint32 {
@@ -2251,42 +2463,63 @@ var file_types_proto_rawDesc = []byte{
 	0x12, 0x12, 0x0a, 0x04, 0x70, 0x61, 0x74, 0x68, 0x18, 0x08, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04,
 	0x70, 0x61, 0x74, 0x68, 0x12, 0x20, 0x0a, 0x0b, 0x70, 0x65, 0x72, 0x6d, 0x69, 0x73, 0x73, 0x69,
 	0x6f, 0x6e, 0x73, 0x18, 0x09, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x0b, 0x70, 0x65, 0x72, 0x6d, 0x69,
-	0x73, 0x73, 0x69, 0x6f, 0x6e, 0x73, 0x22, 0xe5, 0x01, 0x0a, 0x05, 0x4d, 0x6f, 0x75, 0x6e, 0x74,
-	0x12, 0x1d, 0x0a, 0x0a, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x5f, 0x70, 0x61, 0x74, 0x68, 0x18, 0x01,
-	0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6c, 0x6f, 0x63, 0x61, 0x6c, 0x50, 0x61, 0x74, 0x68, 0x12,
-	0x1d, 0x0a, 0x0a, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x5f, 0x70, 0x61, 0x74, 0x68, 0x18, 0x02, 0x20,
-	0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x50, 0x61, 0x74, 0x68, 0x12, 0x1b,
-	0x0a, 0x09, 0x6c, 0x69, 0x6e, 0x6b, 0x5f, 0x70, 0x61, 0x74, 0x68, 0x18, 0x03, 0x20, 0x01, 0x28,
-	0x09, 0x52, 0x08, 0x6c, 0x69, 0x6e, 0x6b, 0x50, 0x61, 0x74, 0x68, 0x12, 0x1b, 0x0a, 0x09, 0x72,
-	0x65, 0x61, 0x64, 0x5f, 0x6f, 0x6e, 0x6c, 0x79, 0x18, 0x04, 0x20, 0x01, 0x28, 0x08, 0x52, 0x08,
-	0x72, 0x65, 0x61, 0x64, 0x4f, 0x6e, 0x6c, 0x79, 0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x6f, 0x75, 0x6e,
-	0x74, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x6f,
-	0x75, 0x6e, 0x74, 0x54, 0x79, 0x70, 0x65, 0x12, 0x45, 0x0a, 0x12, 0x6d, 0x6f, 0x75, 0x6e, 0x74,
-	0x5f, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x5f, 0x63, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x18, 0x06, 0x20,
-	0x01, 0x28, 0x0b, 0x32, 0x17, 0x2e, 0x74, 0x79, 0x70, 0x65, 0x73, 0x2e, 0x4d, 0x6f, 0x75, 0x6e,
-	0x74, 0x50, 0x6f, 0x69, 0x6e, 0x74, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x52, 0x10, 0x6d, 0x6f,
-	0x75, 0x6e, 0x74, 0x50, 0x6f, 0x69, 0x6e, 0x74, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x22, 0xf3,
-	0x01, 0x0a, 0x10, 0x4d, 0x6f, 0x75, 0x6e, 0x74, 0x50, 0x6f, 0x69, 0x6e, 0x74, 0x43, 0x6f, 0x6e,
-	0x66, 0x69, 0x67, 0x12, 0x1f, 0x0a, 0x0b, 0x62, 0x75, 0x63, 0x6b, 0x65, 0x74, 0x5f, 0x6e, 0x61,
-	0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x62, 0x75, 0x63, 0x6b, 0x65, 0x74,
-	0x4e, 0x61, 0x6d, 0x65, 0x12, 0x1d, 0x0a, 0x0a, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x5f, 0x6b,
-	0x65, 0x79, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73,
-	0x4b, 0x65, 0x79, 0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x5f, 0x6b, 0x65,
-	0x79, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x4b,
-	0x65, 0x79, 0x12, 0x21, 0x0a, 0x0c, 0x65, 0x6e, 0x64, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x5f, 0x75,
-	0x72, 0x6c, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x65, 0x6e, 0x64, 0x70, 0x6f, 0x69,
-	0x6e, 0x74, 0x55, 0x72, 0x6c, 0x12, 0x16, 0x0a, 0x06, 0x72, 0x65, 0x67, 0x69, 0x6f, 0x6e, 0x18,
-	0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x72, 0x65, 0x67, 0x69, 0x6f, 0x6e, 0x12, 0x1b, 0x0a,
-	0x09, 0x72, 0x65, 0x61, 0x64, 0x5f, 0x6f, 0x6e, 0x6c, 0x79, 0x18, 0x06, 0x20, 0x01, 0x28, 0x08,
-	0x52, 0x08, 0x72, 0x65, 0x61, 0x64, 0x4f, 0x6e, 0x6c, 0x79, 0x12, 0x28, 0x0a, 0x10, 0x66, 0x6f,
-	0x72, 0x63, 0x65, 0x5f, 0x70, 0x61, 0x74, 0x68, 0x5f, 0x73, 0x74, 0x79, 0x6c, 0x65, 0x18, 0x07,
-	0x20, 0x01, 0x28, 0x08, 0x52, 0x0e, 0x66, 0x6f, 0x72, 0x63, 0x65, 0x50, 0x61, 0x74, 0x68, 0x53,
-	0x74, 0x79, 0x6c, 0x65, 0x22, 0x50, 0x0a, 0x08, 0x4e, 0x75, 0x6c, 0x6c, 0x54, 0x69, 0x6d, 0x65,
-	0x12, 0x2e, 0x0a, 0x04, 0x74, 0x69, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a,
-	0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66,
-	0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x52, 0x04, 0x74, 0x69, 0x6d, 0x65,
-	0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x08, 0x52,
-	0x05, 0x76, 0x61, 0x6c, 0x69, 0x64, 0x22, 0xbf, 0x01, 0x0a, 0x06, 0x4f, 0x62, 0x6a, 0x65, 0x63,
+	0x73, 0x73, 0x69, 0x6f, 0x6e, 0x73, 0x22, 0x59, 0x0a, 0x0f, 0x46, 0x69, 0x6c, 0x65, 0x53, 0x65,
+	0x61, 0x72, 0x63, 0x68, 0x4d, 0x61, 0x74, 0x63, 0x68, 0x12, 0x2c, 0x0a, 0x05, 0x72, 0x61, 0x6e,
+	0x67, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x16, 0x2e, 0x74, 0x79, 0x70, 0x65, 0x73,
+	0x2e, 0x46, 0x69, 0x6c, 0x65, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68, 0x52, 0x61, 0x6e, 0x67, 0x65,
+	0x52, 0x05, 0x72, 0x61, 0x6e, 0x67, 0x65, 0x12, 0x18, 0x0a, 0x07, 0x63, 0x6f, 0x6e, 0x74, 0x65,
+	0x6e, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x63, 0x6f, 0x6e, 0x74, 0x65, 0x6e,
+	0x74, 0x22, 0x40, 0x0a, 0x12, 0x46, 0x69, 0x6c, 0x65, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68, 0x50,
+	0x6f, 0x73, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x12, 0x0a, 0x04, 0x6c, 0x69, 0x6e, 0x65, 0x18,
+	0x01, 0x20, 0x01, 0x28, 0x05, 0x52, 0x04, 0x6c, 0x69, 0x6e, 0x65, 0x12, 0x16, 0x0a, 0x06, 0x63,
+	0x6f, 0x6c, 0x75, 0x6d, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x05, 0x52, 0x06, 0x63, 0x6f, 0x6c,
+	0x75, 0x6d, 0x6e, 0x22, 0x6f, 0x0a, 0x0f, 0x46, 0x69, 0x6c, 0x65, 0x53, 0x65, 0x61, 0x72, 0x63,
+	0x68, 0x52, 0x61, 0x6e, 0x67, 0x65, 0x12, 0x2f, 0x0a, 0x05, 0x73, 0x74, 0x61, 0x72, 0x74, 0x18,
+	0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x79, 0x70, 0x65, 0x73, 0x2e, 0x46, 0x69,
+	0x6c, 0x65, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68, 0x50, 0x6f, 0x73, 0x69, 0x74, 0x69, 0x6f, 0x6e,
+	0x52, 0x05, 0x73, 0x74, 0x61, 0x72, 0x74, 0x12, 0x2b, 0x0a, 0x03, 0x65, 0x6e, 0x64, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x0b, 0x32, 0x19, 0x2e, 0x74, 0x79, 0x70, 0x65, 0x73, 0x2e, 0x46, 0x69, 0x6c,
+	0x65, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68, 0x50, 0x6f, 0x73, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x52,
+	0x03, 0x65, 0x6e, 0x64, 0x22, 0x58, 0x0a, 0x10, 0x46, 0x69, 0x6c, 0x65, 0x53, 0x65, 0x61, 0x72,
+	0x63, 0x68, 0x52, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x12, 0x12, 0x0a, 0x04, 0x70, 0x61, 0x74, 0x68,
+	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x70, 0x61, 0x74, 0x68, 0x12, 0x30, 0x0a, 0x07,
+	0x6d, 0x61, 0x74, 0x63, 0x68, 0x65, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x16, 0x2e,
+	0x74, 0x79, 0x70, 0x65, 0x73, 0x2e, 0x46, 0x69, 0x6c, 0x65, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68,
+	0x4d, 0x61, 0x74, 0x63, 0x68, 0x52, 0x07, 0x6d, 0x61, 0x74, 0x63, 0x68, 0x65, 0x73, 0x22, 0xe5,
+	0x01, 0x0a, 0x05, 0x4d, 0x6f, 0x75, 0x6e, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x6c, 0x6f, 0x63, 0x61,
+	0x6c, 0x5f, 0x70, 0x61, 0x74, 0x68, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6c, 0x6f,
+	0x63, 0x61, 0x6c, 0x50, 0x61, 0x74, 0x68, 0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x6f, 0x75, 0x6e, 0x74,
+	0x5f, 0x70, 0x61, 0x74, 0x68, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x6f, 0x75,
+	0x6e, 0x74, 0x50, 0x61, 0x74, 0x68, 0x12, 0x1b, 0x0a, 0x09, 0x6c, 0x69, 0x6e, 0x6b, 0x5f, 0x70,
+	0x61, 0x74, 0x68, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x6c, 0x69, 0x6e, 0x6b, 0x50,
+	0x61, 0x74, 0x68, 0x12, 0x1b, 0x0a, 0x09, 0x72, 0x65, 0x61, 0x64, 0x5f, 0x6f, 0x6e, 0x6c, 0x79,
+	0x18, 0x04, 0x20, 0x01, 0x28, 0x08, 0x52, 0x08, 0x72, 0x65, 0x61, 0x64, 0x4f, 0x6e, 0x6c, 0x79,
+	0x12, 0x1d, 0x0a, 0x0a, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x5f, 0x74, 0x79, 0x70, 0x65, 0x18, 0x05,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x54, 0x79, 0x70, 0x65, 0x12,
+	0x45, 0x0a, 0x12, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x5f, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x5f, 0x63,
+	0x6f, 0x6e, 0x66, 0x69, 0x67, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x17, 0x2e, 0x74, 0x79,
+	0x70, 0x65, 0x73, 0x2e, 0x4d, 0x6f, 0x75, 0x6e, 0x74, 0x50, 0x6f, 0x69, 0x6e, 0x74, 0x43, 0x6f,
+	0x6e, 0x66, 0x69, 0x67, 0x52, 0x10, 0x6d, 0x6f, 0x75, 0x6e, 0x74, 0x50, 0x6f, 0x69, 0x6e, 0x74,
+	0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x22, 0xf3, 0x01, 0x0a, 0x10, 0x4d, 0x6f, 0x75, 0x6e, 0x74,
+	0x50, 0x6f, 0x69, 0x6e, 0x74, 0x43, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x12, 0x1f, 0x0a, 0x0b, 0x62,
+	0x75, 0x63, 0x6b, 0x65, 0x74, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x0a, 0x62, 0x75, 0x63, 0x6b, 0x65, 0x74, 0x4e, 0x61, 0x6d, 0x65, 0x12, 0x1d, 0x0a, 0x0a,
+	0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x5f, 0x6b, 0x65, 0x79, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x09, 0x61, 0x63, 0x63, 0x65, 0x73, 0x73, 0x4b, 0x65, 0x79, 0x12, 0x1d, 0x0a, 0x0a, 0x73,
+	0x65, 0x63, 0x72, 0x65, 0x74, 0x5f, 0x6b, 0x65, 0x79, 0x18, 0x03, 0x20, 0x01, 0x28, 0x09, 0x52,
+	0x09, 0x73, 0x65, 0x63, 0x72, 0x65, 0x74, 0x4b, 0x65, 0x79, 0x12, 0x21, 0x0a, 0x0c, 0x65, 0x6e,
+	0x64, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x5f, 0x75, 0x72, 0x6c, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09,
+	0x52, 0x0b, 0x65, 0x6e, 0x64, 0x70, 0x6f, 0x69, 0x6e, 0x74, 0x55, 0x72, 0x6c, 0x12, 0x16, 0x0a,
+	0x06, 0x72, 0x65, 0x67, 0x69, 0x6f, 0x6e, 0x18, 0x05, 0x20, 0x01, 0x28, 0x09, 0x52, 0x06, 0x72,
+	0x65, 0x67, 0x69, 0x6f, 0x6e, 0x12, 0x1b, 0x0a, 0x09, 0x72, 0x65, 0x61, 0x64, 0x5f, 0x6f, 0x6e,
+	0x6c, 0x79, 0x18, 0x06, 0x20, 0x01, 0x28, 0x08, 0x52, 0x08, 0x72, 0x65, 0x61, 0x64, 0x4f, 0x6e,
+	0x6c, 0x79, 0x12, 0x28, 0x0a, 0x10, 0x66, 0x6f, 0x72, 0x63, 0x65, 0x5f, 0x70, 0x61, 0x74, 0x68,
+	0x5f, 0x73, 0x74, 0x79, 0x6c, 0x65, 0x18, 0x07, 0x20, 0x01, 0x28, 0x08, 0x52, 0x0e, 0x66, 0x6f,
+	0x72, 0x63, 0x65, 0x50, 0x61, 0x74, 0x68, 0x53, 0x74, 0x79, 0x6c, 0x65, 0x22, 0x38, 0x0a, 0x08,
+	0x4e, 0x75, 0x6c, 0x6c, 0x54, 0x69, 0x6d, 0x65, 0x12, 0x2c, 0x0a, 0x09, 0x6e, 0x75, 0x6c, 0x6c,
+	0x5f, 0x74, 0x69, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x0f, 0x2e, 0x74, 0x79,
+	0x70, 0x65, 0x73, 0x2e, 0x4e, 0x75, 0x6c, 0x6c, 0x54, 0x69, 0x6d, 0x65, 0x52, 0x08, 0x6e, 0x75,
+	0x6c, 0x6c, 0x54, 0x69, 0x6d, 0x65, 0x22, 0xbf, 0x01, 0x0a, 0x06, 0x4f, 0x62, 0x6a, 0x65, 0x63,
 	0x74, 0x12, 0x0e, 0x0a, 0x02, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0d, 0x52, 0x02, 0x69,
 	0x64, 0x12, 0x1f, 0x0a, 0x0b, 0x65, 0x78, 0x74, 0x65, 0x72, 0x6e, 0x61, 0x6c, 0x5f, 0x69, 0x64,
 	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x65, 0x78, 0x74, 0x65, 0x72, 0x6e, 0x61, 0x6c,
@@ -2484,7 +2717,7 @@ func file_types_proto_rawDescGZIP() []byte {
 	return file_types_proto_rawDescData
 }
 
-var file_types_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_types_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_types_proto_goTypes = []interface{}{
 	(*App)(nil),                   // 0: types.App
 	(*BuildOptions)(nil),          // 1: types.BuildOptions
@@ -2494,53 +2727,61 @@ var file_types_proto_goTypes = []interface{}{
 	(*ContainerRequest)(nil),      // 5: types.ContainerRequest
 	(*ContainerState)(nil),        // 6: types.ContainerState
 	(*FileInfo)(nil),              // 7: types.FileInfo
-	(*Mount)(nil),                 // 8: types.Mount
-	(*MountPointConfig)(nil),      // 9: types.MountPointConfig
-	(*NullTime)(nil),              // 10: types.NullTime
-	(*Object)(nil),                // 11: types.Object
-	(*PricingPolicy)(nil),         // 12: types.PricingPolicy
-	(*Stub)(nil),                  // 13: types.Stub
-	(*StubWithRelated)(nil),       // 14: types.StubWithRelated
-	(*Worker)(nil),                // 15: types.Worker
-	(*WorkerPoolState)(nil),       // 16: types.WorkerPoolState
-	(*Workspace)(nil),             // 17: types.Workspace
-	(*WorkspaceStorage)(nil),      // 18: types.WorkspaceStorage
-	(*timestamppb.Timestamp)(nil), // 19: google.protobuf.Timestamp
+	(*FileSearchMatch)(nil),       // 8: types.FileSearchMatch
+	(*FileSearchPosition)(nil),    // 9: types.FileSearchPosition
+	(*FileSearchRange)(nil),       // 10: types.FileSearchRange
+	(*FileSearchResult)(nil),      // 11: types.FileSearchResult
+	(*Mount)(nil),                 // 12: types.Mount
+	(*MountPointConfig)(nil),      // 13: types.MountPointConfig
+	(*NullTime)(nil),              // 14: types.NullTime
+	(*Object)(nil),                // 15: types.Object
+	(*PricingPolicy)(nil),         // 16: types.PricingPolicy
+	(*Stub)(nil),                  // 17: types.Stub
+	(*StubWithRelated)(nil),       // 18: types.StubWithRelated
+	(*Worker)(nil),                // 19: types.Worker
+	(*WorkerPoolState)(nil),       // 20: types.WorkerPoolState
+	(*Workspace)(nil),             // 21: types.Workspace
+	(*WorkspaceStorage)(nil),      // 22: types.WorkspaceStorage
+	(*timestamppb.Timestamp)(nil), // 23: google.protobuf.Timestamp
 }
 var file_types_proto_depIdxs = []int32{
-	19, // 0: types.App.created_at:type_name -> google.protobuf.Timestamp
-	19, // 1: types.App.updated_at:type_name -> google.protobuf.Timestamp
-	10, // 2: types.App.deleted_at:type_name -> types.NullTime
-	19, // 3: types.ConcurrencyLimit.created_at:type_name -> google.protobuf.Timestamp
-	19, // 4: types.ConcurrencyLimit.updated_at:type_name -> google.protobuf.Timestamp
-	19, // 5: types.Container.scheduled_at:type_name -> google.protobuf.Timestamp
-	19, // 6: types.Container.started_at:type_name -> google.protobuf.Timestamp
-	17, // 7: types.ContainerRequest.workspace:type_name -> types.Workspace
-	14, // 8: types.ContainerRequest.stub:type_name -> types.StubWithRelated
-	19, // 9: types.ContainerRequest.timestamp:type_name -> google.protobuf.Timestamp
-	8,  // 10: types.ContainerRequest.mounts:type_name -> types.Mount
+	23, // 0: types.App.created_at:type_name -> google.protobuf.Timestamp
+	23, // 1: types.App.updated_at:type_name -> google.protobuf.Timestamp
+	14, // 2: types.App.deleted_at:type_name -> types.NullTime
+	23, // 3: types.ConcurrencyLimit.created_at:type_name -> google.protobuf.Timestamp
+	23, // 4: types.ConcurrencyLimit.updated_at:type_name -> google.protobuf.Timestamp
+	23, // 5: types.Container.scheduled_at:type_name -> google.protobuf.Timestamp
+	23, // 6: types.Container.started_at:type_name -> google.protobuf.Timestamp
+	21, // 7: types.ContainerRequest.workspace:type_name -> types.Workspace
+	18, // 8: types.ContainerRequest.stub:type_name -> types.StubWithRelated
+	23, // 9: types.ContainerRequest.timestamp:type_name -> google.protobuf.Timestamp
+	12, // 10: types.ContainerRequest.mounts:type_name -> types.Mount
 	1,  // 11: types.ContainerRequest.build_options:type_name -> types.BuildOptions
-	9,  // 12: types.Mount.mount_point_config:type_name -> types.MountPointConfig
-	19, // 13: types.NullTime.time:type_name -> google.protobuf.Timestamp
-	19, // 14: types.Object.created_at:type_name -> google.protobuf.Timestamp
-	19, // 15: types.Stub.created_at:type_name -> google.protobuf.Timestamp
-	19, // 16: types.Stub.updated_at:type_name -> google.protobuf.Timestamp
-	13, // 17: types.StubWithRelated.stub:type_name -> types.Stub
-	17, // 18: types.StubWithRelated.workspace:type_name -> types.Workspace
-	11, // 19: types.StubWithRelated.object:type_name -> types.Object
-	0,  // 20: types.StubWithRelated.app:type_name -> types.App
-	4,  // 21: types.Worker.active_containers:type_name -> types.Container
-	19, // 22: types.Workspace.created_at:type_name -> google.protobuf.Timestamp
-	19, // 23: types.Workspace.updated_at:type_name -> google.protobuf.Timestamp
-	3,  // 24: types.Workspace.concurrency_limit:type_name -> types.ConcurrencyLimit
-	18, // 25: types.Workspace.storage:type_name -> types.WorkspaceStorage
-	19, // 26: types.WorkspaceStorage.created_at:type_name -> google.protobuf.Timestamp
-	19, // 27: types.WorkspaceStorage.updated_at:type_name -> google.protobuf.Timestamp
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	10, // 12: types.FileSearchMatch.range:type_name -> types.FileSearchRange
+	9,  // 13: types.FileSearchRange.start:type_name -> types.FileSearchPosition
+	9,  // 14: types.FileSearchRange.end:type_name -> types.FileSearchPosition
+	8,  // 15: types.FileSearchResult.matches:type_name -> types.FileSearchMatch
+	13, // 16: types.Mount.mount_point_config:type_name -> types.MountPointConfig
+	14, // 17: types.NullTime.null_time:type_name -> types.NullTime
+	23, // 18: types.Object.created_at:type_name -> google.protobuf.Timestamp
+	23, // 19: types.Stub.created_at:type_name -> google.protobuf.Timestamp
+	23, // 20: types.Stub.updated_at:type_name -> google.protobuf.Timestamp
+	17, // 21: types.StubWithRelated.stub:type_name -> types.Stub
+	21, // 22: types.StubWithRelated.workspace:type_name -> types.Workspace
+	15, // 23: types.StubWithRelated.object:type_name -> types.Object
+	0,  // 24: types.StubWithRelated.app:type_name -> types.App
+	4,  // 25: types.Worker.active_containers:type_name -> types.Container
+	23, // 26: types.Workspace.created_at:type_name -> google.protobuf.Timestamp
+	23, // 27: types.Workspace.updated_at:type_name -> google.protobuf.Timestamp
+	3,  // 28: types.Workspace.concurrency_limit:type_name -> types.ConcurrencyLimit
+	22, // 29: types.Workspace.storage:type_name -> types.WorkspaceStorage
+	23, // 30: types.WorkspaceStorage.created_at:type_name -> google.protobuf.Timestamp
+	23, // 31: types.WorkspaceStorage.updated_at:type_name -> google.protobuf.Timestamp
+	32, // [32:32] is the sub-list for method output_type
+	32, // [32:32] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_types_proto_init() }
@@ -2646,7 +2887,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Mount); i {
+			switch v := v.(*FileSearchMatch); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2658,7 +2899,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[9].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*MountPointConfig); i {
+			switch v := v.(*FileSearchPosition); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2670,7 +2911,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[10].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*NullTime); i {
+			switch v := v.(*FileSearchRange); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2682,7 +2923,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[11].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Object); i {
+			switch v := v.(*FileSearchResult); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2694,7 +2935,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[12].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*PricingPolicy); i {
+			switch v := v.(*Mount); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2706,7 +2947,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[13].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Stub); i {
+			switch v := v.(*MountPointConfig); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2718,7 +2959,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[14].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*StubWithRelated); i {
+			switch v := v.(*NullTime); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2730,7 +2971,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[15].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Worker); i {
+			switch v := v.(*Object); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2742,7 +2983,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[16].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*WorkerPoolState); i {
+			switch v := v.(*PricingPolicy); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2754,7 +2995,7 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[17].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*Workspace); i {
+			switch v := v.(*Stub); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2766,6 +3007,54 @@ func file_types_proto_init() {
 			}
 		}
 		file_types_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StubWithRelated); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_types_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*Worker); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_types_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*WorkerPoolState); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_types_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*Workspace); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_types_proto_msgTypes[22].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*WorkspaceStorage); i {
 			case 0:
 				return &v.state
@@ -2784,7 +3073,7 @@ func file_types_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_types_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

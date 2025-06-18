@@ -112,7 +112,7 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
-RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
+RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion 
 
 RUN apt-get install -y libbtrfs-dev libgpgme11-dev
 RUN mkdir -p /etc/containers/registries.conf.d
@@ -167,6 +167,8 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
 
 RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint && \
     chmod +x /usr/local/bin/cuda-checkpoint
+
+RUN apt-get install ripgrep
 
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
