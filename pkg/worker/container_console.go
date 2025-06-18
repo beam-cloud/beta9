@@ -12,12 +12,22 @@ import (
 	"github.com/opencontainers/runc/libcontainer/utils"
 )
 
-type ConsoleWriter struct {
-	path string
+// ContainerConsole defines the interface for container console/TTY handling
+type ContainerConsole interface {
+	// Path returns the path to the console socket
+	Path() string
+	// Close cleans up any resources used by the console
+	Close() error
 }
 
-// Implementation of runc ConsoleSocket, for writing only
-func NewConsoleWriter(writer io.Writer) (*ConsoleWriter, error) {
+// ConsoleWriter implements ContainerConsole for runc
+type ConsoleWriter struct {
+	path string
+	ln   net.Listener
+}
+
+// NewConsoleWriter creates a new console writer that implements ContainerConsole
+func NewConsoleWriter(writer io.Writer) (ContainerConsole, error) {
 	socketPath := filepath.Join(os.TempDir(), fmt.Sprintf("tty-%d.sock", time.Now().UnixNano()))
 
 	ln, err := net.Listen("unix", socketPath)
@@ -25,11 +35,15 @@ func NewConsoleWriter(writer io.Writer) (*ConsoleWriter, error) {
 		return nil, err
 	}
 
+	cw := &ConsoleWriter{
+		path: socketPath,
+		ln:   ln,
+	}
+
 	go func() {
 		// We only accept a single connection, since we can only really have
 		// one reader for os.Stdin.
 		conn, err := ln.Accept()
-		defer ln.Close()
 		if err != nil {
 			return
 		}
@@ -73,9 +87,37 @@ func NewConsoleWriter(writer io.Writer) (*ConsoleWriter, error) {
 		}
 	}()
 
-	return &ConsoleWriter{path: socketPath}, nil
+	return cw, nil
 }
 
 func (w *ConsoleWriter) Path() string {
 	return w.path
+}
+
+func (w *ConsoleWriter) Close() error {
+	if w.ln != nil {
+		return w.ln.Close()
+	}
+	return nil
+}
+
+// GvisorConsole implements ContainerConsole for gvisor
+type GvisorConsole struct {
+	path string
+}
+
+func NewGvisorConsole(writer io.Writer) (ContainerConsole, error) {
+	// TODO: Implement gvisor console handling
+	// For now, return a basic implementation that just returns a path
+	return &GvisorConsole{
+		path: filepath.Join(os.TempDir(), fmt.Sprintf("gvisor-tty-%d.sock", time.Now().UnixNano())),
+	}, nil
+}
+
+func (g *GvisorConsole) Path() string {
+	return g.path
+}
+
+func (g *GvisorConsole) Close() error {
+	return nil
 }

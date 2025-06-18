@@ -129,7 +129,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 	// If a checkpoint exists but is not available (previously failed), run the container normally
 	bundlePath := filepath.Dir(configPath)
 
-	exitCode, err := s.runcHandle.Run(s.ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
+	exitCode, err := s.containerRuntime.Run(s.ctx, request.ContainerId, bundlePath, &ContainerRuntimeOpts{
 		OutputWriter: outputWriter,
 		Started:      startedChan,
 	})
