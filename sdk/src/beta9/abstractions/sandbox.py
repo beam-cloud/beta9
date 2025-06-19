@@ -64,6 +64,8 @@ class Sandbox(Pod):
             The volumes and/or cloud buckets to mount into the Sandbox container. Default is an empty list.
         secrets (List[str]):
             The secrets to pass to the Sandbox container.
+        sync_local_dir: bool = False,
+            Whether to sync the local directory to the sandbox filesystem on creation. Default is False.
     """
 
     def __init__(
@@ -78,8 +80,10 @@ class Sandbox(Pod):
         name: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
         secrets: Optional[List[str]] = None,
+        sync_local_dir: bool = False,
     ):
         self.debug_buffer = io.StringIO()
+        self.sync_local_dir = sync_local_dir
 
         super().__init__(
             cpu=cpu,
@@ -98,6 +102,9 @@ class Sandbox(Pod):
         print(self.debug_buffer.getvalue())
 
     def connect(self, id: str) -> "SandboxInstance":
+        """
+        Connect to an existing sandbox instance by ID.
+        """
         response: "PodSandboxConnectResponse" = self.stub.sandbox_connect(
             PodSandboxConnectRequest(
                 container_id=id,
@@ -125,6 +132,7 @@ class Sandbox(Pod):
         if not self.prepare_runtime(
             stub_type=SANDBOX_STUB_TYPE,
             force_create_stub=True,
+            ignore_patterns=["*"] if not self.sync_local_dir else None,
         ):
             return SandboxInstance(
                 container_id="",
@@ -209,6 +217,9 @@ class SandboxInstance(BaseAbstraction):
         return res.ok
 
     def sandbox_id(self) -> str:
+        """
+        Get the ID of the sandbox.
+        """
         return self.container_id
 
     def update_ttl(self, ttl: int):
@@ -263,6 +274,15 @@ class SandboxProcessManager:
         cwd: Optional[str] = None,
         env: Optional[Dict[str, str]] = None,
     ) -> Union["SandboxProcessResponse", "SandboxProcess"]:
+        """
+        Run python code in the sandbox. If blocking is True, the method will wait for the process to complete and return the response.
+        If blocking is False, the method will return a SandboxProcess object that can be used to interact with the process.
+
+        Parameters:
+            code (str): The python code to run.
+            blocking (bool): Whether to wait for the process to complete. Default is True.
+            cwd (Optional[str]): The working directory to run the code in. Default is None.
+        """
         process = self._exec("python3", "-c", code, cwd=cwd, env=env)
 
         if blocking:
@@ -280,6 +300,14 @@ class SandboxProcessManager:
     def exec(
         self, *args, cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None
     ) -> "SandboxProcess":
+        """
+        Run an arbitrary command in the sandbox.
+
+        Parameters:
+            *args: The command to run.
+            cwd (Optional[str]): The working directory to run the command in. Default is None.
+            env (Optional[Dict[str, str]]): The environment variables to set for the command. Default is None.
+        """
         return self._exec(*args, cwd=cwd, env=env)
 
     def _exec(
@@ -305,9 +333,15 @@ class SandboxProcessManager:
             return process
 
     def list_processes(self) -> List["SandboxProcess"]:
+        """
+        List all processes running in the sandbox.
+        """
         return list(self.processes.values())
 
     def get_process(self, pid: int) -> "SandboxProcess":
+        """
+        Get a process by its PID.
+        """
         if pid not in self.processes:
             raise SandboxProcessError(f"Process with pid {pid} not found")
 
@@ -378,6 +412,10 @@ class SandboxProcess:
         self._status = ""
 
     def wait(self) -> int:
+        """
+        Wait for the process to complete.
+        """
+
         self.exit_code, self._status = self.status()
 
         while self.exit_code < 0:
@@ -387,6 +425,10 @@ class SandboxProcess:
         return self.exit_code
 
     def kill(self):
+        """
+        Kill the process.
+        """
+
         response = self.sandbox_instance.stub.sandbox_kill(
             PodSandboxKillRequest(container_id=self.sandbox_instance.container_id, pid=self.pid)
         )
@@ -394,6 +436,10 @@ class SandboxProcess:
             raise SandboxProcessError(response.error_msg)
 
     def status(self) -> Tuple[int, str]:
+        """
+        Get the status of the process.
+        """
+
         response = self.sandbox_instance.stub.sandbox_status(
             PodSandboxStatusRequest(container_id=self.sandbox_instance.container_id, pid=self.pid)
         )
@@ -405,6 +451,10 @@ class SandboxProcess:
 
     @property
     def stdout(self):
+        """
+        Get a handle to a stream of the process's stdout.
+        """
+
         return SandboxProcessStream(
             self,
             lambda: self.sandbox_instance.stub.sandbox_stdout(
@@ -416,6 +466,10 @@ class SandboxProcess:
 
     @property
     def stderr(self):
+        """
+        Get a handle to a stream of the process's stderr.
+        """
+
         return SandboxProcessStream(
             self,
             lambda: self.sandbox_instance.stub.sandbox_stderr(
@@ -435,7 +489,7 @@ class SandboxProcess:
         """
 
         class CombinedStream:
-            def __init__(self, process):
+            def __init__(self, process: "SandboxProcess"):
                 self.process = process
                 self._stdout = process.stdout
                 self._stderr = process.stderr
@@ -459,12 +513,15 @@ class SandboxProcess:
                         line, stream_info["buffer"] = stream_info["buffer"].split("\n", 1)
                         self._queue.append(line + "\n")
 
-                elif self.process.exit_code >= 0:  # Process has exited
-                    if stream_info["buffer"]:
-                        self._queue.append(stream_info["buffer"])
-                        stream_info["buffer"] = ""
+                else:
+                    exit_code, _ = self.process.status()
+                    if exit_code >= 0:  # Process has exited
+                        if stream_info["buffer"]:
+                            self._queue.append(stream_info["buffer"])
+                            stream_info["buffer"] = ""
+                            return
 
-                    stream_info["exhausted"] = True
+                        stream_info["exhausted"] = True
 
             def _fill_queue(self):
                 self._process_stream("stdout")
@@ -503,6 +560,10 @@ class SandboxProcess:
 
 @dataclass
 class SandboxFileInfo:
+    """
+    Metadata of a file in the sandbox.
+    """
+
     name: str
     is_dir: bool
     size: int
@@ -522,6 +583,10 @@ class SandboxFileSystem:
         self.sandbox_instance = sandbox_instance
 
     def upload_file(self, local_path: str, sandbox_path: str):
+        """
+        Upload a local file to the sandbox.
+        """
+
         with open(local_path, "rb") as f:
             content = f.read()
 
@@ -538,6 +603,10 @@ class SandboxFileSystem:
                 raise SandboxFileSystemError(response.error_msg)
 
     def download_file(self, sandbox_path: str, local_path: str):
+        """
+        Download a file from the sandbox to a local path.
+        """
+
         response = self.sandbox_instance.stub.sandbox_download_file(
             PodSandboxDownloadFileRequest(
                 container_id=self.sandbox_instance.container_id,
@@ -552,6 +621,10 @@ class SandboxFileSystem:
             f.write(response.data)
 
     def stat_file(self, sandbox_path: str) -> "SandboxFileInfo":
+        """
+        Get the metadata of a file in the sandbox.
+        """
+
         response = self.sandbox_instance.stub.sandbox_stat_file(
             PodSandboxStatFileRequest(
                 container_id=self.sandbox_instance.container_id,
@@ -575,6 +648,10 @@ class SandboxFileSystem:
         )
 
     def list_files(self, sandbox_path: str) -> List["SandboxFileInfo"]:
+        """
+        List the files in a directory in the sandbox.
+        """
+
         response = self.sandbox_instance.stub.sandbox_list_files(
             PodSandboxListFilesRequest(
                 container_id=self.sandbox_instance.container_id,
@@ -607,6 +684,10 @@ class SandboxFileSystem:
         raise NotImplementedError("Delete directory not implemented")
 
     def delete_file(self, sandbox_path: str):
+        """
+        Delete a file in the sandbox.
+        """
+
         response = self.sandbox_instance.stub.sandbox_delete_file(
             PodSandboxDeleteFileRequest(
                 container_id=self.sandbox_instance.container_id,
@@ -618,6 +699,10 @@ class SandboxFileSystem:
             raise SandboxFileSystemError(response.error_msg)
 
     def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
+        """
+        Replace a string in all files in a directory.
+        """
+
         response = self.sandbox_instance.stub.sandbox_replace_in_files(
             PodSandboxReplaceInFilesRequest(
                 container_id=self.sandbox_instance.container_id,
