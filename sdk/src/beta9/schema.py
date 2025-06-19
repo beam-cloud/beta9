@@ -7,7 +7,7 @@ import os
 import tempfile
 import urllib.request
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 
@@ -51,12 +51,15 @@ class SchemaField:
             "File": File,
             "Image": Image,
             "Object": Object,
+            "JSON": JSON,
         }
 
         if field_type in ("Object", "object"):
             # Recursively build nested schema
             schema_cls = Schema.from_dict(data["fields"])
             return Object(schema_cls)
+        elif field_type in ("JSON", "json"):
+            return JSON()
 
         if field_type not in field_classes:
             raise ValidationError(f"Unknown field type '{field_type}'")
@@ -378,6 +381,39 @@ class Object(SchemaField):
         raise ValidationError(f"Expected {self.schema_cls.__name__} for serialization")
 
 
+class JSON(SchemaField):
+    """Schema field for JSON data."""
+
+    def validate(self, value: Any) -> Any:
+        """Validate and process JSON input."""
+
+        # If value is already a dict/list, use it directly
+        if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
+            return value
+        elif isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError as e:
+                raise ValidationError(f"Invalid JSON string: {e}")
+        else:
+            raise ValidationError(
+                f"Expected dict, list, or JSON string, got {type(value).__name__}"
+            )
+
+    def dump(self, value: Any) -> Union[Dict[str, Any], List[Any]]:
+        """Serialize JSON data."""
+        if isinstance(value, (dict, list)):
+            return value
+        else:
+            raise ValidationError(
+                f"Expected dict or list for serialization, got {type(value).__name__}"
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {"type": "JSON"}
+
+
 class SchemaMeta(type):
     """Metaclass for collecting schema fields."""
 
@@ -519,6 +555,9 @@ class Schema(metaclass=SchemaMeta):
                     annotations[k] = object
             elif isinstance(v, Object):
                 annotations[k] = v.schema_cls
+            elif isinstance(v, JSON):
+                # For JSON fields, use Union[Dict, List] as the annotation
+                annotations[k] = Union[Dict[str, Any], List[Any]]
             else:
                 annotations[k] = object
 
