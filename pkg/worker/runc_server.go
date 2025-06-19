@@ -9,8 +9,10 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -794,4 +796,211 @@ func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandb
 
 	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[int32(in.Port)])
 	return &pb.RunCSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err
+}
+
+type StagedFile struct {
+	Path    string
+	Content string
+}
+
+func stageFilesForReplacement(basePath string, stringToReplace string, stringToReplaceWith string) ([]StagedFile, error) {
+	stagedFiles := []StagedFile{}
+	regex, err := regexp.Compile(stringToReplace)
+	if err != nil {
+		return nil, err
+	}
+
+	filepath.WalkDir(basePath, func(path string, d os.DirEntry, err error) error {
+		if err != nil && os.IsNotExist(err) {
+			return nil
+		}
+
+		if !d.IsDir() {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			content, err := io.ReadAll(file)
+			if err != nil {
+				return err
+			}
+
+			if regex.Match(content) {
+				content = regex.ReplaceAll(content, []byte(stringToReplaceWith))
+			}
+
+			stagedFiles = append(stagedFiles, StagedFile{
+				Path:    path,
+				Content: string(content),
+			})
+		}
+
+		return nil
+	})
+
+	return stagedFiles, nil
+}
+
+func (s *RunCServer) RunCSandboxReplaceInFiles(ctx context.Context, in *pb.RunCSandboxReplaceInFilesRequest) (*pb.RunCSandboxReplaceInFilesResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	stagedFiles, err := stageFilesForReplacement(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), in.Pattern, in.NewString)
+	if err != nil {
+		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	for _, stagedFile := range stagedFiles {
+		err = os.WriteFile(stagedFile.Path, []byte(stagedFile.Content), 0644)
+		if err != nil {
+			return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+	}
+
+	return &pb.RunCSandboxReplaceInFilesResponse{Ok: true}, nil
+}
+
+func (s *RunCServer) RunCSandboxFindFiles(ctx context.Context, in *pb.RunCSandboxFindFilesRequest) (*pb.RunCSandboxFindFilesResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxFindFilesResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.RunCSandboxFindFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	fullPath := filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath))
+
+	// Build ripgrep command with JSON output format
+	args := []string{
+		"--json",               // Output in JSON format
+		"--line-number",        // Include line numbers
+		"--column",             // Include column numbers
+		"--with-filename",      // Include filename in output
+		"--no-heading",         // Don't include file headers
+		"--no-messages",        // Suppress error messages
+		"--no-ignore",          // Don't respect .gitignore, etc.
+		"--hidden",             // Search hidden files
+		"--binary",             // Search binary files
+		"--regexp", in.Pattern, // The search pattern
+		fullPath, // The directory to search
+	}
+
+	cmd := exec.CommandContext(ctx, "rg", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	if err != nil {
+		// ripgrep returns exit code 1 when no matches are found, which is not an error
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			// No matches found, return empty results
+			return &pb.RunCSandboxFindFilesResponse{Ok: true, Results: []*pb.FileSearchResult{}}, nil
+		}
+		return &pb.RunCSandboxFindFilesResponse{
+			Ok:       false,
+			ErrorMsg: fmt.Sprintf("ripgrep failed: %v, stderr: %s", err, stderr.String()),
+		}, nil
+	}
+
+	// Parse ripgrep JSON output
+	results := []*pb.FileSearchResult{}
+	fileMatches := make(map[string][]*pb.FileSearchMatch)
+
+	lines := strings.Split(stdout.String(), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		// Parse JSON line from ripgrep
+		var rgResult struct {
+			Type string `json:"type"`
+			Data struct {
+				Path struct {
+					Text string `json:"text"`
+				} `json:"path"`
+				Lines struct {
+					Text string `json:"text"`
+				} `json:"lines"`
+				LineNumber     int `json:"line_number"`
+				AbsoluteOffset int `json:"absolute_offset"`
+				Submatches     []struct {
+					Match struct {
+						Text string `json:"text"`
+					} `json:"match"`
+					Start int `json:"start"`
+					End   int `json:"end"`
+				} `json:"submatches"`
+			} `json:"data"`
+		}
+
+		if err := json.Unmarshal([]byte(line), &rgResult); err != nil {
+			log.Warn().Str("line", line).Err(err).Msg("failed to parse ripgrep JSON output")
+			continue
+		}
+
+		// Only process match results
+		if rgResult.Type != "match" {
+			continue
+		}
+
+		filePath := rgResult.Data.Path.Text
+		lineNum := rgResult.Data.LineNumber
+
+		// Calculate column positions for each submatch
+		for _, submatch := range rgResult.Data.Submatches {
+			startCol := submatch.Start + 1
+			endCol := submatch.End
+
+			match := &pb.FileSearchMatch{
+				Range: &pb.FileSearchRange{
+					Start: &pb.FileSearchPosition{
+						Line:   int32(lineNum),
+						Column: int32(startCol),
+					},
+					End: &pb.FileSearchPosition{
+						Line:   int32(lineNum),
+						Column: int32(endCol),
+					},
+				},
+				Content: submatch.Match.Text,
+			}
+
+			fileMatches[filePath] = append(fileMatches[filePath], match)
+		}
+	}
+
+	// Convert map to slice format expected by the response
+	for filePath, matches := range fileMatches {
+		results = append(results, &pb.FileSearchResult{
+			Path:    filePath,
+			Matches: matches,
+		})
+	}
+
+	return &pb.RunCSandboxFindFilesResponse{Ok: true, Results: results}, nil
 }

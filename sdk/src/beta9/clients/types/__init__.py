@@ -117,6 +117,30 @@ class FileInfo(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class FileSearchMatch(betterproto.Message):
+    range: "FileSearchRange" = betterproto.message_field(1)
+    content: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class FileSearchPosition(betterproto.Message):
+    line: int = betterproto.int32_field(1)
+    column: int = betterproto.int32_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class FileSearchRange(betterproto.Message):
+    start: "FileSearchPosition" = betterproto.message_field(1)
+    end: "FileSearchPosition" = betterproto.message_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class FileSearchResult(betterproto.Message):
+    path: str = betterproto.string_field(1)
+    matches: List["FileSearchMatch"] = betterproto.message_field(2)
+
+
+@dataclass(eq=False, repr=False)
 class Mount(betterproto.Message):
     local_path: str = betterproto.string_field(1)
     mount_path: str = betterproto.string_field(2)
@@ -139,8 +163,7 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    time: datetime = betterproto.message_field(1)
-    valid: bool = betterproto.bool_field(2)
+    null_time: "NullTime" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)

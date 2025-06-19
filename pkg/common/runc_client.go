@@ -176,6 +176,22 @@ func (c *RunCClient) SandboxListFiles(containerId, containerPath string) (*pb.Ru
 	return resp, nil
 }
 
+func (c *RunCClient) SandboxReplaceInFiles(containerId, containerPath, oldString, newString string) (*pb.RunCSandboxReplaceInFilesResponse, error) {
+	resp, err := c.client.RunCSandboxReplaceInFiles(context.TODO(), &pb.RunCSandboxReplaceInFilesRequest{ContainerId: containerId, ContainerPath: containerPath, Pattern: oldString, NewString: newString})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxFindFiles(containerId, containerPath, pattern string) (*pb.RunCSandboxFindFilesResponse, error) {
+	resp, err := c.client.RunCSandboxFindFiles(context.TODO(), &pb.RunCSandboxFindFilesRequest{ContainerId: containerId, ContainerPath: containerPath, Pattern: pattern})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
 func (c *RunCClient) SandboxExposePort(containerId string, port int32) (*pb.RunCSandboxExposePortResponse, error) {
 	resp, err := c.client.RunCSandboxExposePort(context.TODO(), &pb.RunCSandboxExposePortRequest{ContainerId: containerId, Port: port})
 	if err != nil {

@@ -24,8 +24,10 @@ from ..clients.pod import (
     PodSandboxExecRequest,
     PodSandboxExposePortRequest,
     PodSandboxExposePortResponse,
+    PodSandboxFindFilesRequest,
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
+    PodSandboxReplaceInFilesRequest,
     PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
@@ -614,3 +616,30 @@ class SandboxFileSystem:
 
         if not response.ok:
             raise SandboxFileSystemError(response.error_msg)
+
+    def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
+        response = self.sandbox_instance.stub.sandbox_replace_in_files(
+            PodSandboxReplaceInFilesRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+                pattern=old_string,
+                new_string=new_string,
+            )
+        )
+
+        if not response.ok:
+            raise SandboxFileSystemError(response.error_msg)
+
+    def find_files(self, sandbox_path: str, pattern: str) -> List["SandboxFileInfo"]:
+        response = self.sandbox_instance.stub.sandbox_find_files(
+            PodSandboxFindFilesRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+                pattern=pattern,
+            )
+        )
+
+        if not response.ok:
+            raise SandboxFileSystemError(response.error_msg)
+
+        return response.results

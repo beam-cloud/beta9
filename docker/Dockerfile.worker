@@ -168,6 +168,8 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
 RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint && \
     chmod +x /usr/local/bin/cuda-checkpoint
 
+RUN apt-get install -y ripgrep
+
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*

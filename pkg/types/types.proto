@@ -105,6 +105,26 @@ message FileInfo {
   uint32 permissions = 9;
 }
 
+message FileSearchMatch {
+  FileSearchRange range = 1;
+  string content = 2;
+}
+
+message FileSearchPosition {
+  int32 line = 1;
+  int32 column = 2;
+}
+
+message FileSearchRange {
+  FileSearchPosition start = 1;
+  FileSearchPosition end = 2;
+}
+
+message FileSearchResult {
+  string path = 1;
+  repeated FileSearchMatch matches = 2;
+}
+
 message Mount {
   string local_path = 1;
   string mount_path = 2;
@@ -125,8 +145,7 @@ message MountPointConfig {
 }
 
 message NullTime {
-  google.protobuf.Timestamp time = 1;
-  bool valid = 2;
+  NullTime null_time = 1;
 }
 
 message Object {

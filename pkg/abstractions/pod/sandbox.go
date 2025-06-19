@@ -329,6 +329,56 @@ func (s *GenericPodService) SandboxListFiles(ctx context.Context, in *pb.PodSand
 	}, nil
 }
 
+func (s *GenericPodService) SandboxReplaceInFiles(ctx context.Context, in *pb.PodSandboxReplaceInFilesRequest) (*pb.PodSandboxReplaceInFilesResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxReplaceInFilesResponse{
+
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxReplaceInFiles(in.ContainerId, in.ContainerPath, in.Pattern, in.NewString)
+	if err != nil {
+		return &pb.PodSandboxReplaceInFilesResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to replace in file",
+		}, nil
+	}
+
+	return &pb.PodSandboxReplaceInFilesResponse{
+		Ok: resp.Ok,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxFindFiles(ctx context.Context, in *pb.PodSandboxFindFilesRequest) (*pb.PodSandboxFindFilesResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxFindFilesResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxFindFiles(in.ContainerId, in.ContainerPath, in.Pattern)
+	if err != nil {
+		return &pb.PodSandboxFindFilesResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to find files",
+		}, nil
+	}
+
+	return &pb.PodSandboxFindFilesResponse{
+		Ok:      true,
+		Results: resp.Results,
+	}, nil
+}
+
 func (s *GenericPodService) SandboxConnect(ctx context.Context, in *pb.PodSandboxConnectRequest) (*pb.PodSandboxConnectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 

@@ -1,8 +1,10 @@
 syntax = "proto3";
 
-option go_package = "github.com/beam-cloud/beam/proto";
+option go_package = "github.com/beam-cloud/beta9/proto";
 
 package pod;
+
+import "types.proto";
 
 service PodService {
   rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {}
@@ -32,6 +34,10 @@ service PodService {
       returns (PodSandboxDeleteDirectoryResponse) {}
   rpc SandboxExposePort(PodSandboxExposePortRequest)
       returns (PodSandboxExposePortResponse) {}
+  rpc SandboxReplaceInFiles(PodSandboxReplaceInFilesRequest)
+      returns (PodSandboxReplaceInFilesResponse) {}
+  rpc SandboxFindFiles(PodSandboxFindFilesRequest)
+      returns (PodSandboxFindFilesResponse) {}
   rpc SandboxConnect(PodSandboxConnectRequest)
       returns (PodSandboxConnectResponse) {}
   rpc SandboxUpdateTTL(PodSandboxUpdateTTLRequest)
@@ -197,6 +203,18 @@ message PodSandboxFileInfo {
   uint32 permissions = 8;
 }
 
+message PodSandboxReplaceInFilesRequest {
+  string container_id = 1;
+  string container_path = 2;
+  string pattern = 3;
+  string new_string = 4;
+}
+
+message PodSandboxReplaceInFilesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
 message PodSandboxExposePortRequest {
   string container_id = 1;
   string stub_id = 2;
@@ -207,6 +225,18 @@ message PodSandboxExposePortResponse {
   bool ok = 1;
   string url = 2;
   string error_msg = 3;
+}
+
+message PodSandboxFindFilesRequest {
+  string container_id = 1;
+  string container_path = 2;
+  string pattern = 3;
+}
+
+message PodSandboxFindFilesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated types.FileSearchResult results = 3;
 }
 
 message PodSandboxConnectRequest { string container_id = 1; }

@@ -41,6 +41,11 @@ service RunCService {
       returns (RunCSandboxDeleteDirectoryResponse) {}
   rpc RunCSandboxExposePort(RunCSandboxExposePortRequest)
       returns (RunCSandboxExposePortResponse) {}
+  rpc RunCSandboxReplaceInFiles(RunCSandboxReplaceInFilesRequest)
+      returns (RunCSandboxReplaceInFilesResponse) {}
+  rpc RunCSandboxFindFiles(RunCSandboxFindFilesRequest)
+      returns (RunCSandboxFindFilesResponse) {}
+  
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -216,4 +221,28 @@ message RunCSandboxStatFileResponse {
   bool ok = 1;
   string error_msg = 2;
   types.FileInfo file_info = 3;
+}
+
+message RunCSandboxReplaceInFilesRequest {
+  string container_id = 1;
+  string container_path = 2;
+  string pattern = 3;
+  string new_string = 4;
+}
+
+message RunCSandboxReplaceInFilesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RunCSandboxFindFilesRequest {
+  string container_id = 1;
+  string container_path = 2;
+  string pattern = 3;
+}
+
+message RunCSandboxFindFilesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated types.FileSearchResult results = 3;
 }
