@@ -37,6 +37,7 @@ from ..clients.pod import (
     PodSandboxUploadFileRequest,
     PodServiceStub,
 )
+from ..clients.types import FileSearchResult
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias
 
@@ -1372,7 +1373,7 @@ class SandboxFileSystem:
         if not response.ok:
             raise SandboxFileSystemError(response.error_msg)
 
-    def find_in_files(self, sandbox_path: str, pattern: str) -> List["SandboxFileInfo"]:
+    def find_in_files(self, sandbox_path: str, pattern: str) -> List[FileSearchResult]:
         """
         Find files matching a pattern in the sandbox.
 
@@ -1384,7 +1385,7 @@ class SandboxFileSystem:
             pattern (str): The pattern to match files against.
 
         Returns:
-            List[SandboxFileInfo]: List of matching file information objects.
+            List[FileSearchResult]: List of matching file information objects.
 
         Raises:
             SandboxFileSystemError: If the search fails.
