@@ -385,7 +385,7 @@ class RunnerAbstraction(BaseAbstraction):
         func: Optional[Callable] = None,
         stub_type: str,
         force_create_stub: bool = False,
-        ignore_patterns: List[str] = None,
+        ignore_patterns: Optional[List[str]] = None,
     ) -> bool:
         if called_on_import():
             return False
