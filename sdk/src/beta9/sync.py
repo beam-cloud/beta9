@@ -6,7 +6,7 @@ import zipfile
 from http import HTTPStatus
 from pathlib import Path
 from queue import Queue
-from typing import Generator, NamedTuple
+from typing import Generator, List, NamedTuple
 
 import requests
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
@@ -134,6 +134,9 @@ class FileSyncer:
         return spec.match_file(relative_path)
 
     def _collect_files(self) -> Generator[str, None, None]:
+        if self.ignore_patterns == ["*"]:
+            return
+
         terminal.detail(f"Collecting files from {self.root_dir}")
 
         for root, dirs, files in os.walk(self.root_dir):
@@ -153,18 +156,23 @@ class FileSyncer:
                 hasher.update(chunk)
         return hasher.hexdigest()
 
-    def sync(self) -> FileSyncResult:
+    def sync(self, ignore_patterns: List[str] = []) -> FileSyncResult:
         with _sync_lock:
             if self.is_workspace_dir and get_workspace_object_id() != "" and not is_notebook_env():
                 terminal.header("Files already synced")
                 return FileSyncResult(success=True, object_id=get_workspace_object_id())
-            return self._sync()
+            return self._sync(ignore_patterns=ignore_patterns)
 
-    def _sync(self) -> FileSyncResult:
+    def _sync(self, ignore_patterns: List[str] = []) -> FileSyncResult:
         terminal.header("Syncing files")
 
         self._init_ignore_file()
-        self.ignore_patterns = self._read_ignore_file()
+
+        if ignore_patterns is None or len(ignore_patterns) == 0:
+            self.ignore_patterns = self._read_ignore_file()
+        else:
+            self.ignore_patterns = ignore_patterns
+
         temp_zip_name = tempfile.NamedTemporaryFile(delete=False).name
 
         with zipfile.ZipFile(temp_zip_name, "w") as zipf:
@@ -178,7 +186,8 @@ class FileSyncer:
         size = os.path.getsize(temp_zip_name)
         hash = self._calculate_sha256(temp_zip_name)
 
-        terminal.detail(f"Collected object is {terminal.humanize_memory(size, base=10)}")
+        if ignore_patterns != ["*"]:
+            terminal.detail(f"Collected object is {terminal.humanize_memory(size, base=10)}")
 
         object_id = None
         head_response: HeadObjectResponse = self.gateway_stub.head_object(

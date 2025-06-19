@@ -385,6 +385,7 @@ class RunnerAbstraction(BaseAbstraction):
         func: Optional[Callable] = None,
         stub_type: str,
         force_create_stub: bool = False,
+        ignore_patterns: Optional[List[str]] = None,
     ) -> bool:
         if called_on_import():
             return False
@@ -409,7 +410,7 @@ class RunnerAbstraction(BaseAbstraction):
                 return False
 
         if not self.files_synced:
-            sync_result = self.syncer.sync()
+            sync_result = self.syncer.sync(ignore_patterns=ignore_patterns)
             self._remove_tmp_files()
 
             if sync_result.success:

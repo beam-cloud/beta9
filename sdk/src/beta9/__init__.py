@@ -13,7 +13,18 @@ from .abstractions.map import Map
 from .abstractions.output import Output
 from .abstractions.pod import Pod
 from .abstractions.queue import SimpleQueue as Queue
-from .abstractions.sandbox import Sandbox
+from .abstractions.sandbox import (
+    Sandbox,
+    SandboxConnectionError,
+    SandboxFileInfo,
+    SandboxFileSystem,
+    SandboxFileSystemError,
+    SandboxInstance,
+    SandboxProcess,
+    SandboxProcessError,
+    SandboxProcessManager,
+    SandboxProcessStream,
+)
 from .abstractions.taskqueue import TaskQueue as task_queue
 from .abstractions.volume import CloudBucket, CloudBucketConfig, Volume
 from .client.client import Client
@@ -62,4 +73,13 @@ __all__ = [
     "Deployment",
     "schema",
     "Sandbox",
+    "SandboxInstance",
+    "SandboxProcess",
+    "SandboxProcessStream",
+    "SandboxProcessManager",
+    "SandboxFileInfo",
+    "SandboxFileSystem",
+    "SandboxConnectionError",
+    "SandboxProcessError",
+    "SandboxFileSystemError",
 ]

@@ -616,7 +616,8 @@ func (s *RunCServer) RunCSandboxUploadFile(ctx context.Context, in *pb.RunCSandb
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	err = os.WriteFile(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), in.Data, os.FileMode(in.Mode))
+	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	err = os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode))
 	if err != nil {
 		return &pb.RunCSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -640,7 +641,8 @@ func (s *RunCServer) RunCSandboxDownloadFile(ctx context.Context, in *pb.RunCSan
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	data, err := os.ReadFile(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)))
+	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	data, err := os.ReadFile(hostPath)
 	if err != nil {
 		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -664,7 +666,8 @@ func (s *RunCServer) RunCSandboxDeleteFile(ctx context.Context, in *pb.RunCSandb
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	err = os.RemoveAll(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)))
+	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	err = os.RemoveAll(hostPath)
 	if err != nil {
 		return &pb.RunCSandboxDeleteFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -688,7 +691,8 @@ func (s *RunCServer) RunCSandboxStatFile(ctx context.Context, in *pb.RunCSandbox
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	stat, err := os.Stat(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)))
+	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	stat, err := os.Stat(hostPath)
 	if err != nil {
 		return &pb.RunCSandboxStatFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -721,7 +725,8 @@ func (s *RunCServer) RunCSandboxListFiles(ctx context.Context, in *pb.RunCSandbo
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	files, err := os.ReadDir(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)))
+	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	files, err := os.ReadDir(hostPath)
 	if err != nil {
 		return &pb.RunCSandboxListFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -746,6 +751,20 @@ func (s *RunCServer) RunCSandboxListFiles(ctx context.Context, in *pb.RunCSandbo
 	}
 
 	return &pb.RunCSandboxListFilesResponse{Ok: true, Files: responseFiles}, nil
+}
+
+// getHostPathFromContainerPath maps a container path to its corresponding host path
+func (s *RunCServer) getHostPathFromContainerPath(containerPath string, instance *ContainerInstance) string {
+	// Check if the path matches any of the container's mounts
+	for _, mount := range instance.Spec.Mounts {
+		if containerPath == mount.Destination || strings.HasPrefix(containerPath, mount.Destination+"/") {
+			relativePath := strings.TrimPrefix(containerPath, mount.Destination)
+			return filepath.Join(mount.Source, strings.TrimPrefix(relativePath, "/"))
+		}
+	}
+
+	// If no mount matches, use the overlay root path
+	return filepath.Join(instance.Spec.Root.Path, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
 }
 
 func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandboxExposePortRequest) (*pb.RunCSandboxExposePortResponse, error) {
@@ -859,7 +878,8 @@ func (s *RunCServer) RunCSandboxReplaceInFiles(ctx context.Context, in *pb.RunCS
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	stagedFiles, err := stageFilesForReplacement(filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath)), in.Pattern, in.NewString)
+	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	stagedFiles, err := stageFilesForReplacement(hostPath, in.Pattern, in.NewString)
 	if err != nil {
 		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -890,7 +910,7 @@ func (s *RunCServer) RunCSandboxFindFiles(ctx context.Context, in *pb.RunCSandbo
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	fullPath := filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath))
+	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 
 	// Build ripgrep command with JSON output format
 	args := []string{
@@ -904,7 +924,7 @@ func (s *RunCServer) RunCSandboxFindFiles(ctx context.Context, in *pb.RunCSandbo
 		"--hidden",             // Search hidden files
 		"--binary",             // Search binary files
 		"--regexp", in.Pattern, // The search pattern
-		fullPath, // The directory to search
+		hostPath, // The directory to search
 	}
 
 	cmd := exec.CommandContext(ctx, "rg", args...)
