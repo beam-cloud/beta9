@@ -1440,7 +1440,7 @@ class SandboxFileSystem:
             pattern (str): The pattern to match files against.
 
         Returns:
-            List[FileSearchResult]: List of matching file information objects.
+            List[SandboxFileSearchResult]: List of matching file information objects.
 
         Raises:
             SandboxFileSystemError: If the search fails.
