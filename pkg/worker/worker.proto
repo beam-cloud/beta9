@@ -43,8 +43,8 @@ service RunCService {
       returns (RunCSandboxExposePortResponse) {}
   rpc RunCSandboxReplaceInFiles(RunCSandboxReplaceInFilesRequest)
       returns (RunCSandboxReplaceInFilesResponse) {}
-  rpc RunCSandboxFindFiles(RunCSandboxFindFilesRequest)
-      returns (RunCSandboxFindFilesResponse) {}
+  rpc RunCSandboxFindInFiles(RunCSandboxFindInFilesRequest)
+      returns (RunCSandboxFindInFilesResponse) {}
   
 }
 
@@ -235,13 +235,13 @@ message RunCSandboxReplaceInFilesResponse {
   string error_msg = 2;
 }
 
-message RunCSandboxFindFilesRequest {
+message RunCSandboxFindInFilesRequest {
   string container_id = 1;
   string container_path = 2;
   string pattern = 3;
 }
 
-message RunCSandboxFindFilesResponse {
+message RunCSandboxFindInFilesResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated types.FileSearchResult results = 3;

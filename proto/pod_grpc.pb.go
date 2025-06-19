@@ -35,7 +35,7 @@ const (
 	PodService_SandboxDeleteDirectory_FullMethodName = "/pod.PodService/SandboxDeleteDirectory"
 	PodService_SandboxExposePort_FullMethodName      = "/pod.PodService/SandboxExposePort"
 	PodService_SandboxReplaceInFiles_FullMethodName  = "/pod.PodService/SandboxReplaceInFiles"
-	PodService_SandboxFindFiles_FullMethodName       = "/pod.PodService/SandboxFindFiles"
+	PodService_SandboxFindInFiles_FullMethodName     = "/pod.PodService/SandboxFindInFiles"
 	PodService_SandboxConnect_FullMethodName         = "/pod.PodService/SandboxConnect"
 	PodService_SandboxUpdateTTL_FullMethodName       = "/pod.PodService/SandboxUpdateTTL"
 )
@@ -60,7 +60,7 @@ type PodServiceClient interface {
 	SandboxDeleteDirectory(ctx context.Context, in *PodSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*PodSandboxDeleteDirectoryResponse, error)
 	SandboxExposePort(ctx context.Context, in *PodSandboxExposePortRequest, opts ...grpc.CallOption) (*PodSandboxExposePortResponse, error)
 	SandboxReplaceInFiles(ctx context.Context, in *PodSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*PodSandboxReplaceInFilesResponse, error)
-	SandboxFindFiles(ctx context.Context, in *PodSandboxFindFilesRequest, opts ...grpc.CallOption) (*PodSandboxFindFilesResponse, error)
+	SandboxFindInFiles(ctx context.Context, in *PodSandboxFindInFilesRequest, opts ...grpc.CallOption) (*PodSandboxFindInFilesResponse, error)
 	SandboxConnect(ctx context.Context, in *PodSandboxConnectRequest, opts ...grpc.CallOption) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(ctx context.Context, in *PodSandboxUpdateTTLRequest, opts ...grpc.CallOption) (*PodSandboxUpdateTTLResponse, error)
 }
@@ -217,9 +217,9 @@ func (c *podServiceClient) SandboxReplaceInFiles(ctx context.Context, in *PodSan
 	return out, nil
 }
 
-func (c *podServiceClient) SandboxFindFiles(ctx context.Context, in *PodSandboxFindFilesRequest, opts ...grpc.CallOption) (*PodSandboxFindFilesResponse, error) {
-	out := new(PodSandboxFindFilesResponse)
-	err := c.cc.Invoke(ctx, PodService_SandboxFindFiles_FullMethodName, in, out, opts...)
+func (c *podServiceClient) SandboxFindInFiles(ctx context.Context, in *PodSandboxFindInFilesRequest, opts ...grpc.CallOption) (*PodSandboxFindInFilesResponse, error) {
+	out := new(PodSandboxFindInFilesResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxFindInFiles_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +264,7 @@ type PodServiceServer interface {
 	SandboxDeleteDirectory(context.Context, *PodSandboxDeleteDirectoryRequest) (*PodSandboxDeleteDirectoryResponse, error)
 	SandboxExposePort(context.Context, *PodSandboxExposePortRequest) (*PodSandboxExposePortResponse, error)
 	SandboxReplaceInFiles(context.Context, *PodSandboxReplaceInFilesRequest) (*PodSandboxReplaceInFilesResponse, error)
-	SandboxFindFiles(context.Context, *PodSandboxFindFilesRequest) (*PodSandboxFindFilesResponse, error)
+	SandboxFindInFiles(context.Context, *PodSandboxFindInFilesRequest) (*PodSandboxFindInFilesResponse, error)
 	SandboxConnect(context.Context, *PodSandboxConnectRequest) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(context.Context, *PodSandboxUpdateTTLRequest) (*PodSandboxUpdateTTLResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
@@ -322,8 +322,8 @@ func (UnimplementedPodServiceServer) SandboxExposePort(context.Context, *PodSand
 func (UnimplementedPodServiceServer) SandboxReplaceInFiles(context.Context, *PodSandboxReplaceInFilesRequest) (*PodSandboxReplaceInFilesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxReplaceInFiles not implemented")
 }
-func (UnimplementedPodServiceServer) SandboxFindFiles(context.Context, *PodSandboxFindFilesRequest) (*PodSandboxFindFilesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SandboxFindFiles not implemented")
+func (UnimplementedPodServiceServer) SandboxFindInFiles(context.Context, *PodSandboxFindInFilesRequest) (*PodSandboxFindInFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxFindInFiles not implemented")
 }
 func (UnimplementedPodServiceServer) SandboxConnect(context.Context, *PodSandboxConnectRequest) (*PodSandboxConnectResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxConnect not implemented")
@@ -632,20 +632,20 @@ func _PodService_SandboxReplaceInFiles_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PodService_SandboxFindFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PodSandboxFindFilesRequest)
+func _PodService_SandboxFindInFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxFindInFilesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PodServiceServer).SandboxFindFiles(ctx, in)
+		return srv.(PodServiceServer).SandboxFindInFiles(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PodService_SandboxFindFiles_FullMethodName,
+		FullMethod: PodService_SandboxFindInFiles_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PodServiceServer).SandboxFindFiles(ctx, req.(*PodSandboxFindFilesRequest))
+		return srv.(PodServiceServer).SandboxFindInFiles(ctx, req.(*PodSandboxFindInFilesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -758,8 +758,8 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PodService_SandboxReplaceInFiles_Handler,
 		},
 		{
-			MethodName: "SandboxFindFiles",
-			Handler:    _PodService_SandboxFindFiles_Handler,
+			MethodName: "SandboxFindInFiles",
+			Handler:    _PodService_SandboxFindInFiles_Handler,
 		},
 		{
 			MethodName: "SandboxConnect",

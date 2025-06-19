@@ -354,26 +354,26 @@ func (s *GenericPodService) SandboxReplaceInFiles(ctx context.Context, in *pb.Po
 	}, nil
 }
 
-func (s *GenericPodService) SandboxFindFiles(ctx context.Context, in *pb.PodSandboxFindFilesRequest) (*pb.PodSandboxFindFilesResponse, error) {
+func (s *GenericPodService) SandboxFindInFiles(ctx context.Context, in *pb.PodSandboxFindInFilesRequest) (*pb.PodSandboxFindInFilesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
-		return &pb.PodSandboxFindFilesResponse{
+		return &pb.PodSandboxFindInFilesResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to connect to sandbox",
 		}, nil
 	}
 
-	resp, err := client.SandboxFindFiles(in.ContainerId, in.ContainerPath, in.Pattern)
+	resp, err := client.SandboxFindInFiles(in.ContainerId, in.ContainerPath, in.Pattern)
 	if err != nil {
-		return &pb.PodSandboxFindFilesResponse{
+		return &pb.PodSandboxFindInFilesResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to find files",
 		}, nil
 	}
 
-	return &pb.PodSandboxFindFilesResponse{
+	return &pb.PodSandboxFindInFilesResponse{
 		Ok:      true,
 		Results: resp.Results,
 	}, nil
