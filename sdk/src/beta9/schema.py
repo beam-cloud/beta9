@@ -388,7 +388,7 @@ class JSON(SchemaField):
         """Validate and process JSON input."""
 
         # If value is already a dict/list, use it directly
-        if isinstance(value, (dict, list)):
+        if isinstance(value, (dict, list, str, int, float, bool)) or value is None:
             return value
         elif isinstance(value, str):
             try:
