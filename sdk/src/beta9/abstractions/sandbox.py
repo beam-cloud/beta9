@@ -24,7 +24,7 @@ from ..clients.pod import (
     PodSandboxExecRequest,
     PodSandboxExposePortRequest,
     PodSandboxExposePortResponse,
-    PodSandboxFindFilesRequest,
+    PodSandboxFindInFilesRequest,
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
     PodSandboxReplaceInFilesRequest,
@@ -517,7 +517,10 @@ class SandboxProcessManager:
         return process
 
     def exec(
-        self, *args, cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None
+        self,
+        *args,
+        cwd: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
     ) -> "SandboxProcess":
         """
         Run an arbitrary command in the sandbox.
@@ -549,7 +552,10 @@ class SandboxProcessManager:
         return self._exec(*args, cwd=cwd, env=env)
 
     def _exec(
-        self, *args, cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None
+        self,
+        *args,
+        cwd: Optional[str] = None,
+        env: Optional[Dict[str, str]] = None,
     ) -> "SandboxProcess":
         """
         Internal method to execute commands in the sandbox.
@@ -1366,7 +1372,7 @@ class SandboxFileSystem:
         if not response.ok:
             raise SandboxFileSystemError(response.error_msg)
 
-    def find_files(self, sandbox_path: str, pattern: str) -> List["SandboxFileInfo"]:
+    def find_in_files(self, sandbox_path: str, pattern: str) -> List["SandboxFileInfo"]:
         """
         Find files matching a pattern in the sandbox.
 
@@ -1386,14 +1392,14 @@ class SandboxFileSystem:
         Example:
             ```python
             # Find all Python files
-            python_files = fs.find_files("/workspace", "*.py")
+            python_files = fs.find_in_files("/workspace", "*.py")
 
             # Find all log files
-            log_files = fs.find_files("/var/log", "*.log")
+            log_files = fs.find_in_files("/var/log", "*.log")
             ```
         """
-        response = self.sandbox_instance.stub.sandbox_find_files(
-            PodSandboxFindFilesRequest(
+        response = self.sandbox_instance.stub.sandbox_find_in_files(
+            PodSandboxFindInFilesRequest(
                 container_id=self.sandbox_instance.container_id,
                 container_path=sandbox_path,
                 pattern=pattern,

@@ -36,8 +36,8 @@ service PodService {
       returns (PodSandboxExposePortResponse) {}
   rpc SandboxReplaceInFiles(PodSandboxReplaceInFilesRequest)
       returns (PodSandboxReplaceInFilesResponse) {}
-  rpc SandboxFindFiles(PodSandboxFindFilesRequest)
-      returns (PodSandboxFindFilesResponse) {}
+  rpc SandboxFindInFiles(PodSandboxFindInFilesRequest)
+      returns (PodSandboxFindInFilesResponse) {}
   rpc SandboxConnect(PodSandboxConnectRequest)
       returns (PodSandboxConnectResponse) {}
   rpc SandboxUpdateTTL(PodSandboxUpdateTTLRequest)
@@ -227,13 +227,13 @@ message PodSandboxExposePortResponse {
   string error_msg = 3;
 }
 
-message PodSandboxFindFilesRequest {
+message PodSandboxFindInFilesRequest {
   string container_id = 1;
   string container_path = 2;
   string pattern = 3;
 }
 
-message PodSandboxFindFilesResponse {
+message PodSandboxFindInFilesResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated types.FileSearchResult results = 3;

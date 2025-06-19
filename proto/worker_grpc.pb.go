@@ -39,7 +39,7 @@ const (
 	RunCService_RunCSandboxDeleteDirectory_FullMethodName = "/runc.RunCService/RunCSandboxDeleteDirectory"
 	RunCService_RunCSandboxExposePort_FullMethodName      = "/runc.RunCService/RunCSandboxExposePort"
 	RunCService_RunCSandboxReplaceInFiles_FullMethodName  = "/runc.RunCService/RunCSandboxReplaceInFiles"
-	RunCService_RunCSandboxFindFiles_FullMethodName       = "/runc.RunCService/RunCSandboxFindFiles"
+	RunCService_RunCSandboxFindInFiles_FullMethodName     = "/runc.RunCService/RunCSandboxFindInFiles"
 )
 
 // RunCServiceClient is the client API for RunCService service.
@@ -66,7 +66,7 @@ type RunCServiceClient interface {
 	RunCSandboxDeleteDirectory(ctx context.Context, in *RunCSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteDirectoryResponse, error)
 	RunCSandboxExposePort(ctx context.Context, in *RunCSandboxExposePortRequest, opts ...grpc.CallOption) (*RunCSandboxExposePortResponse, error)
 	RunCSandboxReplaceInFiles(ctx context.Context, in *RunCSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxReplaceInFilesResponse, error)
-	RunCSandboxFindFiles(ctx context.Context, in *RunCSandboxFindFilesRequest, opts ...grpc.CallOption) (*RunCSandboxFindFilesResponse, error)
+	RunCSandboxFindInFiles(ctx context.Context, in *RunCSandboxFindInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxFindInFilesResponse, error)
 }
 
 type runCServiceClient struct {
@@ -303,9 +303,9 @@ func (c *runCServiceClient) RunCSandboxReplaceInFiles(ctx context.Context, in *R
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxFindFiles(ctx context.Context, in *RunCSandboxFindFilesRequest, opts ...grpc.CallOption) (*RunCSandboxFindFilesResponse, error) {
-	out := new(RunCSandboxFindFilesResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxFindFiles_FullMethodName, in, out, opts...)
+func (c *runCServiceClient) RunCSandboxFindInFiles(ctx context.Context, in *RunCSandboxFindInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxFindInFilesResponse, error) {
+	out := new(RunCSandboxFindInFilesResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxFindInFiles_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -336,7 +336,7 @@ type RunCServiceServer interface {
 	RunCSandboxDeleteDirectory(context.Context, *RunCSandboxDeleteDirectoryRequest) (*RunCSandboxDeleteDirectoryResponse, error)
 	RunCSandboxExposePort(context.Context, *RunCSandboxExposePortRequest) (*RunCSandboxExposePortResponse, error)
 	RunCSandboxReplaceInFiles(context.Context, *RunCSandboxReplaceInFilesRequest) (*RunCSandboxReplaceInFilesResponse, error)
-	RunCSandboxFindFiles(context.Context, *RunCSandboxFindFilesRequest) (*RunCSandboxFindFilesResponse, error)
+	RunCSandboxFindInFiles(context.Context, *RunCSandboxFindInFilesRequest) (*RunCSandboxFindInFilesResponse, error)
 	mustEmbedUnimplementedRunCServiceServer()
 }
 
@@ -404,8 +404,8 @@ func (UnimplementedRunCServiceServer) RunCSandboxExposePort(context.Context, *Ru
 func (UnimplementedRunCServiceServer) RunCSandboxReplaceInFiles(context.Context, *RunCSandboxReplaceInFilesRequest) (*RunCSandboxReplaceInFilesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxReplaceInFiles not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxFindFiles(context.Context, *RunCSandboxFindFilesRequest) (*RunCSandboxFindFilesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxFindFiles not implemented")
+func (UnimplementedRunCServiceServer) RunCSandboxFindInFiles(context.Context, *RunCSandboxFindInFilesRequest) (*RunCSandboxFindInFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxFindInFiles not implemented")
 }
 func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
 
@@ -786,20 +786,20 @@ func _RunCService_RunCSandboxReplaceInFiles_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxFindFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxFindFilesRequest)
+func _RunCService_RunCSandboxFindInFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxFindInFilesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxFindFiles(ctx, in)
+		return srv.(RunCServiceServer).RunCSandboxFindInFiles(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxFindFiles_FullMethodName,
+		FullMethod: RunCService_RunCSandboxFindInFiles_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxFindFiles(ctx, req.(*RunCSandboxFindFilesRequest))
+		return srv.(RunCServiceServer).RunCSandboxFindInFiles(ctx, req.(*RunCSandboxFindInFilesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -884,8 +884,8 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _RunCService_RunCSandboxReplaceInFiles_Handler,
 		},
 		{
-			MethodName: "RunCSandboxFindFiles",
-			Handler:    _RunCService_RunCSandboxFindFiles_Handler,
+			MethodName: "RunCSandboxFindInFiles",
+			Handler:    _RunCService_RunCSandboxFindInFiles_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

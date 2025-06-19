@@ -894,15 +894,15 @@ func (s *RunCServer) RunCSandboxReplaceInFiles(ctx context.Context, in *pb.RunCS
 	return &pb.RunCSandboxReplaceInFilesResponse{Ok: true}, nil
 }
 
-func (s *RunCServer) RunCSandboxFindFiles(ctx context.Context, in *pb.RunCSandboxFindFilesRequest) (*pb.RunCSandboxFindFilesResponse, error) {
+func (s *RunCServer) RunCSandboxFindInFiles(ctx context.Context, in *pb.RunCSandboxFindInFilesRequest) (*pb.RunCSandboxFindInFilesResponse, error) {
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
-		return &pb.RunCSandboxFindFilesResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+		return &pb.RunCSandboxFindInFilesResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
 	err := s.waitForContainer(ctx, in.ContainerId)
 	if err != nil {
-		return &pb.RunCSandboxFindFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxFindInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	containerPath := in.ContainerPath
@@ -937,9 +937,9 @@ func (s *RunCServer) RunCSandboxFindFiles(ctx context.Context, in *pb.RunCSandbo
 		// ripgrep returns exit code 1 when no matches are found, which is not an error
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			// No matches found, return empty results
-			return &pb.RunCSandboxFindFilesResponse{Ok: true, Results: []*pb.FileSearchResult{}}, nil
+			return &pb.RunCSandboxFindInFilesResponse{Ok: true, Results: []*pb.FileSearchResult{}}, nil
 		}
-		return &pb.RunCSandboxFindFilesResponse{
+		return &pb.RunCSandboxFindInFilesResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("ripgrep failed: %v, stderr: %s", err, stderr.String()),
 		}, nil
@@ -992,6 +992,7 @@ func (s *RunCServer) RunCSandboxFindFiles(ctx context.Context, in *pb.RunCSandbo
 		lineNum := rgResult.Data.LineNumber
 
 		// Calculate column positions for each submatch
+		log.Printf("submatches: %v", rgResult.Data.Submatches)
 		for _, submatch := range rgResult.Data.Submatches {
 			startCol := submatch.Start + 1
 			endCol := submatch.End
@@ -1010,7 +1011,8 @@ func (s *RunCServer) RunCSandboxFindFiles(ctx context.Context, in *pb.RunCSandbo
 				Content: submatch.Match.Text,
 			}
 
-			fileMatches[filePath] = append(fileMatches[filePath], match)
+			cleanedPath := filepath.Clean(filepath.Join(containerPath, strings.TrimPrefix(filePath, hostPath)))
+			fileMatches[cleanedPath] = append(fileMatches[cleanedPath], match)
 		}
 	}
 
@@ -1022,5 +1024,5 @@ func (s *RunCServer) RunCSandboxFindFiles(ctx context.Context, in *pb.RunCSandbo
 		})
 	}
 
-	return &pb.RunCSandboxFindFilesResponse{Ok: true, Results: results}, nil
+	return &pb.RunCSandboxFindInFilesResponse{Ok: true, Results: results}, nil
 }

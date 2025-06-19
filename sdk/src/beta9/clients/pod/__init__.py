@@ -248,14 +248,14 @@ class PodSandboxExposePortResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxFindFilesRequest(betterproto.Message):
+class PodSandboxFindInFilesRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     container_path: str = betterproto.string_field(2)
     pattern: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxFindFilesResponse(betterproto.Message):
+class PodSandboxFindInFilesResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
     results: List["_types__.FileSearchResult"] = betterproto.message_field(3)
@@ -428,14 +428,14 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxReplaceInFilesResponse,
         )(pod_sandbox_replace_in_files_request)
 
-    def sandbox_find_files(
-        self, pod_sandbox_find_files_request: "PodSandboxFindFilesRequest"
-    ) -> "PodSandboxFindFilesResponse":
+    def sandbox_find_in_files(
+        self, pod_sandbox_find_in_files_request: "PodSandboxFindInFilesRequest"
+    ) -> "PodSandboxFindInFilesResponse":
         return self._unary_unary(
-            "/pod.PodService/SandboxFindFiles",
-            PodSandboxFindFilesRequest,
-            PodSandboxFindFilesResponse,
-        )(pod_sandbox_find_files_request)
+            "/pod.PodService/SandboxFindInFiles",
+            PodSandboxFindInFilesRequest,
+            PodSandboxFindInFilesResponse,
+        )(pod_sandbox_find_in_files_request)
 
     def sandbox_connect(
         self, pod_sandbox_connect_request: "PodSandboxConnectRequest"

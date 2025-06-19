@@ -184,8 +184,8 @@ func (c *RunCClient) SandboxReplaceInFiles(containerId, containerPath, oldString
 	return resp, nil
 }
 
-func (c *RunCClient) SandboxFindFiles(containerId, containerPath, pattern string) (*pb.RunCSandboxFindFilesResponse, error) {
-	resp, err := c.client.RunCSandboxFindFiles(context.TODO(), &pb.RunCSandboxFindFilesRequest{ContainerId: containerId, ContainerPath: containerPath, Pattern: pattern})
+func (c *RunCClient) SandboxFindInFiles(containerId, containerPath, pattern string) (*pb.RunCSandboxFindInFilesResponse, error) {
+	resp, err := c.client.RunCSandboxFindInFiles(context.TODO(), &pb.RunCSandboxFindInFilesRequest{ContainerId: containerId, ContainerPath: containerPath, Pattern: pattern})
 	if err != nil {
 		return resp, err
 	}
