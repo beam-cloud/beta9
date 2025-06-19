@@ -759,7 +759,7 @@ func (s *RunCServer) getHostPathFromContainerPath(containerPath string, instance
 	for _, mount := range instance.Spec.Mounts {
 		if containerPath == mount.Destination || strings.HasPrefix(containerPath, mount.Destination+"/") {
 			relativePath := strings.TrimPrefix(containerPath, mount.Destination)
-			return filepath.Join(mount.Source, relativePath)
+			return filepath.Join(mount.Source, strings.TrimPrefix(relativePath, "/"))
 		}
 	}
 
