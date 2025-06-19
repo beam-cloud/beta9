@@ -1462,7 +1462,28 @@ class SandboxFileSystem:
             )
         )
 
+        results = []
+        for result in response.results:
+            matches = []
+            for match in result.matches:
+                matches.append(
+                    SandboxFileSearchMatch(
+                        range=SandboxFileSearchRange(
+                            start=SandboxFilePosition(
+                                line=match.range.start.line,
+                                column=match.range.start.column,
+                            ),
+                            end=SandboxFilePosition(
+                                line=match.range.end.line,
+                                column=match.range.end.column,
+                            ),
+                        ),
+                        content=match.content,
+                    )
+                )
+            results.append(SandboxFileSearchResult(path=result.path, matches=matches))
+
         if not response.ok:
             raise SandboxFileSystemError(response.error_msg)
 
-        return response.results
+        return results

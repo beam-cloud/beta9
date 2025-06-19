@@ -1010,7 +1010,7 @@ func (s *RunCServer) RunCSandboxFindInFiles(ctx context.Context, in *pb.RunCSand
 				Content: submatch.Match.Text,
 			}
 
-			cleanedPath := filepath.Clean(filepath.Join(containerPath, strings.TrimPrefix(filePath, hostPath)))
+			cleanedPath := filepath.Clean(filepath.Join(containerPath, strings.TrimPrefix(filePath, hostPath+string(os.PathSeparator))))
 			fileMatches[cleanedPath] = append(fileMatches[cleanedPath], match)
 		}
 	}
