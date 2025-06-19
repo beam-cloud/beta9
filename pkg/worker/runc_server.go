@@ -764,7 +764,7 @@ func (s *RunCServer) getHostPathFromContainerPath(containerPath string, instance
 	}
 
 	// If no mount matches, use the overlay root path
-	return filepath.Join(instance.Spec.Root.Path, filepath.Clean(containerPath))
+	return filepath.Join(instance.Spec.Root.Path, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
 }
 
 func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandboxExposePortRequest) (*pb.RunCSandboxExposePortResponse, error) {
