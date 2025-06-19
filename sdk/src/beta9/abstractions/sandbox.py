@@ -37,7 +37,6 @@ from ..clients.pod import (
     PodSandboxUploadFileRequest,
     PodServiceStub,
 )
-from ..clients.types import FileSearchResult
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias
 
@@ -1067,6 +1066,62 @@ class SandboxFileInfo:
         return f"SandboxFileInfo(name='{self.name}', is_dir={self.is_dir}, size={self.size}, mode={self.mode}, mod_time={self.mod_time}, permissions={octal_perms}, owner='{self.owner}', group='{self.group}')"
 
 
+@dataclass
+class SandboxFilePosition:
+    """
+    A position in a file.
+
+    Attributes:
+        line (int): The line number.
+        column (int): The column number.
+    """
+
+    line: int
+    column: int
+
+
+@dataclass
+class SandboxFileSearchRange:
+    """
+    A range in a file.
+
+    Attributes:
+        start (SandboxFilePosition): The start position.
+        end (SandboxFilePosition): The end position.
+    """
+
+    start: SandboxFilePosition
+    end: SandboxFilePosition
+
+
+@dataclass
+class SandboxFileSearchMatch:
+    """
+    A match in a file.
+
+    Attributes:
+        range (SandboxFileSearchRange): The range of the match.
+        content (str): The content of the match.
+    """
+
+    range: SandboxFileSearchRange
+    content: str
+
+
+@dataclass
+class SandboxFileSearchResult:
+    """
+    A search result in a file.
+
+    Attributes:
+        path (str): The path to the file.
+        matches (List[SandboxFileSearchMatch]): The matches in the file with the start and end position of the match.
+    """
+
+    path: str
+    matches: List[SandboxFileSearchMatch]
+
+
 class SandboxFileSystem:
     """
     File system interface for managing files within a sandbox.
@@ -1373,7 +1428,7 @@ class SandboxFileSystem:
         if not response.ok:
             raise SandboxFileSystemError(response.error_msg)
 
-    def find_in_files(self, sandbox_path: str, pattern: str) -> List[FileSearchResult]:
+    def find_in_files(self, sandbox_path: str, pattern: str) -> List[SandboxFileSearchResult]:
         """
         Find files matching a pattern in the sandbox.
 
