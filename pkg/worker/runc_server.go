@@ -992,7 +992,6 @@ func (s *RunCServer) RunCSandboxFindInFiles(ctx context.Context, in *pb.RunCSand
 		lineNum := rgResult.Data.LineNumber
 
 		// Calculate column positions for each submatch
-		log.Printf("submatches: %v", rgResult.Data.Submatches)
 		for _, submatch := range rgResult.Data.Submatches {
 			startCol := submatch.Start + 1
 			endCol := submatch.End
