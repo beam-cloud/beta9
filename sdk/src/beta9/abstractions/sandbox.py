@@ -282,6 +282,7 @@ class SandboxProcessManager:
             code (str): The python code to run.
             blocking (bool): Whether to wait for the process to complete. Default is True.
             cwd (Optional[str]): The working directory to run the code in. Default is None.
+            env (Optional[Dict[str, str]]): The environment variables to set for the python process. Default is None.
         """
         process = self._exec("python3", "-c", code, cwd=cwd, env=env)
 
