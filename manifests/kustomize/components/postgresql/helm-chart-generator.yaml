@@ -23,7 +23,7 @@ valuesInline:
         database: main
   image:
     registry: public.ecr.aws
-    repository: n4e0e1y0/postgres
+    repository: docker/library/postgres
     tag: 16.1
     pullPolicy: IfNotPresent
   primary:
