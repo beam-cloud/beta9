@@ -154,7 +154,6 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 		}
 
 		// Skip containers with keep warm locks
-		log.Info().Str("instance_name", i.Name).Str("key", Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Msg("Key is (INSIDE STOPPABLE CONTAINERS)")
 		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {
 			log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")

@@ -62,19 +62,16 @@ func (em *ContainerEventManager) handleContainerEvents(ctx context.Context) {
 				out the stubId.
 			*/
 
-			// Find which prefix this event belongs to
+			// Find which prefix this event belongs to and reconstruct the container ID
 			var containerId string
 			var stubId string
 
 			for _, prefix := range em.containerPrefixes {
-				if strings.HasPrefix(event.Key, "-") {
-					// Event key starts with "-", so we need to reconstruct the full container ID
-					containerId = fmt.Sprintf("%s%s", prefix, event.Key)
-					containerIdParts := strings.Split(containerId, "-")
-					if len(containerIdParts) >= 6 {
-						stubId = strings.Join(containerIdParts[1:6], "-")
-						break
-					}
+				containerId = fmt.Sprintf("%s%s", prefix, event.Key)
+				containerIdParts := strings.Split(containerId, "-")
+				if len(containerIdParts) >= 6 {
+					stubId = strings.Join(containerIdParts[1:6], "-")
+					break
 				}
 			}
 

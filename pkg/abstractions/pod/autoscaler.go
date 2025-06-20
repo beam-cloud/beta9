@@ -4,7 +4,6 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 )
 
 type podAutoscalerSample struct {
@@ -40,8 +39,6 @@ func podAutoscalerSampleFunc(i *podInstance) (*podAutoscalerSample, error) {
 // podScaleFunc scales based on the number of desired containers
 func podScaleFunc(i *podInstance, s *podAutoscalerSample) *abstractions.AutoscalerResult {
 	desiredContainers := 1
-
-	log.Info().Str("instance_name", i.Name).Int("current_containers", s.CurrentContainers).Int64("total_connections", s.TotalConnections).Msg("Autoscaler sample")
 
 	if i.Stub.Type == types.StubType(types.StubTypePodRun) || i.Stub.Type == types.StubType(types.StubTypeSandbox) {
 		if s.CurrentContainers == 0 {
