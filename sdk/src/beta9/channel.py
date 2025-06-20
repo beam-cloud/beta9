@@ -173,11 +173,19 @@ def prompt_first_auth(settings: SDKSettings) -> None:
     terminal.header(f"Welcome to {settings.name.title()}! Let's get started 📡")
     terminal.print(settings.ascii_logo, highlight=True)
 
-    name, context = prompt_for_config_context(
-        name=DEFAULT_CONTEXT_NAME,
-        gateway_host=settings.gateway_host,
-        gateway_port=settings.gateway_port,
-    )
+    if settings.api_token:
+        name = DEFAULT_CONTEXT_NAME
+        context = ConfigContext(
+            token=settings.api_token,
+            gateway_host=settings.gateway_host,
+            gateway_port=settings.gateway_port,
+        )
+    else:
+        name, context = prompt_for_config_context(
+            name=DEFAULT_CONTEXT_NAME,
+            gateway_host=settings.gateway_host,
+            gateway_port=settings.gateway_port,
+        )
 
     channel = Channel(
         addr=f"{context.gateway_host}:{context.gateway_port}",
