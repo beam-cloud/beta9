@@ -3,9 +3,9 @@
 <img alt="Logo" src="static/beam-logo-white.png" width="30%">
 </p>
 
-## Ultrafast AI Inference
+## Run AI Workloads at Scale
 
-### Scalable Infrastructure for Running Your AI Workloads at Scale
+### Secure, high-performance AI infrastructure in Python.
 
 <p align="center">
   <a href="https://github.com/beam-cloud/beta9/stargazers">
@@ -35,7 +35,7 @@ pip install beam-client
 
 ## Features
 
-- **Extremely Fast**: Launch containers in 200ms using a custom `runc` runtime
+- **Extremely Fast**: Launch containers in under a second using a custom container runtime
 - **Parallelization and Concurrency**: Fan out workloads to 100s of containers
 - **First-Class Developer Experience**: Hot-reloading, webhooks, and scheduled jobs
 - **Scale-to-Zero**: Workloads are serverless by default
@@ -47,25 +47,57 @@ pip install beam-client
 1. Create an account at https://beam.cloud
 2. Follow our [Getting Started Guide](https://platform.beam.cloud/onboarding)
 
-## Creating your first inference endpoint
+## Creating a sandbox
 
-With Beam, everything is Python-native—no YAML, no config files, just code:
+Spin up isolated containers to run LLM-generated code:
+
+```python
+from beam import Image, Sandbox
+
+
+sandbox = Sandbox(image=Image()).create()
+response = sandbox.process.run_code("print('I am running remotely')")
+
+print(response.result)
+```
+
+## Deploy a serverless inference endpoint
+
+Create an autoscaling endpoint for your custom model:
 
 ```python
 from beam import Image, endpoint
-
+from beam import QueueDepthAutoscaler
 
 @endpoint(
     image=Image(python_version="python3.11"),
     gpu="A10G",
-    cpu=1,
-    memory=1024,
+    cpu=2,
+    memory="16Gi",
+    autoscaler=QueueDepthAutoscaler(max_containers=5, tasks_per_container=30)
 )
 def handler():
     return {"label": "cat", "confidence": 0.97}
 ```
 
-This snippet deploys your code to a GPU-backed container with an HTTPS endpoint—ready to serve requests immediately (`https://my-model-v1.app.beam.cloud/`)
+## Run background tasks
+
+Replace your Celery queue with a simple decorator:
+
+```python
+from beam import Image, task_queue
+
+@task_queue(
+    image=Image(python_version="python3.11"),
+    cpu=1,
+    memory=1024,
+)
+def handler(images):
+    for image in images:
+      # Do something
+      pass
+
+```
 
 > ## Self-Hosting vs Cloud
 >
