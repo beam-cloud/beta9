@@ -46,6 +46,7 @@ class SDKSettings:
     config_path: Path = Path("~/.beta9/config.ini").expanduser()
     ascii_logo: str = DEFAULT_ASCII_LOGO
     use_defaults_in_prompt: bool = False
+    api_token: Optional[str] = os.getenv("BETA9_TOKEN")
 
     def __post_init__(self, **kwargs):
         if p := os.getenv("CONFIG_PATH"):
