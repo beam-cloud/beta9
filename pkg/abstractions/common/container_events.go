@@ -12,36 +12,39 @@ import (
 type ContainerEventManager struct {
 	ctx               context.Context
 	containerPrefixes []string
-	keyEventChan      chan common.KeyEvent
+	keyEventChans     map[string]chan common.KeyEvent
 	keyEventManager   *common.KeyEventManager
 	instanceFactory   func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
 }
 
 func NewContainerEventManager(ctx context.Context, containerPrefixes []string, keyEventManager *common.KeyEventManager, instanceFactory func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)) (*ContainerEventManager, error) {
-	keyEventChan := make(chan common.KeyEvent)
+	keyEventChans := make(map[string]chan common.KeyEvent)
+	for _, prefix := range containerPrefixes {
+		keyEventChans[prefix] = make(chan common.KeyEvent)
+	}
 
 	return &ContainerEventManager{
 		ctx:               ctx,
 		containerPrefixes: containerPrefixes,
+		keyEventChans:     keyEventChans,
 		instanceFactory:   instanceFactory,
-		keyEventChan:      keyEventChan,
 		keyEventManager:   keyEventManager,
 	}, nil
 }
 
 func (em *ContainerEventManager) Listen() {
-	// Listen for events on all container prefixes
 	for _, prefix := range em.containerPrefixes {
-		go em.keyEventManager.ListenForPattern(em.ctx, common.RedisKeys.SchedulerContainerState(prefix), em.keyEventChan)
+		go em.keyEventManager.ListenForPattern(em.ctx, common.RedisKeys.SchedulerContainerState(prefix), em.keyEventChans[prefix])
+		go em.handleContainerEventsForPrefix(em.ctx, prefix)
 	}
-
-	go em.handleContainerEvents(em.ctx)
 }
 
-func (em *ContainerEventManager) handleContainerEvents(ctx context.Context) {
+func (em *ContainerEventManager) handleContainerEventsForPrefix(ctx context.Context, prefix string) {
+	keyEventChan := em.keyEventChans[prefix]
+
 	for {
 		select {
-		case event := <-em.keyEventChan:
+		case event := <-keyEventChan:
 			operation := event.Operation
 
 			/*
@@ -62,24 +65,23 @@ func (em *ContainerEventManager) handleContainerEvents(ctx context.Context) {
 				out the stubId.
 			*/
 
-			// Find which prefix this event belongs to and reconstruct the container ID
-			var containerId string
-			var stubId string
+			// Reconstruct the container ID using the known prefix
+			containerId := fmt.Sprintf("%s%s", prefix, event.Key)
+			containerIdParts := strings.Split(containerId, "-")
 
-			for _, prefix := range em.containerPrefixes {
-				containerId = fmt.Sprintf("%s%s", prefix, event.Key)
-				containerIdParts := strings.Split(containerId, "-")
-				if len(containerIdParts) >= 6 {
-					stubId = strings.Join(containerIdParts[1:6], "-")
-					break
-				}
-			}
-
-			// Skip if we couldn't determine the container ID or stub ID
-			if containerId == "" || stubId == "" {
+			// Check if this produces a valid container ID structure
+			// We expect: prefix-uuid-uuid-uuid-uuid-uuid-container-uuid
+			// So we need at least 7 parts: [prefix, uuid1, uuid2, uuid3, uuid4, uuid5, container-uuid]
+			if len(containerIdParts) < 7 {
 				continue
 			}
 
+			// Verify the first part matches our prefix
+			if containerIdParts[0] != prefix {
+				continue
+			}
+
+			stubId := strings.Join(containerIdParts[1:6], "-")
 			instance, err := em.instanceFactory(em.ctx, stubId)
 			if err != nil {
 				continue
