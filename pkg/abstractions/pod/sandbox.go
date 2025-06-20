@@ -3,6 +3,7 @@ package pod
 import (
 	"context"
 	"errors"
+	"log"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -453,6 +454,7 @@ func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSand
 	}
 
 	key := Keys.podKeepWarmLock(authInfo.Workspace.Name, instance.Stub.ExternalId, in.ContainerId)
+	log.Println("Key is (INSIDE UPDATE TTL)", key)
 	if in.Ttl <= 0 {
 		s.rdb.Set(context.Background(), key, 1, 0) // Never expire
 	} else {

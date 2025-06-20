@@ -108,7 +108,7 @@ func NewRedisTaskQueueService(
 
 	// Listen for container events with a certain prefix
 	// For example if a container is created, destroyed, or updated
-	eventManager, err := abstractions.NewContainerEventManager(ctx, taskQueueContainerPrefix, keyEventManager, tq.InstanceFactory)
+	eventManager, err := abstractions.NewContainerEventManager(ctx, []string{taskQueueContainerPrefix}, keyEventManager, tq.InstanceFactory)
 	if err != nil {
 		return nil, err
 	}

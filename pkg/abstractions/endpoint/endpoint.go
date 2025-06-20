@@ -106,7 +106,7 @@ func NewHTTPEndpointService(
 
 	// Listen for container events with a certain prefix
 	// For example if a container is created, destroyed, or updated
-	eventManager, err := abstractions.NewContainerEventManager(ctx, endpointContainerPrefix, keyEventManager, es.InstanceFactory)
+	eventManager, err := abstractions.NewContainerEventManager(ctx, []string{endpointContainerPrefix}, keyEventManager, es.InstanceFactory)
 	if err != nil {
 		return nil, err
 	}

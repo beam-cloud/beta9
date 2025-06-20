@@ -90,7 +90,7 @@ func NewPodService(
 
 	// Listen for container events with a certain prefix
 	// For example if a container is created, destroyed, or updated
-	eventManager, err := abstractions.NewContainerEventManager(ctx, podContainerPrefix, keyEventManager, ps.InstanceFactory)
+	eventManager, err := abstractions.NewContainerEventManager(ctx, []string{podContainerPrefix, sandboxContainerPrefix}, keyEventManager, ps.InstanceFactory)
 	if err != nil {
 		return nil, err
 	}
