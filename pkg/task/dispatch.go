@@ -203,12 +203,7 @@ func (d *Dispatcher) monitor(ctx context.Context) {
 				}
 
 				if !claimed {
-					expires := taskMessage.Policy.Expires
-					if expires.IsZero() {
-						expires = time.Now().Add(time.Duration(taskMessage.Policy.TTL) * time.Second)
-					}
-
-					if time.Now().After(expires) {
+					if time.Now().After(taskMessage.Policy.Expires) {
 						err = task.Cancel(ctx, types.TaskExpired)
 						if err != nil {
 							log.Error().Str("task_id", task.Metadata().TaskId).Err(err).Msg("dispatcher unable to cancel task")
