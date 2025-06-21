@@ -69,6 +69,8 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		return err
 	}
 
+	defer t.es.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
+
 	// Don't update tasks that are already in a terminal state
 	if task.Status.IsCompleted() {
 		return nil
@@ -91,7 +93,7 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		return err
 	}
 
-	return t.es.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
+	return nil
 }
 
 func (t *EndpointTask) HeartBeat(ctx context.Context) (bool, error) {
