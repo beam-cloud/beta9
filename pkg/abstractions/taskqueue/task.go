@@ -76,7 +76,7 @@ func (t *TaskQueueTask) HeartBeat(ctx context.Context) (bool, error) {
 }
 
 func (t *TaskQueueTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {
-	task, err := t.tq.backendRepo.GetTask(ctx, t.msg.TaskId)
+	task, err := t.tq.backendRepo.GetTask(context.Background(), t.msg.TaskId)
 	if err != nil {
 		return err
 	}
@@ -95,7 +95,7 @@ func (t *TaskQueueTask) Cancel(ctx context.Context, reason types.TaskCancellatio
 		task.Status = types.TaskStatusError
 	}
 
-	_, err = t.tq.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
+	_, err = t.tq.backendRepo.UpdateTask(context.Background(), t.msg.TaskId, *task)
 	if err != nil {
 		return err
 	}
