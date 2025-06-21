@@ -3,10 +3,12 @@ package repository
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog/log"
 )
 
 type TaskRedisRepository struct {
@@ -146,10 +148,24 @@ func (r *TaskRedisRepository) GetTasksInFlight(ctx context.Context) ([]*types.Ta
 		msg, err := r.rdb.Get(ctx, taskKey).Bytes()
 		if err != nil {
 			if err == redis.Nil {
+				log.Error().Str("task_id", taskKey).Msg("task data not found, cleaning up stale task state")
+
 				// Task key exists in index but actual task data doesn't exist
-				// This is an inconsistent state, so let's clean it up
-				r.rdb.SRem(ctx, common.RedisKeys.TaskIndex(), taskKey)
+				// This is an inconsistent state, so let's clean it up properly
+				// Parse the task key to extract workspace, stub, and task IDs
+				parts := strings.Split(taskKey, ":")
+				if len(parts) >= 4 {
+					workspaceName := parts[1]
+					stubId := parts[2]
+					taskId := parts[3]
+
+					err = r.DeleteTaskState(ctx, workspaceName, stubId, taskId)
+					if err != nil {
+						log.Error().Str("task_id", taskId).Err(err).Msg("failed to delete task state")
+					}
+				}
 			}
+
 			continue
 		}
 
