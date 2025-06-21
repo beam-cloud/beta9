@@ -64,10 +64,12 @@ func (t *EndpointTask) Retry(ctx context.Context) error {
 }
 
 func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellationReason) error {
-	task, err := t.es.backendRepo.GetTask(ctx, t.msg.TaskId)
+	task, err := t.es.backendRepo.GetTask(context.Background(), t.msg.TaskId)
 	if err != nil {
 		return err
 	}
+
+	defer t.es.taskDispatcher.Complete(context.Background(), t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
 
 	// Don't update tasks that are already in a terminal state
 	if task.Status.IsCompleted() {
@@ -86,12 +88,12 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		task.Status = types.TaskStatusError
 	}
 
-	_, err = t.es.backendRepo.UpdateTask(ctx, t.msg.TaskId, *task)
+	_, err = t.es.backendRepo.UpdateTask(context.Background(), t.msg.TaskId, *task)
 	if err != nil {
 		return err
 	}
 
-	return t.es.taskDispatcher.Complete(ctx, t.msg.WorkspaceName, t.msg.StubId, t.msg.TaskId)
+	return nil
 }
 
 func (t *EndpointTask) HeartBeat(ctx context.Context) (bool, error) {
