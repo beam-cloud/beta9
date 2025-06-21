@@ -145,6 +145,11 @@ func (r *TaskRedisRepository) GetTasksInFlight(ctx context.Context) ([]*types.Ta
 	for _, taskKey := range tasks {
 		msg, err := r.rdb.Get(ctx, taskKey).Bytes()
 		if err != nil {
+			if err == redis.Nil {
+				// Task key exists in index but actual task data doesn't exist
+				// This is an inconsistent state, so let's clean it up
+				r.rdb.SRem(ctx, common.RedisKeys.TaskIndex(), taskKey)
+			}
 			continue
 		}
 
