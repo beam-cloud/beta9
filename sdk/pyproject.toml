@@ -25,7 +25,7 @@ dependencies = [
     "websockets>=13,<14",
 ]
 name = "beta9"
-version = "0.1.205"
+version = "0.1.206"
 description = ""
 
 [project.scripts]
