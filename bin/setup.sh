@@ -66,8 +66,8 @@ curl -sSfL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | TAG=v$
 check_status
 
 echo "=> Installing go2proto"
-go get github.com/beam-cloud/go2proto@latest
-go get google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
+# go get github.com/beam-cloud/go2proto@latest
+# go get google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
 go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
-go install github.com/beam-cloud/go2proto
+go install github.com/beam-cloud/go2proto@latest
 check_status
