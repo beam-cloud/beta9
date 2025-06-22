@@ -84,15 +84,15 @@ func (r *TaskRedisRepository) SetTaskState(ctx context.Context, workspaceName, s
 		return fmt.Errorf("failed to add task key to index <%v>: %w", indexKey, err)
 	}
 
-	err = r.rdb.SAdd(ctx, stubIndexKey, taskId).Err()
-	if err != nil {
-		return fmt.Errorf("failed to add task key to stub index <%v>: %w", indexKey, err)
-	}
-
 	err = r.rdb.Set(ctx, entryKey, msg, 0).Err()
 	if err != nil {
 		r.DeleteTaskState(ctx, workspaceName, stubId, taskId)
 		return err
+	}
+
+	err = r.rdb.SAdd(ctx, stubIndexKey, taskId).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add task key to stub index <%v>: %w", indexKey, err)
 	}
 
 	return nil
@@ -148,8 +148,6 @@ func (r *TaskRedisRepository) GetTasksInFlight(ctx context.Context) ([]*types.Ta
 		msg, err := r.rdb.Get(ctx, taskKey).Bytes()
 		if err != nil {
 			if err == redis.Nil {
-				log.Error().Str("task_id", taskKey).Msg("task data not found, cleaning up stale task state")
-
 				// Task key exists in index but actual task data doesn't exist
 				// This is an inconsistent state, so let's clean it up properly
 				// Parse the task key to extract workspace, stub, and task IDs

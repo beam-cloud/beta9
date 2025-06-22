@@ -242,7 +242,7 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
-		Retries:       5,
+		Retries:       10,
 	}))
 	if err != nil {
 		return nil, err
@@ -333,7 +333,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
-		Retries:       5,
+		Retries:       10,
 	}))
 	if err != nil {
 		return err
@@ -525,7 +525,7 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
-		Retries:       5,
+		Retries:       10,
 	}))
 	if err != nil {
 		return err
