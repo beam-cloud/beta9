@@ -184,10 +184,7 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 		Stub:        *stub,
 	})
 	if err != nil {
-		// Check if it's a concurrency limit error
 		if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
-			// For concurrency limit errors, we still want to cancel the task
-			// but we can log it specifically for debugging
 			log.Info().Str("task_id", task.ExternalId).Str("reason", err.Error()).Msg("task cancelled due to concurrency limit")
 		}
 
