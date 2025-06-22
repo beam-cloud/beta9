@@ -40,7 +40,7 @@ class Function(RunnerAbstraction):
             Assign the function to an app. If the app does not exist, it will be created with the given name.
             An app is a group of resources (endpoints, task queues, functions, etc).
         cpu (Union[int, float, str]):
-            The number of CPU cores allocated to the container. Default is 1.0.
+            The number of CPU cores allocated to the container. Default is 0.125.
         memory (Union[int, str]):
             The amount of memory allocated to the container. It should be specified in
             MiB, or as a string with units (e.g. "1Gi"). Default is 128 MiB.
@@ -101,7 +101,7 @@ class Function(RunnerAbstraction):
     def __init__(
         self,
         app: str = "",
-        cpu: Union[int, float, str] = 1.0,
+        cpu: Union[int, float, str] = 0.125,
         memory: Union[int, str] = 128,
         gpu: Union[GpuTypeAlias, List[GpuTypeAlias]] = GpuType.NoGPU,
         gpu_count: int = 0,

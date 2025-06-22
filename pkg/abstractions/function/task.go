@@ -11,6 +11,7 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 type FunctionTask struct {
@@ -39,7 +40,7 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 		externalWorkspaceId = &authInfo.Workspace.Id
 	}
 
-	_, err = t.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
+	task, err := t.fs.backendRepo.CreateTask(ctx, &types.TaskParams{
 		WorkspaceId:         stub.WorkspaceId,
 		StubId:              stub.Id,
 		TaskId:              taskId,
@@ -50,7 +51,7 @@ func (t *FunctionTask) Execute(ctx context.Context, options ...interface{}) erro
 		return err
 	}
 
-	return t.run(ctx, stub)
+	return t.run(ctx, stub, task)
 }
 
 func (t *FunctionTask) Retry(ctx context.Context) error {
@@ -71,17 +72,17 @@ func (t *FunctionTask) Retry(ctx context.Context) error {
 
 	task.Status = types.TaskStatusRetry
 	task.ContainerId = containerId
-	_, err = t.fs.backendRepo.UpdateTask(ctx, taskId, task.Task)
+	updatedTask, err := t.fs.backendRepo.UpdateTask(ctx, taskId, task.Task)
 	if err != nil {
 		return err
 	}
 
-	return t.run(ctx, stub)
+	return t.run(ctx, stub, updatedTask)
 }
 
 var cloudPickleHeader []byte = []byte{0x80, 0x05, 0x95}
 
-func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) error {
+func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, task *types.Task) error {
 	var stubConfig types.StubConfigV1 = types.StubConfigV1{}
 	err := json.Unmarshal([]byte(stub.Config), &stubConfig)
 	if err != nil {
@@ -183,6 +184,17 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated) err
 		Stub:        *stub,
 	})
 	if err != nil {
+		// Check if it's a concurrency limit error
+		if _, ok := err.(*types.ThrottledByConcurrencyLimitError); ok {
+			// For concurrency limit errors, we still want to cancel the task
+			// but we can log it specifically for debugging
+			log.Info().Str("task_id", task.ExternalId).Str("reason", err.Error()).Msg("task cancelled due to concurrency limit")
+		}
+
+		task.Status = types.TaskStatusCancelled
+		task.EndedAt = types.NullTime{}.Now()
+		t.fs.backendRepo.UpdateTask(ctx, task.ExternalId, *task)
+
 		return err
 	}
 
