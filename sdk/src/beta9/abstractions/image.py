@@ -386,6 +386,60 @@ class Image(BaseAbstraction):
         image.dockerfile = dockerfile
         return image
 
+    @classmethod
+    def from_registry(
+        cls,
+        image_uri: str,
+        credentials: Optional[ImageCredentials] = None,
+    ) -> "Image":
+        """
+        Create an Image from a remote registry.
+
+        This is a convenient helper method to create an Image that uses a base image
+        from a container registry (Docker Hub, ECR, GAR, NGC, etc.) with optional credentials.
+
+        Parameters:
+            image_uri: The full URI of the image from the registry.
+                Examples:
+                - Docker Hub: `docker.io/my-org/my-image:0.1.0`
+                - ECR: `111111111111.dkr.ecr.us-east-1.amazonaws.com/my-image:latest`
+                - GAR: `us-east4-docker.pkg.dev/my-project/my-repo/my-image:0.1.0`
+                - NGC: `nvcr.io/my-org/my-repo:0.1.0`
+            credentials: Optional credentials for private registry access.
+                Can be provided as a dict with key-value pairs or a list of environment variable keys.
+
+        Returns:
+            Image: The Image object configured with the registry image.
+
+        Example:
+            ```python
+            # Public image from Docker Hub
+            image = Image.from_registry("docker.io/library/python:3.11-slim")
+
+            # Private image with credentials
+            image = Image.from_registry(
+                "docker.io/my-org/my-image:latest",
+                credentials=["DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD"]
+            )
+
+            # ECR image with AWS credentials
+            image = Image.from_registry(
+                "111111111111.dkr.ecr.us-east-1.amazonaws.com/my-app:latest",
+                credentials=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"]
+            )
+
+            # NGC image with API key
+            image = Image.from_registry(
+                "nvcr.io/nvidia/tensorrt:24.10-py3",
+                credentials=["NGC_API_KEY"]
+            )
+            ```
+        """
+        return cls(
+            base_image=image_uri,
+            base_image_creds=credentials,
+        )
+
     def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.stub.verify_image_build(
             VerifyImageBuildRequest(
