@@ -129,6 +129,7 @@ type BackendRepository interface {
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
 	GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error)
 	GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
+	GetVolumeByExternalId(ctx context.Context, workspaceId uint, externalId string) (*types.Volume, error)
 	GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	DeleteVolume(ctx context.Context, workspaceId uint, name string) error
 	ListVolumesWithRelated(ctx context.Context, workspaceId uint) ([]types.VolumeWithRelated, error)

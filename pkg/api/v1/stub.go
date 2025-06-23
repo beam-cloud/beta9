@@ -483,6 +483,20 @@ func (g *StubGroup) cloneStub(ctx context.Context, workspace *types.Workspace, s
 		})
 	}
 
+	for _, volumeConfig := range stubConfig.Volumes {
+		parentVolume, err := g.backendRepo.GetVolumeByExternalId(ctx, stub.WorkspaceId, volumeConfig.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		childVolume, err := g.backendRepo.GetOrCreateVolume(ctx, workspace.Id, parentVolume.Name)
+		if err != nil {
+			return nil, err
+		}
+
+		volumeConfig.Id = childVolume.ExternalId
+	}
+
 	err = g.configureVolumes(ctx, stubConfig.Volumes, workspace)
 	if err != nil {
 		return nil, HTTPInternalServerError("Failed to configure volumes")
