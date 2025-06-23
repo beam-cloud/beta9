@@ -1012,6 +1012,20 @@ func (c *PostgresBackendRepository) GetVolume(ctx context.Context, workspaceId u
 	return &volume, nil
 }
 
+func (c *PostgresBackendRepository) GetVolumeByExternalId(ctx context.Context, workspaceId uint, externalId string) (*types.Volume, error) {
+	var volume types.Volume
+	queryGet := `SELECT id, external_id, name, workspace_id, created_at, updated_at FROM volume WHERE external_id = $1 AND workspace_id = $2;`
+
+	if err := c.client.GetContext(ctx, &volume, queryGet, externalId, workspaceId); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	return &volume, nil
+}
+
 func (c *PostgresBackendRepository) GetOrCreateVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error) {
 	v, err := c.GetVolume(ctx, workspaceId, name)
 	if err == nil {
