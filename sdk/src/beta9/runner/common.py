@@ -375,10 +375,8 @@ async def execute_lifecycle_method_async(name: str) -> Union[Any, None]:
 
         print(f"{name} func complete, took: {duration}s")
         return result
-    except BaseException as e:
-        print(f"Error executing {name} method: {e}")
-        print(f"Traceback: {traceback.format_exc()}")
-        raise RunnerException(f"Failed to execute {name} method: {e}")
+    except BaseException:
+        raise RunnerException()
 
 
 # TODO: add retry behavior directly in dynamically generated GRPC stubs
