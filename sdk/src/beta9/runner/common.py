@@ -300,7 +300,11 @@ class FunctionHandler:
 
         return result
 
-    def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+    def __call__(self, context: FunctionContext = None, *args: Any, **kwargs: Any) -> Any:
+        # Handle case where context is passed as keyword argument
+        if context is None and "context" in kwargs:
+            context = kwargs.pop("context")
+
         handler_args, handler_kwargs = self._prepare_handler_call(context, args, kwargs)
 
         # Handle sync functions (the normal case)
@@ -317,8 +321,12 @@ class FunctionHandler:
         finally:
             loop.close()
 
-    async def __acall__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+    async def __acall__(self, context: FunctionContext = None, *args: Any, **kwargs: Any) -> Any:
         """Async version of __call__ for proper async function handling"""
+        # Handle case where context is passed as keyword argument
+        if context is None and "context" in kwargs:
+            context = kwargs.pop("context")
+
         handler_args, handler_kwargs = self._prepare_handler_call(context, args, kwargs)
 
         # Handle async functions (the normal case for this method)

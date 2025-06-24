@@ -175,6 +175,7 @@ class EndpointManager:
         else:
             self.app = FastAPI(lifespan=self.lifespan)
 
+        # Add middleware and health endpoints for both ASGI and regular endpoints
         self.app.add_middleware(TaskLifecycleMiddleware)
         self.app.add_middleware(WebsocketTaskLifecycleMiddleware)
 
