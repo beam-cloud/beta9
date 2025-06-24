@@ -1,14 +1,16 @@
 import asyncio
+import json
 import logging
 import os
 import signal
 import traceback
+import types
 from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Any, Dict, Optional, Tuple, Union
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from gunicorn.app.base import Arbiter, BaseApplication
 from starlette.applications import Starlette
 from starlette.types import ASGIApp
@@ -31,7 +33,7 @@ from ..middleware import (
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
-    execute_lifecycle_method,
+    execute_lifecycle_method_async,
     wait_for_checkpoint,
 )
 from ..runner.common import config as cfg
@@ -119,7 +121,7 @@ class OnStartMethodHandler:
     async def start(self):
         loop = asyncio.get_running_loop()
         task = loop.create_task(self._keep_worker_alive())
-        result = await loop.run_in_executor(None, execute_lifecycle_method, LifeCycleMethod.OnStart)
+        result = await execute_lifecycle_method_async(LifeCycleMethod.OnStart)
         self._is_running = False
         await task
         return result
@@ -219,6 +221,36 @@ class EndpointManager:
             if kwargs:
                 task_lifecycle_data.override_callback_url = kwargs.get("callback_url")
 
+            # Handle streaming responses
+            if hasattr(task_lifecycle_data.result, "__aiter__"):
+                # Async generator - return streaming response
+                async def generate():
+                    async for item in task_lifecycle_data.result:
+                        if isinstance(item, dict):
+                            yield f"data: {json.dumps(item)}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'data': item})}\n\n"
+
+                return StreamingResponse(
+                    generate(),
+                    media_type="text/plain",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+                )
+            elif isinstance(task_lifecycle_data.result, types.GeneratorType):
+                # Regular generator - return streaming response
+                def generate():
+                    for item in task_lifecycle_data.result:
+                        if isinstance(item, dict):
+                            yield f"data: {json.dumps(item)}\n\n"
+                        else:
+                            yield f"data: {json.dumps({'data': item})}\n\n"
+
+                return StreamingResponse(
+                    generate(),
+                    media_type="text/plain",
+                    headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+                )
+
             return self._create_response(body=task_lifecycle_data.result, status_code=status_code)
 
     def _create_response(self, *, body: Any, status_code: int = HTTPStatus.OK) -> Response:
@@ -254,7 +286,7 @@ class EndpointManager:
 
         try:
             if self.handler.is_async:
-                response_body = await self.handler(
+                response_body = await self.handler.__acall__(
                     context,
                     *args,
                     **kwargs,

@@ -249,7 +249,11 @@ class FunctionHandler:
         except BaseException:
             raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
 
-    def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+    def _prepare_handler_call(
+        self, context: FunctionContext, *args: Any, **kwargs: Any
+    ) -> tuple[tuple, dict]:
+        """Prepare handler arguments and kwargs, handling input validation and context injection."""
+
         if self.handler is None:
             raise Exception("Handler not configured.")
 
@@ -259,20 +263,11 @@ class FunctionHandler:
         if self.inputs is not None:
             if len(kwargs) == 1:
                 key, value = next(iter(kwargs.items()))
-                if isinstance(value, dict):
-                    input_data = value
-                else:
-                    # Wrap the value in a dict with the expected field name
-                    input_data = {key: value}
+                input_data = value if isinstance(value, dict) else {key: value}
             else:
                 input_data = kwargs
 
-            try:
-                parsed_inputs = self.inputs.new(input_data)
-            except ValidationError as e:
-                print(f"Input validation error: {e}")
-                return e.to_dict()
-
+            parsed_inputs = self.inputs.new(input_data)
             handler_args = (parsed_inputs,)
             handler_kwargs = {}
 
@@ -280,7 +275,10 @@ class FunctionHandler:
             handler_kwargs["context"] = context
 
         os.environ["TASK_ID"] = context.task_id or ""
-        result = self.handler(*handler_args, **handler_kwargs)
+        return handler_args, handler_kwargs
+
+    def _process_result(self, result: Any) -> Any:
+        """Process and validate the handler result."""
 
         if self.outputs is not None:
             if result is None:
@@ -295,6 +293,26 @@ class FunctionHandler:
             return parsed_outputs.dump()
 
         return result
+
+    def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+        try:
+            handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
+        except ValidationError as e:
+            print(f"Input validation error: {e}")
+            return e.to_dict()
+
+        result = self.handler(*handler_args, **handler_kwargs)
+        return self._process_result(result)
+
+    async def __acall__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+        try:
+            handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
+        except ValidationError as e:
+            print(f"Input validation error: {e}")
+            return e.to_dict()
+
+        result = await self.handler(*handler_args, **handler_kwargs)
+        return self._process_result(result)
 
     @property
     def parent_abstraction(self) -> ParentAbstractionProxy:
@@ -320,6 +338,37 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
         target_module = importlib.import_module(module)
         method = getattr(target_module, func)
         result = method()
+        duration = time.time() - start_time
+
+        print(f"{name} func complete, took: {duration}s")
+        return result
+    except BaseException:
+        raise RunnerException()
+
+
+async def execute_lifecycle_method_async(name: str) -> Union[Any, None]:
+    """Async version of execute_lifecycle_method for use in async contexts"""
+
+    if sys.path[0] != USER_CODE_DIR:
+        sys.path.insert(0, USER_CODE_DIR)
+
+    func: str = getattr(config, name)
+    if func == "" or func is None:
+        return None
+
+    start_time = time.time()
+    print(f"Running {name} func: {func}")
+    try:
+        module, func = func.split(":")
+        target_module = importlib.import_module(module)
+        method = getattr(target_module, func)
+
+        if asyncio.iscoroutinefunction(method):
+            result = await method()
+        else:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, method)
+
         duration = time.time() - start_time
 
         print(f"{name} func complete, took: {duration}s")
