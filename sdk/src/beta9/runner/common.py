@@ -263,20 +263,11 @@ class FunctionHandler:
         if self.inputs is not None:
             if len(kwargs) == 1:
                 key, value = next(iter(kwargs.items()))
-                if isinstance(value, dict):
-                    input_data = value
-                else:
-                    # Wrap the value in a dict with the expected field name
-                    input_data = {key: value}
+                input_data = value if isinstance(value, dict) else {key: value}
             else:
                 input_data = kwargs
 
-            try:
-                parsed_inputs = self.inputs.new(input_data)
-            except ValidationError as e:
-                print(f"Input validation error: {e}")
-                return e.to_dict()
-
+            parsed_inputs = self.inputs.new(input_data)
             handler_args = (parsed_inputs,)
             handler_kwargs = {}
 
@@ -304,21 +295,21 @@ class FunctionHandler:
         return result
 
     def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
-        handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
-
-        # Handle validation errors returned from _prepare_handler_call
-        if isinstance(handler_args, dict) and "error" in handler_args:
-            return handler_args
+        try:
+            handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
+        except ValidationError as e:
+            print(f"Input validation error: {e}")
+            return e.to_dict()
 
         result = self.handler(*handler_args, **handler_kwargs)
         return self._process_result(result)
 
     async def __acall__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
-        handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
-
-        # Handle validation errors returned from _prepare_handler_call
-        if isinstance(handler_args, dict) and "error" in handler_args:
-            return handler_args
+        try:
+            handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
+        except ValidationError as e:
+            print(f"Input validation error: {e}")
+            return e.to_dict()
 
         result = await self.handler(*handler_args, **handler_kwargs)
         return self._process_result(result)
