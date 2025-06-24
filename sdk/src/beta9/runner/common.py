@@ -296,6 +296,50 @@ class FunctionHandler:
 
         return result
 
+    async def __acall__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+        """Async version of __call__ for async functions"""
+        if self.handler is None:
+            raise Exception("Handler not configured.")
+
+        if self.inputs is not None:
+            if len(kwargs) == 1:
+                key, value = next(iter(kwargs.items()))
+                if isinstance(value, dict):
+                    input_data = value
+                else:
+                    input_data = {key: value}
+            else:
+                input_data = kwargs
+
+            try:
+                parsed_inputs = self.inputs.new(input_data)
+            except ValidationError as e:
+                print(f"Input validation error: {e}")
+                return e.to_dict()
+
+            handler_args = (parsed_inputs,)
+            handler_kwargs = {}
+
+        if self.pass_context:
+            handler_kwargs["context"] = context
+
+        os.environ["TASK_ID"] = context.task_id or ""
+        result = await self.handler(*handler_args, **handler_kwargs)
+
+        if self.outputs is not None:
+            if result is None:
+                result = {}
+
+            try:
+                parsed_outputs = self.outputs.new(result)
+            except ValidationError as e:
+                print(f"Output validation error: {e}")
+                return e.to_dict()
+
+            return parsed_outputs.dump()
+
+        return result
+
     @property
     def parent_abstraction(self) -> ParentAbstractionProxy:
         if not hasattr(self, "_parent_abstraction"):
@@ -326,6 +370,41 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
         return result
     except BaseException:
         raise RunnerException()
+
+
+async def execute_lifecycle_method_async(name: str) -> Union[Any, None]:
+    """Async version of execute_lifecycle_method for use in async contexts"""
+
+    if sys.path[0] != USER_CODE_DIR:
+        sys.path.insert(0, USER_CODE_DIR)
+
+    func: str = getattr(config, name)
+    if func == "" or func is None:
+        return None
+
+    start_time = time.time()
+    print(f"Running {name} func: {func}")
+    try:
+        module, func = func.split(":")
+        target_module = importlib.import_module(module)
+        method = getattr(target_module, func)
+
+        if asyncio.iscoroutinefunction(method):
+            # For async methods, await them directly
+            result = await method()
+        else:
+            # For sync methods, run in executor to avoid blocking
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, method)
+
+        duration = time.time() - start_time
+
+        print(f"{name} func complete, took: {duration}s")
+        return result
+    except BaseException as e:
+        print(f"Error executing {name} method: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        raise RunnerException(f"Failed to execute {name} method: {e}")
 
 
 # TODO: add retry behavior directly in dynamically generated GRPC stubs
