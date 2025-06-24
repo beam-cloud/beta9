@@ -364,10 +364,8 @@ async def execute_lifecycle_method_async(name: str) -> Union[Any, None]:
         method = getattr(target_module, func)
 
         if asyncio.iscoroutinefunction(method):
-            # For async methods, await them directly
             result = await method()
         else:
-            # For sync methods, run in executor to avoid blocking
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, method)
 
