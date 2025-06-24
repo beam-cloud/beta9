@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import wraps
 from multiprocessing import Value
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import cloudpickle
 import requests
@@ -249,7 +249,10 @@ class FunctionHandler:
         except BaseException:
             raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
 
-    def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+    def _prepare_handler_call(
+        self, context: FunctionContext, args: Any, kwargs: Any
+    ) -> Tuple[Any, Dict[str, Any]]:
+        """Prepare handler arguments and kwargs - shared logic between sync and async calls"""
         if self.handler is None:
             raise Exception("Handler not configured.")
 
@@ -271,7 +274,7 @@ class FunctionHandler:
                 parsed_inputs = self.inputs.new(input_data)
             except ValidationError as e:
                 print(f"Input validation error: {e}")
-                return e.to_dict()
+                return e.to_dict(), {}
 
             handler_args = (parsed_inputs,)
             handler_kwargs = {}
@@ -280,8 +283,9 @@ class FunctionHandler:
             handler_kwargs["context"] = context
 
         os.environ["TASK_ID"] = context.task_id or ""
-        result = self.handler(*handler_args, **handler_kwargs)
+        return handler_args, handler_kwargs
 
+    def _process_result(self, result: Any) -> Any:
         if self.outputs is not None:
             if result is None:
                 result = {}
@@ -295,6 +299,37 @@ class FunctionHandler:
             return parsed_outputs.dump()
 
         return result
+
+    def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+        handler_args, handler_kwargs = self._prepare_handler_call(context, args, kwargs)
+
+        # Handle sync functions (the normal case)
+        if not self.is_async:
+            result = self.handler(*handler_args, **handler_kwargs)
+            return self._process_result(result)
+
+        # Handle async functions in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(self.handler(*handler_args, **handler_kwargs))
+            return self._process_result(result)
+        finally:
+            loop.close()
+
+    async def __acall__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+        """Async version of __call__ for proper async function handling"""
+        handler_args, handler_kwargs = self._prepare_handler_call(context, args, kwargs)
+
+        # Handle async functions (the normal case for this method)
+        if self.is_async:
+            result = await self.handler(*handler_args, **handler_kwargs)
+            return self._process_result(result)
+
+        # Handle sync functions in async context
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, self.handler, *handler_args, **handler_kwargs)
+        return self._process_result(result)
 
     @property
     def parent_abstraction(self) -> ParentAbstractionProxy:
@@ -319,13 +354,63 @@ def execute_lifecycle_method(name: str) -> Union[Any, None]:
         module, func = func.split(":")
         target_module = importlib.import_module(module)
         method = getattr(target_module, func)
-        result = method()
+
+        # Check if the method is async
+
+        if asyncio.iscoroutinefunction(method):
+            # For async methods, create a new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(method())
+            finally:
+                loop.close()
+        else:
+            result = method()
+
         duration = time.time() - start_time
 
         print(f"{name} func complete, took: {duration}s")
         return result
-    except BaseException:
-        raise RunnerException()
+    except Exception as e:
+        print(f"Error executing {name} method: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        raise RunnerException(f"Failed to execute {name} method: {e}")
+
+
+async def execute_lifecycle_method_async(name: str) -> Union[Any, None]:
+    """Async version of execute_lifecycle_method for use in async contexts"""
+
+    if sys.path[0] != USER_CODE_DIR:
+        sys.path.insert(0, USER_CODE_DIR)
+
+    func: str = getattr(config, name)
+    if func == "" or func is None:
+        return None
+
+    start_time = time.time()
+    print(f"Running {name} func: {func}")
+    try:
+        module, func = func.split(":")
+        target_module = importlib.import_module(module)
+        method = getattr(target_module, func)
+
+        if asyncio.iscoroutinefunction(method):
+            # For async methods, await them directly
+            result = await method()
+        else:
+            # For sync methods, run in executor to avoid blocking
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, method)
+
+        duration = time.time() - start_time
+
+        print(f"{name} func complete, took: {duration}s")
+        return result
+    except BaseException as e:
+        print(f"Error executing {name} method: {e}")
+        print(f"Traceback: {traceback.format_exc()}")
+        raise RunnerException(f"Failed to execute {name} method: {e}")
 
 
 # TODO: add retry behavior directly in dynamically generated GRPC stubs

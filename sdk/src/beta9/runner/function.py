@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import signal
@@ -249,7 +250,16 @@ def invoke_function(
         callback_url = kwargs.pop("callback_url", None)
 
         handler = FunctionHandler()
-        result = handler(context, *args, **kwargs)
+
+        if handler.is_async:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(handler.__acall__(context, *args, **kwargs))
+            finally:
+                loop.close()
+        else:
+            result = handler(context, *args, **kwargs)
 
         pickled_result = cloudpickle.dumps(result)
         set_result_resp = function_stub.function_set_result(

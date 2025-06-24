@@ -532,12 +532,28 @@ class RealtimeASGI(ASGI):
                                 await websocket.send(output)
 
                         while not internal_asgi_app.input_queue.empty():
-                            output = internal_asgi_app.handler(
-                                context=internal_asgi_app.context,
-                                event=internal_asgi_app.input_queue.get(),
-                            )
+                            # Handle async functions properly
+                            if (
+                                hasattr(internal_asgi_app.handler, "is_async")
+                                and internal_asgi_app.handler.is_async
+                            ):
+                                output = await internal_asgi_app.handler.__acall__(
+                                    context=internal_asgi_app.context,
+                                    event=internal_asgi_app.input_queue.get(),
+                                )
+                            else:
+                                output = internal_asgi_app.handler(
+                                    context=internal_asgi_app.context,
+                                    event=internal_asgi_app.input_queue.get(),
+                                )
 
-                            if isinstance(output, types.GeneratorType):
+                            # Handle different types of outputs including generators and async generators
+                            if hasattr(output, "__aiter__"):
+                                # Async generator
+                                async for o in output:
+                                    await _handle_output(o)
+                            elif isinstance(output, types.GeneratorType):
+                                # Regular generator
                                 for o in output:
                                     await _handle_output(o)
                             else:

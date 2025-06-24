@@ -332,7 +332,20 @@ class TaskQueueWorker:
                     kwargs = task.kwargs or {}
 
                     try:
-                        result = handler(context, *args, **kwargs)
+                        if handler.is_async:
+                            import asyncio
+
+                            # Create a new event loop for async execution
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            try:
+                                result = loop.run_until_complete(
+                                    handler.__acall__(context, *args, **kwargs)
+                                )
+                            finally:
+                                loop.close()
+                        else:
+                            result = handler(context, *args, **kwargs)
                     except BaseException as e:
                         print(traceback.format_exc())
 
