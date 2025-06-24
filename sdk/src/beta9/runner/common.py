@@ -249,7 +249,11 @@ class FunctionHandler:
         except BaseException:
             raise RunnerException(f"Error loading handler: {traceback.format_exc()}")
 
-    def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+    def _prepare_handler_call(
+        self, context: FunctionContext, *args: Any, **kwargs: Any
+    ) -> tuple[tuple, dict]:
+        """Prepare handler arguments and kwargs, handling input validation and context injection."""
+
         if self.handler is None:
             raise Exception("Handler not configured.")
 
@@ -280,7 +284,10 @@ class FunctionHandler:
             handler_kwargs["context"] = context
 
         os.environ["TASK_ID"] = context.task_id or ""
-        result = self.handler(*handler_args, **handler_kwargs)
+        return handler_args, handler_kwargs
+
+    def _process_result(self, result: Any) -> Any:
+        """Process and validate the handler result."""
 
         if self.outputs is not None:
             if result is None:
@@ -295,50 +302,26 @@ class FunctionHandler:
             return parsed_outputs.dump()
 
         return result
+
+    def __call__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
+        handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
+
+        # Handle validation errors returned from _prepare_handler_call
+        if isinstance(handler_args, dict) and "error" in handler_args:
+            return handler_args
+
+        result = self.handler(*handler_args, **handler_kwargs)
+        return self._process_result(result)
 
     async def __acall__(self, context: FunctionContext, *args: Any, **kwargs: Any) -> Any:
-        """Async version of __call__ for async functions"""
-        if self.handler is None:
-            raise Exception("Handler not configured.")
+        handler_args, handler_kwargs = self._prepare_handler_call(context, *args, **kwargs)
 
-        if self.inputs is not None:
-            if len(kwargs) == 1:
-                key, value = next(iter(kwargs.items()))
-                if isinstance(value, dict):
-                    input_data = value
-                else:
-                    input_data = {key: value}
-            else:
-                input_data = kwargs
+        # Handle validation errors returned from _prepare_handler_call
+        if isinstance(handler_args, dict) and "error" in handler_args:
+            return handler_args
 
-            try:
-                parsed_inputs = self.inputs.new(input_data)
-            except ValidationError as e:
-                print(f"Input validation error: {e}")
-                return e.to_dict()
-
-            handler_args = (parsed_inputs,)
-            handler_kwargs = {}
-
-        if self.pass_context:
-            handler_kwargs["context"] = context
-
-        os.environ["TASK_ID"] = context.task_id or ""
         result = await self.handler(*handler_args, **handler_kwargs)
-
-        if self.outputs is not None:
-            if result is None:
-                result = {}
-
-            try:
-                parsed_outputs = self.outputs.new(result)
-            except ValidationError as e:
-                print(f"Output validation error: {e}")
-                return e.to_dict()
-
-            return parsed_outputs.dump()
-
-        return result
+        return self._process_result(result)
 
     @property
     def parent_abstraction(self) -> ParentAbstractionProxy:
