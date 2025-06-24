@@ -6,10 +6,10 @@ FROM golang:1.22.10-bookworm AS golang
 RUN apt-get update && apt-get install -y curl git
 
 
-FROM ubuntu:20.04 as dropbear
+FROM debian:bookworm as dropbear
 RUN apt update && apt install curl bzip2 zlib1g-dev make gcc -y  
 RUN mkdir /dropbear &&  curl https://dropbear.nl/mirror/releases/dropbear-2025.88.tar.bz2 -o /dropbear/dropbear-2025.88.tar.bz2
-RUN cd /dropbear && tar -xvf dropbear-2025.88.tar.bz2 && cd dropbear-2025.88  && ./configure && make PROGRAMS="dropbear" && mv dropbear /usr/local/bin/dropbear 
+RUN cd /dropbear && tar -xvf dropbear-2025.88.tar.bz2 && cd dropbear-2025.88  && ./configure --enable-static --enable-pam=no CPPFLAGS="-DDISABLE_PAM" LDFLAGS="-static" && make PROGRAMS="dropbear" && mv dropbear /usr/local/bin/dropbear 
 
 # runc
 # ========================

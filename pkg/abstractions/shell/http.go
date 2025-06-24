@@ -67,6 +67,8 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	}
 	defer clientConn.Close()
 
+	fmt.Println("clientConn", clientConn)
+
 	// Dial ssh server in the container
 	containerConn, err := network.ConnectToHost(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale)
 	if err != nil {
@@ -74,6 +76,8 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 		return err
 	}
 	defer containerConn.Close()
+
+	fmt.Println("containerConn", containerConn)
 
 	abstractions.SetConnOptions(clientConn, true, shellKeepAliveIntervalS, -1)
 	abstractions.SetConnOptions(containerConn, true, shellKeepAliveIntervalS, -1)
@@ -108,6 +112,8 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 			once.Do(closeConnections)
 		}(pair.src, pair.dst)
 	}
+
+	fmt.Println("wg.Wait()")
 
 	wg.Wait()
 
