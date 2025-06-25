@@ -34,7 +34,7 @@ Running AI in production is slow, complex, and expensive.
 
 **[Beam](https://beam.cloud?utm_source=github_readme)** is a fast, open-source runtime for serverless AI workloads. It gives you a Pythonic interface to deploy and scale AI applications with zero infrastructure overhead.
 
-<video src="https://github.com/beam-cloud/beta9/blob/06cfee5c38e12305d1427f0751af9242ec249e46/static/readme-video.mp4?raw=true" controls width="100%"></video>
+[![Watch the demo](static/video-thumbnail.png)](https://github.com/user-attachments/assets/7e2b9908-dd5f-4f18-9a8e-536dca634b85)
 
 ## ✨ Features
 
