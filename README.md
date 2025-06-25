@@ -1,6 +1,7 @@
 <div align="center">
 <p align="center">
-<img alt="Logo" src="static/beam-logo-white.png" width="30%">
+<img alt="Logo" src="static/beam-logo-white.png#gh-dark-mode-only" width="30%">
+<img alt="Logo" src="static/beam-logo-dark.png#gh-light-mode-only" width="30%">
 </p>
 
 ## Run AI Workloads at Scale
@@ -20,8 +21,8 @@
     <a href="https://twitter.com/beam_cloud">
     <img alt="Twitter" src="https://img.shields.io/twitter/follow/beam_cloud.svg?style=social&logo=twitter">
   </a>
-  <a href="https://github.com/beam-cloud/beta9/actions">
-    <img alt="Tests Passing" src="https://github.com/beam-cloud/beta9/actions/workflows/test.yml/badge.svg">
+    <a href="https://github.com/beam-cloud/beta9?tab=AGPL-3.0-1-ov-file">
+    <img alt="AGPL" src="https://img.shields.io/badge/License-AGPL-green">
   </a>
 </p>
 
