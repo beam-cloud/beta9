@@ -6,9 +6,11 @@
 
 ## Run AI Workloads at Scale
 
-### Secure, high-performance AI infrastructure in Python.
-
 <p align="center">
+  </a>
+    <a href="https://colab.research.google.com/drive/1jSDyYY7FY3Y3jJlCzkmHlH8vTyF-TEmB?usp=sharing">
+    <img alt="Colab" src="https://colab.research.google.com/assets/colab-badge.svg">
+  </a>
   <a href="https://github.com/beam-cloud/beta9/stargazers">
     <img alt="⭐ Star the Repo" src="https://img.shields.io/github/stars/beam-cloud/beta9">
   </a>
@@ -28,25 +30,31 @@
 
 </div>
 
-## Installation
+Running AI in production is slow, complex, and expensive.
 
-```shell
-pip install beam-client
-```
+**[Beam](https://beam.cloud?utm_source=github_readme)** is a fast, open-source runtime for serverless AI workloads. It gives you a Pythonic interface to deploy and scale AI applications with zero infrastructure overhead.
 
-## Features
+![Watch the demo](static/readme.gif)
 
-- **Extremely Fast**: Launch containers in under a second using a custom container runtime
+## ✨ Features
+
+- **Fast Image Builds**: Launch containers in under a second using a custom container runtime
 - **Parallelization and Concurrency**: Fan out workloads to 100s of containers
 - **First-Class Developer Experience**: Hot-reloading, webhooks, and scheduled jobs
 - **Scale-to-Zero**: Workloads are serverless by default
 - **Volume Storage**: Mount distributed storage volumes
 - **GPU Support**: Run on our cloud (4090s, H100s, and more) or bring your own GPUs
 
-## Quickstart
+## 📦 Installation
 
-1. Create an account at https://beam.cloud
-2. Follow our [Getting Started Guide](https://platform.beam.cloud/onboarding)
+```shell
+pip install beam-client
+```
+
+## ⚡️ Quickstart
+
+1. Create an account [here](https://beam.cloud?utm_source=github_readme)
+2. Follow our [Getting Started Guide](https://platform.beam.cloud/onboarding?utm_source=github_readme)
 
 ## Creating a sandbox
 
@@ -104,14 +112,14 @@ def handler(images):
 >
 > Beta9 is the open-source engine powering [Beam](https://beam.cloud), our fully-managed cloud platform. You can self-host Beta9 for free or choose managed cloud hosting through Beam.
 
-## Contributing
+## 👋 Contributing
 
 We welcome contributions big or small. These are the most helpful things for us:
 
 - Submit a [feature request](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=feature-request.md&title=) or [bug report](https://github.com/beam-cloud/beta9/issues/new?assignees=&labels=&projects=&template=bug-report.md&title=)
 - Open a PR with a new feature or improvement
 
-## Thanks to Our Contributors
+## ❤️ Thanks to Our Contributors
 
 <a href="https://github.com/beam-cloud/beta9/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=beam-cloud/beta9" />
