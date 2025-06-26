@@ -40,13 +40,11 @@ const (
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
 	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
 	startupScript                 string        = `exec /usr/local/bin/dropbear -p $SHELL_PORT -R -E -F 2>> /etc/dropbear/logs.txt`
-	createUserScript              string        = `set -e;
-SHELL=$(ls /bin/bash || /bin/sh);
+	createUserScript              string        = `SHELL=$(ls /bin/bash || /bin/sh); \
 (command -v useradd >/dev/null && useradd -m -s $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (echo "$USERNAME:x:1000:1000:$USERNAME:/home/$USERNAME:$SHELL" >> /etc/passwd && mkdir -p "/home/$USERNAME" && chown 1000:1000 "/home/$USERNAME") && \
-echo "$USERNAME:$PASSWORD" | chpasswd 2>> /etc/dropbear/logs.txt
-`
+echo "$USERNAME:$PASSWORD" | chpasswd 2>> /etc/dropbear/logs.txt`
 )
 
 type ShellService interface {
@@ -383,7 +381,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 
 	startupCommand := fmt.Sprintf("%s && %s", createUserScript, startupScript)
 	entryPoint := []string{
-		"/bin/bash",
+		"/bin/sh",
 		"-c",
 		startupCommand,
 	}
