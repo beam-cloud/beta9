@@ -105,7 +105,7 @@ func (s *RunCServer) RunCKill(ctx context.Context, in *pb.RunCKillRequest) (*pb.
 func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.RunCExecResponse, error) {
 	log.Print("ENV: ", in.Env)
 
-	cmd := fmt.Sprintf("sh -c '%s'", in.Cmd)
+	cmd := fmt.Sprintf("bash -c '%s'", in.Cmd)
 	parsedCmd, err := shlex.Split(cmd)
 	if err != nil {
 		return &pb.RunCExecResponse{}, err
