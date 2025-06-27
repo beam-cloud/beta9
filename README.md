@@ -91,7 +91,7 @@ def handler():
 
 ## Run background tasks
 
-Schedule resilient background functions (or replace your Celery queue) by adding a simple decorator:
+Schedule resilient background tasks (or replace your Celery queue) by adding a simple decorator:
 
 ```python
 from beam import Image, TaskPolicy, schema, task_queue
