@@ -103,6 +103,8 @@ func (s *RunCServer) RunCKill(ctx context.Context, in *pb.RunCKillRequest) (*pb.
 
 // Execute an arbitary command inside a running container
 func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.RunCExecResponse, error) {
+	log.Print("ENV: ", in.Env)
+
 	cmd := fmt.Sprintf("sh -c '%s'", in.Cmd)
 	parsedCmd, err := shlex.Split(cmd)
 	if err != nil {

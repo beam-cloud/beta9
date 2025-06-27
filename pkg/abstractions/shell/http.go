@@ -5,12 +5,14 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	apiv1 "github.com/beam-cloud/beta9/pkg/api/v1"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/cenkalti/backoff/v4"
 	"github.com/labstack/echo/v4"
 )
 
@@ -67,8 +69,24 @@ func (g *shellGroup) ShellConnect(ctx echo.Context) error {
 	}
 	defer clientConn.Close()
 
-	// Dial ssh server in the container
-	containerConn, err := network.ConnectToHost(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale)
+	// Dial ssh server in the container with retry logic
+	var containerConn net.Conn
+
+	operation := func() error {
+		var err error
+		containerConn, err = network.ConnectToHost(ctx.Request().Context(), containerAddress, containerDialTimeoutDurationS, g.ss.tailscale, g.ss.config.Tailscale)
+		return err
+	}
+
+	// Configure exponential backoff with 5 retries and max 5 second delay
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 1 * time.Minute
+	b.MaxInterval = 5 * time.Second
+
+	err = backoff.RetryNotify(operation, backoff.WithContext(b, ctx.Request().Context()),
+		func(err error, d time.Duration) {
+			// Optional: log retry attempts if needed
+		})
 	if err != nil {
 		fmt.Fprintf(clientConn, "ERROR: %s", err.Error())
 		return err

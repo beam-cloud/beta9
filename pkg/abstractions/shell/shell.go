@@ -39,7 +39,7 @@ const (
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
 	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
-	startupScript                 string        = `exec /usr/local/bin/dropbear -p $SHELL_PORT -R -E -F 2>> /etc/dropbear/logs.txt`
+	startupScript                 string        = `exec echo "SHELL_PORT=$SHELL_PORT" >> /etc/dropbear/logs.txt && /usr/local/bin/dropbear -p $SHELL_PORT -R -E -F 2>> /etc/dropbear/logs.txt`
 	createUserScript              string        = `SHELL=$(ls /bin/bash || /bin/sh); \
 (command -v useradd >/dev/null && useradd -m -s $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
@@ -277,9 +277,11 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 	if !ok {
 		go func() {
 			// This only dies if the container is stopped
-			_, err = runcClient.Exec(containerId, startupScript, []string{
+			envvars := []string{
 				fmt.Sprintf("SHELL_PORT=%d", types.WorkerShellPort),
-			})
+			}
+			log.Print("ENVVARS: ", envvars)
+			_, err = runcClient.Exec(containerId, startupScript, envvars)
 			if err != nil {
 				log.Error().Msgf("Failed to execute startup script: %v", err)
 			}
