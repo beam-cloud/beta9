@@ -91,21 +91,36 @@ def handler():
 
 ## Run background tasks
 
-Replace your Celery queue with a simple decorator:
+Schedule resilient background tasks (or replace your Celery queue) by adding a simple decorator:
 
 ```python
-from beam import Image, task_queue
+from beam import Image, TaskPolicy, schema, task_queue
+
+
+class Input(schema.Schema):
+    image_url = schema.String()
+
 
 @task_queue(
+    name="image-processor",
     image=Image(python_version="python3.11"),
     cpu=1,
     memory=1024,
+    inputs=Input,
+    task_policy=TaskPolicy(max_retries=3),
 )
-def handler(images):
-    for image in images:
-      # Do something
-      pass
+def my_background_task(input: Input, *, context):
+    image_url = input.image_url
+    print(f"Processing image: {image_url}")
+    return {"image_url": image_url}
 
+
+if __name__ == "__main__":
+    # Invoke a background task from your app (without deploying it)
+    my_background_task.put(image_url="https://example.com/image.jpg")
+
+    # You can also deploy this behind a versioned endpoint with:
+    # beam deploy app.py:my_background_task --name image-processor
 ```
 
 > ## Self-Hosting vs Cloud
