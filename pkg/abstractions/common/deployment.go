@@ -77,7 +77,7 @@ func ParseAndValidateDeploymentStubId(
 
 	if stubId != "" {
 		stub, err := backendRepo.GetStubByExternalId(ctx, stubId)
-		if err != nil {
+		if stub == nil || err != nil {
 			return "", apiv1.HTTPBadRequest("Invalid stub")
 		}
 
