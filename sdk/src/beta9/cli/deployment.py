@@ -70,8 +70,8 @@ def common(**_):
 )
 @click.option(
     "--format",
-    type=click.Choice(["json", "table"]),
-    default="table",
+    type=click.Choice(["json"]),
+    default=None,
     help="The format of the output after a successful deployment.",
 )
 @override_config_options
@@ -141,8 +141,8 @@ def _generate_pod_module(name: str, entrypoint: str):
 )
 @click.option(
     "--format",
-    type=click.Choice(["json", "table"]),
-    default="table",
+    type=click.Choice(["json"]),
+    default=None,
     help="The format of the output after a successful deployment.",
 )
 @override_config_options
@@ -160,7 +160,6 @@ def create_deployment(
 
     logs = []
 
-    # For now only capture the logs if the format is json
     with StoredStdoutInterceptor(capture_logs=format == "json") as capture_logs:
         if handler:
             user_obj, module_name, obj_name = load_module_spec(handler, "deploy")
@@ -230,7 +229,7 @@ def create_deployment(
 )
 @click.option(
     "--format",
-    type=click.Choice(("table", "json")),
+    type=click.Choice(["json", "none"]),
     default="table",
     show_default=True,
     help="Change the format of the output.",
