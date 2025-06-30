@@ -1,7 +1,7 @@
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from .. import terminal
 from ..abstractions.base.runner import (
@@ -228,8 +228,9 @@ class Pod(RunnerAbstraction, DeployableMixin):
         self,
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
-        **invocation_details_options: Any,
-    ):
+        invocation_details_func: Optional[Callable[..., None]] = None,
+        **invocation_details_options: Dict[str, Any],
+    ) -> Tuple[bool, Dict[str, Any]]:
         self.name = name or self.name
         if not self.name:
             terminal.error(
@@ -238,13 +239,13 @@ class Pod(RunnerAbstraction, DeployableMixin):
 
         if not self.entrypoint:
             terminal.error("You must specify an entrypoint.")
-            return False
+            return {}, False
 
         if context is not None:
             self.config_context = context
 
         if not self.prepare_runtime(stub_type=POD_DEPLOYMENT_STUB_TYPE, force_create_stub=True):
-            return False
+            return {}, False
 
         terminal.header("Deploying")
         deploy_response: DeployStubResponse = self.gateway_stub.deploy_stub(
@@ -254,11 +255,20 @@ class Pod(RunnerAbstraction, DeployableMixin):
         self.deployment_id = deploy_response.deployment_id
         if deploy_response.ok:
             terminal.header("Deployed 🎉")
+            if invocation_details_func:
+                invocation_details_func(
+                    **invocation_details_options,
+                )
 
-            if len(self.ports) > 0:
+            elif len(self.ports) > 0:
                 self.print_invocation_snippet()
 
-        return deploy_response.ok
+        return {
+            "deployment_id": deploy_response.deployment_id,
+            "deployment_name": self.name,
+            "invoke_url": deploy_response.invoke_url,
+            "version": deploy_response.version,
+        }, deploy_response.ok
 
     def generate_deployment_artifacts(self, **kwargs) -> str:
         imports = ["Pod"]

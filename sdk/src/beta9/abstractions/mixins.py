@@ -41,6 +41,7 @@ class DeployableMixin:
         self,
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
+        render_json: bool = False,
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Any,
     ) -> bool:
@@ -64,7 +65,7 @@ class DeployableMixin:
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=self.deployment_stub_type, force_create_stub=True
         ):
-            return False
+            return {}, False
 
         terminal.header("Deploying")
         deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
@@ -78,11 +79,18 @@ class DeployableMixin:
         if deploy_response.ok:
             terminal.header("Deployed 🎉")
             if invocation_details_func:
-                invocation_details_func(**invocation_details_options)
+                invocation_details_func(
+                    **invocation_details_options,
+                )
             else:
                 self.parent.print_invocation_snippet(**invocation_details_options)
 
-        return deploy_response.ok
+        return {
+            "deployment_id": deploy_response.deployment_id,
+            "deployment_name": self.parent.name,
+            "invoke_url": deploy_response.invoke_url,
+            "version": deploy_response.version,
+        }, deploy_response.ok
 
     def _attach_and_sync(self, container_id: str, sync_dir: str):
         try:
