@@ -41,7 +41,6 @@ class DeployableMixin:
         self,
         name: Optional[str] = None,
         context: Optional[ConfigContext] = None,
-        render_json: bool = False,
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Any,
     ) -> bool:
