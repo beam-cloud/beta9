@@ -1,7 +1,7 @@
 import inspect
 import threading
 import urllib.parse
-from typing import Any, Callable, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Dict, Optional, Tuple
 
 from .. import terminal
 from ..abstractions.base.container import Container
@@ -43,7 +43,7 @@ class DeployableMixin:
         context: Optional[ConfigContext] = None,
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Any,
-    ) -> bool:
+    ) -> Tuple[Dict[str, Any], bool]:
         self._validate()
 
         self.parent.name = name or self.parent.name
