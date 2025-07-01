@@ -1,7 +1,7 @@
 import inspect
 import threading
 import urllib.parse
-from typing import Any, Callable, ClassVar, Optional
+from typing import Any, Callable, ClassVar, Dict, Optional, Tuple
 
 from .. import terminal
 from ..abstractions.base.container import Container
@@ -43,7 +43,7 @@ class DeployableMixin:
         context: Optional[ConfigContext] = None,
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Any,
-    ) -> bool:
+    ) -> Tuple[Dict[str, Any], bool]:
         self._validate()
 
         self.parent.name = name or self.parent.name
@@ -64,7 +64,7 @@ class DeployableMixin:
         if not self.parent.prepare_runtime(
             func=self.func, stub_type=self.deployment_stub_type, force_create_stub=True
         ):
-            return False
+            return {}, False
 
         terminal.header("Deploying")
         deploy_response: DeployStubResponse = self.parent.gateway_stub.deploy_stub(
@@ -78,11 +78,18 @@ class DeployableMixin:
         if deploy_response.ok:
             terminal.header("Deployed 🎉")
             if invocation_details_func:
-                invocation_details_func(**invocation_details_options)
+                invocation_details_func(
+                    **invocation_details_options,
+                )
             else:
                 self.parent.print_invocation_snippet(**invocation_details_options)
 
-        return deploy_response.ok
+        return {
+            "deployment_id": deploy_response.deployment_id,
+            "deployment_name": self.parent.name,
+            "invoke_url": deploy_response.invoke_url,
+            "version": deploy_response.version,
+        }, deploy_response.ok
 
     def _attach_and_sync(self, container_id: str, sync_dir: str):
         try:

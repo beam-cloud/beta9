@@ -57,3 +57,26 @@ def json_output_interceptor(**ctx: Any):
         return wrapper
 
     return decorator
+
+
+class StoredStdoutInterceptor(io.TextIOBase):
+    def __init__(self, capture_logs: bool = False):
+        self.logs = []
+        self.capture_logs = capture_logs
+
+    def __enter__(self):
+        self.logs = []
+        sys.stdout = self
+        return self
+
+    def __exit__(self, *_, **__):
+        sys.stdout = sys.__stdout__
+
+    def write(self, data: str):
+        self.logs.append(data)
+        if not self.capture_logs:
+            sys.__stdout__.write(data)
+            sys.__stdout__.flush()
+
+    def flush(self):
+        pass

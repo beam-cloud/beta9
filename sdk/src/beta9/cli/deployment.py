@@ -20,6 +20,7 @@ from ..clients.gateway import (
     StopDeploymentResponse,
     StringList,
 )
+from ..logging import StoredStdoutInterceptor
 from ..utils import load_module_spec
 from .extraclick import (
     ClickCommonGroup,
@@ -67,6 +68,12 @@ def common(**_):
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@click.option(
+    "--format",
+    type=click.Choice(["json"]),
+    default=None,
+    help="The format of the output after a successful deployment.",
+)
 @override_config_options
 @click.pass_context
 def deploy(
@@ -74,6 +81,7 @@ def deploy(
     name: str,
     handler: str,
     url_type: str,
+    format: str,
     **kwargs,
 ):
     ctx.invoke(
@@ -81,6 +89,7 @@ def deploy(
         name=name,
         handler=handler,
         url_type=url_type,
+        format=format,
         **kwargs,
     )
 
@@ -130,6 +139,12 @@ def _generate_pod_module(name: str, entrypoint: str):
     help="The type of URL to get back. [default is determined by the server] ",
     type=click.Choice(["host", "path"]),
 )
+@click.option(
+    "--format",
+    type=click.Choice(["json"]),
+    default=None,
+    help="The format of the output after a successful deployment.",
+)
 @override_config_options
 @extraclick.pass_service_client
 def create_deployment(
@@ -137,34 +152,52 @@ def create_deployment(
     name: str,
     handler: str,
     url_type: str,
+    format: str,
     **kwargs,
 ):
     module = None
     entrypoint = kwargs["entrypoint"]
-    if handler:
-        user_obj, module_name, obj_name = load_module_spec(handler, "deploy")
 
-        if hasattr(user_obj, "set_handler"):
-            user_obj.set_handler(f"{module_name}:{obj_name}")
+    logs = []
 
-    elif entrypoint:
-        user_obj = _generate_pod_module(name, entrypoint)
+    with StoredStdoutInterceptor(capture_logs=format == "json") as capture_logs:
+        if handler:
+            user_obj, module_name, obj_name = load_module_spec(handler, "deploy")
 
-    else:
-        terminal.error("No handler or entrypoint specified")
-        return
+            if hasattr(user_obj, "set_handler"):
+                user_obj.set_handler(f"{module_name}:{obj_name}")
 
-    if not handle_config_override(user_obj, kwargs):
-        return
+        elif entrypoint:
+            user_obj = _generate_pod_module(name, entrypoint)
 
-    if not module and hasattr(user_obj, "generate_deployment_artifacts"):
-        user_obj.generate_deployment_artifacts(**kwargs)
+        else:
+            terminal.error("No handler or entrypoint specified")
+            return
 
-    if not user_obj.deploy(name=name, context=service._config, url_type=url_type):  # type: ignore
-        terminal.error("Deployment failed ☠️")
+        if not handle_config_override(user_obj, kwargs):
+            return
 
-    if not module and hasattr(user_obj, "cleanup_deployment_artifacts"):
-        user_obj.cleanup_deployment_artifacts()
+        if not module and hasattr(user_obj, "generate_deployment_artifacts"):
+            user_obj.generate_deployment_artifacts(**kwargs)
+
+        response, ok = user_obj.deploy(name=name, context=service._config, url_type=url_type)
+        if not ok:
+            terminal.error("Deployment failed ☠️")
+            return
+
+        if not module and hasattr(user_obj, "cleanup_deployment_artifacts"):
+            user_obj.cleanup_deployment_artifacts()
+
+        if capture_logs.capture_logs:
+            logs.extend(capture_logs.logs)
+
+    if format == "json":
+        terminal.print_json(
+            {
+                "logs": logs,
+                **response,
+            }
+        )
 
 
 @management.command(
@@ -196,7 +229,7 @@ def create_deployment(
 )
 @click.option(
     "--format",
-    type=click.Choice(("table", "json")),
+    type=click.Choice(["json", "none"]),
     default="table",
     show_default=True,
     help="Change the format of the output.",
