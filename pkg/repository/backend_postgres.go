@@ -557,6 +557,17 @@ func (r *PostgresBackendRepository) GetTask(ctx context.Context, externalId stri
 	return &task, nil
 }
 
+func (r *PostgresBackendRepository) GetTaskStatus(ctx context.Context, externalId string) (types.TaskStatus, error) {
+	var status string
+	query := `SELECT status FROM task WHERE external_id = $1;`
+	err := r.client.GetContext(ctx, &status, query, externalId)
+	if err != nil {
+		return "", err
+	}
+
+	return types.TaskStatus(status), nil
+}
+
 func (r *PostgresBackendRepository) GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error) {
 	var taskWithRelated types.TaskWithRelated
 	query := `

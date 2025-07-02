@@ -133,6 +133,20 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 		return HTTPBadRequest("Missing task ID")
 	}
 
+	// Check if the task exists and the user has access to it first
+	task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve task")
+	}
+
+	if task == nil {
+		return HTTPNotFound()
+	}
+
+	if task.WorkspaceId != cc.AuthInfo.Workspace.Id && *task.ExternalWorkspaceId != cc.AuthInfo.Workspace.Id {
+		return HTTPNotFound()
+	}
+
 	ctx.Response().Header().Set(echo.HeaderContentType, "text/event-stream")
 	ctx.Response().Header().Set(echo.HeaderCacheControl, "no-cache")
 	ctx.Response().Header().Set(echo.HeaderConnection, "keep-alive")
@@ -150,28 +164,28 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 		default:
 		}
 
-		task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId)
+		status, err := g.backendRepo.GetTaskStatus(ctx.Request().Context(), taskId)
 		if err != nil {
-			return HTTPInternalServerError("Failed to retrieve task")
+			return HTTPInternalServerError("Failed to retrieve task status")
 		}
 
-		if task == nil {
-			return HTTPNotFound()
-		}
-
-		if task.WorkspaceId != cc.AuthInfo.Workspace.Id && *task.ExternalWorkspaceId != cc.AuthInfo.Workspace.Id {
-			return HTTPNotFound()
-		}
-
-		task.Workspace = *cc.AuthInfo.Workspace
-		task.Stub.SanitizeConfig()
-
-		g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
-		g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
-		g.addResultToTask(ctx.Request().Context(), task, cc.AuthInfo)
-
-		status := task.Status
 		if status != lastStatus {
+			task, err := g.backendRepo.GetTaskWithRelated(ctx.Request().Context(), taskId)
+			if err != nil {
+				return HTTPInternalServerError("Failed to retrieve task")
+			}
+
+			if task == nil {
+				return HTTPNotFound()
+			}
+
+			task.Workspace = *cc.AuthInfo.Workspace
+			task.Stub.SanitizeConfig()
+
+			g.addOutputsToTask(ctx.Request().Context(), cc.AuthInfo, task)
+			g.addStatsToTask(ctx.Request().Context(), cc.AuthInfo.Workspace.Name, task)
+			g.addResultToTask(ctx.Request().Context(), task, cc.AuthInfo)
+
 			serializedTask, err := serializer.Serialize(task)
 			if err != nil {
 				return HTTPInternalServerError("Failed to serialize task")
@@ -181,7 +195,6 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 				return HTTPInternalServerError("Failed to marshal task to JSON")
 			}
 
-			// Write SSE event
 			ctx.Response().Write([]byte("event: status\n"))
 			ctx.Response().Write([]byte("data: "))
 			ctx.Response().Write(jsonBytes)
@@ -190,8 +203,7 @@ func (g *TaskGroup) SubscribeTask(ctx echo.Context) error {
 			lastStatus = status
 		}
 
-		// If task is completed, break
-		if task.Status.IsCompleted() {
+		if status.IsCompleted() {
 			break
 		}
 
