@@ -114,6 +114,7 @@ type BackendRepository interface {
 	ToggleToken(ctx context.Context, workspaceId uint, extTokenId string) (types.Token, error)
 	DeleteToken(ctx context.Context, workspaceId uint, extTokenId string) error
 	GetTask(ctx context.Context, externalId string) (*types.Task, error)
+	GetTaskStatus(ctx context.Context, externalId string) (types.TaskStatus, error)
 	GetTaskWithRelated(ctx context.Context, externalId string) (*types.TaskWithRelated, error)
 	GetTaskByWorkspace(ctx context.Context, externalId string, workspace *types.Workspace) (*types.TaskWithRelated, error)
 	CreateTask(ctx context.Context, params *types.TaskParams) (*types.Task, error)
