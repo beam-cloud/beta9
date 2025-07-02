@@ -8,23 +8,23 @@ import (
 
 const (
 	standardCPUShare     uint64  = 1024
-	standardCPUPeriod    int64   = 100_000
+	standardCPUPeriod    uint64  = 100_000 // 100ms
 	memoryOverheadFactor float64 = 1.25
 )
 
 func calculateCPUShares(millicores int64) uint64 {
-	shares := uint64(millicores) * standardCPUShare / 1000
-	return shares
+	return uint64(millicores) * standardCPUShare / 1000
 }
 
 func calculateCPUQuota(millicores int64) int64 {
-	quota := millicores * standardCPUPeriod / 1000
-	return quota
+	return millicores * int64(standardCPUPeriod) / 1000
 }
 
 func getLinuxCPU(request *types.ContainerRequest) *specs.LinuxCPU {
 	return &specs.LinuxCPU{
 		Shares: ptr.To(calculateCPUShares(request.Cpu)),
+		Quota:  ptr.To(calculateCPUQuota(request.Cpu)),
+		Period: ptr.To(standardCPUPeriod),
 	}
 }
 

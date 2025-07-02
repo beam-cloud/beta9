@@ -211,8 +211,8 @@ worker:
   # non-standard k8s job spec
   imagePVCName: beta9-images
   jobResourcesEnforced: false
-  runcResourceLimits:
-    cpuEnforced: false
+  containerResourceLimits:
+    cpuEnforced: true
     memoryEnforced: false
   defaultWorkerCPURequest: 2000
   defaultWorkerMemoryRequest: 1024

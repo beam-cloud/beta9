@@ -356,14 +356,14 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Args = request.EntryPoint
 	spec.Process.Terminal = false
 
-	if s.config.Worker.RunCResourceLimits.CPUEnforced || s.config.Worker.RunCResourceLimits.MemoryEnforced {
+	if s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced {
 		spec.Linux.Resources.Unified = cgroupV2Parameters
 
-		if s.config.Worker.RunCResourceLimits.CPUEnforced {
+		if s.config.Worker.ContainerResourceLimits.CPUEnforced {
 			spec.Linux.Resources.CPU = getLinuxCPU(request)
 		}
 
-		if s.config.Worker.RunCResourceLimits.MemoryEnforced {
+		if s.config.Worker.ContainerResourceLimits.MemoryEnforced {
 			spec.Linux.Resources.Memory = getLinuxMemory(request)
 		}
 	}
