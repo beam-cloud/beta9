@@ -356,7 +356,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Args = request.EntryPoint
 	spec.Process.Terminal = false
 
-	if !request.IsBuildRequest() && (s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced) {
+	throttlingEnabled := !request.IsBuildRequest() && !request.RequiresGPU()
+	if throttlingEnabled && (s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced) {
 		spec.Linux.Resources.Unified = cgroupV2Parameters
 
 		if s.config.Worker.ContainerResourceLimits.CPUEnforced {
