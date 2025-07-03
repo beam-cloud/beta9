@@ -86,12 +86,17 @@ EOT
 # ========================
 FROM golang AS worker
 
+ARG DEBUG_SYMBOLS=true
 WORKDIR /workspace
 
 COPY go.mod go.sum ./
 RUN go mod download
 COPY --exclude=sdk . .
-RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
+RUN if [ "$DEBUG_SYMBOLS" = "true" ]; then \
+    go build -gcflags "all=-N -l" -o /usr/local/bin/worker ./cmd/worker/main.go; \
+else \
+    go build -o /usr/local/bin/worker ./cmd/worker/main.go; \
+fi
 
 # uv
 # ========================
