@@ -86,7 +86,6 @@ EOT
 # ========================
 FROM golang AS worker
 
-ARG DEBUG_SYMBOLS=true
 WORKDIR /workspace
 
 COPY go.mod go.sum ./
