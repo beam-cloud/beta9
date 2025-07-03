@@ -92,11 +92,9 @@ WORKDIR /workspace
 COPY go.mod go.sum ./
 RUN go mod download
 COPY --exclude=sdk . .
-RUN if [ "$DEBUG_SYMBOLS" = "true" ]; then \
-    go build -gcflags "all=-N -l" -o /usr/local/bin/worker ./cmd/worker/main.go; \
-else \
-    go build -o /usr/local/bin/worker ./cmd/worker/main.go; \
-fi
+
+go build -gcflags "all=-N" -o /usr/local/bin/worker-debug ./cmd/worker/main.go;
+go build -o /usr/local/bin/worker ./cmd/worker/main.go;
 
 # uv
 # ========================
@@ -210,6 +208,7 @@ else \
 fi
 
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
+COPY --from=worker /usr/local/bin/worker-debug /usr/local/bin/worker-debug
 COPY ./sdk/src/beta9 /workspace/sdk
 COPY --from=uv /root/.local/bin/uv /usr/local/bin/uv
 COPY --from=dropbear /usr/local/bin/dropbear /usr/local/bin/dropbear
