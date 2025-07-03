@@ -92,8 +92,8 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY --exclude=sdk . .
 
-go build -gcflags "all=-N" -o /usr/local/bin/worker-debug ./cmd/worker/main.go;
-go build -o /usr/local/bin/worker ./cmd/worker/main.go;
+RUN go build -gcflags "all=-N" -o /usr/local/bin/worker-debug ./cmd/worker/main.go
+RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
 
 # uv
 # ========================
