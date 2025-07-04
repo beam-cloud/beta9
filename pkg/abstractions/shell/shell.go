@@ -39,8 +39,8 @@ const (
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
 	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
-	startupScript                 string        = `SHELL=$(ls /bin/bash || /bin/sh); /usr/local/bin/dropbear -e -c "cd /mnt/code && $SHELL"  -p 2222 -R -E -F 2>> /etc/dropbear/logs.txt`
-	createUserScript              string        = `SHELL=$(ls /bin/bash || /bin/sh); \
+	startupScript                 string        = `SHELL=$(ls /bin/bash || ls /bin/sh); /usr/local/bin/dropbear -e -c "cd /mnt/code && $SHELL"  -p 2222 -R -E -F 2>> /etc/dropbear/logs.txt`
+	createUserScript              string        = `SHELL=$(ls /bin/bash || ls /bin/sh); \
 (command -v useradd >/dev/null && useradd -m -s $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (echo "$USERNAME:x:1000:1000:$USERNAME:/home/$USERNAME:$SHELL" >> /etc/passwd && mkdir -p "/home/$USERNAME" && chown 1000:1000 "/home/$USERNAME") && \
