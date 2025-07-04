@@ -57,6 +57,7 @@ func NewChannelHandler(logChan chan LogRecord) *ChannelHandler {
 // Handle implements slog.Handler
 func (h *ChannelHandler) Handle(_ context.Context, r slog.Record) error {
 	attrs := make(map[string]any)
+
 	r.Attrs(func(a slog.Attr) bool {
 		attrs[a.Key] = a.Value.Any()
 		return true

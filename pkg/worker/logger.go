@@ -82,6 +82,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 	limiter := rate.NewLimiter(rate.Limit(float64(r.logLinesPerHour)/3600.0), r.logLinesPerHour)
 	rateLimitMessageLogged := false
 
+	var msg ContainerLogMessage
 	for o := range logChan {
 		if !request.IsBuildRequest() && !limiter.Allow() {
 			if !rateLimitMessageLogged {
@@ -102,7 +103,10 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 		msgDecoded := false
 
 		for {
-			var msg ContainerLogMessage
+			// Clear the message struct to avoid carrying over previous values
+			msg.Level = ""
+			msg.Message = ""
+			msg.TaskID = nil
 
 			err := dec.Decode(&msg)
 			if err != nil {
@@ -128,15 +132,18 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 				instance.LogBuffer.Write([]byte(msg.Message))
 			}
 
-			for _, line := range strings.Split(msg.Message, "\n") {
-				if line == "" {
-					continue
-				}
+			if msg.Message != "" {
+				lines := strings.Split(msg.Message, "\n")
+				for _, line := range lines {
+					if line == "" {
+						continue
+					}
 
-				if msg.TaskID != nil {
-					log.Info().Str("container_id", request.ContainerId).Str("task_id", *msg.TaskID).Msg(line)
-				} else {
-					log.Info().Str("container_id", request.ContainerId).Msg(line)
+					if msg.TaskID != nil {
+						log.Info().Str("container_id", request.ContainerId).Str("task_id", *msg.TaskID).Msg(line)
+					} else {
+						log.Info().Str("container_id", request.ContainerId).Msg(line)
+					}
 				}
 			}
 		}
@@ -148,7 +155,8 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 				"stub_id":      instance.StubId,
 			}).Info(o.Message)
 
-			for _, line := range strings.Split(o.Message, "\n") {
+			lines := strings.Split(o.Message, "\n")
+			for _, line := range lines {
 				if line == "" {
 					continue
 				}
