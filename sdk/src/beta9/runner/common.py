@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from functools import wraps
 from multiprocessing import Value
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 import cloudpickle
 import requests
@@ -251,7 +251,7 @@ class FunctionHandler:
 
     def _prepare_handler_call(
         self, context: FunctionContext, *args: Any, **kwargs: Any
-    ) -> tuple[tuple, dict]:
+    ) -> Tuple[Tuple, Dict]:
         """Prepare handler arguments and kwargs, handling input validation and context injection."""
 
         if self.handler is None:
