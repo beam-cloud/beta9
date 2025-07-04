@@ -251,13 +251,15 @@ class FileSyncer:
 
 
 class SyncEventHandler(FileSystemEventHandler):
-    def __init__(self, queue: Queue):
+    def __init__(self, queue: Queue, hide_logs: bool = False):
         super().__init__()
         self.queue = queue
+        self.hide_logs = hide_logs
 
     def on_any_event(self, event: FileSystemEvent) -> None:
         if not event.is_directory and event.src_path.endswith(".py"):
-            terminal.warn(f"Detected changes in '{event.src_path}'. Reloading...")
+            if not self.hide_logs:
+                terminal.warn(f"Detected changes in '{event.src_path}'. Reloading...")
 
     def on_created(self, event) -> None:
         self.queue.put((SyncContainerWorkspaceOperation.WRITE, event.src_path, None))
