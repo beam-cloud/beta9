@@ -557,12 +557,18 @@ func (s *Worker) profile() {
 		return
 	}
 
+	port, err := getRandomFreePort()
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get random free port for pprof server")
+		return
+	}
+
 	pprofServer := &http.Server{
-		Addr: ":6061",
+		Addr: fmt.Sprintf(":%d", port),
 	}
 
 	go func() {
-		log.Info().Msg("starting pprof server on :6061")
+		log.Info().Msgf("starting pprof server on :%d", port)
 		if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("pprof server error")
 		}
