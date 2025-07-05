@@ -41,7 +41,9 @@ class Container(BaseAbstraction):
             )
 
             if sync_dir:
-                yield from self._sync_dir_to_workspace(dir=sync_dir, container_id=container_id)
+                yield from self._sync_dir_to_workspace(
+                    dir=sync_dir, container_id=container_id, hide_logs=hide_logs
+                )
             else:
                 while True:
                     time.sleep(DEFAULT_SYNC_INTERVAL)
@@ -68,10 +70,15 @@ class Container(BaseAbstraction):
             terminal.header(r.output)
 
     def _sync_dir_to_workspace(
-        self, *, dir: str, container_id: str, on_event: Optional[Callable] = None
+        self,
+        *,
+        dir: str,
+        container_id: str,
+        on_event: Optional[Callable] = None,
+        hide_logs: bool = False,
     ):
         file_update_queue = Queue()
-        event_handler = SyncEventHandler(file_update_queue)
+        event_handler = SyncEventHandler(file_update_queue, hide_logs=hide_logs)
 
         observer = Observer()
         observer.schedule(event_handler, dir, recursive=True)
