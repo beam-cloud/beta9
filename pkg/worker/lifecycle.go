@@ -836,7 +836,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 			}
 
 			if event.Type == "error" && event.Err != nil && strings.Contains(event.Err.Error(), "file already closed") {
-				log.Warn().Str("container_id", containerId).Msgf("received error event from runc: %s, stopping OOM event monitoring goroutine", event.Err.Error())
+				log.Warn().Str("container_id", containerId).Msgf("received error event: %s, stopping OOM event monitoring", event.Err.Error())
 				cancelEvents()
 				return
 			}
