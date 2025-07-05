@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof" // Import for side effects
 	"os"
 	"os/signal"
 	"strconv"
@@ -550,6 +552,30 @@ func (s *Worker) keepalive() {
 	}
 }
 
+func (s *Worker) profile() {
+	if !s.config.DebugMode {
+		return
+	}
+
+	pprofServer := &http.Server{
+		Addr: ":6060",
+	}
+
+	go func() {
+		log.Info().Msg("starting pprof server on :6060")
+		if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Error().Err(err).Msg("pprof server error")
+		}
+	}()
+
+	go func() {
+		<-s.ctx.Done()
+		if err := pprofServer.Shutdown(context.Background()); err != nil {
+			log.Error().Err(err).Msg("error shutting down pprof server")
+		}
+	}()
+}
+
 func (s *Worker) startup() error {
 	log.Info().Msg("worker starting up")
 
@@ -575,6 +601,8 @@ func (s *Worker) startup() error {
 	}
 
 	go s.eventRepo.PushWorkerStartedEvent(s.workerId)
+
+	s.profile()
 
 	return nil
 }
