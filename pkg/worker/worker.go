@@ -558,11 +558,11 @@ func (s *Worker) profile() {
 	}
 
 	pprofServer := &http.Server{
-		Addr: ":6060",
+		Addr: ":6061",
 	}
 
 	go func() {
-		log.Info().Msg("starting pprof server on :6060")
+		log.Info().Msg("starting pprof server on :6061")
 		if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("pprof server error")
 		}
