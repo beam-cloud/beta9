@@ -782,11 +782,14 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 
 	defer ticker.Stop()
 
+	eventsCtx, cancelEvents := context.WithCancel(ctx)
+	defer cancelEvents()
+
 	select {
 	case <-ctx.Done():
 		return
 	default:
-		ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
+		ch, err = s.runcHandle.Events(eventsCtx, containerId, time.Second)
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to open runc events channel: %v", err)
 			return
@@ -804,7 +807,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 		case <-ticker.C:
 			seenEvents = make(map[string]struct{})
 		case event, ok := <-ch:
-			if !ok { // If the channel is closed, try to re-open it
+			if !ok {
 				if tries == maxTries {
 					return
 				}
@@ -820,7 +823,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 				case <-ctx.Done():
 					return
 				case <-time.After(backoff):
-					ch, err = s.runcHandle.Events(ctx, containerId, time.Second)
+					ch, err = s.runcHandle.Events(eventsCtx, containerId, time.Second)
 					if err != nil {
 						log.Error().Str("container_id", containerId).Msgf("failed to open runc events channel: %v", err)
 					}
@@ -830,6 +833,12 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 
 			if s.config.DebugMode {
 				log.Info().Str("container_id", containerId).Msgf("received container event: %+v", event)
+			}
+
+			if event.Type == "error" && event.Err != nil && strings.Contains(event.Err.Error(), "file already closed") {
+				log.Warn().Str("container_id", containerId).Msgf("received error event from runc: %s, stopping OOM event monitoring goroutine", event.Err.Error())
+				cancelEvents()
+				return
 			}
 
 			if _, ok := seenEvents[event.Type]; ok {
