@@ -557,20 +557,26 @@ func (s *Worker) profile() {
 		return
 	}
 
-	pprofServer := &http.Server{
-		Addr: ":6061",
+	port, err := getRandomFreePort()
+	if err != nil {
+		log.Error().Err(err).Msg("failed to get random free port for pprof server")
+		return
+	}
+
+	srv := &http.Server{
+		Addr: fmt.Sprintf(":%d", port),
 	}
 
 	go func() {
-		log.Info().Msg("starting pprof server on :6061")
-		if err := pprofServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Info().Msgf("starting pprof server on :%d", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Error().Err(err).Msg("pprof server error")
 		}
 	}()
 
 	go func() {
 		<-s.ctx.Done()
-		if err := pprofServer.Shutdown(context.Background()); err != nil {
+		if err := srv.Shutdown(context.Background()); err != nil {
 			log.Error().Err(err).Msg("error shutting down pprof server")
 		}
 	}()
