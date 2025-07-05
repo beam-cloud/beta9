@@ -828,6 +828,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 				continue
 			}
 
+			log.Info().Str("container_id", containerId).Msgf("received container event: %+v", event)
 			if _, ok := seenEvents[event.Type]; ok {
 				continue
 			}
