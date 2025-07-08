@@ -44,6 +44,11 @@ def common(**_):
     help="The ID of the container to connect to.",
     type=str,
 )
+@click.option(
+    "--sync-dir",
+    help="The directory to sync to the container.",
+    type=str,
+)
 @override_config_options
 @extraclick.pass_service_client
 @click.pass_context
@@ -53,6 +58,7 @@ def shell(
     handler: str,
     url_type: str = "path",
     container_id: str = None,
+    sync_dir: str = None,
     **kwargs,
 ):
     entrypoint = kwargs["entrypoint"]
@@ -71,4 +77,4 @@ def shell(
     if not handle_config_override(user_obj, kwargs):
         return
 
-    user_obj.shell(url_type=url_type, container_id=container_id)  # type:ignore
+    user_obj.shell(url_type=url_type, container_id=container_id, sync_dir=sync_dir)  # type:ignore
