@@ -277,9 +277,7 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 	if !ok {
 		go func() {
 			// This only dies if the container is stopped
-			_, err = runcClient.Exec(containerId, fmt.Sprintf(startupScript, types.WorkerShellPort), []string{
-				fmt.Sprintf("SHELL_PORT=%d", types.WorkerShellPort),
-			})
+			_, err = runcClient.Exec(containerId, fmt.Sprintf(startupScript, types.WorkerShellPort), []string{})
 			if err != nil {
 				log.Error().Msgf("Failed to execute startup script: %v", err)
 			}
@@ -364,7 +362,6 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		fmt.Sprintf("USERNAME=%s", username),
 		fmt.Sprintf("PASSWORD=%s", password),
-		fmt.Sprintf("SHELL_PORT=%d", types.WorkerShellPort),
 	}
 
 	env = append(secrets, env...)
