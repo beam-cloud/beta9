@@ -39,7 +39,7 @@ const (
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
 	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
-	startupScript                 string        = `SHELL=$(ls /bin/bash || ls /bin/sh); /usr/local/bin/dropbear -e -c "cd /mnt/code && $SHELL"  -p 2222 -R -E -F 2>> /etc/dropbear/logs.txt`
+	startupScript                 string        = `SHELL=$(ls /bin/bash || ls /bin/sh); /usr/local/bin/dropbear -e -c "cd /mnt/code && $SHELL" -p %d -R -E -F 2>> /etc/dropbear/logs.txt`
 	createUserScript              string        = `SHELL=$(ls /bin/bash || ls /bin/sh); \
 (command -v useradd >/dev/null && useradd -m -s $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
@@ -277,7 +277,7 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 	if !ok {
 		go func() {
 			// This only dies if the container is stopped
-			_, err = runcClient.Exec(containerId, startupScript, []string{
+			_, err = runcClient.Exec(containerId, fmt.Sprintf(startupScript, types.WorkerShellPort), []string{
 				fmt.Sprintf("SHELL_PORT=%d", types.WorkerShellPort),
 			})
 			if err != nil {
@@ -379,7 +379,7 @@ func (ss *SSHShellService) CreateStandaloneShell(ctx context.Context, in *pb.Cre
 		gpuCount = 1
 	}
 
-	startupCommand := fmt.Sprintf("%s && %s", createUserScript, startupScript)
+	startupCommand := fmt.Sprintf("%s && %s", createUserScript, fmt.Sprintf(startupScript, types.WorkerShellPort))
 	entryPoint := []string{
 		"/bin/sh",
 		"-c",
