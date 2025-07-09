@@ -83,7 +83,10 @@ class StoredStdoutInterceptor(io.TextIOBase):
             sys.__stdout__.flush()
 
     def fileno(self) -> int:
-        return sys.__stdout__.fileno()
+        try:
+            return sys.__stdout__.fileno()
+        except (AttributeError, io.UnsupportedOperation):
+            return -1
 
     def isatty(self) -> bool:
         return sys.__stdout__.isatty()
