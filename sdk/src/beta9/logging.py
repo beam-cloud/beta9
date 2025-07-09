@@ -79,4 +79,23 @@ class StoredStdoutInterceptor(io.TextIOBase):
             sys.__stdout__.flush()
 
     def flush(self):
-        pass
+        if not self.capture_logs:
+            sys.__stdout__.flush()
+
+    def fileno(self) -> int:
+        try:
+            return sys.__stdout__.fileno()
+        except (AttributeError, io.UnsupportedOperation):
+            return -1
+
+    def isatty(self) -> bool:
+        return sys.__stdout__.isatty()
+
+    def writable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return False
+
+    def readable(self) -> bool:
+        return False
