@@ -1,3 +1,4 @@
+import asyncio
 import concurrent.futures
 import inspect
 import os
@@ -234,6 +235,10 @@ class _CallableWrapper(DeployableMixin):
 
     def remote(self, *args, **kwargs) -> Any:
         return self(*args, **kwargs)
+
+    async def async_remote(self, *args, **kwargs) -> Any:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: self.remote(*args, **kwargs))
 
     def serve(self, **kwargs):
         terminal.error("Serve has not been implemented for functions.")
