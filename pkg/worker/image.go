@@ -324,15 +324,20 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	if _, err := os.Stat(archivePath); err != nil {
 		err = c.primaryRegistry.Pull(ctx, archivePath, imageId)
 		if err != nil {
+			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from primary registry")
 
 			sourceRegistry = c.config.ImageService.Registries.S3.Secondary
 			err = c.secondaryRegistry.Pull(ctx, archivePath, imageId)
 			if err != nil {
+				log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from secondary registry")
 				return nil, err
 			}
 
 			// HACK: Async copy the archives to the primary registry if it exists in the secondary registry
-			go c.primaryRegistry.CopyImageFromRegistry(context.Background(), imageId, c.secondaryRegistry)
+			if c.primaryRegistry.Registry().BucketName != c.secondaryRegistry.Registry().BucketName &&
+				c.primaryRegistry.Registry().Endpoint != c.secondaryRegistry.Registry().Endpoint {
+				go c.primaryRegistry.CopyImageFromRegistry(context.Background(), imageId, c.secondaryRegistry)
+			}
 		}
 	}
 

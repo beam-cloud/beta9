@@ -212,7 +212,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 }
 
 // Check if an image already exists in the registry
-func (b *Builder) Exists(ctx context.Context, imageId string) bool {
+func (b *Builder) Exists(ctx context.Context, imageId string) (bool, error) {
 	return b.registry.Exists(ctx, imageId)
 }
 

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import signal
@@ -206,7 +207,7 @@ def main(channel: Channel):
 
     try:
         # Invoke the function and handle its result
-        result = invoke_function(function_stub, context, task_id)
+        result = asyncio.run(invoke_function(function_stub, context, task_id))
         if result.exception:
             handle_task_failure(gateway_stub, result, task_id, container_id, container_hostname)
             raise result.exception
@@ -231,7 +232,7 @@ def start_task(
     return gateway_stub.start_task(StartTaskRequest(task_id=task_id, container_id=container_id))
 
 
-def invoke_function(
+async def invoke_function(
     function_stub: FunctionServiceStub, context: FunctionContext, task_id: str
 ) -> InvokeResult:
     result: Any = None
@@ -249,8 +250,18 @@ def invoke_function(
         callback_url = kwargs.pop("callback_url", None)
 
         handler = FunctionHandler()
-        result = handler(context, *args, **kwargs)
-
+        if handler.is_async:
+            result = await handler.__acall__(
+                context,
+                *args,
+                **kwargs,
+            )
+        else:
+            result = handler(
+                context,
+                *args,
+                **kwargs,
+            )
         pickled_result = cloudpickle.dumps(result)
         set_result_resp = function_stub.function_set_result(
             FunctionSetResultRequest(task_id=task_id, result=pickled_result)

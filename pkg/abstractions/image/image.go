@@ -132,9 +132,14 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		valid = false
 	}
 
+	exists, err := is.builder.Exists(ctx, imageId)
+	if err != nil {
+		return nil, err
+	}
+
 	return &pb.VerifyImageBuildResponse{
 		ImageId: imageId,
-		Exists:  is.builder.Exists(ctx, imageId),
+		Exists:  exists,
 		Valid:   valid,
 	}, nil
 }

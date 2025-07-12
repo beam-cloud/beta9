@@ -31,6 +31,7 @@ type ImageRegistry struct {
 	store              ObjectStore
 	config             types.ImageServiceConfig
 	ImageFileExtension string
+	registry           types.S3ImageRegistry
 }
 
 func NewImageRegistry(config types.AppConfig, registry types.S3ImageRegistry) (*ImageRegistry, error) {
@@ -59,10 +60,15 @@ func NewImageRegistry(config types.AppConfig, registry types.S3ImageRegistry) (*
 		store:              store,
 		config:             config.ImageService,
 		ImageFileExtension: imageFileExtension,
+		registry:           registry,
 	}, nil
 }
 
-func (r *ImageRegistry) Exists(ctx context.Context, imageId string) bool {
+func (r *ImageRegistry) Registry() types.S3ImageRegistry {
+	return r.registry
+}
+
+func (r *ImageRegistry) Exists(ctx context.Context, imageId string) (bool, error) {
 	return r.store.Exists(ctx, fmt.Sprintf("%s.%s", imageId, r.ImageFileExtension))
 }
 
@@ -86,7 +92,7 @@ func (r *ImageRegistry) CopyImageFromRegistry(ctx context.Context, imageId strin
 type ObjectStore interface {
 	Put(ctx context.Context, localPath string, key string) error
 	Get(ctx context.Context, key string, localPath string) error
-	Exists(ctx context.Context, key string) bool
+	Exists(ctx context.Context, key string) (bool, error)
 	Size(ctx context.Context, key string) (int64, error)
 	GetReader(ctx context.Context, key string) (io.ReadCloser, error)
 	PutReader(ctx context.Context, reader io.Reader, key string) error
@@ -187,13 +193,13 @@ func (s *S3Store) Get(ctx context.Context, key string, localPath string) error {
 }
 
 // Exists returns true if the object exists
-func (s *S3Store) Exists(ctx context.Context, key string) bool {
+func (s *S3Store) Exists(ctx context.Context, key string) (bool, error) {
 	exists, err := s.objectExists(ctx, key)
 	if err != nil {
-		return false
+		return false, err
 	}
 
-	return exists
+	return exists, nil
 }
 
 // Size returns the size of the object in bytes
@@ -323,9 +329,9 @@ func (s *LocalObjectStore) Get(ctx context.Context, key string, localPath string
 	return nil
 }
 
-func (s *LocalObjectStore) Exists(ctx context.Context, key string) bool {
+func (s *LocalObjectStore) Exists(ctx context.Context, key string) (bool, error) {
 	_, err := os.Stat(filepath.Join(s.Path, key))
-	return err == nil
+	return err == nil, nil
 }
 
 func (s *LocalObjectStore) Size(ctx context.Context, key string) (int64, error) {
