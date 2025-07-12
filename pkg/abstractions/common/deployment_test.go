@@ -2,6 +2,7 @@ package abstractions
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 	"time"
@@ -103,6 +104,17 @@ func TestParseAndValidateDeploymentStubId(t *testing.T) {
 			expectedErr:    apiv1.HTTPBadRequest("Invalid deployment"),
 			preloadFn: func() {
 				sqlmock.ExpectQuery("SELECT").WillReturnError(nil)
+			},
+		},
+		{
+			name:           "Valid version - Stub not found",
+			version:        "1",
+			deploymentName: "",
+			stubId:         "stub",
+			expectedStubId: "",
+			expectedErr:    apiv1.HTTPBadRequest("Invalid stub"),
+			preloadFn: func() {
+				sqlmock.ExpectQuery("SELECT").WillReturnError(sql.ErrNoRows)
 			},
 		},
 		{
