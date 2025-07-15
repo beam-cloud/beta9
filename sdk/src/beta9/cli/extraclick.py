@@ -250,6 +250,15 @@ class ImageParser(click.ParamType):
         )
 
 
+class DockerfileParser(click.ParamType):
+    name = "dockerfile"
+
+    def convert(self, value, param, ctx):
+        image = Image.from_dockerfile(value)
+        image.dockerfile_path = value
+        return image
+
+
 class ShlexParser(click.ParamType):
     name = "shlex"
 
@@ -310,6 +319,12 @@ def override_config_options(func: click.Command):
         help="The entrypoint for the container - only used if a handler is not provided.",
     )(f)
     f = click.option(
+        "--dockerfile",
+        type=DockerfileParser(),
+        help="The path to the Dockerfile to use for the container (e.g. --dockerfile Dockerfile).",
+        required=False,
+    )(f)
+    f = click.option(
         "--image",
         type=ImageParser(),
         help="The image to use for the container (e.g. --image python:3.10).",
@@ -361,6 +376,9 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
                     )
 
                 setattr(config_class_instance, key, value)
+
+        if "dockerfile" in kwargs:
+            config_class_instance.image = kwargs["dockerfile"]
 
         return True
     except BaseException as e:
