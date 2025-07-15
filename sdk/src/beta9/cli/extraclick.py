@@ -377,7 +377,7 @@ def handle_config_override(func, kwargs: Dict[str, str]) -> bool:
 
                 setattr(config_class_instance, key, value)
 
-        if "dockerfile" in kwargs:
+        if kwargs.get("dockerfile") is not None:
             config_class_instance.image = kwargs["dockerfile"]
 
         return True
