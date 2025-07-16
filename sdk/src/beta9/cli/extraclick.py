@@ -1,5 +1,6 @@
 import functools
 import inspect
+import os
 import shlex
 import sys
 import textwrap
@@ -254,6 +255,10 @@ class DockerfileParser(click.ParamType):
     name = "dockerfile"
 
     def convert(self, value, param, ctx):
+        if not os.path.exists(value):
+            terminal.error(f"Dockerfile not found: {value}")
+            return None
+
         image = Image.from_dockerfile(value)
         image.dockerfile_path = value
         return image
