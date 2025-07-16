@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path"
 	"slices"
@@ -66,41 +67,58 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 	os.MkdirAll(mountPath, 0755)
 
-	mount, err := storage.NewStorage(types.StorageConfig{
-		Mode:           storage.StorageModeGeese,
-		FilesystemName: workspaceName,
-		FilesystemPath: mountPath,
-		Geese: types.GeeseConfig{
-			// Workspace specific config
-			EndpointUrl: *workspaceStorage.EndpointUrl,
-			BucketName:  *workspaceStorage.BucketName,
-			AccessKey:   *workspaceStorage.AccessKey,
-			SecretKey:   *workspaceStorage.SecretKey,
-			Region:      *workspaceStorage.Region,
+	var err error
+	if s.config.WorkspaceStorage.Mode == storage.StorageModeGeese {
+		mount, err = storage.NewStorage(types.StorageConfig{
+			Mode:           storage.StorageModeGeese,
+			FilesystemName: workspaceName,
+			FilesystemPath: mountPath,
+			Geese: types.GeeseConfig{
+				// Workspace specific config
+				EndpointUrl: *workspaceStorage.EndpointUrl,
+				BucketName:  *workspaceStorage.BucketName,
+				AccessKey:   *workspaceStorage.AccessKey,
+				SecretKey:   *workspaceStorage.SecretKey,
+				Region:      *workspaceStorage.Region,
 
-			// Global config
-			Debug:                  s.config.WorkspaceStorage.Geese.Debug,
-			FsyncOnClose:           s.config.WorkspaceStorage.Geese.FsyncOnClose,
-			MemoryLimit:            s.config.WorkspaceStorage.Geese.MemoryLimit,
-			MaxFlushers:            s.config.WorkspaceStorage.Geese.MaxFlushers,
-			MaxParallelParts:       s.config.WorkspaceStorage.Geese.MaxParallelParts,
-			DirMode:                s.config.WorkspaceStorage.Geese.DirMode,
-			FileMode:               s.config.WorkspaceStorage.Geese.FileMode,
-			ListType:               s.config.WorkspaceStorage.Geese.ListType,
-			MountOptions:           s.config.WorkspaceStorage.Geese.MountOptions,
-			ReadAheadKB:            s.config.WorkspaceStorage.Geese.ReadAheadKB,
-			ReadAheadLargeKB:       s.config.WorkspaceStorage.Geese.ReadAheadLargeKB,
-			ReadAheadParallelKB:    s.config.WorkspaceStorage.Geese.ReadAheadParallelKB,
-			FuseReadAheadKB:        s.config.WorkspaceStorage.Geese.FuseReadAheadKB,
-			DisableVolumeCaching:   s.config.WorkspaceStorage.Geese.DisableVolumeCaching,
-			StagedWriteModeEnabled: s.config.WorkspaceStorage.Geese.StagedWriteModeEnabled,
-			StagedWritePath:        s.config.WorkspaceStorage.Geese.StagedWritePath,
-			StagedWriteDebounce:    s.config.WorkspaceStorage.Geese.StagedWriteDebounce,
-			CacheStreamingEnabled:  s.config.WorkspaceStorage.Geese.CacheStreamingEnabled,
-		},
-	}, s.cacheClient)
-	if err != nil {
-		return nil, err
+				// Global config
+				Debug:                  s.config.WorkspaceStorage.Geese.Debug,
+				FsyncOnClose:           s.config.WorkspaceStorage.Geese.FsyncOnClose,
+				MemoryLimit:            s.config.WorkspaceStorage.Geese.MemoryLimit,
+				MaxFlushers:            s.config.WorkspaceStorage.Geese.MaxFlushers,
+				MaxParallelParts:       s.config.WorkspaceStorage.Geese.MaxParallelParts,
+				DirMode:                s.config.WorkspaceStorage.Geese.DirMode,
+				FileMode:               s.config.WorkspaceStorage.Geese.FileMode,
+				ListType:               s.config.WorkspaceStorage.Geese.ListType,
+				MountOptions:           s.config.WorkspaceStorage.Geese.MountOptions,
+				ReadAheadKB:            s.config.WorkspaceStorage.Geese.ReadAheadKB,
+				ReadAheadLargeKB:       s.config.WorkspaceStorage.Geese.ReadAheadLargeKB,
+				ReadAheadParallelKB:    s.config.WorkspaceStorage.Geese.ReadAheadParallelKB,
+				FuseReadAheadKB:        s.config.WorkspaceStorage.Geese.FuseReadAheadKB,
+				DisableVolumeCaching:   s.config.WorkspaceStorage.Geese.DisableVolumeCaching,
+				StagedWriteModeEnabled: s.config.WorkspaceStorage.Geese.StagedWriteModeEnabled,
+				StagedWritePath:        s.config.WorkspaceStorage.Geese.StagedWritePath,
+				StagedWriteDebounce:    s.config.WorkspaceStorage.Geese.StagedWriteDebounce,
+				CacheStreamingEnabled:  s.config.WorkspaceStorage.Geese.CacheStreamingEnabled,
+			},
+		}, s.cacheClient)
+		if err != nil {
+			return nil, err
+		}
+	} else if s.config.WorkspaceStorage.Mode == storage.StorageModeAlluxio {
+		mount, err = storage.NewStorage(types.StorageConfig{
+			Mode:           storage.StorageModeAlluxio,
+			FilesystemName: workspaceName,
+			FilesystemPath: mountPath,
+			Alluxio: types.AlluxioConfig{
+				Debug: s.config.WorkspaceStorage.Alluxio.Debug,
+			},
+		}, s.cacheClient)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, errors.New("invalid storage mode")
 	}
 
 	s.mounts.Set(workspaceName, mount)

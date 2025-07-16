@@ -13,6 +13,7 @@ const (
 	StorageModeJuiceFS    string = "juicefs"
 	StorageModeMountPoint string = "mountpoint"
 	StorageModeGeese      string = "geese"
+	StorageModeAlluxio    string = "alluxio"
 )
 
 type Storage interface {
@@ -68,6 +69,14 @@ func NewStorage(config types.StorageConfig, cacheClient *blobcache.BlobCacheClie
 		}
 
 		return s, nil
+	case StorageModeAlluxio:
+		// TODO: Implement alluxio storage
+		// s, err := NewAlluxioStorage(config.Alluxio)
+		// if err != nil {
+		// 	return nil, err
+		// }
+
+		return nil, errors.New("alluxio storage not implemented")
 	case StorageModeMountPoint:
 		s, err := NewMountPointStorage(config.MountPoint)
 		if err != nil {
