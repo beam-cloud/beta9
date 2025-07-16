@@ -17,7 +17,7 @@ build:
 	uv build
 
 clean:
-	rm dist/*
+	rm -f dist/*
 
 publish: clean build
 	uv publish --token ${PYPI_TOKEN}
