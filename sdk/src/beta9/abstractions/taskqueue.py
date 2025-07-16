@@ -258,10 +258,6 @@ class _CallableWrapper(DeployableMixin):
         ):
             return False
 
-        if not self.parent.client:
-            terminal.error("No API client was instantiated.")
-            return False
-
         payload = {"args": args, "kwargs": kwargs}
         json_payload = json.dumps(payload)
 
@@ -274,6 +270,5 @@ class _CallableWrapper(DeployableMixin):
             return False
 
         terminal.detail(f"Enqueued task: {r.task_id}")
-        task = self.parent.client.get_task_by_id(r.task_id)
 
-        return task
+        return self.parent.client.get_task_by_id(r.task_id)
