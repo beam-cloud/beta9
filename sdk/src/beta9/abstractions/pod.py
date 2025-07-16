@@ -283,10 +283,14 @@ app = Pod(
         arguments = []
         argkwargs = get_init_args_kwargs(self.__class__)
         for key, value in kwargs.items():
-            if key not in argkwargs or value is None:
+            if key != "dockerfile" and (key not in argkwargs or value is None):
                 continue
 
-            if isinstance(value, Image):
+            if key == "dockerfile":
+                imports.append("Image")
+                key = "image"
+                value = f"Image.from_dockerfile('{value.dockerfile_path}')"
+            elif isinstance(value, Image):
                 imports.append("Image")
                 value = f'Image(base_image="{value.base_image}")'
             elif isinstance(value, tuple):
