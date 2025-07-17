@@ -42,6 +42,10 @@ class TestTaskQueue(TestCase):
                 return_value=(TaskQueuePutResponse(ok=True, task_id="1234"))
             )
             test_func.parent.prepare_runtime = MagicMock(return_value=True)
+            test_func.parent.client = MagicMock().assign_attr(
+                "get_task_by_id",
+                MagicMock(return_value=MagicMock()),
+            )
 
             test_func.put()
 
@@ -67,6 +71,10 @@ class TestTaskQueue(TestCase):
             )
 
             test_func.parent.prepare_runtime = MagicMock(return_value=True)
+            test_func.parent.client = MagicMock().assign_attr(
+                "get_task_by_id",
+                MagicMock(return_value=MagicMock()),
+            )
 
             self.assertRaises(
                 NotImplementedError,
