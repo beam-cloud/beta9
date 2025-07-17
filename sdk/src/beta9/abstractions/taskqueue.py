@@ -269,6 +269,4 @@ class _CallableWrapper(DeployableMixin):
             terminal.error("Failed to enqueue task")
             return False
 
-        terminal.detail(f"Enqueued task: {r.task_id}")
-
         return self.parent.get_client().get_task_by_id(r.task_id)
