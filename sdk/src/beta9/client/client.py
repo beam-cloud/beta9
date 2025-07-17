@@ -1,9 +1,12 @@
 import http
+import os
 import uuid
 from pathlib import Path
 
 import requests
 
+from ..config import get_config_context, get_settings
+from ..env import is_remote
 from ..exceptions import VolumeUploadError, WorkspaceNotFoundError
 from . import get, make_request
 from .deployment import Deployment
@@ -15,15 +18,32 @@ VOLUME_UPLOAD_PATH = "uploads"
 class Client:
     def __init__(
         self,
-        token: str,
-        gateway_host: str = "0.0.0.0",
-        gateway_port: int = 1994,
+        token: str = os.environ.get("BETA9_TOKEN", ""),
+        gateway_host: str = "",
+        gateway_port: int = 0,
         tls: bool = False,
     ) -> None:
         self.token: str = token
         self.gateway_host: str = gateway_host
         self.gateway_port: int = gateway_port
         self.tls: bool = tls
+
+        if is_remote():
+            self.gateway_host = os.environ.get("BETA9_GATEWAY_HOST_HTTP", "beta9-gateway")
+            self.gateway_port = int(os.environ.get("BETA9_GATEWAY_PORT_HTTP", "1994"))
+        else:
+            settings = get_settings()
+            config_context = get_config_context()
+
+            if not token:
+                self.token = config_context.token
+
+            if not gateway_host:
+                self.gateway_host = settings.api_host
+
+            if not gateway_port:
+                self.gateway_port = settings.api_port
+
         self.base_url: str = self._get_base_url()
         self._load_workspace()
 
@@ -82,7 +102,9 @@ class Client:
     def get_task_by_id(self, id: str) -> Task:
         """Retrieve a task by task ID."""
         return Task(
-            id=id, url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}", token=self.token
+            id=id,
+            url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}",
+            token=self.token,
         )
 
     def get_deployment_by_id(self, id: str) -> Deployment:

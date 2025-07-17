@@ -485,6 +485,14 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Value: "443",
 		},
 		{
+			Name:  "BETA9_GATEWAY_HOST_HTTP",
+			Value: wpc.config.GatewayService.HTTP.ExternalHost,
+		},
+		{
+			Name:  "BETA9_GATEWAY_PORT_HTTP",
+			Value: "443",
+		},
+		{
 			Name:  "POD_HOSTNAME",
 			Value: podHostname,
 		},

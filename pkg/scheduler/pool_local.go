@@ -467,6 +467,14 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 				Name:  "BETA9_GATEWAY_PORT",
 				Value: fmt.Sprint(wpc.config.GatewayService.GRPC.Port),
 			},
+			{
+				Name:  "BETA9_GATEWAY_HOST_HTTP",
+				Value: wpc.config.GatewayService.Host,
+			},
+			{
+				Name:  "BETA9_GATEWAY_PORT_HTTP",
+				Value: fmt.Sprint(wpc.config.GatewayService.HTTP.Port),
+			},
 		}...)
 	} else {
 		envVars = append(envVars, []corev1.EnvVar{
@@ -476,6 +484,14 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			},
 			{
 				Name:  "BETA9_GATEWAY_PORT",
+				Value: "443",
+			},
+			{
+				Name:  "BETA9_GATEWAY_HOST_HTTP",
+				Value: wpc.config.GatewayService.HTTP.ExternalHost,
+			},
+			{
+				Name:  "BETA9_GATEWAY_PORT_HTTP",
 				Value: "443",
 			},
 		}...)
