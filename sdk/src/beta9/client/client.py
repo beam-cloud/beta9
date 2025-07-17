@@ -18,7 +18,7 @@ VOLUME_UPLOAD_PATH = "uploads"
 class Client:
     def __init__(
         self,
-        token: str = os.environ.get("BETA9_TOKEN", ""),
+        token: str = "",
         gateway_host: str = "",
         gateway_port: int = 0,
         tls: bool = False,
@@ -28,6 +28,9 @@ class Client:
         self.gateway_port: int = gateway_port
         self.tls: bool = tls
 
+        if not self.token:
+            self.token = os.environ.get("BETA9_TOKEN", "")
+
         if is_remote():
             self.gateway_host = os.environ.get("BETA9_GATEWAY_HOST_HTTP", "beta9-gateway")
             self.gateway_port = int(os.environ.get("BETA9_GATEWAY_PORT_HTTP", "1994"))
@@ -35,7 +38,7 @@ class Client:
             settings = get_settings()
             config_context = get_config_context()
 
-            if not token:
+            if not self.token:
                 self.token = config_context.token
 
             if not gateway_host:
