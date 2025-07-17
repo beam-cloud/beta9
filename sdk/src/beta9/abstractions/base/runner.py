@@ -181,7 +181,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.outputs: Optional[Schema] = outputs
         self.client: Optional[Client] = None
 
-    def get_client(self):
+    def get_client(self) -> Client | None:
         if self.client:
             return self.client
         self.client = Client(token=self.config_context.token) if self.config_context.token else None
