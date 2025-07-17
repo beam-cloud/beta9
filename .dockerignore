@@ -7,6 +7,7 @@
 !sdk
 !bin/volume_cache_*
 !bin/ipbind_*
+!bin/beta9-cli
 **/__pycache__
 *.pyc
 .venv
