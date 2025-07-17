@@ -286,7 +286,7 @@ app = Pod(
             if key != "dockerfile" and (key not in argkwargs or value is None):
                 continue
 
-            if key == "dockerfile":
+            if key == "dockerfile" and isinstance(value, Image):
                 imports.append("Image")
                 key = "image"
                 value = f"Image.from_dockerfile('{value.dockerfile_path}')"

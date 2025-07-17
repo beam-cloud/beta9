@@ -261,6 +261,7 @@ class DockerfileParser(click.ParamType):
 
         image = Image.from_dockerfile(value)
         image.dockerfile_path = value
+        image.ignore_python = True
         return image
 
 
