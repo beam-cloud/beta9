@@ -1,4 +1,4 @@
-.PHONY: docs tests
+.PHONY: docs tests build
 
 init:
 	git submodule update --init --recursive
