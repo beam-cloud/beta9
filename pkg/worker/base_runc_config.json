@@ -162,6 +162,18 @@
 			]
 		},
 		{
+			"destination": "/usr/bin/beta9",
+			"type": "bind",
+			"source": "/usr/local/bin/beta9",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
 			"destination": "/usr/local/bin/uv-b9",
 			"type": "bind",
 			"source": "/usr/local/bin/uv",
