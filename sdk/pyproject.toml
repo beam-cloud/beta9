@@ -23,9 +23,10 @@ dependencies = [
     "requests<3.0.0,>=2.32.3",
     "paramiko<4.0.0,>=3.5.0",
     "websockets>=13,<14",
+    "beam-client>=0.2.170",
 ]
 name = "beta9"
-version = "0.1.212"
+version = "0.1.213"
 description = ""
 
 [project.scripts]
