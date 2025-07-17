@@ -109,26 +109,11 @@ wheels = [
 ]
 
 [[package]]
-name = "beam-client"
-version = "0.2.170"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "beta9" },
-    { name = "requests" },
-    { name = "websockets" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/01/03/60c6f3ac382a34569b7e1c9e490266cf49ffd7fb954c649b347498da88b8/beam_client-0.2.170.tar.gz", hash = "sha256:ac8ac8d4af132034530aea609d8048a967071e7641975e962226653e11de83f0", size = 8183 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/90/b4086b545fb1eed7b8c2023c689185ea4c42cd474a45a37c4aa183571653/beam_client-0.2.170-py3-none-any.whl", hash = "sha256:2b72eb239b23c5caae13d69b63a602524e3444e5eb2cbe2fa91f8193d27c3bd1", size = 12496 },
-]
-
-[[package]]
 name = "beta9"
 version = "0.1.213"
 source = { editable = "." }
 dependencies = [
     { name = "asgiref" },
-    { name = "beam-client" },
     { name = "betterproto-beta9", extra = ["compiler"] },
     { name = "click" },
     { name = "cloudpickle" },
@@ -164,7 +149,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asgiref", specifier = ">=3.8.1,<4.0.0" },
-    { name = "beam-client", specifier = ">=0.2.170" },
     { name = "betterproto-beta9", extras = ["compiler"], specifier = "==2.0.1" },
     { name = "click", specifier = ">=8.1.7,<9.0.0" },
     { name = "cloudpickle", specifier = ">=3.0.0,<4.0.0" },
