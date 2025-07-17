@@ -10,6 +10,7 @@ from ... import terminal
 from ...abstractions.base import BaseAbstraction
 from ...abstractions.image import Image, ImageBuildResult
 from ...abstractions.volume import Volume
+from ...client.client import Client
 from ...clients.gateway import Autoscaler as AutoscalerProto
 from ...clients.gateway import (
     GatewayServiceStub,
@@ -178,6 +179,13 @@ class RunnerAbstraction(BaseAbstraction):
         self.pricing: Optional[PricingPolicy] = pricing
         self.inputs: Optional[Schema] = inputs
         self.outputs: Optional[Schema] = outputs
+        self.client: Optional[Client] = None
+
+    def get_client(self) -> Client | None:
+        if self.client:
+            return self.client
+        self.client = Client(token=self.config_context.token) if self.config_context.token else None
+        return self.client
 
     def print_invocation_snippet(self, url_type: str = "") -> GetUrlResponse:
         """Print curl request to call deployed container URL"""

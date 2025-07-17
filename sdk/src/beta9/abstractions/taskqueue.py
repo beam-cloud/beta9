@@ -14,6 +14,7 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.volume import CloudBucket, Volume
 from ..channel import with_grpc_error_handling
+from ..client.task import Task
 from ..clients.taskqueue import (
     StartTaskQueueServeRequest,
     StartTaskQueueServeResponse,
@@ -250,7 +251,7 @@ class _CallableWrapper(DeployableMixin):
         container = Container(container_id=r.container_id)
         container.attach(container_id=r.container_id, sync_dir=dir)
 
-    def put(self, *args, **kwargs) -> bool:
+    def put(self, *args, **kwargs) -> Union[bool, Task]:
         if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,
@@ -268,5 +269,4 @@ class _CallableWrapper(DeployableMixin):
             terminal.error("Failed to enqueue task")
             return False
 
-        terminal.detail(f"Enqueued task: {r.task_id}")
-        return True
+        return self.parent.get_client().get_task_by_id(r.task_id)
