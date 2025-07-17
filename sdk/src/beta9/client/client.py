@@ -34,6 +34,7 @@ class Client:
         if is_remote():
             self.gateway_host = os.environ.get("BETA9_GATEWAY_HOST_HTTP", "beta9-gateway")
             self.gateway_port = int(os.environ.get("BETA9_GATEWAY_PORT_HTTP", "1994"))
+
         else:
             settings = get_settings()
             config_context = get_config_context()
@@ -46,6 +47,9 @@ class Client:
 
             if not gateway_port:
                 self.gateway_port = settings.api_port
+
+        if not self.tls and self.gateway_port == 443:
+            self.tls = True
 
         self.base_url: str = self._get_base_url()
         self._load_workspace()
