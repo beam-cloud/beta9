@@ -423,13 +423,15 @@ func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxEx
 		Started: started,
 	}
 
-	var stdoutBuf, stderrBuf bytes.Buffer
+	stdoutBuf := &common.SafeBuffer{}
+	stderrBuf := &common.SafeBuffer{}
+
 	go func() {
-		io.Copy(&stdoutBuf, processIO.Stdout())
+		io.Copy(stdoutBuf, processIO.Stdout())
 	}()
 
 	go func() {
-		io.Copy(&stderrBuf, processIO.Stderr())
+		io.Copy(stderrBuf, processIO.Stderr())
 	}()
 
 	if !in.Interactive {
@@ -466,8 +468,8 @@ func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxEx
 		Stderr:    processIO.Stderr(),
 		StartTime: time.Now(),
 		Status:    SandboxProcessStatusRunning,
-		StdoutBuf: &stdoutBuf,
-		StderrBuf: &stderrBuf,
+		StdoutBuf: stdoutBuf,
+		StderrBuf: stderrBuf,
 		mu:        sync.Mutex{},
 		ExitCode:  -1,
 	}
@@ -537,10 +539,7 @@ func (s *RunCServer) RunCSandboxStdout(ctx context.Context, in *pb.RunCSandboxSt
 
 	ps := processState.(*SandboxProcessState)
 
-	ps.mu.Lock()
-	stdout := ps.StdoutBuf.String()
-	ps.StdoutBuf.Reset()
-	ps.mu.Unlock()
+	stdout := ps.StdoutBuf.StringAndReset()
 
 	return &pb.RunCSandboxStdoutResponse{
 		Ok:     true,
@@ -567,10 +566,7 @@ func (s *RunCServer) RunCSandboxStderr(ctx context.Context, in *pb.RunCSandboxSt
 
 	ps := processState.(*SandboxProcessState)
 
-	ps.mu.Lock()
-	stderr := ps.StderrBuf.String()
-	ps.StderrBuf.Reset()
-	ps.mu.Unlock()
+	stderr := ps.StderrBuf.StringAndReset()
 
 	return &pb.RunCSandboxStderrResponse{
 		Ok:     true,

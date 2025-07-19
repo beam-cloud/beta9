@@ -1,9 +1,11 @@
 package common
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/rs/zerolog"
 )
@@ -99,4 +101,24 @@ type ExecWriter struct {
 func (c *ExecWriter) Write(p []byte) (n int, err error) {
 	c.Info(string(p))
 	return len(p), nil
+}
+
+type SafeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *SafeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	n, err := b.buf.Write(p)
+	b.mu.Unlock()
+	return n, err
+}
+
+func (b *SafeBuffer) StringAndReset() string {
+	b.mu.Lock()
+	s := b.buf.String()
+	b.buf.Reset()
+	b.mu.Unlock()
+	return s
 }
