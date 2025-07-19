@@ -110,15 +110,15 @@ type SafeBuffer struct {
 
 func (b *SafeBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	n, err := b.buf.Write(p)
-	b.mu.Unlock()
 	return n, err
 }
 
 func (b *SafeBuffer) StringAndReset() string {
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	s := b.buf.String()
 	b.buf.Reset()
-	b.mu.Unlock()
 	return s
 }
