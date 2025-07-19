@@ -733,16 +733,19 @@ class SandboxProcessStream:
 
     def read(self):
         """
-        Read all remaining output from the stream.
-
-        Returns:
-            str: All output from the stream as a single string.
+        Return whatever output is currently available in the stream.
         """
-        output = []
-        for line in self:
-            output.append(line)
+        data = self._buffer
+        self._buffer = ""
 
-        return "".join(output)
+        while True:
+            chunk = self._fetch_next_chunk()
+            if chunk:
+                data += chunk
+            else:
+                break
+
+        return data
 
 
 class SandboxProcess:

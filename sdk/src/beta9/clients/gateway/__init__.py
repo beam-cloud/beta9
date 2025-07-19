@@ -522,6 +522,7 @@ class CreateMachineResponse(betterproto.Message):
     machine: "Machine" = betterproto.message_field(3)
     agent_upstream_url: str = betterproto.string_field(4)
     agent_upstream_branch: str = betterproto.string_field(5)
+    agent_upstream_token: str = betterproto.string_field(6)
 
 
 @dataclass(eq=False, repr=False)

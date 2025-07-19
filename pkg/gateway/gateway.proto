@@ -450,6 +450,7 @@ message CreateMachineResponse {
   Machine machine = 3;
   string agent_upstream_url = 4;
   string agent_upstream_branch = 5;
+  string agent_upstream_token = 6;
 }
 
 message DeleteMachineRequest {

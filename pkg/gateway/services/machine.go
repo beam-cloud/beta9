@@ -201,6 +201,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 		},
 		AgentUpstreamUrl:    gws.appConfig.Agent.UpstreamURL,
 		AgentUpstreamBranch: gws.appConfig.Agent.UpstreamBranch,
+		AgentUpstreamToken:  gws.appConfig.Agent.UpstreamToken,
 	}, nil
 }
 
