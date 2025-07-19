@@ -1,11 +1,12 @@
 package worker
 
 import (
-	"bytes"
 	"io"
 	"os/exec"
 	"sync"
 	"time"
+
+	common "github.com/beam-cloud/beta9/pkg/common"
 )
 
 type SandboxProcessStatus string
@@ -27,8 +28,8 @@ type SandboxProcessState struct {
 	EndTime   time.Time
 	Status    SandboxProcessStatus
 	Error     error
-	StdoutBuf *bytes.Buffer // buffer for stdout
-	StderrBuf *bytes.Buffer // buffer for stderr
+	StdoutBuf *common.SafeBuffer
+	StderrBuf *common.SafeBuffer
 	mu        sync.Mutex
 }
 
