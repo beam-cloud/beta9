@@ -190,6 +190,9 @@ def create_machine(service: ServiceClient, pool: str):
         if res.agent_upstream_branch != "main":
             agent_url += f"-{res.agent_upstream_branch}"
 
+    if res.agent_upstream_token:
+        cmd_args.append(f'--flux-github-token "{res.agent_upstream_token}"')
+
     cmd_args_formatted = " \\\n\t  ".join(cmd_args)
     text = f"""# -- Agent setup
     sudo curl -L -o agent {agent_url} &&

@@ -425,6 +425,7 @@ type AgentConfig struct {
 	VictoriaLogs   VictoriaLogsConfig  `key:"victoriaLogs" json:"victoria_logs"`
 	UpstreamURL    string              `key:"upstreamURL" json:"upstream_url"`
 	UpstreamBranch string              `key:"upstreamBranch" json:"upstream_branch"`
+	UpstreamToken  string              `key:"upstreamToken" json:"upstream_token"`
 	Configman      ConfigmanConfig     `key:"configman" json:"configman"`
 }
 
