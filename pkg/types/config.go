@@ -224,19 +224,21 @@ type StorageConfig struct {
 	ObjectPath       string                 `key:"objectPath" json:"object_path"`
 	JuiceFS          JuiceFSConfig          `key:"juicefs" json:"juicefs"`
 	Geese            GeeseConfig            `key:"geese" json:"geese"`
+	Alluxio          AlluxioConfig          `key:"alluxio" json:"alluxio"`
 	MountPoint       MountPointConfig       `key:"mountpoint" json:"mountpoint"`
 	WorkspaceStorage WorkspaceStorageConfig `key:"workspaceStorage" json:"workspace_storage"`
 }
 
 type WorkspaceStorageConfig struct {
-	Mode                string      `key:"mode" json:"mode"`
-	BaseMountPath       string      `key:"baseMountPath" json:"base_mount_path"`
-	Geese               GeeseConfig `key:"geese" json:"geese"`
-	DefaultBucketPrefix string      `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
-	DefaultAccessKey    string      `key:"defaultAccessKey" json:"default_access_key"`
-	DefaultSecretKey    string      `key:"defaultSecretKey" json:"default_secret_key"`
-	DefaultEndpointUrl  string      `key:"defaultEndpointUrl" json:"default_endpoint_url"`
-	DefaultRegion       string      `key:"defaultRegion" json:"default_region"`
+	Mode                string        `key:"mode" json:"mode"`
+	BaseMountPath       string        `key:"baseMountPath" json:"base_mount_path"`
+	Geese               GeeseConfig   `key:"geese" json:"geese"`
+	Alluxio             AlluxioConfig `key:"alluxio" json:"alluxio"`
+	DefaultBucketPrefix string        `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
+	DefaultAccessKey    string        `key:"defaultAccessKey" json:"default_access_key"`
+	DefaultSecretKey    string        `key:"defaultSecretKey" json:"default_secret_key"`
+	DefaultEndpointUrl  string        `key:"defaultEndpointUrl" json:"default_endpoint_url"`
+	DefaultRegion       string        `key:"defaultRegion" json:"default_region"`
 }
 
 type JuiceFSConfig struct {
@@ -274,6 +276,11 @@ type GeeseConfig struct {
 	StagedWritePath        string        `key:"stagedWritePath" json:"staged_write_path"`
 	StagedWriteDebounce    time.Duration `key:"stagedWriteDebounce" json:"staged_write_debounce"`
 	CacheStreamingEnabled  bool          `key:"cacheStreamingEnabled" json:"cache_streaming_enabled"`
+}
+
+type AlluxioConfig struct {
+	Debug bool `key:"debug" json:"debug"`
+	// TODO: Add whatever config flags alluxio may need
 }
 
 // @go2proto
