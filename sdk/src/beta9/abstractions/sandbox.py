@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
 from .. import terminal
+from ..abstractions.base import unset_channel
 from ..abstractions.base.runner import (
     SANDBOX_STUB_TYPE,
     BaseAbstraction,
@@ -395,6 +396,23 @@ class SandboxInstance(BaseAbstraction):
             return res.url
 
         raise SandboxProcessError("Failed to expose port")
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+
+        # Remove non-picklable attributes
+        state.pop("gateway_stub", None)
+        state.pop("stub", None)
+        state.pop("channel", None)
+
+        unset_channel()
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        unset_channel()
+        self.gateway_stub = GatewayServiceStub(self.channel)
+        self.stub = PodServiceStub(self.channel)
 
 
 class SandboxProcessResponse:
@@ -1017,6 +1035,13 @@ class SandboxProcess:
                 return stdout_data + stderr_data
 
         return CombinedStream(self)
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
 
 
 @dataclass

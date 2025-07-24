@@ -49,6 +49,11 @@ def set_channel(
     _channel = _get_channel(context)
 
 
+def unset_channel():
+    global _channel
+    _channel = None
+
+
 def get_channel() -> Channel:
     global _channel
 
