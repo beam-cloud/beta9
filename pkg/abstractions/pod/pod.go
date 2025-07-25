@@ -62,6 +62,7 @@ type GenericPodService struct {
 	controller      *abstractions.InstanceController
 	podInstances    *common.SafeMap[*podInstance]
 	clientCache     sync.Map
+	tcpServer       *PodTCPServer
 }
 
 func NewPodService(
@@ -107,6 +108,17 @@ func NewPodService(
 
 	registerPodGroup(opts.RouteGroup.Group(podRoutePrefix, authMiddleware), ps)
 	registerPodGroup(opts.RouteGroup.Group(sandboxRoutePrefix, authMiddleware), ps)
+
+	// If TCP is enabled and we have TLS configured, start the TCP proxy server
+	if opts.Config.Abstractions.Pod.TCP.Enabled {
+		go func() {
+			server := NewPodTCPServer(ctx, opts.Config, opts.BackendRepo, opts.ContainerRepo, opts.RedisClient, opts.Tailscale)
+			ps.tcpServer = server
+			server.Start()
+
+			<-ctx.Done()
+		}()
+	}
 
 	return ps, nil
 }

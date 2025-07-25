@@ -295,6 +295,7 @@ message GetOrCreateStubRequest {
   types.PricingPolicy pricing = 34;
   Schema inputs = 35;
   Schema outputs = 36;
+  bool tcp = 37;
 }
 
 message GetOrCreateStubResponse {

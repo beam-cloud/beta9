@@ -41,6 +41,7 @@ type container struct {
 
 type connection struct {
 	ctx  echo.Context
+	tcp  *net.TCPConn
 	done chan struct{}
 }
 
@@ -145,6 +146,22 @@ func (pb *PodProxyBuffer) processBuffer() {
 			go pb.handleConnection(conn)
 		}
 	}
+}
+
+func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
+	pb.availableContainersLock.RLock()
+
+	if len(pb.availableContainers) == 0 {
+		pb.buffer.Push(conn, true)
+		pb.availableContainersLock.RUnlock()
+		return
+	}
+
+	container := pb.availableContainers[0]
+	pb.availableContainersLock.RUnlock()
+	defer close(conn.done)
+
+	log.Info().Msg("Handling TCP connection: " + container.id)
 }
 
 func (pb *PodProxyBuffer) handleConnection(conn *connection) {

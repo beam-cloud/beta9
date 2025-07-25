@@ -310,3 +310,11 @@ abstractions:
     systemPrompt: ""
     stepIntervalS: 1
     sessionInactivityTimeoutS: 10
+  pod:
+    tcp:
+      enabled: false
+      externalHost: localhost
+      externalPort: 1995
+      port: 1995
+      certFile: ""
+      keyFile: ""
