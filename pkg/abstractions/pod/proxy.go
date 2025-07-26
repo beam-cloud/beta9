@@ -122,6 +122,26 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	}
 }
 
+func (pb *PodProxyBuffer) ForwardTCPRequest(rawConn *net.TCPConn) error {
+	pb.incrementTotalConnections()
+	defer pb.decrementTotalConnections()
+
+	done := make(chan struct{})
+	conn := &connection{
+		done: done,
+		tcp:  rawConn,
+	}
+
+	pb.buffer.Push(conn, false)
+
+	for {
+		select {
+		case <-conn.done:
+			return nil
+		}
+	}
+}
+
 func (pb *PodProxyBuffer) processBuffer() {
 	for {
 		select {
