@@ -93,18 +93,15 @@ func (pts *PodTCPServer) Stop() error {
 	return nil
 }
 
-// acceptConnections handles each incoming raw connection.
+// acceptConnections handles each incoming raw connection
 func (pts *PodTCPServer) acceptConnections() {
 	for {
 		conn, err := pts.listener.Accept()
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				log.Warn().Err(err).Msg("temporary error accepting TCP connection")
-				continue
-			}
 			log.Error().Err(err).Msg("failed to accept TCP connection")
 			return
 		}
+
 		go pts.handleConnection(conn)
 	}
 }
@@ -118,7 +115,9 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	// Route based on SNI, if not available we just close the connection
 	tcpHandler := func(tc *TCPConnection) error {
 		if tc.Stub != nil && tc.Stub.Type.Kind() == types.StubTypePod {
-			log.Info().Str("handler_path", tc.HandlerPath).Msg("Routed to Pod")
+			// TODO: here we should forward the connection to the pod proxy buffer
+
+			return nil
 		}
 
 		defer tc.Conn.Close()
@@ -144,29 +143,45 @@ func (pts *PodTCPServer) createSNIMiddleware(handler TCPConnectionHandler) func(
 			return handler(&TCPConnection{Conn: conn})
 		}
 
-		// Parse subdomain fields using shared common logic
-		fields, err := common.ParseSubdomainFields(sni)
+		log.Info().Str("sni", sni).Msg("SNI")
+
+		fields, err := common.ParseSubdomain(sni, pts.config.Abstractions.Pod.TCP.ExternalHost)
 		if err != nil {
+			log.Error().Err(err).Msg("failed to parse SNI fields")
 			return handler(&TCPConnection{Conn: conn})
 		}
 
+		log.Info().Any("fields", fields).Msg("Fields")
+
 		handlerKey := fmt.Sprintf("middleware:tcp_sni:%s:handler", sni)
 		handlerPath := pts.redisClient.Get(pts.ctx, handlerKey).Val()
+
 		var stub *types.Stub
 
 		if handlerPath == "" {
 			stub, err = common.GetStubForSubdomain(pts.ctx, pts.backendRepo, fields)
 			if err != nil || stub.Type.Kind() != types.StubTypePod {
+				log.Error().Err(err).Msg("failed to get stub via SNI")
 				return handler(&TCPConnection{Conn: conn})
 			}
+
+			log.Info().Any("stub", stub).Msg("Stub")
 
 			handlerPath = common.BuildHandlerPath(stub, fields)
 			if fields.Version > 0 || fields.StubId != "" {
 				pts.redisClient.Set(pts.ctx, handlerKey, handlerPath, tcpHandlerKeyTtl)
 			}
 
+			log.Info().Str("handler_path", handlerPath).Msg("Handler path")
+
 		} else {
-			stub, _ = common.GetStubForSubdomain(pts.ctx, pts.backendRepo, fields)
+			log.Info().Str("handler_path", handlerPath).Msg("Handler path from cache")
+
+			stub, err = common.GetStubForSubdomain(pts.ctx, pts.backendRepo, fields)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to get stub for SNI")
+				return handler(&TCPConnection{Conn: conn})
+			}
 		}
 
 		return handler(&TCPConnection{

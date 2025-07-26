@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -45,6 +46,7 @@ type SubdomainBackendRepo interface {
 
 func GetStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields *SubdomainFields) (*types.Stub, error) {
 	if fields.StubId != "" {
+		log.Info().Str("stub_id", fields.StubId).Msg("Getting stub by external ID")
 		stubRelated, err := repo.GetStubByExternalId(ctx, fields.StubId)
 		if err != nil {
 			return nil, err
@@ -63,6 +65,23 @@ func GetStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields 
 
 	fields.Name = deployment.Name
 	return &deployment.Stub, nil
+}
+
+func ParseSubdomain(subdomain string, baseDomain string) (*SubdomainFields, error) {
+	if strings.HasSuffix(subdomain, "."+baseDomain) {
+		subdomain = strings.TrimSuffix(subdomain, "."+baseDomain)
+	} else if strings.HasSuffix(subdomain, baseDomain) {
+		subdomain = strings.TrimSuffix(subdomain, baseDomain)
+	}
+
+	log.Info().Str("subdomain", subdomain).Msg("Subdomain")
+
+	fields, err := ParseSubdomainFields(subdomain)
+	if err != nil {
+		return nil, err
+	}
+
+	return fields, nil
 }
 
 func ParseSubdomainFields(subdomain string) (*SubdomainFields, error) {
