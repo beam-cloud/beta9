@@ -163,7 +163,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 				continue
 			}
 
-			if conn.ctx == nil {
+			if conn.tc != nil {
 				go pb.handleTCPConnection(conn)
 			} else {
 				if conn.ctx.Request().Context().Err() != nil {
@@ -332,7 +332,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {}
 	proxy.ServeHTTP(response, request)
-
 }
 
 func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, addr string, path string) error {
