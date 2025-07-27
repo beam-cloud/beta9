@@ -164,7 +164,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 			}
 
 			if conn.tc != nil {
-				go pb.handletcpConnection(conn)
+				go pb.handleTCPConnection(conn)
 			} else {
 				if conn.ctx.Request().Context().Err() != nil {
 					continue
@@ -176,7 +176,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 	}
 }
 
-func (pb *PodProxyBuffer) handletcpConnection(conn *connection) {
+func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 	pb.availableContainersLock.RLock()
 
 	if len(pb.availableContainers) == 0 {
@@ -194,19 +194,18 @@ func (pb *PodProxyBuffer) handletcpConnection(conn *connection) {
 	port := tc.Fields.Port
 	targetHost, ok := container.addressMap[int32(port)]
 	if !ok {
-		log.Error().Uint32("port", port).Str("containerId", container.id).Str("stubId", pb.stubId).Msg("Port not available in container")
+		log.Error().Uint32("port", port).Str("containerId", container.id).Str("stubId", pb.stubId).Msg("port not available in pod container")
 		tc.Conn.Close()
 		return
 	}
 
-	podConn, err := net.Dial("tcp", targetHost)
-	if err != nil {
-		log.Error().Err(err).Str("target", targetHost).Str("containerId", container.id).Str("stubId", pb.stubId).Msg("Failed to connect to pod")
+	podConn, err := network.ConnectToHost(context.TODO(), targetHost, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	if err == nil {
+		abstractions.SetConnOptions(podConn, true, connectionKeepAliveInterval, connectionReadTimeout)
+	} else if err != nil {
 		tc.Conn.Close()
 		return
 	}
-
-	log.Info().Str("target", targetHost).Str("containerId", container.id).Str("stubId", pb.stubId).Msg("Connected to pod for TCP forwarding")
 
 	isExpectedError := func(err error) bool {
 		if err == nil || err == io.EOF {
