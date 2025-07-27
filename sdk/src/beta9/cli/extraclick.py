@@ -350,7 +350,7 @@ def override_config_options(func: click.Command):
     )(f)
     f = click.option(
         "--tcp",
-        help="Enable raw TCP-proxying for the deployment [only available for Pods]",
+        help="Enable raw TCP-proxying [only available for Pods]",
         is_flag=True,
         default=False,
     )(f)
