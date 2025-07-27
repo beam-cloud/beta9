@@ -56,19 +56,15 @@ def run(
     sync: bool,
     **kwargs,
 ):
-    entrypoint = kwargs["entrypoint"]
+    entrypoint = kwargs.get("entrypoint")
     if handler:
         pod_spec, _, _ = load_module_spec(handler, "run")
 
         if not inspect.isclass(type(pod_spec)) or pod_spec.__class__.__name__ != "Pod":
             terminal.error("Invalid handler function specified. Expected a Pod abstraction.")
 
-    elif entrypoint:
-        pod_spec = Pod(entrypoint=entrypoint)
-
     else:
-        terminal.error("No handler or entrypoint specified.")
-        return
+        pod_spec = Pod(entrypoint=entrypoint)
 
     if not handle_config_override(pod_spec, kwargs):
         return

@@ -20,6 +20,7 @@ event.json
 config.yaml
 config.yaml.local
 config.local.yaml
+config.stage.yaml
 *.tgz
 test
 **/nvidia-device-plugin.yaml.skip

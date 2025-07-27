@@ -356,6 +356,22 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Args = request.EntryPoint
 	spec.Process.Terminal = false
 
+	if request.Stub.Type.Kind() == types.StubTypePod {
+		if len(request.EntryPoint) == 0 {
+			log.Info().
+				Str("container_id", request.ContainerId).
+				Str("stub_id", request.StubId).
+				Str("entrypoint", strings.Join(request.EntryPoint, " ")).
+				Msg("no entrypoint provided, using initial spec entrypoint")
+
+			spec.Process.Args = options.InitialSpec.Process.Args
+		}
+
+		spec.Process.Cwd = options.InitialSpec.Process.Cwd
+		spec.Process.User.UID = options.InitialSpec.Process.User.UID
+		spec.Process.User.GID = options.InitialSpec.Process.User.GID
+	}
+
 	throttlingEnabled := !request.IsBuildRequest() && !request.RequiresGPU()
 	if throttlingEnabled && (s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced) {
 		spec.Linux.Resources.Unified = cgroupV2Parameters
@@ -477,6 +493,16 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Mounts = append(spec.Mounts, resolvMount)
+
+	// Add back tmpfs pod mounts from initial spec if they exist
+	if request.Stub.Type.Kind() == types.StubTypePod {
+		for _, m := range options.InitialSpec.Mounts {
+			if m.Source == "none" && m.Type == "tmpfs" {
+				spec.Mounts = append(spec.Mounts, m)
+			}
+		}
+	}
+
 	return spec, nil
 }
 
