@@ -113,6 +113,7 @@ func (pts *PodTCPServer) acceptConnections() {
 func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{pts.tlsCert}})
 	if err := tlsConn.Handshake(); err != nil {
+		conn.Close()
 		return
 	}
 
