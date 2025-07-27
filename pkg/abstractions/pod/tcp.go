@@ -94,16 +94,21 @@ func (pts *PodTCPServer) Stop() error {
 	return nil
 }
 
-// acceptConnections handles each incoming raw connection
 func (pts *PodTCPServer) acceptConnections() {
 	for {
-		conn, err := pts.listener.Accept()
-		if err != nil {
-			log.Error().Err(err).Msg("failed to accept TCP connection")
+		select {
+		case <-pts.ctx.Done():
 			return
-		}
+		default:
+			conn, err := pts.listener.Accept()
 
-		go pts.handleConnection(conn)
+			if err != nil {
+				log.Error().Err(err).Msg("failed to accept TCP connection")
+				return
+			}
+
+			go pts.handleConnection(conn)
+		}
 	}
 }
 
