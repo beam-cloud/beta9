@@ -46,7 +46,6 @@ type SubdomainBackendRepo interface {
 
 func GetStubForSubdomain(ctx context.Context, repo SubdomainBackendRepo, fields *SubdomainFields) (*types.Stub, error) {
 	if fields.StubId != "" {
-		log.Info().Str("stub_id", fields.StubId).Msg("Getting stub by external ID")
 		stubRelated, err := repo.GetStubByExternalId(ctx, fields.StubId)
 		if err != nil {
 			return nil, err

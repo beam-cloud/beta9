@@ -194,24 +194,25 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 	port := tc.Fields.Port
 	targetHost, ok := container.addressMap[int32(port)]
 	if !ok {
-		log.Error().Uint32("port", port).Msg("Port not available in container")
+		log.Error().Uint32("port", port).Str("containerId", container.id).Str("stubId", pb.stubId).Msg("Port not available in container")
 		tc.Conn.Close()
 		return
 	}
 
 	podConn, err := net.Dial("tcp", targetHost)
 	if err != nil {
-		log.Error().Err(err).Str("target", targetHost).Msg("Failed to connect to pod")
+		log.Error().Err(err).Str("target", targetHost).Str("containerId", container.id).Str("stubId", pb.stubId).Msg("Failed to connect to pod")
 		tc.Conn.Close()
 		return
 	}
 
-	log.Info().Str("target", targetHost).Msg("Connected to pod for TCP forwarding")
+	log.Info().Str("target", targetHost).Str("containerId", container.id).Str("stubId", pb.stubId).Msg("Connected to pod for TCP forwarding")
 
 	isExpectedError := func(err error) bool {
 		if err == nil || err == io.EOF {
 			return true
 		}
+
 		errStr := err.Error()
 
 		return strings.Contains(errStr, "use of closed network connection") ||
@@ -251,8 +252,6 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 
 	podConn.Close()
 	tc.Conn.Close()
-
-	log.Debug().Msg("TCP connection forwarding completed")
 }
 
 func (pb *PodProxyBuffer) handleConnection(conn *connection) {
