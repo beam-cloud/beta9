@@ -180,7 +180,11 @@ def create_deployment(
         if not module and hasattr(user_obj, "generate_deployment_artifacts"):
             user_obj.generate_deployment_artifacts(**kwargs)
 
-        response, ok = user_obj.deploy(name=name, context=service._config, url_type=url_type)
+        response, ok = user_obj.deploy(
+            name=name,
+            context=service._config,
+            url_type=url_type,
+        )
         if not ok:
             terminal.error("Deployment failed ☠️")
             return

@@ -394,6 +394,7 @@ type StubConfigV1 struct {
 	Pricing            *PricingPolicy  `json:"pricing"`
 	Inputs             *Schema         `json:"inputs"`
 	Outputs            *Schema         `json:"outputs"`
+	TCP                bool            `json:"tcp"`
 }
 
 type StubConfigLimitedValues struct {

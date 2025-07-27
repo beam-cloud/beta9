@@ -330,6 +330,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     pricing: "_types__.PricingPolicy" = betterproto.message_field(34)
     inputs: "Schema" = betterproto.message_field(35)
     outputs: "Schema" = betterproto.message_field(36)
+    tcp: bool = betterproto.bool_field(37)
 
 
 @dataclass(eq=False, repr=False)

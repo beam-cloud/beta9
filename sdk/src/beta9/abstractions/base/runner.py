@@ -116,6 +116,7 @@ class RunnerAbstraction(BaseAbstraction):
         pricing: Optional[PricingPolicy] = None,
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
+        tcp: bool = False,
     ) -> None:
         super().__init__()
 
@@ -161,6 +162,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.checkpoint_enabled = checkpoint_enabled
         self.extra: dict = {}
         self.entrypoint: Optional[List[str]] = entrypoint
+        self.tcp = tcp
 
         if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
             self.gpu_count = 1
@@ -200,11 +202,17 @@ class RunnerAbstraction(BaseAbstraction):
         if not res.ok:
             return terminal.error("Failed to get invocation URL", exit=False)
 
-        if "<PORT>" in res.url:
+        if "<PORT>" in res.url or self.tcp:
             terminal.header("Exposed endpoints\n")
 
+            if self.tcp:
+                res.url = res.url.replace("http://", "").replace("https://", "")
+                res.url += ":443"
+
             for port in self.ports:
-                terminal.print(f"\tPort {port}: {res.url.replace('<PORT>', str(port))}")
+                url_text = res.url.replace("<PORT>", str(port))
+                terminal.print(f"\tPort {port}: ", end="")
+                terminal.url(url_text)
 
             terminal.print("")
             return res
@@ -509,7 +517,9 @@ class RunnerAbstraction(BaseAbstraction):
                 else None,
                 inputs=inputs,
                 outputs=outputs,
+                tcp=self.tcp,
             )
+
             if _is_stub_created_for_workspace():
                 stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
                     stub_request
@@ -519,6 +529,7 @@ class RunnerAbstraction(BaseAbstraction):
                     stub_response: GetOrCreateStubResponse = self.gateway_stub.get_or_create_stub(
                         stub_request
                     )
+
                     _set_stub_created_for_workspace(True)
 
             if stub_response.ok:

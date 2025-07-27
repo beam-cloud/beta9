@@ -18,6 +18,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type PodServiceOpts struct {
@@ -62,6 +63,7 @@ type GenericPodService struct {
 	controller      *abstractions.InstanceController
 	podInstances    *common.SafeMap[*podInstance]
 	clientCache     sync.Map
+	tcpServer       *PodTCPServer
 }
 
 func NewPodService(
@@ -108,6 +110,18 @@ func NewPodService(
 	registerPodGroup(opts.RouteGroup.Group(podRoutePrefix, authMiddleware), ps)
 	registerPodGroup(opts.RouteGroup.Group(sandboxRoutePrefix, authMiddleware), ps)
 
+	// If TCP is enabled and we have TLS configured, start the raw TCP proxy server
+	if opts.Config.Abstractions.Pod.TCP.Enabled {
+		go func() {
+			server := NewPodTCPServer(ctx, ps, opts.Config, opts.BackendRepo, opts.ContainerRepo, opts.RedisClient, opts.Tailscale)
+			ps.tcpServer = server
+			err := server.Start()
+			if err != nil {
+				log.Warn().Err(err).Msg("failed to start pod tcp server")
+			}
+		}()
+	}
+
 	return ps, nil
 }
 
@@ -135,6 +149,15 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 	}
 
 	return instance.buffer.ForwardRequest(ctx)
+}
+
+func (ps *GenericPodService) forwardTCPRequest(tc *tcpConnection, stubId string) error {
+	instance, err := ps.getOrCreatePodInstance(stubId)
+	if err != nil {
+		return err
+	}
+
+	return instance.buffer.ForwardTCPRequest(tc)
 }
 
 func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...func(*podInstance)) (*podInstance, error) {

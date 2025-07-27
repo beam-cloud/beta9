@@ -611,10 +611,38 @@ var (
 
 type AbstractionConfig struct {
 	Bot BotConfig `key:"bot" json:"bot"`
+	Pod PodConfig `key:"pod" json:"pod"`
 }
 
 type BotConfig struct {
 	SystemPrompt              string `key:"systemPrompt" json:"system_prompt"`
 	StepIntervalS             uint   `key:"stepIntervalS" json:"step_interval_s"`
 	SessionInactivityTimeoutS uint   `key:"sessionInactivityTimeoutS" json:"session_inactivity_timeout_s"`
+}
+
+type PodConfig struct {
+	TCP PodTCPConfig `key:"tcp" json:"tcp"`
+}
+
+func (p *PodTCPConfig) GetExternalURL() string {
+	baseUrl := "http"
+	if p.CertFile != "" && p.KeyFile != "" {
+		baseUrl += "s"
+	}
+	baseUrl += "://" + p.ExternalHost
+
+	if p.ExternalPort != 80 && p.ExternalPort != 443 {
+		baseUrl += fmt.Sprintf(":%d", p.ExternalPort)
+	}
+
+	return baseUrl
+}
+
+type PodTCPConfig struct {
+	Enabled      bool   `key:"enabled" json:"enabled"`
+	ExternalPort int    `key:"externalPort" json:"external_port"`
+	ExternalHost string `key:"externalHost" json:"external_host"`
+	Port         int    `key:"port" json:"port"`
+	CertFile     string `key:"certFile" json:"cert_file"`
+	KeyFile      string `key:"keyFile" json:"key_file"`
 }

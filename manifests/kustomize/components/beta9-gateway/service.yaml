@@ -19,6 +19,10 @@ spec:
     port: 1994
     protocol: TCP
     targetPort: 1994
+  - name: tcp
+    port: 1995
+    protocol: TCP
+    targetPort: 1995
   - name: metrics
     port: 9090
     protocol: TCP
