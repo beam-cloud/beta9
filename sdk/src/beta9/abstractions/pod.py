@@ -104,9 +104,6 @@ class Pod(RunnerAbstraction, DeployableMixin):
         authorized (bool):
             If false, allows the pod to be accessed without an auth token.
             Default is False.
-        checkpoint_enabled (bool):
-            If true, the pod will be checkpointed when it is stopped.
-            Default is False.
 
     Example usage:
         ```
@@ -137,7 +134,6 @@ class Pod(RunnerAbstraction, DeployableMixin):
         env: Optional[Dict[str, str]] = {},
         keep_warm_seconds: int = 600,
         authorized: bool = False,
-        checkpoint_enabled: bool = False,
         tcp: bool = False,
     ) -> None:
         super().__init__(
@@ -156,7 +152,6 @@ class Pod(RunnerAbstraction, DeployableMixin):
             keep_warm_seconds=keep_warm_seconds,
             app=app,
             tcp=tcp,
-            checkpoint_enabled=checkpoint_enabled,
         )
         self.parent = self
         self.func = None
