@@ -379,9 +379,15 @@ func (gws *GatewayService) GetURL(ctx context.Context, in *pb.GetURLRequest) (*p
 			}, nil
 		}
 
+		externalUrl := gws.appConfig.GatewayService.HTTP.GetExternalURL()
+		if stubConfig.TCP {
+			externalUrl = gws.appConfig.Abstractions.Pod.TCP.GetExternalURL()
+			in.UrlType = common.InvokeUrlTypeHost
+		}
+
 		return &pb.GetURLResponse{
 			Ok:  true,
-			Url: common.BuildPodURL(gws.appConfig.GatewayService.HTTP.GetExternalURL(), in.UrlType, stub, stubConfig),
+			Url: common.BuildPodURL(externalUrl, in.UrlType, stub, stubConfig),
 		}, nil
 	}
 

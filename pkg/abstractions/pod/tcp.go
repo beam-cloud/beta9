@@ -79,7 +79,7 @@ func (pts *PodTCPServer) Start() error {
 	pts.tlsCert = cert
 
 	log.Info().Int("port", pts.config.Abstractions.Pod.TCP.Port).
-		Msg("Pod TCP server started @ " + fmt.Sprintf(":%d", pts.config.Abstractions.Pod.TCP.Port))
+		Msg("pod tcp server running")
 
 	go pts.acceptConnections()
 

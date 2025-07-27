@@ -624,6 +624,20 @@ type PodConfig struct {
 	TCP PodTCPConfig `key:"tcp" json:"tcp"`
 }
 
+func (p *PodTCPConfig) GetExternalURL() string {
+	baseUrl := "http"
+	if p.CertFile != "" && p.KeyFile != "" {
+		baseUrl += "s"
+	}
+	baseUrl += "://" + p.ExternalHost
+
+	if p.ExternalPort != 80 && p.ExternalPort != 443 {
+		baseUrl += fmt.Sprintf(":%d", p.ExternalPort)
+	}
+
+	return baseUrl
+}
+
 type PodTCPConfig struct {
 	Enabled      bool   `key:"enabled" json:"enabled"`
 	ExternalPort int    `key:"externalPort" json:"external_port"`
