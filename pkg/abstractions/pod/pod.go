@@ -117,7 +117,7 @@ func NewPodService(
 			ps.tcpServer = server
 			err := server.Start()
 			if err != nil {
-				log.Warn().Err(err).Msg("Failed to start pod tcp server")
+				log.Warn().Err(err).Msg("failed to start pod tcp server")
 			}
 		}()
 	}
