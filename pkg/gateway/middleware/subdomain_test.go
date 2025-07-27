@@ -216,33 +216,33 @@ func TestParseSubdomain(t *testing.T) {
 func TestParseSubdomainFields(t *testing.T) {
 	tests := []struct {
 		subdomain   string
-		expected    *SubdomainFields
+		expected    *common.SubdomainFields
 		expectedErr error
 	}{
 		{
 			subdomain: "app1-9a7dbcc",
-			expected: &SubdomainFields{
+			expected: &common.SubdomainFields{
 				Subdomain: "app1-9a7dbcc",
 				Version:   0,
 			},
 		},
 		{
 			subdomain: "app2-7a7db8c-latest",
-			expected: &SubdomainFields{
+			expected: &common.SubdomainFields{
 				Subdomain: "app2-7a7db8c",
 				Version:   0,
 			},
 		},
 		{
 			subdomain: "my-app-7a7db8c-v1",
-			expected: &SubdomainFields{
+			expected: &common.SubdomainFields{
 				Subdomain: "my-app-7a7db8c",
 				Version:   1,
 			},
 		},
 		{
 			subdomain: "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
-			expected: &SubdomainFields{
+			expected: &common.SubdomainFields{
 				StubId: "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
 			},
 		},

@@ -76,14 +76,6 @@ func Subdomain(externalURL string, backendRepo common.SubdomainBackendRepo, redi
 	}
 }
 
-type SubdomainFields struct {
-	Name      string
-	Version   uint
-	StubId    string
-	Subdomain string
-	Port      uint32
-}
-
 func ParseSubdomain(host, baseDomain string) string {
 	// Remove port if present
 	h, _, err := net.SplitHostPort(host)
