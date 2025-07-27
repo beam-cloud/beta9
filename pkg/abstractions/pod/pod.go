@@ -18,6 +18,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"github.com/rs/zerolog/log"
 )
 
 type PodServiceOpts struct {
@@ -114,7 +115,10 @@ func NewPodService(
 		go func() {
 			server := NewPodTCPServer(ctx, ps, opts.Config, opts.BackendRepo, opts.ContainerRepo, opts.RedisClient, opts.Tailscale)
 			ps.tcpServer = server
-			server.Start()
+			err := server.Start()
+			if err != nil {
+				log.Warn().Err(err).Msg("Failed to start pod tcp server")
+			}
 		}()
 	}
 
