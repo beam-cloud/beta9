@@ -18,15 +18,14 @@ const (
 	tcpHandlerKeyTtl time.Duration = 5 * time.Minute
 )
 
-type TCPConnection struct {
+type tcpConnection struct {
 	Conn        net.Conn
 	Stub        *types.Stub
 	Fields      *common.SubdomainFields
 	HandlerPath string
 }
 
-// TCPConnectionHandler handles a TCPConnection after routing
-type TCPConnectionHandler func(conn *TCPConnection) error
+type tcpConnectionHandler func(conn *tcpConnection) error
 type PodTCPServer struct {
 	ps            *GenericPodService
 	ctx           context.Context
@@ -66,7 +65,7 @@ func (pts *PodTCPServer) Start() error {
 
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", pts.config.Abstractions.Pod.TCP.Port))
 	if err != nil {
-		return fmt.Errorf("failed to create TCP listener: %w", err)
+		return err
 	}
 	pts.listener = ln
 
@@ -74,7 +73,6 @@ func (pts *PodTCPServer) Start() error {
 		pts.config.Abstractions.Pod.TCP.CertFile,
 		pts.config.Abstractions.Pod.TCP.KeyFile,
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to load TLS certificate: %w", err)
 	}
@@ -88,11 +86,11 @@ func (pts *PodTCPServer) Start() error {
 	return nil
 }
 
-// Stop shuts down the listener.
 func (pts *PodTCPServer) Stop() error {
 	if pts.listener != nil {
 		return pts.listener.Close()
 	}
+
 	return nil
 }
 
@@ -116,7 +114,7 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 	}
 
 	// Route based on SNI, if not available we just close the connection
-	tcpHandler := func(tc *TCPConnection) error {
+	tcpHandler := func(tc *tcpConnection) error {
 		if tc.Stub != nil && tc.Stub.Type.Kind() == types.StubTypePod {
 			return pts.ps.forwardTCPRequest(tc, tc.Stub.ExternalId)
 		}
@@ -132,7 +130,7 @@ func (pts *PodTCPServer) handleConnection(conn net.Conn) {
 }
 
 // createSNIMiddleware wraps a handler with SNI-based routing middleware
-func (pts *PodTCPServer) createSNIMiddleware(handler TCPConnectionHandler) func(net.Conn) error {
+func (pts *PodTCPServer) createSNIMiddleware(handler tcpConnectionHandler) func(net.Conn) error {
 	return func(conn net.Conn) error {
 		var sni string
 
@@ -141,15 +139,14 @@ func (pts *PodTCPServer) createSNIMiddleware(handler TCPConnectionHandler) func(
 		}
 
 		if sni == "" {
-			return handler(&TCPConnection{Conn: conn})
+			log.Error().Msg("no SNI found, dropping connection")
+			return handler(&tcpConnection{Conn: conn})
 		}
-
-		log.Info().Str("sni", sni).Msg("SNI")
 
 		fields, err := common.ParseSubdomain(sni, pts.config.Abstractions.Pod.TCP.ExternalHost)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to parse SNI fields")
-			return handler(&TCPConnection{Conn: conn})
+			log.Error().Err(err).Msg("failed to parse SNI fields, dropping connection")
+			return handler(&tcpConnection{Conn: conn})
 		}
 
 		handlerKey := fmt.Sprintf("middleware:tcp_sni:%s:handler", sni)
@@ -160,8 +157,8 @@ func (pts *PodTCPServer) createSNIMiddleware(handler TCPConnectionHandler) func(
 		if handlerPath == "" {
 			stub, err = common.GetStubForSubdomain(pts.ctx, pts.backendRepo, fields)
 			if err != nil || stub.Type.Kind() != types.StubTypePod {
-				log.Error().Err(err).Msg("failed to get stub via SNI")
-				return handler(&TCPConnection{Conn: conn})
+				log.Error().Err(err).Msg("failed to get stub via SNI, dropping connection")
+				return handler(&tcpConnection{Conn: conn})
 			}
 
 			handlerPath = common.BuildHandlerPath(stub, fields)
@@ -172,12 +169,12 @@ func (pts *PodTCPServer) createSNIMiddleware(handler TCPConnectionHandler) func(
 		} else {
 			stub, err = common.GetStubForSubdomain(pts.ctx, pts.backendRepo, fields)
 			if err != nil {
-				log.Error().Err(err).Msg("failed to get stub for SNI")
-				return handler(&TCPConnection{Conn: conn})
+				log.Error().Err(err).Msg("failed to get stub for SNI, dropping connection")
+				return handler(&tcpConnection{Conn: conn})
 			}
 		}
 
-		return handler(&TCPConnection{
+		return handler(&tcpConnection{
 			Conn:        conn,
 			Stub:        stub,
 			Fields:      fields,

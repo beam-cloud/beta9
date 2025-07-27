@@ -44,7 +44,7 @@ type container struct {
 
 type connection struct {
 	ctx  echo.Context
-	tc   *TCPConnection
+	tc   *tcpConnection
 	done chan struct{}
 }
 
@@ -125,7 +125,7 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	}
 }
 
-func (pb *PodProxyBuffer) ForwardTCPRequest(tc *TCPConnection) error {
+func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
 	pb.incrementTotalConnections()
 	defer pb.decrementTotalConnections()
 
@@ -164,7 +164,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 			}
 
 			if conn.tc != nil {
-				go pb.handleTCPConnection(conn)
+				go pb.handletcpConnection(conn)
 			} else {
 				if conn.ctx.Request().Context().Err() != nil {
 					continue
@@ -176,7 +176,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 	}
 }
 
-func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
+func (pb *PodProxyBuffer) handletcpConnection(conn *connection) {
 	pb.availableContainersLock.RLock()
 
 	if len(pb.availableContainers) == 0 {

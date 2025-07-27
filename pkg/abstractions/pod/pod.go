@@ -109,14 +109,12 @@ func NewPodService(
 	registerPodGroup(opts.RouteGroup.Group(podRoutePrefix, authMiddleware), ps)
 	registerPodGroup(opts.RouteGroup.Group(sandboxRoutePrefix, authMiddleware), ps)
 
-	// If TCP is enabled and we have TLS configured, start the TCP proxy server
+	// If TCP is enabled and we have TLS configured, start the raw TCP proxy server
 	if opts.Config.Abstractions.Pod.TCP.Enabled {
 		go func() {
 			server := NewPodTCPServer(ctx, ps, opts.Config, opts.BackendRepo, opts.ContainerRepo, opts.RedisClient, opts.Tailscale)
 			ps.tcpServer = server
 			server.Start()
-
-			<-ctx.Done()
 		}()
 	}
 
@@ -149,7 +147,7 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 	return instance.buffer.ForwardRequest(ctx)
 }
 
-func (ps *GenericPodService) forwardTCPRequest(tc *TCPConnection, stubId string) error {
+func (ps *GenericPodService) forwardTCPRequest(tc *tcpConnection, stubId string) error {
 	instance, err := ps.getOrCreatePodInstance(stubId)
 	if err != nil {
 		return err

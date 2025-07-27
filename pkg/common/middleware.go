@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -72,8 +71,6 @@ func ParseSubdomain(subdomain string, baseDomain string) (*SubdomainFields, erro
 	} else if strings.HasSuffix(subdomain, baseDomain) {
 		subdomain = strings.TrimSuffix(subdomain, baseDomain)
 	}
-
-	log.Info().Str("subdomain", subdomain).Msg("Subdomain")
 
 	fields, err := ParseSubdomainFields(subdomain)
 	if err != nil {
