@@ -134,6 +134,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         env: Optional[Dict[str, str]] = {},
         keep_warm_seconds: int = 600,
         authorized: bool = False,
+        tcp: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -150,6 +151,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             authorized=authorized,
             keep_warm_seconds=keep_warm_seconds,
             app=app,
+            tcp=tcp,
         )
         self.parent = self
         self.func = None

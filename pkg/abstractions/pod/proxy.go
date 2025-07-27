@@ -2,12 +2,15 @@ package pod
 
 import (
 	"context"
+	"crypto/tls"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +44,7 @@ type container struct {
 
 type connection struct {
 	ctx  echo.Context
+	tc   *tcpConnection
 	done chan struct{}
 }
 
@@ -121,6 +125,27 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	}
 }
 
+func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
+	pb.incrementTotalConnections()
+	defer pb.decrementTotalConnections()
+
+	done := make(chan struct{})
+	conn := &connection{
+		ctx:  nil,
+		done: done,
+		tc:   tc,
+	}
+
+	pb.buffer.Push(conn, false)
+
+	for {
+		select {
+		case <-conn.done:
+			return nil
+		}
+	}
+}
+
 func (pb *PodProxyBuffer) processBuffer() {
 	for {
 		select {
@@ -138,13 +163,94 @@ func (pb *PodProxyBuffer) processBuffer() {
 				continue
 			}
 
-			if conn.ctx.Request().Context().Err() != nil {
-				continue
-			}
+			if conn.tc != nil {
+				go pb.handleTCPConnection(conn)
+			} else {
+				if conn.ctx.Request().Context().Err() != nil {
+					continue
+				}
 
-			go pb.handleConnection(conn)
+				go pb.handleConnection(conn)
+			}
 		}
 	}
+}
+
+func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
+	pb.availableContainersLock.RLock()
+
+	if len(pb.availableContainers) == 0 {
+		pb.buffer.Push(conn, true)
+		pb.availableContainersLock.RUnlock()
+		return
+	}
+
+	tc := conn.tc
+
+	container := pb.availableContainers[0]
+	pb.availableContainersLock.RUnlock()
+	defer close(conn.done)
+
+	port := tc.Fields.Port
+	targetHost, ok := container.addressMap[int32(port)]
+	if !ok {
+		log.Error().Uint32("port", port).Str("containerId", container.id).Str("stubId", pb.stubId).Msg("port not available in pod container")
+		tc.Conn.Close()
+		return
+	}
+
+	podConn, err := network.ConnectToHost(context.TODO(), targetHost, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	if err == nil {
+		abstractions.SetConnOptions(podConn, true, connectionKeepAliveInterval, connectionReadTimeout)
+	} else if err != nil {
+		tc.Conn.Close()
+		return
+	}
+
+	isExpectedError := func(err error) bool {
+		if err == nil || err == io.EOF {
+			return true
+		}
+
+		errStr := err.Error()
+
+		return strings.Contains(errStr, "use of closed network connection") ||
+			strings.Contains(errStr, "connection reset by peer") ||
+			strings.Contains(errStr, "broken pipe")
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		_, err := io.Copy(podConn, tc.Conn) // Client -> Pod
+		if err != nil && !isExpectedError(err) {
+			log.Warn().Err(err).Msg("error copying from client to pod")
+		}
+
+		if tcpConn, ok := podConn.(*net.TCPConn); ok {
+			tcpConn.CloseWrite()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		_, err := io.Copy(tc.Conn, podConn) // Pod -> Client
+		if err != nil && !isExpectedError(err) {
+			log.Warn().Err(err).Msg("error copying from pod to client")
+		}
+
+		if tlsConn, ok := tc.Conn.(*tls.Conn); ok {
+			tlsConn.CloseWrite()
+		}
+	}()
+
+	wg.Wait()
+
+	podConn.Close()
+	tc.Conn.Close()
 }
 
 func (pb *PodProxyBuffer) handleConnection(conn *connection) {
@@ -225,7 +331,6 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {}
 	proxy.ServeHTTP(response, request)
-
 }
 
 func (pb *PodProxyBuffer) proxyWebSocket(conn *connection, container container, addr string, path string) error {

@@ -216,57 +216,57 @@ func TestParseSubdomain(t *testing.T) {
 func TestParseSubdomainFields(t *testing.T) {
 	tests := []struct {
 		subdomain   string
-		expected    *SubdomainFields
+		expected    *common.SubdomainFields
 		expectedErr error
 	}{
 		{
 			subdomain: "app1-9a7dbcc",
-			expected: &SubdomainFields{
+			expected: &common.SubdomainFields{
 				Subdomain: "app1-9a7dbcc",
 				Version:   0,
 			},
 		},
 		{
 			subdomain: "app2-7a7db8c-latest",
-			expected: &SubdomainFields{
+			expected: &common.SubdomainFields{
 				Subdomain: "app2-7a7db8c",
 				Version:   0,
 			},
 		},
 		{
 			subdomain: "my-app-7a7db8c-v1",
-			expected: &SubdomainFields{
+			expected: &common.SubdomainFields{
 				Subdomain: "my-app-7a7db8c",
 				Version:   1,
 			},
 		},
 		{
 			subdomain: "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
-			expected: &SubdomainFields{
+			expected: &common.SubdomainFields{
 				StubId: "8f32e485-2b2e-4238-9878-490eb9b0a9d3",
 			},
 		},
 		{
 			subdomain:   "invalid-subdomain",
-			expectedErr: ErrSubdomainDoesNotMatchRegex,
+			expectedErr: common.ErrSubdomainDoesNotMatchRegex,
 		},
 		{
 			subdomain:   "invalid-123f",
-			expectedErr: ErrSubdomainDoesNotMatchRegex,
+			expectedErr: common.ErrSubdomainDoesNotMatchRegex,
 		},
 		{
 			subdomain:   "invalid-2b2e-4238-9878-111122222333",
-			expectedErr: ErrSubdomainDoesNotMatchRegex,
+			expectedErr: common.ErrSubdomainDoesNotMatchRegex,
 		},
 		{
 			subdomain:   "invalid-8f32e485-2b2e-4238-9878-490eb9b0a9d3",
-			expectedErr: ErrSubdomainDoesNotMatchRegex,
+			expectedErr: common.ErrSubdomainDoesNotMatchRegex,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.subdomain, func(t *testing.T) {
-			fields, err := parseSubdomainFields(test.subdomain)
+			fields, err := common.ParseSubdomainFields(test.subdomain)
 
 			if test.expectedErr != nil {
 				assert.Error(t, err)
@@ -284,7 +284,7 @@ func TestBuildHandlerPath(t *testing.T) {
 	tests := []struct {
 		name       string
 		stub       *types.Stub
-		fields     *SubdomainFields
+		fields     *common.SubdomainFields
 		extraPaths []string
 		expected   string
 	}{
@@ -302,7 +302,7 @@ func TestBuildHandlerPath(t *testing.T) {
 			stub: &types.Stub{
 				Type: types.StubType(types.StubTypeEndpointDeployment),
 			},
-			fields: &SubdomainFields{
+			fields: &common.SubdomainFields{
 				StubId: "4ec446ce-3fd1-41a8-9f70-4d25b9224821",
 			},
 			expected: "/endpoint/id/4ec446ce-3fd1-41a8-9f70-4d25b9224821",
@@ -312,7 +312,7 @@ func TestBuildHandlerPath(t *testing.T) {
 			stub: &types.Stub{
 				Type: types.StubType(types.StubTypeTaskQueueDeployment),
 			},
-			fields: &SubdomainFields{
+			fields: &common.SubdomainFields{
 				Name:    "tq",
 				Version: 55,
 			},
@@ -323,7 +323,7 @@ func TestBuildHandlerPath(t *testing.T) {
 			stub: &types.Stub{
 				Type: types.StubType(types.StubTypeASGIDeployment),
 			},
-			fields: &SubdomainFields{
+			fields: &common.SubdomainFields{
 				Name:    "tq",
 				Version: 55,
 			},
@@ -334,7 +334,7 @@ func TestBuildHandlerPath(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			assert.Equal(t, test.expected, buildHandlerPath(test.stub, test.fields, test.extraPaths...))
+			assert.Equal(t, test.expected, common.BuildHandlerPath(test.stub, test.fields, test.extraPaths...))
 		})
 	}
 }
@@ -394,7 +394,7 @@ func TestParseVersion(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.version, func(t *testing.T) {
-			assert.Equal(t, test.expected, parseVersion(test.version))
+			assert.Equal(t, test.expected, common.ParseVersion(test.version))
 		})
 	}
 }

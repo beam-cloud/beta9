@@ -183,7 +183,14 @@ func (g *StubGroup) GetURL(ctx echo.Context) error {
 			return HTTPInternalServerError("Failed to decode stub config")
 		}
 
-		invokeUrl := common.BuildPodURL(g.config.GatewayService.HTTP.GetExternalURL(), filter.URLType, stub, stubConfig)
+		externalUrl := g.config.GatewayService.HTTP.GetExternalURL()
+
+		if stubConfig.TCP {
+			externalUrl = g.config.Abstractions.Pod.TCP.GetExternalURL()
+			filter.URLType = common.InvokeUrlTypeHost
+		}
+
+		invokeUrl := common.BuildPodURL(externalUrl, filter.URLType, stub, stubConfig)
 		return ctx.JSON(http.StatusOK, map[string]string{"url": invokeUrl})
 	}
 

@@ -88,7 +88,7 @@ def error(text: str, exit: bool = True) -> None:
 
 
 def url(text: str) -> None:
-    _console.print(Text(text, style="underline blue"))
+    _console.print(Text(text, style="underline green"))
 
 
 @contextmanager

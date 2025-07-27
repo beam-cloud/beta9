@@ -348,6 +348,12 @@ def override_config_options(func: click.Command):
         help="The number of seconds to keep the container up after the last request (e.g. --keep-warm-seconds 600).",
         required=False,
     )(f)
+    f = click.option(
+        "--tcp",
+        help="Enable raw TCP-proxying [only available for Pods]",
+        is_flag=True,
+        default=False,
+    )(f)
     return f
 
 
