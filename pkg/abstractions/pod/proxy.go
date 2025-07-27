@@ -30,7 +30,6 @@ const (
 	bufferProcessingInterval      time.Duration = time.Millisecond * 100
 	containerDiscoveryInterval    time.Duration = time.Millisecond * 500
 	containerDialTimeoutDurationS time.Duration = time.Second * 30
-	connectionBufferSize          int           = 1024 * 4 // 4KB
 	connectionKeepAliveInterval   time.Duration = time.Second * 1
 	connectionReadTimeout         time.Duration = time.Minute * 5
 	containerAvailableTimeout     time.Duration = time.Second * 2
