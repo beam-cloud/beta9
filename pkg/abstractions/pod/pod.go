@@ -112,7 +112,7 @@ func NewPodService(
 	// If TCP is enabled and we have TLS configured, start the TCP proxy server
 	if opts.Config.Abstractions.Pod.TCP.Enabled {
 		go func() {
-			server := NewPodTCPServer(ctx, opts.Config, opts.BackendRepo, opts.ContainerRepo, opts.RedisClient, opts.Tailscale)
+			server := NewPodTCPServer(ctx, ps, opts.Config, opts.BackendRepo, opts.ContainerRepo, opts.RedisClient, opts.Tailscale)
 			ps.tcpServer = server
 			server.Start()
 
@@ -147,6 +147,15 @@ func (ps *GenericPodService) forwardRequest(ctx echo.Context, stubId string) err
 	}
 
 	return instance.buffer.ForwardRequest(ctx)
+}
+
+func (ps *GenericPodService) forwardTCPRequest(tc *TCPConnection, stubId string) error {
+	instance, err := ps.getOrCreatePodInstance(stubId)
+	if err != nil {
+		return err
+	}
+
+	return instance.buffer.ForwardTCPRequest(tc)
 }
 
 func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...func(*podInstance)) (*podInstance, error) {

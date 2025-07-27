@@ -2,6 +2,7 @@ package pod
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -40,9 +41,9 @@ type container struct {
 }
 
 type connection struct {
-	ctx  echo.Context
-	tcp  *net.TCPConn
-	done chan struct{}
+	ctx     echo.Context
+	tcpConn *TCPConnection
+	done    chan struct{}
 }
 
 type PodProxyBuffer struct {
@@ -122,14 +123,14 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 	}
 }
 
-func (pb *PodProxyBuffer) ForwardTCPRequest(rawConn *net.TCPConn) error {
+func (pb *PodProxyBuffer) ForwardTCPRequest(tc *TCPConnection) error {
 	pb.incrementTotalConnections()
 	defer pb.decrementTotalConnections()
 
 	done := make(chan struct{})
 	conn := &connection{
-		done: done,
-		tcp:  rawConn,
+		done:    done,
+		tcpConn: tc,
 	}
 
 	pb.buffer.Push(conn, false)
@@ -159,11 +160,15 @@ func (pb *PodProxyBuffer) processBuffer() {
 				continue
 			}
 
-			if conn.ctx.Request().Context().Err() != nil {
-				continue
-			}
+			if conn.ctx == nil {
+				go pb.handleTCPConnection(conn)
+			} else {
+				if conn.ctx.Request().Context().Err() != nil {
+					continue
+				}
 
-			go pb.handleConnection(conn)
+				go pb.handleConnection(conn)
+			}
 		}
 	}
 }
@@ -181,7 +186,58 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 	pb.availableContainersLock.RUnlock()
 	defer close(conn.done)
 
-	log.Info().Msg("Handling TCP connection: " + container.id)
+	port := conn.tcpConn.Fields.Port
+	targetHost, ok := container.addressMap[int32(port)]
+	if !ok {
+		return
+	}
+
+	podConn, err := net.Dial("tcp", targetHost)
+	if err != nil {
+		log.Error().Err(err).Str("target", targetHost).Msg("Failed to connect to pod")
+		conn.tcpConn.Conn.Close()
+		return
+	}
+	defer podConn.Close()
+	defer conn.tcpConn.Conn.Close()
+
+	log.Info().Str("target", targetHost).Msg("Connected to pod for TCP forwarding")
+
+	// Copy data bidirectionally between client (TLS-terminated) and pod (raw TCP)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		_, err := io.Copy(podConn, conn.tcpConn.Conn) // Client -> Pod
+		if err != nil {
+			log.Debug().Err(err).Msg("Error copying from client to pod")
+		}
+		podConn.Close() // Close pod connection to signal end
+	}()
+
+	go func() {
+		defer wg.Done()
+		_, err := io.Copy(conn.tcpConn.Conn, podConn) // Pod -> Client
+		if err != nil {
+			log.Debug().Err(err).Msg("Error copying from pod to client")
+		}
+		conn.tcpConn.Conn.Close() // Close client connection to signal end
+	}()
+
+	// Wait for both copy operations to complete
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		log.Debug().Msg("TCP connection forwarding completed")
+	case <-pb.ctx.Done():
+		log.Debug().Msg("TCP connection interrupted by context cancellation")
+	}
 }
 
 func (pb *PodProxyBuffer) handleConnection(conn *connection) {
