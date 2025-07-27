@@ -101,10 +101,8 @@ func (pts *PodTCPServer) acceptConnections() {
 			return
 		default:
 			conn, err := pts.listener.Accept()
-
 			if err != nil {
-				log.Error().Err(err).Msg("failed to accept TCP connection")
-				return
+				continue
 			}
 
 			go pts.handleConnection(conn)

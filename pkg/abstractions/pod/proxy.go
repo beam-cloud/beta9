@@ -226,7 +226,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 		defer wg.Done()
 		_, err := io.Copy(podConn, tc.Conn) // Client -> Pod
 		if err != nil && !isExpectedError(err) {
-			log.Warn().Err(err).Msg("Unexpected error copying from client to pod")
+			log.Warn().Err(err).Msg("error copying from client to pod")
 		}
 
 		if tcpConn, ok := podConn.(*net.TCPConn); ok {
@@ -239,7 +239,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 
 		_, err := io.Copy(tc.Conn, podConn) // Pod -> Client
 		if err != nil && !isExpectedError(err) {
-			log.Warn().Err(err).Msg("Unexpected error copying from pod to client")
+			log.Warn().Err(err).Msg("error copying from pod to client")
 		}
 
 		if tlsConn, ok := tc.Conn.(*tls.Conn); ok {
