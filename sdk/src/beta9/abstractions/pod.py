@@ -187,7 +187,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         if entrypoint:
             self.entrypoint = entrypoint
 
-        is_custom_image = self.image.base_image != "" or self.image.dockerfile_path != ""
+        is_custom_image = self.image.base_image != "" or self.image.dockerfile != ""
 
         if not self.entrypoint and not is_custom_image:
             terminal.error("You must specify an entrypoint.")
@@ -241,7 +241,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
                 "You must specify an app name (either in the decorator or via the --name argument)."
             )
 
-        is_custom_image = self.image.base_image != "" or self.image.dockerfile_path != ""
+        is_custom_image = self.image.base_image != "" or self.image.dockerfile != ""
 
         if not self.entrypoint and not is_custom_image:
             terminal.error("You must specify an entrypoint.")
