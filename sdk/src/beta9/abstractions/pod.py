@@ -26,6 +26,7 @@ from ..clients.pod import (
     PodServiceStub,
 )
 from ..config import ConfigContext, get_settings
+from ..runner.common import USER_CODE_DIR
 from ..sync import FileSyncer
 from ..type import GpuType, GpuTypeAlias
 from ..utils import get_init_args_kwargs
@@ -192,7 +193,16 @@ class Pod(RunnerAbstraction, DeployableMixin):
         if not self.entrypoint and not is_custom_image:
             terminal.error("You must specify an entrypoint.")
 
-        if not self.prepare_runtime(stub_type=POD_RUN_STUB_TYPE, force_create_stub=True):
+        ignore_patterns = []
+        if is_custom_image:
+            ignore_patterns = ["**"]
+
+        if not is_custom_image and self.entrypoint:
+            self.entrypoint = ["sh", "-c", f"cd {USER_CODE_DIR} && {' '.join(self.entrypoint)}"]
+
+        if not self.prepare_runtime(
+            stub_type=POD_RUN_STUB_TYPE, force_create_stub=True, ignore_patterns=ignore_patterns
+        ):
             return PodInstance(
                 container_id="",
                 url="",
@@ -247,10 +257,21 @@ class Pod(RunnerAbstraction, DeployableMixin):
             terminal.error("You must specify an entrypoint.")
             return {}, False
 
+        ignore_patterns = []
+        if is_custom_image:
+            ignore_patterns = ["**"]
+
+        if not is_custom_image and self.entrypoint:
+            self.entrypoint = ["sh", "-c", f"cd {USER_CODE_DIR} && {' '.join(self.entrypoint)}"]
+
         if context is not None:
             self.config_context = context
 
-        if not self.prepare_runtime(stub_type=POD_DEPLOYMENT_STUB_TYPE, force_create_stub=True):
+        if not self.prepare_runtime(
+            stub_type=POD_DEPLOYMENT_STUB_TYPE,
+            force_create_stub=True,
+            ignore_patterns=ignore_patterns,
+        ):
             return {}, False
 
         terminal.header("Deploying")
