@@ -206,24 +206,29 @@ class Sandbox(Pod):
             )
         )
 
-        if create_response.ok:
-            terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
-
-            if self.keep_warm_seconds < 0:
-                terminal.header(
-                    "This sandbox has no timeout, it will run until it is shut down manually."
-                )
-            else:
-                terminal.header(
-                    f"This sandbox will timeout after {self.keep_warm_seconds} seconds."
-                )
-
+        if not create_response.ok:
             return SandboxInstance(
                 stub_id=self.stub_id,
-                container_id=create_response.container_id,
-                ok=create_response.ok,
+                container_id="",
+                ok=False,
                 error_msg=create_response.error_msg,
             )
+
+        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
+
+        if self.keep_warm_seconds < 0:
+            terminal.header(
+                "This sandbox has no timeout, it will run until it is shut down manually."
+            )
+        else:
+            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
+
+        return SandboxInstance(
+            stub_id=self.stub_id,
+            container_id=create_response.container_id,
+            ok=create_response.ok,
+            error_msg=create_response.error_msg,
+        )
 
     def create(self) -> "SandboxInstance":
         """
@@ -264,24 +269,29 @@ class Sandbox(Pod):
             )
         )
 
-        if create_response.ok:
-            terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
-
-            if self.keep_warm_seconds < 0:
-                terminal.header(
-                    "This sandbox has no timeout, it will run until it is shut down manually."
-                )
-            else:
-                terminal.header(
-                    f"This sandbox will timeout after {self.keep_warm_seconds} seconds."
-                )
-
+        if not create_response.ok:
             return SandboxInstance(
                 stub_id=self.stub_id,
-                container_id=create_response.container_id,
-                ok=create_response.ok,
+                container_id="",
+                ok=False,
                 error_msg=create_response.error_msg,
             )
+
+        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
+
+        if self.keep_warm_seconds < 0:
+            terminal.header(
+                "This sandbox has no timeout, it will run until it is shut down manually."
+            )
+        else:
+            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
+
+        return SandboxInstance(
+            stub_id=self.stub_id,
+            container_id=create_response.container_id,
+            ok=create_response.ok,
+            error_msg=create_response.error_msg,
+        )
 
 
 @dataclass
