@@ -42,9 +42,14 @@ service PodService {
       returns (PodSandboxConnectResponse) {}
   rpc SandboxUpdateTTL(PodSandboxUpdateTTLRequest)
       returns (PodSandboxUpdateTTLResponse) {}
+  rpc SandboxSnapshot(PodSandboxSnapshotRequest)
+      returns (PodSandboxSnapshotResponse) {}
 }
 
-message CreatePodRequest { string stub_id = 1; }
+message CreatePodRequest {
+  string stub_id = 1;
+  optional string snapshot_id = 2;
+}
 
 message CreatePodResponse {
   bool ok = 1;
@@ -255,4 +260,15 @@ message PodSandboxUpdateTTLRequest {
 message PodSandboxUpdateTTLResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message PodSandboxSnapshotRequest {
+  string stub_id = 1;
+  string container_id = 2;
+}
+
+message PodSandboxSnapshotResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  string snapshot_id = 3;
 }

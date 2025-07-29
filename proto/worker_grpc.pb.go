@@ -40,6 +40,7 @@ const (
 	RunCService_RunCSandboxExposePort_FullMethodName      = "/runc.RunCService/RunCSandboxExposePort"
 	RunCService_RunCSandboxReplaceInFiles_FullMethodName  = "/runc.RunCService/RunCSandboxReplaceInFiles"
 	RunCService_RunCSandboxFindInFiles_FullMethodName     = "/runc.RunCService/RunCSandboxFindInFiles"
+	RunCService_RunCSandboxSnapshot_FullMethodName        = "/runc.RunCService/RunCSandboxSnapshot"
 )
 
 // RunCServiceClient is the client API for RunCService service.
@@ -67,6 +68,7 @@ type RunCServiceClient interface {
 	RunCSandboxExposePort(ctx context.Context, in *RunCSandboxExposePortRequest, opts ...grpc.CallOption) (*RunCSandboxExposePortResponse, error)
 	RunCSandboxReplaceInFiles(ctx context.Context, in *RunCSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxReplaceInFilesResponse, error)
 	RunCSandboxFindInFiles(ctx context.Context, in *RunCSandboxFindInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxFindInFilesResponse, error)
+	RunCSandboxSnapshot(ctx context.Context, in *RunCSandboxSnapshotRequest, opts ...grpc.CallOption) (RunCService_RunCSandboxSnapshotClient, error)
 }
 
 type runCServiceClient struct {
@@ -312,6 +314,38 @@ func (c *runCServiceClient) RunCSandboxFindInFiles(ctx context.Context, in *RunC
 	return out, nil
 }
 
+func (c *runCServiceClient) RunCSandboxSnapshot(ctx context.Context, in *RunCSandboxSnapshotRequest, opts ...grpc.CallOption) (RunCService_RunCSandboxSnapshotClient, error) {
+	stream, err := c.cc.NewStream(ctx, &RunCService_ServiceDesc.Streams[2], RunCService_RunCSandboxSnapshot_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &runCServiceRunCSandboxSnapshotClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type RunCService_RunCSandboxSnapshotClient interface {
+	Recv() (*RunCSandboxSnapshotResponse, error)
+	grpc.ClientStream
+}
+
+type runCServiceRunCSandboxSnapshotClient struct {
+	grpc.ClientStream
+}
+
+func (x *runCServiceRunCSandboxSnapshotClient) Recv() (*RunCSandboxSnapshotResponse, error) {
+	m := new(RunCSandboxSnapshotResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // RunCServiceServer is the server API for RunCService service.
 // All implementations must embed UnimplementedRunCServiceServer
 // for forward compatibility
@@ -337,6 +371,7 @@ type RunCServiceServer interface {
 	RunCSandboxExposePort(context.Context, *RunCSandboxExposePortRequest) (*RunCSandboxExposePortResponse, error)
 	RunCSandboxReplaceInFiles(context.Context, *RunCSandboxReplaceInFilesRequest) (*RunCSandboxReplaceInFilesResponse, error)
 	RunCSandboxFindInFiles(context.Context, *RunCSandboxFindInFilesRequest) (*RunCSandboxFindInFilesResponse, error)
+	RunCSandboxSnapshot(*RunCSandboxSnapshotRequest, RunCService_RunCSandboxSnapshotServer) error
 	mustEmbedUnimplementedRunCServiceServer()
 }
 
@@ -406,6 +441,9 @@ func (UnimplementedRunCServiceServer) RunCSandboxReplaceInFiles(context.Context,
 }
 func (UnimplementedRunCServiceServer) RunCSandboxFindInFiles(context.Context, *RunCSandboxFindInFilesRequest) (*RunCSandboxFindInFilesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxFindInFiles not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxSnapshot(*RunCSandboxSnapshotRequest, RunCService_RunCSandboxSnapshotServer) error {
+	return status.Errorf(codes.Unimplemented, "method RunCSandboxSnapshot not implemented")
 }
 func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
 
@@ -804,6 +842,27 @@ func _RunCService_RunCSandboxFindInFiles_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RunCService_RunCSandboxSnapshot_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(RunCSandboxSnapshotRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(RunCServiceServer).RunCSandboxSnapshot(m, &runCServiceRunCSandboxSnapshotServer{stream})
+}
+
+type RunCService_RunCSandboxSnapshotServer interface {
+	Send(*RunCSandboxSnapshotResponse) error
+	grpc.ServerStream
+}
+
+type runCServiceRunCSandboxSnapshotServer struct {
+	grpc.ServerStream
+}
+
+func (x *runCServiceRunCSandboxSnapshotServer) Send(m *RunCSandboxSnapshotResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // RunCService_ServiceDesc is the grpc.ServiceDesc for RunCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -897,6 +956,11 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "RunCArchive",
 			Handler:       _RunCService_RunCArchive_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "RunCSandboxSnapshot",
+			Handler:       _RunCService_RunCSandboxSnapshot_Handler,
 			ServerStreams: true,
 		},
 	},

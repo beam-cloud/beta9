@@ -3,6 +3,7 @@ package pod
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -10,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/rs/zerolog/log"
 )
 
 func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
@@ -461,5 +463,48 @@ func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSand
 
 	return &pb.PodSandboxUpdateTTLResponse{
 		Ok: true,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxSnapshot(ctx context.Context, in *pb.PodSandboxSnapshotRequest) (*pb.PodSandboxSnapshotResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxSnapshotResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	snapshotId := fmt.Sprintf("snapshot-%s-%d", in.StubId, time.Now().Unix())
+	progressChan := make(chan common.OutputMsg, 1000)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				msg := <-progressChan
+				log.Info().Str("stub_id", in.StubId).Str("container_id", in.ContainerId).Str("snapshot_id", snapshotId).Msg(msg.Msg)
+				if msg.Done {
+					break
+				}
+			}
+		}
+	}()
+
+	err = client.Archive(ctx, in.ContainerId, snapshotId, progressChan)
+	if err != nil {
+		return &pb.PodSandboxSnapshotResponse{
+			Ok:       false,
+			ErrorMsg: err.Error(),
+		}, nil
+	}
+
+	return &pb.PodSandboxSnapshotResponse{
+		Ok:         true,
+		SnapshotId: snapshotId,
 	}, nil
 }
