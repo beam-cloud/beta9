@@ -45,8 +45,6 @@ service RunCService {
       returns (RunCSandboxReplaceInFilesResponse) {}
   rpc RunCSandboxFindInFiles(RunCSandboxFindInFilesRequest)
       returns (RunCSandboxFindInFilesResponse) {}
-  rpc RunCSandboxSnapshot(RunCSandboxSnapshotRequest)
-      returns (stream RunCSandboxSnapshotResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
