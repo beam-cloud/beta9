@@ -383,6 +383,8 @@ class SandboxInstance(BaseAbstraction):
             print(f"Snapshot created with ID: {snapshot_id}")
             ```
         """
+        terminal.header(f"Creating snapshot of: {self.container_id}")
+
         res: "PodSandboxSnapshotResponse" = self.stub.sandbox_snapshot(
             PodSandboxSnapshotRequest(stub_id=self.stub_id, container_id=self.container_id)
         )

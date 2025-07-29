@@ -105,6 +105,7 @@ class Image(BaseAbstraction):
         base_image: Optional[str] = None,
         base_image_creds: Optional[ImageCredentials] = None,
         env_vars: Optional[Union[str, List[str], Dict[str, str]]] = None,
+        snapshot_id: Optional[str] = None,
     ):
         """
         Creates an Image instance.
@@ -297,6 +298,7 @@ class Image(BaseAbstraction):
         self.build_ctx_object = ""
         self.gpu = GpuType.NoGPU
         self.ignore_python = False
+        self.snapshot_id = snapshot_id or ""
 
         self.with_envs(env_vars or [])
 
@@ -440,6 +442,15 @@ class Image(BaseAbstraction):
             base_image_creds=credentials,
         )
 
+    @classmethod
+    def from_snapshot(cls, snapshot_id: str) -> "Image":
+        """
+        Create an Image from a filesystem snapshot.
+        """
+        return cls(
+            snapshot_id=snapshot_id,
+        )
+
     def exists(self) -> Tuple[bool, ImageBuildResult]:
         r: VerifyImageBuildResponse = self.stub.verify_image_build(
             VerifyImageBuildRequest(
@@ -455,6 +466,7 @@ class Image(BaseAbstraction):
                 secrets=self.secrets,
                 gpu=self.gpu,
                 ignore_python=self.ignore_python,
+                snapshot_id=self.snapshot_id,
             )
         )
 
