@@ -8,6 +8,7 @@
 !bin/volume_cache_*
 !bin/ipbind_*
 !bin/beta9-cli
+!bin/snapshot
 **/__pycache__
 *.pyc
 .venv

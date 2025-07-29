@@ -40,6 +40,7 @@ from ..clients.pod import (
     PodSandboxUploadFileRequest,
     PodServiceStub,
 )
+from ..env import is_remote
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias
 
@@ -346,9 +347,10 @@ class SandboxInstance(BaseAbstraction):
     def _cleanup(self):
         try:
             if hasattr(self, "container_id") and self.container_id and not self.terminated:
-                terminal.warn(
-                    f'WARNING: {self.container_id} is still running, to terminate use Sandbox().connect("{self.container_id}").terminate()'
-                )
+                if not is_remote():
+                    terminal.warn(
+                        f'WARNING: {self.container_id} is still running, to terminate use Sandbox().connect("{self.container_id}").terminate()'
+                    )
         except BaseException as e:
             terminal.warn(f"Error during sandbox cleanup: {e}")
 

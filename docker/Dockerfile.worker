@@ -191,6 +191,8 @@ RUN echo '127.0.0.1 localhost' > /workspace/etc/hosts
 RUN echo 'hosts: files dns' > /workspace/etc/nsswitch.conf
 COPY ./bin/beta9-cli /usr/local/bin/beta9
 RUN chmod +x /usr/local/bin/beta9
+COPY ./bin/snapshot /usr/local/bin/snapshot
+RUN chmod +x /usr/local/bin/snapshot
 
 COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
 COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah

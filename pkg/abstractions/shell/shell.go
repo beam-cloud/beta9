@@ -41,9 +41,9 @@ const (
 	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
 	startupScript                 string        = `SHELL=$(ls /bin/bash || ls /bin/sh); /usr/local/bin/dropbear -e -c "cd /mnt/code && $SHELL" -p %d -R -E -F 2>> /etc/dropbear/logs.txt`
 	createUserScript              string        = `SHELL=$(ls /bin/bash || ls /bin/sh); \
-(command -v useradd >/dev/null && useradd -m -s $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
-(command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
-(echo "$USERNAME:x:1000:1000:$USERNAME:/home/$USERNAME:$SHELL" >> /etc/passwd && mkdir -p "/home/$USERNAME" && chown 1000:1000 "/home/$USERNAME") && \
+(command -v useradd >/dev/null && useradd -m -s $SHELL -u 0 -g 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
+(command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL --uid 0 --gid 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
+(echo "$USERNAME:x:0:0:$USERNAME:/root:$SHELL" >> /etc/passwd && mkdir -p "/root" && chown 0:0 "/root") && \
 echo "$USERNAME:$PASSWORD" | chpasswd 2>> /etc/dropbear/logs.txt`
 )
 
