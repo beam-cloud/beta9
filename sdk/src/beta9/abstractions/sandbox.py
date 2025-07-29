@@ -29,6 +29,8 @@ from ..clients.pod import (
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
     PodSandboxReplaceInFilesRequest,
+    PodSandboxSnapshotRequest,
+    PodSandboxSnapshotResponse,
     PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
@@ -38,6 +40,7 @@ from ..clients.pod import (
     PodSandboxUploadFileRequest,
     PodServiceStub,
 )
+from ..env import is_remote
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias
 
@@ -173,6 +176,61 @@ class Sandbox(Pod):
             stub_id=response.stub_id,
         )
 
+    def create_from_snapshot(self, snapshot_id: str) -> "SandboxInstance":
+        """
+        Create a sandbox instance from a filesystem snapshot.
+
+        Parameters:
+            snapshot_id (str): The ID of the snapshot to create the sandbox from.
+
+        Returns:
+            SandboxInstance: A new sandbox instance ready for use.
+
+        Example:
+            ```python
+            # Create a sandbox instance from a filesystem snapshot
+            instance = sandbox.create_from_snapshot("snapshot-123")
+            print(f"Sandbox created with ID: {instance.sandbox_id()}")
+            ```
+        """
+
+        self.stub_id = "-".join(snapshot_id.split("-")[1:6])
+        self.stub_created = True
+        self.image_id = snapshot_id
+
+        terminal.header(f"Creating sandbox from snapshot: {snapshot_id}")
+
+        create_response: CreatePodResponse = self.stub.create_pod(
+            CreatePodRequest(
+                stub_id=self.stub_id,
+                snapshot_id=snapshot_id,
+            )
+        )
+
+        if not create_response.ok:
+            return SandboxInstance(
+                stub_id=self.stub_id,
+                container_id="",
+                ok=False,
+                error_msg=create_response.error_msg,
+            )
+
+        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
+
+        if self.keep_warm_seconds < 0:
+            terminal.header(
+                "This sandbox has no timeout, it will run until it is shut down manually."
+            )
+        else:
+            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
+
+        return SandboxInstance(
+            stub_id=self.stub_id,
+            container_id=create_response.container_id,
+            ok=create_response.ok,
+            error_msg=create_response.error_msg,
+        )
+
     def create(self) -> "SandboxInstance":
         """
         Create a new sandbox instance.
@@ -212,24 +270,29 @@ class Sandbox(Pod):
             )
         )
 
-        if create_response.ok:
-            terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
-
-            if self.keep_warm_seconds < 0:
-                terminal.header(
-                    "This sandbox has no timeout, it will run until it is shut down manually."
-                )
-            else:
-                terminal.header(
-                    f"This sandbox will timeout after {self.keep_warm_seconds} seconds."
-                )
-
+        if not create_response.ok:
             return SandboxInstance(
                 stub_id=self.stub_id,
-                container_id=create_response.container_id,
-                ok=create_response.ok,
+                container_id="",
+                ok=False,
                 error_msg=create_response.error_msg,
             )
+
+        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
+
+        if self.keep_warm_seconds < 0:
+            terminal.header(
+                "This sandbox has no timeout, it will run until it is shut down manually."
+            )
+        else:
+            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
+
+        return SandboxInstance(
+            stub_id=self.stub_id,
+            container_id=create_response.container_id,
+            ok=create_response.ok,
+            error_msg=create_response.error_msg,
+        )
 
 
 @dataclass
@@ -284,9 +347,10 @@ class SandboxInstance(BaseAbstraction):
     def _cleanup(self):
         try:
             if hasattr(self, "container_id") and self.container_id and not self.terminated:
-                terminal.warn(
-                    f'WARNING: {self.container_id} is still running, to terminate use Sandbox().connect("{self.container_id}").terminate()'
-                )
+                if not is_remote():
+                    terminal.warn(
+                        f'WARNING: {self.container_id} is still running, to terminate use Sandbox().connect("{self.container_id}").terminate()'
+                    )
         except BaseException as e:
             terminal.warn(f"Error during sandbox cleanup: {e}")
 
@@ -316,6 +380,31 @@ class SandboxInstance(BaseAbstraction):
             self.terminated = True
 
         return res.ok
+
+    def snapshot(self) -> str:
+        """
+        Create a snapshot of the sandbox filesystem.
+
+        Returns:
+            str: The snapshot ID.
+
+        Example:
+            ```python
+            # Create a snapshot of the sandbox filesystem
+            snapshot_id = instance.snapshot()
+            print(f"Snapshot created with ID: {snapshot_id}")
+            ```
+        """
+        terminal.header(f"Creating snapshot of: {self.container_id}")
+
+        res: "PodSandboxSnapshotResponse" = self.stub.sandbox_snapshot(
+            PodSandboxSnapshotRequest(stub_id=self.stub_id, container_id=self.container_id)
+        )
+
+        if not res.ok:
+            raise SandboxProcessError(res.error_msg)
+
+        return res.snapshot_id
 
     def sandbox_id(self) -> str:
         """
@@ -1206,6 +1295,7 @@ class SandboxFileSystem:
             fs.upload_file("config.json", "/app/config/config.json")
             ```
         """
+
         with open(local_path, "rb") as f:
             content = f.read()
 

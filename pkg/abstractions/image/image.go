@@ -83,6 +83,19 @@ func NewRuncImageService(
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
 	var valid bool = true
 
+	if in.SnapshotId != nil && *in.SnapshotId != "" {
+		exists, err := is.builder.Exists(ctx, *in.SnapshotId)
+		if err != nil {
+			return nil, err
+		}
+
+		return &pb.VerifyImageBuildResponse{
+			ImageId: *in.SnapshotId,
+			Exists:  exists,
+			Valid:   true,
+		}, nil
+	}
+
 	tag := in.PythonVersion
 	if in.PythonVersion == types.Python3.String() {
 		tag = is.config.ImageService.PythonVersion

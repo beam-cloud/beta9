@@ -28,6 +28,7 @@ message VerifyImageBuildRequest {
   repeated string secrets = 10;
   string gpu = 11;
   bool ignore_python = 12;
+  optional string snapshot_id = 13;
 }
 
 message VerifyImageBuildResponse {

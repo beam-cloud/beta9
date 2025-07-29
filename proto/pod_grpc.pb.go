@@ -38,6 +38,7 @@ const (
 	PodService_SandboxFindInFiles_FullMethodName     = "/pod.PodService/SandboxFindInFiles"
 	PodService_SandboxConnect_FullMethodName         = "/pod.PodService/SandboxConnect"
 	PodService_SandboxUpdateTTL_FullMethodName       = "/pod.PodService/SandboxUpdateTTL"
+	PodService_SandboxSnapshot_FullMethodName        = "/pod.PodService/SandboxSnapshot"
 )
 
 // PodServiceClient is the client API for PodService service.
@@ -63,6 +64,7 @@ type PodServiceClient interface {
 	SandboxFindInFiles(ctx context.Context, in *PodSandboxFindInFilesRequest, opts ...grpc.CallOption) (*PodSandboxFindInFilesResponse, error)
 	SandboxConnect(ctx context.Context, in *PodSandboxConnectRequest, opts ...grpc.CallOption) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(ctx context.Context, in *PodSandboxUpdateTTLRequest, opts ...grpc.CallOption) (*PodSandboxUpdateTTLResponse, error)
+	SandboxSnapshot(ctx context.Context, in *PodSandboxSnapshotRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotResponse, error)
 }
 
 type podServiceClient struct {
@@ -244,6 +246,15 @@ func (c *podServiceClient) SandboxUpdateTTL(ctx context.Context, in *PodSandboxU
 	return out, nil
 }
 
+func (c *podServiceClient) SandboxSnapshot(ctx context.Context, in *PodSandboxSnapshotRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotResponse, error) {
+	out := new(PodSandboxSnapshotResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxSnapshot_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PodServiceServer is the server API for PodService service.
 // All implementations must embed UnimplementedPodServiceServer
 // for forward compatibility
@@ -267,6 +278,7 @@ type PodServiceServer interface {
 	SandboxFindInFiles(context.Context, *PodSandboxFindInFilesRequest) (*PodSandboxFindInFilesResponse, error)
 	SandboxConnect(context.Context, *PodSandboxConnectRequest) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(context.Context, *PodSandboxUpdateTTLRequest) (*PodSandboxUpdateTTLResponse, error)
+	SandboxSnapshot(context.Context, *PodSandboxSnapshotRequest) (*PodSandboxSnapshotResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
 
@@ -330,6 +342,9 @@ func (UnimplementedPodServiceServer) SandboxConnect(context.Context, *PodSandbox
 }
 func (UnimplementedPodServiceServer) SandboxUpdateTTL(context.Context, *PodSandboxUpdateTTLRequest) (*PodSandboxUpdateTTLResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxUpdateTTL not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxSnapshot(context.Context, *PodSandboxSnapshotRequest) (*PodSandboxSnapshotResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxSnapshot not implemented")
 }
 func (UnimplementedPodServiceServer) mustEmbedUnimplementedPodServiceServer() {}
 
@@ -686,6 +701,24 @@ func _PodService_SandboxUpdateTTL_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PodService_SandboxSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxSnapshot(ctx, req.(*PodSandboxSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PodService_ServiceDesc is the grpc.ServiceDesc for PodService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -768,6 +801,10 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SandboxUpdateTTL",
 			Handler:    _PodService_SandboxUpdateTTL_Handler,
+		},
+		{
+			MethodName: "SandboxSnapshot",
+			Handler:    _PodService_SandboxSnapshot_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

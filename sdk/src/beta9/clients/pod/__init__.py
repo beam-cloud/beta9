@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 @dataclass(eq=False, repr=False)
 class CreatePodRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
+    snapshot_id: Optional[str] = betterproto.string_field(2, optional=True)
 
 
 @dataclass(eq=False, repr=False)
@@ -285,6 +286,19 @@ class PodSandboxUpdateTtlResponse(betterproto.Message):
     error_msg: str = betterproto.string_field(2)
 
 
+@dataclass(eq=False, repr=False)
+class PodSandboxSnapshotRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    container_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxSnapshotResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    snapshot_id: str = betterproto.string_field(3)
+
+
 class PodServiceStub(SyncServiceStub):
     def create_pod(self, create_pod_request: "CreatePodRequest") -> "CreatePodResponse":
         return self._unary_unary(
@@ -454,3 +468,12 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxUpdateTtlRequest,
             PodSandboxUpdateTtlResponse,
         )(pod_sandbox_update_ttl_request)
+
+    def sandbox_snapshot(
+        self, pod_sandbox_snapshot_request: "PodSandboxSnapshotRequest"
+    ) -> "PodSandboxSnapshotResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxSnapshot",
+            PodSandboxSnapshotRequest,
+            PodSandboxSnapshotResponse,
+        )(pod_sandbox_snapshot_request)
