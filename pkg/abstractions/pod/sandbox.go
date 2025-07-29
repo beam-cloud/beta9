@@ -485,11 +485,10 @@ func (s *GenericPodService) SandboxSnapshot(ctx context.Context, in *pb.PodSandb
 			select {
 			case <-ctx.Done():
 				return
-			default:
-				msg := <-progressChan
+			case msg := <-progressChan:
 				log.Info().Str("stub_id", in.StubId).Str("container_id", in.ContainerId).Str("snapshot_id", snapshotId).Msg(msg.Msg)
 				if msg.Done {
-					break
+					return
 				}
 			}
 		}
