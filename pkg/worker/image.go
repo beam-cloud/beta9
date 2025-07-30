@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
-	"github.com/beam-cloud/beta9/pkg/clients"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/registry"
@@ -615,137 +614,22 @@ func umociUnpackOptions() layer.UnpackOptions {
 
 func (c *ImageClient) getBuildContext(buildPath string, request *types.ContainerRequest) (string, error) {
 	if request.BuildOptions.BuildCtxObject == nil {
-		log.Info().Str("container_id", request.ContainerId).Msg("no build context object specified, using current directory")
 		return ".", nil
 	}
 
 	buildCtxPath := filepath.Join(types.DefaultExtractedObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
 	objectPath := path.Join(types.DefaultObjectPath, request.Workspace.Name, *request.BuildOptions.BuildCtxObject)
 
-	log.Info().
-		Str("container_id", request.ContainerId).
-		Str("workspace", request.Workspace.Name).
-		Str("build_ctx_object", *request.BuildOptions.BuildCtxObject).
-		Bool("storage_available", request.StorageAvailable()).
-		Str("initial_object_path", objectPath).
-		Str("initial_build_ctx_path", buildCtxPath).
-		Msg("setting up build context")
-
 	if request.StorageAvailable() {
 		// Overwrite the path if workspace storage is available
 		objectPath = path.Join(c.config.Storage.WorkspaceStorage.BaseMountPath, request.Workspace.Name, "objects", *request.BuildOptions.BuildCtxObject)
 		buildCtxPath = path.Join(buildPath, "build-ctx")
-		
-		log.Info().
-			Str("container_id", request.ContainerId).
-			Str("updated_object_path", objectPath).
-			Str("updated_build_ctx_path", buildCtxPath).
-			Msg("using workspace storage paths")
 	}
 
-	var err error
-	
-	if request.StorageAvailable() {
-		// Use the same logic as deployment containers for workspace storage
-		err = c.getAndExtractBuildContext(context.TODO(), request, buildCtxPath)
-		if err != nil {
-			log.Error().
-				Str("container_id", request.ContainerId).
-				Str("workspace", request.Workspace.Name).
-				Str("build_ctx_object", *request.BuildOptions.BuildCtxObject).
-				Err(err).
-				Msg("failed to download and extract build context from workspace storage")
-			return "", err
-		}
-	} else {
-		// Legacy storage path - check if object file exists before extraction
-		if _, err := os.Stat(objectPath); os.IsNotExist(err) {
-			log.Error().
-				Str("container_id", request.ContainerId).
-				Str("object_path", objectPath).
-				Err(err).
-				Msg("build context object file does not exist at legacy storage path")
-			return "", fmt.Errorf("build context object file does not exist at path: %s", objectPath)
-		}
-
-		log.Info().
-			Str("container_id", request.ContainerId).
-			Str("object_path", objectPath).
-			Str("extract_to", buildCtxPath).
-			Msg("extracting build context object from legacy storage")
-
-		err = common.ExtractObjectFile(context.TODO(), objectPath, buildCtxPath)
-		if err != nil {
-			log.Error().
-				Str("container_id", request.ContainerId).
-				Str("object_path", objectPath).
-				Str("extract_to", buildCtxPath).
-				Err(err).
-				Msg("failed to extract build context object from legacy storage")
-			return "", err
-		}
-	}
-
-	// Verify extraction was successful by listing contents
-	if entries, err := os.ReadDir(buildCtxPath); err == nil {
-		log.Info().
-			Str("container_id", request.ContainerId).
-			Str("build_ctx_path", buildCtxPath).
-			Int("file_count", len(entries)).
-			Msg("build context extraction completed")
-		
-		// Log first few entries for debugging
-		for i, entry := range entries {
-			if i < 5 { // Limit to first 5 entries
-				log.Info().
-					Str("container_id", request.ContainerId).
-					Str("entry_name", entry.Name()).
-					Bool("is_dir", entry.IsDir()).
-					Msg("build context entry")
-			}
-		}
-	} else {
-		log.Warn().
-			Str("container_id", request.ContainerId).
-			Str("build_ctx_path", buildCtxPath).
-			Err(err).
-			Msg("failed to list build context contents after extraction")
+	err := common.ExtractObjectFile(context.TODO(), objectPath, buildCtxPath)
+	if err != nil {
+		return "", err
 	}
 
 	return buildCtxPath, nil
-}
-
-// getAndExtractBuildContext downloads the build context object from workspace storage and extracts it
-// This mirrors the logic used in getAndExtractStubCode for deployment containers
-func (c *ImageClient) getAndExtractBuildContext(ctx context.Context, request *types.ContainerRequest, destPath string) error {
-	storageClient, err := clients.NewWorkspaceStorageClient(ctx, request.Workspace.Name, request.Workspace.Storage)
-	if err != nil {
-		log.Error().
-			Str("container_id", request.ContainerId).
-			Str("workspace_id", request.Workspace.ExternalId).
-			Err(err).
-			Msg("unable to instantiate workspace storage client for build context")
-		return err
-	}
-
-	buildCtxObjectId := *request.BuildOptions.BuildCtxObject
-	objBytes, err := storageClient.Download(ctx, fmt.Sprintf("objects/%s", buildCtxObjectId))
-	if err != nil {
-		log.Error().
-			Str("container_id", request.ContainerId).
-			Str("workspace_id", request.Workspace.ExternalId).
-			Str("build_ctx_object", buildCtxObjectId).
-			Err(err).
-			Msg("unable to download build context object from workspace storage")
-		return err
-	}
-
-	log.Info().
-		Str("container_id", request.ContainerId).
-		Str("build_ctx_object", buildCtxObjectId).
-		Int("object_size_bytes", len(objBytes)).
-		Str("dest_path", destPath).
-		Msg("downloaded build context object from workspace storage, extracting...")
-
-	return common.UnzipBytesToPath(destPath, objBytes, request)
 }

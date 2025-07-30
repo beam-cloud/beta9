@@ -2,7 +2,6 @@ package gatewayservices
 
 import (
 	"context"
-	"log"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -11,7 +10,6 @@ import (
 
 func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeRequest) (*pb.AuthorizeResponse, error) {
 	authInfo, authFound := auth.AuthInfoFromContext(ctx)
-	log.Println("authInfo", authInfo)
 	if authFound {
 		return &pb.AuthorizeResponse{
 			WorkspaceId: authInfo.Workspace.ExternalId,

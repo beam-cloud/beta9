@@ -141,8 +141,6 @@ func getAndExtractStubCode(ctx context.Context, request *types.ContainerRequest)
 		return err
 	}
 
-	fmt.Printf("downloading object: %s\n", fmt.Sprintf("objects/%s", request.Stub.Object.ExternalId))
-
 	objBytes, err := storageClient.Download(ctx, fmt.Sprintf("objects/%s", request.Stub.Object.ExternalId))
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to download object")

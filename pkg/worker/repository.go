@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -36,7 +35,6 @@ func NewWorkerRepositoryClient(ctx context.Context, config types.AppConfig, toke
 // NewContainerRepositoryClient creates a new container repository client
 func NewContainerRepositoryClient(ctx context.Context, config types.AppConfig, token string) (pb.ContainerRepositoryServiceClient, error) {
 	host := fmt.Sprintf("%s:%d", config.GatewayService.GRPC.ExternalHost, config.GatewayService.GRPC.ExternalPort)
-	log.Println("host", host)
 	conn, err := newGRPCConn(host, token)
 	if err != nil {
 		return nil, err
@@ -58,7 +56,6 @@ func newGRPCConn(host string, token string) (*grpc.ClientConn, error) {
 	}
 
 	if token != "" {
-		log.Println("token", token)
 		opts = append(opts, grpc.WithUnaryInterceptor(common.GRPCClientAuthInterceptor(token)))
 		opts = append(opts, grpc.WithStreamInterceptor(common.GRPCClientAuthStreamInterceptor(token)))
 	}

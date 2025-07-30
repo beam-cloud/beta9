@@ -147,8 +147,6 @@ class FileSyncer:
                 if not self._should_ignore(file_path) and (
                     len(include_patterns) == 0 or file_path in include_patterns
                 ):
-                    print("include_patterns", include_patterns)
-                    print("yield path", file_path)
                     yield file_path
 
     @staticmethod
@@ -200,10 +198,8 @@ class FileSyncer:
                 except OSError as e:
                     terminal.warn(f"Failed to add {file}: {e}")
 
-        print("temp_zip_name", temp_zip_name)
         size = os.path.getsize(temp_zip_name)
         hash = self._calculate_sha256(temp_zip_name)
-        print("calculated hash", hash)
 
         if ignore_patterns != ["*"]:
             terminal.detail(f"Collected object is {terminal.humanize_memory(size, base=10)}")
@@ -212,9 +208,7 @@ class FileSyncer:
         head_response: HeadObjectResponse = self.gateway_stub.head_object(
             HeadObjectRequest(hash=hash)
         )
-        print("head_response", head_response)
         if not head_response.exists:
-            print("head_response", head_response)
             metadata = ObjectMetadata(name=hash, size=size)
 
             def _upload_object() -> requests.Response:
