@@ -133,7 +133,7 @@ class FileSyncer:
         spec = PathSpec.from_lines("gitwildmatch", self.ignore_patterns)
         return spec.match_file(relative_path)
 
-    def _collect_files(self) -> Generator[str, None, None]:
+    def _collect_files(self, include_patterns: List[str] = []) -> Generator[str, None, None]:
         if self.ignore_patterns == ["*"]:
             return
 
@@ -144,8 +144,11 @@ class FileSyncer:
 
             for file in files:
                 file_path = os.path.join(root, file)
-
-                if not self._should_ignore(file_path):
+                if not self._should_ignore(file_path) and (
+                    len(include_patterns) == 0 or file_path in include_patterns
+                ):
+                    print("include_patterns", include_patterns)
+                    print("yield path", file_path)
                     yield file_path
 
     @staticmethod
@@ -156,14 +159,28 @@ class FileSyncer:
                 hasher.update(chunk)
         return hasher.hexdigest()
 
-    def sync(self, ignore_patterns: List[str] = []) -> FileSyncResult:
+    def sync(
+        self, ignore_patterns: List[str] = [], include_patterns: List[str] = []
+    ) -> FileSyncResult:
         with _sync_lock:
             if self.is_workspace_dir and get_workspace_object_id() != "" and not is_notebook_env():
                 terminal.header("Files already synced")
                 return FileSyncResult(success=True, object_id=get_workspace_object_id())
-            return self._sync(ignore_patterns=ignore_patterns)
+            return self._sync(ignore_patterns=ignore_patterns, include_patterns=include_patterns)
 
-    def _sync(self, ignore_patterns: List[str] = []) -> FileSyncResult:
+    def _sync(
+        self,
+        ignore_patterns: List[str] = [],
+        include_patterns: List[str] = [],
+    ) -> FileSyncResult:
+        """
+        Syncs the files in the workspace directory to the gateway.
+
+        Args:
+            ignore_patterns: A list of patterns to ignore when syncing the files.
+            include_patterns: A list of patterns to include when syncing the files. If not provided, all files will be included.
+        """
+
         terminal.header("Syncing files")
 
         self._init_ignore_file()
@@ -176,15 +193,17 @@ class FileSyncer:
         temp_zip_name = tempfile.NamedTemporaryFile(delete=False).name
 
         with zipfile.ZipFile(temp_zip_name, "w") as zipf:
-            for file in self._collect_files():
+            for file in self._collect_files(include_patterns):
                 try:
                     zipf.write(file, os.path.relpath(file, self.root_dir))
                     terminal.detail(f"Added {file}")
                 except OSError as e:
                     terminal.warn(f"Failed to add {file}: {e}")
 
+        print("temp_zip_name", temp_zip_name)
         size = os.path.getsize(temp_zip_name)
         hash = self._calculate_sha256(temp_zip_name)
+        print("calculated hash", hash)
 
         if ignore_patterns != ["*"]:
             terminal.detail(f"Collected object is {terminal.humanize_memory(size, base=10)}")
@@ -193,7 +212,9 @@ class FileSyncer:
         head_response: HeadObjectResponse = self.gateway_stub.head_object(
             HeadObjectRequest(hash=hash)
         )
+        print("head_response", head_response)
         if not head_response.exists:
+            print("head_response", head_response)
             metadata = ObjectMetadata(name=hash, size=size)
 
             def _upload_object() -> requests.Response:

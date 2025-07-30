@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"path"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -55,10 +56,20 @@ type Build struct {
 	runcClient  RuncClient
 	commands    []string
 	micromamba  bool
+	mounts      []types.Mount
 }
 
 func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg, config types.AppConfig) (*Build, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	mounts := []types.Mount{}
+	if opts.BuildCtxObject != "" {
+		mounts = append(mounts, types.Mount{
+			LocalPath: path.Join(types.DefaultObjectPath, authInfo.Workspace.Name, opts.BuildCtxObject),
+			MountPath: types.WorkerUserCodeVolume,
+			ReadOnly:  false,
+		})
+	}
 
 	return &Build{
 		ctx:         ctx,
@@ -69,6 +80,7 @@ func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.Outpu
 		outputChan:  outputChan,
 		authInfo:    authInfo,
 		micromamba:  strings.Contains(opts.PythonVersion, "micromamba"),
+		mounts:      mounts,
 	}, nil
 }
 
@@ -319,6 +331,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
+		Mounts:      b.mounts,
 	}
 
 	if b.opts.Gpu != "" {
