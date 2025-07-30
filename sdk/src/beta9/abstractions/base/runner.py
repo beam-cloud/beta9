@@ -426,7 +426,7 @@ class RunnerAbstraction(BaseAbstraction):
                 return False
 
         if not self.files_synced:
-            sync_result = self.syncer.sync(ignore_patterns=ignore_patterns, include_patterns=[])
+            sync_result = self.syncer.sync(ignore_patterns=ignore_patterns)
             self._remove_tmp_files()
 
             if sync_result.success:
