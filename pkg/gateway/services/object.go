@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -40,6 +41,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 
 			exists, err = storageClient.Exists(ctx, path.Join(types.DefaultObjectPrefix, existingObject.ExternalId))
 			if err != nil {
+				fmt.Println("Error checking if object exists", err)
 				return &pb.HeadObjectResponse{
 					Ok:       false,
 					ErrorMsg: "Unable to check if object exists",

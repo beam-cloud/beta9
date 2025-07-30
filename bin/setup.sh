@@ -38,6 +38,9 @@ function check_status() {
   echo ""
 }
 
+echo "os: ${os}"
+echo "arch: ${arch}"
+
 echo "=> Installing kubectl ${k8s_version}"
 curl -sSfL "https://dl.k8s.io/release/${k8s_version}/bin/${os}/${arch}/kubectl" > /usr/local/bin/kubectl
 chmod +x /usr/local/bin/kubectl
