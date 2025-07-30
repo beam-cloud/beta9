@@ -185,14 +185,6 @@ class FileSyncer:
         include_patterns: List[str] = [],
         cache_object_id: bool = True,
     ) -> FileSyncResult:
-        """
-        Syncs the files in the workspace directory to the gateway.
-
-        Args:
-            ignore_patterns: A list of patterns to ignore when syncing the files.
-            include_patterns: A list of patterns to include when syncing the files. If not provided, all files will be included.
-        """
-
         terminal.header("Syncing files")
 
         self._init_ignore_file()
@@ -206,8 +198,6 @@ class FileSyncer:
             self.include_patterns = []
         else:
             self.include_patterns = include_patterns
-
-        print("include_patterns", self.include_patterns)
 
         temp_zip_name = tempfile.NamedTemporaryFile(delete=False).name
 

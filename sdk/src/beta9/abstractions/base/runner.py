@@ -425,7 +425,6 @@ class RunnerAbstraction(BaseAbstraction):
                 terminal.error("Image build failed ❌", exit=False)
                 return False
 
-        print("self.files_synced", self.files_synced)
         if not self.files_synced:
             sync_result = self.syncer.sync(ignore_patterns=ignore_patterns, include_patterns=[])
             self._remove_tmp_files()
