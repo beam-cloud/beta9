@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"path"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -327,7 +326,6 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 	if b.opts.BuildCtxObject != "" {
 		containerRequest.Stub.Object.ExternalId = b.opts.BuildCtxObject
 		containerRequest.Mounts = append(containerRequest.Mounts, types.Mount{
-			LocalPath: path.Join(types.DefaultObjectPath, b.authInfo.Workspace.Name, b.opts.BuildCtxObject),
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  false,
 		})

@@ -385,11 +385,13 @@ class Image(BaseAbstraction):
         image.dockerfile = dockerfile
         return image
 
-    def sync_files(self, context_dir: Optional[str] = None) -> None:
+    def sync_files(self, context_dir: Optional[str] = None, cache_object_id: bool = True) -> None:
         syncer = FileSyncer(
             gateway_stub=self.gateway_stub, root_dir=context_dir or os.path.dirname("./")
         )
-        result = syncer.sync(include_patterns=self.include_files_patterns)
+        result = syncer.sync(
+            include_patterns=self.include_files_patterns, cache_object_id=cache_object_id
+        )
         if not result.success:
             raise ValueError("Failed to sync context directory.")
 
@@ -499,10 +501,9 @@ class Image(BaseAbstraction):
             raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
 
         if not self.dockerfile and len(self.include_files_patterns) > 0:
-            print("syncing files", self.include_files_patterns)
-            self.sync_files()
-
-        print(self.include_files_patterns, self.build_ctx_object)
+            # We don't want to cache the object id for a regular build context, because it doesn't upload all files
+            # Compared to a custom Dockerfile build context, which does upload all files.
+            self.sync_files(cache_object_id=False)
 
         exists, exists_response = self.exists()
         if exists:
@@ -656,9 +657,10 @@ class Image(BaseAbstraction):
         """
         Add a local path to the image.
         """
-        self.include_files_patterns.append(
-            os.path.join(Path("./").absolute(), Path(pattern).relative_to("./"))
-        )
+        path = Path(pattern).as_posix()
+        if path == ".":
+            path = "*"
+        self.include_files_patterns.append(path)
 
         return self
 

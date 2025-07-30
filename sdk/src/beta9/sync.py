@@ -133,7 +133,15 @@ class FileSyncer:
         spec = PathSpec.from_lines("gitwildmatch", self.ignore_patterns)
         return spec.match_file(relative_path)
 
-    def _collect_files(self, include_patterns: List[str] = []) -> Generator[str, None, None]:
+    def _should_include(self, path: str) -> bool:
+        if len(self.include_patterns) == 0:
+            return True
+
+        relative_path = os.path.relpath(path, self.root_dir)
+        spec = PathSpec.from_lines("gitwildmatch", self.include_patterns)
+        return len(self.include_patterns) == 0 or spec.match_file(relative_path)
+
+    def _collect_files(self) -> Generator[str, None, None]:
         if self.ignore_patterns == ["*"]:
             return
 
@@ -144,9 +152,7 @@ class FileSyncer:
 
             for file in files:
                 file_path = os.path.join(root, file)
-                if not self._should_ignore(file_path) and (
-                    len(include_patterns) == 0 or file_path in include_patterns
-                ):
+                if not self._should_ignore(file_path) and self._should_include(file_path):
                     yield file_path
 
     @staticmethod
@@ -158,18 +164,26 @@ class FileSyncer:
         return hasher.hexdigest()
 
     def sync(
-        self, ignore_patterns: List[str] = [], include_patterns: List[str] = []
+        self,
+        ignore_patterns: List[str] = [],
+        include_patterns: List[str] = [],
+        cache_object_id: bool = True,
     ) -> FileSyncResult:
         with _sync_lock:
             if self.is_workspace_dir and get_workspace_object_id() != "" and not is_notebook_env():
                 terminal.header("Files already synced")
                 return FileSyncResult(success=True, object_id=get_workspace_object_id())
-            return self._sync(ignore_patterns=ignore_patterns, include_patterns=include_patterns)
+            return self._sync(
+                ignore_patterns=ignore_patterns,
+                include_patterns=include_patterns,
+                cache_object_id=cache_object_id,
+            )
 
     def _sync(
         self,
         ignore_patterns: List[str] = [],
         include_patterns: List[str] = [],
+        cache_object_id: bool = True,
     ) -> FileSyncResult:
         """
         Syncs the files in the workspace directory to the gateway.
@@ -188,10 +202,17 @@ class FileSyncer:
         else:
             self.ignore_patterns = ignore_patterns
 
+        if include_patterns is None or len(include_patterns) == 0:
+            self.include_patterns = []
+        else:
+            self.include_patterns = include_patterns
+
+        print("include_patterns", self.include_patterns)
+
         temp_zip_name = tempfile.NamedTemporaryFile(delete=False).name
 
         with zipfile.ZipFile(temp_zip_name, "w") as zipf:
-            for file in self._collect_files(include_patterns):
+            for file in self._collect_files():
                 try:
                     zipf.write(file, os.path.relpath(file, self.root_dir))
                     terminal.detail(f"Added {file}")
@@ -233,14 +254,14 @@ class FileSyncer:
                     presigned_url = create_object_response.presigned_url
                     response = _upload_object()
                     if response.status_code == HTTPStatus.OK:
-                        if self.is_workspace_dir:
+                        if self.is_workspace_dir and cache_object_id:
                             set_workspace_object_id(create_object_response.object_id)
                         object_id = create_object_response.object_id
                     else:
                         terminal.error("File sync failed ☠️")
             else:
                 put_response = self.gateway_stub.put_object_stream(stream_requests())
-                if put_response.ok and self.is_workspace_dir:
+                if put_response.ok and self.is_workspace_dir and cache_object_id:
                     set_workspace_object_id(put_response.object_id)
                     object_id = put_response.object_id
                 else:
@@ -249,7 +270,7 @@ class FileSyncer:
         elif head_response.exists and head_response.ok:
             terminal.header("Files already synced")
 
-            if self.is_workspace_dir:
+            if self.is_workspace_dir and cache_object_id:
                 set_workspace_object_id(head_response.object_id)
                 object_id = head_response.object_id
 
