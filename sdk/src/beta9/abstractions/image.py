@@ -299,6 +299,7 @@ class Image(BaseAbstraction):
         self.gpu = GpuType.NoGPU
         self.ignore_python = False
         self.snapshot_id = snapshot_id or ""
+        self.include_files_patterns = []
 
         self.with_envs(env_vars or [])
 
@@ -369,6 +370,7 @@ class Image(BaseAbstraction):
         Returns:
             Image: The Image object.
         """
+
         image = cls()
         if env.is_remote():
             return image
@@ -376,17 +378,24 @@ class Image(BaseAbstraction):
         if not context_dir:
             context_dir = os.path.dirname(path)
 
-        syncer = FileSyncer(gateway_stub=image.gateway_stub, root_dir=context_dir)
-        result = syncer.sync()
-        if not result.success:
-            raise ValueError("Failed to sync context directory.")
-
-        image.build_ctx_object = result.object_id
+        image.sync_files(context_dir)
 
         with open(path, "r") as f:
             dockerfile = f.read()
         image.dockerfile = dockerfile
         return image
+
+    def sync_files(self, context_dir: Optional[str] = None, cache_object_id: bool = True) -> None:
+        syncer = FileSyncer(
+            gateway_stub=self.gateway_stub, root_dir=context_dir or os.path.dirname("./")
+        )
+        result = syncer.sync(
+            include_patterns=self.include_files_patterns, cache_object_id=cache_object_id
+        )
+        if not result.success:
+            raise ValueError("Failed to sync context directory.")
+
+        self.build_ctx_object = result.object_id
 
     @classmethod
     def from_registry(
@@ -477,7 +486,9 @@ class Image(BaseAbstraction):
             ),
         )
 
-    def build(self) -> ImageBuildResult:
+    def build(
+        self,
+    ) -> ImageBuildResult:
         terminal.header("Building image")
 
         if is_notebook_env():
@@ -488,6 +499,11 @@ class Image(BaseAbstraction):
 
         if self.base_image != "" and self.dockerfile != "":
             raise ValueError("Cannot use from_dockerfile and provide a custom base image.")
+
+        if not self.dockerfile and len(self.include_files_patterns) > 0:
+            # We don't want to cache the object id for a regular build context, because it doesn't upload all files
+            # Compared to a custom Dockerfile build context, which does upload all files.
+            self.sync_files(cache_object_id=False)
 
         exists, exists_response = self.exists()
         if exists:
@@ -635,6 +651,17 @@ class Image(BaseAbstraction):
 
         for package in packages:
             self.build_steps.append(BuildStep(command=package, type="pip"))
+        return self
+
+    def add_local_path(self, pattern: str = "*") -> "Image":
+        """
+        Add a local path to the image.
+        """
+        path = Path(pattern).as_posix()
+        if path == ".":
+            path = "*"
+        self.include_files_patterns.append(path)
+
         return self
 
     def with_envs(

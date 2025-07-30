@@ -55,6 +55,7 @@ type Build struct {
 	runcClient  RuncClient
 	commands    []string
 	micromamba  bool
+	mounts      []types.Mount
 }
 
 func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg, config types.AppConfig) (*Build, error) {
@@ -319,6 +320,15 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
+		Mounts:      b.mounts,
+	}
+
+	if b.opts.BuildCtxObject != "" {
+		containerRequest.Stub.Object.ExternalId = b.opts.BuildCtxObject
+		containerRequest.Mounts = append(containerRequest.Mounts, types.Mount{
+			MountPath: types.WorkerUserCodeVolume,
+			ReadOnly:  false,
+		})
 	}
 
 	if b.opts.Gpu != "" {
