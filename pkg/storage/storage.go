@@ -70,13 +70,18 @@ func NewStorage(config types.StorageConfig, cacheClient *blobcache.BlobCacheClie
 
 		return s, nil
 	case StorageModeAlluxio:
-		// TODO: Implement alluxio storage
-		// s, err := NewAlluxioStorage(config.Alluxio)
-		// if err != nil {
-		// 	return nil, err
-		// }
+		s, err := NewAlluxioStorage(config.Alluxio)
+		if err != nil {
+			return nil, err
+		}
 
-		return nil, errors.New("alluxio storage not implemented")
+		// Mount filesystem
+		err = s.Mount(config.FilesystemPath)
+		if err != nil {
+			log.Fatal().Err(err).Msg("unable to mount filesystem")
+		}
+
+		return s, nil
 	case StorageModeMountPoint:
 		s, err := NewMountPointStorage(config.MountPoint)
 		if err != nil {
