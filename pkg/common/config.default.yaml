@@ -33,7 +33,7 @@ storage:
     prefetch: 1
     bufferSize: 300
   workspaceStorage:
-    mode: geese # TODO: Change to alluxio
+    mode: geese
     baseMountPath: /workspace/data
     defaultBucketPrefix: workspace
     defaultAccessKey: test
