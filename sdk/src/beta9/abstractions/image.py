@@ -656,6 +656,12 @@ class Image(BaseAbstraction):
     def add_local_path(self, pattern: str = "*") -> "Image":
         """
         Add a local path to the image.
+
+        Parameters:
+            pattern: The pattern to add. This can be a glob pattern or a single file.
+
+        Returns:
+            Image: The Image object.
         """
         path = Path(pattern).as_posix()
         if path == ".":
