@@ -72,13 +72,13 @@ func InitializeCRIUManager(ctx context.Context, criuConfig types.CRIUConfig, sto
 			EtcdPassword:        storageConfig.Alluxio.EtcdPassword,
 			EtcdTlsEnabled:      storageConfig.Alluxio.EtcdTlsEnabled,
 			CoordinatorHostname: storageConfig.Alluxio.CoordinatorHostname,
-			BucketName:          storageConfig.Alluxio.BucketName,
-			AccessKey:           storageConfig.Alluxio.AccessKey,
-			SecretKey:           storageConfig.Alluxio.SecretKey,
-			EndpointURL:         storageConfig.Alluxio.EndpointURL,
-			Region:              storageConfig.Alluxio.Region,
-			ReadOnly:            storageConfig.Alluxio.ReadOnly,
-			ForcePathStyle:      storageConfig.Alluxio.ForcePathStyle,
+			BucketName:          criuConfig.Storage.ObjectStore.BucketName,
+			AccessKey:           criuConfig.Storage.ObjectStore.AccessKey,
+			SecretKey:           criuConfig.Storage.ObjectStore.SecretKey,
+			EndpointURL:         criuConfig.Storage.ObjectStore.EndpointURL,
+			Region:              criuConfig.Storage.ObjectStore.Region,
+			ForcePathStyle:      criuConfig.Storage.ObjectStore.ForcePathStyle,
+			ReadOnly:            false,
 		})
 
 		err := checkpointStorage.Mount(criuConfig.Storage.MountPath)
