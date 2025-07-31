@@ -126,6 +126,7 @@ RUN apt-get install -y libbtrfs-dev libgpgme11-dev
 RUN mkdir -p /etc/containers/registries.conf.d
 RUN curl -L https://raw.githubusercontent.com/containers/shortnames/refs/heads/main/shortnames.conf \
     -o /etc/containers/registries.conf.d/shortnames.conf
+RUN echo 'unqualified-search-registries = ["docker.io"]' > /etc/containers/registries.conf
 
 ARG CEDANA_VERSION=0.9.240
 ARG CEDANA_BASE_URL=""
