@@ -106,6 +106,11 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 			return nil, err
 		}
 	} else if s.config.WorkspaceStorage.Mode == storage.StorageModeAlluxio {
+		alluxioCoordinatorHostname := os.Getenv("ALLUXIO_COORDINATOR_HOSTNAME")
+		if alluxioCoordinatorHostname == "" {
+			alluxioCoordinatorHostname = s.config.WorkspaceStorage.Alluxio.CoordinatorHostname
+		}
+
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeAlluxio,
 			FilesystemName: workspaceName,
@@ -119,7 +124,7 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 				EtcdUsername:        s.config.WorkspaceStorage.Alluxio.EtcdUsername,
 				EtcdPassword:        s.config.WorkspaceStorage.Alluxio.EtcdPassword,
 				EtcdTlsEnabled:      s.config.WorkspaceStorage.Alluxio.EtcdTlsEnabled,
-				CoordinatorHostname: s.config.WorkspaceStorage.Alluxio.CoordinatorHostname,
+				CoordinatorHostname: alluxioCoordinatorHostname,
 
 				// Workspace specific config
 				BucketName:     *workspaceStorage.BucketName,

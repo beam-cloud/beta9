@@ -377,21 +377,22 @@ var (
 )
 
 type WorkerPoolConfig struct {
-	GPUType              string                            `key:"gpuType" json:"gpu_type"`
-	Runtime              string                            `key:"runtime" json:"runtime"`
-	Mode                 PoolMode                          `key:"mode" json:"mode"`
-	Provider             *MachineProvider                  `key:"provider" json:"provider"`
-	JobSpec              WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
-	PoolSizing           WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
-	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
-	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
-	Priority             int32                             `key:"priority" json:"priority"`
-	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
-	UserData             string                            `key:"userData" json:"user_data"`
-	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
-	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
-	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
-	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
+	GPUType                    string                            `key:"gpuType" json:"gpu_type"`
+	Runtime                    string                            `key:"runtime" json:"runtime"`
+	Mode                       PoolMode                          `key:"mode" json:"mode"`
+	Provider                   *MachineProvider                  `key:"provider" json:"provider"`
+	JobSpec                    WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
+	PoolSizing                 WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
+	DefaultMachineCost         float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
+	RequiresPoolSelector       bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
+	Priority                   int32                             `key:"priority" json:"priority"`
+	Preemptable                bool                              `key:"preemptable" json:"preemptable"`
+	UserData                   string                            `key:"userData" json:"user_data"`
+	CRIUEnabled                bool                              `key:"criuEnabled" json:"criu_enabled"`
+	TmpSizeLimit               string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
+	ConfigGroup                string                            `key:"configGroup" json:"config_group"`
+	K3sInstallDir              string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
+	AlluxioCoordinatorHostname string                            `key:"alluxioCoordinatorHostname" json:"alluxio_coordinator_hostname"`
 }
 
 type WorkerPoolJobSpecConfig struct {

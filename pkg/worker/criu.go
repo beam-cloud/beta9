@@ -64,6 +64,11 @@ func InitializeCRIUManager(ctx context.Context, criuConfig types.CRIUConfig, sto
 
 	// If storage mode is S3, mount the checkpoint storage bucket
 	if criuConfig.Storage.Mode == string(types.CheckpointStorageModeS3) {
+		alluxioCoordinatorHostname := os.Getenv("ALLUXIO_COORDINATOR_HOSTNAME")
+		if alluxioCoordinatorHostname == "" {
+			alluxioCoordinatorHostname = storageConfig.Alluxio.CoordinatorHostname
+		}
+
 		checkpointStorage, _ := storage.NewAlluxioStorage(types.AlluxioConfig{
 			ImageUrl:            storageConfig.Alluxio.ImageUrl,
 			License:             storageConfig.Alluxio.License,
@@ -71,7 +76,7 @@ func InitializeCRIUManager(ctx context.Context, criuConfig types.CRIUConfig, sto
 			EtcdUsername:        storageConfig.Alluxio.EtcdUsername,
 			EtcdPassword:        storageConfig.Alluxio.EtcdPassword,
 			EtcdTlsEnabled:      storageConfig.Alluxio.EtcdTlsEnabled,
-			CoordinatorHostname: storageConfig.Alluxio.CoordinatorHostname,
+			CoordinatorHostname: alluxioCoordinatorHostname,
 			BucketName:          criuConfig.Storage.ObjectStore.BucketName,
 			AccessKey:           criuConfig.Storage.ObjectStore.AccessKey,
 			SecretKey:           criuConfig.Storage.ObjectStore.SecretKey,
