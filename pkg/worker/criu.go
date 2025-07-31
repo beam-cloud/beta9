@@ -41,39 +41,47 @@ type CRIUManager interface {
 
 // InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers
 // -- depending on the mode, it will use either cedana or nvidia cuda checkpoint under the hood
-func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, fileCacheManager *FileCacheManager) (CRIUManager, error) {
+func InitializeCRIUManager(ctx context.Context, criuConfig types.CRIUConfig, storageConfig types.StorageConfig, fileCacheManager *FileCacheManager) (CRIUManager, error) {
 	var criuManager CRIUManager = nil
 	var err error = nil
 
-	switch config.Mode {
+	switch criuConfig.Mode {
 	case types.CRIUConfigModeCedana:
-		criuManager, err = InitializeCedanaCRIU(ctx, config.Cedana, fileCacheManager)
+		criuManager, err = InitializeCedanaCRIU(ctx, criuConfig.Cedana, fileCacheManager)
 	case types.CRIUConfigModeNvidia:
-		criuManager, err = InitializeNvidiaCRIU(ctx, config, fileCacheManager)
+		criuManager, err = InitializeNvidiaCRIU(ctx, criuConfig, fileCacheManager)
 	default:
-		return nil, fmt.Errorf("invalid CRIU mode: %s", config.Mode)
+		return nil, fmt.Errorf("invalid CRIU mode: %s", criuConfig.Mode)
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(config.Storage.MountPath, os.ModePerm); err != nil {
+	if err := os.MkdirAll(criuConfig.Storage.MountPath, os.ModePerm); err != nil {
 		return nil, err
 	}
 
-	// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
-	if config.Storage.Mode == string(types.CheckpointStorageModeS3) {
-		checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
-			BucketName:  config.Storage.ObjectStore.BucketName,
-			AccessKey:   config.Storage.ObjectStore.AccessKey,
-			SecretKey:   config.Storage.ObjectStore.SecretKey,
-			EndpointURL: config.Storage.ObjectStore.EndpointURL,
-			Region:      config.Storage.ObjectStore.Region,
-			ReadOnly:    false,
+	// If storage mode is S3, mount the checkpoint storage bucket
+	if criuConfig.Storage.Mode == string(types.CheckpointStorageModeS3) {
+		checkpointStorage, _ := storage.NewAlluxioStorage(types.AlluxioConfig{
+			ImageUrl:            storageConfig.Alluxio.ImageUrl,
+			License:             storageConfig.Alluxio.License,
+			EtcdEndpoint:        storageConfig.Alluxio.EtcdEndpoint,
+			EtcdUsername:        storageConfig.Alluxio.EtcdUsername,
+			EtcdPassword:        storageConfig.Alluxio.EtcdPassword,
+			EtcdTlsEnabled:      storageConfig.Alluxio.EtcdTlsEnabled,
+			CoordinatorHostname: storageConfig.Alluxio.CoordinatorHostname,
+			BucketName:          storageConfig.Alluxio.BucketName,
+			AccessKey:           storageConfig.Alluxio.AccessKey,
+			SecretKey:           storageConfig.Alluxio.SecretKey,
+			EndpointURL:         storageConfig.Alluxio.EndpointURL,
+			Region:              storageConfig.Alluxio.Region,
+			ReadOnly:            storageConfig.Alluxio.ReadOnly,
+			ForcePathStyle:      storageConfig.Alluxio.ForcePathStyle,
 		})
 
-		err := checkpointStorage.Mount(config.Storage.MountPath)
+		err := checkpointStorage.Mount(criuConfig.Storage.MountPath)
 		if err != nil {
 			log.Warn().Msgf("C/R unavailable, unable to mount checkpoint storage: %v", err)
 			return nil, err

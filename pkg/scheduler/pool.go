@@ -27,10 +27,12 @@ const (
 	tmpVolumeName               string  = "beta9-tmp"
 	logVolumeName               string  = "beta9-logs"
 	imagesVolumeName            string  = "beta9-images"
+	storageVolumeName           string  = "beta9-storage"
 	defaultContainerName        string  = "worker"
 	defaultWorkerEntrypoint     string  = "/usr/local/bin/worker"
 	defaultWorkerLogPath        string  = "/var/log/worker"
 	defaultImagesPath           string  = "/images"
+	defaultStoragePath          string  = "/storage"
 	defaultSharedMemoryPct      float32 = 0.5
 	poolMonitoringInterval              = 1 * time.Second
 	poolHealthCheckInterval             = 10 * time.Second

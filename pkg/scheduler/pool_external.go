@@ -571,6 +571,15 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 				},
 			},
 		},
+		{
+			Name: storageVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: defaultStoragePath,
+					Type: &hostPathType,
+				},
+			},
+		},
 	}
 }
 

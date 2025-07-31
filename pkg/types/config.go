@@ -279,8 +279,21 @@ type GeeseConfig struct {
 }
 
 type AlluxioConfig struct {
-	Debug bool `key:"debug" json:"debug"`
-	// TODO: Add whatever config flags alluxio may need
+	Debug               bool   `key:"debug" json:"debug"`
+	CoordinatorHostname string `key:"coordinatorHostname" json:"coordinator_hostname"`
+	EtcdEndpoint        string `key:"etcdEndpoint" json:"etcd_endpoint"`
+	EtcdUsername        string `key:"etcdUsername" json:"etcd_username"`
+	EtcdPassword        string `key:"etcdPassword" json:"etcd_password"`
+	EtcdTlsEnabled      bool   `key:"etcdTlsEnabled" json:"etcd_tls_enabled"`
+	ImageUrl            string `key:"imageUrl" json:"image_url"`
+	License             string `key:"license" json:"license"`
+	BucketName          string `key:"bucketName" json:"bucket_name"`
+	AccessKey           string `key:"accessKey" json:"access_key"`
+	SecretKey           string `key:"secretKey" json:"secret_key"`
+	EndpointURL         string `key:"endpointURL" json:"endpoint_url"`
+	Region              string `key:"region" json:"region"`
+	ReadOnly            bool   `key:"readOnly" json:"read_only"`
+	ForcePathStyle      bool   `key:"forcePathStyle" json:"force_path_style"`
 }
 
 // @go2proto
@@ -568,12 +581,13 @@ type FluentBitEventMapping struct {
 }
 
 type ObjectStoreConfig struct {
-	BucketName  string `key:"bucketName" json:"bucket_name"`
-	AccessKey   string `key:"accessKey" json:"access_key"`
-	SecretKey   string `key:"secretKey" json:"secret_key"`
-	EndpointURL string `key:"endpointURL" json:"bucket_url"`
-	Region      string `key:"region" json:"region"`
-	ReadOnly    bool   `key:"readOnly" json:"read_only"`
+	BucketName     string `key:"bucketName" json:"bucket_name"`
+	AccessKey      string `key:"accessKey" json:"access_key"`
+	SecretKey      string `key:"secretKey" json:"secret_key"`
+	EndpointURL    string `key:"endpointURL" json:"bucket_url"`
+	Region         string `key:"region" json:"region"`
+	ReadOnly       bool   `key:"readOnly" json:"read_only"`
+	ForcePathStyle bool   `key:"forcePathStyle" json:"force_path_style"`
 }
 
 type FluentBitEventConfig struct {

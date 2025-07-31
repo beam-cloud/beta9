@@ -111,7 +111,25 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 			FilesystemName: workspaceName,
 			FilesystemPath: mountPath,
 			Alluxio: types.AlluxioConfig{
-				Debug: s.config.WorkspaceStorage.Alluxio.Debug,
+				// Global config
+
+				Debug:               s.config.WorkspaceStorage.Alluxio.Debug,
+				ImageUrl:            s.config.WorkspaceStorage.Alluxio.ImageUrl,
+				License:             s.config.WorkspaceStorage.Alluxio.License,
+				EtcdEndpoint:        s.config.WorkspaceStorage.Alluxio.EtcdEndpoint,
+				EtcdUsername:        s.config.WorkspaceStorage.Alluxio.EtcdUsername,
+				EtcdPassword:        s.config.WorkspaceStorage.Alluxio.EtcdPassword,
+				EtcdTlsEnabled:      s.config.WorkspaceStorage.Alluxio.EtcdTlsEnabled,
+				CoordinatorHostname: s.config.WorkspaceStorage.Alluxio.CoordinatorHostname,
+
+				// Workspace specific config
+				BucketName:     *workspaceStorage.BucketName,
+				AccessKey:      *workspaceStorage.AccessKey,
+				SecretKey:      *workspaceStorage.SecretKey,
+				EndpointURL:    *workspaceStorage.EndpointUrl,
+				Region:         *workspaceStorage.Region,
+				ReadOnly:       false,
+				ForcePathStyle: false,
 			},
 		}, s.cacheClient)
 		if err != nil {
