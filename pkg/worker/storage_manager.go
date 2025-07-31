@@ -112,7 +112,6 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 			FilesystemPath: mountPath,
 			Alluxio: types.AlluxioConfig{
 				// Global config
-
 				Debug:               s.config.WorkspaceStorage.Alluxio.Debug,
 				ImageUrl:            s.config.WorkspaceStorage.Alluxio.ImageUrl,
 				License:             s.config.WorkspaceStorage.Alluxio.License,
