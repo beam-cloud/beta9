@@ -230,15 +230,17 @@ type StorageConfig struct {
 }
 
 type WorkspaceStorageConfig struct {
-	Mode                string        `key:"mode" json:"mode"`
-	BaseMountPath       string        `key:"baseMountPath" json:"base_mount_path"`
-	Geese               GeeseConfig   `key:"geese" json:"geese"`
-	Alluxio             AlluxioConfig `key:"alluxio" json:"alluxio"`
-	DefaultBucketPrefix string        `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
-	DefaultAccessKey    string        `key:"defaultAccessKey" json:"default_access_key"`
-	DefaultSecretKey    string        `key:"defaultSecretKey" json:"default_secret_key"`
-	DefaultEndpointUrl  string        `key:"defaultEndpointUrl" json:"default_endpoint_url"`
-	DefaultRegion       string        `key:"defaultRegion" json:"default_region"`
+	BaseMountPath       string `key:"baseMountPath" json:"base_mount_path"`
+	DefaultStorageMode  string `key:"defaultStorageMode" json:"default_storage_mode"`
+	DefaultBucketPrefix string `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
+	DefaultAccessKey    string `key:"defaultAccessKey" json:"default_access_key"`
+	DefaultSecretKey    string `key:"defaultSecretKey" json:"default_secret_key"`
+	DefaultEndpointUrl  string `key:"defaultEndpointUrl" json:"default_endpoint_url"`
+	DefaultRegion       string `key:"defaultRegion" json:"default_region"`
+
+	// Storage mode configs
+	Geese   GeeseConfig   `key:"geese" json:"geese"`
+	Alluxio AlluxioConfig `key:"alluxio" json:"alluxio"`
 }
 
 type JuiceFSConfig struct {
@@ -393,6 +395,7 @@ type WorkerPoolConfig struct {
 	ConfigGroup                string                            `key:"configGroup" json:"config_group"`
 	K3sInstallDir              string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
 	StoragePath                string                            `key:"storagePath" json:"storage_path"`
+	StorageMode                string                            `key:"storageMode" json:"storage_mode"`
 	AlluxioCoordinatorHostname string                            `key:"alluxioCoordinatorHostname" json:"alluxio_coordinator_hostname"`
 }
 

@@ -38,6 +38,7 @@ type Worker struct {
 	workerId                string
 	workerToken             string
 	poolName                string
+	poolConfig              types.WorkerPoolConfig
 	cpuLimit                int64
 	memoryLimit             int64
 	gpuType                 string
@@ -168,12 +169,17 @@ func NewWorker() (*Worker, error) {
 		}
 	}
 
+	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
+	if !poolFound {
+		return nil, errors.New("invalid worker pool name")
+	}
+
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
 		return nil, err
 	}
 
-	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, containerInstances, cacheClient)
+	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, poolConfig, containerInstances, cacheClient)
 	if err != nil {
 		return nil, err
 	}
@@ -222,6 +228,7 @@ func NewWorker() (*Worker, error) {
 		workerId:                workerId,
 		workerToken:             workerToken,
 		poolName:                workerPoolName,
+		poolConfig:              poolConfig,
 		cancel:                  cancel,
 		config:                  config,
 		imageMountPath:          getImageMountPath(workerId),

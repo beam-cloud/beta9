@@ -24,19 +24,25 @@ type WorkspaceStorageManager struct {
 	ctx                context.Context
 	mounts             *common.SafeMap[storage.Storage]
 	config             types.StorageConfig
+	poolConfig         types.WorkerPoolConfig
 	containerInstances *common.SafeMap[*ContainerInstance]
 	mu                 sync.Mutex
 	cacheClient        *blobcache.BlobCacheClient
 }
 
-func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, containerInstances *common.SafeMap[*ContainerInstance], cacheClient *blobcache.BlobCacheClient) (*WorkspaceStorageManager, error) {
+func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, poolConfig types.WorkerPoolConfig, containerInstances *common.SafeMap[*ContainerInstance], cacheClient *blobcache.BlobCacheClient) (*WorkspaceStorageManager, error) {
 	sm := &WorkspaceStorageManager{
 		ctx:                ctx,
 		mounts:             common.NewSafeMap[storage.Storage](),
 		config:             config,
+		poolConfig:         poolConfig,
 		containerInstances: containerInstances,
 		mu:                 sync.Mutex{},
 		cacheClient:        cacheClient,
+	}
+
+	if poolConfig.StorageMode == "" {
+		poolConfig.StorageMode = config.WorkspaceStorage.DefaultStorageMode
 	}
 
 	go sm.cleanupUnusedMounts()
@@ -67,7 +73,7 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
 	var err error
-	if s.config.WorkspaceStorage.Mode == storage.StorageModeGeese {
+	if s.poolConfig.StorageMode == storage.StorageModeGeese {
 		os.MkdirAll(mountPath, 0755)
 
 		mount, err = storage.NewStorage(types.StorageConfig{
@@ -106,7 +112,7 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		if err != nil {
 			return nil, err
 		}
-	} else if s.config.WorkspaceStorage.Mode == storage.StorageModeAlluxio {
+	} else if s.poolConfig.StorageMode == storage.StorageModeAlluxio {
 		alluxioCoordinatorHostname := os.Getenv("ALLUXIO_COORDINATOR_HOSTNAME")
 		if alluxioCoordinatorHostname == "" {
 			alluxioCoordinatorHostname = s.config.WorkspaceStorage.Alluxio.CoordinatorHostname
