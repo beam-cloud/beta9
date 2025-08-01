@@ -264,7 +264,7 @@ class _CallableWrapper(DeployableMixin):
 
         Example:
             ```python
-            from beta9 import task_queue
+            from beta9 import task_queue, Image
 
             @task_queue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
             def transcribe(filename: str):
