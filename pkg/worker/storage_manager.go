@@ -65,10 +65,11 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 	}
 
 	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
-	os.MkdirAll(mountPath, 0755)
 
 	var err error
 	if s.config.WorkspaceStorage.Mode == storage.StorageModeGeese {
+		os.MkdirAll(mountPath, 0755)
+
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeGeese,
 			FilesystemName: workspaceName,
@@ -114,12 +115,11 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeAlluxio,
 			FilesystemName: workspaceName,
-			FilesystemPath: mountPath,
+			FilesystemPath: workspaceName,
 			Alluxio: types.AlluxioConfig{
 				// Global config
 				Debug:               s.config.WorkspaceStorage.Alluxio.Debug,
 				ImageUrl:            s.config.WorkspaceStorage.Alluxio.ImageUrl,
-				License:             s.config.WorkspaceStorage.Alluxio.License,
 				EtcdEndpoint:        s.config.WorkspaceStorage.Alluxio.EtcdEndpoint,
 				EtcdUsername:        s.config.WorkspaceStorage.Alluxio.EtcdUsername,
 				EtcdPassword:        s.config.WorkspaceStorage.Alluxio.EtcdPassword,
@@ -162,6 +162,7 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 		return nil
 	}
 
+	// TODO: correct these paths
 	localPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
 	err := mount.Unmount(localPath)

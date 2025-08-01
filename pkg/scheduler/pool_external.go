@@ -338,7 +338,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
-		wpc.config.Worker.ImageTag,
+		"ax-4", // wpc.config.Worker.ImageTag,
 	)
 
 	resources := corev1.ResourceRequirements{}
@@ -539,6 +539,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPoolConfig.PoolSizing.SharedMemoryLimitPct, workerMemory)
 	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPoolConfig.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
 
+	storagePath := wpc.workerPoolConfig.StoragePath
+	if storagePath == "" {
+		storagePath = defaultStoragePath
+	}
+
 	return []corev1.Volume{
 		{
 			Name: logVolumeName,
@@ -579,7 +584,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 			Name: storageVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: defaultStoragePath,
+					Path: storagePath,
 					Type: &hostPathType,
 				},
 			},
@@ -597,6 +602,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		{
 			Name:      imagesVolumeName,
 			MountPath: "/images",
+			ReadOnly:  false,
+		},
+		{
+			Name:      storageVolumeName,
+			MountPath: "/storage",
 			ReadOnly:  false,
 		},
 		{

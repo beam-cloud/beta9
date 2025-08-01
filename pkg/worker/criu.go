@@ -71,7 +71,6 @@ func InitializeCRIUManager(ctx context.Context, criuConfig types.CRIUConfig, sto
 
 		checkpointStorage, _ := storage.NewAlluxioStorage(types.AlluxioConfig{
 			ImageUrl:            storageConfig.Alluxio.ImageUrl,
-			License:             storageConfig.Alluxio.License,
 			EtcdEndpoint:        storageConfig.Alluxio.EtcdEndpoint,
 			EtcdUsername:        storageConfig.Alluxio.EtcdUsername,
 			EtcdPassword:        storageConfig.Alluxio.EtcdPassword,
@@ -84,7 +83,7 @@ func InitializeCRIUManager(ctx context.Context, criuConfig types.CRIUConfig, sto
 			Region:              criuConfig.Storage.ObjectStore.Region,
 			ForcePathStyle:      criuConfig.Storage.ObjectStore.ForcePathStyle,
 			ReadOnly:            false,
-		})
+		}, "")
 
 		err := checkpointStorage.Mount(criuConfig.Storage.MountPath)
 		if err != nil {

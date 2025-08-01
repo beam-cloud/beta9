@@ -392,6 +392,7 @@ type WorkerPoolConfig struct {
 	TmpSizeLimit               string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ConfigGroup                string                            `key:"configGroup" json:"config_group"`
 	K3sInstallDir              string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
+	StoragePath                string                            `key:"storagePath" json:"storage_path"`
 	AlluxioCoordinatorHostname string                            `key:"alluxioCoordinatorHostname" json:"alluxio_coordinator_hostname"`
 }
 

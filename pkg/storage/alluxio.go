@@ -13,12 +13,14 @@ import (
 const defaultAlluxioCoordinatorPort = 19999
 
 type AlluxioStorage struct {
-	config types.AlluxioConfig
+	config   types.AlluxioConfig
+	basePath string
 }
 
-func NewAlluxioStorage(config types.AlluxioConfig) (Storage, error) {
+func NewAlluxioStorage(config types.AlluxioConfig, basePath string) (Storage, error) {
 	return &AlluxioStorage{
-		config: config,
+		config:   config,
+		basePath: basePath,
 	}, nil
 }
 
@@ -32,9 +34,9 @@ func (s *AlluxioStorage) Mount(localPath string) error {
 			"s3a.accessKeyId":                        s.config.AccessKey,
 			"s3a.secretKey":                          s.config.SecretKey,
 			"alluxio.underfs.s3.endpoint":            s.config.EndpointURL,
+			"alluxio.underfs.s3.endpoint.region":     s.config.Region,
 			"alluxio.underfs.s3.inherit.acl":         "false",
 			"alluxio.underfs.s3.disable.dns.buckets": "true",
-			"alluxio.underfs.s3.endpoint.region":     s.config.Region,
 		},
 	}
 
@@ -50,7 +52,7 @@ func (s *AlluxioStorage) Mount(localPath string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
 		return fmt.Errorf("mount request failed with status %d", resp.StatusCode)
 	}
 

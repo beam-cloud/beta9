@@ -70,7 +70,7 @@ func NewStorage(config types.StorageConfig, cacheClient *blobcache.BlobCacheClie
 
 		return s, nil
 	case StorageModeAlluxio:
-		s, err := NewAlluxioStorage(config.Alluxio)
+		s, err := NewAlluxioStorage(config.Alluxio, "")
 		if err != nil {
 			return nil, err
 		}
