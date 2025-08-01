@@ -33,26 +33,9 @@ func (s *AlluxioStorage) Mount(localPath string) error {
 			"s3a.secretKey":                          s.config.SecretKey,
 			"alluxio.underfs.s3.endpoint":            s.config.EndpointURL,
 			"alluxio.underfs.s3.inherit.acl":         "false",
-			"alluxio.underfs.s3.disable.dns.buckets": "false",
+			"alluxio.underfs.s3.disable.dns.buckets": "true",
+			"alluxio.underfs.s3.endpoint.region":     s.config.Region,
 		},
-	}
-
-	/*
-		-d '{
-			"path": "/tigris",
-			"ufs": "s3://bucket/path",
-			"options": {
-			  "s3a.accessKeyId": "<ACCESS_KEY_ID>",
-			  "s3a.secretKey":"<SECRET_KEY>"
-			  "alluxio.underfs.s3.disable.dns.buckets": "false",
-			  "alluxio.underfs.s3.endpoint": "https://fly.storage.tigris.dev"
-			  "alluxio.underfs.s3.inherit.acl": "false"
-			}
-		  }'
-	*/
-
-	if s.config.Region != "" {
-		mountRequest["options"].(map[string]string)["alluxio.underfs.s3.region"] = s.config.Region
 	}
 
 	requestBody, err := json.Marshal(mountRequest)
