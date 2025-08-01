@@ -10,7 +10,7 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const defaultAlluxioCoordinatorPort = 19997
+const defaultAlluxioCoordinatorPort = 19999
 
 type AlluxioStorage struct {
 	config types.AlluxioConfig
