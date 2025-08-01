@@ -288,7 +288,6 @@ type AlluxioConfig struct {
 	EtcdPassword        string `key:"etcdPassword" json:"etcd_password"`
 	EtcdTlsEnabled      bool   `key:"etcdTlsEnabled" json:"etcd_tls_enabled"`
 	ImageUrl            string `key:"imageUrl" json:"image_url"`
-	License             string `key:"license" json:"license"`
 	BucketName          string `key:"bucketName" json:"bucket_name"`
 	AccessKey           string `key:"accessKey" json:"access_key"`
 	SecretKey           string `key:"secretKey" json:"secret_key"`
