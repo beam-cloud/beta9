@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -13,19 +14,19 @@ import (
 const defaultAlluxioCoordinatorPort = 19999
 
 type AlluxioStorage struct {
-	config   types.AlluxioConfig
-	basePath string
+	config types.AlluxioConfig
 }
 
-func NewAlluxioStorage(config types.AlluxioConfig, basePath string) (Storage, error) {
+func NewAlluxioStorage(config types.AlluxioConfig) (Storage, error) {
 	return &AlluxioStorage{
-		config:   config,
-		basePath: basePath,
+		config: config,
 	}, nil
 }
 
 func (s *AlluxioStorage) Mount(localPath string) error {
 	log.Info().Str("local_path", localPath).Msg("alluxio filesystem mounting")
+
+	localPath = s.stripLocalPath(localPath)
 
 	mountRequest := map[string]interface{}{
 		"path": localPath,
@@ -63,6 +64,8 @@ func (s *AlluxioStorage) Mount(localPath string) error {
 func (s *AlluxioStorage) Unmount(localPath string) error {
 	log.Info().Str("local_path", localPath).Msg("alluxio filesystem unmounting")
 
+	localPath = s.stripLocalPath(localPath)
+
 	unmountRequest := map[string]string{
 		"path": localPath,
 	}
@@ -92,6 +95,10 @@ func (s *AlluxioStorage) Unmount(localPath string) error {
 
 	log.Info().Str("local_path", localPath).Msg("alluxio filesystem unmounted successfully")
 	return nil
+}
+
+func (s *AlluxioStorage) stripLocalPath(localPath string) string {
+	return filepath.Base(localPath)
 }
 
 func (s *AlluxioStorage) Format(fsName string) error {

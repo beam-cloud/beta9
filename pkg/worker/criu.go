@@ -83,7 +83,7 @@ func InitializeCRIUManager(ctx context.Context, criuConfig types.CRIUConfig, sto
 			Region:              criuConfig.Storage.ObjectStore.Region,
 			ForcePathStyle:      criuConfig.Storage.ObjectStore.ForcePathStyle,
 			ReadOnly:            false,
-		}, "")
+		})
 
 		err := checkpointStorage.Mount(criuConfig.Storage.MountPath)
 		if err != nil {

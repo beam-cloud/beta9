@@ -73,7 +73,8 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
 	var err error
-	if s.poolConfig.StorageMode == storage.StorageModeGeese {
+	switch s.poolConfig.StorageMode {
+	case storage.StorageModeGeese:
 		os.MkdirAll(mountPath, 0755)
 
 		mount, err = storage.NewStorage(types.StorageConfig{
@@ -112,7 +113,8 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		if err != nil {
 			return nil, err
 		}
-	} else if s.poolConfig.StorageMode == storage.StorageModeAlluxio {
+
+	case storage.StorageModeAlluxio:
 		alluxioCoordinatorHostname := os.Getenv("ALLUXIO_COORDINATOR_HOSTNAME")
 		if alluxioCoordinatorHostname == "" {
 			alluxioCoordinatorHostname = s.config.WorkspaceStorage.Alluxio.CoordinatorHostname
@@ -145,7 +147,8 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		if err != nil {
 			return nil, err
 		}
-	} else {
+
+	default:
 		return nil, errors.New("invalid storage mode")
 	}
 
@@ -168,7 +171,6 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 		return nil
 	}
 
-	// TODO: correct these paths
 	localPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
 	err := mount.Unmount(localPath)
@@ -176,7 +178,14 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 		return err
 	}
 
-	os.RemoveAll(localPath)
+	switch s.poolConfig.StorageMode {
+	case storage.StorageModeGeese:
+		os.RemoveAll(localPath)
+	case storage.StorageModeAlluxio:
+		fallthrough
+	default:
+	}
+
 	s.mounts.Delete(workspaceName)
 
 	return nil
