@@ -69,7 +69,7 @@ func InitializeCRIUManager(ctx context.Context, criuConfig types.CRIUConfig, sto
 			alluxioCoordinatorHostname = storageConfig.Alluxio.CoordinatorHostname
 		}
 
-		checkpointStorage, _ := storage.NewAlluxioStorage(types.AlluxioConfig{
+		checkpointStorage, err := storage.NewAlluxioStorage(types.AlluxioConfig{
 			ImageUrl:            storageConfig.Alluxio.ImageUrl,
 			EtcdEndpoint:        storageConfig.Alluxio.EtcdEndpoint,
 			EtcdUsername:        storageConfig.Alluxio.EtcdUsername,
@@ -84,8 +84,12 @@ func InitializeCRIUManager(ctx context.Context, criuConfig types.CRIUConfig, sto
 			ForcePathStyle:      criuConfig.Storage.ObjectStore.ForcePathStyle,
 			ReadOnly:            false,
 		})
+		if err != nil {
+			log.Warn().Msgf("C/R unavailable, unable to create checkpoint storage: %v", err)
+			return nil, err
+		}
 
-		err := checkpointStorage.Mount(criuConfig.Storage.MountPath)
+		err = checkpointStorage.Mount(criuConfig.Storage.MountPath)
 		if err != nil {
 			log.Warn().Msgf("C/R unavailable, unable to mount checkpoint storage: %v", err)
 			return nil, err
