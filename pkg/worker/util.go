@@ -47,14 +47,14 @@ func copyFile(src, dst string) error {
 	return os.WriteFile(dst, input, 0644)
 }
 
-func createTarGz(srcDir, destTarGz string) error {
-	cmd := exec.Command("tar", "-czf", destTarGz, "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+func createTar(srcDir, destTar string) error {
+	cmd := exec.Command("tar", "-cf", destTar, "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
-func untarGz(srcTarGz, destDir string) error {
-	cmd := exec.Command("tar", "-xzf", srcTarGz, "-C", destDir)
+func untarTar(srcTar, destDir string) error {
+	cmd := exec.Command("tar", "-xf", srcTar, "-C", destDir)
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }

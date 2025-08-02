@@ -64,7 +64,7 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 	// Create archive and store it asynchronously
 	go func() {
 		localArchive := fmt.Sprintf("/tmp/%s.tar.gz", request.StubId)
-		err := createTarGz(checkpointDir, localArchive)
+		err := createTar(checkpointDir, localArchive)
 		if err != nil {
 			log.Error().Err(err).
 				Str("temp_dir", checkpointDir).
@@ -114,7 +114,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	defer os.RemoveAll(tempDir)
 
 	// Untar checkpoint from tarball to temp directory
-	err = untarGz(tarballPath, tempDir)
+	err = untarTar(tarballPath, tempDir)
 	if err != nil {
 		return -1, fmt.Errorf("failed to untar checkpoint: %v", err)
 	}
