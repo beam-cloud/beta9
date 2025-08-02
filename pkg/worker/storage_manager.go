@@ -173,13 +173,13 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 
 	localPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
-	err := mount.Unmount(localPath)
-	if err != nil {
-		return err
-	}
-
 	switch s.poolConfig.StorageMode {
 	case storage.StorageModeGeese:
+		err := mount.Unmount(localPath)
+		if err != nil {
+			return err
+		}
+
 		os.RemoveAll(localPath)
 	case storage.StorageModeAlluxio:
 		fallthrough
