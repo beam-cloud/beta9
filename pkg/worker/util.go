@@ -56,19 +56,25 @@ func createTarGz(srcDir, destTarGz string) error {
 		return err
 	}
 	defer out.Close()
+
 	gw := gzip.NewWriter(out)
 	defer gw.Close()
+
 	tw := tar.NewWriter(gw)
 	defer tw.Close()
-	return filepath.Walk(srcDir, func(file string, fi os.FileInfo, err error) error {
+
+	return filepath.Walk(srcDir, func(path string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		header, err := tar.FileInfoHeader(fi, fi.Name())
+		if path == srcDir {
+			return nil // skip the root dir itself
+		}
+		relPath, err := filepath.Rel(srcDir, path)
 		if err != nil {
 			return err
 		}
-		relPath, err := filepath.Rel(srcDir, file)
+		header, err := tar.FileInfoHeader(fi, relPath)
 		if err != nil {
 			return err
 		}
@@ -77,7 +83,7 @@ func createTarGz(srcDir, destTarGz string) error {
 			return err
 		}
 		if fi.Mode().IsRegular() {
-			f, err := os.Open(file)
+			f, err := os.Open(path)
 			if err != nil {
 				return err
 			}

@@ -44,47 +44,44 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUMan
 }
 
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
-	// Create a temporary directory for the checkpoint
-	tempDir, err := os.MkdirTemp("", fmt.Sprintf("checkpoint-%s-", request.StubId))
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp directory: %v", err)
-	}
+	checkpointDir := fmt.Sprintf("/tmp/checkpoint-%s", request.StubId) // Create a temporary directory for the checkpoint
+	os.RemoveAll(checkpointDir)
+	os.MkdirAll(checkpointDir, 0700)
 
 	// Create checkpoint in temp directory
-	err = c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
+	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
 		LeaveRunning: true,
 		SkipInFlight: true,
 		AllowOpenTCP: true,
 		LinkRemap:    true,
-		ImagePath:    tempDir,
+		ImagePath:    checkpointDir,
 	})
 	if err != nil {
-		os.RemoveAll(tempDir)
+		os.RemoveAll(checkpointDir)
 		return "", err
 	}
 
-	// Tarball path
-	tarballPath := fmt.Sprintf("%s/%s.tar.gz", c.cpStorageConfig.MountPath, request.StubId)
-
-	// Create tarball and store it asynchronously
+	// Create archive and store it asynchronously
+	archivePath := fmt.Sprintf("%s/%s.tar.gz", c.cpStorageConfig.MountPath, request.StubId)
 	go func() {
-		if err := createTarGz(tempDir, tarballPath); err != nil {
+		if err := createTarGz(checkpointDir, archivePath); err != nil {
 			log.Error().Err(err).
-				Str("temp_dir", tempDir).
-				Str("tarball_path", tarballPath).
+				Str("temp_dir", checkpointDir).
+				Str("archive_path", archivePath).
 				Str("stub_id", request.StubId).
 				Msg("failed to create checkpoint tarball")
 		} else {
 			log.Info().
-				Str("temp_dir", tempDir).
-				Str("tarball_path", tarballPath).
+				Str("temp_dir", checkpointDir).
+				Str("archive_path", archivePath).
 				Str("stub_id", request.StubId).
 				Msg("checkpoint tarballed and stored")
 		}
-		os.RemoveAll(tempDir)
+
+		os.RemoveAll(checkpointDir)
 	}()
 
-	return tarballPath, nil
+	return archivePath, nil
 }
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
