@@ -40,11 +40,9 @@ func copyDirectory(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
-	input, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, input, 0644)
+	cmd := exec.Command("cp", src, dst)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func createTar(srcDir, destTar string) error {
