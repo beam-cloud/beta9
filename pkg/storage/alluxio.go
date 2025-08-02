@@ -98,7 +98,8 @@ func (s *AlluxioStorage) Unmount(localPath string) error {
 }
 
 func (s *AlluxioStorage) stripLocalPath(localPath string) string {
-	return filepath.Base(localPath)
+	base := filepath.Base(localPath)
+	return filepath.Join("/", base)
 }
 
 func (s *AlluxioStorage) Format(fsName string) error {

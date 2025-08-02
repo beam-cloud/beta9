@@ -338,7 +338,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
-		"ax-4", // wpc.config.Worker.ImageTag,
+		"ax-5", // wpc.config.Worker.ImageTag,
 	)
 
 	resources := corev1.ResourceRequirements{}
