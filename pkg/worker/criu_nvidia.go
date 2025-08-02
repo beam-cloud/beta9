@@ -62,8 +62,9 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 	}
 
 	// Create archive and store it asynchronously
+	archivePath := fmt.Sprintf("%s/%s.tar", c.cpStorageConfig.MountPath, request.StubId)
 	go func() {
-		localArchive := fmt.Sprintf("/tmp/%s.tar.gz", request.StubId)
+		localArchive := fmt.Sprintf("/tmp/%s.tar", request.StubId)
 		err := createTar(checkpointDir, localArchive)
 		if err != nil {
 			log.Error().Err(err).
@@ -77,7 +78,6 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 		}
 
 		// Copy to distributed filesystem
-		archivePath := fmt.Sprintf("%s/%s.tar.gz", c.cpStorageConfig.MountPath, request.StubId)
 		err = copyFile(localArchive, archivePath)
 		if err != nil {
 			log.Error().Err(err).
@@ -99,12 +99,12 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 		onComplete(request, err)
 	}()
 
-	return "", nil // Return empty string as the archive is created asynchronously
+	return archivePath, nil
 }
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
-	tarballPath := fmt.Sprintf("%s/%s.tar.gz", c.cpStorageConfig.MountPath, opts.request.StubId)
+	tarballPath := fmt.Sprintf("%s/%s.tar", c.cpStorageConfig.MountPath, opts.request.StubId)
 
 	// Create a temporary directory for the restore operation
 	tempDir, err := os.MkdirTemp("", fmt.Sprintf("restore-%s-", opts.request.StubId))
