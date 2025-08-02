@@ -67,26 +67,26 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 	// Final destination path
 	finalPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, request.StubId)
 
-	// Move checkpoint to final location asynchronously
+	// Copy checkpoint to final location asynchronously
 	go func() {
-		if err := os.Rename(tempDir, finalPath); err != nil {
+		if err := copyDir(tempDir, finalPath); err != nil {
 			log.Error().Err(err).
 				Str("temp_dir", tempDir).
 				Str("final_path", finalPath).
 				Str("stub_id", request.StubId).
-				Msg("failed to move checkpoint from temp directory to final location")
-			// Clean up temp directory if move fails
-			os.RemoveAll(tempDir)
+				Msg("failed to copy checkpoint from temp directory to final location")
 		} else {
 			log.Info().
 				Str("temp_dir", tempDir).
 				Str("final_path", finalPath).
 				Str("stub_id", request.StubId).
-				Msg("checkpoint moved from temp directory to final location")
+				Msg("checkpoint copied from temp directory to final location")
 		}
+		// Clean up temp directory after copy
+		os.RemoveAll(tempDir)
 	}()
 
-	// Return the final path immediately (the move is happening asynchronously)
+	// Return the final path immediately (the copy is happening asynchronously)
 	return finalPath, nil
 }
 
