@@ -44,37 +44,73 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUMan
 }
 
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
-	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, request.StubId)
-	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
+	// Create a temporary directory for the checkpoint
+	tempDir, err := os.MkdirTemp("", fmt.Sprintf("checkpoint-%s-", request.StubId))
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp directory: %v", err)
+	}
+
+	// Create checkpoint in temp directory
+	err = c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
 		LeaveRunning: true,
 		SkipInFlight: true,
 		AllowOpenTCP: true,
 		LinkRemap:    true,
-		ImagePath:    checkpointPath,
+		ImagePath:    tempDir,
 	})
 	if err != nil {
+		// Clean up temp directory on error
+		os.RemoveAll(tempDir)
 		return "", err
 	}
 
-	return checkpointPath, nil
+	// Final destination path
+	finalPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, request.StubId)
+
+	// Move checkpoint to final location asynchronously
+	go func() {
+		if err := os.Rename(tempDir, finalPath); err != nil {
+			log.Error().Err(err).
+				Str("temp_dir", tempDir).
+				Str("final_path", finalPath).
+				Str("stub_id", request.StubId).
+				Msg("failed to move checkpoint from temp directory to final location")
+			// Clean up temp directory if move fails
+			os.RemoveAll(tempDir)
+		} else {
+			log.Info().
+				Str("temp_dir", tempDir).
+				Str("final_path", finalPath).
+				Str("stub_id", request.StubId).
+				Msg("checkpoint moved from temp directory to final location")
+		}
+	}()
+
+	// Return the final path immediately (the move is happening asynchronously)
+	return finalPath, nil
 }
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.request.StubId)
-	// workDir := filepath.Join("/tmp", imagePath)
-	// err := c.setupRestoreWorkDir(workDir)
-	// if err != nil {
-	// 	return -1, err
-	// }
+
+	// Create a temporary directory for the restore operation
+	tempDir, err := os.MkdirTemp("", fmt.Sprintf("restore-%s-", opts.request.StubId))
+	if err != nil {
+		return -1, fmt.Errorf("failed to create temp directory for restore: %v", err)
+	}
+	defer os.RemoveAll(tempDir) // Clean up temp directory when done
+
+	// Copy checkpoint from final location to temp directory
+	err = copyDir(imagePath, tempDir)
+	if err != nil {
+		return -1, fmt.Errorf("failed to copy checkpoint to temp directory: %v", err)
+	}
 
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
 			AllowOpenTCP: true,
-			// Logs, irmap cache, sockets for lazy server and other go to working dir
-			// must be overriden bc blobcache is read-only
-			// WorkDir:      workDir,
-			ImagePath:    imagePath,
+			ImagePath:    tempDir,
 			OutputWriter: opts.runcOpts.OutputWriter,
 		},
 		Started: opts.runcOpts.Started,
@@ -84,6 +120,36 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	}
 
 	return exitCode, nil
+}
+
+// copyDir recursively copies a directory from src to dst
+func copyDir(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			// Create destination directory
+			if err := os.MkdirAll(dstPath, 0755); err != nil {
+				return err
+			}
+			// Recursively copy subdirectory
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			// Copy file
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (c *NvidiaCRIUManager) Available() bool {
@@ -97,15 +163,6 @@ func (c *NvidiaCRIUManager) Run(ctx context.Context, request *types.ContainerReq
 	}
 
 	return exitCode, nil
-}
-
-func (c *NvidiaCRIUManager) checkpointCached(cachedCheckpointPath string, containerId string) bool {
-	// If the checkpoint is already cached, we can use that path without the extra grpc call
-	if _, err := os.Stat(cachedCheckpointPath); err != nil {
-		log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
-		return false
-	}
-	return true
 }
 
 // getNvidiaDriverVersion returns the NVIDIA driver version as an integer
