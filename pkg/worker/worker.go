@@ -38,6 +38,7 @@ type Worker struct {
 	workerId                string
 	workerToken             string
 	poolName                string
+	poolConfig              types.WorkerPoolConfig
 	cpuLimit                int64
 	memoryLimit             int64
 	gpuType                 string
@@ -168,12 +169,17 @@ func NewWorker() (*Worker, error) {
 		}
 	}
 
+	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
+	if !poolFound {
+		return nil, errors.New("invalid worker pool name")
+	}
+
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
 		return nil, err
 	}
 
-	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, containerInstances, cacheClient)
+	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, poolConfig, containerInstances, cacheClient)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +193,7 @@ func NewWorker() (*Worker, error) {
 	var criuManager CRIUManager = nil
 	var checkpointStorage storage.Storage = nil
 	if pool, ok := config.Worker.Pools[workerPoolName]; ok && pool.CRIUEnabled {
-		criuManager, err = InitializeCRIUManager(context.Background(), config.Worker.CRIU, fileCacheManager)
+		criuManager, err = InitializeCRIUManager(ctx, config.Worker.CRIU, config.Storage)
 		if err != nil {
 			log.Warn().Str("worker_id", workerId).Msgf("C/R unavailable, failed to create CRIU manager: %v", err)
 		}
@@ -222,6 +228,7 @@ func NewWorker() (*Worker, error) {
 		workerId:                workerId,
 		workerToken:             workerToken,
 		poolName:                workerPoolName,
+		poolConfig:              poolConfig,
 		cancel:                  cancel,
 		config:                  config,
 		imageMountPath:          getImageMountPath(workerId),

@@ -3,6 +3,7 @@ package worker
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 )
@@ -39,11 +40,51 @@ func copyDirectory(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
-	input, err := os.ReadFile(src)
+	cmd := exec.Command("cp", src, dst)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func createTar(srcDir, destTar string) error {
+	cmd := exec.Command("tar", "-cf", destTar, "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func untarTar(srcTar, destDir string) error {
+	cmd := exec.Command("tar", "-xf", srcTar, "-C", destDir)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+// copyDir recursively copies a directory from src to dst
+func copyDir(src, dst string) error {
+	entries, err := os.ReadDir(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, input, 0644)
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			// Create destination directory
+			if err := os.MkdirAll(dstPath, 0755); err != nil {
+				return err
+			}
+			// Recursively copy subdirectory
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			// Copy file
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 type FileLock struct {
