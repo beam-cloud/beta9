@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -27,14 +26,12 @@ import (
 const runcRoot = "/run/runc"
 
 type CedanaCRIUManager struct {
-	client           *cedana.Client
-	fileCacheManager *FileCacheManager
+	client *cedana.Client
 }
 
 func InitializeCedanaCRIU(
 	ctx context.Context,
 	c config.Config,
-	fileCacheManager *FileCacheManager,
 ) (*CedanaCRIUManager, error) {
 	path, err := exec.LookPath("cedana")
 	if err != nil {
@@ -95,7 +92,7 @@ func InitializeCedanaCRIU(
 
 	log.Info().Msg("cedana client initialized")
 
-	return &CedanaCRIUManager{client: client, fileCacheManager: fileCacheManager}, nil
+	return &CedanaCRIUManager{client: client}, nil
 }
 
 func (c *CedanaCRIUManager) Available() bool {
@@ -177,7 +174,6 @@ func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 		checkpointPath: opts.state.RemoteKey,
 		jobId:          opts.state.ContainerId,
 		containerId:    opts.request.ContainerId,
-		// cacheFunc:      c.cacheCheckpoint,
 	}
 
 	bundle := strings.TrimRight(opts.configPath, filepath.Base(opts.configPath))
@@ -232,40 +228,4 @@ func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 
 	exitCode := <-exitCodeChan
 	return exitCode, nil
-}
-
-func (c *CedanaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) (string, error) {
-	cachedCheckpointPath := filepath.Join(baseFileCachePath, checkpointPath)
-
-	if c.fileCacheManager.CacheAvailable() {
-
-		// If the checkpoint is already cached, we can use that path without the extra grpc call
-		if _, err := os.Stat(cachedCheckpointPath); err == nil {
-			return cachedCheckpointPath, nil
-		}
-
-		log.Info().Str("container_id", containerId).Msgf("caching checkpoint nearby: %s", checkpointPath)
-		client := c.fileCacheManager.GetClient()
-
-		// Remove the leading "/" from the checkpoint path
-		sourcePath := checkpointPath[1:]
-		_, err := client.StoreContentFromFUSE(struct {
-			Path string
-		}{
-			Path: sourcePath,
-		}, struct {
-			RoutingKey string
-			Lock       bool
-		}{
-			RoutingKey: sourcePath,
-			Lock:       true,
-		})
-		if err != nil {
-			return "", err
-		}
-
-		checkpointPath = cachedCheckpointPath
-	}
-
-	return checkpointPath, nil
 }
