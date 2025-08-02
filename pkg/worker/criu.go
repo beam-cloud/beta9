@@ -33,7 +33,7 @@ type RestoreOpts struct {
 type CRIUManager interface {
 	Available() bool
 	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error)
-	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
+	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest, onComplete func(request *types.ContainerRequest, err error)) (string, error)
 	RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error)
 }
 
@@ -151,6 +151,27 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 	return exitCode, request.ContainerId, err
 }
 
+func (s *Worker) onCheckpointComplete(request *types.ContainerRequest, err error) {
+	if err != nil {
+		updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusCheckpointFailed)
+		if updateStateErr != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+		}
+
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
+		return
+	}
+
+	// Create a file accessible to the container to indicate that the checkpoint has been captured
+	os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
+	log.Info().Str("container_id", request.ContainerId).Msg("checkpoint created successfully")
+
+	updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusAvailable)
+	if updateStateErr != nil {
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+	}
+}
+
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, error) {
@@ -195,23 +216,9 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		}
 
 		// Proceed to create the checkpoint
-		_, err := s.criuManager.CreateCheckpoint(ctx, request)
+		_, err := s.criuManager.CreateCheckpoint(ctx, request, s.onCheckpointComplete)
 		if err != nil {
-			updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusCheckpointFailed)
-			if updateStateErr != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
-			}
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
-			return
-		}
-
-		// Create a file accessible to the container to indicate that the checkpoint has been captured
-		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
-		log.Info().Str("container_id", request.ContainerId).Msg("checkpoint created successfully")
-
-		updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusAvailable)
-		if updateStateErr != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 		}
 	}()
 
