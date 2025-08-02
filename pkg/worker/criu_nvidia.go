@@ -62,18 +62,18 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.request.StubId)
-	workDir := filepath.Join("/tmp", imagePath)
-	err := c.setupRestoreWorkDir(workDir)
-	if err != nil {
-		return -1, err
-	}
+	// workDir := filepath.Join("/tmp", imagePath)
+	// err := c.setupRestoreWorkDir(workDir)
+	// if err != nil {
+	// 	return -1, err
+	// }
 
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
 			AllowOpenTCP: true,
 			// Logs, irmap cache, sockets for lazy server and other go to working dir
 			// must be overriden bc blobcache is read-only
-			WorkDir:      workDir,
+			// WorkDir:      workDir,
 			ImagePath:    imagePath,
 			OutputWriter: opts.runcOpts.OutputWriter,
 		},
