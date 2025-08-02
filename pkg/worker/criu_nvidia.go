@@ -59,52 +59,49 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 		ImagePath:    tempDir,
 	})
 	if err != nil {
-		// Clean up temp directory on error
 		os.RemoveAll(tempDir)
 		return "", err
 	}
 
-	// Final destination path
-	finalPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, request.StubId)
+	// Tarball path
+	tarballPath := fmt.Sprintf("%s/%s.tar.gz", c.cpStorageConfig.MountPath, request.StubId)
 
-	// Copy checkpoint to final location asynchronously
+	// Create tarball and store it asynchronously
 	go func() {
-		if err := copyDir(tempDir, finalPath); err != nil {
+		if err := createTarGz(tempDir, tarballPath); err != nil {
 			log.Error().Err(err).
 				Str("temp_dir", tempDir).
-				Str("final_path", finalPath).
+				Str("tarball_path", tarballPath).
 				Str("stub_id", request.StubId).
-				Msg("failed to copy checkpoint from temp directory to final location")
+				Msg("failed to create checkpoint tarball")
 		} else {
 			log.Info().
 				Str("temp_dir", tempDir).
-				Str("final_path", finalPath).
+				Str("tarball_path", tarballPath).
 				Str("stub_id", request.StubId).
-				Msg("checkpoint copied from temp directory to final location")
+				Msg("checkpoint tarballed and stored")
 		}
-		// Clean up temp directory after copy
 		os.RemoveAll(tempDir)
 	}()
 
-	// Return the final path immediately (the copy is happening asynchronously)
-	return finalPath, nil
+	return tarballPath, nil
 }
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
-	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.request.StubId)
+	tarballPath := fmt.Sprintf("%s/%s.tar.gz", c.cpStorageConfig.MountPath, opts.request.StubId)
 
 	// Create a temporary directory for the restore operation
 	tempDir, err := os.MkdirTemp("", fmt.Sprintf("restore-%s-", opts.request.StubId))
 	if err != nil {
 		return -1, fmt.Errorf("failed to create temp directory for restore: %v", err)
 	}
-	defer os.RemoveAll(tempDir) // Clean up temp directory when done
+	defer os.RemoveAll(tempDir)
 
-	// Copy checkpoint from final location to temp directory
-	err = copyDir(imagePath, tempDir)
+	// Untar checkpoint from tarball to temp directory
+	err = untarGz(tarballPath, tempDir)
 	if err != nil {
-		return -1, fmt.Errorf("failed to copy checkpoint to temp directory: %v", err)
+		return -1, fmt.Errorf("failed to untar checkpoint: %v", err)
 	}
 
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
@@ -120,36 +117,6 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	}
 
 	return exitCode, nil
-}
-
-// copyDir recursively copies a directory from src to dst
-func copyDir(src, dst string) error {
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			// Create destination directory
-			if err := os.MkdirAll(dstPath, 0755); err != nil {
-				return err
-			}
-			// Recursively copy subdirectory
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			// Copy file
-			if err := copyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func (c *NvidiaCRIUManager) Available() bool {
