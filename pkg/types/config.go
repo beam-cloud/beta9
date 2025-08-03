@@ -372,6 +372,7 @@ type WorkerPoolConfig struct {
 	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
 	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
+	CheckpointPath       string                            `key:"checkpointPath" json:"checkpoint_path"`
 }
 
 type WorkerPoolJobSpecConfig struct {
