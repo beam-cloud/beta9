@@ -57,36 +57,6 @@ func untarTar(srcTar, destDir string) error {
 	return cmd.Run()
 }
 
-// copyDir recursively copies a directory from src to dst
-func copyDir(src, dst string) error {
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			// Create destination directory
-			if err := os.MkdirAll(dstPath, 0755); err != nil {
-				return err
-			}
-			// Recursively copy subdirectory
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			// Copy file
-			if err := copyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 type FileLock struct {
 	file *os.File
 	path string
