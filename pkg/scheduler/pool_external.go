@@ -338,7 +338,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
-		wpc.config.Worker.ImageTag,
+		"ax-17", // wpc.config.Worker.ImageTag,
 	)
 
 	resources := corev1.ResourceRequirements{}
@@ -508,6 +508,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Name:  "PREEMPTABLE",
 			Value: strconv.FormatBool(wpc.workerPoolConfig.Preemptable),
 		},
+		{
+			Name:  "ALLUXIO_COORDINATOR_HOSTNAME",
+			Value: wpc.workerPoolConfig.AlluxioCoordinatorHostname,
+		},
 	}
 
 	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)
@@ -534,6 +538,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 	hostPathType := corev1.HostPathDirectoryOrCreate
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPoolConfig.PoolSizing.SharedMemoryLimitPct, workerMemory)
 	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPoolConfig.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
+
+	storagePath := wpc.workerPoolConfig.StoragePath
+	if storagePath == "" {
+		storagePath = defaultStoragePath
+	}
 
 	return []corev1.Volume{
 		{
@@ -571,6 +580,15 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 				},
 			},
 		},
+		{
+			Name: storageVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: storagePath,
+					Type: &hostPathType,
+				},
+			},
+		},
 	}
 }
 
@@ -584,6 +602,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		{
 			Name:      imagesVolumeName,
 			MountPath: "/images",
+			ReadOnly:  false,
+		},
+		{
+			Name:      storageVolumeName,
+			MountPath: "/storage",
 			ReadOnly:  false,
 		},
 		{

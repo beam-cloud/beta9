@@ -196,6 +196,23 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 
+	imageId, err := getImageID(buildOptions)
+	if err != nil {
+		return errors.New("build failed")
+	}
+
+	_, err = is.backendRepo.CreateImage(context.Background(), imageId, clipVersion)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create image record")
+
+		// TODO: if this is an integrity error, then just return success, then flush RCLIPs across all nodes
+		// This should prevent overwrites of existing images
+		// It is unclear what is causing the existence check to fail, but we know that in these cases the image DOES exist in our system
+		stream.Send(&pb.BuildImageResponse{Msg: "", Done: true, Success: true, ImageId: imageId, PythonVersion: buildOptions.PythonVersion})
+
+		return errors.New("failed to create image record")
+	}
+
 	go is.builder.Build(ctx, buildOptions, outputChan)
 
 	// This is a switch to stop sending build log messages once the archiving stage is reached
@@ -224,12 +241,6 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
 	if !lastMessage.Success {
 		return errors.New("build failed")
-	}
-
-	_, err = is.backendRepo.CreateImage(context.Background(), lastMessage.ImageId, clipVersion)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to create image record")
-		return errors.New("failed to create image record")
 	}
 
 	log.Info().Msg("build completed successfully")
