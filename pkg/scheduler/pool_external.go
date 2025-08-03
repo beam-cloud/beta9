@@ -535,7 +535,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPoolConfig.PoolSizing.SharedMemoryLimitPct, workerMemory)
 	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPoolConfig.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
 
-	return []corev1.Volume{
+	volumes := []corev1.Volume{
 		{
 			Name: logVolumeName,
 			VolumeSource: corev1.VolumeSource{
@@ -572,10 +572,24 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 			},
 		},
 	}
+
+	if wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
+		volumes = append(volumes, corev1.Volume{
+			Name: checkpointVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: defaultCheckpointPath,
+					Type: &hostPathType,
+				},
+			},
+		})
+	}
+
+	return volumes
 }
 
 func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.VolumeMount {
-	return []corev1.VolumeMount{
+	volumeMounts := []corev1.VolumeMount{
 		{
 			Name:      tmpVolumeName,
 			MountPath: "/tmp",
@@ -596,6 +610,21 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 			Name:      "dshm",
 		},
 	}
+
+	if wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
+		path := defaultCheckpointPath
+		if wpc.workerPoolConfig.CheckpointPath != "" {
+			path = wpc.workerPoolConfig.CheckpointPath
+		}
+
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      checkpointVolumeName,
+			MountPath: path,
+			ReadOnly:  false,
+		})
+	}
+
+	return volumeMounts
 }
 
 func (wpc *ExternalWorkerPoolController) getProxiedClient(hostname, token string) (*kubernetes.Clientset, error) {

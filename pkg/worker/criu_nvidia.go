@@ -3,35 +3,29 @@ package worker
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
-	"github.com/hashicorp/go-multierror"
-	"github.com/panjf2000/ants/v2"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	CacheWorkerPoolSize    = 20
 	minNvidiaDriverVersion = 570
 )
 
 type NvidiaCRIUManager struct {
-	runcHandle       runc.Runc
-	cpStorageConfig  types.CheckpointStorageConfig
-	fileCacheManager *FileCacheManager
-	gpuCnt           int
-	available        bool
+	runcHandle      runc.Runc
+	cpStorageConfig types.CheckpointStorageConfig
+	gpuCnt          int
+	available       bool
 }
 
-func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig, fileCacheManager *FileCacheManager) (CRIUManager, error) {
+func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUManager, error) {
 	gpuCnt := 0
 	var err error
 	gpuCntEnv := os.Getenv(gpuCntEnvKey)
@@ -45,7 +39,7 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig, fileCach
 	available := crCompatible(gpuCnt)
 
 	runcHandle := runc.Runc{}
-	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, fileCacheManager: fileCacheManager, gpuCnt: gpuCnt, available: available}, nil
+	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, gpuCnt: gpuCnt, available: available}, nil
 }
 
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
@@ -71,16 +65,6 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	err := c.setupRestoreWorkDir(workDir)
 	if err != nil {
 		return -1, err
-	}
-
-	if c.fileCacheManager.CacheAvailable() {
-		cachedCheckpointPath := filepath.Join(baseFileCachePath, imagePath)
-		checkpointCached := c.checkpointCached(cachedCheckpointPath, opts.request.ContainerId)
-		if checkpointCached {
-			imagePath = cachedCheckpointPath
-		} else {
-			go c.cacheDir(opts.request.ContainerId, imagePath)
-		}
 	}
 
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
@@ -112,99 +96,6 @@ func (c *NvidiaCRIUManager) Run(ctx context.Context, request *types.ContainerReq
 	}
 
 	return exitCode, nil
-}
-
-// Caches a checkpoint nearby if the file cache is available
-func (c *NvidiaCRIUManager) CacheCheckpoint(containerId, checkpointPath string) (string, error) {
-	if !c.fileCacheManager.CacheAvailable() {
-		log.Warn().Str("container_id", containerId).Msg("file cache unavailable, skipping checkpoint caching")
-		return checkpointPath, nil
-	}
-
-	cachedCheckpointPath := filepath.Join(baseFileCachePath, checkpointPath)
-	checkpointCached := c.checkpointCached(cachedCheckpointPath, containerId)
-	if checkpointCached {
-		return cachedCheckpointPath, nil
-	}
-
-	err := c.cacheDir(containerId, checkpointPath)
-	if err != nil {
-		return "", err
-	}
-	return cachedCheckpointPath, nil
-}
-
-func (c *NvidiaCRIUManager) checkpointCached(cachedCheckpointPath string, containerId string) bool {
-	// If the checkpoint is already cached, we can use that path without the extra grpc call
-	if _, err := os.Stat(cachedCheckpointPath); err != nil {
-		log.Info().Str("container_id", containerId).Msgf("checkpoint not cached nearby: %s", cachedCheckpointPath)
-		return false
-	}
-	return true
-}
-
-func (c *NvidiaCRIUManager) cacheDir(containerId, checkpointPath string) error {
-	log.Info().Str("container_id", containerId).Msgf("caching checkpoint nearby: %s", checkpointPath)
-	client := c.fileCacheManager.GetClient()
-	wg := sync.WaitGroup{}
-	p, err := ants.NewPool(CacheWorkerPoolSize)
-	if err != nil {
-		return err
-	}
-	defer p.Release()
-
-	var storeContentErrMu sync.Mutex
-	var storeContentErr *multierror.Error
-
-	storeContentErr = multierror.Append(storeContentErr, filepath.WalkDir(checkpointPath, func(path string, info fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if info.IsDir() {
-			return nil
-		}
-
-		wg.Add(1)
-		poolSubmitErr := p.Submit(func() {
-			sourcePath := path[1:]
-
-			defer wg.Done()
-			_, err := client.StoreContentFromFUSE(struct {
-				Path string
-			}{
-				Path: sourcePath,
-			}, struct {
-				RoutingKey string
-				Lock       bool
-			}{
-				RoutingKey: sourcePath,
-				Lock:       true,
-			})
-			if err != nil {
-				storeContentErrMu.Lock()
-				storeContentErr = multierror.Append(storeContentErr, err)
-				storeContentErrMu.Unlock()
-				log.Error().Err(err).Str("container_id", containerId).Msgf("error caching checkpoint file: %s", path)
-			}
-		})
-
-		if poolSubmitErr != nil {
-			wg.Done()
-			return poolSubmitErr
-		}
-
-		return nil
-	}))
-
-	wg.Wait() // Wait for all tasks to finish
-	err = storeContentErr.ErrorOrNil()
-	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("error caching checkpoint: %v", err)
-	} else {
-		log.Info().Str("container_id", containerId).Msgf("cached checkpoint: %s", checkpointPath)
-	}
-	return err
 }
 
 // getNvidiaDriverVersion returns the NVIDIA driver version as an integer

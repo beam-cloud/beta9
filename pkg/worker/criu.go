@@ -3,11 +3,11 @@ package worker
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	storage "github.com/beam-cloud/beta9/pkg/storage"
@@ -36,20 +36,19 @@ type CRIUManager interface {
 	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error)
 	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
 	RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error)
-	CacheCheckpoint(containerId, checkpointPath string) (string, error)
 }
 
 // InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers
 // -- depending on the mode, it will use either cedana or nvidia cuda checkpoint under the hood
-func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig, fileCacheManager *FileCacheManager) (CRIUManager, error) {
+func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUManager, error) {
 	var criuManager CRIUManager = nil
 	var err error = nil
 
 	switch config.Mode {
 	case types.CRIUConfigModeCedana:
-		criuManager, err = InitializeCedanaCRIU(ctx, config.Cedana, fileCacheManager)
+		criuManager, err = InitializeCedanaCRIU(ctx, config.Cedana)
 	case types.CRIUConfigModeNvidia:
-		criuManager, err = InitializeNvidiaCRIU(ctx, config, fileCacheManager)
+		criuManager, err = InitializeNvidiaCRIU(ctx, config)
 	default:
 		return nil, fmt.Errorf("invalid CRIU mode: %s", config.Mode)
 	}
@@ -140,7 +139,6 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, error) {
-	wg := sync.WaitGroup{}
 	bundlePath := filepath.Dir(configPath)
 
 	go func() {
@@ -192,18 +190,14 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 			return
 		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := s.criuManager.CacheCheckpoint(request.ContainerId, checkpointPath)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to cache checkpoint: %v", err)
-			}
-		}()
+		err = s.createSyncFile(request, checkpointPath)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to create sync file: %v", err)
+		}
 
 		// Create a file accessible to the container to indicate that the checkpoint has been captured
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
-		log.Info().Str("container_id", request.ContainerId).Msg("checkpoint created successfully")
+		log.Info().Str("container_id", request.ContainerId).Str("checkpoint_path", checkpointPath).Msg("checkpoint created successfully")
 
 		updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusAvailable)
 		if updateStateErr != nil {
@@ -216,8 +210,30 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		Started:      startedChan,
 	})
 
-	wg.Wait()
 	return exitCode, err
+}
+
+type syncFile struct {
+	Path string `json:"path"`
+}
+
+const syncFileExtension = "crsync"
+
+func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointPath string) error {
+	syncFile := syncFile{
+		Path: filepath.Base(checkpointPath),
+	}
+	syncFileBytes, err := json.Marshal(syncFile)
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to marshal sync file: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", request.StubId, syncFileExtension)), syncFileBytes, 0644)
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to write sync file: %v", err)
+	}
+
+	return nil
 }
 
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
