@@ -97,6 +97,12 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 	}
 
 	if state.Status == types.CheckpointStatusAvailable {
+		err := s.waitForSyncFile(request)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to wait for sync file: %v", err)
+			return -1, "", err
+		}
+
 		log.Info().Str("container_id", request.ContainerId).Msg("attempting to restore checkpoint")
 		f, err := os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 		if err != nil {
@@ -217,7 +223,11 @@ type syncFile struct {
 	Path string `json:"path"`
 }
 
-const syncFileExtension = "crsync"
+const (
+	syncFileExtension    = "crsync"
+	syncFileTimeout      = 600 * time.Second
+	syncFilePollInterval = 1 * time.Second
+)
 
 func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointPath string) error {
 	syncFile := syncFile{
@@ -234,6 +244,28 @@ func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointPath 
 	}
 
 	return nil
+}
+
+func (s *Worker) waitForSyncFile(request *types.ContainerRequest) error {
+	timeout := syncFileTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	syncFilePath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", request.StubId, syncFileExtension))
+	for {
+		_, err := os.Stat(syncFilePath)
+		if err == nil {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for sync file")
+		default:
+		}
+
+		time.Sleep(syncFilePollInterval)
+	}
 }
 
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container

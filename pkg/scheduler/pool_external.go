@@ -338,7 +338,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 	workerImage := fmt.Sprintf("%s/%s:%s",
 		wpc.config.Worker.ImageRegistry,
 		wpc.config.Worker.ImageName,
-		wpc.config.Worker.ImageTag,
+		"crsync-1", //wpc.config.Worker.ImageTag,
 	)
 
 	resources := corev1.ResourceRequirements{}
@@ -574,11 +574,16 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 	}
 
 	if wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
+		path := defaultCheckpointPath
+		if wpc.workerPoolConfig.CheckpointPath != "" {
+			path = wpc.workerPoolConfig.CheckpointPath
+		}
+
 		volumes = append(volumes, corev1.Volume{
 			Name: checkpointVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: defaultCheckpointPath,
+					Path: path,
 					Type: &hostPathType,
 				},
 			},
@@ -612,14 +617,9 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 	}
 
 	if wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
-		path := defaultCheckpointPath
-		if wpc.workerPoolConfig.CheckpointPath != "" {
-			path = wpc.workerPoolConfig.CheckpointPath
-		}
-
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      checkpointVolumeName,
-			MountPath: path,
+			MountPath: defaultCheckpointPath,
 			ReadOnly:  false,
 		})
 	}
