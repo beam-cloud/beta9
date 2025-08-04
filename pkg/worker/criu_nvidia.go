@@ -76,6 +76,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 			WorkDir:      workDir,
 			ImagePath:    imagePath,
 			OutputWriter: opts.runcOpts.OutputWriter,
+			Cgroups:      runc.Ignore,
 		},
 		Started: opts.runcOpts.Started,
 	})

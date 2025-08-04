@@ -18,7 +18,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.0
 	github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563
 	github.com/beam-cloud/clip v0.0.0-20250424185136-5f40b560b510
-	github.com/beam-cloud/go-runc v0.0.0-20250705192003-074a7a5f2124
+	github.com/beam-cloud/go-runc v0.0.0-20250804193923-7e2e1bff6915
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
 	github.com/cedana/cedana v0.9.240
 	github.com/cenkalti/backoff v2.2.1+incompatible
