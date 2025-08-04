@@ -45,9 +45,9 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUMan
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
 	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, request.StubId)
 	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
+		AllowOpenTCP: true,
 		LeaveRunning: true,
 		SkipInFlight: true,
-		AllowOpenTCP: true,
 		LinkRemap:    true,
 		ImagePath:    checkpointPath,
 	})

@@ -352,6 +352,26 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
+	// Always add IPv6 loopback address to enable IPv6 wildcard binds
+	ipv6Lo := &netlink.Addr{
+		IPNet: &net.IPNet{
+			IP:   net.ParseIP("::1"),
+			Mask: net.CIDRMask(128, 128),
+		},
+	}
+	if err := netlink.AddrAdd(lo, ipv6Lo); err != nil && !errors.Is(err, unix.EEXIST) {
+		return err
+	}
+
+	ipv4Lo := &netlink.Addr{
+		IPNet: &net.IPNet{
+			IP:   net.ParseIP("127.0.0.1"),
+			Mask: net.CIDRMask(8, 32),
+		},
+	}
+	if err := netlink.AddrAdd(lo, ipv4Lo); err != nil && !errors.Is(err, unix.EEXIST) {
+		return err
+	}
 	// Set up the veth interface
 	if err := netlink.LinkSetUp(containerVeth); err != nil {
 		return err
