@@ -352,6 +352,18 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 
+	// Force-enable IPv6 in the namespace (ensures AF_INET6 is usable for CRIU restore binds)
+	sysctlDisableIPv6 := "/proc/sys/net/ipv6/conf/all/disable_ipv6"
+	if err := os.WriteFile(sysctlDisableIPv6, []byte("0\n"), 0644); err != nil {
+		return err
+	}
+
+	// As backup, allow binds to non-local addresses
+	sysctlNonlocalBind := "/proc/sys/net/ipv6/ip_nonlocal_bind"
+	if err := os.WriteFile(sysctlNonlocalBind, []byte("1\n"), 0644); err != nil {
+		return err
+	}
+
 	// Always add IPv6 loopback address to enable IPv6 wildcard binds
 	ipv6Lo := &netlink.Addr{
 		IPNet: &net.IPNet{
