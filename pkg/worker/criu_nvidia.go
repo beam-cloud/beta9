@@ -50,7 +50,7 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 		SkipInFlight: true,
 		LinkRemap:    true,
 		ImagePath:    checkpointPath,
-		Cgroups:      runc.None,
+		Cgroups:      runc.Ignore,
 	})
 	if err != nil {
 		return "", err
@@ -77,7 +77,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 			WorkDir:      workDir,
 			ImagePath:    imagePath,
 			OutputWriter: opts.runcOpts.OutputWriter,
-			Cgroups:      runc.None,
+			Cgroups:      runc.Ignore,
 		},
 		Started: opts.runcOpts.Started,
 	})

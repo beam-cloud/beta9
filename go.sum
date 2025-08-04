@@ -136,12 +136,8 @@ github.com/beam-cloud/geesefs v0.0.0-20250606164905-2f3593d03f4f h1:0SRb1V1OO9Jg
 github.com/beam-cloud/geesefs v0.0.0-20250606164905-2f3593d03f4f/go.mod h1:utihEuMyzBOeZ6oU2ozzZkJmyzbYBuYrxsLUo1DfZXs=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f h1:XzHOu+erxeBO6D3fKVbd5DAlipl+PYZ3u+Ywb8m7Ovk=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f/go.mod h1:YT41ScwaZw9hYfM0WbYZ64sQLNhPxWZFOXJOPug7O5M=
-github.com/beam-cloud/go-runc v0.0.0-20250705192003-074a7a5f2124 h1:mlJ80fXIvEEYVAWV8YY6QlzqXYJyPn/woT9HQahg7Rg=
-github.com/beam-cloud/go-runc v0.0.0-20250705192003-074a7a5f2124/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
-github.com/beam-cloud/go-runc v0.0.0-20250804193923-7e2e1bff6915 h1:d0p2YVmfxspueb7foipHH2CeZdpzBLGgzhC2qGuiO9o=
-github.com/beam-cloud/go-runc v0.0.0-20250804193923-7e2e1bff6915/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
-github.com/beam-cloud/go-runc v0.0.0-20250804222058-26754319f4e0 h1:tqw5R8MTFRmRVX4DjGX32LfPjla+X6udahWtpRdpJyc=
-github.com/beam-cloud/go-runc v0.0.0-20250804222058-26754319f4e0/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
+github.com/beam-cloud/go-runc v0.0.0-20250804233952-faffa99498b8 h1:iIcq2g9Q/LHpXNF+Ssoy21edO3X+1zbf1GZf99rnBEI=
+github.com/beam-cloud/go-runc v0.0.0-20250804233952-faffa99498b8/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324 h1:2BWf8G8CaZ8vN0rST9uu5BL8P/bDUBwXJYVLwWwaLVU=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324/go.mod h1:pBb6ZWEw7rhALuBZTGZxT3p+Sd5b8jsvP5EPEsM8T/Q=
 github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8 h1:lc3G6/sHW4e5/XPHO2w2Ni43fbu42nojS/uX45Ws6Ck=
@@ -384,7 +380,6 @@ github.com/grpc-ecosystem/grpc-gateway/v2 v2.24.0 h1:TmHmbvxPmaegwhDubVz0lICL0J5
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.24.0/go.mod h1:qztMSjm835F2bXf+5HKAPIS5qsmQDqZna/PgVt4rWtI=
 github.com/hanwen/go-fuse/v2 v2.5.1 h1:OQBE8zVemSocRxA4OaFJbjJ5hlpCmIWbGr7r0M4uoQQ=
 github.com/hanwen/go-fuse/v2 v2.5.1/go.mod h1:xKwi1cF7nXAOBCXujD5ie0ZKsxc8GGSA1rlMJc+8IJs=
-github.com/hashicorp/errwrap v1.0.0/go.mod h1:YH+1FKiLXxHSkmPseP+kNlulaMuP3n2brvKWEqk/Jc4=
 github.com/hashicorp/errwrap v1.1.0 h1:OxrOeh75EUXMY8TBjag2fzXGZ40LB6IKw45YeGUDY2I=
 github.com/hashicorp/errwrap v1.1.0/go.mod h1:YH+1FKiLXxHSkmPseP+kNlulaMuP3n2brvKWEqk/Jc4=
 github.com/hashicorp/go-multierror v1.1.1 h1:H5DkEtf6CXdFp0N0Em5UCwQpXMWke8IA0+lD48awMYo=
@@ -595,8 +590,6 @@ github.com/openmeterio/openmeter v1.0.0-beta.47 h1:tZR4QiKLiJMAhPUsA/FXrskYF65wQ
 github.com/openmeterio/openmeter v1.0.0-beta.47/go.mod h1:rGwmmEiRR4uS4xNkdhFMkZPH9OjSPlQikEYPG8CzP2g=
 github.com/oracle/oci-go-sdk v24.3.0+incompatible h1:x4mcfb4agelf1O4/1/auGlZ1lr97jXRSSN5MxTgG/zU=
 github.com/oracle/oci-go-sdk v24.3.0+incompatible/go.mod h1:VQb79nF8Z2cwLkLS35ukwStZIg5F66tcBccjip/j888=
-github.com/panjf2000/ants/v2 v2.11.1 h1:3FvycSRXomAF4mp9astbsibKh1Cnrk9w4c2nz99IZ50=
-github.com/panjf2000/ants/v2 v2.11.1/go.mod h1:8u92CYMUc6gyvTIw8Ru7Mt7+/ESnJahz5EVtqfrilek=
 github.com/pborman/getopt v0.0.0-20170112200414-7148bc3a4c30/go.mod h1:85jBQOZwpVEaDAr341tbn15RS4fCAsIst0qp7i8ex1o=
 github.com/pelletier/go-toml/v2 v2.2.2 h1:aYUidT7k73Pcl9nb2gScu7NSrKCSHIDE89b3+6Wq+LM=
 github.com/pelletier/go-toml/v2 v2.2.2/go.mod h1:1t835xjRzz80PqgE6HHgN2JOsmgYu/h4qDAS4n929Rs=
