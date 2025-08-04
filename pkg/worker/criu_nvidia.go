@@ -50,6 +50,7 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 		SkipInFlight: true,
 		LinkRemap:    true,
 		ImagePath:    checkpointPath,
+		Cgroups:      runc.Ignore,
 	})
 	if err != nil {
 		return "", err
