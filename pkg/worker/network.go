@@ -359,7 +359,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 			Mask: net.CIDRMask(128, 128),
 		},
 	}
-	if err := netlink.AddrAdd(lo, ipv6Lo); err != nil && !os.IsExist(err) { // Ignore if already exists
+	if err := netlink.AddrAdd(lo, ipv6Lo); err != nil && !errors.Is(err, unix.EEXIST) {
 		return err
 	}
 
@@ -369,7 +369,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 			Mask: net.CIDRMask(8, 32),
 		},
 	}
-	if err := netlink.AddrAdd(lo, ipv4Lo); err != nil && !os.IsExist(err) {
+	if err := netlink.AddrAdd(lo, ipv4Lo); err != nil && !errors.Is(err, unix.EEXIST) {
 		return err
 	}
 	// Set up the veth interface
