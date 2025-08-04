@@ -70,6 +70,8 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
 			AllowOpenTCP: true,
+			LinkRemap:    true,
+			SkipInFlight: true,
 			// Logs, irmap cache, sockets for lazy server and other go to working dir
 			// must be overriden bc blobcache is read-only
 			WorkDir:      workDir,
