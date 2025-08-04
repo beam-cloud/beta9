@@ -140,6 +140,8 @@ github.com/beam-cloud/go-runc v0.0.0-20250705192003-074a7a5f2124 h1:mlJ80fXIvEEY
 github.com/beam-cloud/go-runc v0.0.0-20250705192003-074a7a5f2124/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
 github.com/beam-cloud/go-runc v0.0.0-20250804193923-7e2e1bff6915 h1:d0p2YVmfxspueb7foipHH2CeZdpzBLGgzhC2qGuiO9o=
 github.com/beam-cloud/go-runc v0.0.0-20250804193923-7e2e1bff6915/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
+github.com/beam-cloud/go-runc v0.0.0-20250804222058-26754319f4e0 h1:tqw5R8MTFRmRVX4DjGX32LfPjla+X6udahWtpRdpJyc=
+github.com/beam-cloud/go-runc v0.0.0-20250804222058-26754319f4e0/go.mod h1:aw0zhDi28Hemve0raHcfU9suxZwkCpyNANOEwKZSSXo=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324 h1:2BWf8G8CaZ8vN0rST9uu5BL8P/bDUBwXJYVLwWwaLVU=
 github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324/go.mod h1:pBb6ZWEw7rhALuBZTGZxT3p+Sd5b8jsvP5EPEsM8T/Q=
 github.com/beam-cloud/rendezvous v0.0.0-20250415141250-2a0f81633db8 h1:lc3G6/sHW4e5/XPHO2w2Ni43fbu42nojS/uX45Ws6Ck=
