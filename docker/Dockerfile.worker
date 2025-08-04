@@ -40,7 +40,10 @@ RUN apt-get update && apt-get install -y \
 
 RUN <<EOT
 set -eux
-git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git /workspace/runc
+git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git /workspace/runc \
+  && cd /workspace/runc \
+  && git reset --hard 29bdf366e59697ca12cde1da05b828d579b1eb9a
+
 cd /workspace/runc
 make
 make install
