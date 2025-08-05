@@ -90,8 +90,6 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 	if createCheckpoint {
 		outputLogger.Info("Attempting to create container checkpoint...")
 
-		log.Info().Str("container_id", request.ContainerId).Msg("attempting to create checkpoint")
-
 		exitCode, err := s.createCheckpoint(ctx, request, outputWriter, outputLogger, startedChan, checkpointPIDChan, configPath)
 		if err != nil {
 			return -1, "", err
@@ -107,9 +105,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			return -1, "", err
 		}
 
-		log.Info().Str("container_id", request.ContainerId).Msg("attempting to restore checkpoint")
 		outputLogger.Info("Attempting to restore container checkpoint...")
-
 		f, err := os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 		if err != nil {
 			return -1, "", fmt.Errorf("failed to create checkpoint signal directory: %v", err)
@@ -133,7 +129,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			return exitCode, "", err
 		}
 
-		log.Info().Str("container_id", request.ContainerId).Msg("checkpoint found and restored")
+		outputLogger.Info("Checkpoint found and restored")
 		return exitCode, request.ContainerId, nil
 	}
 
@@ -183,9 +179,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 				// Check if the container is ready for checkpoint by verifying the existence of a signal file
 				readyFilePath := filepath.Join(checkpointSignalDir(instance.Id), checkpointSignalFileName)
 				if _, err := os.Stat(readyFilePath); err == nil {
-					log.Info().Str("container_id", instance.Id).Msg("container ready for checkpoint")
 					outputLogger.Info("Container ready for checkpoint")
-
 					break waitForReady
 				} else {
 					sampledLogger.Info().Str("container_id", instance.Id).Msg("container not ready for checkpoint")
@@ -200,7 +194,8 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 			if updateStateErr != nil {
 				log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 			}
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
+
+			outputLogger.Error("Failed to create checkpoint")
 			return
 		}
 
@@ -212,7 +207,6 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		// Create a file accessible to the container to indicate that the checkpoint has been captured
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 
-		log.Info().Str("container_id", request.ContainerId).Str("checkpoint_path", checkpointPath).Msg("checkpoint created successfully")
 		outputLogger.Info("Checkpoint created successfully")
 
 		updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusAvailable)
