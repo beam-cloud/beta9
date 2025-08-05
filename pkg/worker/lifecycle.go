@@ -635,7 +635,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
-	err = s.containerNetworkManager.Setup(containerId, spec)
+	err = s.containerNetworkManager.Setup(containerId, spec, request)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return

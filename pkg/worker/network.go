@@ -142,7 +142,7 @@ func detectIptablesMode() string {
 	return "legacy"
 }
 
-func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
+func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, request *types.ContainerRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -222,7 +222,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 	}
 	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
 
-	return m.configureContainerNetwork(containerId, containerVeth)
+	return m.configureContainerNetwork(containerId, containerVeth, request)
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
@@ -329,7 +329,7 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	return bridge, err
 }
 
-func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
+func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link, request *types.ContainerRequest) error {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
@@ -403,33 +403,51 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		allocatedSet[ip] = true
 	}
 
-	// Choose a few address that lies in containerSubnet
-	_, ipNet, _ := net.ParseCIDR(containerSubnet)
 	var ipAddr *netlink.Addr = nil
-	var ipv4LastOctet int
-	for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
-		ipStr := ip.String()
-
-		// Skip the gateway address (i.e. 192.168.1.1)
-		if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
-			continue
-		}
-
-		if _, allocated := allocatedSet[ipStr]; allocated {
-			continue
-		}
-
+	var ipv4LastOctet int = -1
+	if request.CheckpointEnabled {
 		ipAddr = &netlink.Addr{
 			IPNet: &net.IPNet{
-				IP:   ip,
-				Mask: ipNet.Mask,
+				IP:   net.ParseIP("192.168.1.128"),
+				Mask: net.CIDRMask(24, 32),
 			},
 		}
 
-		// Extract the last octet of the IPv4 address
-		ipv4LastOctet = int(ip.To4()[3])
-		break
+		ipv4LastOctet = int(ipAddr.IP.To4()[3])
+
+		if _, allocated := allocatedSet[ipAddr.IP.String()]; allocated {
+			return errors.New("preferred IP address is already allocated, cannot use it")
+		}
 	}
+
+	if ipAddr == nil {
+		// Choose a few address that lies in containerSubnet
+		_, ipNet, _ := net.ParseCIDR(containerSubnet)
+		for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
+			ipStr := ip.String()
+
+			// Skip the gateway address (i.e. 192.168.1.1)
+			if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
+				continue
+			}
+
+			if _, allocated := allocatedSet[ipStr]; allocated {
+				continue
+			}
+
+			ipAddr = &netlink.Addr{
+				IPNet: &net.IPNet{
+					IP:   ip,
+					Mask: ipNet.Mask,
+				},
+			}
+
+			// Extract the last octet of the IPv4 address
+			ipv4LastOctet = int(ip.To4()[3])
+			break
+		}
+	}
+
 	if ipAddr == nil {
 		return errors.New("unable to assign IP address to container")
 	}
