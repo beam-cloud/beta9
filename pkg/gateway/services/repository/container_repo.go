@@ -116,10 +116,11 @@ func (s *ContainerRepositoryService) SetWorkerAddress(ctx context.Context, req *
 
 func (s *ContainerRepositoryService) UpdateCheckpointState(ctx context.Context, req *pb.UpdateCheckpointStateRequest) (*pb.UpdateCheckpointStateResponse, error) {
 	checkpointState := types.CheckpointState{
-		StubId:      req.CheckpointState.StubId,
-		ContainerId: req.CheckpointState.ContainerId,
-		Status:      types.CheckpointStatus(req.CheckpointState.Status),
-		RemoteKey:   req.CheckpointState.RemoteKey,
+		StubId:             req.CheckpointState.StubId,
+		ContainerId:        req.CheckpointState.ContainerId,
+		ContainerIpAddress: req.ContainerIpAddress,
+		Status:             types.CheckpointStatus(req.CheckpointState.Status),
+		RemoteKey:          req.CheckpointState.RemoteKey,
 	}
 	err := s.containerRepo.UpdateCheckpointState(req.WorkspaceName, req.CheckpointId, &checkpointState)
 	if err != nil {
@@ -136,9 +137,10 @@ func (s *ContainerRepositoryService) GetCheckpointState(ctx context.Context, req
 	}
 
 	return &pb.GetCheckpointStateResponse{Ok: true, CheckpointState: &pb.CheckpointState{
-		Status:      string(checkpointState.Status),
-		ContainerId: checkpointState.ContainerId,
-		StubId:      checkpointState.StubId,
-		RemoteKey:   checkpointState.RemoteKey,
+		Status:             string(checkpointState.Status),
+		ContainerId:        checkpointState.ContainerId,
+		ContainerIpAddress: checkpointState.ContainerIpAddress,
+		StubId:             checkpointState.StubId,
+		RemoteKey:          checkpointState.RemoteKey,
 	}}, nil
 }

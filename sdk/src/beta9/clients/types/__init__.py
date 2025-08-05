@@ -35,8 +35,9 @@ class BuildOptions(betterproto.Message):
 class CheckpointState(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
-    status: str = betterproto.string_field(3)
-    remote_key: str = betterproto.string_field(4)
+    container_ip_address: str = betterproto.string_field(3)
+    status: str = betterproto.string_field(4)
+    remote_key: str = betterproto.string_field(5)
 
 
 @dataclass(eq=False, repr=False)
@@ -163,8 +164,7 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    time: datetime = betterproto.message_field(1)
-    valid: bool = betterproto.bool_field(2)
+    null_time: "NullTime" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)

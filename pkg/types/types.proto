@@ -29,8 +29,9 @@ message BuildOptions {
 message CheckpointState {
   string stub_id = 1;
   string container_id = 2;
-  string status = 3;
-  string remote_key = 4;
+  string container_ip_address = 3;
+  string status = 4;
+  string remote_key = 5;
 }
 
 message ConcurrencyLimit {
@@ -145,8 +146,7 @@ message MountPointConfig {
 }
 
 message NullTime {
-  google.protobuf.Timestamp time = 1;
-  bool valid = 2;
+  NullTime null_time = 1;
 }
 
 message Object {

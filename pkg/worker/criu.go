@@ -329,9 +329,10 @@ func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 
 func (s *Worker) updateCheckpointState(request *types.ContainerRequest, status types.CheckpointStatus) error {
 	_, err := handleGRPCResponse(s.containerRepoClient.UpdateCheckpointState(context.Background(), &pb.UpdateCheckpointStateRequest{
-		ContainerId:   request.ContainerId,
-		CheckpointId:  request.StubId,
-		WorkspaceName: request.Workspace.Name,
+		ContainerId:        request.ContainerId,
+		ContainerIpAddress: "",
+		CheckpointId:       request.StubId,
+		WorkspaceName:      request.Workspace.Name,
 		CheckpointState: &pb.CheckpointState{
 			Status:      string(status),
 			ContainerId: request.ContainerId,

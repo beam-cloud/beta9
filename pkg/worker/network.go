@@ -142,7 +142,7 @@ func detectIptablesMode() string {
 	return "legacy"
 }
 
-func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) error {
+func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, request *types.ContainerRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -222,7 +222,22 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec) er
 	}
 	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
 
-	return m.configureContainerNetwork(containerId, containerVeth)
+	var preferredIpAddress *string = nil
+	if request.CheckpointEnabled {
+		checkpointState, err := m.containerRepoClient.GetCheckpointState(m.ctx, &pb.GetCheckpointStateRequest{
+			WorkspaceName: request.Workspace.Name,
+			CheckpointId:  request.StubId,
+		})
+		if err != nil {
+			return err
+		}
+
+		if checkpointState.CheckpointState.ContainerIpAddress != "" {
+			preferredIpAddress = &checkpointState.CheckpointState.ContainerIpAddress
+		}
+	}
+
+	return m.configureContainerNetwork(containerId, containerVeth, preferredIpAddress)
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
@@ -329,7 +344,7 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	return bridge, err
 }
 
-func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link) error {
+func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link, preferredIpAddress *string) error {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
@@ -403,7 +418,14 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		allocatedSet[ip] = true
 	}
 
-	// Choose a few address that lies in containerSubnet
+	if preferredIpAddress != nil {
+		if _, allocated := allocatedSet[*preferredIpAddress]; allocated {
+			return errors.New("preferred IP address is already allocated, cannot use it")
+		}
+
+	}
+
+	// Choose a new address that lies in containerSubnet
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
 	var ipAddr *netlink.Addr = nil
 	var ipv4LastOctet int
