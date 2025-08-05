@@ -83,9 +83,7 @@ message SetContainerAddressMapResponse {
   string error_msg = 2;
 }
 
-message GetContainerAddressMapRequest {
-  string container_id = 1;
-}
+message GetContainerAddressMapRequest { string container_id = 1; }
 
 message GetContainerAddressMapResponse {
   bool ok = 1;
@@ -107,7 +105,8 @@ message UpdateCheckpointStateRequest {
   string container_id = 1;
   string workspace_name = 2;
   string checkpoint_id = 3;
-  types.CheckpointState checkpoint_state = 4;
+  string container_ip = 4;
+  types.CheckpointState checkpoint_state = 5;
 }
 
 message UpdateCheckpointStateResponse {

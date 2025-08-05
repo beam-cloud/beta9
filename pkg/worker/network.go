@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	mathrand "math/rand"
+
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/coreos/go-iptables/iptables"
@@ -405,27 +407,42 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 
 	var ipAddr *netlink.Addr = nil
 	var ipv4LastOctet int = -1
+
+	// For checkpointed containers, we need to use the IP address that was used for the checkpoint
+	// We try to do this in the upper bound of the subnet range
+	// If we have an existing checkpoint, we try to allocate that IP. If it's not available, we can't
+	// launch the container on this worker right now
 	if request.CheckpointEnabled {
-		fixedIpAddress := "192.168.1.128"
+		ip := request.ContainerIp
+		if ip != "" {
+			log.Info().Str("container_id", containerId).Msgf("checkpoint enabled, using stored IP address: %s", ip)
 
-		log.Info().Msgf("checkpoint enabled, using FIXED IP address: %s", fixedIpAddress)
+			ipAddr = &netlink.Addr{
+				IPNet: &net.IPNet{
+					IP:   net.ParseIP(ip),
+					Mask: net.CIDRMask(24, 32),
+				},
+			}
 
-		ipAddr = &netlink.Addr{
-			IPNet: &net.IPNet{
-				IP:   net.ParseIP(fixedIpAddress),
-				Mask: net.CIDRMask(24, 32),
-			},
-		}
+			ipv4LastOctet = int(ipAddr.IP.To4()[3])
 
-		ipv4LastOctet = int(ipAddr.IP.To4()[3])
+			if _, allocated := allocatedSet[ipAddr.IP.String()]; allocated {
+				return errors.New("preferred IP address is already allocated, cannot use it")
+			}
+		} else {
+			// Assign a random IP address in the range 128-255 to avoid _most_ conflicts with non-checkpointed containers
+			ipAddr, err = assignIpInRange(allocatedSet, 128, 255)
+			if err != nil {
+				return err
+			}
 
-		if _, allocated := allocatedSet[ipAddr.IP.String()]; allocated {
-			return errors.New("preferred IP address is already allocated, cannot use it")
+			ipv4LastOctet = int(ipAddr.IP.To4()[3])
+			request.ContainerIp = ipAddr.IP.String()
 		}
 	}
 
 	if ipAddr == nil {
-		// Choose a few address that lies in containerSubnet
+		// Choose a new address that lies in containerSubnet
 		_, ipNet, _ := net.ParseCIDR(containerSubnet)
 		for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
 			ipStr := ip.String()
@@ -891,4 +908,49 @@ func generateUniqueMAC() net.HardwareAddr {
 	mac[0] = (mac[0] | 0x02) & 0xfe
 
 	return net.HardwareAddr(mac)
+}
+
+// assignIpInRange assigns an IP address in the range [rangeStart, rangeEnd) that is not already allocated.
+// (returns an error if no IP address can be assigned)
+func assignIpInRange(allocatedSet map[string]bool, rangeStart, rangeEnd uint8) (*netlink.Addr, error) {
+	_, ipNet, _ := net.ParseCIDR(containerSubnet)
+	baseIP := ipNet.IP.To4()
+	if baseIP == nil {
+		return nil, errors.New("invalid IPv4 subnet")
+	}
+
+	var candidates []net.IP
+	for i := rangeStart; i < rangeEnd; i++ {
+		ip := net.IPv4(baseIP[0], baseIP[1], baseIP[2], byte(i))
+		if !ipNet.Contains(ip) {
+			continue
+		}
+
+		ipStr := ip.String()
+		if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
+			continue
+		}
+
+		if _, allocated := allocatedSet[ipStr]; allocated {
+			continue
+		}
+
+		candidates = append(candidates, ip)
+	}
+
+	if len(candidates) == 0 {
+		return nil, errors.New("unable to assign IP address in range")
+	}
+
+	mathrand.Seed(time.Now().UnixNano())
+	mathrand.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
+
+	ip := candidates[0]
+
+	return &netlink.Addr{
+		IPNet: &net.IPNet{
+			IP:   ip,
+			Mask: ipNet.Mask,
+		},
+	}, nil
 }
