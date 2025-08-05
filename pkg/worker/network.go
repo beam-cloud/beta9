@@ -406,9 +406,12 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	var ipAddr *netlink.Addr = nil
 	var ipv4LastOctet int = -1
 	if request.CheckpointEnabled {
+		fixedIpAddress := "192.168.1.128"
+
+		log.Info().Msgf("checkpoint enabled, using FIXED IP address: %s", fixedIpAddress)
 		ipAddr = &netlink.Addr{
 			IPNet: &net.IPNet{
-				IP:   net.ParseIP("192.168.1.128"),
+				IP:   net.ParseIP(fixedIpAddress),
 				Mask: net.CIDRMask(24, 32),
 			},
 		}
