@@ -105,7 +105,6 @@ message UpdateCheckpointStateRequest {
   string container_id = 1;
   string workspace_name = 2;
   string checkpoint_id = 3;
-  string container_ip = 4;
   types.CheckpointState checkpoint_state = 5;
 }
 

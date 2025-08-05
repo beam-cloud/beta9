@@ -118,6 +118,7 @@ func (s *ContainerRepositoryService) UpdateCheckpointState(ctx context.Context, 
 	checkpointState := types.CheckpointState{
 		StubId:      req.CheckpointState.StubId,
 		ContainerId: req.CheckpointState.ContainerId,
+		ContainerIp: req.CheckpointState.ContainerIp,
 		Status:      types.CheckpointStatus(req.CheckpointState.Status),
 		RemoteKey:   req.CheckpointState.RemoteKey,
 	}

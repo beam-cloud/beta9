@@ -487,6 +487,7 @@ func (cr *ContainerRedisRepository) UpdateCheckpointState(workspaceName, checkpo
 		context.TODO(), stateKey,
 		"stub_id", checkpointState.StubId,
 		"container_id", checkpointState.ContainerId,
+		"container_ip", checkpointState.ContainerIp,
 		"status", string(checkpointState.Status),
 		"remote_key", checkpointState.RemoteKey,
 	).Err()
