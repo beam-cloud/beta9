@@ -726,7 +726,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 	}()
 
-	exitCode, containerId, _ = s.runContainer(ctx, request, configPath, outputWriter, startedChan, checkpointPIDChan)
+	exitCode, containerId, _ = s.runContainer(ctx, request, configPath, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -762,10 +762,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, configPath string, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, configPath string, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
-		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputWriter, startedChan, checkpointPIDChan, configPath)
+		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, configPath)
 		if err == nil {
 			return exitCode, containerId, err
 		}
