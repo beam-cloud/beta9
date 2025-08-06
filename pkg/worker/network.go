@@ -427,7 +427,14 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 			ipv4LastOctet = int(ipAddr.IP.To4()[3])
 
 			if _, allocated := allocatedSet[ipAddr.IP.String()]; allocated {
-				return errors.New("preferred IP address is already allocated, cannot use it")
+				log.Info().Str("container_id", containerId).Msgf("checkpoint enabled, but preferred IP address is already allocated, cannot use it: %s", ipAddr.IP.String())
+
+				// If we were unable to use the preferred IP address, we need to disable checkpointing
+				// for this container request
+				ipAddr = nil
+				ipv4LastOctet = -1
+
+				request.CheckpointEnabled = false
 			}
 		} else {
 			// Assign a random IP address in the range 128-255 to avoid _most_ conflicts with non-checkpointed containers
