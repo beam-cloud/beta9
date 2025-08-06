@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	storage "github.com/beam-cloud/beta9/pkg/storage"
@@ -225,6 +226,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 
 type syncFile struct {
 	Path string `json:"path"`
+	Type string `json:"type"`
 }
 
 const (
@@ -234,8 +236,14 @@ const (
 )
 
 func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointPath string) error {
+	cacheType := "CPU"
+	if request.Gpu != "" {
+		cacheType = strings.ToUpper(request.Gpu)
+	}
+
 	syncFile := syncFile{
 		Path: filepath.Base(checkpointPath),
+		Type: cacheType,
 	}
 	syncFileBytes, err := json.Marshal(syncFile)
 	if err != nil {
