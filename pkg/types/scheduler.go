@@ -223,6 +223,7 @@ type ContainerRequest struct {
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
 	AppId             string          `json:"app_id"`
+	ContainerIp       string          `json:"container_ip"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -289,6 +290,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		Timestamp:         timestamppb.New(c.Timestamp),
 		BuildOptions:      buildOptions,
 		Ports:             c.Ports,
+		ContainerIp:       c.ContainerIp,
 	}
 }
 
@@ -331,6 +333,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
 		Ports:             in.Ports,
+		ContainerIp:       in.ContainerIp,
 	}
 }
 
@@ -529,6 +532,7 @@ const (
 type CheckpointState struct {
 	StubId      string           `redis:"stub_id" json:"stub_id"`
 	ContainerId string           `redis:"container_id" json:"container_id"`
+	ContainerIp string           `redis:"container_ip" json:"container_ip"`
 	Status      CheckpointStatus `redis:"status" json:"status"`
 	RemoteKey   string           `redis:"remote_key" json:"remote_key"`
 }

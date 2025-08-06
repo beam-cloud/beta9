@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"fmt"
 	"os"
 	"testing"
 )
@@ -59,5 +60,49 @@ func TestGetIPFromEnv(t *testing.T) {
 				t.Errorf("getIPFromEnv() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAssignIpInRange(t *testing.T) {
+	allocated := map[string]bool{}
+
+	iterations := 20
+	rangeStart := uint8(128)
+	rangeEnd := uint8(rangeStart + uint8(iterations))
+
+	results := map[string]bool{}
+	for i := 0; i < iterations; i++ {
+		addr, err := assignIpInRange(allocated, rangeStart, rangeEnd)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		ip := addr.IPNet.IP.String()
+		if ip == containerBridgeAddress || ip == "192.168.1.0" {
+			t.Errorf("reserved IP was returned: %s", ip)
+		}
+
+		last := addr.IPNet.IP.To4()[3]
+		if last < rangeStart || last >= rangeEnd {
+			t.Errorf("IP out of range: %s", ip)
+		}
+
+		results[ip] = true
+		allocated[ip] = true
+	}
+
+	// Should be able to get all unallocated IPs in the range
+	if len(results) != iterations {
+		t.Errorf("expected %d unique IPs, got %d: %v", iterations, len(results), results)
+	}
+
+	// Now allocate all, should error
+	for i := rangeStart; i < rangeEnd; i++ {
+		allocated[fmt.Sprintf("192.168.1.%d", i)] = true
+	}
+
+	_, err := assignIpInRange(allocated, rangeStart, rangeEnd)
+	if err == nil {
+		t.Errorf("expected error when all IPs are allocated, got nil")
 	}
 }

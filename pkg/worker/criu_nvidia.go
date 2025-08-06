@@ -73,7 +73,6 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 			AllowOpenTCP: true,
 			LinkRemap:    true,
 			// Logs, irmap cache, sockets for lazy server and other go to working dir
-			// must be overriden bc blobcache is read-only
 			WorkDir:      workDir,
 			ImagePath:    imagePath,
 			OutputWriter: opts.runcOpts.OutputWriter,

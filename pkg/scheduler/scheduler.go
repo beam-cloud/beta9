@@ -121,6 +121,14 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
+	// Add container IP to request if checkpoint is enabled
+	if request.CheckpointEnabled {
+		checkpointState, err := s.containerRepo.GetCheckpointState(request.Workspace.Name, request.StubId)
+		if err == nil && checkpointState.Status == types.CheckpointStatusAvailable {
+			request.ContainerIp = checkpointState.ContainerIp
+		}
+	}
+
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(request)
 	go s.eventRepo.PushContainerRequestedEvent(request)
 

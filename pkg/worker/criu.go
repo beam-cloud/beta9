@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -82,13 +83,14 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUMa
 	return criuManager, nil
 }
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, string, error) {
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, string, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
 	if createCheckpoint {
-		log.Info().Str("container_id", request.ContainerId).Msg("attempting to create checkpoint")
-		exitCode, err := s.createCheckpoint(ctx, request, outputWriter, startedChan, checkpointPIDChan, configPath)
+		outputLogger.Info("Attempting to create container checkpoint...")
+
+		exitCode, err := s.createCheckpoint(ctx, request, outputWriter, outputLogger, startedChan, checkpointPIDChan, configPath)
 		if err != nil {
 			return -1, "", err
 		}
@@ -97,13 +99,13 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 	}
 
 	if state.Status == types.CheckpointStatusAvailable {
-		err := s.waitForSyncFile(request)
+		err := s.waitForSyncFile(request, outputLogger)
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to wait for sync file: %v", err)
 			return -1, "", err
 		}
 
-		log.Info().Str("container_id", request.ContainerId).Msg("attempting to restore checkpoint")
+		outputLogger.Info("Attempting to restore container checkpoint...")
 		f, err := os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 		if err != nil {
 			return -1, "", fmt.Errorf("failed to create checkpoint signal directory: %v", err)
@@ -127,7 +129,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			return exitCode, "", err
 		}
 
-		log.Info().Str("container_id", request.ContainerId).Msg("checkpoint found and restored")
+		outputLogger.Info("Checkpoint found and restored")
 		return exitCode, request.ContainerId, nil
 	}
 
@@ -144,7 +146,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
-func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, error) {
+func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, outputLogger *slog.Logger, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, error) {
 	bundlePath := filepath.Dir(configPath)
 
 	go func() {
@@ -177,7 +179,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 				// Check if the container is ready for checkpoint by verifying the existence of a signal file
 				readyFilePath := filepath.Join(checkpointSignalDir(instance.Id), checkpointSignalFileName)
 				if _, err := os.Stat(readyFilePath); err == nil {
-					log.Info().Str("container_id", instance.Id).Msg("container ready for checkpoint")
+					outputLogger.Info("Container ready for checkpoint")
 					break waitForReady
 				} else {
 					sampledLogger.Info().Str("container_id", instance.Id).Msg("container not ready for checkpoint")
@@ -192,7 +194,8 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 			if updateStateErr != nil {
 				log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 			}
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
+
+			outputLogger.Error("Failed to create checkpoint")
 			return
 		}
 
@@ -203,7 +206,8 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 
 		// Create a file accessible to the container to indicate that the checkpoint has been captured
 		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
-		log.Info().Str("container_id", request.ContainerId).Str("checkpoint_path", checkpointPath).Msg("checkpoint created successfully")
+
+		outputLogger.Info("Checkpoint created successfully")
 
 		updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusAvailable)
 		if updateStateErr != nil {
@@ -246,12 +250,19 @@ func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointPath 
 	return nil
 }
 
-func (s *Worker) waitForSyncFile(request *types.ContainerRequest) error {
+func (s *Worker) waitForSyncFile(request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	timeout := syncFileTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	syncFilePath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", request.StubId, syncFileExtension))
+
+	_, err := os.Stat(syncFilePath)
+	if err == nil {
+		return nil
+	}
+
+	outputLogger.Info("Waiting for checkpoint to sync")
 	for {
 		_, err := os.Stat(syncFilePath)
 		if err == nil {
@@ -260,6 +271,7 @@ func (s *Worker) waitForSyncFile(request *types.ContainerRequest) error {
 
 		select {
 		case <-ctx.Done():
+			outputLogger.Info("Timeout waiting for checkpoint to sync")
 			return fmt.Errorf("timeout waiting for sync file")
 		default:
 		}
@@ -335,9 +347,9 @@ func (s *Worker) updateCheckpointState(request *types.ContainerRequest, status t
 		CheckpointState: &pb.CheckpointState{
 			Status:      string(status),
 			ContainerId: request.ContainerId,
+			ContainerIp: request.ContainerIp,
 			StubId:      request.StubId,
 		},
 	}))
-
 	return err
 }
