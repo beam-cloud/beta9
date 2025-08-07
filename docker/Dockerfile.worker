@@ -226,8 +226,9 @@ VOLUME "/usr/lib/aarch64-linux-gnu"
 RUN mkdir -p /etc/criu
 RUN touch /etc/criu/default.conf
 # add the following options to the default.conf file on new lines
-RUN echo "verbosity=4" >> /etc/criu/default.conf
+RUN echo "verbosity 4" >> /etc/criu/default.conf
 RUN echo "display-stats" >> /etc/criu/default.conf
+RUN echo "timeout 60" >> /etc/criu/default.conf
 
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,ngx,video
 ENV _BUILDAH_STARTED_IN_USERNS="" \
