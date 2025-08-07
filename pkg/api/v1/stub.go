@@ -565,7 +565,6 @@ func (g *StubGroup) GetConfig(ctx echo.Context) error {
 	return ctx.JSON(http.StatusOK, limitedConfig)
 }
 
-// UpdateConfigRequest represents the request body for updating stub configuration
 type UpdateConfigRequest struct {
 	Field string      `json:"field"` // The JSON field path to update (e.g., "runtime.cpu", "autoscaler.max_containers")
 	Value interface{} `json:"value"` // The new value for the field
@@ -619,7 +618,6 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 	})
 }
 
-// updateConfigField updates a specific field in the stub config using reflection
 func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {
 	// Split the field path by dots to handle nested fields
 	fields := strings.Split(fieldPath, ".")
