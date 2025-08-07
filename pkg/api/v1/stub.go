@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"reflect"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -40,6 +42,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, event
 	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                                  // Allows cluster admins to list all stubs
 	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))               // Allows workspace admins to get the URL of a stub
 	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL)) // Allows workspace admins to get the URL of a stub by deployment Id
+	g.PATCH("/:workspaceId/:stubId/config", auth.WithWorkspaceAuth(group.UpdateConfig))    // Allows workspace admins to update the config of a stub
 	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                         // Allows users to clone a public stub
 	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                     // Allows users to get the URL of a stub
 	g.GET("/:stubId/config", group.GetConfig)                                              // Allows users to get the config of a stub
@@ -560,4 +563,286 @@ func (g *StubGroup) GetConfig(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, limitedConfig)
+}
+
+// UpdateConfigRequest represents the request body for updating stub configuration
+type UpdateConfigRequest struct {
+	Field string      `json:"field"` // The JSON field path to update (e.g., "runtime.cpu", "autoscaler.max_containers")
+	Value interface{} `json:"value"` // The new value for the field
+}
+
+func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
+	stubID := ctx.Param("stubId")
+
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve stub")
+	} else if stub == nil {
+		return HTTPNotFound()
+	}
+
+	if !stub.Public {
+		cc, _ := ctx.(*auth.HttpAuthContext)
+		if cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
+			return HTTPNotFound()
+		}
+	}
+
+	// Parse the request body
+	var updateReq UpdateConfigRequest
+	if err := ctx.Bind(&updateReq); err != nil {
+		return HTTPBadRequest("Failed to decode request body")
+	}
+
+	if updateReq.Field == "" {
+		return HTTPBadRequest("Field is required")
+	}
+
+	// Parse the current config
+	var stubConfig types.StubConfigV1
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return HTTPInternalServerError("Failed to decode stub config")
+	}
+
+	// Update the specified field using reflection
+	if err := g.updateConfigField(&stubConfig, updateReq.Field, updateReq.Value); err != nil {
+		return HTTPBadRequest(fmt.Sprintf("Failed to update field '%s': %v", updateReq.Field, err))
+	}
+
+	// Update the stub config in the database
+	if err := g.backendRepo.UpdateStubConfig(ctx.Request().Context(), stub.Id, &stubConfig); err != nil {
+		return HTTPInternalServerError("Failed to update stub config")
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"message": fmt.Sprintf("Stub config field '%s' updated successfully", updateReq.Field),
+	})
+}
+
+// updateConfigField updates a specific field in the stub config using reflection
+func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {
+	// Split the field path by dots to handle nested fields
+	fields := strings.Split(fieldPath, ".")
+	if len(fields) == 0 {
+		return fmt.Errorf("empty field path")
+	}
+
+	// Start with the config struct
+	current := reflect.ValueOf(config).Elem()
+
+	// Navigate through the field path
+	for i, field := range fields {
+		if field == "" {
+			return fmt.Errorf("empty field name at position %d", i)
+		}
+
+		// Find the field by JSON tag or field name
+		fieldValue, found := g.findField(current, field)
+		if !found {
+			return fmt.Errorf("field '%s' not found at path '%s'", field, strings.Join(fields[:i+1], "."))
+		}
+
+		// If this is the last field, set the value
+		if i == len(fields)-1 {
+			// Convert the value to the correct type
+			convertedValue, err := g.convertValue(fieldValue.Type(), value)
+			if err != nil {
+				return fmt.Errorf("failed to convert value for field '%s': %v", field, err)
+			}
+
+			fieldValue.Set(convertedValue)
+			return nil
+		}
+
+		// If not the last field, continue navigating
+		if fieldValue.Kind() == reflect.Ptr {
+			if fieldValue.IsNil() {
+				// Create a new instance if the pointer is nil
+				newValue := reflect.New(fieldValue.Type().Elem())
+				fieldValue.Set(newValue)
+			}
+			current = fieldValue.Elem()
+		} else {
+			current = fieldValue
+		}
+	}
+
+	return nil
+}
+
+// findField finds a field by JSON tag or field name in a struct
+func (g *StubGroup) findField(v reflect.Value, fieldName string) (reflect.Value, bool) {
+	if v.Kind() != reflect.Struct {
+		return reflect.Value{}, false
+	}
+
+	// Find by JSON tag
+	for i := 0; i < v.NumField(); i++ {
+		fieldType := v.Type().Field(i)
+		jsonTag := fieldType.Tag.Get("json")
+
+		// Remove any options after comma
+		if commaIndex := strings.Index(jsonTag, ","); commaIndex != -1 {
+			jsonTag = jsonTag[:commaIndex]
+		}
+
+		if jsonTag == fieldName {
+			return v.Field(i), true
+		}
+	}
+
+	return reflect.Value{}, false
+}
+
+func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (reflect.Value, error) {
+	valueType := reflect.TypeOf(value)
+
+	if valueType == targetType {
+		return reflect.ValueOf(value), nil
+	}
+
+	// Handle nil values
+	if value == nil {
+		return reflect.Zero(targetType), nil
+	}
+
+	switch targetType.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		switch v := value.(type) {
+		case float64:
+			return reflect.ValueOf(int64(v)).Convert(targetType), nil
+		case int:
+			return reflect.ValueOf(int64(v)).Convert(targetType), nil
+		case int64:
+			return reflect.ValueOf(v).Convert(targetType), nil
+		case uint:
+			return reflect.ValueOf(int64(v)).Convert(targetType), nil
+		case uint64:
+			return reflect.ValueOf(int64(v)).Convert(targetType), nil
+		case string:
+			// Try to parse as integer
+			var i int64
+			if _, err := fmt.Sscanf(v, "%d", &i); err != nil {
+				return reflect.Value{}, fmt.Errorf("cannot convert string '%s' to %v", v, targetType)
+			}
+			return reflect.ValueOf(i).Convert(targetType), nil
+		default:
+			return reflect.Value{}, fmt.Errorf("cannot convert %v (%T) to %v", value, value, targetType)
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		switch v := value.(type) {
+		case float64:
+			if v < 0 {
+				return reflect.Value{}, fmt.Errorf("cannot convert negative float %v to %v", v, targetType)
+			}
+			return reflect.ValueOf(uint64(v)).Convert(targetType), nil
+		case int:
+			if v < 0 {
+				return reflect.Value{}, fmt.Errorf("cannot convert negative int %v to %v", v, targetType)
+			}
+			return reflect.ValueOf(uint64(v)).Convert(targetType), nil
+		case int64:
+			if v < 0 {
+				return reflect.Value{}, fmt.Errorf("cannot convert negative int64 %v to %v", v, targetType)
+			}
+			return reflect.ValueOf(uint64(v)).Convert(targetType), nil
+		case uint:
+			return reflect.ValueOf(uint64(v)).Convert(targetType), nil
+		case uint64:
+			return reflect.ValueOf(v).Convert(targetType), nil
+		case string:
+			// Try to parse as unsigned integer
+			var u uint64
+			if _, err := fmt.Sscanf(v, "%d", &u); err != nil {
+				return reflect.Value{}, fmt.Errorf("cannot convert string '%s' to %v", v, targetType)
+			}
+			return reflect.ValueOf(u).Convert(targetType), nil
+		default:
+			return reflect.Value{}, fmt.Errorf("cannot convert %v (%T) to %v", value, value, targetType)
+		}
+	case reflect.Float32, reflect.Float64:
+		switch v := value.(type) {
+		case int:
+			return reflect.ValueOf(float64(v)).Convert(targetType), nil
+		case int64:
+			return reflect.ValueOf(float64(v)).Convert(targetType), nil
+		case uint:
+			return reflect.ValueOf(float64(v)).Convert(targetType), nil
+		case uint64:
+			return reflect.ValueOf(float64(v)).Convert(targetType), nil
+		case float64:
+			return reflect.ValueOf(v).Convert(targetType), nil
+		case string:
+			// Try to parse as float
+			var f float64
+			if _, err := fmt.Sscanf(v, "%f", &f); err != nil {
+				return reflect.Value{}, fmt.Errorf("cannot convert string '%s' to %v", v, targetType)
+			}
+			return reflect.ValueOf(f).Convert(targetType), nil
+		default:
+			return reflect.Value{}, fmt.Errorf("cannot convert %v (%T) to %v", value, value, targetType)
+		}
+	case reflect.String:
+		switch v := value.(type) {
+		case string:
+			return reflect.ValueOf(v), nil
+		case int, int64, uint, uint64, float64, bool:
+			return reflect.ValueOf(fmt.Sprintf("%v", v)), nil
+		default:
+			return reflect.Value{}, fmt.Errorf("cannot convert %v (%T) to string", value, value)
+		}
+	case reflect.Bool:
+		switch v := value.(type) {
+		case bool:
+			return reflect.ValueOf(v), nil
+		case string:
+			switch strings.ToLower(v) {
+			case "true", "1", "yes", "on":
+				return reflect.ValueOf(true), nil
+			case "false", "0", "no", "off":
+				return reflect.ValueOf(false), nil
+			default:
+				return reflect.Value{}, fmt.Errorf("cannot convert string '%s' to bool", v)
+			}
+		case int, int64:
+			return reflect.ValueOf(v != 0), nil
+		case uint, uint64:
+			return reflect.ValueOf(v != 0), nil
+		case float64:
+			return reflect.ValueOf(v != 0), nil
+		default:
+			return reflect.Value{}, fmt.Errorf("cannot convert %v (%T) to bool", value, value)
+		}
+	case reflect.Slice:
+		// Handle slice conversions (e.g., []string, []uint32)
+		if valueType.Kind() == reflect.Slice {
+			srcSlice := reflect.ValueOf(value)
+			dstSlice := reflect.MakeSlice(targetType, srcSlice.Len(), srcSlice.Len())
+
+			for i := 0; i < srcSlice.Len(); i++ {
+				converted, err := g.convertValue(targetType.Elem(), srcSlice.Index(i).Interface())
+				if err != nil {
+					return reflect.Value{}, fmt.Errorf("failed to convert slice element %d: %v", i, err)
+				}
+				dstSlice.Index(i).Set(converted)
+			}
+			return dstSlice, nil
+		}
+		return reflect.Value{}, fmt.Errorf("cannot convert %v to slice", valueType)
+	case reflect.Ptr:
+		// Handle pointer types
+		if value == nil {
+			return reflect.Zero(targetType), nil
+		}
+		// Dereference the pointer and convert the value
+		elemValue, err := g.convertValue(targetType.Elem(), value)
+		if err != nil {
+			return reflect.Value{}, err
+		}
+		ptrValue := reflect.New(targetType.Elem())
+		ptrValue.Elem().Set(elemValue)
+		return ptrValue, nil
+	default:
+		return reflect.Value{}, fmt.Errorf("unsupported type conversion to %v", targetType)
+	}
 }
