@@ -252,6 +252,29 @@ class _CallableWrapper(DeployableMixin):
         container.attach(container_id=r.container_id, sync_dir=dir)
 
     def put(self, *args, **kwargs) -> Union[bool, Task]:
+        """
+        Enqueues task to the task queue.
+
+        Args:
+            *args: Positional arguments to pass to the task function.
+            **kwargs: Keyword arguments to pass to the task function.
+
+        Returns:
+            Union[bool, Task]: Returns a Task object if the task was enqueued successfully, otherwise False.
+
+        Example:
+            ```python
+            from beta9 import task_queue, Image
+
+            @task_queue(cpu=1.0, memory=128, gpu="T4", image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
+            def transcribe(filename: str):
+                print(filename)
+                return
+
+            task = transcribe.put("some_file.mp4")
+            print(task.id)
+            ```
+        """
         if not self.parent.prepare_runtime(
             func=self.func,
             stub_type=TASKQUEUE_STUB_TYPE,

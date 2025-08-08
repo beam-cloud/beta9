@@ -244,7 +244,27 @@ class Pod(RunnerAbstraction, DeployableMixin):
         context: Optional[ConfigContext] = None,
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Dict[str, Any],
-    ) -> Tuple[bool, Dict[str, Any]]:
+    ) -> Tuple[Dict[str, Any], bool]:
+        """
+        Deploy a pod.
+
+        Args:
+            name (Optional[str]): The name of the pod.
+            context (Optional[ConfigContext]): The context of the pod.
+            invocation_details_func (Optional[Callable[..., None]]): The function to call to print invocation details.
+            **invocation_details_options: The options to pass to the invocation details function.
+
+        Returns:
+            Tuple[bool, Dict[str, Any]]: A tuple containing a dictionary of deployment details (empty if deployment failed) and a boolean indicating if the deployment was successful.
+
+        Example:
+            ```python
+            from beta9 import Image, Pod
+
+            pod = Pod(cpu=1.0, memory=128, image=Image(python_packages=["torch"]), keep_warm_seconds=1000)
+            pod.deploy()
+            ```
+        """
         self.name = name or self.name
         if not self.name:
             terminal.error(
@@ -297,7 +317,13 @@ class Pod(RunnerAbstraction, DeployableMixin):
             "version": deploy_response.version,
         }, deploy_response.ok
 
-    def generate_deployment_artifacts(self, **kwargs) -> str:
+    def generate_deployment_artifacts(self, **kwargs):
+        """
+        Generate the deployment artifacts for the pod (creates a python file that can be executed to deploy the pod).
+
+        Args:
+            **kwargs: The options to pass to the pod constructor.
+        """
         imports = ["Pod"]
 
         pod_py = """
@@ -337,6 +363,9 @@ app = Pod(
             f.write(content)
 
     def cleanup_deployment_artifacts(self):
+        """
+        Cleans up the deployment artifacts for the pod (removes the generated python file).
+        """
         if os.path.exists(f"pod-{self._id}.py"):
             os.remove(f"pod-{self._id}.py")
 
