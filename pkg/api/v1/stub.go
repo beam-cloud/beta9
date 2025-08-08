@@ -614,13 +614,18 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		updatedFields = append(updatedFields, fieldPath)
 	}
 
+	valid, errorMsg := types.ValidateCpuAndMemory(stubConfig.Runtime.Cpu, stubConfig.Runtime.Memory, g.config.GatewayService.StubLimits)
+	if !valid {
+		return HTTPBadRequest(errorMsg)
+	}
+
 	// Update the stub config in the database
 	if err := g.backendRepo.UpdateStubConfig(ctx.Request().Context(), stub.Id, &stubConfig); err != nil {
 		return HTTPInternalServerError("Failed to update stub config")
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"message":        fmt.Sprintf("Stub config updated successfully. Updated fields: %v", updatedFields),
+		"message":        fmt.Sprintf("Stub config updated successfully. Updated fields: %v, %g", updatedFields),
 		"updated_fields": updatedFields,
 	})
 }
