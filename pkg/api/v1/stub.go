@@ -566,8 +566,7 @@ func (g *StubGroup) GetConfig(ctx echo.Context) error {
 }
 
 type UpdateConfigRequest struct {
-	Field string      `json:"field"` // The JSON field path to update (e.g., "runtime.cpu", "autoscaler.max_containers")
-	Value interface{} `json:"value"` // The new value for the field
+	Fields map[string]interface{} `json:"fields"` // Map of field paths to values (e.g., {"runtime.cpu": 4, "runtime.memory": 8192})
 }
 
 func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
@@ -593,8 +592,8 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPBadRequest("Failed to decode request body")
 	}
 
-	if updateReq.Field == "" {
-		return HTTPBadRequest("Field is required")
+	if len(updateReq.Fields) == 0 {
+		return HTTPBadRequest("At least one field must be provided")
 	}
 
 	// Parse the current config
@@ -603,9 +602,18 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to decode stub config")
 	}
 
-	// Update the specified field using reflection
-	if err := g.updateConfigField(&stubConfig, updateReq.Field, updateReq.Value); err != nil {
-		return HTTPBadRequest(fmt.Sprintf("Failed to update field '%s': %v", updateReq.Field, err))
+	// Update each specified field
+	updatedFields := make([]string, 0, len(updateReq.Fields))
+	for fieldPath, value := range updateReq.Fields {
+		if fieldPath == "" {
+			return HTTPBadRequest("Field path cannot be empty")
+		}
+
+		// Update the specified field using reflection
+		if err := g.updateConfigField(&stubConfig, fieldPath, value); err != nil {
+			return HTTPBadRequest(fmt.Sprintf("Failed to update field '%s': %v", fieldPath, err))
+		}
+		updatedFields = append(updatedFields, fieldPath)
 	}
 
 	// Update the stub config in the database
@@ -613,8 +621,9 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to update stub config")
 	}
 
-	return ctx.JSON(http.StatusOK, map[string]string{
-		"message": fmt.Sprintf("Stub config field '%s' updated successfully", updateReq.Field),
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
+		"message":        fmt.Sprintf("Stub config updated successfully. Updated fields: %v", updatedFields),
+		"updated_fields": updatedFields,
 	})
 }
 
@@ -668,7 +677,7 @@ func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath stri
 	return nil
 }
 
-// findField finds a field by JSON tag or field name in a struct
+// findField finds a field by JSON tag in a struct
 func (g *StubGroup) findField(v reflect.Value, fieldName string) (reflect.Value, bool) {
 	if v.Kind() != reflect.Struct {
 		return reflect.Value{}, false
