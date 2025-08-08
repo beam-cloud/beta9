@@ -99,8 +99,6 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		return nil, err
 	}
 
-	log.Info().Str("imageId", imageId).Bool("exists", exists).Msg("image verification result")
-
 	return &pb.VerifyImageBuildResponse{
 		ImageId: imageId,
 		Exists:  exists,
@@ -129,8 +127,6 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	if err != nil {
 		return err
 	}
-
-	log.Info().Str("imageId", imageId).Bool("exists", exists).Msg("image verification result")
 
 	if exists {
 		return stream.Send(&pb.BuildImageResponse{
