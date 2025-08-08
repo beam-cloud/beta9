@@ -579,11 +579,9 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	if !stub.Public {
-		cc, _ := ctx.(*auth.HttpAuthContext)
-		if cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
-			return HTTPNotFound()
-		}
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
+		return HTTPNotFound()
 	}
 
 	// Parse the request body
