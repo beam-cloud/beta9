@@ -713,6 +713,16 @@ func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (re
 		return reflect.Zero(targetType), nil
 	}
 
+	// Handle GpuType specifically
+	if targetType == reflect.TypeOf(types.GpuType("")) {
+		switch v := value.(type) {
+		case string:
+			return reflect.ValueOf(types.GpuType(v)), nil
+		default:
+			return reflect.Value{}, fmt.Errorf("cannot convert %v (%T) to GpuType", value, value)
+		}
+	}
+
 	switch targetType.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		switch v := value.(type) {
