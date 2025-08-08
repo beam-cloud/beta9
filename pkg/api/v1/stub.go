@@ -625,7 +625,7 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"message":        fmt.Sprintf("Stub config updated successfully. Updated fields: %v, %g", updatedFields),
+		"message":        fmt.Sprintf("Stub config updated successfully. Updated fields: %v", updatedFields),
 		"updated_fields": updatedFields,
 	})
 }
