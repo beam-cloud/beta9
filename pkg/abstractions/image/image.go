@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -252,7 +253,11 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 
 	_, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
 	if err != nil {
-		return "", false, false, nil, err
+		if errors.Is(err, sql.ErrNoRows) {
+			exists = exists || false
+		} else {
+			return "", false, false, nil, err
+		}
 	}
 
 	return imageId, exists, valid, opts, nil
