@@ -250,6 +250,11 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 		return "", false, false, nil, err
 	}
 
+	_, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
+	if err != nil {
+		return "", false, false, nil, err
+	}
+
 	return imageId, exists, valid, opts, nil
 }
 
