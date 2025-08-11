@@ -215,11 +215,9 @@ func TestUpdateConfig(t *testing.T) {
 				},
 			},
 			setupMock: func(mock *sqlmock.Sqlmock) {
-				// Mock GetStubByExternalId - use more flexible pattern to match complex JOIN query
 				rows := generateMockStubRows(1, "test-stub-123", "Test Stub", `{"runtime":{"cpu":1000,"memory":1000},"python_version":"python3"}`, 1)
 				(*mock).ExpectQuery("SELECT").WithArgs("test-stub-123").WillReturnRows(rows)
 
-				// Mock UpdateStubConfig
 				(*mock).ExpectExec("UPDATE stub").WithArgs(sqlmock.AnyArg(), 1).WillReturnResult(sqlmock.NewResult(1, 1))
 			},
 			expectedStatus: http.StatusOK,
@@ -391,15 +389,12 @@ func TestUpdateConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create stub group with mock repository
 			stubGroup, mock, e := NewStubGroupWithMockForTest()
 
-			// Setup mock expectations
 			if tt.setupMock != nil {
 				tt.setupMock(&mock)
 			}
 
-			// Marshal body first and create request with body
 			jsonBody, _ := json.Marshal(tt.requestBody)
 			req := httptest.NewRequest(http.MethodPatch, "/", nil)
 			req.Body = io.NopCloser(bytes.NewReader(jsonBody))
@@ -408,11 +403,9 @@ func TestUpdateConfig(t *testing.T) {
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 
-			// Set path parameter
 			c.SetParamNames("stubId")
 			c.SetParamValues(tt.stubID)
 
-			// Create auth context
 			authCtx := &auth.HttpAuthContext{
 				Context: c,
 				AuthInfo: &auth.AuthInfo{
@@ -420,20 +413,16 @@ func TestUpdateConfig(t *testing.T) {
 				},
 			}
 
-			// Call UpdateConfig
 			err := stubGroup.UpdateConfig(authCtx)
 
-			// Verify expectations
 			if err := mock.ExpectationsWereMet(); err != nil {
 				t.Errorf("Mock expectations were not met: %v", err)
 			}
 
-			// Check response
 			if tt.expectedError {
 				if err == nil {
 					t.Errorf("Expected error but got none")
 				}
-				// For HTTP errors, check if they're properly returned
 				if httpErr, ok := err.(*echo.HTTPError); ok {
 					if httpErr.Code != tt.expectedStatus {
 						t.Errorf("Expected status %d, got %d", tt.expectedStatus, httpErr.Code)
@@ -447,27 +436,23 @@ func TestUpdateConfig(t *testing.T) {
 					t.Errorf("Expected status %d, got %d", tt.expectedStatus, rec.Code)
 				}
 
-				// Verify response body for successful updates
 				if tt.expectedStatus == http.StatusOK {
 					var response map[string]interface{}
 					if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
 						t.Errorf("Failed to unmarshal response: %v", err)
 					}
 
-					// Check message
 					if message, ok := response["message"].(string); !ok {
 						t.Error("Response missing message field")
 					} else if !strings.Contains(message, "Stub config updated successfully") {
 						t.Errorf("Unexpected message: %s", message)
 					}
 
-					// Check updated fields
 					if updatedFields, ok := response["updated_fields"].([]interface{}); ok {
 						if len(updatedFields) != len(tt.expectedFields) {
 							t.Errorf("Expected %d updated fields, got %d", len(tt.expectedFields), len(updatedFields))
 						}
 
-						// Verify each expected field is present
 						for _, expectedField := range tt.expectedFields {
 							found := false
 							for _, field := range updatedFields {
@@ -608,7 +593,6 @@ func TestUpdateConfigField(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create a copy of the config for testing
 			configCopy := *tt.config
 
 			err := stubGroup.updateConfigField(&configCopy, tt.fieldPath, tt.value)
