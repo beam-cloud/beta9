@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"reflect"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -40,6 +42,7 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, event
 	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                                  // Allows cluster admins to list all stubs
 	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))               // Allows workspace admins to get the URL of a stub
 	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL)) // Allows workspace admins to get the URL of a stub by deployment Id
+	g.PATCH("/:workspaceId/:stubId/config", auth.WithWorkspaceAuth(group.UpdateConfig))    // Allows workspace admins to update the config of a stub
 	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                         // Allows users to clone a public stub
 	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                     // Allows users to get the URL of a stub
 	g.GET("/:stubId/config", group.GetConfig)                                              // Allows users to get the config of a stub
@@ -560,4 +563,106 @@ func (g *StubGroup) GetConfig(ctx echo.Context) error {
 	}
 
 	return ctx.JSON(http.StatusOK, limitedConfig)
+}
+
+type UpdateConfigRequest struct {
+	Fields map[string]interface{} `json:"fields"` // Map of field paths to values (e.g., {"runtime.cpu": 4, "runtime.memory": 8192})
+}
+
+func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
+	stubID := ctx.Param("stubId")
+
+	stub, err := g.backendRepo.GetStubByExternalId(ctx.Request().Context(), stubID)
+	if err != nil {
+		return HTTPInternalServerError("Failed to retrieve stub")
+	} else if stub == nil {
+		return HTTPNotFound()
+	}
+
+	cc, _ := ctx.(*auth.HttpAuthContext)
+	if cc.AuthInfo.Workspace.Id != stub.WorkspaceId {
+		return HTTPNotFound()
+	}
+
+	var updateReq UpdateConfigRequest
+	if err := ctx.Bind(&updateReq); err != nil {
+		return HTTPBadRequest("Failed to decode request body")
+	}
+
+	if len(updateReq.Fields) == 0 {
+		return HTTPBadRequest("At least one field must be provided")
+	}
+
+	var stubConfig types.StubConfigV1
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return HTTPInternalServerError("Failed to decode stub config")
+	}
+
+	updatedFields := make([]string, 0, len(updateReq.Fields))
+	for fieldPath, value := range updateReq.Fields {
+		if fieldPath == "" {
+			return HTTPBadRequest("Field path cannot be empty")
+		}
+
+		if err := g.updateConfigField(&stubConfig, fieldPath, value); err != nil {
+			return HTTPBadRequest(fmt.Sprintf("Failed to update field '%s': %v", fieldPath, err))
+		}
+		updatedFields = append(updatedFields, fieldPath)
+	}
+
+	valid, errorMsg := types.ValidateCpuAndMemory(stubConfig.Runtime.Cpu, stubConfig.Runtime.Memory, g.config.GatewayService.StubLimits)
+	if !valid {
+		return HTTPBadRequest(errorMsg)
+	}
+
+	if err := g.backendRepo.UpdateStubConfig(ctx.Request().Context(), stub.Id, &stubConfig); err != nil {
+		return HTTPInternalServerError("Failed to update stub config")
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
+		"message":        fmt.Sprintf("Stub config updated successfully. Updated fields: %v", updatedFields),
+		"updated_fields": updatedFields,
+	})
+}
+
+func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {
+	fields := strings.Split(fieldPath, ".")
+	if len(fields) == 0 {
+		return fmt.Errorf("empty field path")
+	}
+
+	current := reflect.ValueOf(config).Elem()
+
+	for i, field := range fields {
+		if field == "" {
+			return fmt.Errorf("empty field name at position %d", i)
+		}
+
+		fieldValue, found := common.FindField(current, field)
+		if !found {
+			return fmt.Errorf("field '%s' not found at path '%s'", field, strings.Join(fields[:i+1], "."))
+		}
+
+		if i == len(fields)-1 {
+			convertedValue, err := common.ConvertValue(fieldValue.Type(), value)
+			if err != nil {
+				return fmt.Errorf("failed to convert value for field '%s': %v", field, err)
+			}
+
+			fieldValue.Set(convertedValue)
+			return nil
+		}
+
+		if fieldValue.Kind() == reflect.Ptr {
+			if fieldValue.IsNil() {
+				newValue := reflect.New(fieldValue.Type().Elem())
+				fieldValue.Set(newValue)
+			}
+			current = fieldValue.Elem()
+		} else {
+			current = fieldValue
+		}
+	}
+
+	return nil
 }
