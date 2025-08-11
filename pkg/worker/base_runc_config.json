@@ -713,19 +713,6 @@
 				"noexec",
 				"nodev"
 			]
-		},
-		{
-			"type": "none",
-			"source": "/workspace/etc/nsswitch.conf",
-			"destination": "/etc/nsswitch.conf",
-			"options": [
-				"ro",
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"noexec",
-				"nodev"
-			]
 		}
 	],
 	"hooks": {},
