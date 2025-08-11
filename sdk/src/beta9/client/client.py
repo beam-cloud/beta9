@@ -74,7 +74,18 @@ class Client:
         return f"{'https' if self.tls else 'http'}://{self.gateway_host}:{self.gateway_port}"
 
     def upload_file(self, local_path: str = "") -> str:
-        """Upload a file to to be used as an input to some function or deployment."""
+        """
+        Upload a file to to be used as an input to some function or deployment.
+
+        Args:
+            local_path (str): The path to the file to upload.
+
+        Returns:
+            str: The path to the uploaded file.
+
+        Raises:
+            VolumeUploadError: If the file upload fails.
+        """
 
         path = Path(local_path)
         filename = f"{path.stem}_{uuid.uuid4()}{path.suffix}"
@@ -107,7 +118,15 @@ class Client:
         return response.json()
 
     def get_task_by_id(self, id: str) -> Task:
-        """Retrieve a task by task ID."""
+        """
+        Retrieve a task by task ID.
+
+        Args:
+            id (str): The ID of the task to retrieve.
+
+        Returns:
+            Task: The task object.
+        """
         return Task(
             id=id,
             url=f"{self.base_url}/api/v1/task/{self.workspace_id}/{id}",
@@ -115,7 +134,15 @@ class Client:
         )
 
     def get_deployment_by_id(self, id: str) -> Deployment:
-        """Retrieve a deployment using its deployment ID."""
+        """
+        Retrieve a deployment using its deployment ID.
+
+        Args:
+            id (str): The ID of the deployment to retrieve.
+
+        Returns:
+            Deployment: The deployment object.
+        """
         return Deployment(
             base_url=self.base_url,
             token=self.token,
@@ -124,7 +151,15 @@ class Client:
         )
 
     def get_deployment_by_stub_id(self, stub_id: str) -> Deployment:
-        """Retrieve a deployment using the associated stub ID."""
+        """
+        Retrieve a deployment using the associated stub ID.
+
+        Args:
+            stub_id (str): The ID of the stub to retrieve.
+
+        Returns:
+            Deployment: The deployment object.
+        """
         return Deployment(
             base_url=self.base_url,
             token=self.token,
