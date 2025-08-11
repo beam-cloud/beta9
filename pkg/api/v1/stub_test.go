@@ -241,6 +241,24 @@ func TestUpdateConfig(t *testing.T) {
 			expectedFields: []string{"runtime.cpu"},
 		},
 		{
+			name:        "Test successful config update with gpu field",
+			stubID:      "test-stub-456",
+			workspaceID: 2,
+			requestBody: UpdateConfigRequest{
+				Fields: map[string]interface{}{
+					"runtime.cpu": 1500,
+					"runtime.gpu": "H100",
+				},
+			},
+			setupMock: func(mock *sqlmock.Sqlmock) {
+				rows := generateMockStubRows(2, "test-stub-456", "Test Stub", `{"runtime":{"cpu":1000,"memory":1000, "gpu": "T4"}}`, 2)
+				(*mock).ExpectQuery("SELECT").WithArgs("test-stub-456").WillReturnRows(rows)
+				(*mock).ExpectExec("UPDATE stub").WithArgs(sqlmock.AnyArg(), 2).WillReturnResult(sqlmock.NewResult(1, 1))
+			},
+			expectedStatus: http.StatusOK,
+			expectedFields: []string{"runtime.cpu", "runtime.gpu"},
+		},
+		{
 			name:        "Test stub not found",
 			stubID:      "non-existent-stub",
 			workspaceID: 1,

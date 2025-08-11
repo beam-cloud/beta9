@@ -643,7 +643,6 @@ func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath stri
 			return fmt.Errorf("field '%s' not found at path '%s'", field, strings.Join(fields[:i+1], "."))
 		}
 
-		// If this is the last field, set the value
 		if i == len(fields)-1 {
 			convertedValue, err := g.convertValue(fieldValue.Type(), value)
 			if err != nil {
@@ -654,7 +653,6 @@ func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath stri
 			return nil
 		}
 
-		// If not the last field, continue navigating
 		if fieldValue.Kind() == reflect.Ptr {
 			if fieldValue.IsNil() {
 				newValue := reflect.New(fieldValue.Type().Elem())
