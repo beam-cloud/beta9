@@ -702,7 +702,6 @@ func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (re
 		return reflect.Zero(targetType), nil
 	}
 
-	// Handle GpuType specifically
 	if targetType == reflect.TypeOf(types.GpuType("")) {
 		switch v := value.(type) {
 		case string:
@@ -835,7 +834,6 @@ func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (re
 		if value == nil {
 			return reflect.Zero(targetType), nil
 		}
-		// Dereference the pointer and convert the value
 		elemValue, err := g.convertValue(targetType.Elem(), value)
 		if err != nil {
 			return reflect.Value{}, err
