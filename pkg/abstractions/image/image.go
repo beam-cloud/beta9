@@ -142,8 +142,6 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	buildOptions.ExistingImageCreds = in.ExistingImageCreds
 	buildOptions.ClipVersion = clipVersion
 
-	_ = imageId
-
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 
