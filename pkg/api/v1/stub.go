@@ -584,7 +584,6 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPNotFound()
 	}
 
-	// Parse the request body
 	var updateReq UpdateConfigRequest
 	if err := ctx.Bind(&updateReq); err != nil {
 		return HTTPBadRequest("Failed to decode request body")
@@ -594,20 +593,17 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPBadRequest("At least one field must be provided")
 	}
 
-	// Parse the current config
 	var stubConfig types.StubConfigV1
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return HTTPInternalServerError("Failed to decode stub config")
 	}
 
-	// Update each specified field
 	updatedFields := make([]string, 0, len(updateReq.Fields))
 	for fieldPath, value := range updateReq.Fields {
 		if fieldPath == "" {
 			return HTTPBadRequest("Field path cannot be empty")
 		}
 
-		// Update the specified field using reflection
 		if err := g.updateConfigField(&stubConfig, fieldPath, value); err != nil {
 			return HTTPBadRequest(fmt.Sprintf("Failed to update field '%s': %v", fieldPath, err))
 		}
@@ -619,7 +615,6 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 		return HTTPBadRequest(errorMsg)
 	}
 
-	// Update the stub config in the database
 	if err := g.backendRepo.UpdateStubConfig(ctx.Request().Context(), stub.Id, &stubConfig); err != nil {
 		return HTTPInternalServerError("Failed to update stub config")
 	}
@@ -631,22 +626,18 @@ func (g *StubGroup) UpdateConfig(ctx echo.Context) error {
 }
 
 func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath string, value interface{}) error {
-	// Split the field path by dots to handle nested fields
 	fields := strings.Split(fieldPath, ".")
 	if len(fields) == 0 {
 		return fmt.Errorf("empty field path")
 	}
 
-	// Start with the config struct
 	current := reflect.ValueOf(config).Elem()
 
-	// Navigate through the field path
 	for i, field := range fields {
 		if field == "" {
 			return fmt.Errorf("empty field name at position %d", i)
 		}
 
-		// Find the field by JSON tag or field name
 		fieldValue, found := g.findField(current, field)
 		if !found {
 			return fmt.Errorf("field '%s' not found at path '%s'", field, strings.Join(fields[:i+1], "."))
@@ -654,7 +645,6 @@ func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath stri
 
 		// If this is the last field, set the value
 		if i == len(fields)-1 {
-			// Convert the value to the correct type
 			convertedValue, err := g.convertValue(fieldValue.Type(), value)
 			if err != nil {
 				return fmt.Errorf("failed to convert value for field '%s': %v", field, err)
@@ -667,7 +657,6 @@ func (g *StubGroup) updateConfigField(config *types.StubConfigV1, fieldPath stri
 		// If not the last field, continue navigating
 		if fieldValue.Kind() == reflect.Ptr {
 			if fieldValue.IsNil() {
-				// Create a new instance if the pointer is nil
 				newValue := reflect.New(fieldValue.Type().Elem())
 				fieldValue.Set(newValue)
 			}
@@ -686,12 +675,10 @@ func (g *StubGroup) findField(v reflect.Value, fieldName string) (reflect.Value,
 		return reflect.Value{}, false
 	}
 
-	// Find by JSON tag
 	for i := 0; i < v.NumField(); i++ {
 		fieldType := v.Type().Field(i)
 		jsonTag := fieldType.Tag.Get("json")
 
-		// Remove any options after comma
 		if commaIndex := strings.Index(jsonTag, ","); commaIndex != -1 {
 			jsonTag = jsonTag[:commaIndex]
 		}
@@ -711,7 +698,6 @@ func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (re
 		return reflect.ValueOf(value), nil
 	}
 
-	// Handle nil values
 	if value == nil {
 		return reflect.Zero(targetType), nil
 	}
@@ -740,7 +726,6 @@ func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (re
 		case uint64:
 			return reflect.ValueOf(int64(v)).Convert(targetType), nil
 		case string:
-			// Try to parse as integer
 			var i int64
 			if _, err := fmt.Sscanf(v, "%d", &i); err != nil {
 				return reflect.Value{}, fmt.Errorf("cannot convert string '%s' to %v", v, targetType)
@@ -771,7 +756,6 @@ func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (re
 		case uint64:
 			return reflect.ValueOf(v).Convert(targetType), nil
 		case string:
-			// Try to parse as unsigned integer
 			var u uint64
 			if _, err := fmt.Sscanf(v, "%d", &u); err != nil {
 				return reflect.Value{}, fmt.Errorf("cannot convert string '%s' to %v", v, targetType)
@@ -793,7 +777,6 @@ func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (re
 		case float64:
 			return reflect.ValueOf(v).Convert(targetType), nil
 		case string:
-			// Try to parse as float
 			var f float64
 			if _, err := fmt.Sscanf(v, "%f", &f); err != nil {
 				return reflect.Value{}, fmt.Errorf("cannot convert string '%s' to %v", v, targetType)
@@ -834,7 +817,6 @@ func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (re
 			return reflect.Value{}, fmt.Errorf("cannot convert %v (%T) to bool", value, value)
 		}
 	case reflect.Slice:
-		// Handle slice conversions (e.g., []string, []uint32)
 		if valueType.Kind() == reflect.Slice {
 			srcSlice := reflect.ValueOf(value)
 			dstSlice := reflect.MakeSlice(targetType, srcSlice.Len(), srcSlice.Len())
@@ -850,7 +832,6 @@ func (g *StubGroup) convertValue(targetType reflect.Type, value interface{}) (re
 		}
 		return reflect.Value{}, fmt.Errorf("cannot convert %v to slice", valueType)
 	case reflect.Ptr:
-		// Handle pointer types
 		if value == nil {
 			return reflect.Zero(targetType), nil
 		}
