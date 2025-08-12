@@ -212,6 +212,54 @@ func (s *GenericPodService) SandboxDeleteFile(ctx context.Context, in *pb.PodSan
 	}, nil
 }
 
+func (s *GenericPodService) SandboxCreateDir(ctx context.Context, in *pb.PodSandboxCreateDirRequest) (*pb.PodSandboxCreateDirResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxCreateDirResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxCreateDir(in.ContainerId, in.ContainerPath)
+	if err != nil {
+		return &pb.PodSandboxCreateDirResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to create dir in sandbox",
+		}, nil
+	}
+
+	return &pb.PodSandboxCreateDirResponse{
+		Ok: resp.Ok,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxDeleteDir(ctx context.Context, in *pb.PodSandboxDeleteDirRequest) (*pb.PodSandboxDeleteDirResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxDeleteDirResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxDeleteDir(in.ContainerId, in.ContainerPath)
+	if err != nil {
+		return &pb.PodSandboxDeleteDirResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to delete dir in sandbox",
+		}, nil
+	}
+
+	return &pb.PodSandboxDeleteDirResponse{
+		Ok: resp.Ok,
+	}, nil
+}
+
 func (s *GenericPodService) SandboxExposePort(ctx context.Context, in *pb.PodSandboxExposePortRequest) (*pb.PodSandboxExposePortResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
