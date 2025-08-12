@@ -169,6 +169,7 @@ message PodSandboxDeleteFileResponse {
 message PodSandboxCreateDirectoryRequest {
   string container_id = 1;
   string container_path = 2;
+  int32 mode = 3;
 }
 
 message PodSandboxCreateDirectoryResponse {
