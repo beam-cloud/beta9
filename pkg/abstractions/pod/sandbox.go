@@ -212,50 +212,50 @@ func (s *GenericPodService) SandboxDeleteFile(ctx context.Context, in *pb.PodSan
 	}, nil
 }
 
-func (s *GenericPodService) SandboxCreateDir(ctx context.Context, in *pb.PodSandboxCreateDirRequest) (*pb.PodSandboxCreateDirResponse, error) {
+func (s *GenericPodService) SandboxCreateDirectory(ctx context.Context, in *pb.PodSandboxCreateDirectoryRequest) (*pb.PodSandboxCreateDirectoryResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
-		return &pb.PodSandboxCreateDirResponse{
+		return &pb.PodSandboxCreateDirectoryResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to connect to sandbox",
 		}, nil
 	}
 
-	resp, err := client.SandboxCreateDir(in.ContainerId, in.ContainerPath)
+	resp, err := client.SandboxCreateDirectory(in.ContainerId, in.ContainerPath)
 	if err != nil {
-		return &pb.PodSandboxCreateDirResponse{
+		return &pb.PodSandboxCreateDirectoryResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to create dir in sandbox",
 		}, nil
 	}
 
-	return &pb.PodSandboxCreateDirResponse{
+	return &pb.PodSandboxCreateDirectoryResponse{
 		Ok: resp.Ok,
 	}, nil
 }
 
-func (s *GenericPodService) SandboxDeleteDir(ctx context.Context, in *pb.PodSandboxDeleteDirRequest) (*pb.PodSandboxDeleteDirResponse, error) {
+func (s *GenericPodService) SandboxDeleteDirectory(ctx context.Context, in *pb.PodSandboxDeleteDirectoryRequest) (*pb.PodSandboxDeleteDirectoryResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
-		return &pb.PodSandboxDeleteDirResponse{
+		return &pb.PodSandboxDeleteDirectoryResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to connect to sandbox",
 		}, nil
 	}
 
-	resp, err := client.SandboxDeleteDir(in.ContainerId, in.ContainerPath)
+	resp, err := client.SandboxDeleteDirectory(in.ContainerId, in.ContainerPath)
 	if err != nil {
-		return &pb.PodSandboxDeleteDirResponse{
+		return &pb.PodSandboxDeleteDirectoryResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to delete dir in sandbox",
 		}, nil
 	}
 
-	return &pb.PodSandboxDeleteDirResponse{
+	return &pb.PodSandboxDeleteDirectoryResponse{
 		Ok: resp.Ok,
 	}, nil
 }
