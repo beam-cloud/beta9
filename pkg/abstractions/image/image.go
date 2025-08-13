@@ -252,6 +252,7 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 	_, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
+			// If this check fails, the image is not persisted
 			exists = false
 		} else {
 			return "", false, false, nil, err
