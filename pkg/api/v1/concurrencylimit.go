@@ -25,8 +25,10 @@ func NewConcurrencyLimitGroup(
 		workspaceRepo: workspaceRepo,
 	}
 
-	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.GetConcurrencyLimitByWorkspaceId))
-	g.POST("/:workspaceId", auth.WithClusterAdminAuth(group.CreateOrUpdateConcurrencyLimit))
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListConcurrencyLimitsByWorkspaceId))
+	g.GET("/:workspaceId/current", auth.WithWorkspaceAuth(group.GetConcurrencyLimitByWorkspaceId))
+	g.POST("/:workspaceId", auth.WithClusterAdminAuth(group.CreateConcurrencyLimit))
+	g.POST("/:workspaceId/revert/:concurrencyLimitId", auth.WithClusterAdminAuth(group.RevertConcurrencyLimit))
 	g.DELETE("/:workspaceId", auth.WithClusterAdminAuth(group.DeleteConcurrencyLimit))
 
 	return group
@@ -52,7 +54,7 @@ func (c *ConcurrencyLimitGroup) GetConcurrencyLimitByWorkspaceId(ctx echo.Contex
 	return ctx.JSON(http.StatusOK, concurrencyLimit)
 }
 
-func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context) error {
+func (c *ConcurrencyLimitGroup) CreateConcurrencyLimit(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 
 	workspace, err := c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
@@ -65,20 +67,7 @@ func (c *ConcurrencyLimitGroup) CreateOrUpdateConcurrencyLimit(ctx echo.Context)
 		return HTTPBadRequest("Invalid request")
 	}
 
-	if workspace.ConcurrencyLimitId != nil {
-		concurrencyLimit, err := c.backendRepo.UpdateConcurrencyLimit(ctx.Request().Context(), *workspace.ConcurrencyLimitId, data.GPULimit, data.CPUMillicoreLimit)
-		if err != nil {
-			return HTTPInternalServerError("Failed to update concurrency limit")
-		}
-
-		err = c.workspaceRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
-		if err != nil {
-			return HTTPInternalServerError("Failed to recache concurrency limit")
-		}
-
-		return ctx.JSON(http.StatusOK, concurrencyLimit)
-	}
-
+	// Always create a new concurrency limit (no longer update existing ones)
 	concurrencyLimit, err := c.backendRepo.CreateConcurrencyLimit(ctx.Request().Context(), workspace.Id, data.GPULimit, data.CPUMillicoreLimit)
 	if err != nil {
 		return HTTPInternalServerError("Failed to create concurrency limit")
@@ -110,4 +99,33 @@ func (c *ConcurrencyLimitGroup) DeleteConcurrencyLimit(ctx echo.Context) error {
 	}
 
 	return ctx.NoContent(http.StatusOK)
+}
+
+func (c *ConcurrencyLimitGroup) ListConcurrencyLimitsByWorkspaceId(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+
+	limits, err := c.backendRepo.ListConcurrencyLimitsByWorkspaceId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get concurrency limits")
+	}
+
+	return ctx.JSON(http.StatusOK, limits)
+}
+
+func (c *ConcurrencyLimitGroup) RevertConcurrencyLimit(ctx echo.Context) error {
+	workspaceId := ctx.Param("workspaceId")
+	concurrencyLimitId := ctx.Param("concurrencyLimitId")
+
+	concurrencyLimit, err := c.backendRepo.RevertConcurrencyLimit(ctx.Request().Context(), workspaceId, concurrencyLimitId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to revert concurrency limit")
+	}
+
+	// Update cache
+	err = c.workspaceRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, concurrencyLimit)
+	if err != nil {
+		return HTTPInternalServerError("Failed to recache concurrency limit")
+	}
+
+	return ctx.JSON(http.StatusOK, concurrencyLimit)
 }
