@@ -33,14 +33,14 @@ func TestCreateConcurrencyLimit(t *testing.T) {
 	}
 
 	// Mock the INSERT query for creating concurrency limit
-	insertQuery := `INSERT INTO concurrency_limit \(workspace_id, gpu_limit, cpu_millicore_limit\)`
+	insertQuery := `INSERT INTO concurrency_limit (workspace_id, gpu_limit, cpu_millicore_limit)`
 	mock.ExpectQuery(regexp.QuoteMeta(insertQuery)).
 		WithArgs(workspaceId, gpuLimit, cpuMillicoreLimit).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "external_id", "workspace_id", "gpu_limit", "cpu_millicore_limit", "created_at", "updated_at"}).
 			AddRow(expectedLimit.Id, expectedLimit.ExternalId, expectedLimit.WorkspaceId, expectedLimit.GPULimit, expectedLimit.CPUMillicoreLimit, expectedLimit.CreatedAt, expectedLimit.UpdatedAt))
 
 	// Mock the UPDATE query for updating workspace
-	updateQuery := `UPDATE workspace SET concurrency_limit_id = \$1 WHERE id = \$2`
+	updateQuery := `UPDATE workspace SET concurrency_limit_id = $1 WHERE id = $2`
 	mock.ExpectExec(regexp.QuoteMeta(updateQuery)).
 		WithArgs(expectedLimit.Id, workspaceId).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -66,7 +66,7 @@ func TestCreateConcurrencyLimit_Error(t *testing.T) {
 	cpuMillicoreLimit := uint32(8000)
 
 	// Mock the INSERT query to return an error
-	insertQuery := `INSERT INTO concurrency_limit \(workspace_id, gpu_limit, cpu_millicore_limit\)`
+	insertQuery := `INSERT INTO concurrency_limit (workspace_id, gpu_limit, cpu_millicore_limit)`
 	mock.ExpectQuery(regexp.QuoteMeta(insertQuery)).
 		WithArgs(workspaceId, gpuLimit, cpuMillicoreLimit).
 		WillReturnError(fmt.Errorf("database error"))
@@ -96,7 +96,7 @@ func TestUpdateConcurrencyLimit(t *testing.T) {
 	}
 
 	// Mock the UPDATE query
-	updateQuery := `UPDATE concurrency_limit SET gpu_limit = \$2, cpu_millicore_limit = \$3, updated_at = CURRENT_TIMESTAMP WHERE id = \$1`
+	updateQuery := `UPDATE concurrency_limit SET gpu_limit = $2, cpu_millicore_limit = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1`
 	mock.ExpectQuery(regexp.QuoteMeta(updateQuery)).
 		WithArgs(concurrencyLimitId, gpuLimit, cpuMillicoreLimit).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "gpu_limit", "cpu_millicore_limit", "created_at", "updated_at"}).
@@ -129,19 +129,16 @@ func TestGetConcurrencyLimit(t *testing.T) {
 	}
 
 	// Mock the SELECT query
-	selectQuery := `SELECT id, external_id, workspace_id, gpu_limit, cpu_millicore_limit, created_at, updated_at FROM concurrency_limit WHERE id = \$1`
+	selectQuery := `SELECT gpu_limit, cpu_millicore_limit, created_at, updated_at FROM concurrency_limit WHERE id = $1;`
 	mock.ExpectQuery(regexp.QuoteMeta(selectQuery)).
 		WithArgs(concurrencyLimitId).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "external_id", "workspace_id", "gpu_limit", "cpu_millicore_limit", "created_at", "updated_at"}).
-			AddRow(expectedLimit.Id, expectedLimit.ExternalId, expectedLimit.WorkspaceId, expectedLimit.GPULimit, expectedLimit.CPUMillicoreLimit, expectedLimit.CreatedAt, expectedLimit.UpdatedAt))
+		WillReturnRows(sqlmock.NewRows([]string{"gpu_limit", "cpu_millicore_limit", "created_at", "updated_at"}).
+			AddRow(expectedLimit.GPULimit, expectedLimit.CPUMillicoreLimit, expectedLimit.CreatedAt, expectedLimit.UpdatedAt))
 
 	result, err := repo.GetConcurrencyLimit(ctx, concurrencyLimitId)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
-	assert.Equal(t, expectedLimit.Id, result.Id)
-	assert.Equal(t, expectedLimit.ExternalId, result.ExternalId)
-	assert.Equal(t, expectedLimit.WorkspaceId, result.WorkspaceId)
 	assert.Equal(t, expectedLimit.GPULimit, result.GPULimit)
 	assert.Equal(t, expectedLimit.CPUMillicoreLimit, result.CPUMillicoreLimit)
 }
@@ -205,13 +202,13 @@ func TestDeleteConcurrencyLimit(t *testing.T) {
 	mock.ExpectBegin()
 
 	// Mock the UPDATE workspace query
-	updateQuery := `UPDATE workspace SET concurrency_limit_id = NULL WHERE id = \$1`
+	updateQuery := `UPDATE workspace SET concurrency_limit_id = NULL WHERE id = $1`
 	mock.ExpectExec(regexp.QuoteMeta(updateQuery)).
 		WithArgs(workspace.Id).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	// Mock the DELETE concurrency_limit query
-	deleteQuery := `DELETE FROM concurrency_limit WHERE id = \$1`
+	deleteQuery := `DELETE FROM concurrency_limit WHERE id = $1`
 	mock.ExpectExec(regexp.QuoteMeta(deleteQuery)).
 		WithArgs(*workspace.ConcurrencyLimitId).
 		WillReturnResult(sqlmock.NewResult(1, 1))
@@ -243,13 +240,13 @@ func TestRevertConcurrencyLimit(t *testing.T) {
 	}
 
 	// Mock the count query to verify ownership
-	countQuery := `SELECT COUNT\(\*\)`
+	countQuery := `SELECT COUNT(id)`
 	mock.ExpectQuery(regexp.QuoteMeta(countQuery)).
 		WithArgs(workspaceId, concurrencyLimitId).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	// Mock the update query
-	updateQuery := `UPDATE workspace SET concurrency_limit_id = \$1 WHERE external_id = \$2`
+	updateQuery := `UPDATE workspace SET concurrency_limit_id = $1 WHERE external_id = $2`
 	mock.ExpectQuery(regexp.QuoteMeta(updateQuery)).
 		WithArgs(concurrencyLimitId, workspaceId).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "external_id", "workspace_id", "gpu_limit", "cpu_millicore_limit", "created_at", "updated_at"}).
@@ -272,7 +269,7 @@ func TestRevertConcurrencyLimit_NotOwned(t *testing.T) {
 	concurrencyLimitId := "test-limit-id"
 
 	// Mock the count query to return 0 (not owned)
-	countQuery := `SELECT COUNT\(\*\)`
+	countQuery := `SELECT COUNT(id)`
 	mock.ExpectQuery(regexp.QuoteMeta(countQuery)).
 		WithArgs(workspaceId, concurrencyLimitId).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))

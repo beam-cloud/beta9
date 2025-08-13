@@ -1725,7 +1725,7 @@ func (r *PostgresBackendRepository) RevertConcurrencyLimit(ctx context.Context, 
 	var limit types.ConcurrencyLimit
 
 	query := `
-		SELECT COUNT(*) 
+		SELECT COUNT(id) 
 		FROM concurrency_limit cl 
 		JOIN workspace w ON cl.workspace_id = w.id 
 		WHERE w.external_id = $1 AND cl.external_id = $2;
@@ -1738,7 +1738,7 @@ func (r *PostgresBackendRepository) RevertConcurrencyLimit(ctx context.Context, 
 	}
 
 	if count == 0 {
-		return nil, fmt.Errorf("concurrency limit %d does not belong to workspace %s", concurrencyLimitId, workspaceId)
+		return nil, fmt.Errorf("concurrency limit %s does not belong to workspace %s", concurrencyLimitId, workspaceId)
 	}
 
 	updateQuery := `
