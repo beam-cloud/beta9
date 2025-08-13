@@ -116,6 +116,11 @@ func (c *ConcurrencyLimitGroup) RevertConcurrencyLimit(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
 	concurrencyLimitId := ctx.Param("concurrencyLimitId")
 
+	_, err := c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return HTTPBadRequest("Invalid workspace ID")
+	}
+
 	concurrencyLimit, err := c.backendRepo.RevertConcurrencyLimit(ctx.Request().Context(), workspaceId, concurrencyLimitId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to revert concurrency limit")
