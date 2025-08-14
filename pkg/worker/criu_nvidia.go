@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	CacheWorkerPoolSize    = 20
 	minNvidiaDriverVersion = 570
 )
 
@@ -50,11 +49,12 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 
 	// Create checkpoint in temp directory
 	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
+		AllowOpenTCP: true,
 		LeaveRunning: true,
 		SkipInFlight: true,
-		AllowOpenTCP: true,
 		LinkRemap:    true,
-		ImagePath:    checkpointDir,
+		ImagePath:    checkpointPath,
+		Cgroups:      runc.Soft,
 	})
 	if err != nil {
 		os.RemoveAll(checkpointDir)
@@ -106,24 +106,15 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	bundlePath := filepath.Dir(opts.configPath)
 	tarballPath := fmt.Sprintf("%s/%s.tar", c.cpStorageConfig.MountPath, opts.request.StubId)
 
-	// Create a temporary directory for the restore operation
-	tempDir, err := os.MkdirTemp("", fmt.Sprintf("restore-%s-", opts.request.StubId))
-	if err != nil {
-		return -1, fmt.Errorf("failed to create temp directory for restore: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	// Untar checkpoint from tarball to temp directory
-	err = untarTar(tarballPath, tempDir)
-	if err != nil {
-		return -1, fmt.Errorf("failed to untar checkpoint: %v", err)
-	}
-
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
 			AllowOpenTCP: true,
-			ImagePath:    tempDir,
+			LinkRemap:    true,
+			// Logs, irmap cache, sockets for lazy server and other go to working dir
+			WorkDir:      workDir,
+			ImagePath:    imagePath,
 			OutputWriter: opts.runcOpts.OutputWriter,
+			Cgroups:      runc.Soft,
 		},
 		Started: opts.runcOpts.Started,
 	})

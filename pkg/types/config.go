@@ -395,6 +395,7 @@ type WorkerPoolConfig struct {
 	K3sInstallDir              string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
 	StoragePath                string                            `key:"storagePath" json:"storage_path"`
 	StorageMode                string                            `key:"storageMode" json:"storage_mode"`
+	CheckpointPath       string                            `key:"checkpointPath" json:"checkpoint_path"`
 	AlluxioCoordinatorHostname string                            `key:"alluxioCoordinatorHostname" json:"alluxio_coordinator_hostname"`
 }
 

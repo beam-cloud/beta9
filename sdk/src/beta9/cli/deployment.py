@@ -233,7 +233,7 @@ def create_deployment(
 )
 @click.option(
     "--format",
-    type=click.Choice(["json", "none"]),
+    type=click.Choice(["json", "none", "table"]),
     default="table",
     show_default=True,
     help="Change the format of the output.",

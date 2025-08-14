@@ -18,7 +18,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.0
 	github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563
 	github.com/beam-cloud/clip v0.0.0-20250424185136-5f40b560b510
-	github.com/beam-cloud/go-runc v0.0.0-20250705192003-074a7a5f2124
+	github.com/beam-cloud/go-runc v0.0.0-20250804233952-faffa99498b8
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
 	github.com/cedana/cedana v0.9.240
 	github.com/cenkalti/backoff v2.2.1+incompatible
@@ -32,7 +32,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hanwen/go-fuse/v2 v2.5.1
-	github.com/hashicorp/go-multierror v1.1.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/jmoiron/sqlx v1.3.5
 	github.com/json-iterator/go v1.1.12
@@ -52,7 +51,6 @@ require (
 	github.com/opencontainers/umoci v0.4.7
 	github.com/openmeterio/openmeter v1.0.0-beta.47
 	github.com/oracle/oci-go-sdk v24.3.0+incompatible
-	github.com/panjf2000/ants/v2 v2.11.1
 	github.com/pkg/errors v0.9.1
 	github.com/pressly/goose/v3 v3.21.1
 	github.com/prometheus/client_golang v1.20.5
@@ -122,7 +120,6 @@ require (
 	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
 	github.com/googleapis/gax-go/v2 v2.12.3 // indirect
-	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/jacobsa/fuse v0.0.0-20230810134708-ab21db1af836 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-ieproxy v0.0.0-20190805055040-f9202b1cfdeb // indirect

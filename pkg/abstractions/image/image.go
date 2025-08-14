@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -81,8 +82,6 @@ func NewRuncImageService(
 }
 
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
-	var valid bool = true
-
 	if in.SnapshotId != nil && *in.SnapshotId != "" {
 		exists, err := is.builder.Exists(ctx, *in.SnapshotId)
 		if err != nil {
@@ -96,6 +95,106 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 		}, nil
 	}
 
+	imageId, exists, validResult, _, err := is.verifyImage(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+
+	return &pb.VerifyImageBuildResponse{
+		ImageId: imageId,
+		Exists:  exists,
+		Valid:   validResult,
+	}, nil
+}
+
+func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
+	log.Info().Interface("request", in).Msg("incoming image build request")
+
+	verifyReq := &pb.VerifyImageBuildRequest{
+		PythonVersion:    in.PythonVersion,
+		PythonPackages:   in.PythonPackages,
+		Commands:         in.Commands,
+		ExistingImageUri: in.ExistingImageUri,
+		BuildSteps:       in.BuildSteps,
+		EnvVars:          in.EnvVars,
+		Dockerfile:       in.Dockerfile,
+		BuildCtxObject:   in.BuildCtxObject,
+		Secrets:          in.Secrets,
+		Gpu:              in.Gpu,
+		IgnorePython:     in.IgnorePython,
+	}
+
+	imageId, exists, _, buildOptions, err := is.verifyImage(stream.Context(), verifyReq)
+	if err != nil {
+		return err
+	}
+
+	if exists {
+		return stream.Send(&pb.BuildImageResponse{
+			Msg:     "Image already exists",
+			Done:    true,
+			Success: true,
+			ImageId: imageId,
+		})
+	}
+
+	clipVersion := is.config.ImageService.ClipVersion
+	buildOptions.ExistingImageCreds = in.ExistingImageCreds
+	buildOptions.ClipVersion = clipVersion
+
+	ctx := stream.Context()
+	outputChan := make(chan common.OutputMsg)
+
+	go is.builder.Build(ctx, buildOptions, outputChan)
+
+	archivingStage := false
+	var lastMessage common.OutputMsg
+	for o := range outputChan {
+		if archivingStage && !o.Archiving {
+			continue
+		}
+
+		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion, Warning: o.Warning}); err != nil {
+			log.Error().Err(err).Msg("failed to complete build")
+			lastMessage = o
+			break
+		}
+
+		if o.Archiving {
+			archivingStage = true
+		}
+
+		if o.Done {
+			lastMessage = o
+			break
+		}
+	}
+
+	if !lastMessage.Success {
+		return errors.New("build failed")
+	}
+
+	_, err = is.backendRepo.CreateImage(context.Background(), lastMessage.ImageId, clipVersion)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to create image record")
+		return errors.New("failed to create image record")
+	}
+
+	log.Info().Msg("build completed successfully")
+	return nil
+}
+
+func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageBuildRequest) (string, bool, bool, *BuildOpts, error) {
+	var valid bool = true
+
+	if in.SnapshotId != nil && *in.SnapshotId != "" {
+		exists, err := is.builder.Exists(ctx, *in.SnapshotId)
+		if err != nil {
+			return "", false, false, nil, err
+		}
+		return *in.SnapshotId, exists, true, nil, nil
+	}
+
 	tag := in.PythonVersion
 	if in.PythonVersion == types.Python3.String() {
 		tag = is.config.ImageService.PythonVersion
@@ -103,13 +202,13 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 	baseImageTag, ok := is.config.ImageService.Runner.Tags[tag]
 	if !ok {
-		return nil, errors.Errorf("Python version not supported: %s", in.PythonVersion)
+		return "", false, false, nil, errors.Errorf("Python version not supported: %s", in.PythonVersion)
 	}
 
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	buildSecrets, err := is.retrieveBuildSecrets(ctx, in.Secrets, authInfo)
 	if err != nil {
-		return nil, err
+		return "", false, false, nil, err
 	}
 
 	opts := &BuildOpts{
@@ -147,104 +246,20 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 
 	exists, err := is.builder.Exists(ctx, imageId)
 	if err != nil {
-		return nil, err
+		return "", false, false, nil, err
 	}
 
-	return &pb.VerifyImageBuildResponse{
-		ImageId: imageId,
-		Exists:  exists,
-		Valid:   valid,
-	}, nil
-}
-
-func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
-	log.Info().Interface("request", in).Msg("incoming image build request")
-
-	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
-
-	buildSecrets, err := is.retrieveBuildSecrets(stream.Context(), in.Secrets, authInfo)
+	_, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
 	if err != nil {
-		return err
-	}
-
-	tag := in.PythonVersion
-	if in.PythonVersion == types.Python3.String() {
-		tag = is.config.ImageService.PythonVersion
-	}
-
-	clipVersion := is.config.ImageService.ClipVersion
-
-	buildOptions := &BuildOpts{
-		BaseImageTag:       is.config.ImageService.Runner.Tags[tag],
-		BaseImageName:      is.config.ImageService.Runner.BaseImageName,
-		BaseImageRegistry:  is.config.ImageService.Runner.BaseImageRegistry,
-		PythonVersion:      in.PythonVersion,
-		PythonPackages:     in.PythonPackages,
-		Commands:           in.Commands,
-		BuildSteps:         convertBuildSteps(in.BuildSteps),
-		ExistingImageUri:   in.ExistingImageUri,
-		ExistingImageCreds: in.ExistingImageCreds,
-		EnvVars:            in.EnvVars,
-		Dockerfile:         in.Dockerfile,
-		BuildCtxObject:     in.BuildCtxObject,
-		BuildSecrets:       buildSecrets,
-		Gpu:                in.Gpu,
-		IgnorePython:       in.IgnorePython,
-		ClipVersion:        clipVersion,
-	}
-
-	ctx := stream.Context()
-	outputChan := make(chan common.OutputMsg)
-
-	imageId, err := getImageID(buildOptions)
-	if err != nil {
-		return errors.New("build failed")
-	}
-
-	_, err = is.backendRepo.CreateImage(context.Background(), imageId, clipVersion)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to create image record")
-
-		// TODO: if this is an integrity error, then just return success, then flush RCLIPs across all nodes
-		// This should prevent overwrites of existing images
-		// It is unclear what is causing the existence check to fail, but we know that in these cases the image DOES exist in our system
-		stream.Send(&pb.BuildImageResponse{Msg: "", Done: true, Success: true, ImageId: imageId, PythonVersion: buildOptions.PythonVersion})
-
-		return errors.New("failed to create image record")
-	}
-
-	go is.builder.Build(ctx, buildOptions, outputChan)
-
-	// This is a switch to stop sending build log messages once the archiving stage is reached
-	archivingStage := false
-	var lastMessage common.OutputMsg
-	for o := range outputChan {
-		if archivingStage && !o.Archiving {
-			continue
-		}
-
-		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion, Warning: o.Warning}); err != nil {
-			log.Error().Err(err).Msg("failed to complete build")
-			lastMessage = o
-			break
-		}
-
-		if o.Archiving {
-			archivingStage = true
-		}
-
-		if o.Done {
-			lastMessage = o
-			break
+		if errors.Is(err, sql.ErrNoRows) {
+			// If this check fails, the image is not persisted
+			exists = false
+		} else {
+			return "", false, false, nil, err
 		}
 	}
 
-	if !lastMessage.Success {
-		return errors.New("build failed")
-	}
-
-	log.Info().Msg("build completed successfully")
-	return nil
+	return imageId, exists, valid, opts, nil
 }
 
 func (is *RuncImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {

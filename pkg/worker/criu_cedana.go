@@ -180,17 +180,6 @@ func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 
 	bundle := strings.TrimRight(opts.configPath, filepath.Base(opts.configPath))
 
-	// If a cache function is provided, attempt to cache the checkpoint nearby
-	if restoreOpts.cacheFunc != nil {
-		checkpointPath, err := restoreOpts.cacheFunc(restoreOpts.containerId, restoreOpts.checkpointPath)
-		if err == nil {
-			log.Info().Str("container_id", restoreOpts.containerId).Msgf("using cached checkpoint located at: %s", checkpointPath)
-			restoreOpts.checkpointPath = checkpointPath
-		} else {
-			log.Error().Str("container_id", restoreOpts.containerId).Msgf("failed to cache checkpoint nearby: %v", err)
-		}
-	}
-
 	args := &cedanadaemon.RestoreReq{
 		Path:       restoreOpts.checkpointPath,
 		Type:       "job",
