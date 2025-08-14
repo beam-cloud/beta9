@@ -636,7 +636,7 @@ func (s *RunCServer) RunCSandboxCreateDirectory(ctx context.Context, in *pb.RunC
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
 	if err := os.MkdirAll(hostPath, os.FileMode(in.Mode)); err != nil {
 		return &pb.RunCSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
@@ -659,7 +659,7 @@ func (s *RunCServer) RunCSandboxDeleteDirectory(ctx context.Context, in *pb.RunC
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
 	if err := os.RemoveAll(hostPath); err != nil {
 		return &pb.RunCSandboxDeleteDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
