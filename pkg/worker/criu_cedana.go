@@ -140,7 +140,7 @@ func (c *CedanaCRIUManager) Run(ctx context.Context, request *types.ContainerReq
 	return exitCode, nil
 }
 
-func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest, onComplete func(request *types.ContainerRequest, err error)) (string, error) {
+func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
 	args := &cedanadaemon.DumpReq{
 		Name: request.ContainerId,
 		Type: "job",
@@ -158,8 +158,6 @@ func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 		return "", fmt.Errorf("failed to dump runc container: %w", err)
 	}
 	_ = profilingData
-
-	onComplete(request, nil)
 
 	return resp.Path, nil
 }

@@ -42,12 +42,8 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUMan
 	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, gpuCnt: gpuCnt, available: available}, nil
 }
 
-func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest, onComplete func(request *types.ContainerRequest, err error)) (string, error) {
-	checkpointDir := fmt.Sprintf("/tmp/checkpoint-%s", request.StubId) // Create a temporary directory for the checkpoint
-	os.RemoveAll(checkpointDir)
-	os.MkdirAll(checkpointDir, 0700)
-
-	// Create checkpoint in temp directory
+func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
+	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, request.StubId)
 	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
 		AllowOpenTCP: true,
 		LeaveRunning: true,
@@ -57,54 +53,20 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 		Cgroups:      runc.Soft,
 	})
 	if err != nil {
-		os.RemoveAll(checkpointDir)
 		return "", err
 	}
 
-	// Create archive and store it asynchronously
-	archivePath := fmt.Sprintf("%s/%s.tar", c.cpStorageConfig.MountPath, request.StubId)
-	go func() {
-		localArchive := fmt.Sprintf("/tmp/%s.tar", request.StubId)
-		err := createTar(checkpointDir, localArchive)
-		if err != nil {
-			log.Error().Err(err).
-				Str("temp_dir", checkpointDir).
-				Str("local_archive", localArchive).
-				Str("stub_id", request.StubId).
-				Msg("failed to create checkpoint tarball")
-			os.RemoveAll(checkpointDir)
-			onComplete(request, err)
-			return
-		}
-
-		// Copy to distributed filesystem
-		err = copyFile(localArchive, archivePath)
-		if err != nil {
-			log.Error().Err(err).
-				Str("local_archive", localArchive).
-				Str("archive_path", archivePath).
-				Str("stub_id", request.StubId).
-				Msg("failed to copy checkpoint tarball to storage")
-		} else {
-			log.Info().
-				Str("temp_dir", checkpointDir).
-				Str("archive_path", archivePath).
-				Str("stub_id", request.StubId).
-				Msg("checkpoint tarballed and stored")
-		}
-
-		// Clean up
-		os.Remove(localArchive)
-		os.RemoveAll(checkpointDir)
-		onComplete(request, err)
-	}()
-
-	return archivePath, nil
+	return checkpointPath, nil
 }
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
-	tarballPath := fmt.Sprintf("%s/%s.tar", c.cpStorageConfig.MountPath, opts.request.StubId)
+	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.request.StubId)
+	workDir := filepath.Join("/tmp", imagePath)
+	err := c.setupRestoreWorkDir(workDir)
+	if err != nil {
+		return -1, err
+	}
 
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
@@ -178,4 +140,15 @@ func crCompatible(gpuCnt int) bool {
 	}
 
 	return true
+}
+
+func (c *NvidiaCRIUManager) setupRestoreWorkDir(workDir string) error {
+	if _, err := os.Stat(workDir); os.IsNotExist(err) {
+		err := os.MkdirAll(workDir, 0755)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

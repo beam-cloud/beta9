@@ -36,7 +36,7 @@ type RestoreOpts struct {
 type CRIUManager interface {
 	Available() bool
 	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error)
-	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest, onComplete func(request *types.ContainerRequest, err error)) (string, error)
+	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
 	RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error)
 }
 
@@ -46,51 +46,35 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUMa
 	var criuManager CRIUManager = nil
 	var err error = nil
 
-	switch criuConfig.Mode {
+	switch config.Mode {
 	case types.CRIUConfigModeCedana:
 		criuManager, err = InitializeCedanaCRIU(ctx, config.Cedana)
 	case types.CRIUConfigModeNvidia:
 		criuManager, err = InitializeNvidiaCRIU(ctx, config)
 	default:
-		return nil, fmt.Errorf("invalid CRIU mode: %s", criuConfig.Mode)
+		return nil, fmt.Errorf("invalid CRIU mode: %s", config.Mode)
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	if err := os.MkdirAll(criuConfig.Storage.MountPath, os.ModePerm); err != nil {
+	if err := os.MkdirAll(config.Storage.MountPath, os.ModePerm); err != nil {
 		return nil, err
 	}
 
-	// If storage mode is S3, mount the checkpoint storage bucket
-	if criuConfig.Storage.Mode == string(types.CheckpointStorageModeS3) {
-		alluxioCoordinatorHostname := os.Getenv("ALLUXIO_COORDINATOR_HOSTNAME")
-		if alluxioCoordinatorHostname == "" {
-			alluxioCoordinatorHostname = storageConfig.Alluxio.CoordinatorHostname
-		}
-
-		checkpointStorage, err := storage.NewAlluxioStorage(types.AlluxioConfig{
-			ImageUrl:            storageConfig.Alluxio.ImageUrl,
-			EtcdEndpoint:        storageConfig.Alluxio.EtcdEndpoint,
-			EtcdUsername:        storageConfig.Alluxio.EtcdUsername,
-			EtcdPassword:        storageConfig.Alluxio.EtcdPassword,
-			EtcdTlsEnabled:      storageConfig.Alluxio.EtcdTlsEnabled,
-			CoordinatorHostname: alluxioCoordinatorHostname,
-			BucketName:          criuConfig.Storage.ObjectStore.BucketName,
-			AccessKey:           criuConfig.Storage.ObjectStore.AccessKey,
-			SecretKey:           criuConfig.Storage.ObjectStore.SecretKey,
-			EndpointURL:         criuConfig.Storage.ObjectStore.EndpointURL,
-			Region:              criuConfig.Storage.ObjectStore.Region,
-			ForcePathStyle:      criuConfig.Storage.ObjectStore.ForcePathStyle,
-			ReadOnly:            false,
+	// If storage mode is S3, mount the checkpoint storage as a FUSE filesystem
+	if config.Storage.Mode == string(types.CheckpointStorageModeS3) {
+		checkpointStorage, _ := storage.NewMountPointStorage(types.MountPointConfig{
+			BucketName:  config.Storage.ObjectStore.BucketName,
+			AccessKey:   config.Storage.ObjectStore.AccessKey,
+			SecretKey:   config.Storage.ObjectStore.SecretKey,
+			EndpointURL: config.Storage.ObjectStore.EndpointURL,
+			Region:      config.Storage.ObjectStore.Region,
+			ReadOnly:    false,
 		})
-		if err != nil {
-			log.Warn().Msgf("C/R unavailable, unable to create checkpoint storage: %v", err)
-			return nil, err
-		}
 
-		err = checkpointStorage.Mount(criuConfig.Storage.MountPath)
+		err := checkpointStorage.Mount(config.Storage.MountPath)
 		if err != nil {
 			log.Warn().Msgf("C/R unavailable, unable to mount checkpoint storage: %v", err)
 			return nil, err
@@ -161,27 +145,6 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 	return exitCode, request.ContainerId, err
 }
 
-func (s *Worker) onCheckpointComplete(request *types.ContainerRequest, err error) {
-	if err != nil {
-		updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusCheckpointFailed)
-		if updateStateErr != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
-		}
-
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
-		return
-	}
-
-	// Create a file accessible to the container to indicate that the checkpoint has been captured
-	os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
-	log.Info().Str("container_id", request.ContainerId).Msg("checkpoint created successfully")
-
-	updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusAvailable)
-	if updateStateErr != nil {
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
-	}
-}
-
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, outputLogger *slog.Logger, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, error) {
@@ -226,7 +189,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		}
 
 		// Proceed to create the checkpoint
-		_, err := s.criuManager.CreateCheckpoint(ctx, request, s.onCheckpointComplete)
+		checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, request)
 		if err != nil {
 			updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusCheckpointFailed)
 			if updateStateErr != nil {
