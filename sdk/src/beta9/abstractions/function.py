@@ -287,20 +287,24 @@ class ScheduleWrapper(_CallableWrapper):
     deployment_stub_type = SCHEDULE_DEPLOYMENT_STUB_TYPE
 
     def deploy(self, *args: Any, **kwargs: Any) -> Tuple[Dict[str, Any], bool]:
-        deployed = super().deploy(invocation_details_func=self.invocation_details, *args, **kwargs)
-        if deployed:
-            res = self.parent.function_stub.function_schedule(
-                FunctionScheduleRequest(
-                    stub_id=self.parent.stub_id,
-                    when=self.parent.when,
-                    deployment_id=self.parent.deployment_id,
-                )
+        resp, ok = super().deploy(invocation_details_func=self.invocation_details, *args, **kwargs)
+        if not ok:
+            return {}, False
+
+        res = self.parent.function_stub.function_schedule(
+            FunctionScheduleRequest(
+                stub_id=self.parent.stub_id,
+                when=self.parent.when,
+                deployment_id=resp["deployment_id"],
             )
-            if not res.ok:
-                terminal.error(res.err_msg, exit=False)
-                return {}, False
+        )
+        if not res.ok:
+            terminal.error(res.err_msg, exit=False)
+            return {}, False
+
         return {
-            "deployment_id": self.parent.deployment_id,
+            "deployment_id": resp["deployment_id"],
+            "scheduled_job_id": res.scheduled_job_id,
         }, True
 
     def invocation_details(self, **kwargs) -> None:
