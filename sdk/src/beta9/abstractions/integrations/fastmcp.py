@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from ... import terminal
 from ...abstractions.base.container import Container
@@ -145,7 +145,7 @@ class MCPServer(ASGI):
         context: Optional[ConfigContext] = None,
         invocation_details_func: Optional[Callable[..., None]] = None,
         **invocation_details_options: Any,
-    ) -> bool:
+    ) -> Tuple[Dict[str, Any], bool]:
         self.name = name or self.name
         if not self.name:
             terminal.error(
@@ -159,7 +159,7 @@ class MCPServer(ASGI):
             stub_type=ASGI_DEPLOYMENT_STUB_TYPE,
             force_create_stub=True,
         ):
-            return False
+            return {}, False
 
         terminal.header("Deploying")
         deploy_response: DeployStubResponse = self.gateway_stub.deploy_stub(
@@ -174,7 +174,9 @@ class MCPServer(ASGI):
             else:
                 self.print_invocation_snippet(**invocation_details_options)
 
-        return deploy_response.ok
+        return {
+            "deployment_id": deploy_response.deployment_id,
+        }, deploy_response.ok
 
     @with_grpc_error_handling
     def serve(self, timeout: int = 0, url_type: str = ""):
