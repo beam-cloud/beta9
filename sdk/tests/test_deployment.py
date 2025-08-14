@@ -1,9 +1,8 @@
 from unittest import TestCase, mock
 from unittest.mock import MagicMock
 
-from beam.integrations import VLLM, VLLMArgs
-
 from beta9 import Image, Pod, asgi, endpoint, function, realtime, schedule, task_queue
+from beta9.integrations import VLLM, VLLMArgs
 
 PHI_VISION_INSTRUCT = "microsoft/Phi-3.5-vision-instruct"
 
