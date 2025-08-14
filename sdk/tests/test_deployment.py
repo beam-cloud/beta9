@@ -1,7 +1,19 @@
 from unittest import TestCase, mock
 from unittest.mock import MagicMock
 
+from beam.integrations import VLLM, VLLMArgs
+
 from beta9 import Image, Pod, asgi, endpoint, function, realtime, schedule, task_queue
+
+PHI_VISION_INSTRUCT = "microsoft/Phi-3.5-vision-instruct"
+
+
+class GatewayStubMock:
+    def __init__(self, deployment_id):
+        self.deployment_id = deployment_id
+
+    def deploy_stub(self):
+        return MagicMock(deployment_id=self.deployment_id, ok=True)
 
 
 class TestDeployment(TestCase):
@@ -126,3 +138,38 @@ class TestDeployment(TestCase):
 
         self.assertEqual(ok, True)
         self.assertEqual(resp["deployment_id"], deploy_mock.return_value[0]["deployment_id"])
+
+    @mock.patch(
+        "beta9.abstractions.integrations.vllm.VLLM.prepare_runtime",
+        return_value=True,
+    )
+    @mock.patch(
+        "beta9.abstractions.integrations.vllm.VLLM.gateway_stub",
+        return_value=MagicMock(
+            deploy_stub=MagicMock(
+                return_value=MagicMock(
+                    deployment_id="test-deployment-id",
+                    ok=True,
+                )
+            )
+        ),
+    )
+    def test_vllm_deploy(self, gateway_stub_mock, prepare_runtime_mock):
+        test_vllm = VLLM(
+            name=PHI_VISION_INSTRUCT.split("/")[-1],
+            cpu=8,
+            memory="16Gi",
+            gpu="A100-40",
+            vllm_args=VLLMArgs(
+                model=PHI_VISION_INSTRUCT,
+                served_model_name=[PHI_VISION_INSTRUCT],
+                trust_remote_code=True,
+                max_model_len=4096,
+                limit_mm_per_prompt={"image": 2},
+            ),
+        )
+
+        resp, ok = test_vllm.deploy()
+
+        self.assertEqual(ok, gateway_stub_mock.deploy_stub().ok)
+        self.assertEqual(resp["deployment_id"], gateway_stub_mock.deploy_stub().deployment_id)
