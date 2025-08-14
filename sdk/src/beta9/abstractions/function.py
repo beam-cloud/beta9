@@ -3,7 +3,7 @@ import concurrent.futures
 import inspect
 import os
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import cloudpickle
 
@@ -286,7 +286,7 @@ class ScheduleWrapper(_CallableWrapper):
     base_stub_type = SCHEDULE_STUB_TYPE
     deployment_stub_type = SCHEDULE_DEPLOYMENT_STUB_TYPE
 
-    def deploy(self, *args: Any, **kwargs: Any) -> bool:
+    def deploy(self, *args: Any, **kwargs: Any) -> Tuple[Dict[str, Any], bool]:
         deployed = super().deploy(invocation_details_func=self.invocation_details, *args, **kwargs)
         if deployed:
             res = self.parent.function_stub.function_schedule(
@@ -298,8 +298,10 @@ class ScheduleWrapper(_CallableWrapper):
             )
             if not res.ok:
                 terminal.error(res.err_msg, exit=False)
-                return False
-        return deployed
+                return {}, False
+        return {
+            "deployment_id": self.parent.deployment_id,
+        }, True
 
     def invocation_details(self, **kwargs) -> None:
         """
