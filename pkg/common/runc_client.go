@@ -160,8 +160,8 @@ func (c *RunCClient) SandboxDeleteFile(containerId, containerPath string) (*pb.R
 	return resp, nil
 }
 
-func (c *RunCClient) SandboxCreateDirectory(containerId, containerPath string) (*pb.RunCSandboxCreateDirectoryResponse, error) {
-	resp, err := c.client.RunCSandboxCreateDirectory(context.TODO(), &pb.RunCSandboxCreateDirectoryRequest{ContainerId: containerId, ContainerPath: containerPath})
+func (c *RunCClient) SandboxCreateDirectory(containerId, containerPath string, mode int32) (*pb.RunCSandboxCreateDirectoryResponse, error) {
+	resp, err := c.client.RunCSandboxCreateDirectory(context.TODO(), &pb.RunCSandboxCreateDirectoryRequest{ContainerId: containerId, ContainerPath: containerPath, Mode: mode})
 	if err != nil {
 		return resp, err
 	}

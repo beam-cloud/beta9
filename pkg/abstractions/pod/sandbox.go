@@ -223,7 +223,7 @@ func (s *GenericPodService) SandboxCreateDirectory(ctx context.Context, in *pb.P
 		}, nil
 	}
 
-	resp, err := client.SandboxCreateDirectory(in.ContainerId, in.ContainerPath)
+	resp, err := client.SandboxCreateDirectory(in.ContainerId, in.ContainerPath, in.Mode)
 	if err != nil {
 		return &pb.PodSandboxCreateDirectoryResponse{
 			Ok:       false,
