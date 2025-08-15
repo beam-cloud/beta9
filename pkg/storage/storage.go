@@ -13,6 +13,7 @@ const (
 	StorageModeJuiceFS    string = "juicefs"
 	StorageModeMountPoint string = "mountpoint"
 	StorageModeGeese      string = "geese"
+	StorageModeAlluxio    string = "alluxio"
 )
 
 type Storage interface {
@@ -57,6 +58,19 @@ func NewStorage(config types.StorageConfig, cacheClient *blobcache.BlobCacheClie
 		return s, nil
 	case StorageModeGeese:
 		s, err := NewGeeseStorage(config.Geese, cacheClient)
+		if err != nil {
+			return nil, err
+		}
+
+		// Mount filesystem
+		err = s.Mount(config.FilesystemPath)
+		if err != nil {
+			log.Fatal().Err(err).Msg("unable to mount filesystem")
+		}
+
+		return s, nil
+	case StorageModeAlluxio:
+		s, err := NewAlluxioStorage(config.Alluxio)
 		if err != nil {
 			return nil, err
 		}
