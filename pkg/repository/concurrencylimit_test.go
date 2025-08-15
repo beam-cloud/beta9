@@ -252,7 +252,7 @@ func TestRevertConcurrencyLimit(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"id", "external_id", "workspace_id", "gpu_limit", "cpu_millicore_limit", "created_at", "updated_at"}).
 			AddRow(expectedLimit.Id, expectedLimit.ExternalId, expectedLimit.WorkspaceId, expectedLimit.GPULimit, expectedLimit.CPUMillicoreLimit, expectedLimit.CreatedAt, expectedLimit.UpdatedAt))
 
-	result, err := repo.RevertConcurrencyLimit(ctx, workspaceId, concurrencyLimitId)
+	result, err := repo.RevertToConcurrencyLimit(ctx, workspaceId, concurrencyLimitId)
 
 	require.NoError(t, err)
 	assert.NotNil(t, result)
@@ -274,7 +274,7 @@ func TestRevertConcurrencyLimit_NotOwned(t *testing.T) {
 		WithArgs(workspaceId, concurrencyLimitId).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 
-	result, err := repo.RevertConcurrencyLimit(ctx, workspaceId, concurrencyLimitId)
+	result, err := repo.RevertToConcurrencyLimit(ctx, workspaceId, concurrencyLimitId)
 
 	require.Error(t, err)
 	assert.Nil(t, result)

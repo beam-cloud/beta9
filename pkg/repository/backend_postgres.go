@@ -1721,7 +1721,7 @@ func (r *PostgresBackendRepository) ListConcurrencyLimitsByWorkspaceId(ctx conte
 	return limits, nil
 }
 
-func (r *PostgresBackendRepository) RevertConcurrencyLimit(ctx context.Context, workspaceId string, concurrencyLimitId string) (*types.ConcurrencyLimit, error) {
+func (r *PostgresBackendRepository) RevertToConcurrencyLimit(ctx context.Context, workspaceId string, concurrencyLimitId string) (*types.ConcurrencyLimit, error) {
 	var limit types.ConcurrencyLimit
 
 	query := `

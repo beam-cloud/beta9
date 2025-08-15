@@ -28,7 +28,7 @@ func NewConcurrencyLimitGroup(
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListConcurrencyLimitsByWorkspaceId))
 	g.GET("/:workspaceId/current", auth.WithWorkspaceAuth(group.GetConcurrencyLimitByWorkspaceId))
 	g.POST("/:workspaceId", auth.WithClusterAdminAuth(group.CreateConcurrencyLimit))
-	g.POST("/:workspaceId/revert/:concurrencyLimitId", auth.WithClusterAdminAuth(group.RevertConcurrencyLimit))
+	g.POST("/:workspaceId/revert", auth.WithClusterAdminAuth(group.RevertConcurrencyLimit))
 	g.DELETE("/:workspaceId", auth.WithClusterAdminAuth(group.DeleteConcurrencyLimit))
 
 	return group
@@ -114,14 +114,30 @@ func (c *ConcurrencyLimitGroup) ListConcurrencyLimitsByWorkspaceId(ctx echo.Cont
 
 func (c *ConcurrencyLimitGroup) RevertConcurrencyLimit(ctx echo.Context) error {
 	workspaceId := ctx.Param("workspaceId")
-	concurrencyLimitId := ctx.Param("concurrencyLimitId")
 
 	_, err := c.backendRepo.GetWorkspaceByExternalId(ctx.Request().Context(), workspaceId)
 	if err != nil {
 		return HTTPBadRequest("Invalid workspace ID")
 	}
 
-	concurrencyLimit, err := c.backendRepo.RevertConcurrencyLimit(ctx.Request().Context(), workspaceId, concurrencyLimitId)
+	concurrencyLimits, err := c.backendRepo.ListConcurrencyLimitsByWorkspaceId(ctx.Request().Context(), workspaceId)
+	if err != nil {
+		return HTTPInternalServerError("Failed to get concurrency limits")
+	}
+
+	var latestNonZeroConcurrencyLimit *types.ConcurrencyLimit
+	for _, concurrencyLimit := range concurrencyLimits {
+		if concurrencyLimit.GPULimit > 0 && concurrencyLimit.CPUMillicoreLimit > 0 {
+			latestNonZeroConcurrencyLimit = &concurrencyLimit
+			break
+		}
+	}
+
+	if latestNonZeroConcurrencyLimit == nil {
+		return HTTPBadRequest("No non-zero concurrency limit found")
+	}
+
+	concurrencyLimit, err := c.backendRepo.RevertToConcurrencyLimit(ctx.Request().Context(), workspaceId, latestNonZeroConcurrencyLimit.ExternalId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to revert concurrency limit")
 	}
