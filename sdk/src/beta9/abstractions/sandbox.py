@@ -20,7 +20,9 @@ from ..clients.pod import (
     CreatePodResponse,
     PodSandboxConnectRequest,
     PodSandboxConnectResponse,
+    PodSandboxCreateDirectoryRequest,
     PodSandboxDeleteFileRequest,
+    PodSandboxDeleteDirectoryRequest,
     PodSandboxDownloadFileRequest,
     PodSandboxExecRequest,
     PodSandboxExposePortRequest,
@@ -1454,21 +1456,24 @@ class SandboxFileSystem:
         """
         Create a directory in the sandbox.
 
-        Note: This method is not yet implemented.
-
         Parameters:
             sandbox_path (str): The path where the directory should be created.
 
         Raises:
             NotImplementedError: This method is not yet implemented.
         """
-        raise NotImplementedError("Create directory not implemented")
+        resp = self.sandbox_instance.stub.sandbox_create_directory(
+            PodSandboxCreateDirectoryRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+            )
+        )
+        if not resp.ok:
+            raise SandboxFileSystemError(resp.error_msg)        
 
     def delete_directory(self, sandbox_path: str):
         """
         Delete a directory in the sandbox.
-
-        Note: This method is not yet implemented.
 
         Parameters:
             sandbox_path (str): The path of the directory to delete.
@@ -1476,7 +1481,14 @@ class SandboxFileSystem:
         Raises:
             NotImplementedError: This method is not yet implemented.
         """
-        raise NotImplementedError("Delete directory not implemented")
+        resp = self.sandbox_instance.stub.sandbox_delete_directory(
+            PodSandboxDeleteDirectoryRequest(
+                container_id=self.sandbox_instance.container_id,
+                container_path=sandbox_path,
+            )
+        )
+        if not resp.ok:
+            raise SandboxFileSystemError(resp.error_msg)
 
     def delete_file(self, sandbox_path: str):
         """

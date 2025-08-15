@@ -175,6 +175,7 @@ class PodSandboxDeleteFileResponse(betterproto.Message):
 class PodSandboxCreateDirectoryRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     container_path: str = betterproto.string_field(2)
+    mode: int = betterproto.int32_field(3)
 
 
 @dataclass(eq=False, repr=False)

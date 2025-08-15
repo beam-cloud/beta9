@@ -621,6 +621,52 @@ func (s *RunCServer) RunCSandboxUploadFile(ctx context.Context, in *pb.RunCSandb
 	return &pb.RunCSandboxUploadFileResponse{Ok: true}, nil
 }
 
+func (s *RunCServer) RunCSandboxCreateDirectory(ctx context.Context, in *pb.RunCSandboxCreateDirectoryRequest) (*pb.RunCSandboxCreateDirectoryResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	if err := s.waitForContainer(ctx, in.ContainerId); err != nil {
+		return &pb.RunCSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
+	if err := os.MkdirAll(hostPath, os.FileMode(in.Mode)); err != nil {
+		return &pb.RunCSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.RunCSandboxCreateDirectoryResponse{Ok: true}, nil
+}
+
+func (s *RunCServer) RunCSandboxDeleteDirectory(ctx context.Context, in *pb.RunCSandboxDeleteDirectoryRequest) (*pb.RunCSandboxDeleteDirectoryResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxDeleteDirectoryResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	if err := s.waitForContainer(ctx, in.ContainerId); err != nil {
+		return &pb.RunCSandboxDeleteDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	containerPath := in.ContainerPath
+	if !filepath.IsAbs(containerPath) {
+		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
+	}
+
+	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
+	if err := os.RemoveAll(hostPath); err != nil {
+		return &pb.RunCSandboxDeleteDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.RunCSandboxDeleteDirectoryResponse{Ok: true}, nil
+}
+
 func (s *RunCServer) RunCSandboxDownloadFile(ctx context.Context, in *pb.RunCSandboxDownloadFileRequest) (*pb.RunCSandboxDownloadFileResponse, error) {
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
