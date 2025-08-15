@@ -48,6 +48,7 @@ class ConcurrencyLimit(betterproto.Message):
     cpu_millicore_limit: int = betterproto.uint32_field(4)
     created_at: datetime = betterproto.message_field(5)
     updated_at: datetime = betterproto.message_field(6)
+    workspace_id: int = betterproto.uint32_field(7)
 
 
 @dataclass(eq=False, repr=False)
