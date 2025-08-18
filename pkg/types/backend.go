@@ -126,10 +126,10 @@ type WorkspaceStorage struct {
 	AccessKey   *string    `db:"access_key" json:"access_key" encrypt:"true"`
 	SecretKey   *string    `db:"secret_key" json:"secret_key" encrypt:"true"`
 	EndpointUrl *string    `db:"endpoint_url" json:"endpoint_url"`
-	StorageMode *string    `db:"storage_mode" json:"storage_mode"`
 	Region      *string    `db:"region" json:"region"`
 	CreatedAt   *time.Time `db:"created_at" json:"created_at,omitempty"`
 	UpdatedAt   *time.Time `db:"updated_at" json:"updated_at,omitempty"`
+	StorageMode *string    `db:"storage_mode" json:"storage_mode"`
 }
 
 func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
