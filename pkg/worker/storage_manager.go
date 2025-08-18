@@ -118,7 +118,7 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeAlluxio,
 			FilesystemName: workspaceName,
-			FilesystemPath: workspaceName,
+			FilesystemPath: mountPath,
 			Alluxio: types.AlluxioConfig{
 				// Global config
 				Debug:          s.config.WorkspaceStorage.Alluxio.Debug,
