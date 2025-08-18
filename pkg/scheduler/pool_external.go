@@ -535,6 +535,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPoolConfig.PoolSizing.SharedMemoryLimitPct, workerMemory)
 	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPoolConfig.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
 
+	storagePath := wpc.workerPoolConfig.StoragePath
+	if storagePath == "" {
+		storagePath = defaultStoragePath
+	}
+
 	volumes := []corev1.Volume{
 		{
 			Name: logVolumeName,
@@ -571,6 +576,15 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 				},
 			},
 		},
+		{
+			Name: storageVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: storagePath,
+					Type: &hostPathType,
+				},
+			},
+		},
 	}
 
 	if wpc.workerPoolConfig.CRIUEnabled && wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
@@ -603,6 +617,11 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		{
 			Name:      imagesVolumeName,
 			MountPath: "/images",
+			ReadOnly:  false,
+		},
+		{
+			Name:      storageVolumeName,
+			MountPath: "/storage",
 			ReadOnly:  false,
 		},
 		{

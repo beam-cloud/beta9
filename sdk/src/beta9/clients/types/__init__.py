@@ -275,3 +275,4 @@ class WorkspaceStorage(betterproto.Message):
     region: str = betterproto.string_field(7)
     created_at: datetime = betterproto.message_field(8)
     updated_at: datetime = betterproto.message_field(9)
+    storage_mode: str = betterproto.string_field(10)

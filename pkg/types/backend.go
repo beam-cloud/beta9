@@ -129,6 +129,7 @@ type WorkspaceStorage struct {
 	Region      *string    `db:"region" json:"region"`
 	CreatedAt   *time.Time `db:"created_at" json:"created_at,omitempty"`
 	UpdatedAt   *time.Time `db:"updated_at" json:"updated_at,omitempty"`
+	StorageMode *string    `db:"storage_mode" json:"storage_mode"`
 }
 
 func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
@@ -143,6 +144,7 @@ func NewWorkspaceStorageFromProto(in *pb.WorkspaceStorage) *WorkspaceStorage {
 		AccessKey:   &in.AccessKey,
 		SecretKey:   &in.SecretKey,
 		EndpointUrl: &in.EndpointUrl,
+		StorageMode: &in.StorageMode,
 		Region:      &in.Region,
 		CreatedAt:   &createdAt,
 		UpdatedAt:   &updatedAt,
@@ -158,6 +160,7 @@ func (w *WorkspaceStorage) ToProto() *pb.WorkspaceStorage {
 		SecretKey:   *w.SecretKey,
 		Region:      *w.Region,
 		EndpointUrl: *w.EndpointUrl,
+		StorageMode: *w.StorageMode,
 		CreatedAt:   timestamppb.New(*w.CreatedAt),
 		UpdatedAt:   timestamppb.New(*w.UpdatedAt),
 	}
