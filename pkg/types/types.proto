@@ -246,8 +246,9 @@ message WorkspaceStorage {
   string access_key = 4;
   string secret_key = 5;
   string endpoint_url = 6;
-  string region = 7;
-  google.protobuf.Timestamp created_at = 8;
-  google.protobuf.Timestamp updated_at = 9;
+  string storage_mode = 7;
+  string region = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
 }
 

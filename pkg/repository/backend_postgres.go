@@ -172,7 +172,7 @@ func (r *PostgresBackendRepository) GetWorkspace(ctx context.Context, workspaceI
 	SELECT w.id, w.external_id, w.name, w.created_at, w.concurrency_limit_id, w.volume_cache_enabled, w.multi_gpu_enabled,
 	ws.id "storage.id", ws.bucket_name "storage.bucket_name", ws.access_key "storage.access_key",
 	ws.secret_key "storage.secret_key", ws.endpoint_url "storage.endpoint_url", ws.region "storage.region",
-	ws.created_at "storage.created_at", ws.updated_at "storage.updated_at"
+	ws.storage_mode "storage.storage_mode", ws.created_at "storage.created_at", ws.updated_at "storage.updated_at"
 	FROM workspace w
 	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
 	WHERE w.id = $1;
@@ -261,7 +261,7 @@ func (r *PostgresBackendRepository) AuthorizeToken(ctx context.Context, tokenKey
 	       w.id "workspace.id", w.name "workspace.name", w.external_id "workspace.external_id", w.signing_key "workspace.signing_key", w.created_at "workspace.created_at",
 		   w.updated_at "workspace.updated_at", w.volume_cache_enabled "workspace.volume_cache_enabled", w.multi_gpu_enabled "workspace.multi_gpu_enabled", w.storage_id "workspace.storage_id",
 		   ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", 
-		   ws.secret_key AS "workspace.storage.secret_key", ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"
+		   ws.secret_key AS "workspace.storage.secret_key", ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.storage_mode AS "workspace.storage.storage_mode", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"
 	FROM token t
 	INNER JOIN workspace w ON t.workspace_id = w.id
 	LEFT JOIN workspace_storage ws ON w.storage_id = ws.id
@@ -972,7 +972,7 @@ func (r *PostgresBackendRepository) GetStubByExternalId(ctx context.Context, ext
 			a.id as "app.id", a.external_id as "app.external_id", a.name as "app.name"
 		`,
 		`ws.id AS "workspace.storage.id", ws.external_id AS "workspace.storage.external_id", ws.bucket_name AS "workspace.storage.bucket_name", ws.access_key AS "workspace.storage.access_key", ws.secret_key AS "workspace.storage.secret_key", 
-		ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"`,
+		ws.endpoint_url AS "workspace.storage.endpoint_url", ws.region AS "workspace.storage.region", ws.storage_mode AS "workspace.storage.storage_mode", ws.created_at AS "workspace.storage.created_at", ws.updated_at AS "workspace.storage.updated_at"`,
 	).
 		From("stub s").
 		Join("workspace w ON s.workspace_id = w.id").
@@ -1581,7 +1581,7 @@ func (r *PostgresBackendRepository) GetConcurrencyLimit(ctx context.Context, con
 func (r *PostgresBackendRepository) GetWorkspaceStorage(ctx context.Context, storageId uint) (*types.WorkspaceStorage, error) {
 	var storage types.WorkspaceStorage
 
-	query := `SELECT bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at FROM workspace_storage WHERE id = $1;`
+	query := `SELECT bucket_name, access_key, secret_key, endpoint_url, region, storage_mode, created_at, updated_at FROM workspace_storage WHERE id = $1;`
 	if err := r.client.GetContext(ctx, &storage, query, storageId); err != nil {
 		return nil, err
 	}
@@ -1595,9 +1595,9 @@ func (r *PostgresBackendRepository) GetWorkspaceStorage(ctx context.Context, sto
 
 func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, workspaceId uint, storage types.WorkspaceStorage) (*types.WorkspaceStorage, error) {
 	query := `
-	INSERT INTO workspace_storage (bucket_name, access_key, secret_key, endpoint_url, region)
-	VALUES ($1, $2, $3, $4, $5)
-	RETURNING id, external_id, bucket_name, access_key, secret_key, endpoint_url, region, created_at, updated_at;
+	INSERT INTO workspace_storage (bucket_name, access_key, secret_key, endpoint_url, region, storage_mode)
+	VALUES ($1, $2, $3, $4, $5, $6)
+	RETURNING id, external_id, bucket_name, access_key, secret_key, endpoint_url, region, storage_mode, created_at, updated_at;
 	`
 
 	if err := r.encryptFields(&storage); err != nil {

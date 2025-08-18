@@ -72,8 +72,13 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 
 	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
+	storageMode := workspaceStorage.StorageMode
+	if storageMode == nil {
+		storageMode = &s.poolConfig.StorageMode
+	}
+
 	var err error
-	switch s.poolConfig.StorageMode {
+	switch *storageMode {
 	case storage.StorageModeGeese:
 		os.MkdirAll(mountPath, 0755)
 
