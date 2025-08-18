@@ -115,24 +115,18 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		}
 
 	case storage.StorageModeAlluxio:
-		alluxioCoordinatorHostname := os.Getenv("ALLUXIO_COORDINATOR_HOSTNAME")
-		if alluxioCoordinatorHostname == "" {
-			alluxioCoordinatorHostname = s.config.WorkspaceStorage.Alluxio.CoordinatorHostname
-		}
-
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeAlluxio,
 			FilesystemName: workspaceName,
 			FilesystemPath: workspaceName,
 			Alluxio: types.AlluxioConfig{
 				// Global config
-				Debug:               s.config.WorkspaceStorage.Alluxio.Debug,
-				ImageUrl:            s.config.WorkspaceStorage.Alluxio.ImageUrl,
-				EtcdEndpoint:        s.config.WorkspaceStorage.Alluxio.EtcdEndpoint,
-				EtcdUsername:        s.config.WorkspaceStorage.Alluxio.EtcdUsername,
-				EtcdPassword:        s.config.WorkspaceStorage.Alluxio.EtcdPassword,
-				EtcdTlsEnabled:      s.config.WorkspaceStorage.Alluxio.EtcdTlsEnabled,
-				CoordinatorHostname: alluxioCoordinatorHostname,
+				Debug:          s.config.WorkspaceStorage.Alluxio.Debug,
+				ImageUrl:       s.config.WorkspaceStorage.Alluxio.ImageUrl,
+				EtcdEndpoint:   s.config.WorkspaceStorage.Alluxio.EtcdEndpoint,
+				EtcdUsername:   s.config.WorkspaceStorage.Alluxio.EtcdUsername,
+				EtcdPassword:   s.config.WorkspaceStorage.Alluxio.EtcdPassword,
+				EtcdTlsEnabled: s.config.WorkspaceStorage.Alluxio.EtcdTlsEnabled,
 
 				// Workspace specific config
 				BucketName:     *workspaceStorage.BucketName,

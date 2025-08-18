@@ -508,10 +508,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Name:  "PREEMPTABLE",
 			Value: strconv.FormatBool(wpc.workerPoolConfig.Preemptable),
 		},
-		{
-			Name:  "ALLUXIO_COORDINATOR_HOSTNAME",
-			Value: wpc.workerPoolConfig.AlluxioCoordinatorHostname,
-		},
 	}
 
 	remoteConfig, err := providers.GetRemoteConfig(wpc.config, wpc.tailscale)

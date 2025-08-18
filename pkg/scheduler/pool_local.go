@@ -480,10 +480,6 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Name:  "PREEMPTABLE",
 			Value: strconv.FormatBool(wpc.workerPoolConfig.Preemptable),
 		},
-		{
-			Name:  "ALLUXIO_COORDINATOR_HOSTNAME",
-			Value: wpc.workerPoolConfig.AlluxioCoordinatorHostname,
-		},
 	}
 
 	if wpc.config.Worker.UseGatewayServiceHostname {

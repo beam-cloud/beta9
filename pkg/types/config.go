@@ -281,20 +281,19 @@ type GeeseConfig struct {
 }
 
 type AlluxioConfig struct {
-	Debug               bool   `key:"debug" json:"debug"`
-	CoordinatorHostname string `key:"coordinatorHostname" json:"coordinator_hostname"`
-	EtcdEndpoint        string `key:"etcdEndpoint" json:"etcd_endpoint"`
-	EtcdUsername        string `key:"etcdUsername" json:"etcd_username"`
-	EtcdPassword        string `key:"etcdPassword" json:"etcd_password"`
-	EtcdTlsEnabled      bool   `key:"etcdTlsEnabled" json:"etcd_tls_enabled"`
-	ImageUrl            string `key:"imageUrl" json:"image_url"`
-	BucketName          string `key:"bucketName" json:"bucket_name"`
-	AccessKey           string `key:"accessKey" json:"access_key"`
-	SecretKey           string `key:"secretKey" json:"secret_key"`
-	EndpointURL         string `key:"endpointURL" json:"endpoint_url"`
-	Region              string `key:"region" json:"region"`
-	ReadOnly            bool   `key:"readOnly" json:"read_only"`
-	ForcePathStyle      bool   `key:"forcePathStyle" json:"force_path_style"`
+	Debug          bool   `key:"debug" json:"debug"`
+	EtcdEndpoint   string `key:"etcdEndpoint" json:"etcd_endpoint"`
+	EtcdUsername   string `key:"etcdUsername" json:"etcd_username"`
+	EtcdPassword   string `key:"etcdPassword" json:"etcd_password"`
+	EtcdTlsEnabled bool   `key:"etcdTlsEnabled" json:"etcd_tls_enabled"`
+	ImageUrl       string `key:"imageUrl" json:"image_url"`
+	BucketName     string `key:"bucketName" json:"bucket_name"`
+	AccessKey      string `key:"accessKey" json:"access_key"`
+	SecretKey      string `key:"secretKey" json:"secret_key"`
+	EndpointURL    string `key:"endpointURL" json:"endpoint_url"`
+	Region         string `key:"region" json:"region"`
+	ReadOnly       bool   `key:"readOnly" json:"read_only"`
+	ForcePathStyle bool   `key:"forcePathStyle" json:"force_path_style"`
 }
 
 // @go2proto
@@ -378,25 +377,24 @@ var (
 )
 
 type WorkerPoolConfig struct {
-	GPUType                    string                            `key:"gpuType" json:"gpu_type"`
-	Runtime                    string                            `key:"runtime" json:"runtime"`
-	Mode                       PoolMode                          `key:"mode" json:"mode"`
-	Provider                   *MachineProvider                  `key:"provider" json:"provider"`
-	JobSpec                    WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
-	PoolSizing                 WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
-	DefaultMachineCost         float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
-	RequiresPoolSelector       bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
-	Priority                   int32                             `key:"priority" json:"priority"`
-	Preemptable                bool                              `key:"preemptable" json:"preemptable"`
-	UserData                   string                            `key:"userData" json:"user_data"`
-	CRIUEnabled                bool                              `key:"criuEnabled" json:"criu_enabled"`
-	TmpSizeLimit               string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
-	ConfigGroup                string                            `key:"configGroup" json:"config_group"`
-	K3sInstallDir              string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
-	StoragePath                string                            `key:"storagePath" json:"storage_path"`
-	StorageMode                string                            `key:"storageMode" json:"storage_mode"`
+	GPUType              string                            `key:"gpuType" json:"gpu_type"`
+	Runtime              string                            `key:"runtime" json:"runtime"`
+	Mode                 PoolMode                          `key:"mode" json:"mode"`
+	Provider             *MachineProvider                  `key:"provider" json:"provider"`
+	JobSpec              WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
+	PoolSizing           WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
+	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
+	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
+	Priority             int32                             `key:"priority" json:"priority"`
+	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
+	UserData             string                            `key:"userData" json:"user_data"`
+	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
+	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
+	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
+	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
+	StoragePath          string                            `key:"storagePath" json:"storage_path"`
+	StorageMode          string                            `key:"storageMode" json:"storage_mode"`
 	CheckpointPath       string                            `key:"checkpointPath" json:"checkpoint_path"`
-	AlluxioCoordinatorHostname string                            `key:"alluxioCoordinatorHostname" json:"alluxio_coordinator_hostname"`
 }
 
 type WorkerPoolJobSpecConfig struct {

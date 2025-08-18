@@ -11,7 +11,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const defaultAlluxioCoordinatorPort = 19999
+const (
+	defaultAlluxioCoordinatorPort = 19999
+	defaultAlluxioCoordinatorHost = "0.0.0.0"
+)
 
 type AlluxioStorage struct {
 	config types.AlluxioConfig
@@ -46,7 +49,7 @@ func (s *AlluxioStorage) Mount(localPath string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("http://%s:%d/api/v1/mount", s.config.CoordinatorHostname, defaultAlluxioCoordinatorPort)
+	url := fmt.Sprintf("http://%s:%d/api/v1/mount", defaultAlluxioCoordinatorHost, defaultAlluxioCoordinatorPort)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(requestBody))
 	if err != nil {
 		return err
@@ -75,7 +78,7 @@ func (s *AlluxioStorage) Unmount(localPath string) error {
 		return err
 	}
 
-	url := fmt.Sprintf("http://%s:%d/api/v1/mount", s.config.CoordinatorHostname, defaultAlluxioCoordinatorPort)
+	url := fmt.Sprintf("http://%s:%d/api/v1/mount", defaultAlluxioCoordinatorHost, defaultAlluxioCoordinatorPort)
 	req, err := http.NewRequest(http.MethodDelete, url, bytes.NewBuffer(requestBody))
 	if err != nil {
 		return err
