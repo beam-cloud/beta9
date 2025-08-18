@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -14,6 +15,7 @@ import (
 const (
 	defaultAlluxioCoordinatorPort = 19999
 	defaultAlluxioCoordinatorHost = "0.0.0.0"
+	defaultAlluxioHTTPTimeout     = 30 * time.Second
 )
 
 type AlluxioStorage struct {
@@ -50,7 +52,11 @@ func (s *AlluxioStorage) Mount(localPath string) error {
 	}
 
 	url := fmt.Sprintf("http://%s:%d/api/v1/mount", defaultAlluxioCoordinatorHost, defaultAlluxioCoordinatorPort)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(requestBody))
+
+	client := &http.Client{
+		Timeout: defaultAlluxioHTTPTimeout,
+	}
+	resp, err := client.Post(url, "application/json", bytes.NewBuffer(requestBody))
 	if err != nil {
 		return err
 	}
@@ -85,7 +91,9 @@ func (s *AlluxioStorage) Unmount(localPath string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: defaultAlluxioHTTPTimeout,
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
