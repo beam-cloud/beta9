@@ -59,6 +59,10 @@ func (s *MountPointStorage) Format(fsName string) error {
 	return nil
 }
 
+func (s *MountPointStorage) Mode() string {
+	return StorageModeMountPoint
+}
+
 func (s *MountPointStorage) Unmount(localPath string) error {
 	cmd := exec.Command("umount", localPath)
 

@@ -3,6 +3,7 @@ package worker
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 )
@@ -39,11 +40,21 @@ func copyDirectory(src, dst string) error {
 }
 
 func copyFile(src, dst string) error {
-	input, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, input, 0644)
+	cmd := exec.Command("cp", src, dst)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func createTar(srcDir, destTar string) error {
+	cmd := exec.Command("tar", "-cf", destTar, "-C", filepath.Dir(srcDir), filepath.Base(srcDir))
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func untarTar(srcTar, destDir string) error {
+	cmd := exec.Command("tar", "-xf", srcTar, "-C", destDir)
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 type FileLock struct {
