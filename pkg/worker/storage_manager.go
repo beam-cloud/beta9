@@ -77,7 +77,7 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 	storageMode := s.poolConfig.StorageMode
 	if workspaceStorage.StorageMode != nil {
 		storageMode = *workspaceStorage.StorageMode
-		log.Info().Str("workspace_name", workspaceName).Str("storage_mode", storageMode).Msgf("using storage mode '%s'", storageMode)
+		log.Info().Str("workspace_name", workspaceName).Str("storage_mode", storageMode).Msgf("using storage mode override on workspace '%s'", workspaceName)
 	}
 
 	var err error
