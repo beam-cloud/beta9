@@ -45,6 +45,8 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 		poolConfig.StorageMode = config.WorkspaceStorage.DefaultStorageMode
 	}
 
+	log.Info().Str("setting default storage mode", poolConfig.StorageMode).Msg("storage mode")
+
 	go sm.cleanupUnusedMounts()
 	return sm, nil
 }
@@ -74,7 +76,7 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 
 	storageMode := workspaceStorage.StorageMode
 	if storageMode != nil && *storageMode != s.poolConfig.StorageMode {
-		log.Warn().Str("workspace_name", workspaceName).Str("storage_mode", *storageMode).Msg("storage mode mismatch, using default storage mode")
+		log.Warn().Str("workspace_name", workspaceName).Str("storage_mode", *storageMode).Msgf("storage mode mismatch, using default storage mode to '%s'", s.poolConfig.StorageMode)
 		storageMode = &s.poolConfig.StorageMode
 	}
 
