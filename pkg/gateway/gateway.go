@@ -257,13 +257,17 @@ func (g *Gateway) initGrpc() error {
 	return nil
 }
 
+// initGrpcGateway exposes gRPC services as HTTP endpoints.
 func (g *Gateway) initGrpcGateway(grpcAddr string) error {
 	mux := runtime.NewServeMux()
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	if err := pb.RegisterPodServiceHandlerFromEndpoint(context.Background(), mux, grpcAddr, opts); err != nil {
 		return err
 	}
-	g.baseRouteGroup.Any("/grpc-gateway/*", echo.WrapHandler(http.StripPrefix("/api/v1/grpc-gateway", mux)))
+	// No need to add auth middleware: grpc-gateway maps the 'Authorization' header
+	// to gRPC metadata, and the destination gRPC server's interceptor will handle
+	// authorization for every request.
+	g.baseRouteGroup.Any("/grpc-gateway/*", echo.WrapHandler(http.StripPrefix(apiv1.HttpServerBaseRoute+"/grpc-gateway", mux)))
 	return nil
 }
 
