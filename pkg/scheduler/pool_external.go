@@ -590,6 +590,18 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 		})
 	}
 
+	if wpc.workerPoolConfig.StoragePath != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: storageVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: wpc.workerPoolConfig.StoragePath,
+					Type: &hostPathType,
+				},
+			},
+		})
+	}
+
 	return volumes
 }
 
@@ -620,6 +632,14 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      checkpointVolumeName,
 			MountPath: defaultCheckpointPath,
+			ReadOnly:  false,
+		})
+	}
+
+	if wpc.workerPoolConfig.StoragePath != "" {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      storageVolumeName,
+			MountPath: defaultStoragePath,
 			ReadOnly:  false,
 		})
 	}

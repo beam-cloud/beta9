@@ -224,19 +224,23 @@ type StorageConfig struct {
 	ObjectPath       string                 `key:"objectPath" json:"object_path"`
 	JuiceFS          JuiceFSConfig          `key:"juicefs" json:"juicefs"`
 	Geese            GeeseConfig            `key:"geese" json:"geese"`
+	Alluxio          AlluxioConfig          `key:"alluxio" json:"alluxio"`
 	MountPoint       MountPointConfig       `key:"mountpoint" json:"mountpoint"`
 	WorkspaceStorage WorkspaceStorageConfig `key:"workspaceStorage" json:"workspace_storage"`
 }
 
 type WorkspaceStorageConfig struct {
-	Mode                string      `key:"mode" json:"mode"`
-	BaseMountPath       string      `key:"baseMountPath" json:"base_mount_path"`
-	Geese               GeeseConfig `key:"geese" json:"geese"`
-	DefaultBucketPrefix string      `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
-	DefaultAccessKey    string      `key:"defaultAccessKey" json:"default_access_key"`
-	DefaultSecretKey    string      `key:"defaultSecretKey" json:"default_secret_key"`
-	DefaultEndpointUrl  string      `key:"defaultEndpointUrl" json:"default_endpoint_url"`
-	DefaultRegion       string      `key:"defaultRegion" json:"default_region"`
+	BaseMountPath       string `key:"baseMountPath" json:"base_mount_path"`
+	DefaultStorageMode  string `key:"defaultStorageMode" json:"default_storage_mode"`
+	DefaultBucketPrefix string `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
+	DefaultAccessKey    string `key:"defaultAccessKey" json:"default_access_key"`
+	DefaultSecretKey    string `key:"defaultSecretKey" json:"default_secret_key"`
+	DefaultEndpointUrl  string `key:"defaultEndpointUrl" json:"default_endpoint_url"`
+	DefaultRegion       string `key:"defaultRegion" json:"default_region"`
+
+	// Storage mode configs
+	Geese   GeeseConfig   `key:"geese" json:"geese"`
+	Alluxio AlluxioConfig `key:"alluxio" json:"alluxio"`
 }
 
 type JuiceFSConfig struct {
@@ -274,6 +278,22 @@ type GeeseConfig struct {
 	StagedWritePath        string        `key:"stagedWritePath" json:"staged_write_path"`
 	StagedWriteDebounce    time.Duration `key:"stagedWriteDebounce" json:"staged_write_debounce"`
 	CacheStreamingEnabled  bool          `key:"cacheStreamingEnabled" json:"cache_streaming_enabled"`
+}
+
+type AlluxioConfig struct {
+	Debug          bool   `key:"debug" json:"debug"`
+	EtcdEndpoint   string `key:"etcdEndpoint" json:"etcd_endpoint"`
+	EtcdUsername   string `key:"etcdUsername" json:"etcd_username"`
+	EtcdPassword   string `key:"etcdPassword" json:"etcd_password"`
+	EtcdTlsEnabled bool   `key:"etcdTlsEnabled" json:"etcd_tls_enabled"`
+	ImageUrl       string `key:"imageUrl" json:"image_url"`
+	BucketName     string `key:"bucketName" json:"bucket_name"`
+	AccessKey      string `key:"accessKey" json:"access_key"`
+	SecretKey      string `key:"secretKey" json:"secret_key"`
+	EndpointURL    string `key:"endpointURL" json:"endpoint_url"`
+	Region         string `key:"region" json:"region"`
+	ReadOnly       bool   `key:"readOnly" json:"read_only"`
+	ForcePathStyle bool   `key:"forcePathStyle" json:"force_path_style"`
 }
 
 // @go2proto
@@ -372,6 +392,8 @@ type WorkerPoolConfig struct {
 	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
 	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
+	StoragePath          string                            `key:"storagePath" json:"storage_path"`
+	StorageMode          string                            `key:"storageMode" json:"storage_mode"`
 	CheckpointPath       string                            `key:"checkpointPath" json:"checkpoint_path"`
 }
 
@@ -562,12 +584,13 @@ type FluentBitEventMapping struct {
 }
 
 type ObjectStoreConfig struct {
-	BucketName  string `key:"bucketName" json:"bucket_name"`
-	AccessKey   string `key:"accessKey" json:"access_key"`
-	SecretKey   string `key:"secretKey" json:"secret_key"`
-	EndpointURL string `key:"endpointURL" json:"bucket_url"`
-	Region      string `key:"region" json:"region"`
-	ReadOnly    bool   `key:"readOnly" json:"read_only"`
+	BucketName     string `key:"bucketName" json:"bucket_name"`
+	AccessKey      string `key:"accessKey" json:"access_key"`
+	SecretKey      string `key:"secretKey" json:"secret_key"`
+	EndpointURL    string `key:"endpointURL" json:"bucket_url"`
+	Region         string `key:"region" json:"region"`
+	ReadOnly       bool   `key:"readOnly" json:"read_only"`
+	ForcePathStyle bool   `key:"forcePathStyle" json:"force_path_style"`
 }
 
 type FluentBitEventConfig struct {

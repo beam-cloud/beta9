@@ -3,7 +3,7 @@ import concurrent.futures
 import inspect
 import os
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
 import cloudpickle
 
@@ -286,20 +286,26 @@ class ScheduleWrapper(_CallableWrapper):
     base_stub_type = SCHEDULE_STUB_TYPE
     deployment_stub_type = SCHEDULE_DEPLOYMENT_STUB_TYPE
 
-    def deploy(self, *args: Any, **kwargs: Any) -> bool:
-        deployed = super().deploy(invocation_details_func=self.invocation_details, *args, **kwargs)
-        if deployed:
-            res = self.parent.function_stub.function_schedule(
-                FunctionScheduleRequest(
-                    stub_id=self.parent.stub_id,
-                    when=self.parent.when,
-                    deployment_id=self.parent.deployment_id,
-                )
+    def deploy(self, *args: Any, **kwargs: Any) -> Tuple[Dict[str, Any], bool]:
+        resp, ok = super().deploy(invocation_details_func=self.invocation_details, *args, **kwargs)
+        if not ok:
+            return {}, False
+
+        res = self.parent.function_stub.function_schedule(
+            FunctionScheduleRequest(
+                stub_id=self.parent.stub_id,
+                when=self.parent.when,
+                deployment_id=resp["deployment_id"],
             )
-            if not res.ok:
-                terminal.error(res.err_msg, exit=False)
-                return False
-        return deployed
+        )
+        if not res.ok:
+            terminal.error(res.err_msg, exit=False)
+            return {}, False
+
+        return {
+            "deployment_id": resp["deployment_id"],
+            "scheduled_job_id": res.scheduled_job_id,
+        }, True
 
     def invocation_details(self, **kwargs) -> None:
         """
