@@ -33,8 +33,8 @@ const (
 	defaultWorkerEntrypoint     string  = "/usr/local/bin/worker"
 	defaultWorkerLogPath        string  = "/var/log/worker"
 	defaultImagesPath           string  = "/images"
-	defaultStoragePath          string  = "/storage"
 	defaultCheckpointPath       string  = "/checkpoints"
+	defaultStoragePath          string  = "/storage"
 	defaultSharedMemoryPct      float32 = 0.5
 	poolMonitoringInterval              = 1 * time.Second
 	poolHealthCheckInterval             = 10 * time.Second

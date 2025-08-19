@@ -23,7 +23,6 @@ const (
 
 type WorkspaceStorageManager struct {
 	ctx                context.Context
-	workerId           string
 	mounts             *common.SafeMap[storage.Storage]
 	config             types.StorageConfig
 	poolConfig         types.WorkerPoolConfig
@@ -32,10 +31,9 @@ type WorkspaceStorageManager struct {
 	cacheClient        *blobcache.BlobCacheClient
 }
 
-func NewWorkspaceStorageManager(ctx context.Context, workerId string, config types.StorageConfig, poolConfig types.WorkerPoolConfig, containerInstances *common.SafeMap[*ContainerInstance], cacheClient *blobcache.BlobCacheClient) (*WorkspaceStorageManager, error) {
+func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, poolConfig types.WorkerPoolConfig, containerInstances *common.SafeMap[*ContainerInstance], cacheClient *blobcache.BlobCacheClient) (*WorkspaceStorageManager, error) {
 	sm := &WorkspaceStorageManager{
 		ctx:                ctx,
-		workerId:           workerId,
 		mounts:             common.NewSafeMap[storage.Storage](),
 		config:             config,
 		poolConfig:         poolConfig,
@@ -44,11 +42,11 @@ func NewWorkspaceStorageManager(ctx context.Context, workerId string, config typ
 		cacheClient:        cacheClient,
 	}
 
-	if len(poolConfig.StorageModes) == 0 {
-		poolConfig.StorageModes = []string{config.WorkspaceStorage.DefaultStorageMode}
+	if poolConfig.StorageMode == "" {
+		poolConfig.StorageMode = config.WorkspaceStorage.DefaultStorageMode
 	}
 
-	log.Info().Strs("storage_modes", poolConfig.StorageModes).Msg("supported storage modes")
+	log.Info().Str("storage_mode", poolConfig.StorageMode).Msg("using default storage mode")
 
 	go sm.cleanupUnusedMounts()
 	return sm, nil
@@ -75,18 +73,11 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		return mount, nil
 	}
 
-	storageMode := defaultStorageMode
-	if workspaceStorage.StorageMode != nil && slices.Contains(s.poolConfig.StorageModes, *workspaceStorage.StorageMode) {
-		storageMode = *workspaceStorage.StorageMode
-		log.Info().Str("workspace_name", workspaceName).Str("storage_mode", storageMode).Msgf("using storage mode override %s -> %s", storageMode, workspaceName)
-	} else {
-		log.Info().Str("workspace_name", workspaceName).Str("storage_mode", storageMode).Msgf("using default storage mode %s", storageMode)
-	}
+	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
 	var err error
-	switch storageMode {
+	switch s.poolConfig.StorageMode {
 	case storage.StorageModeGeese:
-		mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, "geese", s.workerId, workspaceName)
 		os.MkdirAll(mountPath, 0755)
 
 		mount, err = storage.NewStorage(types.StorageConfig{
@@ -127,7 +118,6 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		}
 
 	case storage.StorageModeAlluxio:
-		mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, "alluxio", "fuse", workspaceName)
 		mount, err = storage.NewStorage(types.StorageConfig{
 			Mode:           storage.StorageModeAlluxio,
 			FilesystemName: workspaceName,
@@ -178,10 +168,10 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 		return nil
 	}
 
+	localPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
+
 	switch mount.Mode() {
 	case storage.StorageModeGeese:
-		localPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, "geese", s.workerId, workspaceName)
-
 		err := mount.Unmount(localPath)
 		if err != nil {
 			return err
