@@ -1722,38 +1722,34 @@ func (r *PostgresBackendRepository) ListConcurrencyLimitsByWorkspaceId(ctx conte
 }
 
 func (r *PostgresBackendRepository) RevertToConcurrencyLimit(ctx context.Context, workspaceId string, concurrencyLimitId string) (*types.ConcurrencyLimit, error) {
-	var limit types.ConcurrencyLimit
-
 	query := `
-		SELECT COUNT(id) 
+		SELECT cl.*
 		FROM concurrency_limit cl 
 		JOIN workspace w ON cl.workspace_id = w.id 
 		WHERE w.external_id = $1 AND cl.external_id = $2;
 	`
 
-	var count int
-	err := r.client.GetContext(ctx, &count, query, workspaceId, concurrencyLimitId)
+	var concurrencyLimit types.ConcurrencyLimit
+	err := r.client.GetContext(ctx, &concurrencyLimit, query, workspaceId, concurrencyLimitId)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("concurrency limit %s does not exist", concurrencyLimitId)
+		}
 		return nil, err
-	}
-
-	if count == 0 {
-		return nil, fmt.Errorf("concurrency limit %s does not belong to workspace %s", concurrencyLimitId, workspaceId)
 	}
 
 	updateQuery := `
-		UPDATE workspace 
-		SET concurrency_limit_id = $1 
-		WHERE external_id = $2;
-		RETURNING id, external_id, workspace_id, gpu_limit, cpu_millicore_limit, created_at, updated_at;
+			UPDATE workspace 
+			SET concurrency_limit_id = $1 
+			WHERE external_id = $2
 	`
 
-	err = r.client.GetContext(ctx, &limit, updateQuery, concurrencyLimitId, workspaceId)
+	_, err = r.client.ExecContext(ctx, updateQuery, concurrencyLimit.Id, workspaceId)
 	if err != nil {
 		return nil, err
 	}
 
-	return &limit, nil
+	return &concurrencyLimit, nil
 }
 
 func validateEnvironmentVariableName(name string) error {

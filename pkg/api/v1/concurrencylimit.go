@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -98,6 +99,11 @@ func (c *ConcurrencyLimitGroup) DeleteConcurrencyLimit(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to delete concurrency limit")
 	}
 
+	err = c.workspaceRepo.SetConcurrencyLimitByWorkspaceId(workspaceId, nil)
+	if err != nil {
+		return HTTPInternalServerError("Failed to recache concurrency limit")
+	}
+
 	return ctx.NoContent(http.StatusOK)
 }
 
@@ -139,6 +145,7 @@ func (c *ConcurrencyLimitGroup) RevertConcurrencyLimit(ctx echo.Context) error {
 
 	concurrencyLimit, err := c.backendRepo.RevertToConcurrencyLimit(ctx.Request().Context(), workspaceId, latestNonZeroConcurrencyLimit.ExternalId)
 	if err != nil {
+		log.Println("Failed to revert concurrency limit", err)
 		return HTTPInternalServerError("Failed to revert concurrency limit")
 	}
 
