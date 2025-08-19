@@ -393,7 +393,7 @@ type WorkerPoolConfig struct {
 	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
 	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
 	StoragePath          string                            `key:"storagePath" json:"storage_path"`
-	StorageMode          string                            `key:"storageMode" json:"storage_mode"`
+	StorageModes         []string                          `key:"storageModes" json:"storage_modes"`
 	CheckpointPath       string                            `key:"checkpointPath" json:"checkpoint_path"`
 }
 
