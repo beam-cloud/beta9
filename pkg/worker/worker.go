@@ -179,7 +179,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	storageManager, err := NewWorkspaceStorageManager(ctx, config.Storage, poolConfig, containerInstances, cacheClient)
+	storageManager, err := NewWorkspaceStorageManager(ctx, workerId, config.Storage, poolConfig, containerInstances, cacheClient)
 	if err != nil {
 		return nil, err
 	}
