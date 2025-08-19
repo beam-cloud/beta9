@@ -20,6 +20,7 @@ type Storage interface {
 	Mount(localPath string) error
 	Unmount(localPath string) error
 	Format(fsName string) error
+	Mode() string
 }
 
 // isMounted uses stat to check if the specified FUSE mount point is available

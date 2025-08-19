@@ -158,6 +158,10 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	return nil
 }
 
+func (s *GeeseStorage) Mode() string {
+	return StorageModeGeese
+}
+
 func (s *GeeseStorage) Unmount(localPath string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

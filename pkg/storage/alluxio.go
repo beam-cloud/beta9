@@ -70,6 +70,10 @@ func (s *AlluxioStorage) Mount(localPath string) error {
 	return nil
 }
 
+func (s *AlluxioStorage) Mode() string {
+	return StorageModeAlluxio
+}
+
 func (s *AlluxioStorage) Unmount(localPath string) error {
 	log.Info().Str("local_path", localPath).Msg("alluxio filesystem unmounting")
 

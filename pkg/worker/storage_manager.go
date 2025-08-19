@@ -18,6 +18,7 @@ import (
 
 const (
 	mountCleanupInterval = 30 * time.Second
+	defaultStorageMode   = storage.StorageModeGeese
 )
 
 type WorkspaceStorageManager struct {
@@ -41,11 +42,11 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 		cacheClient:        cacheClient,
 	}
 
-	if poolConfig.StorageMode == "" {
-		poolConfig.StorageMode = config.WorkspaceStorage.DefaultStorageMode
+	if len(poolConfig.StorageModes) == 0 {
+		poolConfig.StorageModes = []string{config.WorkspaceStorage.DefaultStorageMode}
 	}
 
-	log.Info().Str("storage_mode", poolConfig.StorageMode).Msg("using default storage mode")
+	log.Info().Strs("storage_modes", poolConfig.StorageModes).Msg("supported storage modes")
 
 	go sm.cleanupUnusedMounts()
 	return sm, nil
@@ -74,10 +75,12 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 
 	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
-	storageMode := s.poolConfig.StorageMode
-	if workspaceStorage.StorageMode != nil {
+	storageMode := defaultStorageMode
+	if workspaceStorage.StorageMode != nil && slices.Contains(s.poolConfig.StorageModes, *workspaceStorage.StorageMode) {
 		storageMode = *workspaceStorage.StorageMode
-		log.Info().Str("workspace_name", workspaceName).Str("storage_mode", storageMode).Msgf("using storage mode override on workspace '%s'", workspaceName)
+		log.Info().Str("workspace_name", workspaceName).Str("storage_mode", storageMode).Msgf("using storage mode override %s -> %s", storageMode, workspaceName)
+	} else {
+		log.Info().Str("workspace_name", workspaceName).Str("storage_mode", storageMode).Msgf("using default storage mode %s", storageMode)
 	}
 
 	var err error
@@ -175,7 +178,7 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 
 	localPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
-	switch s.poolConfig.StorageMode {
+	switch mount.Mode() {
 	case storage.StorageModeGeese:
 		err := mount.Unmount(localPath)
 		if err != nil {
