@@ -42,41 +42,41 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 		cacheClient:        cacheClient,
 	}
 
-	if poolConfig.StorageMode == "" {
-		poolConfig.StorageMode = config.WorkspaceStorage.DefaultStorageMode
+	if sm.poolConfig.StorageMode == "" {
+		sm.poolConfig.StorageMode = sm.config.WorkspaceStorage.DefaultStorageMode
 	}
 
-	log.Info().Str("storage_mode", poolConfig.StorageMode).Msg("using default storage mode")
+	log.Info().Str("storage_mode", sm.poolConfig.StorageMode).Msgf("using storage mode: '%s'", sm.poolConfig.StorageMode)
 
 	go sm.cleanupUnusedMounts()
 	return sm, nil
 }
 
-func (s *WorkspaceStorageManager) Create(workspaceName string, storage storage.Storage) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (sm *WorkspaceStorageManager) Create(workspaceName string, storage storage.Storage) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
-	s.mounts.Set(workspaceName, storage)
+	sm.mounts.Set(workspaceName, storage)
 }
 
-func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (storage.Storage, error) {
-	mount, ok := s.mounts.Get(workspaceName)
+func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *types.WorkspaceStorage) (storage.Storage, error) {
+	mount, ok := sm.mounts.Get(workspaceName)
 	if ok {
 		return mount, nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
-	mount, ok = s.mounts.Get(workspaceName)
+	mount, ok = sm.mounts.Get(workspaceName)
 	if ok {
 		return mount, nil
 	}
 
-	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
+	mountPath := path.Join(sm.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
 	var err error
-	switch s.poolConfig.StorageMode {
+	switch sm.poolConfig.StorageMode {
 	case storage.StorageModeGeese:
 		os.MkdirAll(mountPath, 0755)
 
@@ -93,26 +93,26 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 				Region:      *workspaceStorage.Region,
 
 				// Global config
-				Debug:                  s.config.WorkspaceStorage.Geese.Debug,
-				FsyncOnClose:           s.config.WorkspaceStorage.Geese.FsyncOnClose,
-				MemoryLimit:            s.config.WorkspaceStorage.Geese.MemoryLimit,
-				MaxFlushers:            s.config.WorkspaceStorage.Geese.MaxFlushers,
-				MaxParallelParts:       s.config.WorkspaceStorage.Geese.MaxParallelParts,
-				DirMode:                s.config.WorkspaceStorage.Geese.DirMode,
-				FileMode:               s.config.WorkspaceStorage.Geese.FileMode,
-				ListType:               s.config.WorkspaceStorage.Geese.ListType,
-				MountOptions:           s.config.WorkspaceStorage.Geese.MountOptions,
-				ReadAheadKB:            s.config.WorkspaceStorage.Geese.ReadAheadKB,
-				ReadAheadLargeKB:       s.config.WorkspaceStorage.Geese.ReadAheadLargeKB,
-				ReadAheadParallelKB:    s.config.WorkspaceStorage.Geese.ReadAheadParallelKB,
-				FuseReadAheadKB:        s.config.WorkspaceStorage.Geese.FuseReadAheadKB,
-				DisableVolumeCaching:   s.config.WorkspaceStorage.Geese.DisableVolumeCaching,
-				StagedWriteModeEnabled: s.config.WorkspaceStorage.Geese.StagedWriteModeEnabled,
-				StagedWritePath:        s.config.WorkspaceStorage.Geese.StagedWritePath,
-				StagedWriteDebounce:    s.config.WorkspaceStorage.Geese.StagedWriteDebounce,
-				CacheStreamingEnabled:  s.config.WorkspaceStorage.Geese.CacheStreamingEnabled,
+				Debug:                  sm.config.WorkspaceStorage.Geese.Debug,
+				FsyncOnClose:           sm.config.WorkspaceStorage.Geese.FsyncOnClose,
+				MemoryLimit:            sm.config.WorkspaceStorage.Geese.MemoryLimit,
+				MaxFlushers:            sm.config.WorkspaceStorage.Geese.MaxFlushers,
+				MaxParallelParts:       sm.config.WorkspaceStorage.Geese.MaxParallelParts,
+				DirMode:                sm.config.WorkspaceStorage.Geese.DirMode,
+				FileMode:               sm.config.WorkspaceStorage.Geese.FileMode,
+				ListType:               sm.config.WorkspaceStorage.Geese.ListType,
+				MountOptions:           sm.config.WorkspaceStorage.Geese.MountOptions,
+				ReadAheadKB:            sm.config.WorkspaceStorage.Geese.ReadAheadKB,
+				ReadAheadLargeKB:       sm.config.WorkspaceStorage.Geese.ReadAheadLargeKB,
+				ReadAheadParallelKB:    sm.config.WorkspaceStorage.Geese.ReadAheadParallelKB,
+				FuseReadAheadKB:        sm.config.WorkspaceStorage.Geese.FuseReadAheadKB,
+				DisableVolumeCaching:   sm.config.WorkspaceStorage.Geese.DisableVolumeCaching,
+				StagedWriteModeEnabled: sm.config.WorkspaceStorage.Geese.StagedWriteModeEnabled,
+				StagedWritePath:        sm.config.WorkspaceStorage.Geese.StagedWritePath,
+				StagedWriteDebounce:    sm.config.WorkspaceStorage.Geese.StagedWriteDebounce,
+				CacheStreamingEnabled:  sm.config.WorkspaceStorage.Geese.CacheStreamingEnabled,
 			},
-		}, s.cacheClient)
+		}, sm.cacheClient)
 		if err != nil {
 			return nil, err
 		}
@@ -124,12 +124,12 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 			FilesystemPath: mountPath,
 			Alluxio: types.AlluxioConfig{
 				// Global config
-				Debug:          s.config.WorkspaceStorage.Alluxio.Debug,
-				ImageUrl:       s.config.WorkspaceStorage.Alluxio.ImageUrl,
-				EtcdEndpoint:   s.config.WorkspaceStorage.Alluxio.EtcdEndpoint,
-				EtcdUsername:   s.config.WorkspaceStorage.Alluxio.EtcdUsername,
-				EtcdPassword:   s.config.WorkspaceStorage.Alluxio.EtcdPassword,
-				EtcdTlsEnabled: s.config.WorkspaceStorage.Alluxio.EtcdTlsEnabled,
+				Debug:          sm.config.WorkspaceStorage.Alluxio.Debug,
+				ImageUrl:       sm.config.WorkspaceStorage.Alluxio.ImageUrl,
+				EtcdEndpoint:   sm.config.WorkspaceStorage.Alluxio.EtcdEndpoint,
+				EtcdUsername:   sm.config.WorkspaceStorage.Alluxio.EtcdUsername,
+				EtcdPassword:   sm.config.WorkspaceStorage.Alluxio.EtcdPassword,
+				EtcdTlsEnabled: sm.config.WorkspaceStorage.Alluxio.EtcdTlsEnabled,
 
 				// Workspace specific config
 				BucketName:     *workspaceStorage.BucketName,
@@ -140,7 +140,7 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 				ReadOnly:       false,
 				ForcePathStyle: false,
 			},
-		}, s.cacheClient)
+		}, sm.cacheClient)
 		if err != nil {
 			return nil, err
 		}
@@ -149,26 +149,26 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 		return nil, errors.New("invalid storage mode")
 	}
 
-	s.mounts.Set(workspaceName, mount)
+	sm.mounts.Set(workspaceName, mount)
 
 	return mount, nil
 }
 
-func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
-	mount, ok := s.mounts.Get(workspaceName)
+func (sm *WorkspaceStorageManager) Unmount(workspaceName string) error {
+	mount, ok := sm.mounts.Get(workspaceName)
 	if !ok {
 		return nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
 
-	mount, ok = s.mounts.Get(workspaceName)
+	mount, ok = sm.mounts.Get(workspaceName)
 	if !ok {
 		return nil
 	}
 
-	localPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
+	localPath := path.Join(sm.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
 	switch mount.Mode() {
 	case storage.StorageModeGeese:
@@ -183,21 +183,21 @@ func (s *WorkspaceStorageManager) Unmount(workspaceName string) error {
 	default:
 	}
 
-	s.mounts.Delete(workspaceName)
+	sm.mounts.Delete(workspaceName)
 
 	return nil
 }
 
-func (s *WorkspaceStorageManager) Cleanup() error {
+func (sm *WorkspaceStorageManager) Cleanup() error {
 	mountsToDelete := []string{}
 	activeWorkspaceNames := []string{}
 
-	s.containerInstances.Range(func(containerInstanceId string, value *ContainerInstance) bool {
+	sm.containerInstances.Range(func(containerInstanceId string, value *ContainerInstance) bool {
 		activeWorkspaceNames = append(activeWorkspaceNames, value.Request.Workspace.Name)
 		return true
 	})
 
-	s.mounts.Range(func(workspaceName string, value storage.Storage) bool {
+	sm.mounts.Range(func(workspaceName string, value storage.Storage) bool {
 		if !slices.Contains(activeWorkspaceNames, workspaceName) {
 			mountsToDelete = append(mountsToDelete, workspaceName)
 		}
@@ -207,7 +207,7 @@ func (s *WorkspaceStorageManager) Cleanup() error {
 
 	for _, workspaceName := range mountsToDelete {
 		log.Info().Str("workspace_name", workspaceName).Msg("unmounting storage")
-		err := s.Unmount(workspaceName)
+		err := sm.Unmount(workspaceName)
 		if err != nil {
 			log.Error().Str("workspace_name", workspaceName).Err(err).Msg("failed to unmount storage")
 			continue
@@ -218,16 +218,16 @@ func (s *WorkspaceStorageManager) Cleanup() error {
 	return nil
 }
 
-func (s *WorkspaceStorageManager) cleanupUnusedMounts() {
+func (sm *WorkspaceStorageManager) cleanupUnusedMounts() {
 	ticker := time.NewTicker(mountCleanupInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-sm.ctx.Done():
 			return
 		case <-ticker.C:
-			err := s.Cleanup()
+			err := sm.Cleanup()
 			if err != nil {
 				log.Error().Err(err).Msg("failed to cleanup unused mounts")
 			}
