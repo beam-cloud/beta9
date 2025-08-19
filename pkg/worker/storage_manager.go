@@ -45,7 +45,7 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 		poolConfig.StorageMode = config.WorkspaceStorage.DefaultStorageMode
 	}
 
-	log.Info().Str("setting default storage mode", poolConfig.StorageMode).Msg("storage mode")
+	log.Info().Str("storage_mode", poolConfig.StorageMode).Msg("using default storage mode")
 
 	go sm.cleanupUnusedMounts()
 	return sm, nil
@@ -74,14 +74,14 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 
 	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
-	storageMode := workspaceStorage.StorageMode
-	if storageMode != nil && *storageMode != s.poolConfig.StorageMode {
-		log.Warn().Str("workspace_name", workspaceName).Str("storage_mode", *storageMode).Msgf("storage mode mismatch, using default storage mode to '%s'", s.poolConfig.StorageMode)
-		storageMode = &s.poolConfig.StorageMode
+	storageMode := s.poolConfig.StorageMode
+	if workspaceStorage.StorageMode != nil {
+		storageMode = *workspaceStorage.StorageMode
+		log.Info().Str("workspace_name", workspaceName).Str("storage_mode", storageMode).Msgf("using storage mode override on workspace '%s'", workspaceName)
 	}
 
 	var err error
-	switch *storageMode {
+	switch storageMode {
 	case storage.StorageModeGeese:
 		os.MkdirAll(mountPath, 0755)
 
