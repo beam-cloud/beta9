@@ -45,7 +45,7 @@ func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig,
 		poolConfig.StorageMode = config.WorkspaceStorage.DefaultStorageMode
 	}
 
-	log.Info().Str("setting default storage mode", poolConfig.StorageMode).Msg("storage mode")
+	log.Info().Str("storage_mode", poolConfig.StorageMode).Msg("using default storage mode")
 
 	go sm.cleanupUnusedMounts()
 	return sm, nil
