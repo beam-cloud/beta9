@@ -535,11 +535,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 	sharedMemoryLimit := calculateMemoryQuantity(wpc.workerPoolConfig.PoolSizing.SharedMemoryLimitPct, workerMemory)
 	tmpSizeLimit := parseTmpSizeLimit(wpc.workerPoolConfig.TmpSizeLimit, wpc.config.Worker.TmpSizeLimit)
 
-	storagePath := wpc.workerPoolConfig.StoragePath
-	if storagePath == "" {
-		storagePath = defaultStoragePath
-	}
-
 	volumes := []corev1.Volume{
 		{
 			Name: logVolumeName,
@@ -576,15 +571,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 				},
 			},
 		},
-		{
-			Name: storageVolumeName,
-			VolumeSource: corev1.VolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: storagePath,
-					Type: &hostPathType,
-				},
-			},
-		},
 	}
 
 	if wpc.workerPoolConfig.CRIUEnabled && wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
@@ -598,6 +584,18 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
 					Path: path,
+					Type: &hostPathType,
+				},
+			},
+		})
+	}
+
+	if wpc.workerPoolConfig.StoragePath != "" {
+		volumes = append(volumes, corev1.Volume{
+			Name: storageVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: wpc.workerPoolConfig.StoragePath,
 					Type: &hostPathType,
 				},
 			},
@@ -620,11 +618,6 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 			ReadOnly:  false,
 		},
 		{
-			Name:      storageVolumeName,
-			MountPath: "/storage",
-			ReadOnly:  false,
-		},
-		{
 			Name:      logVolumeName,
 			MountPath: defaultWorkerLogPath,
 			ReadOnly:  false,
@@ -639,6 +632,14 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      checkpointVolumeName,
 			MountPath: defaultCheckpointPath,
+			ReadOnly:  false,
+		})
+	}
+
+	if wpc.workerPoolConfig.StoragePath != "" {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      storageVolumeName,
+			MountPath: defaultStoragePath,
 			ReadOnly:  false,
 		})
 	}

@@ -221,7 +221,6 @@ func (g *WorkspaceGroup) setupDefaultWorkspaceStorage(ctx echo.Context, bucketNa
 		SecretKey:   &g.config.Storage.WorkspaceStorage.DefaultSecretKey,
 		EndpointUrl: &g.config.Storage.WorkspaceStorage.DefaultEndpointUrl,
 		Region:      &g.config.Storage.WorkspaceStorage.DefaultRegion,
-		StorageMode: &g.config.Storage.WorkspaceStorage.DefaultStorageMode,
 	})
 	return createdStorage, err
 }
