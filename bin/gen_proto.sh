@@ -52,6 +52,7 @@ protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/endpoint/ --go_out=./proto 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/endpoint/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/endpoint/endpoint.proto
 
 protoc -I $PROTOC_INCLUDE_PATH  -I ./pkg/types -I ./pkg/abstractions/pod/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/pod/pod.proto
+protoc -I ./pkg/types -I ./pkg/abstractions/pod/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/pod/pod.proto
 protoc -I $PROTOC_INCLUDE_PATH  -I ./pkg/types -I ./pkg/abstractions/pod/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/pod/pod.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/output/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/output/output.proto

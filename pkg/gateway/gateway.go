@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/labstack/echo-contrib/pprof"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -48,6 +49,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
@@ -252,6 +254,16 @@ func (g *Gateway) initGrpc() error {
 		serverOptions...,
 	)
 
+	return nil
+}
+
+func (g *Gateway) initGrpcGateway(grpcAddr string) error {
+	mux := runtime.NewServeMux()
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if err := pb.RegisterPodServiceHandlerFromEndpoint(context.Background(), mux, grpcAddr, opts); err != nil {
+		return err
+	}
+	g.baseRouteGroup.Any("/grpc-gateway/*", echo.WrapHandler(http.StripPrefix("/api/v1/grpc-gateway", mux)))
 	return nil
 }
 
@@ -501,6 +513,11 @@ func (g *Gateway) Start() error {
 	err = g.initHttp()
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to initialize http server")
+	}
+
+	err = g.initGrpcGateway(fmt.Sprintf(":%d", g.Config.GatewayService.GRPC.Port))
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize grpc gateway")
 	}
 
 	err = g.registerServices()

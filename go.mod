@@ -3,8 +3,8 @@ module github.com/beam-cloud/beta9
 go 1.22.10
 
 require (
-	buf.build/gen/go/cedana/cedana/protocolbuffers/go v1.36.3-20250123222419-64bf8384f939.1
-	buf.build/gen/go/cedana/criu/protocolbuffers/go v1.36.3-20250123222419-6ed7871347d0.1
+	buf.build/gen/go/cedana/cedana/protocolbuffers/go v1.31.0-20250715194101-6e81b5367634.2
+	buf.build/gen/go/cedana/criu/protocolbuffers/go v1.31.0-20250715194101-730ceffc8abc.2
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/VictoriaMetrics/metrics v1.35.2
@@ -16,11 +16,10 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.0
-	github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563
 	github.com/beam-cloud/clip v0.0.0-20250424185136-5f40b560b510
 	github.com/beam-cloud/go-runc v0.0.0-20250804233952-faffa99498b8
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
-	github.com/cedana/cedana v0.9.240
+	github.com/cedana/cedana v0.9.81
 	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/cloudevents/sdk-go/v2 v2.15.2
 	github.com/containerd/console v1.0.4
@@ -40,20 +39,20 @@ require (
 	github.com/knadh/koanf/providers/file v0.1.0
 	github.com/knadh/koanf/providers/rawbytes v0.1.0
 	github.com/knadh/koanf/v2 v2.0.1
-	github.com/labstack/echo-contrib v0.17.1
+	github.com/labstack/echo-contrib v0.15.0
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/lib/pq v1.10.9
 	github.com/mholt/archiver/v3 v3.5.1
 	github.com/mitchellh/hashstructure/v2 v2.0.2
 	github.com/mitchellh/mapstructure v1.5.0
-	github.com/opencontainers/runc v1.2.3
+	github.com/opencontainers/runc v1.1.13
 	github.com/opencontainers/runtime-spec v1.2.0
 	github.com/opencontainers/umoci v0.4.7
-	github.com/openmeterio/openmeter v1.0.0-beta.47
+	github.com/openmeterio/openmeter v1.0.0-beta.36
 	github.com/oracle/oci-go-sdk v24.3.0+incompatible
 	github.com/pkg/errors v0.9.1
-	github.com/pressly/goose/v3 v3.21.1
-	github.com/prometheus/client_golang v1.20.5
+	github.com/pressly/goose/v3 v3.19.2
+	github.com/prometheus/client_golang v1.18.0
 	github.com/prometheus/procfs v0.15.1
 	github.com/redis/go-redis/v9 v9.5.1
 	github.com/rs/zerolog v1.34.0
@@ -64,10 +63,9 @@ require (
 	github.com/tj/assert v0.0.3
 	github.com/vishvananda/netlink v1.2.1-beta.2
 	github.com/vishvananda/netns v0.0.4
-	github.com/yandex-cloud/geesefs v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/otel v1.34.0
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.33.0
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.27.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.21.0
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.21.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutlog v0.7.0
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v1.31.0
 	go.opentelemetry.io/otel/log v0.7.0
@@ -80,22 +78,22 @@ require (
 	golang.org/x/sync v0.11.0
 	golang.org/x/sys v0.30.0
 	golang.org/x/time v0.8.0
-	google.golang.org/grpc v1.71.1
-	google.golang.org/protobuf v1.36.4
+	google.golang.org/grpc v1.61.2
+	google.golang.org/protobuf v1.31.0
 	gopkg.in/yaml.v2 v2.4.0
-	gvisor.dev/gvisor v0.0.0-20240722211153-64c016c92987
-	k8s.io/api v0.30.3
-	k8s.io/apimachinery v0.30.3
-	k8s.io/client-go v0.30.3
+	gvisor.dev/gvisor v0.0.0-20230928000133-4fe30062272c
+	k8s.io/api v0.30.0-alpha.3
+	k8s.io/apimachinery v0.30.0-alpha.3
+	k8s.io/client-go v0.30.0-alpha.3
 	k8s.io/utils v0.0.0-20240711033017-18e509b52bc8
-	tailscale.com v1.72.1
+	tailscale.com v1.58.2
 )
 
 require (
-	cloud.google.com/go v0.112.1 // indirect
+	cloud.google.com/go v0.111.0 // indirect
 	cloud.google.com/go/compute/metadata v0.6.0 // indirect
-	cloud.google.com/go/iam v1.1.6 // indirect
-	cloud.google.com/go/storage v1.38.0 // indirect
+	cloud.google.com/go/iam v1.1.5 // indirect
+	cloud.google.com/go/storage v1.36.0 // indirect
 	github.com/Azure/azure-pipeline-go v0.2.2 // indirect
 	github.com/Azure/azure-sdk-for-go v32.1.0+incompatible // indirect
 	github.com/Azure/azure-storage-blob-go v0.7.1-0.20190724222048-33c102d4ffd2 // indirect
@@ -119,7 +117,7 @@ require (
 	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
-	github.com/googleapis/gax-go/v2 v2.12.3 // indirect
+	github.com/googleapis/gax-go/v2 v2.12.0 // indirect
 	github.com/jacobsa/fuse v0.0.0-20230810134708-ab21db1af836 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-ieproxy v0.0.0-20190805055040-f9202b1cfdeb // indirect
@@ -128,14 +126,14 @@ require (
 	github.com/stretchr/objx v0.5.2 // indirect
 	github.com/winfsp/cgofuse v1.5.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.49.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.46.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.49.0 // indirect
-	google.golang.org/api v0.171.0 // indirect
-	google.golang.org/genproto v0.0.0-20240213162025-012b6fc9bca9 // indirect
+	google.golang.org/api v0.155.0 // indirect
+	google.golang.org/genproto v0.0.0-20231211222908-989df2bf70f3 // indirect
 )
 
 require (
-	buf.build/gen/go/cedana/cedana/grpc/go v1.5.1-20250123222419-64bf8384f939.2 // indirect
+	buf.build/gen/go/cedana/cedana/grpc/go v1.3.0-20250715194101-6e81b5367634.2 // indirect
 	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/AdamKorcz/go-fuzz-headers v0.0.0-20210312213058-32f4d319f0d2 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
@@ -197,7 +195,7 @@ require (
 	github.com/gofrs/flock v0.8.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
+	github.com/golang/protobuf v1.5.3 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/gnostic-models v0.6.9-0.20230804172637-c7be7c783f49 // indirect
@@ -206,7 +204,7 @@ require (
 	github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806 // indirect
 	github.com/gorilla/csrf v1.7.2 // indirect
 	github.com/gorilla/securecookie v1.1.2 // indirect
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.24.0 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.18.1
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/illarion/gonotify v1.0.1 // indirect
@@ -252,8 +250,8 @@ require (
 	github.com/nwaples/rardecode v1.1.3 // indirect
 	github.com/oapi-codegen/runtime v1.1.1 // indirect
 	github.com/oklog/ulid/v2 v2.1.0 // indirect
-	github.com/onsi/ginkgo/v2 v2.20.0 // indirect
-	github.com/onsi/gomega v1.34.1 // indirect
+	github.com/onsi/ginkgo/v2 v2.17.1 // indirect
+	github.com/onsi/gomega v1.31.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/opencontainers/runtime-tools v0.9.1-0.20230914150019-408c51e934dc // indirect
@@ -264,8 +262,8 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20221212215047-62379fc7944b // indirect
 	github.com/prometheus-community/pro-bing v0.4.0 // indirect
-	github.com/prometheus/client_model v0.6.1 // indirect
-	github.com/prometheus/common v0.55.0 // indirect
+	github.com/prometheus/client_model v0.5.0 // indirect
+	github.com/prometheus/common v0.45.0 // indirect
 	github.com/rivo/uniseg v0.4.4 // indirect
 	github.com/rootless-containers/proto v0.1.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
@@ -279,7 +277,7 @@ require (
 	github.com/spf13/cast v1.6.0 // indirect
 	github.com/spf13/cobra v1.8.1 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	github.com/spf13/viper v1.19.0 // indirect
+	github.com/spf13/viper v1.18.2 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635 // indirect
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e // indirect
@@ -309,9 +307,9 @@ require (
 	github.com/yuin/gopher-lua v1.1.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
-	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.33.0 // indirect
+	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.21.0 // indirect
 	go.opentelemetry.io/otel/metric v1.34.0 // indirect
-	go.opentelemetry.io/proto/otlp v1.4.0 // indirect
+	go.opentelemetry.io/proto/otlp v1.0.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go4.org/mem v0.0.0-20220726221520-4f986261bf13 // indirect
@@ -324,8 +322,8 @@ require (
 	golang.org/x/tools v0.30.0 // indirect
 	golang.zx2c4.com/wintun v0.0.0-20230126152724-0fa3db229ce2 // indirect
 	golang.zx2c4.com/wireguard/windows v0.5.3 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20250106144421-5f5ef82da422 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250115164207-1a7da9e5054f // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20231211222908-989df2bf70f3 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20231212172506-995d672761c0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
