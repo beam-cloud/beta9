@@ -18,7 +18,6 @@ import (
 
 const (
 	mountCleanupInterval = 30 * time.Second
-	defaultStorageMode   = storage.StorageModeGeese
 )
 
 type WorkspaceStorageManager struct {
