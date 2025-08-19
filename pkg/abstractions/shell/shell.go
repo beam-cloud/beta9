@@ -39,8 +39,9 @@ const (
 	containerWaitPollIntervalS    time.Duration = 1 * time.Second
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
 	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
-	startupScript                 string        = `SHELL=$(ls /bin/bash || ls /bin/sh); /usr/local/bin/dropbear -e -c "cd /mnt/code && $SHELL" -p %d -R -E -F 2>> /etc/dropbear/logs.txt`
-	createUserScript              string        = `SHELL=$(ls /bin/bash || ls /bin/sh); \
+	// Remove systemd from nsswitch.conf to prevent systemd from being used for user referencing with dropbear
+	startupScript    string = `SHELL=$(ls /bin/bash || ls /bin/sh); sed 's/systemd//g' /etc/nsswitch.conf > /etc/nsswitch.conf; /usr/local/bin/dropbear -e -c "cd /mnt/code && $SHELL" -p %d -R -E -F 2>> /etc/dropbear/logs.txt`
+	createUserScript string = `SHELL=$(ls /bin/bash || ls /bin/sh); \
 (command -v useradd >/dev/null && useradd -m -s $SHELL -u 0 -g 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL --uid 0 --gid 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (echo "$USERNAME:x:0:0:$USERNAME:/root:$SHELL" >> /etc/passwd && mkdir -p "/root" && chown 0:0 "/root") && \
