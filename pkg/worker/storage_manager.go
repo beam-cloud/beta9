@@ -73,7 +73,8 @@ func (s *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage *
 	mountPath := path.Join(s.config.WorkspaceStorage.BaseMountPath, workspaceName)
 
 	storageMode := workspaceStorage.StorageMode
-	if storageMode == nil {
+	if storageMode != nil && *storageMode != s.poolConfig.StorageMode {
+		log.Warn().Str("workspace_name", workspaceName).Str("storage_mode", *storageMode).Msg("storage mode mismatch, using default storage mode")
 		storageMode = &s.poolConfig.StorageMode
 	}
 
