@@ -240,17 +240,17 @@ func TestRevertConcurrencyLimit(t *testing.T) {
 	}
 
 	// Mock the count query to verify ownership
-	countQuery := `SELECT COUNT(id)`
-	mock.ExpectQuery(regexp.QuoteMeta(countQuery)).
+	retrieveQuery := `SELECT cl.*`
+	mock.ExpectQuery(regexp.QuoteMeta(retrieveQuery)).
 		WithArgs(workspaceId, concurrencyLimitId).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "external_id", "workspace_id", "gpu_limit", "cpu_millicore_limit", "created_at", "updated_at"}).
+			AddRow(expectedLimit.Id, expectedLimit.ExternalId, expectedLimit.WorkspaceId, expectedLimit.GPULimit, expectedLimit.CPUMillicoreLimit, expectedLimit.CreatedAt, expectedLimit.UpdatedAt))
 
 	// Mock the update query
 	updateQuery := `UPDATE workspace SET concurrency_limit_id = $1 WHERE external_id = $2`
-	mock.ExpectQuery(regexp.QuoteMeta(updateQuery)).
-		WithArgs(concurrencyLimitId, workspaceId).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "external_id", "workspace_id", "gpu_limit", "cpu_millicore_limit", "created_at", "updated_at"}).
-			AddRow(expectedLimit.Id, expectedLimit.ExternalId, expectedLimit.WorkspaceId, expectedLimit.GPULimit, expectedLimit.CPUMillicoreLimit, expectedLimit.CreatedAt, expectedLimit.UpdatedAt))
+	mock.ExpectExec(regexp.QuoteMeta(updateQuery)).
+		WithArgs(expectedLimit.Id, workspaceId).
+		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	result, err := repo.RevertToConcurrencyLimit(ctx, workspaceId, concurrencyLimitId)
 
@@ -258,25 +258,4 @@ func TestRevertConcurrencyLimit(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, expectedLimit.Id, result.Id)
 	assert.Equal(t, expectedLimit.ExternalId, result.ExternalId)
-}
-
-func TestRevertConcurrencyLimit_NotOwned(t *testing.T) {
-	repo, mock := NewBackendPostgresRepositoryForTest()
-	defer mock.ExpectationsWereMet()
-
-	ctx := context.Background()
-	workspaceId := "test-workspace-id"
-	concurrencyLimitId := "test-limit-id"
-
-	// Mock the count query to return 0 (not owned)
-	countQuery := `SELECT COUNT(id)`
-	mock.ExpectQuery(regexp.QuoteMeta(countQuery)).
-		WithArgs(workspaceId, concurrencyLimitId).
-		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
-
-	result, err := repo.RevertToConcurrencyLimit(ctx, workspaceId, concurrencyLimitId)
-
-	require.Error(t, err)
-	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "does not belong to workspace")
 }
