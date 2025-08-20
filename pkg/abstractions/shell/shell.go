@@ -40,7 +40,7 @@ const (
 	containerKeepAliveIntervalS   time.Duration = 5 * time.Second
 	sshBannerTimeoutDurationS     time.Duration = 2 * time.Second
 	// Remove systemd from nsswitch.conf to prevent systemd from being used as credential provider by dropbear
-	startupScript    string = `SHELL=$(ls /bin/bash || ls /bin/sh); sed -i 's/systemd//g' /etc/nsswitch.conf; /usr/local/bin/dropbear -e -c "cd /mnt/code && $SHELL" -p %d -R -E -F 2>> /etc/dropbear/logs.txt`
+	startupScript    string = `SHELL=$(ls /bin/bash || ls /bin/sh); sed -i 's/systemd//g' /etc/nsswitch.conf; /usr/local/bin/dropbear -e -c "export PATH=$PATH:/usr/local/bin && cd /mnt/code && $SHELL" -p %d -R -E -F 2>> /etc/dropbear/logs.txt`
 	createUserScript string = `SHELL=$(ls /bin/bash || ls /bin/sh); \
 (command -v useradd >/dev/null && useradd -m -s $SHELL -u 0 -g 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
 (command -v adduser >/dev/null && adduser --disabled-password --gecos "" --shell $SHELL --uid 0 --gid 0 "$USERNAME" 2>> /etc/dropbear/logs.txt) || \
