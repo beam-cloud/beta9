@@ -665,6 +665,7 @@ type FilterFieldMapping struct {
 type ConcurrencyLimit struct {
 	Id                uint      `db:"id" json:"-" redis:"-"`
 	ExternalId        string    `db:"external_id" json:"external_id,omitempty" redis:"external_id"`
+	WorkspaceId       uint      `db:"workspace_id" json:"workspace_id,omitempty" redis:"workspace_id"`
 	GPULimit          uint32    `db:"gpu_limit" json:"gpu_limit" redis:"gpu_limit"`
 	CPUMillicoreLimit uint32    `db:"cpu_millicore_limit" json:"cpu_millicore_limit" redis:"cpu_millicore_limit"`
 	CreatedAt         time.Time `db:"created_at" json:"created_at,omitempty" redis:"-"`
@@ -675,6 +676,7 @@ func (c *ConcurrencyLimit) ToProto() *pb.ConcurrencyLimit {
 	return &pb.ConcurrencyLimit{
 		Id:                uint32(c.Id),
 		ExternalId:        c.ExternalId,
+		WorkspaceId:       uint32(c.WorkspaceId),
 		GpuLimit:          c.GPULimit,
 		CpuMillicoreLimit: c.CPUMillicoreLimit,
 	}
@@ -684,6 +686,7 @@ func NewConcurrencyLimitFromProto(in *pb.ConcurrencyLimit) *ConcurrencyLimit {
 	return &ConcurrencyLimit{
 		Id:                uint(in.Id),
 		ExternalId:        in.ExternalId,
+		WorkspaceId:       uint(in.WorkspaceId),
 		GPULimit:          in.GpuLimit,
 		CPUMillicoreLimit: in.CpuMillicoreLimit,
 	}

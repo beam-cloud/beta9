@@ -1624,13 +1624,13 @@ func (r *PostgresBackendRepository) CreateWorkspaceStorage(ctx context.Context, 
 
 func (r *PostgresBackendRepository) CreateConcurrencyLimit(ctx context.Context, workspaceId uint, gpuLimit uint32, cpuMillicoreLimit uint32) (*types.ConcurrencyLimit, error) {
 	query := `
-	INSERT INTO concurrency_limit (gpu_limit, cpu_millicore_limit)
-	VALUES ($1, $2)
-	RETURNING id, gpu_limit, cpu_millicore_limit, created_at, updated_at;
+	INSERT INTO concurrency_limit (workspace_id, gpu_limit, cpu_millicore_limit)
+	VALUES ($1, $2, $3)
+	RETURNING id, external_id, workspace_id, gpu_limit, cpu_millicore_limit, created_at, updated_at;
 	`
 
 	var limit types.ConcurrencyLimit
-	if err := r.client.GetContext(ctx, &limit, query, gpuLimit, cpuMillicoreLimit); err != nil {
+	if err := r.client.GetContext(ctx, &limit, query, workspaceId, gpuLimit, cpuMillicoreLimit); err != nil {
 		return nil, err
 	}
 
@@ -1700,6 +1700,56 @@ func (r *PostgresBackendRepository) DeleteConcurrencyLimit(ctx context.Context, 
 	}
 
 	return nil
+}
+
+func (r *PostgresBackendRepository) ListConcurrencyLimitsByWorkspaceId(ctx context.Context, workspaceId string) ([]types.ConcurrencyLimit, error) {
+	var limits []types.ConcurrencyLimit
+
+	query := `
+		SELECT cl.id, cl.external_id, cl.workspace_id, cl.gpu_limit, cl.cpu_millicore_limit, cl.created_at, cl.updated_at 
+		FROM concurrency_limit cl 
+		JOIN workspace w ON cl.workspace_id = w.id 
+		WHERE w.external_id = $1
+		ORDER BY cl.created_at DESC;
+	`
+
+	err := r.client.SelectContext(ctx, &limits, query, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return limits, nil
+}
+
+func (r *PostgresBackendRepository) RevertToConcurrencyLimit(ctx context.Context, workspaceId string, concurrencyLimitId string) (*types.ConcurrencyLimit, error) {
+	query := `
+		SELECT cl.*
+		FROM concurrency_limit cl 
+		JOIN workspace w ON cl.workspace_id = w.id 
+		WHERE w.external_id = $1 AND cl.external_id = $2;
+	`
+
+	var concurrencyLimit types.ConcurrencyLimit
+	err := r.client.GetContext(ctx, &concurrencyLimit, query, workspaceId, concurrencyLimitId)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("concurrency limit %s does not exist", concurrencyLimitId)
+		}
+		return nil, err
+	}
+
+	updateQuery := `
+			UPDATE workspace 
+			SET concurrency_limit_id = $1 
+			WHERE external_id = $2
+	`
+
+	_, err = r.client.ExecContext(ctx, updateQuery, concurrencyLimit.Id, workspaceId)
+	if err != nil {
+		return nil, err
+	}
+
+	return &concurrencyLimit, nil
 }
 
 func validateEnvironmentVariableName(name string) error {
