@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -90,6 +92,17 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			MaxInFlight:           int(in.Pricing.MaxInFlight),
 			CostPerTask:           float64(in.Pricing.CostPerTask),
 			CostPerTaskDurationMs: float64(in.Pricing.CostPerTaskDurationMs),
+		}
+	}
+
+	// If checkpoint/restore is enabled, we need to handle a few additional things to ensure dump/restore will work properly
+	if in.CheckpointEnabled {
+		err := gws.handleCheckpointEnabled(ctx, authInfo, in, gpus)
+		if err != nil {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: err.Error(),
+			}, nil
 		}
 	}
 
@@ -243,6 +256,50 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		StubId:  stub.ExternalId,
 		WarnMsg: warning,
 	}, nil
+}
+
+func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo *auth.AuthInfo, in *pb.GetOrCreateStubRequest, gpus []types.GpuType) error {
+	workspace := authInfo.Workspace
+
+	if in.GpuCount > 1 {
+		return fmt.Errorf("Checkpoints are yet not supported for multi-GPU")
+	}
+
+	if len(gpus) > 1 {
+		return fmt.Errorf("Checkpoints are yet not supported between multiple GPUs")
+	}
+
+	// Disable checkpoint for serves
+	if types.StubType(in.StubType).IsServe() {
+		in.CheckpointEnabled = false
+		return nil
+	}
+
+	volumeName := "checkpoint-model-cache"
+	modelCachePath := fmt.Sprintf("/%s", volumeName)
+	volume, err := gws.backendRepo.GetOrCreateVolume(ctx, authInfo.Workspace.Id, volumeName)
+	if err != nil {
+		return err
+	}
+
+	if !workspace.StorageAvailable() {
+		volumePath := path.Join(append([]string{types.DefaultVolumesPath, workspace.Name, volume.ExternalId})...)
+		if _, err := os.Stat(volumePath); os.IsNotExist(err) {
+			os.MkdirAll(volumePath, os.FileMode(0755))
+		}
+	}
+
+	// Force set cache vars
+	in.Env = append(in.Env, fmt.Sprintf("TRITON_CACHE_DIR=%s", modelCachePath))
+	in.Env = append(in.Env, fmt.Sprintf("TRANSFORMERS_CACHE=%s", modelCachePath))
+	in.Env = append(in.Env, fmt.Sprintf("HF_HOME=%s", modelCachePath))
+
+	in.Volumes = append(in.Volumes, &pb.Volume{
+		Id:        volume.ExternalId,
+		MountPath: modelCachePath,
+	})
+
+	return nil
 }
 
 func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequest) (*pb.DeployStubResponse, error) {

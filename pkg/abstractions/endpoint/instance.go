@@ -67,9 +67,6 @@ func (i *endpointInstance) startContainers(containersToRun int) error {
 	}
 
 	checkpointEnabled := i.StubConfig.CheckpointEnabled
-	if i.Stub.Type.IsServe() {
-		checkpointEnabled = false
-	}
 
 	if gpuCount > 1 {
 		checkpointEnabled = false
