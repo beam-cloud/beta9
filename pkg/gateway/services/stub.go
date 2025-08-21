@@ -269,15 +269,15 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 		return fmt.Errorf("Checkpoints are yet not supported between multiple GPUs")
 	}
 
-	volumeName := "checkpoint-model-cache"
-
 	volume, err := gws.backendRepo.GetOrCreateVolume(ctx, authInfo.Workspace.Id, volumeName)
 	if err != nil {
 		return err
 	}
 
+	volumeName := "checkpoint-model-cache"
+
 	if !workspace.StorageAvailable() {
-		volumePath := JoinVolumePath(workspace.Name, volume.ExternalId)
+		volumePath := path.Join(append([]string{types.DefaultVolumesPath, workspace.Name, volume.ExternalId})...)
 		if _, err := os.Stat(volumePath); os.IsNotExist(err) {
 			os.MkdirAll(volumePath, os.FileMode(0755))
 		}
@@ -285,21 +285,17 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 
 	modelCachePath := fmt.Sprintf("/%s", volumeName)
 
-	in.Volumes = append(in.Volumes, &pb.Volume{
-		Id:        volume.ExternalId,
-		MountPath: modelCachePath,
-	})
-
 	// Force set cache vars
 	in.Env = append(in.Env, "TRITON_CACHE_DIR", modelCachePath)
 	in.Env = append(in.Env, "TRANSFORMERS_CACHE", modelCachePath)
 	in.Env = append(in.Env, "HF_HOME", modelCachePath)
 
-	return nil
-}
+	in.Volumes = append(in.Volumes, &pb.Volume{
+		Id:        volume.ExternalId,
+		MountPath: modelCachePath,
+	})
 
-func JoinVolumePath(workspaceName, volumeExternalId string, subPaths ...string) string {
-	return path.Join(append([]string{types.DefaultVolumesPath, workspaceName, volumeExternalId}, subPaths...)...)
+	return nil
 }
 
 func (gws *GatewayService) DeployStub(ctx context.Context, in *pb.DeployStubRequest) (*pb.DeployStubResponse, error) {
