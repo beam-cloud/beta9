@@ -89,16 +89,30 @@ func local_request_PodService_SandboxExec_0(ctx context.Context, marshaler runti
 	return msg, metadata, err
 }
 
+var filter_PodService_SandboxStatus_0 = &utilities.DoubleArray{Encoding: map[string]int{"container_id": 0}, Base: []int{1, 1, 0}, Check: []int{0, 1, 2}}
+
 func request_PodService_SandboxStatus_0(ctx context.Context, marshaler runtime.Marshaler, client PodServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq PodSandboxStatusRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["container_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
+	}
+	protoReq.ContainerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_PodService_SandboxStatus_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.SandboxStatus(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -108,8 +122,20 @@ func local_request_PodService_SandboxStatus_0(ctx context.Context, marshaler run
 	var (
 		protoReq PodSandboxStatusRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	val, ok := pathParams["container_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
+	}
+	protoReq.ContainerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_PodService_SandboxStatus_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.SandboxStatus(ctx, &protoReq)
@@ -587,7 +613,7 @@ func RegisterPodServiceHandlerServer(ctx context.Context, mux *runtime.ServeMux,
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/pod.PodService/CreatePod", runtime.WithHTTPPathPattern("/pod.PodService/CreatePod"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/pod.PodService/CreatePod", runtime.WithHTTPPathPattern("/v1/pods"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -621,13 +647,13 @@ func RegisterPodServiceHandlerServer(ctx context.Context, mux *runtime.ServeMux,
 		}
 		forward_PodService_SandboxExec_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_PodService_SandboxStatus_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_PodService_SandboxStatus_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/pod.PodService/SandboxStatus", runtime.WithHTTPPathPattern("/pod.PodService/SandboxStatus"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/pod.PodService/SandboxStatus", runtime.WithHTTPPathPattern("/v1/pods/{container_id}/status"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1025,7 +1051,7 @@ func RegisterPodServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux,
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/pod.PodService/CreatePod", runtime.WithHTTPPathPattern("/pod.PodService/CreatePod"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/pod.PodService/CreatePod", runtime.WithHTTPPathPattern("/v1/pods"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1055,11 +1081,11 @@ func RegisterPodServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux,
 		}
 		forward_PodService_SandboxExec_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_PodService_SandboxStatus_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_PodService_SandboxStatus_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/pod.PodService/SandboxStatus", runtime.WithHTTPPathPattern("/pod.PodService/SandboxStatus"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/pod.PodService/SandboxStatus", runtime.WithHTTPPathPattern("/v1/pods/{container_id}/status"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1365,9 +1391,9 @@ func RegisterPodServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux,
 }
 
 var (
-	pattern_PodService_CreatePod_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pod.PodService", "CreatePod"}, ""))
+	pattern_PodService_CreatePod_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "pods"}, ""))
 	pattern_PodService_SandboxExec_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pod.PodService", "SandboxExec"}, ""))
-	pattern_PodService_SandboxStatus_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pod.PodService", "SandboxStatus"}, ""))
+	pattern_PodService_SandboxStatus_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "pods", "container_id", "status"}, ""))
 	pattern_PodService_SandboxStdout_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pod.PodService", "SandboxStdout"}, ""))
 	pattern_PodService_SandboxStderr_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pod.PodService", "SandboxStderr"}, ""))
 	pattern_PodService_SandboxKill_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pod.PodService", "SandboxKill"}, ""))

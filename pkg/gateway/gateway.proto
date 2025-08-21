@@ -2,6 +2,7 @@ syntax = "proto3";
 
 option go_package = "github.com/beam-cloud/beta9/proto";
 import "google/protobuf/timestamp.proto";
+import "google/api/annotations.proto";
 import "types.proto";
 
 package gateway;
@@ -31,10 +32,18 @@ service GatewayService {
   // Stubs
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse);
   rpc DeployStub(DeployStubRequest) returns (DeployStubResponse);
-  rpc GetURL(GetURLRequest) returns (GetURLResponse);
+  rpc GetURL(GetURLRequest) returns (GetURLResponse) {
+    option (google.api.http) = {
+      get: "/v1/stubs/{stub_id}/url"
+    };
+  }
 
   // Deployments
-  rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse);
+  rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse) {
+    option (google.api.http) = {
+      get: "/v1/deployments"
+    };
+  }
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse);
   rpc StartDeployment(StartDeploymentRequest) returns (StartDeploymentResponse);
   rpc ScaleDeployment(ScaleDeploymentRequest) returns (ScaleDeploymentResponse);

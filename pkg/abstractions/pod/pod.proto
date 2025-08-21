@@ -5,12 +5,22 @@ option go_package = "github.com/beam-cloud/beta9/proto";
 package pod;
 
 import "types.proto";
+import "google/api/annotations.proto";
 
 service PodService {
-  rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {}
+  rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {
+    option (google.api.http) = {
+      post: "/v1/pods"
+      body: "*"
+    };
+  }
   rpc SandboxExec(PodSandboxExecRequest) returns (PodSandboxExecResponse) {}
   rpc SandboxStatus(PodSandboxStatusRequest)
-      returns (PodSandboxStatusResponse) {}
+      returns (PodSandboxStatusResponse) {
+        option (google.api.http) = {
+          get: "/v1/pods/{container_id}/status"
+        };
+      }
   rpc SandboxStdout(PodSandboxStdoutRequest)
       returns (PodSandboxStdoutResponse) {}
   rpc SandboxStderr(PodSandboxStderrRequest)

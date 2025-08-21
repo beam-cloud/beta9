@@ -22,16 +22,16 @@ protoc -I ./pkg/types/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ .
 
 protoc -I ./pkg/scheduler/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/scheduler/scheduler.proto
 protoc -I ./pkg/types -I ./pkg/gateway/ -I ./pkg/worker/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/worker/worker.proto
-protoc -I ./pkg/types -I ./pkg/gateway/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/gateway.proto
-protoc -I ./pkg/types -I ./pkg/gateway/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/gateway/gateway.proto
+protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/gateway.proto
+protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/gateway/gateway.proto
 
 # Repository services
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/types -I ./pkg/gateway/services/repository/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/repository/container_repo.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/types -I ./pkg/gateway/services/repository/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/repository/worker_repo.proto
 
 # Generate code for abstractions
-protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/image/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/image/image.proto
-protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/image/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/image/image.proto
+protoc -I ./googleapis -I ./pkg/abstractions/image/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/image/image.proto
+protoc -I ./googleapis -I ./pkg/abstractions/image/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/image/image.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/map/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/map/map.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/map/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/map/map.proto
@@ -52,9 +52,9 @@ protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/endpoint/ --go_out=./proto 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/endpoint/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/endpoint/endpoint.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/types -I ./pkg/abstractions/pod/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/pod/pod.proto
-protoc -I ./pkg/types -I ./pkg/abstractions/pod/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/pod/pod.proto 
-protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/image/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/image/image.proto
-protoc -I ./pkg/types -I ./pkg/gateway/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/gateway/gateway.proto
+protoc -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/pod/pod.proto 
+protoc -I ./googleapis -I ./pkg/abstractions/image/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/image/image.proto
+protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/gateway/gateway.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/types -I ./pkg/abstractions/pod/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/pod/pod.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/output/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/output/output.proto

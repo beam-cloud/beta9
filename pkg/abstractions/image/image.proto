@@ -4,9 +4,16 @@ option go_package = "github.com/beam-cloud/beta9/proto";
 
 package image;
 
+import "google/api/annotations.proto";
+
 service ImageService {
   rpc VerifyImageBuild(VerifyImageBuildRequest)
-      returns (VerifyImageBuildResponse) {}
+      returns (VerifyImageBuildResponse) {
+    option (google.api.http) = {
+      post: "/v1/images/verify-build"
+      body: "*"
+    };
+  }
   rpc BuildImage(BuildImageRequest) returns (stream BuildImageResponse) {}
 }
 
