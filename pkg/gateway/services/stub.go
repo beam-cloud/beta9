@@ -269,12 +269,18 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 		return fmt.Errorf("Checkpoints are yet not supported between multiple GPUs")
 	}
 
+	// Disable checkpoint for serves
+	if types.StubType(in.StubType).IsServe() {
+		in.CheckpointEnabled = false
+		return nil
+	}
+
+	volumeName := "checkpoint-model-cache"
+	modelCachePath := fmt.Sprintf("/%s", volumeName)
 	volume, err := gws.backendRepo.GetOrCreateVolume(ctx, authInfo.Workspace.Id, volumeName)
 	if err != nil {
 		return err
 	}
-
-	volumeName := "checkpoint-model-cache"
 
 	if !workspace.StorageAvailable() {
 		volumePath := path.Join(append([]string{types.DefaultVolumesPath, workspace.Name, volume.ExternalId})...)
@@ -282,8 +288,6 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 			os.MkdirAll(volumePath, os.FileMode(0755))
 		}
 	}
-
-	modelCachePath := fmt.Sprintf("/%s", volumeName)
 
 	// Force set cache vars
 	in.Env = append(in.Env, "TRITON_CACHE_DIR", modelCachePath)
