@@ -290,9 +290,9 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 	}
 
 	// Force set cache vars
-	in.Env = append(in.Env, "TRITON_CACHE_DIR", modelCachePath)
-	in.Env = append(in.Env, "TRANSFORMERS_CACHE", modelCachePath)
-	in.Env = append(in.Env, "HF_HOME", modelCachePath)
+	in.Env = append(in.Env, fmt.Sprintf("TRITON_CACHE_DIR=%s", modelCachePath))
+	in.Env = append(in.Env, fmt.Sprintf("TRANSFORMERS_CACHE=%s", modelCachePath))
+	in.Env = append(in.Env, fmt.Sprintf("HF_HOME=%s", modelCachePath))
 
 	in.Volumes = append(in.Volumes, &pb.Volume{
 		Id:        volume.ExternalId,
