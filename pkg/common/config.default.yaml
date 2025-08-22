@@ -231,7 +231,6 @@ worker:
     minMachinesAvailable: 1 # minMachinesAvailable only applies to external pools
   criu:
     mode: nvidia
-    enabled: true
     storage:
       mode: local
       mountPath: /data/checkpoints
