@@ -162,7 +162,8 @@ worker:
       priority: 1
       jobSpec:
         nodeSelector: {}
-      criuEnabled: false
+      criuEnabled: true
+      checkpointPath: /data/checkpoints
       poolSizing:
         defaultWorkerCpu: 1000m
         defaultWorkerGpuType: ""
@@ -231,13 +232,8 @@ worker:
   criu:
     mode: nvidia
     storage:
-      mountPath: /data/checkpoints
       mode: local
-      objectStore:
-        bucketName: beta9-checkpoints
-        accessKey: test
-        secretKey: test
-        endpointURL: http://localstack:4566
+      mountPath: /data/checkpoints
     cedana:
       # Can be unix, tcp, vsock
       protocol: unix

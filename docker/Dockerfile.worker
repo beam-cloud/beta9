@@ -137,7 +137,7 @@ ARG CEDANA_TOKEN=""
 
 RUN <<EOT
 set -eux
-if [ "$(uname -m)" = "x86_64" ]; then
+if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
     apt-get update && apt-get install -y \
         gcc \
         make \
@@ -157,9 +157,15 @@ if [ "$(uname -m)" = "x86_64" ]; then
         git
     git clone https://github.com/checkpoint-restore/criu.git
     cd criu
-    make install-lib install-criu install-compel install-amdgpu_plugin install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
+
+    # Skip GPU plugins on ARM64 since they're x86_64 specific
+    if [ "$(uname -m)" = "x86_64" ]; then
+        make install-lib install-criu install-compel install-amdgpu_plugin install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
+        stat /usr/lib/criu/cuda_plugin.so 
+    else
+        make install-lib install-criu install-compel PREFIX=/usr SKIP_PIP_INSTALL=1
+    fi
     criu --version
-    stat /usr/lib/criu/cuda_plugin.so 
     cd .. && rm -rf criu
 fi
 EOT
