@@ -526,7 +526,6 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
 		fmt.Sprintf("BETA9_GATEWAY_HOST_HTTP=%s", os.Getenv("BETA9_GATEWAY_HOST_HTTP")),
 		fmt.Sprintf("BETA9_GATEWAY_PORT_HTTP=%s", os.Getenv("BETA9_GATEWAY_PORT_HTTP")),
-		fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)),
 		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
 		"PYTHONUNBUFFERED=1",
 	}
@@ -675,6 +674,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 			return
 		}
+	}
+
+	if request.CheckpointEnabled {
+		spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
 	}
 
 	// Write runc config spec to disk
