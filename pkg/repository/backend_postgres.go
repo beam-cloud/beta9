@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -868,6 +869,17 @@ func (c *PostgresBackendRepository) AggregateTasksByTimeWindow(ctx context.Conte
 }
 
 func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, filters types.TaskFilter) ([]types.TaskWithRelated, error) {
+	if filters.All {
+		filters.Limit = 0
+
+		tasks, err := c.listAllTasksWithRelatedPaginated(ctx, filters)
+		if err != nil {
+			return nil, err
+		}
+
+		return tasks.Data, nil
+	}
+
 	qb := c.listTaskWithRelatedQueryBuilder(filters)
 
 	sql, args, err := qb.ToSql()
@@ -885,6 +897,10 @@ func (c *PostgresBackendRepository) ListTasksWithRelated(ctx context.Context, fi
 }
 
 func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
+	if filters.All {
+		return c.listAllTasksWithRelatedPaginated(ctx, filters)
+	}
+
 	qb := c.listTaskWithRelatedQueryBuilder(filters)
 
 	page, err := common.Paginate(
@@ -903,6 +919,64 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Co
 	}
 
 	return *page, nil
+}
+
+func (c *PostgresBackendRepository) listAllTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
+	filtersWorkspace := filters
+	filtersWorkspace.All = false
+	filtersWorkspace.WorkspaceID = filters.WorkspaceID
+	filtersWorkspace.ExternalWorkspaceID = 0
+
+	filtersExternalWorkspace := filters
+	filtersExternalWorkspace.All = false
+	filtersExternalWorkspace.WorkspaceID = 0
+	filtersExternalWorkspace.ExternalWorkspaceID = filters.WorkspaceID
+
+	// Get results from both calls
+	resultWorkspace, err := c.ListTasksWithRelatedPaginated(ctx, filtersWorkspace)
+	if err != nil {
+		return common.CursorPaginationInfo[types.TaskWithRelated]{}, err
+	}
+
+	resultExternalWorkspace, err := c.ListTasksWithRelatedPaginated(ctx, filtersExternalWorkspace)
+	if err != nil {
+		return common.CursorPaginationInfo[types.TaskWithRelated]{}, err
+	}
+
+	// Merge and sort results
+	allTasks := append(resultWorkspace.Data, resultExternalWorkspace.Data...)
+
+	// Sort by created_at DESC, id DESC
+	sort.Slice(allTasks, func(i, j int) bool {
+		if allTasks[i].CreatedAt.Equal(allTasks[j].CreatedAt.Time) {
+			return allTasks[i].Id > allTasks[j].Id
+		}
+
+		return allTasks[i].CreatedAt.After(allTasks[j].CreatedAt.Time)
+	})
+
+	// Apply limit
+	pageSize := int(filters.Limit)
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+
+	var nextCursor string
+	if len(allTasks) > pageSize {
+		allTasks = allTasks[:pageSize]
+		lastRow := allTasks[pageSize-1]
+
+		newCursor := common.DatetimeCursor{
+			Value: lastRow.CreatedAt.Format(common.CursorTimestampFormat),
+			Id:    lastRow.Id,
+		}
+		nextCursor = common.EncodeCursor(newCursor)
+	}
+
+	return common.CursorPaginationInfo[types.TaskWithRelated]{
+		Next: nextCursor,
+		Data: allTasks,
+	}, nil
 }
 
 // Stub
