@@ -206,7 +206,10 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		}
 
 		// Create a file accessible to the container to indicate that the checkpoint has been captured
-		os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
+		_, err = os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint complete file: %v", err)
+		}
 
 		outputLogger.Info("Checkpoint created successfully")
 
