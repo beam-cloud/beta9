@@ -17,6 +17,7 @@ service GatewayService {
   rpc SignPayload(SignPayloadRequest) returns (SignPayloadResponse) {
     option (google.api.http) = {
       post: "/auth/sign"
+      body: "*"
     };
   }
 
@@ -29,6 +30,7 @@ service GatewayService {
   rpc CreateObject(CreateObjectRequest) returns (CreateObjectResponse) {
     option (google.api.http) = {
       post: "/objects"
+      body: "*"
     };
   }
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
@@ -51,16 +53,19 @@ service GatewayService {
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse) {
     option (google.api.http) = {
       post: "/tasks/start"
+      body: "*"
     };
   }
   rpc EndTask(EndTaskRequest) returns (EndTaskResponse) {
     option (google.api.http) = {
       post: "/tasks/end"
+      body: "*"
     };
   }
   rpc StopTasks(StopTasksRequest) returns (StopTasksResponse) {
     option (google.api.http) = {
       post: "/tasks/stop"
+      body: "*"
     };
   }
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse) {
@@ -73,11 +78,13 @@ service GatewayService {
   rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse) {
     option (google.api.http) = {
       post: "/stubs"
+      body: "*"
     };
   }
   rpc DeployStub(DeployStubRequest) returns (DeployStubResponse) {
     option (google.api.http) = {
       post: "/stubs/deploy"
+      body: "*"
     };
   }
   rpc GetURL(GetURLRequest) returns (GetURLResponse) {
@@ -105,6 +112,7 @@ service GatewayService {
   rpc ScaleDeployment(ScaleDeploymentRequest) returns (ScaleDeploymentResponse) {
     option (google.api.http) = {
       post: "/deployments/{id}/scale"
+      body: "*"
     };
   }
   rpc DeleteDeployment(DeleteDeploymentRequest)
@@ -130,6 +138,7 @@ service GatewayService {
   rpc CreateMachine(CreateMachineRequest) returns (CreateMachineResponse) {
     option (google.api.http) = {
       post: "/machines"
+      body: "*"
     };
   }
   rpc DeleteMachine(DeleteMachineRequest) returns (DeleteMachineResponse) {
