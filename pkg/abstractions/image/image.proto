@@ -14,7 +14,13 @@ service ImageService {
       body: "*"
     };
   }
-  rpc BuildImage(BuildImageRequest) returns (stream BuildImageResponse) {}
+  rpc BuildImage(BuildImageRequest)
+      returns (stream BuildImageResponse) {
+    option (google.api.http) = {
+      post: "/images/build"
+      body: "*"
+    };
+  }
 }
 
 message BuildStep {

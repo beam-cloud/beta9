@@ -179,7 +179,7 @@ func RegisterImageServiceHandlerClient(ctx context.Context, mux *runtime.ServeMu
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/image.ImageService/BuildImage", runtime.WithHTTPPathPattern("/image.ImageService/BuildImage"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/image.ImageService/BuildImage", runtime.WithHTTPPathPattern("/images/build"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -197,7 +197,7 @@ func RegisterImageServiceHandlerClient(ctx context.Context, mux *runtime.ServeMu
 
 var (
 	pattern_ImageService_VerifyImageBuild_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"images", "verify-build"}, ""))
-	pattern_ImageService_BuildImage_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"image.ImageService", "BuildImage"}, ""))
+	pattern_ImageService_BuildImage_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"images", "build"}, ""))
 )
 
 var (
