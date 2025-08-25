@@ -60,7 +60,7 @@ service PodService {
   rpc SandboxDownloadFile(PodSandboxDownloadFileRequest)
       returns (PodSandboxDownloadFileResponse) {
     option (google.api.http) = {
-      get: "/pods/{container_id}/files/download"
+      get: "/pods/{container_id}/files/download/{container_path=**}"
     };
   }
   rpc SandboxStatFile(PodSandboxStatFileRequest)
