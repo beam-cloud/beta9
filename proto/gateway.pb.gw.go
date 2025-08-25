@@ -40,9 +40,6 @@ func request_GatewayService_Authorize_0(ctx context.Context, marshaler runtime.M
 		protoReq AuthorizeRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
@@ -55,23 +52,25 @@ func local_request_GatewayService_Authorize_0(ctx context.Context, marshaler run
 		protoReq AuthorizeRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	msg, err := server.Authorize(ctx, &protoReq)
 	return msg, metadata, err
 }
+
+var filter_GatewayService_SignPayload_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
 
 func request_GatewayService_SignPayload_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq SignPayloadRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_SignPayload_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.SignPayload(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -82,7 +81,10 @@ func local_request_GatewayService_SignPayload_0(ctx context.Context, marshaler r
 		protoReq SignPayloadRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_SignPayload_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.SignPayload(ctx, &protoReq)
@@ -93,12 +95,18 @@ func request_GatewayService_HeadObject_0(ctx context.Context, marshaler runtime.
 	var (
 		protoReq HeadObjectRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["hash"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "hash")
+	}
+	protoReq.Hash, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "hash", err)
 	}
 	msg, err := client.HeadObject(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -108,24 +116,35 @@ func local_request_GatewayService_HeadObject_0(ctx context.Context, marshaler ru
 	var (
 		protoReq HeadObjectRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["hash"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "hash")
+	}
+	protoReq.Hash, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "hash", err)
 	}
 	msg, err := server.HeadObject(ctx, &protoReq)
 	return msg, metadata, err
 }
+
+var filter_GatewayService_CreateObject_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
 
 func request_GatewayService_CreateObject_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq CreateObjectRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_CreateObject_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.CreateObject(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -136,7 +155,10 @@ func local_request_GatewayService_CreateObject_0(ctx context.Context, marshaler 
 		protoReq CreateObjectRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_CreateObject_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.CreateObject(ctx, &protoReq)
@@ -189,9 +211,6 @@ func request_GatewayService_ListContainers_0(ctx context.Context, marshaler runt
 		protoReq ListContainersRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
@@ -204,9 +223,6 @@ func local_request_GatewayService_ListContainers_0(ctx context.Context, marshale
 		protoReq ListContainersRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	msg, err := server.ListContainers(ctx, &protoReq)
 	return msg, metadata, err
 }
@@ -215,12 +231,18 @@ func request_GatewayService_StopContainer_0(ctx context.Context, marshaler runti
 	var (
 		protoReq StopContainerRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["container_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
+	}
+	protoReq.ContainerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
 	}
 	msg, err := client.StopContainer(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -230,9 +252,15 @@ func local_request_GatewayService_StopContainer_0(ctx context.Context, marshaler
 	var (
 		protoReq StopContainerRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["container_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
+	}
+	protoReq.ContainerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
 	}
 	msg, err := server.StopContainer(ctx, &protoReq)
 	return msg, metadata, err
@@ -281,16 +309,21 @@ func request_GatewayService_AttachToContainer_0(ctx context.Context, marshaler r
 	return stream, metadata, nil
 }
 
+var filter_GatewayService_StartTask_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+
 func request_GatewayService_StartTask_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq StartTaskRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_StartTask_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.StartTask(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -301,23 +334,31 @@ func local_request_GatewayService_StartTask_0(ctx context.Context, marshaler run
 		protoReq StartTaskRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_StartTask_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.StartTask(ctx, &protoReq)
 	return msg, metadata, err
 }
 
+var filter_GatewayService_EndTask_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+
 func request_GatewayService_EndTask_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq EndTaskRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_EndTask_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.EndTask(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -328,23 +369,31 @@ func local_request_GatewayService_EndTask_0(ctx context.Context, marshaler runti
 		protoReq EndTaskRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_EndTask_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.EndTask(ctx, &protoReq)
 	return msg, metadata, err
 }
 
+var filter_GatewayService_StopTasks_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+
 func request_GatewayService_StopTasks_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq StopTasksRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_StopTasks_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.StopTasks(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -355,23 +404,31 @@ func local_request_GatewayService_StopTasks_0(ctx context.Context, marshaler run
 		protoReq StopTasksRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_StopTasks_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.StopTasks(ctx, &protoReq)
 	return msg, metadata, err
 }
 
+var filter_GatewayService_ListTasks_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+
 func request_GatewayService_ListTasks_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq ListTasksRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListTasks_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.ListTasks(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -382,23 +439,31 @@ func local_request_GatewayService_ListTasks_0(ctx context.Context, marshaler run
 		protoReq ListTasksRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListTasks_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.ListTasks(ctx, &protoReq)
 	return msg, metadata, err
 }
 
+var filter_GatewayService_GetOrCreateStub_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+
 func request_GatewayService_GetOrCreateStub_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq GetOrCreateStubRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_GetOrCreateStub_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.GetOrCreateStub(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -409,23 +474,31 @@ func local_request_GatewayService_GetOrCreateStub_0(ctx context.Context, marshal
 		protoReq GetOrCreateStubRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_GetOrCreateStub_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.GetOrCreateStub(ctx, &protoReq)
 	return msg, metadata, err
 }
 
+var filter_GatewayService_DeployStub_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+
 func request_GatewayService_DeployStub_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq DeployStubRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_DeployStub_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.DeployStub(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -436,7 +509,10 @@ func local_request_GatewayService_DeployStub_0(ctx context.Context, marshaler ru
 		protoReq DeployStubRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_DeployStub_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.DeployStub(ctx, &protoReq)
@@ -535,12 +611,18 @@ func request_GatewayService_StopDeployment_0(ctx context.Context, marshaler runt
 	var (
 		protoReq StopDeploymentRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
 	}
 	msg, err := client.StopDeployment(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -550,9 +632,15 @@ func local_request_GatewayService_StopDeployment_0(ctx context.Context, marshale
 	var (
 		protoReq StopDeploymentRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
 	}
 	msg, err := server.StopDeployment(ctx, &protoReq)
 	return msg, metadata, err
@@ -562,12 +650,18 @@ func request_GatewayService_StartDeployment_0(ctx context.Context, marshaler run
 	var (
 		protoReq StartDeploymentRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
 	}
 	msg, err := client.StartDeployment(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -577,24 +671,44 @@ func local_request_GatewayService_StartDeployment_0(ctx context.Context, marshal
 	var (
 		protoReq StartDeploymentRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
 	}
 	msg, err := server.StartDeployment(ctx, &protoReq)
 	return msg, metadata, err
 }
 
+var filter_GatewayService_ScaleDeployment_0 = &utilities.DoubleArray{Encoding: map[string]int{"id": 0}, Base: []int{1, 1, 0}, Check: []int{0, 1, 2}}
+
 func request_GatewayService_ScaleDeployment_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq ScaleDeploymentRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ScaleDeployment_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.ScaleDeployment(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -604,8 +718,20 @@ func local_request_GatewayService_ScaleDeployment_0(ctx context.Context, marshal
 	var (
 		protoReq ScaleDeploymentRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ScaleDeployment_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.ScaleDeployment(ctx, &protoReq)
@@ -616,12 +742,18 @@ func request_GatewayService_DeleteDeployment_0(ctx context.Context, marshaler ru
 	var (
 		protoReq DeleteDeploymentRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
 	}
 	msg, err := client.DeleteDeployment(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -631,24 +763,35 @@ func local_request_GatewayService_DeleteDeployment_0(ctx context.Context, marsha
 	var (
 		protoReq DeleteDeploymentRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
+	}
+	protoReq.Id, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
 	}
 	msg, err := server.DeleteDeployment(ctx, &protoReq)
 	return msg, metadata, err
 }
+
+var filter_GatewayService_ListPools_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
 
 func request_GatewayService_ListPools_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq ListPoolsRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListPools_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.ListPools(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -659,23 +802,31 @@ func local_request_GatewayService_ListPools_0(ctx context.Context, marshaler run
 		protoReq ListPoolsRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListPools_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.ListPools(ctx, &protoReq)
 	return msg, metadata, err
 }
 
+var filter_GatewayService_ListMachines_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+
 func request_GatewayService_ListMachines_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq ListMachinesRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListMachines_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.ListMachines(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -686,23 +837,31 @@ func local_request_GatewayService_ListMachines_0(ctx context.Context, marshaler 
 		protoReq ListMachinesRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_ListMachines_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.ListMachines(ctx, &protoReq)
 	return msg, metadata, err
 }
 
+var filter_GatewayService_CreateMachine_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
+
 func request_GatewayService_CreateMachine_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq CreateMachineRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_CreateMachine_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.CreateMachine(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -713,23 +872,40 @@ func local_request_GatewayService_CreateMachine_0(ctx context.Context, marshaler
 		protoReq CreateMachineRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_CreateMachine_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.CreateMachine(ctx, &protoReq)
 	return msg, metadata, err
 }
 
+var filter_GatewayService_DeleteMachine_0 = &utilities.DoubleArray{Encoding: map[string]int{"machine_id": 0}, Base: []int{1, 1, 0}, Check: []int{0, 1, 2}}
+
 func request_GatewayService_DeleteMachine_0(ctx context.Context, marshaler runtime.Marshaler, client GatewayServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq DeleteMachineRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["machine_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "machine_id")
+	}
+	protoReq.MachineId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "machine_id", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_DeleteMachine_0); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := client.DeleteMachine(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -739,8 +915,20 @@ func local_request_GatewayService_DeleteMachine_0(ctx context.Context, marshaler
 	var (
 		protoReq DeleteMachineRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+	val, ok := pathParams["machine_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "machine_id")
+	}
+	protoReq.MachineId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "machine_id", err)
+	}
+	if err := req.ParseForm(); err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_GatewayService_DeleteMachine_0); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	msg, err := server.DeleteMachine(ctx, &protoReq)
@@ -752,9 +940,6 @@ func request_GatewayService_ListTokens_0(ctx context.Context, marshaler runtime.
 		protoReq ListTokensRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
@@ -767,9 +952,6 @@ func local_request_GatewayService_ListTokens_0(ctx context.Context, marshaler ru
 		protoReq ListTokensRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	msg, err := server.ListTokens(ctx, &protoReq)
 	return msg, metadata, err
 }
@@ -779,9 +961,6 @@ func request_GatewayService_CreateToken_0(ctx context.Context, marshaler runtime
 		protoReq CreateTokenRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
@@ -794,9 +973,6 @@ func local_request_GatewayService_CreateToken_0(ctx context.Context, marshaler r
 		protoReq CreateTokenRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	msg, err := server.CreateToken(ctx, &protoReq)
 	return msg, metadata, err
 }
@@ -805,12 +981,18 @@ func request_GatewayService_ToggleToken_0(ctx context.Context, marshaler runtime
 	var (
 		protoReq ToggleTokenRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["token_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "token_id")
+	}
+	protoReq.TokenId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "token_id", err)
 	}
 	msg, err := client.ToggleToken(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -820,9 +1002,15 @@ func local_request_GatewayService_ToggleToken_0(ctx context.Context, marshaler r
 	var (
 		protoReq ToggleTokenRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["token_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "token_id")
+	}
+	protoReq.TokenId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "token_id", err)
 	}
 	msg, err := server.ToggleToken(ctx, &protoReq)
 	return msg, metadata, err
@@ -832,12 +1020,18 @@ func request_GatewayService_DeleteToken_0(ctx context.Context, marshaler runtime
 	var (
 		protoReq DeleteTokenRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["token_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "token_id")
+	}
+	protoReq.TokenId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "token_id", err)
 	}
 	msg, err := client.DeleteToken(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -847,9 +1041,15 @@ func local_request_GatewayService_DeleteToken_0(ctx context.Context, marshaler r
 	var (
 		protoReq DeleteTokenRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["token_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "token_id")
+	}
+	protoReq.TokenId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "token_id", err)
 	}
 	msg, err := server.DeleteToken(ctx, &protoReq)
 	return msg, metadata, err
@@ -860,9 +1060,6 @@ func request_GatewayService_ListWorkers_0(ctx context.Context, marshaler runtime
 		protoReq ListWorkersRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
@@ -875,9 +1072,6 @@ func local_request_GatewayService_ListWorkers_0(ctx context.Context, marshaler r
 		protoReq ListWorkersRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	msg, err := server.ListWorkers(ctx, &protoReq)
 	return msg, metadata, err
 }
@@ -886,12 +1080,18 @@ func request_GatewayService_CordonWorker_0(ctx context.Context, marshaler runtim
 	var (
 		protoReq CordonWorkerRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["worker_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "worker_id")
+	}
+	protoReq.WorkerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "worker_id", err)
 	}
 	msg, err := client.CordonWorker(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -901,9 +1101,15 @@ func local_request_GatewayService_CordonWorker_0(ctx context.Context, marshaler 
 	var (
 		protoReq CordonWorkerRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["worker_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "worker_id")
+	}
+	protoReq.WorkerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "worker_id", err)
 	}
 	msg, err := server.CordonWorker(ctx, &protoReq)
 	return msg, metadata, err
@@ -913,12 +1119,18 @@ func request_GatewayService_UncordonWorker_0(ctx context.Context, marshaler runt
 	var (
 		protoReq UncordonWorkerRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["worker_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "worker_id")
+	}
+	protoReq.WorkerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "worker_id", err)
 	}
 	msg, err := client.UncordonWorker(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -928,9 +1140,15 @@ func local_request_GatewayService_UncordonWorker_0(ctx context.Context, marshale
 	var (
 		protoReq UncordonWorkerRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["worker_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "worker_id")
+	}
+	protoReq.WorkerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "worker_id", err)
 	}
 	msg, err := server.UncordonWorker(ctx, &protoReq)
 	return msg, metadata, err
@@ -940,12 +1158,18 @@ func request_GatewayService_DrainWorker_0(ctx context.Context, marshaler runtime
 	var (
 		protoReq DrainWorkerRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
+	}
+	val, ok := pathParams["worker_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "worker_id")
+	}
+	protoReq.WorkerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "worker_id", err)
 	}
 	msg, err := client.DrainWorker(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -955,9 +1179,15 @@ func local_request_GatewayService_DrainWorker_0(ctx context.Context, marshaler r
 	var (
 		protoReq DrainWorkerRequest
 		metadata runtime.ServerMetadata
+		err      error
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	val, ok := pathParams["worker_id"]
+	if !ok {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "worker_id")
+	}
+	protoReq.WorkerId, err = runtime.String(val)
+	if err != nil {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "worker_id", err)
 	}
 	msg, err := server.DrainWorker(ctx, &protoReq)
 	return msg, metadata, err
@@ -968,9 +1198,6 @@ func request_GatewayService_ExportWorkspaceConfig_0(ctx context.Context, marshal
 		protoReq ExportWorkspaceConfigRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
@@ -983,9 +1210,6 @@ func local_request_GatewayService_ExportWorkspaceConfig_0(ctx context.Context, m
 		protoReq ExportWorkspaceConfigRequest
 		metadata runtime.ServerMetadata
 	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
 	msg, err := server.ExportWorkspaceConfig(ctx, &protoReq)
 	return msg, metadata, err
 }
@@ -1002,7 +1226,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/Authorize", runtime.WithHTTPPathPattern("/gateway.GatewayService/Authorize"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/Authorize", runtime.WithHTTPPathPattern("/auth/authorize"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1022,7 +1246,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/SignPayload", runtime.WithHTTPPathPattern("/gateway.GatewayService/SignPayload"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/SignPayload", runtime.WithHTTPPathPattern("/auth/sign"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1036,13 +1260,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_SignPayload_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_HeadObject_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_HeadObject_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/HeadObject", runtime.WithHTTPPathPattern("/gateway.GatewayService/HeadObject"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/HeadObject", runtime.WithHTTPPathPattern("/objects/{hash}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1062,7 +1286,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CreateObject", runtime.WithHTTPPathPattern("/gateway.GatewayService/CreateObject"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CreateObject", runtime.WithHTTPPathPattern("/objects"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1083,13 +1307,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 		return
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListContainers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListContainers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListContainers", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListContainers"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListContainers", runtime.WithHTTPPathPattern("/containers"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1109,7 +1333,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StopContainer", runtime.WithHTTPPathPattern("/gateway.GatewayService/StopContainer"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StopContainer", runtime.WithHTTPPathPattern("/containers/{container_id}/stop"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1136,7 +1360,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StartTask", runtime.WithHTTPPathPattern("/gateway.GatewayService/StartTask"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StartTask", runtime.WithHTTPPathPattern("/tasks/start"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1156,7 +1380,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/EndTask", runtime.WithHTTPPathPattern("/gateway.GatewayService/EndTask"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/EndTask", runtime.WithHTTPPathPattern("/tasks/end"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1176,7 +1400,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StopTasks", runtime.WithHTTPPathPattern("/gateway.GatewayService/StopTasks"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StopTasks", runtime.WithHTTPPathPattern("/tasks/stop"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1190,13 +1414,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_StopTasks_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListTasks_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListTasks_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListTasks", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListTasks"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListTasks", runtime.WithHTTPPathPattern("/tasks"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1216,7 +1440,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetOrCreateStub", runtime.WithHTTPPathPattern("/gateway.GatewayService/GetOrCreateStub"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetOrCreateStub", runtime.WithHTTPPathPattern("/stubs"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1236,7 +1460,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeployStub", runtime.WithHTTPPathPattern("/gateway.GatewayService/DeployStub"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeployStub", runtime.WithHTTPPathPattern("/stubs/deploy"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1256,7 +1480,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetURL", runtime.WithHTTPPathPattern("/v1/stubs/{stub_id}/url"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/GetURL", runtime.WithHTTPPathPattern("/stubs/{stub_id}/url"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1276,7 +1500,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListDeployments", runtime.WithHTTPPathPattern("/v1/deployments"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListDeployments", runtime.WithHTTPPathPattern("/deployments"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1296,7 +1520,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StopDeployment", runtime.WithHTTPPathPattern("/gateway.GatewayService/StopDeployment"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StopDeployment", runtime.WithHTTPPathPattern("/deployments/{id}/stop"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1316,7 +1540,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StartDeployment", runtime.WithHTTPPathPattern("/gateway.GatewayService/StartDeployment"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/StartDeployment", runtime.WithHTTPPathPattern("/deployments/{id}/start"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1336,7 +1560,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ScaleDeployment", runtime.WithHTTPPathPattern("/gateway.GatewayService/ScaleDeployment"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ScaleDeployment", runtime.WithHTTPPathPattern("/deployments/{id}/scale"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1350,13 +1574,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ScaleDeployment_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_DeleteDeployment_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodDelete, pattern_GatewayService_DeleteDeployment_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeleteDeployment", runtime.WithHTTPPathPattern("/gateway.GatewayService/DeleteDeployment"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeleteDeployment", runtime.WithHTTPPathPattern("/deployments/{id}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1370,13 +1594,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_DeleteDeployment_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListPools_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListPools_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListPools", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListPools"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListPools", runtime.WithHTTPPathPattern("/pools"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1390,13 +1614,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ListPools_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListMachines_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListMachines_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListMachines", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListMachines"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListMachines", runtime.WithHTTPPathPattern("/machines"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1416,7 +1640,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CreateMachine", runtime.WithHTTPPathPattern("/gateway.GatewayService/CreateMachine"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CreateMachine", runtime.WithHTTPPathPattern("/machines"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1430,13 +1654,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_CreateMachine_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_DeleteMachine_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodDelete, pattern_GatewayService_DeleteMachine_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeleteMachine", runtime.WithHTTPPathPattern("/gateway.GatewayService/DeleteMachine"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeleteMachine", runtime.WithHTTPPathPattern("/machines/{machine_id}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1450,13 +1674,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_DeleteMachine_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListTokens_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListTokens_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListTokens", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListTokens"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListTokens", runtime.WithHTTPPathPattern("/tokens"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1476,7 +1700,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CreateToken", runtime.WithHTTPPathPattern("/gateway.GatewayService/CreateToken"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CreateToken", runtime.WithHTTPPathPattern("/tokens"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1496,7 +1720,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ToggleToken", runtime.WithHTTPPathPattern("/gateway.GatewayService/ToggleToken"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ToggleToken", runtime.WithHTTPPathPattern("/tokens/{token_id}/toggle"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1510,13 +1734,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ToggleToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_DeleteToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodDelete, pattern_GatewayService_DeleteToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeleteToken", runtime.WithHTTPPathPattern("/gateway.GatewayService/DeleteToken"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DeleteToken", runtime.WithHTTPPathPattern("/tokens/{token_id}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1530,13 +1754,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_DeleteToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListWorkers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListWorkers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListWorkers", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListWorkers"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ListWorkers", runtime.WithHTTPPathPattern("/workers"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1556,7 +1780,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CordonWorker", runtime.WithHTTPPathPattern("/gateway.GatewayService/CordonWorker"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/CordonWorker", runtime.WithHTTPPathPattern("/workers/{worker_id}/cordon"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1576,7 +1800,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/UncordonWorker", runtime.WithHTTPPathPattern("/gateway.GatewayService/UncordonWorker"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/UncordonWorker", runtime.WithHTTPPathPattern("/workers/{worker_id}/uncordon"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1596,7 +1820,7 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DrainWorker", runtime.WithHTTPPathPattern("/gateway.GatewayService/DrainWorker"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/DrainWorker", runtime.WithHTTPPathPattern("/workers/{worker_id}/drain"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1610,13 +1834,13 @@ func RegisterGatewayServiceHandlerServer(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_DrainWorker_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ExportWorkspaceConfig_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ExportWorkspaceConfig_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ExportWorkspaceConfig", runtime.WithHTTPPathPattern("/gateway.GatewayService/ExportWorkspaceConfig"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/gateway.GatewayService/ExportWorkspaceConfig", runtime.WithHTTPPathPattern("/workspace/config"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1674,7 +1898,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/Authorize", runtime.WithHTTPPathPattern("/gateway.GatewayService/Authorize"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/Authorize", runtime.WithHTTPPathPattern("/auth/authorize"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1691,7 +1915,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/SignPayload", runtime.WithHTTPPathPattern("/gateway.GatewayService/SignPayload"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/SignPayload", runtime.WithHTTPPathPattern("/auth/sign"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1704,11 +1928,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_SignPayload_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_HeadObject_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_HeadObject_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/HeadObject", runtime.WithHTTPPathPattern("/gateway.GatewayService/HeadObject"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/HeadObject", runtime.WithHTTPPathPattern("/objects/{hash}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1725,7 +1949,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CreateObject", runtime.WithHTTPPathPattern("/gateway.GatewayService/CreateObject"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CreateObject", runtime.WithHTTPPathPattern("/objects"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1755,11 +1979,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_PutObjectStream_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListContainers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListContainers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListContainers", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListContainers"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListContainers", runtime.WithHTTPPathPattern("/containers"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1776,7 +2000,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StopContainer", runtime.WithHTTPPathPattern("/gateway.GatewayService/StopContainer"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StopContainer", runtime.WithHTTPPathPattern("/containers/{container_id}/stop"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1810,7 +2034,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StartTask", runtime.WithHTTPPathPattern("/gateway.GatewayService/StartTask"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StartTask", runtime.WithHTTPPathPattern("/tasks/start"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1827,7 +2051,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/EndTask", runtime.WithHTTPPathPattern("/gateway.GatewayService/EndTask"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/EndTask", runtime.WithHTTPPathPattern("/tasks/end"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1844,7 +2068,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StopTasks", runtime.WithHTTPPathPattern("/gateway.GatewayService/StopTasks"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StopTasks", runtime.WithHTTPPathPattern("/tasks/stop"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1857,11 +2081,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_StopTasks_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListTasks_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListTasks_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListTasks", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListTasks"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListTasks", runtime.WithHTTPPathPattern("/tasks"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1878,7 +2102,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetOrCreateStub", runtime.WithHTTPPathPattern("/gateway.GatewayService/GetOrCreateStub"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetOrCreateStub", runtime.WithHTTPPathPattern("/stubs"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1895,7 +2119,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeployStub", runtime.WithHTTPPathPattern("/gateway.GatewayService/DeployStub"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeployStub", runtime.WithHTTPPathPattern("/stubs/deploy"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1912,7 +2136,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetURL", runtime.WithHTTPPathPattern("/v1/stubs/{stub_id}/url"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/GetURL", runtime.WithHTTPPathPattern("/stubs/{stub_id}/url"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1929,7 +2153,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListDeployments", runtime.WithHTTPPathPattern("/v1/deployments"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListDeployments", runtime.WithHTTPPathPattern("/deployments"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1946,7 +2170,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StopDeployment", runtime.WithHTTPPathPattern("/gateway.GatewayService/StopDeployment"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StopDeployment", runtime.WithHTTPPathPattern("/deployments/{id}/stop"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1963,7 +2187,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StartDeployment", runtime.WithHTTPPathPattern("/gateway.GatewayService/StartDeployment"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/StartDeployment", runtime.WithHTTPPathPattern("/deployments/{id}/start"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1980,7 +2204,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ScaleDeployment", runtime.WithHTTPPathPattern("/gateway.GatewayService/ScaleDeployment"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ScaleDeployment", runtime.WithHTTPPathPattern("/deployments/{id}/scale"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1993,11 +2217,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ScaleDeployment_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_DeleteDeployment_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodDelete, pattern_GatewayService_DeleteDeployment_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeleteDeployment", runtime.WithHTTPPathPattern("/gateway.GatewayService/DeleteDeployment"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeleteDeployment", runtime.WithHTTPPathPattern("/deployments/{id}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2010,11 +2234,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_DeleteDeployment_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListPools_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListPools_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListPools", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListPools"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListPools", runtime.WithHTTPPathPattern("/pools"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2027,11 +2251,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ListPools_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListMachines_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListMachines_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListMachines", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListMachines"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListMachines", runtime.WithHTTPPathPattern("/machines"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2048,7 +2272,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CreateMachine", runtime.WithHTTPPathPattern("/gateway.GatewayService/CreateMachine"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CreateMachine", runtime.WithHTTPPathPattern("/machines"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2061,11 +2285,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_CreateMachine_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_DeleteMachine_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodDelete, pattern_GatewayService_DeleteMachine_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeleteMachine", runtime.WithHTTPPathPattern("/gateway.GatewayService/DeleteMachine"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeleteMachine", runtime.WithHTTPPathPattern("/machines/{machine_id}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2078,11 +2302,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_DeleteMachine_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListTokens_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListTokens_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListTokens", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListTokens"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListTokens", runtime.WithHTTPPathPattern("/tokens"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2099,7 +2323,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CreateToken", runtime.WithHTTPPathPattern("/gateway.GatewayService/CreateToken"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CreateToken", runtime.WithHTTPPathPattern("/tokens"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2116,7 +2340,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ToggleToken", runtime.WithHTTPPathPattern("/gateway.GatewayService/ToggleToken"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ToggleToken", runtime.WithHTTPPathPattern("/tokens/{token_id}/toggle"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2129,11 +2353,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_ToggleToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_DeleteToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodDelete, pattern_GatewayService_DeleteToken_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeleteToken", runtime.WithHTTPPathPattern("/gateway.GatewayService/DeleteToken"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DeleteToken", runtime.WithHTTPPathPattern("/tokens/{token_id}"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2146,11 +2370,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_DeleteToken_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ListWorkers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ListWorkers_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListWorkers", runtime.WithHTTPPathPattern("/gateway.GatewayService/ListWorkers"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ListWorkers", runtime.WithHTTPPathPattern("/workers"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2167,7 +2391,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CordonWorker", runtime.WithHTTPPathPattern("/gateway.GatewayService/CordonWorker"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/CordonWorker", runtime.WithHTTPPathPattern("/workers/{worker_id}/cordon"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2184,7 +2408,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/UncordonWorker", runtime.WithHTTPPathPattern("/gateway.GatewayService/UncordonWorker"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/UncordonWorker", runtime.WithHTTPPathPattern("/workers/{worker_id}/uncordon"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2201,7 +2425,7 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DrainWorker", runtime.WithHTTPPathPattern("/gateway.GatewayService/DrainWorker"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/DrainWorker", runtime.WithHTTPPathPattern("/workers/{worker_id}/drain"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2214,11 +2438,11 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 		}
 		forward_GatewayService_DrainWorker_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_GatewayService_ExportWorkspaceConfig_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodGet, pattern_GatewayService_ExportWorkspaceConfig_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ExportWorkspaceConfig", runtime.WithHTTPPathPattern("/gateway.GatewayService/ExportWorkspaceConfig"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/gateway.GatewayService/ExportWorkspaceConfig", runtime.WithHTTPPathPattern("/workspace/config"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -2235,39 +2459,39 @@ func RegisterGatewayServiceHandlerClient(ctx context.Context, mux *runtime.Serve
 }
 
 var (
-	pattern_GatewayService_Authorize_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "Authorize"}, ""))
-	pattern_GatewayService_SignPayload_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "SignPayload"}, ""))
-	pattern_GatewayService_HeadObject_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "HeadObject"}, ""))
-	pattern_GatewayService_CreateObject_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "CreateObject"}, ""))
+	pattern_GatewayService_Authorize_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"auth", "authorize"}, ""))
+	pattern_GatewayService_SignPayload_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"auth", "sign"}, ""))
+	pattern_GatewayService_HeadObject_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"objects", "hash"}, ""))
+	pattern_GatewayService_CreateObject_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"objects"}, ""))
 	pattern_GatewayService_PutObjectStream_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "PutObjectStream"}, ""))
-	pattern_GatewayService_ListContainers_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "ListContainers"}, ""))
-	pattern_GatewayService_StopContainer_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StopContainer"}, ""))
+	pattern_GatewayService_ListContainers_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"containers"}, ""))
+	pattern_GatewayService_StopContainer_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"containers", "container_id", "stop"}, ""))
 	pattern_GatewayService_AttachToContainer_0     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "AttachToContainer"}, ""))
-	pattern_GatewayService_StartTask_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StartTask"}, ""))
-	pattern_GatewayService_EndTask_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "EndTask"}, ""))
-	pattern_GatewayService_StopTasks_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StopTasks"}, ""))
-	pattern_GatewayService_ListTasks_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "ListTasks"}, ""))
-	pattern_GatewayService_GetOrCreateStub_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "GetOrCreateStub"}, ""))
-	pattern_GatewayService_DeployStub_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "DeployStub"}, ""))
-	pattern_GatewayService_GetURL_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 1, 0, 4, 1, 5, 2, 2, 3}, []string{"v1", "stubs", "stub_id", "url"}, ""))
-	pattern_GatewayService_ListDeployments_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"v1", "deployments"}, ""))
-	pattern_GatewayService_StopDeployment_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StopDeployment"}, ""))
-	pattern_GatewayService_StartDeployment_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "StartDeployment"}, ""))
-	pattern_GatewayService_ScaleDeployment_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "ScaleDeployment"}, ""))
-	pattern_GatewayService_DeleteDeployment_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "DeleteDeployment"}, ""))
-	pattern_GatewayService_ListPools_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "ListPools"}, ""))
-	pattern_GatewayService_ListMachines_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "ListMachines"}, ""))
-	pattern_GatewayService_CreateMachine_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "CreateMachine"}, ""))
-	pattern_GatewayService_DeleteMachine_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "DeleteMachine"}, ""))
-	pattern_GatewayService_ListTokens_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "ListTokens"}, ""))
-	pattern_GatewayService_CreateToken_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "CreateToken"}, ""))
-	pattern_GatewayService_ToggleToken_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "ToggleToken"}, ""))
-	pattern_GatewayService_DeleteToken_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "DeleteToken"}, ""))
-	pattern_GatewayService_ListWorkers_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "ListWorkers"}, ""))
-	pattern_GatewayService_CordonWorker_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "CordonWorker"}, ""))
-	pattern_GatewayService_UncordonWorker_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "UncordonWorker"}, ""))
-	pattern_GatewayService_DrainWorker_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "DrainWorker"}, ""))
-	pattern_GatewayService_ExportWorkspaceConfig_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"gateway.GatewayService", "ExportWorkspaceConfig"}, ""))
+	pattern_GatewayService_StartTask_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "start"}, ""))
+	pattern_GatewayService_EndTask_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "end"}, ""))
+	pattern_GatewayService_StopTasks_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"tasks", "stop"}, ""))
+	pattern_GatewayService_ListTasks_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tasks"}, ""))
+	pattern_GatewayService_GetOrCreateStub_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"stubs"}, ""))
+	pattern_GatewayService_DeployStub_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"stubs", "deploy"}, ""))
+	pattern_GatewayService_GetURL_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"stubs", "stub_id", "url"}, ""))
+	pattern_GatewayService_ListDeployments_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"deployments"}, ""))
+	pattern_GatewayService_StopDeployment_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "stop"}, ""))
+	pattern_GatewayService_StartDeployment_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "start"}, ""))
+	pattern_GatewayService_ScaleDeployment_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"deployments", "id", "scale"}, ""))
+	pattern_GatewayService_DeleteDeployment_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"deployments", "id"}, ""))
+	pattern_GatewayService_ListPools_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pools"}, ""))
+	pattern_GatewayService_ListMachines_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"machines"}, ""))
+	pattern_GatewayService_CreateMachine_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"machines"}, ""))
+	pattern_GatewayService_DeleteMachine_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"machines", "machine_id"}, ""))
+	pattern_GatewayService_ListTokens_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tokens"}, ""))
+	pattern_GatewayService_CreateToken_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"tokens"}, ""))
+	pattern_GatewayService_ToggleToken_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"tokens", "token_id", "toggle"}, ""))
+	pattern_GatewayService_DeleteToken_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1}, []string{"tokens", "token_id"}, ""))
+	pattern_GatewayService_ListWorkers_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"workers"}, ""))
+	pattern_GatewayService_CordonWorker_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"workers", "worker_id", "cordon"}, ""))
+	pattern_GatewayService_UncordonWorker_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"workers", "worker_id", "uncordon"}, ""))
+	pattern_GatewayService_DrainWorker_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"workers", "worker_id", "drain"}, ""))
+	pattern_GatewayService_ExportWorkspaceConfig_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"workspace", "config"}, ""))
 )
 
 var (
