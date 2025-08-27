@@ -53,8 +53,13 @@ protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/endpoint/ --python_betterpr
 
 protoc -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/pod/pod.proto
 protoc -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/pod/pod.proto 
+protoc -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/pod/pod.proto
+
 protoc -I ./googleapis -I ./pkg/abstractions/image/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/abstractions/image/image.proto
+protoc -I ./googleapis -I ./pkg/abstractions/image/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/image/image.proto
+
 protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --grpc-gateway_out=./proto --grpc-gateway_opt paths=source_relative --grpc-gateway_opt generate_unbound_methods=true ./pkg/gateway/gateway.proto
+protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/gateway/gateway.proto
 protoc -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/abstractions/pod/pod.proto
 
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/output/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/output/output.proto
