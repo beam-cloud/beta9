@@ -60,16 +60,7 @@ def run_generic_checkpoint_condition():
         time.sleep(1)
 
     """
-    Considerations:
-    1. Do we need to block the main process from receiving requests or starting its main processing job? (what happens if we checkpoint in the middle of a request?)
-    2. How do we make sure that we don't reload the checkpoint condition after it has been checkpointed?
-    3. How do we make sure that we don't load the checkpoint after it has been loaded?
-    
-    When we start up the container, we already know if its attempting a checkpoint or starting from a checkpoint.
-    If its attempting a checkpoint, we disable the ingress/egress traffic and wait for the checkpoint condition to be met.
-    If its starting from a checkpoint, we can just keep the ingress/egress traffic running before we start from the checkpoint.
-    
-    Asssuming the process is does not require any network access, for example a training job, 
+    TODO: Asssuming the process is does not require any network access, for example a training job, 
     we can actually add a helper that the USER can use to check and block their process until its checkpointed.
     """
 
