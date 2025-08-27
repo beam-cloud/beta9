@@ -33,6 +33,8 @@ func (i *podInstance) startContainers(containersToRun int) error {
 		fmt.Sprintf("STUB_ID=%s", i.Stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", i.Stub.Type),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", i.StubConfig.KeepWarmSeconds),
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", i.StubConfig.CheckpointEnabled),
+		fmt.Sprintf("CHECKPOINT_CONDITION=%s", i.StubConfig.CheckpointCondition),
 	}...)
 
 	gpuRequest := types.GpuTypesToStrings(i.StubConfig.Runtime.Gpus)

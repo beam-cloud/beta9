@@ -282,6 +282,8 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		fmt.Sprintf("STUB_ID=%s", stub.ExternalId),
 		fmt.Sprintf("STUB_TYPE=%s", stub.Type),
 		fmt.Sprintf("KEEP_WARM_SECONDS=%d", stubConfig.KeepWarmSeconds),
+		fmt.Sprintf("CHECKPOINT_ENABLED=%t", stubConfig.CheckpointEnabled),
+		fmt.Sprintf("CHECKPOINT_CONDITION=%s", stubConfig.CheckpointCondition),
 	}...)
 
 	gpuRequest := types.GpuTypesToStrings(stubConfig.Runtime.Gpus)

@@ -180,17 +180,21 @@ def create_deployment(
         if not module and hasattr(user_obj, "generate_deployment_artifacts"):
             user_obj.generate_deployment_artifacts(**kwargs)
 
-        response, ok = user_obj.deploy(
-            name=name,
-            context=service._config,
-            url_type=url_type,
-        )
-        if not ok:
-            terminal.error("Deployment failed ☠️")
+        try:
+            response, ok = user_obj.deploy(
+                name=name,
+                context=service._config,
+                url_type=url_type,
+            )
+            if not ok:
+                terminal.error("Deployment failed ☠️")
+                return
+        except Exception as e:
+            terminal.error(f"Deployment failed ☠️: {e}")
             return
-
-        if not module and hasattr(user_obj, "cleanup_deployment_artifacts"):
-            user_obj.cleanup_deployment_artifacts()
+        finally:
+            if not module and hasattr(user_obj, "cleanup_deployment_artifacts"):
+                user_obj.cleanup_deployment_artifacts()
 
         if capture_logs.capture_logs:
             logs.extend(capture_logs.logs)

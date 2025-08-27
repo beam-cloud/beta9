@@ -74,10 +74,10 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		return nil
 	}
 
-	signal := int(syscall.SIGTERM)
-	if kill {
-		signal = int(syscall.SIGKILL)
-	}
+	// signal := int(syscall.SIGTERM)
+	// if kill {
+	signal := int(syscall.SIGKILL)
+	// }
 
 	err := s.runcHandle.Kill(context.Background(), instance.Id, signal, &runc.KillOpts{All: true})
 	if err != nil {
@@ -86,7 +86,7 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		return nil
 	}
 
-	log.Info().Str("container_id", containerId).Msg("container stopped")
+	log.Info().Str("container_id", containerId).Msgf("container stopped with signal %d", signal)
 	return nil
 }
 
@@ -541,6 +541,16 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	return env
 }
 
+func (s *Worker) exposeBindPorts(containerId string, request *types.ContainerRequest, opts *ContainerOptions) error {
+	for idx, bindPort := range opts.BindPorts {
+		err := s.containerNetworkManager.ExposePort(containerId, bindPort, int(request.Ports[idx]))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // spawn a container using runc binary
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -640,6 +650,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
+	log.Info().Msgf("container network setup complete")
+
 	if request.RequiresGPU() {
 		// Assign n-number of GPUs to a container
 		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
@@ -667,14 +679,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
+	log.Info().Msgf("container GPU setup complete")
+
 	// Expose the bind ports
-	for idx, bindPort := range opts.BindPorts {
-		err = s.containerNetworkManager.ExposePort(containerId, bindPort, int(request.Ports[idx]))
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
-			return
-		}
-	}
+	// for idx, bindPort := range opts.BindPorts {
+	// 	err = s.containerNetworkManager.ExposePort(containerId, bindPort, int(request.Ports[idx]))
+	// 	if err != nil {
+	// 		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
+	// 		return
+	// 	}
+	// }
+
+	log.Info().Msgf("container bind ports exposed")
 
 	if request.CheckpointEnabled {
 		spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
@@ -685,6 +701,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	if err != nil {
 		return
 	}
+
+	log.Info().Msgf("container bind ports exposed")
 
 	configPath := filepath.Join(spec.Root.Path, specBaseName)
 	err = os.WriteFile(configPath, configContents, 0644)
@@ -729,7 +747,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 	}()
 
-	exitCode, containerId, _ = s.runContainer(ctx, request, configPath, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+	log.Info().Msgf("container metrics collected")
+	log.Info().Msgf("beginning container run")
+
+	exitCode, containerId, _ = s.runContainer(ctx, request, configPath, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -765,14 +786,24 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, configPath string, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, configPath string, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, opts *ContainerOptions) (int, string, error) {
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
-		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, configPath)
+		log.Info().Msgf("attempting checkpoint or restore")
+		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, configPath, func() error {
+			return s.exposeBindPorts(request.ContainerId, request, opts)
+		})
 		if err == nil {
+			log.Info().Msgf("checkpoint or restore successful")
 			return exitCode, containerId, err
 		}
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from checkpoint/restore, exit code %d", exitCode)
+	}
+
+	err := s.exposeBindPorts(request.ContainerId, request, opts)
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to expose container bind ports: %v", err)
+		return -1, "", err
 	}
 
 	bundlePath := filepath.Dir(configPath)
