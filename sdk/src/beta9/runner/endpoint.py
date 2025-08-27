@@ -30,11 +30,11 @@ from ..middleware import (
     TaskLifecycleMiddleware,
     WebsocketTaskLifecycleMiddleware,
 )
+from ..runner.checkpoint import wait_for_checkpoint
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
     execute_lifecycle_method_async,
-    wait_for_checkpoint,
 )
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskStatus

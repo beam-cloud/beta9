@@ -296,6 +296,7 @@ message GetOrCreateStubRequest {
   Schema inputs = 35;
   Schema outputs = 36;
   bool tcp = 37;
+  string checkpoint_condition = 38;
 }
 
 message GetOrCreateStubResponse {

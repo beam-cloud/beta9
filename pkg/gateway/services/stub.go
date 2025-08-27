@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path"
@@ -124,31 +125,34 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 			Memory:   in.Memory,
 			ImageId:  in.ImageId,
 		},
-		Handler:            in.Handler,
-		OnStart:            in.OnStart,
-		OnDeploy:           in.OnDeploy,
-		OnDeployStubId:     in.OnDeployStubId,
-		CallbackUrl:        in.CallbackUrl,
-		PythonVersion:      in.PythonVersion,
-		TaskPolicy:         gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
-		KeepWarmSeconds:    uint(in.KeepWarmSeconds),
-		Workers:            uint(in.Workers),
-		ConcurrentRequests: uint(in.ConcurrentRequests),
-		MaxPendingTasks:    uint(in.MaxPendingTasks),
-		Volumes:            in.Volumes,
-		Secrets:            []types.Secret{},
-		Authorized:         in.Authorized,
-		Autoscaler:         autoscaler,
-		Extra:              json.RawMessage(in.Extra),
-		CheckpointEnabled:  in.CheckpointEnabled,
-		EntryPoint:         in.Entrypoint,
-		Ports:              in.Ports,
-		Env:                in.Env,
-		Pricing:            pricing,
-		Inputs:             inputs,
-		Outputs:            outputs,
-		TCP:                in.Tcp,
+		Handler:             in.Handler,
+		OnStart:             in.OnStart,
+		OnDeploy:            in.OnDeploy,
+		OnDeployStubId:      in.OnDeployStubId,
+		CallbackUrl:         in.CallbackUrl,
+		PythonVersion:       in.PythonVersion,
+		TaskPolicy:          gws.configureTaskPolicy(in.TaskPolicy, types.StubType(in.StubType)),
+		KeepWarmSeconds:     uint(in.KeepWarmSeconds),
+		Workers:             uint(in.Workers),
+		ConcurrentRequests:  uint(in.ConcurrentRequests),
+		MaxPendingTasks:     uint(in.MaxPendingTasks),
+		Volumes:             in.Volumes,
+		Secrets:             []types.Secret{},
+		Authorized:          in.Authorized,
+		Autoscaler:          autoscaler,
+		Extra:               json.RawMessage(in.Extra),
+		CheckpointEnabled:   in.CheckpointEnabled,
+		CheckpointCondition: in.CheckpointCondition,
+		EntryPoint:          in.Entrypoint,
+		Ports:               in.Ports,
+		Env:                 in.Env,
+		Pricing:             pricing,
+		Inputs:              inputs,
+		Outputs:             outputs,
+		TCP:                 in.Tcp,
 	}
+
+	log.Print(stubConfig)
 
 	// Ensure GPU count is at least 1 if a GPU is required
 	if stubConfig.RequiresGPU() && in.GpuCount == 0 {

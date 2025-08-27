@@ -53,6 +53,7 @@ class Config:
     task_id: str
     bind_port: int
     checkpoint_enabled: bool
+    checkpoint_condition: Optional[str]
     volume_cache_map: Dict
     inputs: Dict
     outputs: Dict
@@ -73,6 +74,7 @@ class Config:
         bind_port = int(os.getenv("BIND_PORT"))
         timeout = int(os.getenv("TIMEOUT", 180))
         checkpoint_enabled = os.getenv("CHECKPOINT_ENABLED", "false").lower() == "true"
+        checkpoint_condition = os.getenv("CHECKPOINT_CONDITION")
         volume_cache_map = json.loads(os.getenv("VOLUME_CACHE_MAP", "{}"))
         inputs = json.loads(os.getenv("BETA9_INPUTS", "{}"))
         outputs = json.loads(os.getenv("BETA9_OUTPUTS", "{}"))
@@ -98,6 +100,7 @@ class Config:
             bind_port=bind_port,
             timeout=timeout,
             checkpoint_enabled=checkpoint_enabled,
+            checkpoint_condition=checkpoint_condition,
             volume_cache_map=volume_cache_map,
             inputs=inputs,
             outputs=outputs,
@@ -519,35 +522,3 @@ class ThreadPoolExecutorOverride(ThreadPoolExecutor):
             self.shutdown(cancel_futures=True)
         except Exception:
             pass
-
-
-CHECKPOINT_SIGNAL_FILE = "/criu/READY_FOR_CHECKPOINT"
-CHECKPOINT_COMPLETE_FILE = "/criu/CHECKPOINT_COMPLETE"
-CHECKPOINT_CONTAINER_ID_FILE = "/criu/CONTAINER_ID"
-CHECKPOINT_CONTAINER_HOSTNAME_FILE = "/criu/CONTAINER_HOSTNAME"
-
-
-def wait_for_checkpoint():
-    def _reload_config():
-        # Once we have set the checkpoint signal file, wait for checkpoint to be complete before reloading the config
-        while not Path(CHECKPOINT_COMPLETE_FILE).exists():
-            time.sleep(1)
-
-        # Reload config that may have changed during restore
-        config.container_id = Path(CHECKPOINT_CONTAINER_ID_FILE).read_text()
-        config.container_hostname = Path(CHECKPOINT_CONTAINER_HOSTNAME_FILE).read_text()
-
-    with workers_ready.get_lock():
-        workers_ready.value += 1
-
-    if workers_ready.value == config.workers:
-        Path(CHECKPOINT_SIGNAL_FILE).touch(exist_ok=True)
-        return _reload_config()
-
-    while True:
-        with workers_ready.get_lock():
-            if workers_ready.value == config.workers:
-                break
-        time.sleep(1)
-
-    return _reload_config()

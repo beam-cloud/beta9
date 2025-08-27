@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -84,14 +85,14 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUMa
 	return criuManager, nil
 }
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, string, error) {
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int, configPath string, exposeNetwork func() error) (int, string, error) {
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
 	if createCheckpoint {
 		outputLogger.Info("Attempting to create container checkpoint...")
 
-		exitCode, err := s.createCheckpoint(ctx, request, outputWriter, outputLogger, startedChan, checkpointPIDChan, configPath)
+		exitCode, err := s.createCheckpoint(ctx, request, outputWriter, outputLogger, startedChan, checkpointPIDChan, configPath, exposeNetwork)
 		if err != nil {
 			return -1, "", err
 		}
@@ -113,6 +114,11 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		}
 		defer f.Close()
 
+		err = exposeNetwork()
+		if err != nil {
+			return -1, "", fmt.Errorf("failed to expose network: %v", err)
+		}
+
 		exitCode, err := s.criuManager.RestoreCheckpoint(ctx, &RestoreOpts{
 			request: request,
 			state:   state,
@@ -123,31 +129,30 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			configPath: configPath,
 		})
 		if err != nil {
-			updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusRestoreFailed)
-			if updateStateErr != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+			var e *runc.ExitError
+			if errors.As(err, &e) {
+				code := e.Status
+
+				if code != 137 {
+					log.Error().Str("container_id", request.ContainerId).Msgf("failed to restore checkpoint: %v", err)
+					updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusRestoreFailed)
+					if updateStateErr != nil {
+						log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+					}
+				}
 			}
 			return exitCode, "", err
 		}
 
-		outputLogger.Info("Checkpoint found and restored")
 		return exitCode, request.ContainerId, nil
 	}
 
-	// If a checkpoint exists but is not available (previously failed), run the container normally
-	bundlePath := filepath.Dir(configPath)
-
-	exitCode, err := s.runcHandle.Run(s.ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
-		OutputWriter: outputWriter,
-		Started:      startedChan,
-	})
-
-	return exitCode, request.ContainerId, err
+	return -1, "", fmt.Errorf("checkpoint not found")
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
-func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, outputLogger *slog.Logger, startedChan chan int, checkpointPIDChan chan int, configPath string) (int, error) {
+func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerRequest, outputWriter io.Writer, outputLogger *slog.Logger, startedChan chan int, checkpointPIDChan chan int, configPath string, exposeNetwork func() error) (int, error) {
 	bundlePath := filepath.Dir(configPath)
 
 	go func() {
@@ -213,6 +218,11 @@ func (s *Worker) createCheckpoint(ctx context.Context, request *types.ContainerR
 		updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusAvailable)
 		if updateStateErr != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+		}
+
+		err = exposeNetwork()
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to expose network: %v", err)
 		}
 	}()
 

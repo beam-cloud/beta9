@@ -105,6 +105,22 @@ class Pod(RunnerAbstraction, DeployableMixin):
         authorized (bool):
             If false, allows the pod to be accessed without an auth token.
             Default is False.
+        checkpoint_enabled (bool):
+            If true, enables checkpointing for the pod.
+            Default is False.
+        checkpoint_condition (Optional[Callable]):
+            A function that is called periodically to determine if the pod service is ready to be checkpointed.
+            Example:
+                If you are waiting for a server to be ready before checkpointing, you can get the health status of the server and checkpoint if it is ready.
+                ```python
+                def check_server_ready():
+                    import requests
+                    response = requests.get("http://localhost:8080/health")
+                    return response.status_code == 200
+
+                pod = Pod(checkpoint_enabled=True, checkpoint_condition=check_server_ready)
+                ```
+            Default is None.
 
     Example usage:
         ```
@@ -136,6 +152,8 @@ class Pod(RunnerAbstraction, DeployableMixin):
         keep_warm_seconds: int = 600,
         authorized: bool = False,
         tcp: bool = False,
+        checkpoint_enabled: bool = False,
+        checkpoint_condition: Optional[Callable] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -153,7 +171,13 @@ class Pod(RunnerAbstraction, DeployableMixin):
             keep_warm_seconds=keep_warm_seconds,
             app=app,
             tcp=tcp,
+            checkpoint_enabled=checkpoint_enabled,
+            checkpoint_condition=checkpoint_condition,
         )
+
+        if checkpoint_enabled and checkpoint_condition is None:
+            terminal.error("You must specify a checkpoint condition if checkpointing is enabled.")
+
         self.parent = self
         self.func = None
         self.task_id = ""
@@ -280,6 +304,12 @@ class Pod(RunnerAbstraction, DeployableMixin):
         ignore_patterns = []
         if is_custom_image:
             ignore_patterns = ["**"]
+
+        if self.checkpoint_enabled and self.checkpoint_condition is not None:
+            self.entrypoint = [
+                "(python -m beta9.runner.checkpoint &) &&",
+                *self.entrypoint,
+            ]
 
         if not is_custom_image and self.entrypoint:
             self.entrypoint = ["sh", "-c", f"cd {USER_CODE_DIR} && {' '.join(self.entrypoint)}"]

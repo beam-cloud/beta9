@@ -111,6 +111,7 @@ class RunnerAbstraction(BaseAbstraction):
         autoscaler: Autoscaler = QueueDepthAutoscaler(),
         task_policy: TaskPolicy = TaskPolicy(),
         checkpoint_enabled: bool = False,
+        checkpoint_condition: Optional[Callable] = None,
         entrypoint: Optional[List[str]] = None,
         ports: Optional[List[int]] = [],
         pricing: Optional[PricingPolicy] = None,
@@ -160,6 +161,7 @@ class RunnerAbstraction(BaseAbstraction):
             ttl=task_policy.ttl,
         )
         self.checkpoint_enabled = checkpoint_enabled
+        self.checkpoint_condition = ""
         self.extra: dict = {}
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
@@ -169,6 +171,9 @@ class RunnerAbstraction(BaseAbstraction):
 
         if on_start is not None:
             self._map_callable_to_attr(attr="on_start", func=on_start)
+
+        if checkpoint_condition is not None:
+            self._map_callable_to_attr(attr="checkpoint_condition", func=checkpoint_condition)
 
         self._gateway_stub: Optional[GatewayServiceStub] = None
         self._shell_stub: Optional[ShellServiceStub] = None
@@ -518,6 +523,7 @@ class RunnerAbstraction(BaseAbstraction):
                 inputs=inputs,
                 outputs=outputs,
                 tcp=self.tcp,
+                checkpoint_condition=self.checkpoint_condition,
             )
 
             if _is_stub_created_for_workspace():

@@ -25,6 +25,7 @@ from ..clients.taskqueue import (
 )
 from ..exceptions import RunnerException
 from ..logging import StdoutJsonInterceptor
+from ..runner.checkpoint import wait_for_checkpoint
 from ..runner.common import (
     FunctionContext,
     FunctionHandler,
@@ -33,7 +34,6 @@ from ..runner.common import (
     execute_lifecycle_method,
     send_callback,
     serialize_result,
-    wait_for_checkpoint,
 )
 from ..runner.common import config as cfg
 from ..type import LifeCycleMethod, TaskExitCode, TaskStatus
