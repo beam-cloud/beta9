@@ -65,6 +65,14 @@ stop:
 protocol:
 	uv run ./bin/gen_proto.sh
 
+openapi:
+	@echo "Generating OpenAPI schemas..."
+	@mkdir -p docs/openapi
+	protoc -I ./googleapis -I ./pkg/types -I ./pkg/abstractions/pod/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/pod/pod.proto
+	protoc -I ./googleapis -I ./pkg/abstractions/image/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/abstractions/image/image.proto
+	protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --openapiv2_out=./docs/openapi --openapiv2_opt logtostderr=true ./pkg/gateway/gateway.proto
+	@echo "OpenAPI schemas generated in docs/openapi/"
+
 verify-protocol:
 	./bin/verify_proto.sh
 
