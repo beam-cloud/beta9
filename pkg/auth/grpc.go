@@ -71,7 +71,8 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 		}
 	}
 
-	if !token.Active || token.DisabledByClusterAdmin {
+	// For now, restricted tokens should not be allowed to access grpc endpoints
+	if !token.Active || token.DisabledByClusterAdmin || token.TokenType == types.TokenTypeWorkspaceRestricted {
 		return nil, false
 	}
 
