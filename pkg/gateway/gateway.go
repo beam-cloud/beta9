@@ -108,12 +108,11 @@ func NewGateway() (*Gateway, error) {
 	if config.Storage.Legacy.Enabled {
 		log.Warn().Msg("legacy storage config is enabled, this will be removed in a future release")
 
-		log.Info().Interface("config", config.Storage.Legacy).Msg("legacy storage config")
+		legacyStorageConfig := config.Storage
+		legacyStorageConfig.DefaultStorageMode = config.Storage.Legacy.Mode
+		legacyStorageConfig.JuiceFS = config.Storage.Legacy.JuiceFS
 
-		config.Storage.DefaultStorageMode = config.Storage.Legacy.Mode
-		config.Storage.JuiceFS = config.Storage.Legacy.JuiceFS
-
-		storage, err := storage.NewStorage(config.Storage, nil)
+		storage, err := storage.NewStorage(legacyStorageConfig, nil)
 		if err != nil {
 			return nil, err
 		}
