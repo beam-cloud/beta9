@@ -58,6 +58,17 @@ func TestGetRegistryToken(t *testing.T) {
 			want: "user123:pass123",
 		},
 		{
+			name: "github container registry",
+			opts: &BuildOpts{
+				ExistingImageUri: "ghcr.io/user123/python:3.9",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "user123",
+					"GITHUB_TOKEN":    "token123",
+				},
+			},
+			want: "user123:token123",
+		},
+		{
 			name: "unknown registry",
 			opts: &BuildOpts{
 				ExistingImageUri:   "unknown.registry.com/image:latest",
