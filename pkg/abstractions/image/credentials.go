@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	awsRegistryDomains = []string{"amazonaws.com"}
-	gcpRegistryDomains = []string{"pkg.dev", "gcr.io"}
-	ngcRegistryDomains = []string{"nvcr.io"}
+	awsRegistryDomains  = []string{"amazonaws.com"}
+	gcpRegistryDomains  = []string{"pkg.dev", "gcr.io"}
+	ngcRegistryDomains  = []string{"nvcr.io"}
+	ghcrRegistryDomains = []string{"ghcr.io"}
 )
 
 // Check which registry is passed in
@@ -30,6 +31,8 @@ func GetRegistryToken(opts *BuildOpts) (string, error) {
 		fn = GetGARToken
 	case containsAny(opts.ExistingImageUri, ngcRegistryDomains...):
 		fn = GetNGCToken
+	case containsAny(opts.ExistingImageUri, ghcrRegistryDomains...):
+		fn = GetGHCRToken
 	default:
 		fn = GetDockerHubToken
 	}
@@ -137,6 +140,30 @@ func GetNGCToken(opts *BuildOpts) (string, error) {
 	}
 
 	username := "$oauthtoken"
+
+	token := fmt.Sprintf("%s:%s", username, password)
+	return token, nil
+}
+
+// GitHub Container Registry
+func GetGHCRToken(opts *BuildOpts) (string, error) {
+	creds := opts.ExistingImageCreds
+
+	username, hasUsername := creds["GITHUB_USERNAME"]
+	password, hasPassword := creds["GITHUB_TOKEN"]
+
+	// Check if username and password are set
+	if hasUsername && username == "" {
+		return "", fmt.Errorf("GITHUB_USERNAME set but is empty")
+	}
+	if hasPassword && password == "" {
+		return "", fmt.Errorf("GITHUB_TOKEN set but is empty")
+	}
+
+	// If either username or password is missing, assume no credentials are needed
+	if !hasUsername || !hasPassword {
+		return "", nil
+	}
 
 	token := fmt.Sprintf("%s:%s", username, password)
 	return token, nil
