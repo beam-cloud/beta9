@@ -24,11 +24,11 @@ func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, conf
 	}
 
 	g.PATCH("/admin/:workspaceId", auth.WithClusterAdminAuth(group.ClusterAdminUpdateAllWorkspaceTokens))
-	g.POST("/:workspaceId", auth.WithWorkspaceAuth(group.CreateWorkspaceToken))
-	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListWorkspaceTokens))
-	g.GET("/:workspaceId/signing-key", auth.WithWorkspaceAuth(group.GetSigningKey))
-	g.POST("/:workspaceId/:tokenId/toggle", auth.WithWorkspaceAuth(group.ToggleWorkspaceToken))
-	g.DELETE("/:workspaceId/:tokenId", auth.WithWorkspaceAuth(group.DeleteWorkspaceToken))
+	g.POST("/:workspaceId", auth.WithRestrictedWorkspaceAuth(group.CreateWorkspaceToken))
+	g.GET("/:workspaceId", auth.WithRestrictedWorkspaceAuth(group.ListWorkspaceTokens))
+	g.GET("/:workspaceId/signing-key", auth.WithRestrictedWorkspaceAuth(group.GetSigningKey))
+	g.POST("/:workspaceId/:tokenId/toggle", auth.WithRestrictedWorkspaceAuth(group.ToggleWorkspaceToken))
+	g.DELETE("/:workspaceId/:tokenId", auth.WithRestrictedWorkspaceAuth(group.DeleteWorkspaceToken))
 
 	return group
 }
