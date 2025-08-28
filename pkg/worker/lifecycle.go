@@ -199,6 +199,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
 	if err != nil {
 		if !request.IsBuildRequest() {
+			log.Error().Str("container_id", containerId).Msgf("failed to pull image: %v", err)
 			return err
 		}
 

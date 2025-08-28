@@ -117,8 +117,7 @@ func NewPathInfo(path string) *PathInfo {
 }
 
 type ImageClient struct {
-	primaryRegistry    *registry.ImageRegistry
-	secondaryRegistry  *registry.ImageRegistry
+	registry           *registry.ImageRegistry
 	cacheClient        *blobcache.BlobCacheClient
 	imageCachePath     string
 	imageMountPath     string
@@ -132,20 +131,14 @@ type ImageClient struct {
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
-	primaryRegistry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3.Primary)
-	if err != nil {
-		return nil, err
-	}
-
-	secondaryRegistry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3.Secondary)
+	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3.Primary)
 	if err != nil {
 		return nil, err
 	}
 
 	c := &ImageClient{
 		config:             config,
-		primaryRegistry:    primaryRegistry,
-		secondaryRegistry:  secondaryRegistry,
+		registry:           registry,
 		cacheClient:        fileCacheManager.GetClient(),
 		imageBundlePath:    imageBundlePath,
 		imageCachePath:     getImageCachePath(),
@@ -322,23 +315,14 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	sourceRegistry := c.config.ImageService.Registries.S3.Primary
 
 	if _, err := os.Stat(archivePath); err != nil {
-		err = c.primaryRegistry.Pull(ctx, archivePath, imageId)
+		err = c.registry.Pull(ctx, archivePath, imageId)
 		if err != nil {
 			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from primary registry")
 
-			sourceRegistry = c.config.ImageService.Registries.S3.Secondary
-			err = c.secondaryRegistry.Pull(ctx, archivePath, imageId)
-			if err != nil {
-				log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from secondary registry")
-				return nil, err
-			}
-
-			// HACK: Async copy the archives to the primary registry if it exists in the secondary registry
-			if c.primaryRegistry.Registry().BucketName != c.secondaryRegistry.Registry().BucketName &&
-				c.primaryRegistry.Registry().Endpoint != c.secondaryRegistry.Registry().Endpoint {
-				go c.primaryRegistry.CopyImageFromRegistry(context.Background(), imageId, c.secondaryRegistry)
-			}
+			return nil, err
 		}
+
+		return &sourceRegistry, nil
 	}
 
 	return &sourceRegistry, nil
@@ -547,7 +531,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 
 	startTime := time.Now()
 
-	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.primaryRegistry.ImageFileExtension)
+	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
 	archivePath := filepath.Join("/tmp", archiveName)
 
 	defer func() {
@@ -591,7 +575,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 
 	// Push the archive to a registry
 	startTime = time.Now()
-	err = c.primaryRegistry.Push(ctx, archivePath, imageId)
+	err = c.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
 		log.Error().Str("image_id", imageId).Err(err).Msg("failed to push image")
 		return err
