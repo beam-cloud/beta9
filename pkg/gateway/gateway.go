@@ -259,7 +259,7 @@ func (g *Gateway) initGrpc() error {
 
 // initGrpcGateway exposes gRPC services as HTTP endpoints.
 func (g *Gateway) initGrpcGateway(grpcAddr string) error {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(g.ctx)
 	g.httpServer.RegisterOnShutdown(func() {
 		cancel()
 	})
