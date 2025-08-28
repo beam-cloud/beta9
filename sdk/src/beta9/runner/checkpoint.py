@@ -40,8 +40,7 @@ def wait_for_checkpoint():
 
 
 def run_generic_checkpoint_condition():
-    print("run_generic_checkpoint_condition")
-    print(config.checkpoint_condition)
+    print(f"Running checkpoint condition: {config.checkpoint_condition}")
     if config.checkpoint_condition is None:
         return
 
