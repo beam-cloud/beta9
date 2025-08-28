@@ -117,12 +117,12 @@ func NewGateway() (*Gateway, error) {
 			return nil, err
 		}
 
-		gateway.DefaultStorageClient, err = clients.NewDefaultStorageClient(ctx, config)
-		if err != nil {
-			return nil, err
-		}
-
 		gateway.Storage = storage
+	}
+
+	gateway.DefaultStorageClient, err = clients.NewDefaultStorageClient(ctx, config)
+	if err != nil {
+		return nil, err
 	}
 
 	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)
