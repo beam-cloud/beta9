@@ -53,13 +53,13 @@ func buildBasicAuthToken(username, password string) string {
 	return fmt.Sprintf("%s:%s", username, password)
 }
 
-func validateRequiredCredential(creds map[string]string, key, credentialName string) (string, error) {
+func validateRequiredCredential(creds map[string]string, key string) (string, error) {
 	value, ok := creds[key]
 	if !ok {
-		return "", fmt.Errorf("%s not found", credentialName)
+		return "", fmt.Errorf("%s not found", key)
 	}
 	if value == "" {
-		return "", fmt.Errorf("%s is empty", credentialName)
+		return "", fmt.Errorf("%s is empty", key)
 	}
 	return value, nil
 }
@@ -145,7 +145,7 @@ func GetECRToken(opts *BuildOpts) (string, error) {
 func GetGARToken(opts *BuildOpts) (string, error) {
 	creds := opts.ExistingImageCreds
 
-	password, err := validateRequiredCredential(creds, "GCP_ACCESS_TOKEN", "GCP_ACCESS_TOKEN")
+	password, err := validateRequiredCredential(creds, "GCP_ACCESS_TOKEN")
 	if err != nil {
 		return "", err
 	}
@@ -157,7 +157,7 @@ func GetGARToken(opts *BuildOpts) (string, error) {
 func GetNGCToken(opts *BuildOpts) (string, error) {
 	creds := opts.ExistingImageCreds
 
-	password, err := validateRequiredCredential(creds, "NGC_API_KEY", "NGC_API_KEY")
+	password, err := validateRequiredCredential(creds, "NGC_API_KEY")
 	if err != nil {
 		return "", err
 	}
