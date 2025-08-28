@@ -196,7 +196,7 @@ class Image(BaseAbstraction):
             image = Image(
                 python_version="python3.12",
                 base_image="ghcr.io/my-org/my-image:0.1.0",
-                base_image_creds=["GITHUB_USERNAME", "GITHUB_PASSWORD"],
+                base_image_creds=["GITHUB_USERNAME", "GITHUB_TOKEN"],
             )
 
             @endpoint(image=image)
