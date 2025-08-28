@@ -5,7 +5,6 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/apex/log"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -58,8 +57,6 @@ func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenR
 		tokenType = types.TokenTypeWorkspace
 	}
 
-	log.Infof("token type: %s", tokenType)
-
 	// Validate token type - only allow workspace and workspace_restricted
 	if tokenType != types.TokenTypeWorkspace && tokenType != types.TokenTypeWorkspaceRestricted {
 		return &pb.CreateTokenResponse{
@@ -71,7 +68,6 @@ func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenR
 
 	token, err := gws.backendRepo.CreateToken(ctx, authInfo.Workspace.Id, tokenType, true)
 	if err != nil {
-		log.Errorf("error creating token: %v", err)
 		return &pb.CreateTokenResponse{
 			Token:  &pb.Token{},
 			Ok:     false,
