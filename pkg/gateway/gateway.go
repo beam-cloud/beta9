@@ -98,17 +98,32 @@ func NewGateway() (*Gateway, error) {
 
 	eventRepo := repository.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	storage, err := storage.NewStorage(config.Storage, nil)
-	if err != nil {
-		return nil, err
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	gateway := &Gateway{
 		RedisClient: redisClient,
 		ctx:         ctx,
 		cancelFunc:  cancel,
-		Storage:     storage,
+	}
+
+	if config.Storage.Legacy.Enabled {
+		log.Warn().Msg("legacy storage config is enabled, this will be removed in a future release")
+
+		log.Info().Interface("config", config.Storage.Legacy).Msg("legacy storage config")
+
+		config.Storage.DefaultStorageMode = config.Storage.Legacy.Mode
+		config.Storage.JuiceFS = config.Storage.Legacy.JuiceFS
+
+		storage, err := storage.NewStorage(config.Storage, nil)
+		if err != nil {
+			return nil, err
+		}
+
+		gateway.DefaultStorageClient, err = clients.NewDefaultStorageClient(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+
+		gateway.Storage = storage
 	}
 
 	backendRepo, err := repository.NewBackendPostgresRepository(config.Database.Postgres, eventRepo)

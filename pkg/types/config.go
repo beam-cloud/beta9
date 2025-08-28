@@ -218,18 +218,9 @@ type PythonStandaloneConfig struct {
 }
 
 type StorageConfig struct {
-	Mode             string                 `key:"mode" json:"mode"`
-	FilesystemName   string                 `key:"fsName" json:"filesystem_name"`
-	FilesystemPath   string                 `key:"fsPath" json:"filesystem_path"`
-	ObjectPath       string                 `key:"objectPath" json:"object_path"`
-	JuiceFS          JuiceFSConfig          `key:"juicefs" json:"juicefs"`
-	Geese            GeeseConfig            `key:"geese" json:"geese"`
-	Alluxio          AlluxioConfig          `key:"alluxio" json:"alluxio"`
-	MountPoint       MountPointConfig       `key:"mountpoint" json:"mountpoint"`
-	WorkspaceStorage WorkspaceStorageConfig `key:"workspaceStorage" json:"workspace_storage"`
-}
-
-type WorkspaceStorageConfig struct {
+	FilesystemName      string `key:"fsName" json:"filesystem_name"`
+	FilesystemPath      string `key:"fsPath" json:"filesystem_path"`
+	ObjectPath          string `key:"objectPath" json:"object_path"`
 	BaseMountPath       string `key:"baseMountPath" json:"base_mount_path"`
 	DefaultStorageMode  string `key:"defaultStorageMode" json:"default_storage_mode"`
 	DefaultBucketPrefix string `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
@@ -239,8 +230,22 @@ type WorkspaceStorageConfig struct {
 	DefaultRegion       string `key:"defaultRegion" json:"default_region"`
 
 	// Storage mode configs
-	Geese   GeeseConfig   `key:"geese" json:"geese"`
-	Alluxio AlluxioConfig `key:"alluxio" json:"alluxio"`
+	Geese      GeeseConfig      `key:"geese" json:"geese"`
+	Alluxio    AlluxioConfig    `key:"alluxio" json:"alluxio"`
+	JuiceFS    JuiceFSConfig    `key:"juicefs" json:"juicefs"`
+	MountPoint MountPointConfig `key:"mountpoint" json:"mountpoint"`
+
+	// Legacy storage config (for backwards compatibility)
+	Legacy LegacyStorageConfig `key:"legacy" json:"legacy"`
+}
+
+type LegacyStorageConfig struct {
+	Enabled    bool             `key:"enabled" json:"enabled"`
+	Mode       string           `key:"mode" json:"mode"`
+	JuiceFS    JuiceFSConfig    `key:"juicefs" json:"juicefs"`
+	Geese      GeeseConfig      `key:"geese" json:"geese"`
+	Alluxio    AlluxioConfig    `key:"alluxio" json:"alluxio"`
+	MountPoint MountPointConfig `key:"mountpoint" json:"mountpoint"`
 }
 
 type JuiceFSConfig struct {

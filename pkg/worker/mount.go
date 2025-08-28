@@ -54,15 +54,15 @@ func (c *ContainerMountManager) SetupContainerMounts(ctx context.Context, reques
 		if request.StorageAvailable() {
 			switch {
 			case strings.HasPrefix(m.MountPath, types.WorkerContainerVolumePath):
-				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultVolumesPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultVolumesPrefix), 1)
+				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultVolumesPath, request.Workspace.Name), path.Join(c.storageConfig.BaseMountPath, request.Workspace.Name, types.DefaultVolumesPrefix), 1)
 				request.Mounts[i].LocalPath = m.LocalPath
 
 			case strings.HasPrefix(m.MountPath, types.WorkerUserOutputVolume):
-				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultOutputsPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultOutputsPrefix), 1)
+				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultOutputsPath, request.Workspace.Name), path.Join(c.storageConfig.BaseMountPath, request.Workspace.Name, types.DefaultOutputsPrefix), 1)
 				request.Mounts[i].LocalPath = m.LocalPath
 
 			case strings.HasPrefix(m.LocalPath, types.DefaultVolumesPath):
-				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultVolumesPath, request.Workspace.Name), path.Join(c.storageConfig.WorkspaceStorage.BaseMountPath, request.Workspace.Name, types.DefaultVolumesPrefix), 1)
+				m.LocalPath = strings.Replace(m.LocalPath, path.Join(types.DefaultVolumesPath, request.Workspace.Name), path.Join(c.storageConfig.BaseMountPath, request.Workspace.Name, types.DefaultVolumesPrefix), 1)
 				request.Mounts[i].LocalPath = m.LocalPath
 			}
 		}

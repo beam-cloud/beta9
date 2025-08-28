@@ -33,7 +33,7 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 	remoteConfig.Database.Redis.Addrs[0] = fmt.Sprintf("%s:%d", redisHostname, 6379)
 	remoteConfig.Database.Redis.InsecureSkipVerify = true
 
-	if baseConfig.Storage.Mode == storage.StorageModeJuiceFS {
+	if baseConfig.Storage.DefaultStorageMode == storage.StorageModeJuiceFS {
 		juiceFsRedisHostname, err := tailscale.ResolveService("juicefs-redis", connectTimeout)
 		if err != nil {
 			return nil, err
@@ -41,13 +41,13 @@ func GetRemoteConfig(baseConfig types.AppConfig, tailscale *network.Tailscale) (
 
 		juiceFsRedisHostname = fmt.Sprintf("%s:%d", juiceFsRedisHostname, 6379)
 
-		parsedUrl, err := url.Parse(remoteConfig.Storage.JuiceFS.RedisURI)
+		parsedUrl, err := url.Parse(remoteConfig.Storage.Legacy.JuiceFS.RedisURI)
 		if err != nil {
 			return nil, err
 		}
 
 		juicefsRedisPassword, _ := parsedUrl.User.Password()
-		remoteConfig.Storage.JuiceFS.RedisURI = fmt.Sprintf("rediss://:%s@%s/0", juicefsRedisPassword, juiceFsRedisHostname)
+		remoteConfig.Storage.Legacy.JuiceFS.RedisURI = fmt.Sprintf("rediss://:%s@%s/0", juicefsRedisPassword, juiceFsRedisHostname)
 	}
 
 	return &remoteConfig, nil

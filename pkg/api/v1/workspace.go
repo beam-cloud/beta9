@@ -59,7 +59,7 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 		return HTTPInternalServerError("Unable to create workspace")
 	}
 
-	bucketName := types.WorkspaceBucketName(g.config.Storage.WorkspaceStorage.DefaultBucketPrefix, workspace.ExternalId)
+	bucketName := types.WorkspaceBucketName(g.config.Storage.DefaultBucketPrefix, workspace.ExternalId)
 	_, err = g.setupDefaultWorkspaceStorage(ctx, bucketName, workspace.Id)
 	if err != nil {
 		log.Error().Err(err).Msgf("Failed to setup workspace storage for workspace %d", workspace.Id)
@@ -187,7 +187,7 @@ func (g *WorkspaceGroup) CreateWorkspaceStorage(ctx echo.Context) error {
 		return err
 	}
 
-	bucketName := types.WorkspaceBucketName(g.config.Storage.WorkspaceStorage.DefaultBucketPrefix, workspace.ExternalId)
+	bucketName := types.WorkspaceBucketName(g.config.Storage.DefaultBucketPrefix, workspace.ExternalId)
 
 	createdStorage, err := g.setupDefaultWorkspaceStorage(ctx, bucketName, workspace.Id)
 	if err != nil {
@@ -217,10 +217,10 @@ func (g *WorkspaceGroup) setupDefaultWorkspaceStorage(ctx echo.Context, bucketNa
 	// Register the newly created bucket for this workspace in the database
 	createdStorage, err := g.backendRepo.CreateWorkspaceStorage(ctx.Request().Context(), workspaceId, types.WorkspaceStorage{
 		BucketName:  &bucketName,
-		AccessKey:   &g.config.Storage.WorkspaceStorage.DefaultAccessKey,
-		SecretKey:   &g.config.Storage.WorkspaceStorage.DefaultSecretKey,
-		EndpointUrl: &g.config.Storage.WorkspaceStorage.DefaultEndpointUrl,
-		Region:      &g.config.Storage.WorkspaceStorage.DefaultRegion,
+		AccessKey:   &g.config.Storage.DefaultAccessKey,
+		SecretKey:   &g.config.Storage.DefaultSecretKey,
+		EndpointUrl: &g.config.Storage.DefaultEndpointUrl,
+		Region:      &g.config.Storage.DefaultRegion,
 	})
 	return createdStorage, err
 }

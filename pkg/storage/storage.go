@@ -36,7 +36,7 @@ func isMounted(mountPoint string) bool {
 }
 
 func NewStorage(config types.StorageConfig, cacheClient *blobcache.BlobCacheClient) (Storage, error) {
-	switch config.Mode {
+	switch config.DefaultStorageMode {
 	case StorageModeJuiceFS:
 		s, err := NewJuiceFsStorage(config.JuiceFS)
 		if err != nil {

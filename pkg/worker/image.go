@@ -606,7 +606,7 @@ func (c *ImageClient) getBuildContext(buildPath string, request *types.Container
 
 	if request.StorageAvailable() {
 		// Overwrite the path if workspace storage is available
-		objectPath = path.Join(c.config.Storage.WorkspaceStorage.BaseMountPath, request.Workspace.Name, "objects", *request.BuildOptions.BuildCtxObject)
+		objectPath = path.Join(c.config.Storage.BaseMountPath, request.Workspace.Name, "objects", *request.BuildOptions.BuildCtxObject)
 		buildCtxPath = path.Join(buildPath, "build-ctx")
 	}
 

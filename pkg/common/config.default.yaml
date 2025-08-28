@@ -19,47 +19,50 @@ database:
     insecureSkipVerify: false
     dialTimeout: 3s
 storage:
-  mode: juicefs
   fsName: beta9-fs
   fsPath: /data
   objectPath: /data/objects
-  juicefs:
-    redisURI: redis://juicefs-redis-master:6379/0
-    awsS3Bucket: http://localstack:4566/juicefs
-    awsAccessKey: test
-    awsSecretKey: test
-    blockSize: 4096
-    cacheSize: 0
-    prefetch: 1
-    bufferSize: 300
-  workspaceStorage:
-    baseMountPath: /workspace/data
-    defaultStorageMode: geese
-    defaultBucketPrefix: workspace
-    defaultAccessKey: test
-    defaultSecretKey: test
-    defaultEndpointUrl: http://localstack:4566
-    defaultRegion: us-east-1
-    alluxio:
-      debug: false
-    geese:
-      debug: false
-      fsyncOnClose: true
-      memoryLimit: 2048
-      maxFlushers: 64
-      maxParallelParts: 64
-      dirMode: 0777
-      fileMode: 0666
-      listType: 1
-      readAheadKB: 32768
-      readAheadLargeKB: 131072
-      fuseReadAheadKB: 32768
-      readAheadParallelKB: 4096
-      mountOptions: []
-      stagedWriteModeEnabled: true
-      stagedWritePath: /tmp/geesefs-staged-write
-      stagedWriteDebounce: 30s
-      cacheStreamingEnabled: false
+  baseMountPath: /workspace/data
+  defaultStorageMode: geese
+  defaultBucketPrefix: workspace
+  defaultAccessKey: test
+  defaultSecretKey: test
+  defaultEndpointUrl: http://localstack:4566
+  defaultRegion: us-east-1
+  alluxio:
+    debug: false
+  geese:
+    debug: false
+    fsyncOnClose: true
+    memoryLimit: 2048
+    maxFlushers: 64
+    maxParallelParts: 64
+    dirMode: 0777
+    fileMode: 0666
+    listType: 1
+    readAheadKB: 32768
+    readAheadLargeKB: 131072
+    fuseReadAheadKB: 32768
+    readAheadParallelKB: 4096
+    mountOptions: []
+    stagedWriteModeEnabled: true
+    stagedWritePath: /tmp/geesefs-staged-write
+    stagedWriteDebounce: 30s
+    cacheStreamingEnabled: false
+
+  # Legacy storage config (for backwards compatibility)
+  legacy:
+    enabled: true
+    mode: juicefs
+    juicefs:
+      redisURI: redis://juicefs-redis-master:6379/0
+      awsS3Bucket: http://localstack:4566/juicefs
+      awsAccessKey: test
+      awsSecretKey: test
+      blockSize: 4096
+      cacheSize: 0
+      prefetch: 1
+      bufferSize: 300
 gateway:
   host: beta9-gateway
   invokeURLType: path
@@ -226,7 +229,7 @@ worker:
     mode: nvidia
     storage:
       mode: local
-      mountPath: /data/checkpoints
+      mountPath: /checkpoints
     cedana:
       # Can be unix, tcp, vsock
       protocol: unix
@@ -238,7 +241,7 @@ worker:
         auth_token: ""
       checkpoint:
         # Default dir to write/stream checkpoints to
-        dir: /data/checkpoints
+        dir: /checkpoints
         # Can be one of: none, tar, lz4, gzip, zlib
         compression: lz4
         # Number of parallel streams for streaming checkpoints (0 = off)

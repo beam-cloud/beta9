@@ -66,10 +66,10 @@ func NewWorkspaceStorageClient(ctx context.Context, workspaceName string, worksp
 func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*StorageClient, error) {
 
 	s3Cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion(cfg.Storage.WorkspaceStorage.DefaultRegion),
+		config.WithRegion(cfg.Storage.DefaultRegion),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
-			cfg.Storage.WorkspaceStorage.DefaultAccessKey,
-			cfg.Storage.WorkspaceStorage.DefaultSecretKey,
+			cfg.Storage.DefaultAccessKey,
+			cfg.Storage.DefaultSecretKey,
 			"",
 		)),
 	)
@@ -78,7 +78,7 @@ func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*Storage
 	}
 
 	s3Client := s3.NewFromConfig(s3Cfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(cfg.Storage.WorkspaceStorage.DefaultEndpointUrl)
+		o.BaseEndpoint = aws.String(cfg.Storage.DefaultEndpointUrl)
 	})
 	presignClient := s3.NewPresignClient(s3Client)
 
