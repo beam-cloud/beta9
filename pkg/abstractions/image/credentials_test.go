@@ -188,6 +188,101 @@ func TestGetDockerHubToken(t *testing.T) {
 	}
 }
 
+func TestGetGHCRToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    *BuildOpts
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "empty image creds with full image uri",
+			opts: &BuildOpts{
+				ExistingImageUri:   "ghcr.io/debian:bullseye",
+				ExistingImageCreds: map[string]string{},
+			},
+			want: "",
+		},
+		{
+			name: "empty image creds",
+			opts: &BuildOpts{
+				ExistingImageUri:   "debian:bullseye",
+				ExistingImageCreds: map[string]string{},
+			},
+			want: "",
+		},
+		{
+			name: "with username and token with full image uri",
+			opts: &BuildOpts{
+				ExistingImageUri: "ghcr.io/debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "user123",
+					"GITHUB_TOKEN":    "token123",
+				},
+			},
+			want: "user123:token123",
+		},
+		{
+			name: "with username and token",
+			opts: &BuildOpts{
+				ExistingImageUri: "debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "user123",
+					"GITHUB_TOKEN":    "token123",
+				},
+			},
+			want: "user123:token123",
+		},
+		{
+			name: "with username and empty token",
+			opts: &BuildOpts{
+				ExistingImageUri: "debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "user123",
+					"GITHUB_TOKEN":    "",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "with empty username and token",
+			opts: &BuildOpts{
+				ExistingImageUri: "debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "",
+					"GITHUB_TOKEN":    "token123",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "with empty username and empty token",
+			opts: &BuildOpts{
+				ExistingImageUri: "debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "",
+					"GITHUB_TOKEN":    "",
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := GetGHCRToken(tt.opts)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, token)
+		})
+	}
+}
+
 func TestGetGARToken(t *testing.T) {
 	tests := []struct {
 		name    string
