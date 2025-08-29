@@ -18,11 +18,6 @@ dependencies:
   version: 18.9.1
   repository: https://charts.bitnami.com/bitnami
   condition: redis.enabled
-- alias: juicefs-redis
-  name: redis
-  version: 18.9.1
-  repository: https://charts.bitnami.com/bitnami
-  condition: juicefs-redis.enabled
 - name: postgresql
   version: 13.4.3
   repository: https://charts.bitnami.com/bitnami
