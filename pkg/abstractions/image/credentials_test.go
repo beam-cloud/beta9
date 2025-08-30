@@ -58,6 +58,17 @@ func TestGetRegistryToken(t *testing.T) {
 			want: "user123:pass123",
 		},
 		{
+			name: "github container registry",
+			opts: &BuildOpts{
+				ExistingImageUri: "ghcr.io/user123/python:3.9",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "user123",
+					"GITHUB_TOKEN":    "token123",
+				},
+			},
+			want: "user123:token123",
+		},
+		{
 			name: "unknown registry",
 			opts: &BuildOpts{
 				ExistingImageUri:   "unknown.registry.com/image:latest",
@@ -165,6 +176,101 @@ func TestGetDockerHubToken(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			token, err := GetDockerHubToken(tt.opts)
+
+			if tt.wantErr {
+				assert.Error(t, err)
+				return
+			}
+
+			assert.NoError(t, err)
+			assert.Equal(t, tt.want, token)
+		})
+	}
+}
+
+func TestGetGHCRToken(t *testing.T) {
+	tests := []struct {
+		name    string
+		opts    *BuildOpts
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "empty image creds with full image uri",
+			opts: &BuildOpts{
+				ExistingImageUri:   "ghcr.io/debian:bullseye",
+				ExistingImageCreds: map[string]string{},
+			},
+			want: "",
+		},
+		{
+			name: "empty image creds",
+			opts: &BuildOpts{
+				ExistingImageUri:   "debian:bullseye",
+				ExistingImageCreds: map[string]string{},
+			},
+			want: "",
+		},
+		{
+			name: "with username and token with full image uri",
+			opts: &BuildOpts{
+				ExistingImageUri: "ghcr.io/debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "user123",
+					"GITHUB_TOKEN":    "token123",
+				},
+			},
+			want: "user123:token123",
+		},
+		{
+			name: "with username and token",
+			opts: &BuildOpts{
+				ExistingImageUri: "debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "user123",
+					"GITHUB_TOKEN":    "token123",
+				},
+			},
+			want: "user123:token123",
+		},
+		{
+			name: "with username and empty token",
+			opts: &BuildOpts{
+				ExistingImageUri: "debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "user123",
+					"GITHUB_TOKEN":    "",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "with empty username and token",
+			opts: &BuildOpts{
+				ExistingImageUri: "debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "",
+					"GITHUB_TOKEN":    "token123",
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "with empty username and empty token",
+			opts: &BuildOpts{
+				ExistingImageUri: "debian:bullseye",
+				ExistingImageCreds: map[string]string{
+					"GITHUB_USERNAME": "",
+					"GITHUB_TOKEN":    "",
+				},
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, err := GetGHCRToken(tt.opts)
 
 			if tt.wantErr {
 				assert.Error(t, err)

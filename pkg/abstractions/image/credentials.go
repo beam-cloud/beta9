@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	awsRegistryDomains = []string{"amazonaws.com"}
-	gcpRegistryDomains = []string{"pkg.dev", "gcr.io"}
-	ngcRegistryDomains = []string{"nvcr.io"}
+	awsRegistryDomains  = []string{"amazonaws.com"}
+	gcpRegistryDomains  = []string{"pkg.dev", "gcr.io"}
+	ngcRegistryDomains  = []string{"nvcr.io"}
+	ghcrRegistryDomains = []string{"ghcr.io"}
 )
 
 // Check which registry is passed in
@@ -30,6 +31,8 @@ func GetRegistryToken(opts *BuildOpts) (string, error) {
 		fn = GetGARToken
 	case containsAny(opts.ExistingImageUri, ngcRegistryDomains...):
 		fn = GetNGCToken
+	case containsAny(opts.ExistingImageUri, ghcrRegistryDomains...):
+		fn = GetGHCRToken
 	default:
 		fn = GetDockerHubToken
 	}
@@ -44,6 +47,36 @@ func containsAny(s string, substrs ...string) bool {
 		}
 	}
 	return false
+}
+
+func buildBasicAuthToken(username, password string) string {
+	return fmt.Sprintf("%s:%s", username, password)
+}
+
+func validateRequiredCredential(creds map[string]string, key string) (string, error) {
+	value, ok := creds[key]
+	if !ok {
+		return "", fmt.Errorf("%s not found", key)
+	}
+	if value == "" {
+		return "", fmt.Errorf("%s is empty", key)
+	}
+	return value, nil
+}
+
+func validateOptionalCredentials(creds map[string]string, usernameKey, passwordKey string) (string, string, bool, error) {
+	username, hasUsername := creds[usernameKey]
+	password, hasPassword := creds[passwordKey]
+
+	if hasUsername && username == "" {
+		return "", "", false, fmt.Errorf("%s set but is empty", usernameKey)
+	}
+	if hasPassword && password == "" {
+		return "", "", false, fmt.Errorf("%s set but is empty", passwordKey)
+	}
+
+	bothPresent := hasUsername && hasPassword
+	return username, password, bothPresent, nil
 }
 
 // Amazon Elastic Container Registry
@@ -112,56 +145,57 @@ func GetECRToken(opts *BuildOpts) (string, error) {
 func GetGARToken(opts *BuildOpts) (string, error) {
 	creds := opts.ExistingImageCreds
 
-	password, ok := creds["GCP_ACCESS_TOKEN"]
-	if !ok {
-		return "", fmt.Errorf("GCP_ACCESS_TOKEN not found")
-	}
-	if password == "" {
-		return "", fmt.Errorf("GCP_ACCESS_TOKEN is empty")
+	password, err := validateRequiredCredential(creds, "GCP_ACCESS_TOKEN")
+	if err != nil {
+		return "", err
 	}
 
 	username := "oauth2accesstoken"
-
-	return fmt.Sprintf("%s:%s", username, password), nil
+	return buildBasicAuthToken(username, password), nil
 }
 
 func GetNGCToken(opts *BuildOpts) (string, error) {
 	creds := opts.ExistingImageCreds
 
-	password, ok := creds["NGC_API_KEY"]
-	if !ok {
-		return "", fmt.Errorf("NGC_API_KEY not found")
-	}
-	if password == "" {
-		return "", fmt.Errorf("NGC_API_KEY is empty")
+	password, err := validateRequiredCredential(creds, "NGC_API_KEY")
+	if err != nil {
+		return "", err
 	}
 
 	username := "$oauthtoken"
+	return buildBasicAuthToken(username, password), nil
+}
 
-	token := fmt.Sprintf("%s:%s", username, password)
-	return token, nil
+// GitHub Container Registry
+func GetGHCRToken(opts *BuildOpts) (string, error) {
+	creds := opts.ExistingImageCreds
+
+	username, password, bothPresent, err := validateOptionalCredentials(creds, "GITHUB_USERNAME", "GITHUB_TOKEN")
+	if err != nil {
+		return "", err
+	}
+
+	// If either username or password is missing, assume no credentials are needed
+	if !bothPresent {
+		return "", nil
+	}
+
+	return buildBasicAuthToken(username, password), nil
 }
 
 // Docker Hub
 func GetDockerHubToken(opts *BuildOpts) (string, error) {
 	creds := opts.ExistingImageCreds
 
-	username, hasUsername := creds["DOCKERHUB_USERNAME"]
-	password, hasPassword := creds["DOCKERHUB_PASSWORD"]
-
-	// Check if username and password are set
-	if hasUsername && username == "" {
-		return "", fmt.Errorf("DOCKERHUB_USERNAME set but is empty")
-	}
-	if hasPassword && password == "" {
-		return "", fmt.Errorf("DOCKERHUB_PASSWORD set but is empty")
+	username, password, bothPresent, err := validateOptionalCredentials(creds, "DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD")
+	if err != nil {
+		return "", err
 	}
 
 	// If either username or password is missing, assume no credentials are needed
-	if !hasUsername || !hasPassword {
+	if !bothPresent {
 		return "", nil
 	}
 
-	token := fmt.Sprintf("%s:%s", username, password)
-	return token, nil
+	return buildBasicAuthToken(username, password), nil
 }
