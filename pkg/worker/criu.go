@@ -152,7 +152,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		return exitCode, request.ContainerId, nil
 	}
 
-	// If a checkpoint exists but is not available (previously failed), run the container normally
+	// If a checkpoint exists but does not have status 'AVAILABLE' (previously failed), run the container normally
 	bundlePath := filepath.Dir(request.ConfigPath)
 
 	exitCode, err := s.runcHandle.Run(s.ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
