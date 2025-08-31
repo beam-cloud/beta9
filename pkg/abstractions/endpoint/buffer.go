@@ -152,7 +152,7 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 			return nil
 		case <-ctx.Request().Context().Done():
 			if !req.processed {
-				rb.cancelInFlightTask(req.task)
+				rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
 			}
 			return nil
 		case <-done:
@@ -179,7 +179,7 @@ func (rb *RequestBuffer) processRequests() {
 			}
 
 			if req.ctx.Request().Context().Err() != nil {
-				rb.cancelInFlightTask(req.task)
+				rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
 				continue
 			}
 
@@ -431,13 +431,15 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 		payload, err := task.SerializeHttpPayload(req.ctx)
 		if err != nil {
 			if req.ctx.Request().Context().Err() == context.Canceled {
-				rb.cancelInFlightTask(req.task)
+				rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
 				return
 			}
 
 			req.ctx.JSON(http.StatusBadRequest, map[string]interface{}{
 				"error": err.Error(),
 			})
+
+			rb.cancelInFlightTask(req.task, types.TaskInvalidRequestPayload)
 			return
 		}
 
@@ -490,7 +492,7 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	resp, err := httpClient.Do(httpReq)
 	if err != nil {
 		if req.ctx.Request().Context().Err() == context.Canceled {
-			rb.cancelInFlightTask(req.task)
+			rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
 		}
 		return
 	}
@@ -535,8 +537,8 @@ func (rb *RequestBuffer) handleHttpRequest(req *request, c container) {
 	}
 }
 
-func (rb *RequestBuffer) cancelInFlightTask(task *EndpointTask) {
-	task.Cancel(context.Background(), types.TaskCancellationReason(types.TaskRequestCancelled))
+func (rb *RequestBuffer) cancelInFlightTask(task *EndpointTask, reason types.TaskCancellationReason) {
+	task.Cancel(context.Background(), reason)
 }
 
 func (rb *RequestBuffer) heartBeat(req *request, containerId string) {
