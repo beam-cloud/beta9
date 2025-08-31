@@ -39,9 +39,9 @@ func NewContainerOverlay(request *types.ContainerRequest, rootPath string, overl
 }
 
 func (co *ContainerOverlay) Setup() error {
-	if co.request.CheckpointEnabled {
-		return co.AddLayer("/checkpoints/<stub_id>/upper")
-	}
+	// if co.request.CheckpointEnabled {
+	// 	return co.AddLayer("/checkpoints/<stub_id>/upper")
+	// }
 
 	// Right now, we are just adding an empty layer to the top of the rootfs
 	// In the future, though, we can add additional layers on top of that
