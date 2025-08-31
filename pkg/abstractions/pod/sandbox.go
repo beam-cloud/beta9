@@ -514,12 +514,12 @@ func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSand
 	}, nil
 }
 
-func (s *GenericPodService) SandboxSnapshot(ctx context.Context, in *pb.PodSandboxSnapshotRequest) (*pb.PodSandboxSnapshotResponse, error) {
+func (s *GenericPodService) SandboxSnapshotFilesystem(ctx context.Context, in *pb.PodSandboxSnapshotFilesystemRequest) (*pb.PodSandboxSnapshotFilesystemResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
-		return &pb.PodSandboxSnapshotResponse{
+		return &pb.PodSandboxSnapshotFilesystemResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to connect to sandbox",
 		}, nil
@@ -544,13 +544,13 @@ func (s *GenericPodService) SandboxSnapshot(ctx context.Context, in *pb.PodSandb
 
 	err = client.Archive(ctx, in.ContainerId, snapshotId, progressChan)
 	if err != nil {
-		return &pb.PodSandboxSnapshotResponse{
+		return &pb.PodSandboxSnapshotFilesystemResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
 	}
 
-	return &pb.PodSandboxSnapshotResponse{
+	return &pb.PodSandboxSnapshotFilesystemResponse{
 		Ok:         true,
 		SnapshotId: snapshotId,
 	}, nil

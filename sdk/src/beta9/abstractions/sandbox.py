@@ -21,8 +21,8 @@ from ..clients.pod import (
     PodSandboxConnectRequest,
     PodSandboxConnectResponse,
     PodSandboxCreateDirectoryRequest,
-    PodSandboxDeleteFileRequest,
     PodSandboxDeleteDirectoryRequest,
+    PodSandboxDeleteFileRequest,
     PodSandboxDownloadFileRequest,
     PodSandboxExecRequest,
     PodSandboxExposePortRequest,
@@ -31,8 +31,8 @@ from ..clients.pod import (
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
     PodSandboxReplaceInFilesRequest,
-    PodSandboxSnapshotRequest,
-    PodSandboxSnapshotResponse,
+    PodSandboxSnapshotFilesystemRequest,
+    PodSandboxSnapshotFilesystemResponse,
     PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
@@ -178,9 +178,11 @@ class Sandbox(Pod):
             stub_id=response.stub_id,
         )
 
-    def create_from_snapshot(self, snapshot_id: str) -> "SandboxInstance":
+    def create_from_fs_snapshot(self, snapshot_id: str) -> "SandboxInstance":
         """
         Create a sandbox instance from a filesystem snapshot.
+        This will create a new sandbox instance with any filesystem-level changes made in that original sandbox instance.
+        However, it will not restore any running processes or state present in the original sandbox instance.
 
         Parameters:
             snapshot_id (str): The ID of the snapshot to create the sandbox from.
@@ -191,7 +193,7 @@ class Sandbox(Pod):
         Example:
             ```python
             # Create a sandbox instance from a filesystem snapshot
-            instance = sandbox.create_from_snapshot("snapshot-123")
+            instance = sandbox.create_from_filesystem_snapshot("snapshot-123")
             print(f"Sandbox created with ID: {instance.sandbox_id()}")
             ```
         """
@@ -200,7 +202,7 @@ class Sandbox(Pod):
         self.stub_created = True
         self.image_id = snapshot_id
 
-        terminal.header(f"Creating sandbox from snapshot: {snapshot_id}")
+        terminal.header(f"Creating sandbox from filesystem snapshot: {snapshot_id}")
 
         create_response: CreatePodResponse = self.stub.create_pod(
             CreatePodRequest(
@@ -383,7 +385,7 @@ class SandboxInstance(BaseAbstraction):
 
         return res.ok
 
-    def snapshot(self) -> str:
+    def snapshot_filesystem(self) -> str:
         """
         Create a snapshot of the sandbox filesystem.
 
@@ -392,15 +394,17 @@ class SandboxInstance(BaseAbstraction):
 
         Example:
             ```python
-            # Create a snapshot of the sandbox filesystem
-            snapshot_id = instance.snapshot()
+            # Create a snapshot of the sandbox filesystem contents
+            snapshot_id = instance.snapshot_filesystem  ()
             print(f"Snapshot created with ID: {snapshot_id}")
             ```
         """
-        terminal.header(f"Creating snapshot of: {self.container_id}")
+        terminal.header(f"Creating a snapshot of sandbox filesystem: {self.container_id}")
 
-        res: "PodSandboxSnapshotResponse" = self.stub.sandbox_snapshot(
-            PodSandboxSnapshotRequest(stub_id=self.stub_id, container_id=self.container_id)
+        res: "PodSandboxSnapshotFilesystemResponse" = self.stub.sandbox_snapshot_filesystem(
+            PodSandboxSnapshotFilesystemRequest(
+                stub_id=self.stub_id, container_id=self.container_id
+            )
         )
 
         if not res.ok:
@@ -1469,7 +1473,7 @@ class SandboxFileSystem:
             )
         )
         if not resp.ok:
-            raise SandboxFileSystemError(resp.error_msg)        
+            raise SandboxFileSystemError(resp.error_msg)
 
     def delete_directory(self, sandbox_path: str):
         """

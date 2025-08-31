@@ -37,11 +37,11 @@ message CheckpointState {
 message ConcurrencyLimit {
   uint32 id = 1;
   string external_id = 2;
-  uint32 gpu_limit = 3;
-  uint32 cpu_millicore_limit = 4;
-  google.protobuf.Timestamp created_at = 5;
-  google.protobuf.Timestamp updated_at = 6;
-  uint32 workspace_id = 7;
+  uint32 workspace_id = 3;
+  uint32 gpu_limit = 4;
+  uint32 cpu_millicore_limit = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
 }
 
 message Container {
