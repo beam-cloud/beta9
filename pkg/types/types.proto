@@ -81,6 +81,7 @@ message ContainerRequest {
   double cost_per_ms = 22;
   string app_id = 23;
   string container_ip = 24;
+  string config_path = 25;
 }
 
 message ContainerState {

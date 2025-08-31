@@ -676,6 +676,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
+	// TODO: clean this up, this basically just makes sure that if we actually USED criu, then we should set some stuff inside the worker
 	if request.CheckpointEnabled {
 		spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
 	}
@@ -692,6 +693,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		log.Error().Str("container_id", containerId).Msgf("failed to write runc config: %v", err)
 		return
 	}
+	request.ConfigPath = configPath
 
 	outputWriter := containerInstance.OutputWriter
 
@@ -729,7 +731,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 	}()
 
-	exitCode, containerId, _ = s.runContainer(ctx, request, configPath, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+	exitCode, containerId, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -765,17 +767,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, configPath string, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
-		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, configPath)
+		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 		if err == nil {
 			return exitCode, containerId, err
 		}
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from checkpoint/restore, exit code %d", exitCode)
 	}
 
-	bundlePath := filepath.Dir(configPath)
+	bundlePath := filepath.Dir(request.ConfigPath)
 	exitCode, err := s.runcHandle.Run(ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
 		OutputWriter: outputWriter,
 		Started:      startedChan,
@@ -787,8 +789,8 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
-	// For images that have a rootfs, set that as the root path
-	// otherwise, assume runc config files are in the rootfs themselves
+	// For images that have a rootfs path, set that as the root path
+	// otherwise, assume OCI spec files are in the root
 	rootPath := filepath.Join(bundlePath, "rootfs")
 	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
 		rootPath = bundlePath
@@ -799,7 +801,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 		overlayPath = "/dev/shm"
 	}
 
-	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
+	return common.NewContainerOverlay(request, rootPath, overlayPath)
 }
 
 func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *atomic.Bool) {

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -80,7 +81,16 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 		},
 		Started: opts.runcOpts.Started,
 	})
+
 	if err != nil {
+		// Check if this is go-runc incorrectly wrapping a successful restore
+		if strings.Contains(err.Error(), "did not terminate successfully") {
+			var exitErr *runc.ExitError
+			if errors.As(err, &exitErr) {
+				// This is a successful restore, just return the exit code
+				return exitErr.Status, nil
+			}
+		}
 		return -1, err
 	}
 

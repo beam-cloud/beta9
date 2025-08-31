@@ -197,6 +197,20 @@ func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.Run
 	return nil
 }
 
+func (s *RunCServer) RunCCheckpoint(ctx context.Context, in *pb.RunCCheckpointRequest) (*pb.RunCCheckpointResponse, error) {
+	_, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCCheckpointResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	// err := s.criuManager.CreateCheckpoint(ctx, instance.Request)
+	// if err != nil {
+	// 	return &pb.RunCCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	// }
+
+	return &pb.RunCCheckpointResponse{Ok: true}, nil
+}
+
 func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCService_RunCArchiveServer) error {
 	ctx := stream.Context()
 	state, err := s.runcHandle.State(ctx, req.ContainerId)

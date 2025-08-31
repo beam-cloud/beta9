@@ -224,6 +224,7 @@ type ContainerRequest struct {
 	CostPerMs         float64         `json:"cost_per_ms"`
 	AppId             string          `json:"app_id"`
 	ContainerIp       string          `json:"container_ip"`
+	ConfigPath        string          `json:"config_path"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {

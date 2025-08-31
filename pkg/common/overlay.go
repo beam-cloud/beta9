@@ -8,9 +8,12 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 type ContainerOverlay struct {
+	request     *types.ContainerRequest
 	containerId string
 	layers      []ContainerOverlayLayer
 	root        string
@@ -25,9 +28,10 @@ type ContainerOverlayLayer struct {
 	merged string
 }
 
-func NewContainerOverlay(containerId string, rootPath string, overlayPath string) *ContainerOverlay {
+func NewContainerOverlay(request *types.ContainerRequest, rootPath string, overlayPath string) *ContainerOverlay {
 	return &ContainerOverlay{
-		containerId: containerId,
+		request:     request,
+		containerId: request.ContainerId,
 		layers:      []ContainerOverlayLayer{},
 		root:        rootPath,
 		overlayPath: overlayPath,
@@ -35,6 +39,10 @@ func NewContainerOverlay(containerId string, rootPath string, overlayPath string
 }
 
 func (co *ContainerOverlay) Setup() error {
+	if co.request.CheckpointEnabled {
+		return co.AddLayer("/checkpoints/<stub_id>/upper")
+	}
+
 	// Right now, we are just adding an empty layer to the top of the rootfs
 	// In the future, though, we can add additional layers on top of that
 	return co.AddEmptyLayer()
