@@ -84,7 +84,9 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUMa
 	return criuManager, nil
 }
 
-func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
+func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int) (int, error) {
+	checkpointId := request.StubId
+
 	state, createCheckpoint := s.shouldCreateCheckpoint(request)
 
 	// If checkpointing is enabled, attempt to create a checkpoint
@@ -94,10 +96,13 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		go func() {
 			err := s.createCheckpoint(ctx, &CreateCheckpointOpts{
 				Request:           request,
+				CheckpointId:      checkpointId,
 				OutputWriter:      outputWriter,
 				OutputLogger:      outputLogger,
 				StartedChan:       startedChan,
-				CheckpointPIDChan: checkpointPIDChan})
+				CheckpointPIDChan: checkpointPIDChan,
+				WaitForSignal:     true,
+			})
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)
 				return
@@ -111,23 +116,23 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		})
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to run container: %v", err)
-			return -1, "", err
+			return -1, err
 		}
 
-		return exitCode, request.ContainerId, nil
+		return exitCode, nil
 	}
 
 	if state.Status == types.CheckpointStatusAvailable {
 		err := s.waitForSyncFile(request, outputLogger)
 		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to wait for sync file: %v", err)
-			return -1, "", err
+			log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpointId).Msgf("failed to wait for sync file: %v", err)
+			return -1, err
 		}
 
 		outputLogger.Info("Attempting to restore container checkpoint...")
 		f, err := os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 		if err != nil {
-			return -1, "", fmt.Errorf("failed to create checkpoint signal directory: %v", err)
+			return -1, fmt.Errorf("failed to create checkpoint signal directory: %v", err)
 		}
 		defer f.Close()
 
@@ -141,15 +146,15 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			configPath: request.ConfigPath,
 		})
 		if err != nil {
-			updateStateErr := s.updateCheckpointState(request, types.CheckpointStatusRestoreFailed)
+			updateStateErr := s.updateCheckpointState(checkpointId, request, types.CheckpointStatusRestoreFailed)
 			if updateStateErr != nil {
 				log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 			}
-			return exitCode, "", err
+			return exitCode, err
 		}
 
 		outputLogger.Info("Checkpoint found and restored")
-		return exitCode, request.ContainerId, nil
+		return exitCode, nil
 	}
 
 	// If a checkpoint exists but does not have status 'AVAILABLE' (previously failed), run the container normally
@@ -160,60 +165,68 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		Started:      startedChan,
 	})
 
-	return exitCode, request.ContainerId, err
+	return exitCode, err
 }
 
 type CreateCheckpointOpts struct {
 	Request           *types.ContainerRequest
+	CheckpointId      string
 	OutputWriter      io.Writer
 	OutputLogger      *slog.Logger
 	StartedChan       chan int
 	CheckpointPIDChan chan int
+	WaitForSignal     bool
 }
 
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpts) error {
 	pid := <-opts.CheckpointPIDChan
-	log.Info().Str("container_id", opts.Request.ContainerId).Int("pid", pid).Msg("creating checkpoint")
+
+	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Int("pid", pid).Msg("creating checkpoint")
+
 	os.MkdirAll(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, opts.Request.Workspace.Name), os.ModePerm)
 
-	err := s.waitForCheckpointSignal(ctx, opts.Request, opts.OutputLogger)
-	if err != nil {
-		log.Error().Str("container_id", opts.Request.ContainerId).Msgf("failed to wait for checkpoint signal: %v", err)
-		return err
+	if opts.WaitForSignal {
+		err := s.waitForCheckpointSignal(ctx, opts.Request, opts.OutputLogger)
+		if err != nil {
+			log.Error().Str("container_id", opts.Request.ContainerId).Msgf("failed to wait for checkpoint signal: %v", err)
+			return err
+		}
 	}
 
 	// Proceed to create the checkpoint
 	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, opts.Request)
 	if err != nil {
-		updateStateErr := s.updateCheckpointState(opts.Request, types.CheckpointStatusCheckpointFailed)
+		updateStateErr := s.updateCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed)
 		if updateStateErr != nil {
-			log.Error().Str("container_id", opts.Request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 		}
 
 		opts.OutputLogger.Error("Failed to create checkpoint")
 		return err
 	}
 
-	err = s.createSyncFile(opts.Request, checkpointPath)
+	err = s.createSyncFile(opts.Request, opts.CheckpointId, checkpointPath)
 	if err != nil {
-		log.Error().Str("container_id", opts.Request.ContainerId).Msgf("failed to create sync file: %v", err)
+		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create sync file: %v", err)
 		return err
 	}
 
-	// Create a file accessible to the container to indicate that the checkpoint has been captured
-	_, err = os.Create(filepath.Join(checkpointSignalDir(opts.Request.ContainerId), checkpointCompleteFileName))
-	if err != nil {
-		log.Error().Str("container_id", opts.Request.ContainerId).Msgf("failed to create checkpoint complete file: %v", err)
-		return err
+	if opts.WaitForSignal {
+		// Create a file accessible to the container to indicate that the checkpoint has been captured
+		_, err = os.Create(filepath.Join(checkpointSignalDir(opts.Request.ContainerId), checkpointCompleteFileName))
+		if err != nil {
+			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint complete file: %v", err)
+			return err
+		}
 	}
 
 	opts.OutputLogger.Info("Checkpoint created successfully")
 
-	updateStateErr := s.updateCheckpointState(opts.Request, types.CheckpointStatusAvailable)
+	updateStateErr := s.updateCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable)
 	if updateStateErr != nil {
-		log.Error().Str("container_id", opts.Request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 		return updateStateErr
 	}
 
@@ -231,7 +244,7 @@ const (
 	syncFilePollInterval = 1 * time.Second
 )
 
-func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointPath string) error {
+func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointId string, checkpointPath string) error {
 	cacheType := "CPU"
 	if request.Gpu != "" {
 		cacheType = strings.ToUpper(request.Gpu)
@@ -247,7 +260,7 @@ func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointPath 
 		return err
 	}
 
-	err = os.WriteFile(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", request.StubId, syncFileExtension)), syncFileBytes, 0644)
+	err = os.WriteFile(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", checkpointId, syncFileExtension)), syncFileBytes, 0644)
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Msgf("failed to write sync file: %v", err)
 		return err
@@ -289,17 +302,19 @@ func (s *Worker) waitForSyncFile(request *types.ContainerRequest, outputLogger *
 // shouldCreateCheckpoint checks if a checkpoint should be created for a given container
 // NOTE: this currently only works for deployments since functions can run multiple containers
 func (s *Worker) shouldCreateCheckpoint(request *types.ContainerRequest) (types.CheckpointState, bool) {
+	checkpointId := request.StubId
+
 	if !s.IsCRIUAvailable(request.GpuCount) || !request.CheckpointEnabled {
 		return types.CheckpointState{}, false
 	}
 
 	response, err := handleGRPCResponse(s.containerRepoClient.GetCheckpointState(context.Background(), &pb.GetCheckpointStateRequest{
 		WorkspaceName: request.Workspace.Name,
-		CheckpointId:  request.StubId,
+		CheckpointId:  checkpointId,
 	}))
 	if err != nil {
 		notFoundErr := &types.ErrCheckpointNotFound{
-			CheckpointId: request.StubId,
+			CheckpointId: checkpointId,
 		}
 		if err.Error() == notFoundErr.Error() {
 			log.Info().Str("container_id", request.ContainerId).Msg("checkpoint not found, creating checkpoint")
@@ -345,10 +360,10 @@ func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 	return pool.CRIUEnabled
 }
 
-func (s *Worker) updateCheckpointState(request *types.ContainerRequest, status types.CheckpointStatus) error {
+func (s *Worker) updateCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus) error {
 	_, err := handleGRPCResponse(s.containerRepoClient.UpdateCheckpointState(context.Background(), &pb.UpdateCheckpointStateRequest{
 		ContainerId:   request.ContainerId,
-		CheckpointId:  request.StubId,
+		CheckpointId:  checkpointId,
 		WorkspaceName: request.Workspace.Name,
 		CheckpointState: &pb.CheckpointState{
 			Status:      string(status),

@@ -731,7 +731,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 	}()
 
-	exitCode, containerId, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -767,12 +767,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, error) {
 	// Handle checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
-		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+		exitCode, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 		if err == nil {
-			return exitCode, containerId, err
+			return exitCode, err
 		}
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from checkpoint/restore, exit code %d", exitCode)
 	}
@@ -785,7 +785,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}
-	return exitCode, request.ContainerId, err
+	return exitCode, err
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
