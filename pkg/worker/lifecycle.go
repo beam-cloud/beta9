@@ -768,12 +768,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 }
 
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, error) {
-	// Handle checkpoint creation & restore if applicable
+	// Handle automatic checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
 		exitCode, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 		if err == nil {
 			return exitCode, err
 		}
+
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from checkpoint/restore, exit code %d", exitCode)
 	}
 
@@ -785,6 +786,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}
+
 	return exitCode, err
 }
 

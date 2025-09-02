@@ -148,7 +148,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 		if err != nil {
 			updateStateErr := s.updateCheckpointState(checkpointId, request, types.CheckpointStatusRestoreFailed)
 			if updateStateErr != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+				log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpointId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 			}
 			return exitCode, err
 		}
@@ -190,7 +190,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	if opts.WaitForSignal {
 		err := s.waitForCheckpointSignal(ctx, opts.Request, opts.OutputLogger)
 		if err != nil {
-			log.Error().Str("container_id", opts.Request.ContainerId).Msgf("failed to wait for checkpoint signal: %v", err)
+			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to wait for checkpoint signal: %v", err)
 			return err
 		}
 	}

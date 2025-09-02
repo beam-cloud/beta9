@@ -44,7 +44,15 @@ type RunCServer struct {
 	podAddr                 string
 }
 
-func NewRunCServer(podAddr string, containerInstances *common.SafeMap[*ContainerInstance], imageClient *ImageClient, containerRepoClient pb.ContainerRepositoryServiceClient, containerNetworkManager *ContainerNetworkManager) (*RunCServer, error) {
+type RunCServerOpts struct {
+	PodAddr                 string
+	ContainerInstances      *common.SafeMap[*ContainerInstance]
+	ImageClient             *ImageClient
+	ContainerRepoClient     pb.ContainerRepositoryServiceClient
+	ContainerNetworkManager *ContainerNetworkManager
+}
+
+func NewRunCServer(opts *RunCServerOpts) (*RunCServer, error) {
 	var baseConfigSpec specs.Spec
 	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
 	err := json.Unmarshal([]byte(specTemplate), &baseConfigSpec)
@@ -53,13 +61,13 @@ func NewRunCServer(podAddr string, containerInstances *common.SafeMap[*Container
 	}
 
 	return &RunCServer{
-		podAddr:                 podAddr,
 		runcHandle:              runc.Runc{},
+		podAddr:                 opts.PodAddr,
 		baseConfigSpec:          baseConfigSpec,
-		containerInstances:      containerInstances,
-		imageClient:             imageClient,
-		containerRepoClient:     containerRepoClient,
-		containerNetworkManager: containerNetworkManager,
+		containerInstances:      opts.ContainerInstances,
+		imageClient:             opts.ImageClient,
+		containerRepoClient:     opts.ContainerRepoClient,
+		containerNetworkManager: opts.ContainerNetworkManager,
 	}, nil
 }
 

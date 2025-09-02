@@ -205,7 +205,13 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	runcServer, err := NewRunCServer(podAddr, containerInstances, imageClient, containerRepoClient, containerNetworkManager)
+	runcServer, err := NewRunCServer(&RunCServerOpts{
+		PodAddr:                 podAddr,
+		ContainerInstances:      containerInstances,
+		ImageClient:             imageClient,
+		ContainerRepoClient:     containerRepoClient,
+		ContainerNetworkManager: containerNetworkManager,
+	})
 	if err != nil {
 		cancel()
 		return nil, err
