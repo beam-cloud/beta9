@@ -381,7 +381,7 @@ type Checkpoint struct {
 	StubId            uint     `db:"stub_id" json:"stub_id" go2proto:"ignore"`           // Foreign key to Stub
 	StubType          string   `db:"stub_type" json:"stub_type" serializer:"stub_type"`
 	AppId             uint     `db:"app_id" json:"app_id,omitempty" go2proto:"ignore"` // Foreign key to App
-	ExposedPorts      []string `db:"exposed_ports" json:"exposed_ports" serializer:"exposed_ports"`
+	ExposedPorts      []uint32 `db:"exposed_ports" json:"exposed_ports" serializer:"exposed_ports"`
 	CreatedAt         Time     `db:"created_at" json:"created_at" serializer:"created_at"`
 	LastRestoredAt    Time     `db:"last_restored_at" json:"last_restored_at" serializer:"last_restored_at"`
 }

@@ -40,7 +40,7 @@ class Checkpoint(betterproto.Message):
     status: str = betterproto.string_field(6)
     remote_key: str = betterproto.string_field(7)
     stub_type: str = betterproto.string_field(10)
-    exposed_ports: List[str] = betterproto.string_field(12)
+    exposed_ports: List[int] = betterproto.uint32_field(12)
     created_at: datetime = betterproto.message_field(13)
     last_restored_at: datetime = betterproto.message_field(14)
 
@@ -103,7 +103,7 @@ class ContainerRequest(betterproto.Message):
     ports: List[int] = betterproto.uint32_field(21)
     cost_per_ms: float = betterproto.double_field(22)
     app_id: str = betterproto.string_field(23)
-    container_ip: str = betterproto.string_field(24)
+    checkpoint_id: str = betterproto.string_field(24)
     config_path: str = betterproto.string_field(25)
 
 

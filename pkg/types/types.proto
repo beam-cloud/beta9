@@ -34,7 +34,7 @@ message Checkpoint {
   string status = 6;
   string remote_key = 7;
   string stub_type = 10;
-  repeated string exposed_ports = 12;
+  repeated uint32 exposed_ports = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp last_restored_at = 14;
 }
@@ -93,7 +93,7 @@ message ContainerRequest {
   repeated uint32 ports = 21;
   double cost_per_ms = 22;
   string app_id = 23;
-  string container_ip = 24;
+  string checkpoint_id = 24;
   string config_path = 25;
 }
 
