@@ -146,7 +146,7 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			configPath: request.ConfigPath,
 		})
 		if err != nil {
-			updateStateErr := s.updateCheckpointState(checkpointId, request, types.CheckpointStatusRestoreFailed, []string{})
+			updateStateErr := s.updateCheckpointState(checkpointId, request, types.CheckpointStatusRestoreFailed, []uint32{})
 			if updateStateErr != nil {
 				log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpointId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 			}
@@ -196,7 +196,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	// Proceed to create the checkpoint
 	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, opts.Request)
 	if err != nil {
-		updateStateErr := s.updateCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, []string{})
+		updateStateErr := s.updateCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, []uint32{})
 		if updateStateErr != nil {
 			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 		}
@@ -222,7 +222,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 
 	opts.OutputLogger.Info("Checkpoint created successfully")
 
-	updateStateErr := s.updateCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, []string{})
+	updateStateErr := s.updateCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusAvailable, []uint32{})
 	if updateStateErr != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 		return updateStateErr
@@ -358,15 +358,29 @@ func (s *Worker) IsCRIUAvailable(gpuCount uint32) bool {
 	return pool.CRIUEnabled
 }
 
-func (s *Worker) updateCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, exposedPorts []string) error {
+func (s *Worker) createCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, exposedPorts []uint32) error {
+	_, err := handleGRPCResponse(s.backendRepoClient.CreateCheckpoint(context.Background(), &pb.CreateCheckpointRequest{
+		CheckpointId:      checkpointId,
+		SourceContainerId: request.ContainerId,
+		ContainerIp:       request.ContainerIp,
+		Status:            string(status),
+		// RemoteKey:         request.RemoteKey,
+		StubId:       request.Stub.ExternalId,
+		StubType:     string(request.Stub.Type),
+		ExposedPorts: exposedPorts,
+	}))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Worker) updateCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, exposedPorts []uint32) error {
 	_, err := handleGRPCResponse(s.backendRepoClient.UpdateCheckpoint(context.Background(), &pb.UpdateCheckpointRequest{
-		Checkpoint: &pb.Checkpoint{
-			CheckpointId:      checkpointId,
-			Status:            string(status),
-			SourceContainerId: request.ContainerId,
-			ContainerIp:       request.ContainerIp,
-			ExposedPorts:      exposedPorts,
-		},
+		CheckpointId: checkpointId,
+		ContainerIp:  request.ContainerIp,
+		Status:       string(status),
+		ExposedPorts: exposedPorts,
 	}))
 	if err != nil {
 		return err

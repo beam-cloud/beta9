@@ -39,7 +39,16 @@ message ListCheckpointsResponse {
   string error_msg = 3;
 }
 
-message CreateCheckpointRequest { types.Checkpoint checkpoint = 1; }
+message CreateCheckpointRequest {
+  string checkpoint_id = 1;
+  string source_container_id = 2;
+  string container_ip = 3;
+  string status = 4;
+  string remote_key = 5;
+  string stub_id = 6;
+  string stub_type = 7;
+  repeated uint32 exposed_ports = 8;
+}
 
 message CreateCheckpointResponse {
   bool ok = 1;
@@ -47,7 +56,12 @@ message CreateCheckpointResponse {
   string error_msg = 3;
 }
 
-message UpdateCheckpointRequest { types.Checkpoint checkpoint = 1; }
+message UpdateCheckpointRequest {
+  string checkpoint_id = 1;
+  string container_ip = 2;
+  string status = 3;
+  repeated uint32 exposed_ports = 4;
+}
 
 message UpdateCheckpointResponse {
   bool ok = 1;

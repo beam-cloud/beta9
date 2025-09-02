@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
-	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 )
 
@@ -50,20 +49,20 @@ func (s *BackendRepositoryService) ListCheckpoints(ctx context.Context, req *pb.
 	return &pb.ListCheckpointsResponse{Ok: true, Checkpoints: checkpointsProto}, nil
 }
 
-func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb.CreateCheckpointRequest) (*pb.CreateCheckpointResponse, error) {
-	checkpoint, err := s.backendRepo.CreateCheckpoint(ctx, types.NewCheckpointFromProto(req.Checkpoint))
-	if err != nil {
-		return &pb.CreateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
+// func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb.CreateCheckpointRequest) (*pb.CreateCheckpointResponse, error) {
+// 	checkpoint, err := s.backendRepo.CreateCheckpoint(ctx, types.NewCheckpointFromProto(req.ToCheckpoint()))
+// 	if err != nil {
+// 		return &pb.CreateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
+// 	}
 
-	return &pb.CreateCheckpointResponse{Ok: true, Checkpoint: checkpoint.ToProto()}, nil
-}
+// 	return &pb.CreateCheckpointResponse{Ok: true, Checkpoint: checkpoint.ToProto()}, nil
+// }
 
-func (s *BackendRepositoryService) UpdateCheckpoint(ctx context.Context, req *pb.UpdateCheckpointRequest) (*pb.UpdateCheckpointResponse, error) {
-	checkpoint, err := s.backendRepo.UpdateCheckpoint(ctx, types.NewCheckpointFromProto(req.Checkpoint))
-	if err != nil {
-		return &pb.UpdateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
+// func (s *BackendRepositoryService) UpdateCheckpoint(ctx context.Context, req *pb.UpdateCheckpointRequest) (*pb.UpdateCheckpointResponse, error) {
+// 	checkpoint, err := s.backendRepo.UpdateCheckpoint(ctx, types.NewCheckpointFromProto(req))
+// 	if err != nil {
+// 		return &pb.UpdateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
+// 	}
 
-	return &pb.UpdateCheckpointResponse{Ok: true, Checkpoint: checkpoint.ToProto()}, nil
-}
+// 	return &pb.UpdateCheckpointResponse{Ok: true, Checkpoint: checkpoint.ToProto()}, nil
+// }
