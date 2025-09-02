@@ -129,10 +129,10 @@ func (s *Worker) attemptCheckpointOrRestore(ctx context.Context, request *types.
 			return -1, err
 		}
 
-		outputLogger.Info("Attempting to restore container checkpoint...")
+		outputLogger.Info("Attempting to restore container from checkpoint...")
 		f, err := os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
 		if err != nil {
-			return -1, fmt.Errorf("failed to create checkpoint signal directory: %v", err)
+			return -1, err
 		}
 		defer f.Close()
 
@@ -184,8 +184,6 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	pid := <-opts.CheckpointPIDChan
 
 	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Int("pid", pid).Msg("creating checkpoint")
-
-	os.MkdirAll(filepath.Join(s.config.Worker.CRIU.Storage.MountPath, opts.Request.Workspace.Name), os.ModePerm)
 
 	if opts.WaitForSignal {
 		err := s.waitForCheckpointSignal(ctx, opts.Request, opts.OutputLogger)
