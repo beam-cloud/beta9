@@ -65,6 +65,7 @@ type Worker struct {
 	stopContainerChan       chan stopContainerEvent
 	workerRepoClient        pb.WorkerRepositoryServiceClient
 	containerRepoClient     pb.ContainerRepositoryServiceClient
+	backendRepoClient       pb.BackendRepositoryServiceClient
 	eventRepo               repo.EventRepository
 	storageManager          *WorkspaceStorageManager
 	userDataStorage         storage.Storage
@@ -150,6 +151,11 @@ func NewWorker() (*Worker, error) {
 	}
 
 	workerRepoClient, err := NewWorkerRepositoryClient(context.TODO(), config, workerToken)
+	if err != nil {
+		return nil, err
+	}
+
+	backendRepoClient, err := NewBackendRepositoryClient(context.TODO(), config, workerToken)
 	if err != nil {
 		return nil, err
 	}
@@ -265,6 +271,7 @@ func NewWorker() (*Worker, error) {
 		workerUsageMetrics:  workerMetrics,
 		containerRepoClient: containerRepoClient,
 		workerRepoClient:    workerRepoClient,
+		backendRepoClient:   backendRepoClient,
 		eventRepo:           eventRepo,
 		completedRequests:   make(chan *types.ContainerRequest, 1000),
 		stopContainerChan:   make(chan stopContainerEvent, 1000),

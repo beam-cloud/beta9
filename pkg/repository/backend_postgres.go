@@ -2341,3 +2341,127 @@ func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId str
 
 	return clipVersion, nil
 }
+
+func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {
+	query := `
+		INSERT INTO checkpoint (
+			checkpoint_id, source_container_id, container_ip, status, remote_key,
+			workspace_id, stub_id, stub_type, app_id, exposed_ports
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		)
+		RETURNING *;`
+
+	var created types.Checkpoint
+	err := r.client.GetContext(ctx, &created, query,
+		checkpoint.CheckpointId,
+		checkpoint.SourceContainerId,
+		checkpoint.ContainerIp,
+		checkpoint.Status,
+		checkpoint.RemoteKey,
+		checkpoint.WorkspaceId,
+		checkpoint.StubId,
+		checkpoint.StubType,
+		checkpoint.AppId,
+		checkpoint.ExposedPorts,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+	return &created, nil
+}
+
+func (r *PostgresBackendRepository) ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error) {
+	query := `
+		SELECT c.* FROM checkpoint c
+		INNER JOIN workspace w ON c.workspace_id = w.id
+		WHERE w.external_id = $1 
+		ORDER BY c.created_at DESC;`
+
+	var checkpoints []types.Checkpoint
+	err := r.client.SelectContext(ctx, &checkpoints, query, workspaceExternalId)
+	if err != nil {
+		return nil, err
+	}
+	return checkpoints, nil
+}
+
+func (r *PostgresBackendRepository) UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {
+	if checkpoint.Id == 0 {
+		return nil, errors.New("checkpoint id required for update")
+	}
+
+	// Use COALESCE to preserve existing values when new values are empty/null
+	query := `
+		UPDATE checkpoint SET 
+			checkpoint_id = COALESCE(NULLIF($1, ''), checkpoint_id),
+			source_container_id = COALESCE(NULLIF($2, ''), source_container_id),
+			container_ip = COALESCE(NULLIF($3, ''), container_ip),
+			status = COALESCE(NULLIF($4, ''), status),
+			remote_key = COALESCE(NULLIF($5, ''), remote_key),
+			stub_type = COALESCE(NULLIF($6, ''), stub_type),
+			app_id = CASE WHEN $7 = 0 THEN app_id ELSE $7 END,
+			exposed_ports = COALESCE($8::jsonb, exposed_ports),
+			last_restored_at = COALESCE(NULLIF($9, '0001-01-01 00:00:00+00'::timestamptz), last_restored_at)
+		WHERE id = $10
+		RETURNING *;`
+
+	var updated types.Checkpoint
+	err := r.client.GetContext(ctx, &updated, query,
+		checkpoint.CheckpointId,
+		checkpoint.SourceContainerId,
+		checkpoint.ContainerIp,
+		checkpoint.Status,
+		checkpoint.RemoteKey,
+		checkpoint.StubType,
+		checkpoint.AppId,
+		checkpoint.ExposedPorts,
+		checkpoint.LastRestoredAt,
+		checkpoint.Id,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, &types.ErrCheckpointNotFound{CheckpointId: fmt.Sprintf("%d", checkpoint.Id)}
+		}
+		return nil, err
+	}
+	return &updated, nil
+}
+
+func (r *PostgresBackendRepository) GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error) {
+	query := `
+		SELECT * FROM checkpoint 
+		WHERE checkpoint_id = $1 
+		LIMIT 1;`
+
+	var checkpoint types.Checkpoint
+	err := r.client.GetContext(ctx, &checkpoint, query, checkpointId)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, &types.ErrCheckpointNotFound{CheckpointId: checkpointId}
+		}
+		return nil, err
+	}
+	return &checkpoint, nil
+}
+
+func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error) {
+	query := `
+		SELECT c.* FROM checkpoint c
+		INNER JOIN stub s ON c.stub_id = s.id
+		WHERE s.external_id = $1 
+		ORDER BY c.created_at DESC
+		LIMIT 1;`
+
+	var checkpoint types.Checkpoint
+	err := r.client.GetContext(ctx, &checkpoint, query, stubExternalId)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, &types.ErrCheckpointNotFound{CheckpointId: fmt.Sprintf("stub:%s", stubExternalId)}
+		}
+		return nil, err
+	}
+	return &checkpoint, nil
+}

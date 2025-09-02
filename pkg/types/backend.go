@@ -368,6 +368,62 @@ const (
 	PricingPolicyCostModelDuration PricingPolicyCostModel = "duration"
 )
 
+// @go2proto
+type Checkpoint struct {
+	Id                uint     `db:"id" json:"id" serializer:"id,source:external_id"`
+	CheckpointId      string   `db:"checkpoint_id" json:"checkpoint_id" serializer:"checkpoint_id"`
+	ExternalId        string   `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
+	SourceContainerId string   `db:"source_container_id" json:"source_container_id" serializer:"source_container_id"`
+	ContainerIp       string   `db:"container_ip" json:"container_ip" serializer:"container_ip"`
+	Status            string   `db:"status" json:"status" serializer:"status"`
+	RemoteKey         string   `db:"remote_key" json:"remote_key" serializer:"remote_key"`
+	WorkspaceId       uint     `db:"workspace_id" json:"workspace_id"` // Foreign key to Workspace
+	StubId            uint     `db:"stub_id" json:"stub_id"`           // Foreign key to Stub
+	StubType          string   `db:"stub_type" json:"stub_type" serializer:"stub_type"`
+	AppId             uint     `db:"app_id" json:"app_id,omitempty"` // Foreign key to App
+	ExposedPorts      []string `db:"exposed_ports" json:"exposed_ports" serializer:"exposed_ports"`
+	CreatedAt         Time     `db:"created_at" json:"created_at" serializer:"created_at"`
+	LastRestoredAt    Time     `db:"last_restored_at" json:"last_restored_at" serializer:"last_restored_at"`
+}
+
+func (c *Checkpoint) ToProto() *pb.Checkpoint {
+	return &pb.Checkpoint{
+		Id:                uint32(c.Id),
+		CheckpointId:      c.CheckpointId,
+		ExternalId:        c.ExternalId,
+		SourceContainerId: c.SourceContainerId,
+		ContainerIp:       c.ContainerIp,
+		Status:            c.Status,
+		RemoteKey:         c.RemoteKey,
+		WorkspaceId:       uint32(c.WorkspaceId),
+		StubId:            uint32(c.StubId),
+		StubType:          c.StubType,
+		AppId:             uint32(c.AppId),
+		ExposedPorts:      c.ExposedPorts,
+		CreatedAt:         timestamppb.New(c.CreatedAt.Time),
+		LastRestoredAt:    timestamppb.New(c.LastRestoredAt.Time),
+	}
+}
+
+func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
+	return &Checkpoint{
+		Id:                uint(in.Id),
+		CheckpointId:      in.CheckpointId,
+		ExternalId:        in.ExternalId,
+		SourceContainerId: in.SourceContainerId,
+		ContainerIp:       in.ContainerIp,
+		Status:            in.Status,
+		RemoteKey:         in.RemoteKey,
+		WorkspaceId:       uint(in.WorkspaceId),
+		StubId:            uint(in.StubId),
+		StubType:          in.StubType,
+		AppId:             uint(in.AppId),
+		ExposedPorts:      in.ExposedPorts,
+		CreatedAt:         Time{Time: in.CreatedAt.AsTime()},
+		LastRestoredAt:    Time{Time: in.LastRestoredAt.AsTime()},
+	}
+}
+
 type StubConfigV1 struct {
 	Runtime            Runtime         `json:"runtime"`
 	Handler            string          `json:"handler"`
