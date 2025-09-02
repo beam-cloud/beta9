@@ -33,17 +33,13 @@ class BuildOptions(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class Checkpoint(betterproto.Message):
-    id: int = betterproto.uint32_field(1)
     checkpoint_id: str = betterproto.string_field(2)
     external_id: str = betterproto.string_field(3)
     source_container_id: str = betterproto.string_field(4)
     container_ip: str = betterproto.string_field(5)
     status: str = betterproto.string_field(6)
     remote_key: str = betterproto.string_field(7)
-    workspace_id: int = betterproto.uint32_field(8)
-    stub_id: int = betterproto.uint32_field(9)
     stub_type: str = betterproto.string_field(10)
-    app_id: int = betterproto.uint32_field(11)
     exposed_ports: List[str] = betterproto.string_field(12)
     created_at: datetime = betterproto.message_field(13)
     last_restored_at: datetime = betterproto.message_field(14)

@@ -362,8 +362,6 @@ func (s *Worker) updateCheckpointState(checkpointId string, request *types.Conta
 	_, err := handleGRPCResponse(s.backendRepoClient.UpdateCheckpoint(context.Background(), &pb.UpdateCheckpointRequest{
 		Checkpoint: &pb.Checkpoint{
 			CheckpointId:      checkpointId,
-			WorkspaceId:       uint32(request.Workspace.Id),
-			StubId:            uint32(request.Stub.Id),
 			Status:            string(status),
 			SourceContainerId: request.ContainerId,
 			ContainerIp:       request.ContainerIp,
