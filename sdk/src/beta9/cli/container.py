@@ -10,6 +10,7 @@ from ..abstractions.base.container import Container
 from ..channel import ServiceClient
 from ..cli import extraclick
 from ..clients.gateway import (
+    CheckpointContainerRequest,
     ListContainersRequest,
     StopContainerRequest,
     StopContainerResponse,
@@ -157,3 +158,23 @@ def stop_container(service: ServiceClient, container_ids: List[str]):
 def attach_to_container(_: ServiceClient, container_id: str):
     container = Container(container_id=container_id)
     container.attach(container_id=container_id)
+
+
+@management.command(
+    name="checkpoint",
+    help="Checkpoint a running container.",
+)
+@click.argument(
+    "container_id",
+    required=True,
+)
+@extraclick.pass_service_client
+def checkpoint_container(service: ServiceClient, container_id: str):
+    res = service.gateway.checkpoint_container(
+        CheckpointContainerRequest(container_id=container_id)
+    )
+
+    if res.ok:
+        terminal.success(f"Checkpoint created for container: {container_id}")
+    else:
+        terminal.error(f"{res.error_msg}", exit=False)

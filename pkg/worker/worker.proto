@@ -84,7 +84,8 @@ message RunCCheckpointRequest { string container_id = 1; }
 
 message RunCCheckpointResponse {
   bool ok = 1;
-  string error_msg = 2;
+  string checkpoint_id = 2;
+  string error_msg = 3;
 }
 
 message RunCSandboxExecRequest {
