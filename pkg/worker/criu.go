@@ -237,7 +237,7 @@ type syncFile struct {
 }
 
 const (
-	syncFileExtension    = "crsync" // TODO: this should be in config
+	syncFileExtension    = "crsync" // TODO: this should be in config or consolidated into a centralized checkpoint manager
 	syncFileTimeout      = 600 * time.Second
 	syncFilePollInterval = 1 * time.Second
 )
