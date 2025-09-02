@@ -412,8 +412,8 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	// We try to do this in the upper bound of the subnet range
 	// If we have an existing checkpoint, we try to allocate that IP. If it's not available, we can't
 	// launch the container on this worker right now
-	if request.CheckpointEnabled {
-		ip := request.ContainerIp
+	if request.CheckpointId != "" {
+		ip := "" // "" request.ContainerIp
 		if ip != "" {
 			log.Info().Str("container_id", containerId).Msgf("checkpoint enabled, using stored IP address: %s", ip)
 
@@ -446,7 +446,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 			log.Info().Str("container_id", containerId).Msgf("checkpoint enabled, using random IP address in range 128-255: %s", ipAddr.IP.String())
 
 			ipv4LastOctet = int(ipAddr.IP.To4()[3])
-			request.ContainerIp = ipAddr.IP.String()
+			// request.ContainerIp = ipAddr.IP.String()
 		}
 	}
 

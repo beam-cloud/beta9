@@ -770,7 +770,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, error) {
 	// Handle automatic checkpoint creation & restore if applicable
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
-		exitCode, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+		exitCode, err := s.attemptAutoCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 		if err == nil {
 			return exitCode, err
 		}
