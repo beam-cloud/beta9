@@ -93,7 +93,7 @@ message ContainerRequest {
   repeated uint32 ports = 21;
   double cost_per_ms = 22;
   string app_id = 23;
-  string checkpoint_id = 24;
+  Checkpoint checkpoint = 24;
   string config_path = 25;
 }
 

@@ -121,6 +121,15 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
+	// Add checkpoint state to request if auto checkpoint is enabled and checkpoint is not set
+	if request.CheckpointEnabled && request.Checkpoint == nil {
+		checkpoint, err := s.backendRepo.GetCheckpointById(context.Background(), request.StubId)
+		if err == nil {
+			log.Info().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msg("adding checkpoint to request")
+			request.Checkpoint = checkpoint
+		}
+	}
+
 	go s.schedulerUsageMetrics.CounterIncContainerRequested(request)
 	go s.eventRepo.PushContainerRequestedEvent(request)
 

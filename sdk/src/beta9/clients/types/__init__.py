@@ -103,7 +103,7 @@ class ContainerRequest(betterproto.Message):
     ports: List[int] = betterproto.uint32_field(21)
     cost_per_ms: float = betterproto.double_field(22)
     app_id: str = betterproto.string_field(23)
-    checkpoint_id: str = betterproto.string_field(24)
+    checkpoint: "Checkpoint" = betterproto.message_field(24)
     config_path: str = betterproto.string_field(25)
 
 

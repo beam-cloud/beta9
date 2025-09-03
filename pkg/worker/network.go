@@ -224,7 +224,11 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	}
 	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
 
-	return m.configureContainerNetwork(containerId, containerVeth, request)
+	return m.configureContainerNetwork(&containerNetworkConfigOpts{
+		containerId:   containerId,
+		containerVeth: containerVeth,
+		request:       request,
+	})
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
@@ -331,7 +335,13 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 	return bridge, err
 }
 
-func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, containerVeth netlink.Link, request *types.ContainerRequest) error {
+type containerNetworkConfigOpts struct {
+	containerId   string
+	containerVeth netlink.Link
+	request       *types.ContainerRequest
+}
+
+func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetworkConfigOpts) error {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
@@ -387,7 +397,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return err
 	}
 	// Set up the veth interface
-	if err := netlink.LinkSetUp(containerVeth); err != nil {
+	if err := netlink.LinkSetUp(opts.containerVeth); err != nil {
 		return err
 	}
 
@@ -412,10 +422,15 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 	// We try to do this in the upper bound of the subnet range
 	// If we have an existing checkpoint, we try to allocate that IP. If it's not available, we can't
 	// launch the container on this worker right now
-	if request.CheckpointId != "" {
-		ip := "" // "" request.ContainerIp
+	if opts.request.Checkpoint != nil || opts.request.CheckpointEnabled {
+		var ip string
+
+		if opts.request.Checkpoint != nil {
+			ip = opts.request.Checkpoint.ContainerIp
+		}
+
 		if ip != "" {
-			log.Info().Str("container_id", containerId).Msgf("checkpoint enabled, using stored IP address: %s", ip)
+			log.Info().Str("container_id", opts.containerId).Msgf("checkpoint enabled, using stored IP address: %s", ip)
 
 			ipAddr = &netlink.Addr{
 				IPNet: &net.IPNet{
@@ -427,14 +442,15 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 			ipv4LastOctet = int(ipAddr.IP.To4()[3])
 
 			if _, allocated := allocatedSet[ipAddr.IP.String()]; allocated {
-				log.Info().Str("container_id", containerId).Msgf("checkpoint enabled, but preferred IP address is already allocated, cannot use it: %s", ipAddr.IP.String())
+				log.Info().Str("container_id", opts.containerId).Msgf("checkpoint enabled, but preferred IP address is already allocated, cannot use it: %s", ipAddr.IP.String())
 
 				// If we were unable to use the preferred IP address, we need to disable checkpointing
 				// for this container request
 				ipAddr = nil
 				ipv4LastOctet = -1
 
-				request.CheckpointEnabled = false
+				opts.request.CheckpointEnabled = false
+				opts.request.Checkpoint = nil
 			}
 		} else {
 			// Assign a random IP address in the range 128-255 to avoid _most_ conflicts with non-checkpointed containers
@@ -443,10 +459,8 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 				return err
 			}
 
-			log.Info().Str("container_id", containerId).Msgf("checkpoint enabled, using random IP address in range 128-255: %s", ipAddr.IP.String())
-
+			log.Info().Str("container_id", opts.containerId).Msgf("checkpoint enabled, using random IP address in range 128-255: %s", ipAddr.IP.String())
 			ipv4LastOctet = int(ipAddr.IP.To4()[3])
-			// request.ContainerIp = ipAddr.IP.String()
 		}
 	}
 
@@ -482,13 +496,13 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 		return errors.New("unable to assign IP address to container")
 	}
 
-	if err := netlink.AddrAdd(containerVeth, ipAddr); err != nil {
+	if err := netlink.AddrAdd(opts.containerVeth, ipAddr); err != nil {
 		return err
 	}
 
 	// Add a default route (IPv4)
 	defaultRoute := &netlink.Route{
-		LinkIndex: containerVeth.Attrs().Index,
+		LinkIndex: opts.containerVeth.Attrs().Index,
 		Gw:        net.ParseIP(containerGatewayAddress),
 	}
 	if err := netlink.RouteAdd(defaultRoute); err != nil {
@@ -509,13 +523,13 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 			},
 		}
 
-		if err := netlink.AddrAdd(containerVeth, ipv6Addr); err != nil {
+		if err := netlink.AddrAdd(opts.containerVeth, ipv6Addr); err != nil {
 			return err
 		}
 
 		// Add a default route (IPv6)
 		defaultIPv6Route := &netlink.Route{
-			LinkIndex: containerVeth.Attrs().Index,
+			LinkIndex: opts.containerVeth.Attrs().Index,
 			Gw:        net.ParseIP(containerGatewayAddressIPv6),
 		}
 		if err := netlink.RouteAdd(defaultIPv6Route); err != nil {
@@ -525,7 +539,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(containerId string, 
 
 	_, err = handleGRPCResponse(m.workerRepoClient.SetContainerIp(m.ctx, &pb.SetContainerIpRequest{
 		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
+		ContainerId:   opts.containerId,
 		IpAddress:     ipAddr.IP.String(),
 	}))
 	if err != nil {

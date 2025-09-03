@@ -223,7 +223,7 @@ type ContainerRequest struct {
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
 	AppId             string          `json:"app_id"`
-	CheckpointId      string          `json:"checkpoint_id"`
+	Checkpoint        *Checkpoint     `json:"checkpoint"`
 	ConfigPath        string          `json:"config_path"`
 }
 
@@ -268,6 +268,8 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		}
 	}
 
+	checkpoint := c.Checkpoint.ToProto()
+
 	return &pb.ContainerRequest{
 		ContainerId:       c.ContainerId,
 		EntryPoint:        c.EntryPoint,
@@ -287,11 +289,11 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		RetryCount:        int64(c.RetryCount),
 		PoolSelector:      c.PoolSelector,
 		Preemptable:       c.Preemptable,
-		CheckpointEnabled: c.CheckpointEnabled,
 		Timestamp:         timestamppb.New(c.Timestamp),
 		BuildOptions:      buildOptions,
 		Ports:             c.Ports,
-		// ContainerIp:       c.ContainerIp,
+		CheckpointEnabled: c.CheckpointEnabled,
+		Checkpoint:        checkpoint,
 	}
 }
 
@@ -334,7 +336,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
 		Ports:             in.Ports,
-		// ContainerIp:       in.ContainerIp,
+		Checkpoint:        NewCheckpointFromProto(in.Checkpoint),
 	}
 }
 

@@ -602,11 +602,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			notFoundErr := &types.ErrContainerStateNotFound{}
 
 			if notFoundErr.From(err) {
-				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
+				log.Warn().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}
 		} else if resp.State.Status == string(types.ContainerStatusStopping) {
-			log.Info().Str("container_id", containerId).Msg("container should be stopping, force killing")
+			log.Warn().Str("container_id", containerId).Msg("container should be stopping, force killing")
 			s.stopContainer(containerId, true)
 			return
 		}
@@ -674,11 +674,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 			return
 		}
-	}
-
-	// TODO: clean this up, this basically just makes sure that if we actually USED criu, then we should set some stuff inside the worker
-	if request.CheckpointEnabled {
-		spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
 	}
 
 	// Write runc config spec to disk
@@ -768,15 +763,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 }
 
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, error) {
-	// Handle automatic checkpoint creation & restore if applicable
+	// Handle automatic checkpoint creation if applicable
+	// (This occurs when checkpoint_enabled is true and an existing checkpoint is not available)
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
-		exitCode, err := s.attemptAutoCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
-		if err == nil {
-			return exitCode, err
-		}
-
-		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from checkpoint/restore, exit code %d", exitCode)
+		go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 	}
+
+	// TODO: handle restore of a checkpoint is checkpoint id is set
+	// spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
 
 	bundlePath := filepath.Dir(request.ConfigPath)
 	exitCode, err := s.runcHandle.Run(ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
