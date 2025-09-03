@@ -28,6 +28,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
 	"github.com/google/shlex"
+	"github.com/google/uuid"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc"
 )
@@ -206,17 +207,23 @@ func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.Run
 }
 
 func (s *RunCServer) RunCCheckpoint(ctx context.Context, in *pb.RunCCheckpointRequest) (*pb.RunCCheckpointResponse, error) {
-	_, exists := s.containerInstances.Get(in.ContainerId)
+	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.RunCCheckpointResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
-	// err := s.criuManager.CreateCheckpoint(ctx, instance.Request)
-	// if err != nil {
-	// 	return &pb.RunCCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	// }
+	checkpointId := uuid.New().String()
+	err := s.createCheckpoint(ctx, &CreateCheckpointOpts{
+		Request:      instance.Request,
+		CheckpointId: checkpointId,
+		ContainerIp:  instance.ContainerIp,
+	})
+	if err != nil {
+		log.Error().Str("container_id", in.ContainerId).Msgf("failed to create checkpoint: %v", err)
+		return &pb.RunCCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
 
-	return &pb.RunCCheckpointResponse{Ok: true}, nil
+	return &pb.RunCCheckpointResponse{Ok: true, CheckpointId: checkpointId}, nil
 }
 
 func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCService_RunCArchiveServer) error {

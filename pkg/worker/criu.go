@@ -100,9 +100,7 @@ func (s *Worker) attemptAutoCheckpoint(ctx context.Context, request *types.Conta
 		err := s.createCheckpoint(ctx, &CreateCheckpointOpts{
 			Request:           request,
 			CheckpointId:      checkpointId,
-			OutputWriter:      outputWriter,
 			OutputLogger:      outputLogger,
-			StartedChan:       startedChan,
 			CheckpointPIDChan: checkpointPIDChan,
 			WaitForSignal:     true,
 			ContainerIp:       containerIp,
@@ -163,9 +161,7 @@ type CreateCheckpointOpts struct {
 	Request           *types.ContainerRequest
 	CheckpointId      string
 	ContainerIp       string
-	OutputWriter      io.Writer
 	OutputLogger      *slog.Logger
-	StartedChan       chan int
 	CheckpointPIDChan chan int
 	WaitForSignal     bool
 }
@@ -173,9 +169,11 @@ type CreateCheckpointOpts struct {
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpts) error {
-	pid := <-opts.CheckpointPIDChan
+	if opts.CheckpointPIDChan != nil {
+		<-opts.CheckpointPIDChan
+	}
 
-	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Int("pid", pid).Msg("creating checkpoint")
+	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("creating checkpoint")
 
 	if opts.WaitForSignal {
 		err := s.waitForCheckpointSignal(ctx, opts.Request, opts.OutputLogger)
