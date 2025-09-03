@@ -89,6 +89,7 @@ type ContainerInstance struct {
 	Request          *types.ContainerRequest
 	StopReason       types.StopContainerReason
 	SandboxProcesses sync.Map
+	ContainerIp      string
 }
 
 type ContainerOptions struct {
@@ -205,7 +206,7 @@ func NewWorker() (*Worker, error) {
 		}
 	}
 
-	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, config)
+	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, config, containerInstances)
 	if err != nil {
 		cancel()
 		return nil, err

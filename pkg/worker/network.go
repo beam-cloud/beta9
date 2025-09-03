@@ -17,6 +17,7 @@ import (
 
 	mathrand "math/rand"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/coreos/go-iptables/iptables"
@@ -52,9 +53,10 @@ type ContainerNetworkManager struct {
 	networkPrefix       string
 	mu                  sync.Mutex
 	config              types.AppConfig
+	containerInstances  *common.SafeMap[*ContainerInstance]
 }
 
-func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, config types.AppConfig) (*ContainerNetworkManager, error) {
+func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance]) (*ContainerNetworkManager, error) {
 	defaultLink, err := getDefaultInterface()
 	if err != nil {
 		return nil, err
@@ -112,6 +114,7 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		networkPrefix:       networkPrefix,
 		mu:                  sync.Mutex{},
 		config:              config,
+		containerInstances:  containerInstances,
 	}
 
 	// Disable IPv6 if ip6tables is not supported
@@ -461,6 +464,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 
 			log.Info().Str("container_id", opts.containerId).Msgf("checkpoint enabled, using random IP address in range 128-255: %s", ipAddr.IP.String())
 			ipv4LastOctet = int(ipAddr.IP.To4()[3])
+
 		}
 	}
 
@@ -544,6 +548,12 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 	}))
 	if err != nil {
 		return err
+	}
+
+	containerInstance, exists := m.containerInstances.Get(opts.containerId)
+	if exists {
+		containerInstance.ContainerIp = ipAddr.IP.String()
+		m.containerInstances.Set(opts.containerId, containerInstance)
 	}
 
 	return nil

@@ -91,6 +91,12 @@ func (s *Worker) attemptAutoCheckpoint(ctx context.Context, request *types.Conta
 	if s.shouldCreateCheckpoint(request) {
 		outputLogger.Info("Attempting to create container checkpoint...")
 
+		containerIp := ""
+		containerInstance, exists := s.containerInstances.Get(request.ContainerId)
+		if exists {
+			containerIp = containerInstance.ContainerIp
+		}
+
 		err := s.createCheckpoint(ctx, &CreateCheckpointOpts{
 			Request:           request,
 			CheckpointId:      checkpointId,
@@ -99,6 +105,7 @@ func (s *Worker) attemptAutoCheckpoint(ctx context.Context, request *types.Conta
 			StartedChan:       startedChan,
 			CheckpointPIDChan: checkpointPIDChan,
 			WaitForSignal:     true,
+			ContainerIp:       containerIp,
 		})
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to create checkpoint: %v", err)

@@ -676,6 +676,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
+	// TODO: cleanly remove this if the restore fails
 	if request.CheckpointEnabled {
 		spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
 	}
