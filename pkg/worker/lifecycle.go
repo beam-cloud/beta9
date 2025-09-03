@@ -228,6 +228,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	request.Ports = append(request.Ports, uint32(types.WorkerShellPort))
 	portsToExpose++
 
+	// Only expose checkpoint exposed ports if they are available
+	if request.Checkpoint != nil {
+		request.Ports = request.Checkpoint.ExposedPorts
+		portsToExpose = len(request.Ports)
+	}
+
 	bindPorts := make([]int, 0, portsToExpose)
 	for i := 0; i < portsToExpose; i++ {
 		bindPort, err := getRandomFreePort()
@@ -676,11 +682,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
-	// TODO: cleanly remove this if the restore fails
-	if request.CheckpointEnabled {
-		spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
-	}
-
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
 	if err != nil {
@@ -784,6 +785,16 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		// If this is not a deployment stub, don't fall back to running the container
 		if !restored && !request.Stub.Type.IsDeployment() {
 			return exitCode, err
+		} else if !restored {
+			// Disable checkpoing flag if the restore fails
+			request.CheckpointEnabled = false
+		}
+	}
+
+	if request.CheckpointEnabled {
+		err := addEnvToSpec(request.ConfigPath, []string{fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount))})
+		if err != nil {
+			log.Warn().Str("container_id", request.ContainerId).Msgf("failed to add checkpoint env var to spec: %v", err)
 		}
 	}
 

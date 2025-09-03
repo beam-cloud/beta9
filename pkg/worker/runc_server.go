@@ -832,7 +832,7 @@ func (s *RunCServer) getHostPathFromContainerPath(containerPath string, instance
 }
 
 func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandboxExposePortRequest) (*pb.RunCSandboxExposePortResponse, error) {
-	_, exists := s.containerInstances.Get(in.ContainerId)
+	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
@@ -877,7 +877,9 @@ func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandb
 		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	instance.Request.Ports = append(instance.Request.Ports, uint32(in.Port))
 	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[int32(in.Port)])
+
 	return &pb.RunCSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err
 }
 

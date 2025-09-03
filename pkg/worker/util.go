@@ -1,11 +1,14 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
+
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // Creates a symlink, but will remove any existing symlinks, files, or directories
@@ -102,4 +105,24 @@ func (fl *FileLock) Release() error {
 
 	fl.file = nil
 	return nil
+}
+
+// Adds extra env vars to an existing OCI spec
+func addEnvToSpec(specPath string, extraEnv []string) error {
+	f, err := os.OpenFile(specPath, os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var spec specs.Spec
+	if err := json.NewDecoder(f).Decode(&spec); err != nil {
+		return err
+	}
+
+	spec.Process.Env = append(spec.Process.Env, extraEnv...)
+
+	f.Seek(0, 0)
+	f.Truncate(0)
+	return json.NewEncoder(f).Encode(&spec)
 }
