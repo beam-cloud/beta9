@@ -387,5 +387,7 @@ func sanitizeContainerRequest(request *types.ContainerRequest) types.ContainerRe
 	requestCopy.Workspace = types.Workspace{}
 	requestCopy.Mounts = nil
 	requestCopy.PoolSelector = ""
+	requestCopy.Checkpoint = nil
+	requestCopy.ConfigPath = ""
 	return requestCopy
 }
