@@ -171,8 +171,8 @@ type cedanaRestoreOpts struct {
 
 func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	restoreOpts := cedanaRestoreOpts{
-		checkpointPath: opts.state.RemoteKey,
-		jobId:          opts.state.SourceContainerId,
+		checkpointPath: opts.checkpoint.RemoteKey,
+		jobId:          opts.checkpoint.SourceContainerId,
 		containerId:    opts.request.ContainerId,
 	}
 

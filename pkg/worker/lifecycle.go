@@ -773,8 +773,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 	}
 
-	// TODO: handle restore of a checkpoint is checkpoint id is set
-	// spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
+	// Handle checkpoint restoration if applicable
+	if s.IsCRIUAvailable(request.GpuCount) && request.Checkpoint != nil {
+		exitCode, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+		if err == nil {
+			return exitCode, nil
+		}
+	}
 
 	bundlePath := filepath.Dir(request.ConfigPath)
 	exitCode, err := s.runcHandle.Run(ctx, request.ContainerId, bundlePath, &runc.CreateOpts{

@@ -28,7 +28,7 @@ const (
 
 type RestoreOpts struct {
 	request    *types.ContainerRequest
-	state      *types.Checkpoint
+	checkpoint *types.Checkpoint
 	runcOpts   *runc.CreateOpts
 	configPath string
 }
@@ -105,6 +105,47 @@ func (s *Worker) attemptAutoCheckpoint(ctx context.Context, request *types.Conta
 			return
 		}
 	}
+}
+
+func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int) (int, error) {
+	checkpoint := request.Checkpoint
+	if checkpoint.Status != string(types.CheckpointStatusAvailable) {
+		return -1, fmt.Errorf("checkpoint not available")
+	}
+
+	err := s.waitForSyncFile(request, outputLogger)
+	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to wait for sync file: %v", err)
+		return -1, err
+	}
+
+	outputLogger.Info("Attempting to restore container from checkpoint...")
+	f, err := os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
+	if err != nil {
+		return -1, err
+	}
+	defer f.Close()
+
+	exitCode, err := s.criuManager.RestoreCheckpoint(ctx, &RestoreOpts{
+		request:    request,
+		checkpoint: checkpoint,
+		runcOpts: &runc.CreateOpts{
+			OutputWriter: outputWriter,
+			Started:      startedChan,
+		},
+		configPath: request.ConfigPath,
+	})
+	if err != nil {
+		updateStateErr := s.updateCheckpointState(checkpoint.CheckpointId, request, types.CheckpointStatusRestoreFailed, checkpoint.ContainerIp, []uint32{})
+		if updateStateErr != nil {
+			log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to update checkpoint state: %v", updateStateErr)
+		}
+
+		return exitCode, err
+	}
+
+	outputLogger.Info("Checkpoint found and restored")
+	return exitCode, nil
 }
 
 type CreateCheckpointOpts struct {
