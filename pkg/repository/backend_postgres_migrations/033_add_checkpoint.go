@@ -13,7 +13,8 @@ func init() {
 
 func upAddCheckpoint(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.Exec(`
-		CREATE TABLE IF NOT EXISTS checkpoint (
+		DROP TABLE IF EXISTS checkpoint;
+		CREATE TABLE checkpoint (
 			id SERIAL PRIMARY KEY,
 			checkpoint_id TEXT NOT NULL UNIQUE,
 			external_id UUID DEFAULT uuid_generate_v4() UNIQUE NOT NULL,

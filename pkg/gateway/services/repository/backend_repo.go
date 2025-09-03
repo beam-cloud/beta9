@@ -6,6 +6,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"github.com/lib/pq"
 )
 
 type BackendRepositoryService struct {
@@ -56,6 +57,11 @@ func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb
 		return &pb.CreateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	exposedPorts := make(pq.Int64Array, len(req.ExposedPorts))
+	for i, port := range req.ExposedPorts {
+		exposedPorts[i] = int64(port)
+	}
+
 	checkpoint, err := s.backendRepo.CreateCheckpoint(ctx, &types.Checkpoint{
 		CheckpointId:      req.CheckpointId,
 		SourceContainerId: req.SourceContainerId,
@@ -66,7 +72,7 @@ func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb
 		StubId:            stub.Id,
 		StubType:          string(stub.Type),
 		AppId:             stub.AppId,
-		ExposedPorts:      req.ExposedPorts,
+		ExposedPorts:      exposedPorts,
 	})
 	if err != nil {
 		return &pb.CreateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
@@ -76,11 +82,16 @@ func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb
 }
 
 func (s *BackendRepositoryService) UpdateCheckpoint(ctx context.Context, req *pb.UpdateCheckpointRequest) (*pb.UpdateCheckpointResponse, error) {
+	exposedPorts := make(pq.Int64Array, len(req.ExposedPorts))
+	for i, port := range req.ExposedPorts {
+		exposedPorts[i] = int64(port)
+	}
+
 	checkpoint, err := s.backendRepo.UpdateCheckpoint(ctx, &types.Checkpoint{
 		CheckpointId: req.CheckpointId,
 		ContainerIp:  req.ContainerIp,
 		Status:       req.Status,
-		ExposedPorts: req.ExposedPorts,
+		ExposedPorts: exposedPorts,
 	})
 	if err != nil {
 		return &pb.UpdateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil

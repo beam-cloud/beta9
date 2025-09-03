@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pb "github.com/beam-cloud/beta9/proto"
+	pq "github.com/lib/pq"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -370,23 +371,28 @@ const (
 
 // @go2proto
 type Checkpoint struct {
-	Id                uint     `db:"id" json:"id" serializer:"id,source:external_id" go2proto:"ignore"`
-	CheckpointId      string   `db:"checkpoint_id" json:"checkpoint_id" serializer:"checkpoint_id"`
-	ExternalId        string   `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
-	SourceContainerId string   `db:"source_container_id" json:"source_container_id" serializer:"source_container_id"`
-	ContainerIp       string   `db:"container_ip" json:"container_ip" serializer:"container_ip"`
-	Status            string   `db:"status" json:"status" serializer:"status"`
-	RemoteKey         string   `db:"remote_key" json:"remote_key" serializer:"remote_key"`
-	WorkspaceId       uint     `db:"workspace_id" json:"workspace_id" go2proto:"ignore"` // Foreign key to Workspace
-	StubId            uint     `db:"stub_id" json:"stub_id" go2proto:"ignore"`           // Foreign key to Stub
-	StubType          string   `db:"stub_type" json:"stub_type" serializer:"stub_type"`
-	AppId             uint     `db:"app_id" json:"app_id,omitempty" go2proto:"ignore"` // Foreign key to App
-	ExposedPorts      []uint32 `db:"exposed_ports" json:"exposed_ports" serializer:"exposed_ports"`
-	CreatedAt         Time     `db:"created_at" json:"created_at" serializer:"created_at"`
-	LastRestoredAt    Time     `db:"last_restored_at" json:"last_restored_at" serializer:"last_restored_at"`
+	Id                uint          `db:"id" json:"id" serializer:"id,source:external_id" go2proto:"ignore"`
+	CheckpointId      string        `db:"checkpoint_id" json:"checkpoint_id" serializer:"checkpoint_id"`
+	ExternalId        string        `db:"external_id" json:"external_id,omitempty" serializer:"external_id"`
+	SourceContainerId string        `db:"source_container_id" json:"source_container_id" serializer:"source_container_id"`
+	ContainerIp       string        `db:"container_ip" json:"container_ip" serializer:"container_ip"`
+	Status            string        `db:"status" json:"status" serializer:"status"`
+	RemoteKey         string        `db:"remote_key" json:"remote_key" serializer:"remote_key"`
+	WorkspaceId       uint          `db:"workspace_id" json:"workspace_id" go2proto:"ignore"` // Foreign key to Workspace
+	StubId            uint          `db:"stub_id" json:"stub_id" go2proto:"ignore"`           // Foreign key to Stub
+	StubType          string        `db:"stub_type" json:"stub_type" serializer:"stub_type"`
+	AppId             uint          `db:"app_id" json:"app_id,omitempty" go2proto:"ignore"` // Foreign key to App
+	ExposedPorts      pq.Int64Array `db:"exposed_ports" json:"exposed_ports" serializer:"exposed_ports"`
+	CreatedAt         Time          `db:"created_at" json:"created_at" serializer:"created_at"`
+	LastRestoredAt    Time          `db:"last_restored_at" json:"last_restored_at" serializer:"last_restored_at"`
 }
 
 func (c *Checkpoint) ToProto() *pb.Checkpoint {
+	exposedPorts := make([]uint32, len(c.ExposedPorts))
+	for i, port := range c.ExposedPorts {
+		exposedPorts[i] = uint32(port)
+	}
+
 	return &pb.Checkpoint{
 		CheckpointId:      c.CheckpointId,
 		ExternalId:        c.ExternalId,
@@ -395,13 +401,18 @@ func (c *Checkpoint) ToProto() *pb.Checkpoint {
 		Status:            c.Status,
 		RemoteKey:         c.RemoteKey,
 		StubType:          c.StubType,
-		ExposedPorts:      c.ExposedPorts,
+		ExposedPorts:      exposedPorts,
 		CreatedAt:         timestamppb.New(c.CreatedAt.Time),
 		LastRestoredAt:    timestamppb.New(c.LastRestoredAt.Time),
 	}
 }
 
 func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
+	exposedPorts := make(pq.Int64Array, len(in.ExposedPorts))
+	for i, port := range in.ExposedPorts {
+		exposedPorts[i] = int64(port)
+	}
+
 	return &Checkpoint{
 		CheckpointId:      in.CheckpointId,
 		ExternalId:        in.ExternalId,
@@ -410,7 +421,7 @@ func NewCheckpointFromProto(in *pb.Checkpoint) *Checkpoint {
 		Status:            in.Status,
 		RemoteKey:         in.RemoteKey,
 		StubType:          in.StubType,
-		ExposedPorts:      in.ExposedPorts,
+		ExposedPorts:      exposedPorts,
 		CreatedAt:         Time{Time: in.CreatedAt.AsTime()},
 		LastRestoredAt:    Time{Time: in.LastRestoredAt.AsTime()},
 	}
