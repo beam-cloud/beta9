@@ -773,11 +773,16 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 	}
 
-	// Handle checkpoint restoration if applicable
+	// Handle restore from checkpoint if available
 	if s.IsCRIUAvailable(request.GpuCount) && request.Checkpoint != nil {
-		exitCode, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
-		if err == nil {
-			return exitCode, nil
+		exitCode, restored, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+		if restored {
+			return exitCode, err
+		}
+
+		// If this is not a deployment stub, don't fall back to running the container
+		if !restored && !request.Stub.Type.IsDeployment() {
+			return exitCode, err
 		}
 	}
 

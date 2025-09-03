@@ -31,6 +31,11 @@ func (t *Time) Scan(value interface{}) error {
 	return nil
 }
 
+// Value implements the driver.Valuer interface for SQL operations
+func (t Time) Value() (driver.Value, error) {
+	return t.Time, nil
+}
+
 // @go2proto
 type NullTime struct {
 	sql.NullTime

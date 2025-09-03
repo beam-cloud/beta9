@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,19 @@ import (
 const (
 	minNvidiaDriverVersion = 570
 )
+
+type ErrCRIURestoreFailed struct {
+	Stderr string
+}
+
+func (e *ErrCRIURestoreFailed) Error() string {
+	return fmt.Sprintf("CRIU restore failed: %s", e.Stderr)
+}
+
+func IsCRIURestoreError(err error) bool {
+	var criuErr *ErrCRIURestoreFailed
+	return errors.As(err, &criuErr)
+}
 
 type NvidiaCRIUManager struct {
 	runcHandle      runc.Runc
@@ -69,6 +83,14 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 		return -1, err
 	}
 
+	// Create a buffer to capture stderr while still forwarding to the original writer
+	var stderrBuf strings.Builder
+	var outputWriter io.Writer = &stderrBuf
+
+	if opts.runcOpts.OutputWriter != nil {
+		outputWriter = io.MultiWriter(opts.runcOpts.OutputWriter, &stderrBuf)
+	}
+
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
 			AllowOpenTCP: true,
@@ -76,22 +98,21 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 			// Logs, irmap cache, sockets for lazy server and other go to working dir
 			WorkDir:      workDir,
 			ImagePath:    imagePath,
-			OutputWriter: opts.runcOpts.OutputWriter,
+			OutputWriter: outputWriter,
 			Cgroups:      runc.Soft,
 		},
 		Started: opts.runcOpts.Started,
 	})
 
 	if err != nil {
-		// Check if this is go-runc incorrectly wrapping a successful restore
-		if strings.Contains(err.Error(), "did not terminate successfully") {
-			var exitErr *runc.ExitError
-			if errors.As(err, &exitErr) {
-				// This is a successful restore, just return the exit code
-				return exitErr.Status, nil
-			}
+		stderr := stderrBuf.String()
+
+		// Check if this is a CRIU restore failure by looking for specific error patterns in stderr
+		if strings.Contains(stderr, "criu failed") && strings.Contains(stderr, "type RESTORE") {
+			return -1, &ErrCRIURestoreFailed{Stderr: stderr}
 		}
-		return -1, err
+
+		return exitCode, err
 	}
 
 	return exitCode, nil

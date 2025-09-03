@@ -2388,33 +2388,38 @@ func (r *PostgresBackendRepository) ListCheckpoints(ctx context.Context, workspa
 }
 
 func (r *PostgresBackendRepository) UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {
-	query := `
-		UPDATE checkpoint SET 
-			checkpoint_id = COALESCE(NULLIF($1, ''), checkpoint_id),
-			source_container_id = COALESCE(NULLIF($2, ''), source_container_id),
-			container_ip = COALESCE(NULLIF($3, ''), container_ip),
-			status = COALESCE(NULLIF($4, ''), status),
-			remote_key = COALESCE(NULLIF($5, ''), remote_key),
-			stub_type = COALESCE(NULLIF($6, ''), stub_type),
-			app_id = CASE WHEN $7 = 0 THEN app_id ELSE $7 END,
-			exposed_ports = COALESCE($8, exposed_ports),
-			last_restored_at = COALESCE(NULLIF($9, '0001-01-01 00:00:00+00'::timestamptz), last_restored_at)
-		WHERE checkpoint_id = $10
-		RETURNING *;`
+	updateBuilder := squirrel.Update("checkpoint").
+		Where(squirrel.Eq{"checkpoint_id": checkpoint.CheckpointId}).
+		Suffix("RETURNING *")
+
+	// Only update fields that are provided (non-zero values)
+	if checkpoint.ContainerIp != "" {
+		updateBuilder = updateBuilder.Set("container_ip", checkpoint.ContainerIp)
+	}
+
+	if checkpoint.Status != "" {
+		updateBuilder = updateBuilder.Set("status", checkpoint.Status)
+	}
+
+	if checkpoint.RemoteKey != "" {
+		updateBuilder = updateBuilder.Set("remote_key", checkpoint.RemoteKey)
+	}
+
+	if len(checkpoint.ExposedPorts) > 0 {
+		updateBuilder = updateBuilder.Set("exposed_ports", pq.Array(checkpoint.ExposedPorts))
+	}
+
+	if !checkpoint.LastRestoredAt.Time.IsZero() {
+		updateBuilder = updateBuilder.Set("last_restored_at", checkpoint.LastRestoredAt.Time)
+	}
+
+	query, args, err := updateBuilder.PlaceholderFormat(squirrel.Dollar).ToSql()
+	if err != nil {
+		return nil, err
+	}
 
 	var updated types.Checkpoint
-	err := r.client.GetContext(ctx, &updated, query,
-		checkpoint.CheckpointId,
-		checkpoint.SourceContainerId,
-		checkpoint.ContainerIp,
-		checkpoint.Status,
-		checkpoint.RemoteKey,
-		checkpoint.StubType,
-		checkpoint.AppId,
-		pq.Array(checkpoint.ExposedPorts),
-		checkpoint.LastRestoredAt,
-		checkpoint.CheckpointId,
-	)
+	err = r.client.GetContext(ctx, &updated, query, args...)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
