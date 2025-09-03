@@ -268,7 +268,10 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		}
 	}
 
-	checkpoint := c.Checkpoint.ToProto()
+	var checkpoint *pb.Checkpoint
+	if c.Checkpoint != nil {
+		checkpoint = c.Checkpoint.ToProto()
+	}
 
 	return &pb.ContainerRequest{
 		ContainerId:       c.ContainerId,
@@ -314,6 +317,11 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		}
 	}
 
+	var checkpoint *Checkpoint
+	if in.Checkpoint != nil {
+		checkpoint = NewCheckpointFromProto(in.Checkpoint)
+	}
+
 	return &ContainerRequest{
 		ContainerId:       in.ContainerId,
 		EntryPoint:        in.EntryPoint,
@@ -336,7 +344,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
 		Ports:             in.Ports,
-		Checkpoint:        NewCheckpointFromProto(in.Checkpoint),
+		Checkpoint:        checkpoint,
 	}
 }
 
