@@ -212,31 +212,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	runcServer, err := NewRunCServer(&RunCServerOpts{
-		PodAddr:                 podAddr,
-		ContainerInstances:      containerInstances,
-		ImageClient:             imageClient,
-		ContainerRepoClient:     containerRepoClient,
-		ContainerNetworkManager: containerNetworkManager,
-	})
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
-	err = runcServer.Start()
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
-	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring, gpuType)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
-	return &Worker{
+	worker := &Worker{
 		ctx:                     ctx,
 		workerId:                workerId,
 		workerToken:             workerToken,
@@ -250,7 +226,6 @@ func NewWorker() (*Worker, error) {
 		gpuType:                 gpuType,
 		gpuCount:                uint32(gpuCount),
 		runcHandle:              runc.Runc{Debug: config.DebugMode},
-		runcServer:              runcServer,
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
@@ -269,7 +244,6 @@ func NewWorker() (*Worker, error) {
 			containerInstances: containerInstances,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
-		workerUsageMetrics:  workerMetrics,
 		containerRepoClient: containerRepoClient,
 		workerRepoClient:    workerRepoClient,
 		backendRepoClient:   backendRepoClient,
@@ -278,7 +252,37 @@ func NewWorker() (*Worker, error) {
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
 		userDataStorage:     userDataStorage,
 		checkpointStorage:   checkpointStorage,
-	}, nil
+	}
+
+	runcServer, err := NewRunCServer(&RunCServerOpts{
+		PodAddr:                 podAddr,
+		ContainerInstances:      containerInstances,
+		ImageClient:             imageClient,
+		ContainerRepoClient:     containerRepoClient,
+		ContainerNetworkManager: containerNetworkManager,
+		CreateCheckpoint:        worker.createCheckpoint,
+	})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	err = runcServer.Start()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	workerMetrics, err := NewWorkerUsageMetrics(ctx, workerId, config.Monitoring, gpuType)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	worker.workerUsageMetrics = workerMetrics
+	worker.runcServer = runcServer
+
+	return worker, nil
 }
 
 func (s *Worker) Run() error {

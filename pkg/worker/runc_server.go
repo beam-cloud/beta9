@@ -43,6 +43,7 @@ type RunCServer struct {
 	imageClient             *ImageClient
 	port                    int
 	podAddr                 string
+	createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
 }
 
 type RunCServerOpts struct {
@@ -51,6 +52,7 @@ type RunCServerOpts struct {
 	ImageClient             *ImageClient
 	ContainerRepoClient     pb.ContainerRepositoryServiceClient
 	ContainerNetworkManager *ContainerNetworkManager
+	CreateCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
 }
 
 func NewRunCServer(opts *RunCServerOpts) (*RunCServer, error) {
@@ -69,6 +71,7 @@ func NewRunCServer(opts *RunCServerOpts) (*RunCServer, error) {
 		imageClient:             opts.ImageClient,
 		containerRepoClient:     opts.ContainerRepoClient,
 		containerNetworkManager: opts.ContainerNetworkManager,
+		createCheckpoint:        opts.CreateCheckpoint,
 	}, nil
 }
 
