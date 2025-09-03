@@ -178,7 +178,7 @@ class Sandbox(Pod):
             stub_id=response.stub_id,
         )
 
-    def create_from_fs_snapshot(self, snapshot_id: str) -> "SandboxInstance":
+    def create_from_filesystem_snapshot(self, snapshot_id: str) -> "SandboxInstance":
         """
         Create a sandbox instance from a filesystem snapshot.
         This will create a new sandbox instance with any filesystem-level changes made in that original sandbox instance.

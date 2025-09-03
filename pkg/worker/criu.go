@@ -372,7 +372,7 @@ waitForReady:
 		case <-ticker.C:
 			instance, exists := s.containerInstances.Get(request.ContainerId)
 			if !exists {
-				log.Info().Str("container_id", request.ContainerId).Msg("container instance not found yet")
+				sampledLogger.Info().Str("container_id", request.ContainerId).Msg("container instance not found yet")
 				continue
 			}
 
