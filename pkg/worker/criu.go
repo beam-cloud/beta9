@@ -191,7 +191,10 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 			log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to create checkpoint state: %v", err)
 		}
 
-		opts.OutputLogger.Error("Failed to create checkpoint")
+		if opts.OutputLogger != nil {
+			opts.OutputLogger.Error("Failed to create checkpoint")
+		}
+
 		return err
 	}
 
@@ -216,8 +219,11 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 		return err
 	}
 
-	opts.OutputLogger.Info("Checkpoint created successfully")
+	if opts.OutputLogger != nil {
+		opts.OutputLogger.Info("Checkpoint created successfully")
+	}
 
+	log.Info().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msg("checkpoint created successfully")
 	return nil
 }
 
