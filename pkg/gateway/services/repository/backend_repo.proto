@@ -57,9 +57,7 @@ message CreateCheckpointResponse {
 
 message UpdateCheckpointRequest {
   string checkpoint_id = 1;
-  string container_ip = 2;
-  string status = 3;
-  repeated uint32 exposed_ports = 4;
+  string status = 2;
 }
 
 message UpdateCheckpointResponse {

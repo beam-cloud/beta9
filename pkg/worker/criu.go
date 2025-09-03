@@ -147,7 +147,7 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 
 		outputLogger.Info("Failed to restore checkpoint")
 
-		updateStateErr := s.updateCheckpointState(checkpoint.CheckpointId, request, types.CheckpointStatusRestoreFailed, checkpoint.ContainerIp, []uint32{})
+		updateStateErr := s.updateCheckpointState(checkpoint.CheckpointId, request, types.CheckpointStatusRestoreFailed)
 		if updateStateErr != nil {
 			log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to update checkpoint state: %v", updateStateErr)
 		}
@@ -343,12 +343,10 @@ func (s *Worker) createCheckpointState(checkpointId string, request *types.Conta
 	return err
 }
 
-func (s *Worker) updateCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus, containerIp string, exposedPorts []uint32) error {
+func (s *Worker) updateCheckpointState(checkpointId string, request *types.ContainerRequest, status types.CheckpointStatus) error {
 	_, err := handleGRPCResponse(s.backendRepoClient.UpdateCheckpoint(context.Background(), &pb.UpdateCheckpointRequest{
 		CheckpointId: checkpointId,
-		ContainerIp:  containerIp,
 		Status:       string(status),
-		ExposedPorts: exposedPorts,
 	}))
 
 	return err

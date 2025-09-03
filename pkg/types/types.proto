@@ -34,7 +34,7 @@ message Checkpoint {
   string status = 6;
   string remote_key = 7;
   string stub_type = 10;
-  repeated uint32 exposed_ports = 12;
+  repeated int64 exposed_ports = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp last_restored_at = 14;
 }
@@ -162,8 +162,7 @@ message MountPointConfig {
 }
 
 message NullTime {
-  google.protobuf.Timestamp time = 1;
-  bool valid = 2;
+  NullTime null_time = 1;
 }
 
 message Object {

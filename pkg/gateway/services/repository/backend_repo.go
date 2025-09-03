@@ -82,16 +82,9 @@ func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb
 }
 
 func (s *BackendRepositoryService) UpdateCheckpoint(ctx context.Context, req *pb.UpdateCheckpointRequest) (*pb.UpdateCheckpointResponse, error) {
-	exposedPorts := make(pq.Int64Array, len(req.ExposedPorts))
-	for i, port := range req.ExposedPorts {
-		exposedPorts[i] = int64(port)
-	}
-
 	checkpoint, err := s.backendRepo.UpdateCheckpoint(ctx, &types.Checkpoint{
 		CheckpointId: req.CheckpointId,
-		ContainerIp:  req.ContainerIp,
 		Status:       req.Status,
-		ExposedPorts: exposedPorts,
 	})
 	if err != nil {
 		return &pb.UpdateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil

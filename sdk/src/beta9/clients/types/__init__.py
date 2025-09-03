@@ -40,7 +40,7 @@ class Checkpoint(betterproto.Message):
     status: str = betterproto.string_field(6)
     remote_key: str = betterproto.string_field(7)
     stub_type: str = betterproto.string_field(10)
-    exposed_ports: List[int] = betterproto.uint32_field(12)
+    exposed_ports: List[int] = betterproto.int64_field(12)
     created_at: datetime = betterproto.message_field(13)
     last_restored_at: datetime = betterproto.message_field(14)
 
@@ -181,8 +181,7 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    time: datetime = betterproto.message_field(1)
-    valid: bool = betterproto.bool_field(2)
+    null_time: "NullTime" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)

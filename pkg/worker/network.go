@@ -463,8 +463,8 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 			}
 
 			log.Info().Str("container_id", opts.containerId).Msgf("checkpoint enabled, using random IP address in range 128-255: %s", ipAddr.IP.String())
-			ipv4LastOctet = int(ipAddr.IP.To4()[3])
 
+			ipv4LastOctet = int(ipAddr.IP.To4()[3])
 		}
 	}
 
