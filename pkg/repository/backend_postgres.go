@@ -2363,7 +2363,7 @@ func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkp
 		checkpoint.StubId,
 		checkpoint.StubType,
 		checkpoint.AppId,
-		checkpoint.ExposedPorts,
+		pq.Array(checkpoint.ExposedPorts),
 	)
 
 	if err != nil {
@@ -2388,11 +2388,6 @@ func (r *PostgresBackendRepository) ListCheckpoints(ctx context.Context, workspa
 }
 
 func (r *PostgresBackendRepository) UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {
-	if checkpoint.Id == 0 {
-		return nil, errors.New("checkpoint id required for update")
-	}
-
-	// Use COALESCE to preserve existing values when new values are empty/null
 	query := `
 		UPDATE checkpoint SET 
 			checkpoint_id = COALESCE(NULLIF($1, ''), checkpoint_id),
@@ -2402,9 +2397,9 @@ func (r *PostgresBackendRepository) UpdateCheckpoint(ctx context.Context, checkp
 			remote_key = COALESCE(NULLIF($5, ''), remote_key),
 			stub_type = COALESCE(NULLIF($6, ''), stub_type),
 			app_id = CASE WHEN $7 = 0 THEN app_id ELSE $7 END,
-			exposed_ports = COALESCE($8::jsonb, exposed_ports),
+			exposed_ports = COALESCE($8, exposed_ports),
 			last_restored_at = COALESCE(NULLIF($9, '0001-01-01 00:00:00+00'::timestamptz), last_restored_at)
-		WHERE id = $10
+		WHERE checkpoint_id = $10
 		RETURNING *;`
 
 	var updated types.Checkpoint
@@ -2416,14 +2411,14 @@ func (r *PostgresBackendRepository) UpdateCheckpoint(ctx context.Context, checkp
 		checkpoint.RemoteKey,
 		checkpoint.StubType,
 		checkpoint.AppId,
-		checkpoint.ExposedPorts,
+		pq.Array(checkpoint.ExposedPorts),
 		checkpoint.LastRestoredAt,
-		checkpoint.Id,
+		checkpoint.CheckpointId,
 	)
 
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return nil, &types.ErrCheckpointNotFound{CheckpointId: fmt.Sprintf("%d", checkpoint.Id)}
+			return nil, &types.ErrCheckpointNotFound{CheckpointId: checkpoint.CheckpointId}
 		}
 		return nil, err
 	}

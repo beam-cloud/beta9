@@ -283,10 +283,9 @@ func (s *Worker) createCheckpointState(checkpointId string, request *types.Conta
 		SourceContainerId: request.ContainerId,
 		ContainerIp:       containerIp,
 		Status:            string(status),
-		// RemoteKey:         request.RemoteKey,
-		StubId:       request.Stub.ExternalId,
-		StubType:     string(request.Stub.Type),
-		ExposedPorts: exposedPorts,
+		RemoteKey:         checkpointId,
+		StubId:            request.Stub.ExternalId,
+		ExposedPorts:      request.Ports,
 	}))
 
 	return err

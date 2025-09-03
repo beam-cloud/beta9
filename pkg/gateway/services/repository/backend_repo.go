@@ -51,13 +51,22 @@ func (s *BackendRepositoryService) ListCheckpoints(ctx context.Context, req *pb.
 }
 
 func (s *BackendRepositoryService) CreateCheckpoint(ctx context.Context, req *pb.CreateCheckpointRequest) (*pb.CreateCheckpointResponse, error) {
+	stub, err := s.backendRepo.GetStubByExternalId(ctx, req.StubId)
+	if err != nil {
+		return &pb.CreateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
 	checkpoint, err := s.backendRepo.CreateCheckpoint(ctx, &types.Checkpoint{
 		CheckpointId:      req.CheckpointId,
 		SourceContainerId: req.SourceContainerId,
 		ContainerIp:       req.ContainerIp,
 		Status:            req.Status,
 		RemoteKey:         req.RemoteKey,
-		StubType:          req.StubType,
+		WorkspaceId:       stub.WorkspaceId,
+		StubId:            stub.Id,
+		StubType:          string(stub.Type),
+		AppId:             stub.AppId,
+		ExposedPorts:      req.ExposedPorts,
 	})
 	if err != nil {
 		return &pb.CreateCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil

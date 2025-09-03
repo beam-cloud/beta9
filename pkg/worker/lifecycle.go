@@ -676,6 +676,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
+	if request.CheckpointEnabled {
+		spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
+	}
+
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
 	if err != nil {

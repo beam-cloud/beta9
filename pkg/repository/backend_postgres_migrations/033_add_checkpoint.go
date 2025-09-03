@@ -25,7 +25,7 @@ func upAddCheckpoint(ctx context.Context, tx *sql.Tx) error {
 			stub_id INT REFERENCES stub(id),
 			stub_type TEXT NOT NULL,
 			app_id INT REFERENCES app(id),
-			exposed_ports JSONB DEFAULT '[]'::jsonb,
+			exposed_ports INT[] DEFAULT '{}',
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			last_restored_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);

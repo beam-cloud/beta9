@@ -46,8 +46,7 @@ message CreateCheckpointRequest {
   string status = 4;
   string remote_key = 5;
   string stub_id = 6;
-  string stub_type = 7;
-  repeated uint32 exposed_ports = 8;
+  repeated uint32 exposed_ports = 7;
 }
 
 message CreateCheckpointResponse {
