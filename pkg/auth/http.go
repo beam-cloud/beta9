@@ -106,6 +106,10 @@ func WithWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context)
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 
+		if cc.AuthInfo == nil {
+			return echo.NewHTTPError(http.StatusUnauthorized)
+		}
+
 		if cc.AuthInfo.Workspace.ExternalId != workspaceId && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
@@ -121,6 +125,10 @@ func WithRestrictedWorkspaceAuth(next func(ctx echo.Context) error) func(ctx ech
 
 		cc, ok := ctx.(*HttpAuthContext)
 		if !ok {
+			return echo.NewHTTPError(http.StatusUnauthorized)
+		}
+
+		if cc.AuthInfo == nil {
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 
