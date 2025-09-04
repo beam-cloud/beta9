@@ -483,7 +483,9 @@ message ListTokensResponse {
   repeated Token tokens = 3;
 }
 
-message CreateTokenRequest {}
+message CreateTokenRequest {
+  string token_type = 1;
+}
 
 message CreateTokenResponse {
   bool ok = 1;

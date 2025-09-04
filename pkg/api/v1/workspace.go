@@ -33,9 +33,9 @@ func NewWorkspaceGroup(g *echo.Group, backendRepo repository.BackendRepository, 
 
 	g.POST("", group.CreateWorkspace)
 	g.GET("/current", auth.WithAuth(group.CurrentWorkspace))
-	g.GET("/:workspaceId/export", auth.WithWorkspaceAuth(group.ExportWorkspaceConfig))
-	g.POST("/:workspaceId/set-external-storage", auth.WithWorkspaceAuth(group.SetExternalWorkspaceStorage))
-	g.POST("/:workspaceId/create-storage", auth.WithWorkspaceAuth(group.CreateWorkspaceStorage))
+	g.GET("/:workspaceId/export", auth.WithRestrictedWorkspaceAuth(group.ExportWorkspaceConfig))
+	g.POST("/:workspaceId/set-external-storage", auth.WithRestrictedWorkspaceAuth(group.SetExternalWorkspaceStorage))
+	g.POST("/:workspaceId/create-storage", auth.WithRestrictedWorkspaceAuth(group.CreateWorkspaceStorage))
 
 	return group
 }

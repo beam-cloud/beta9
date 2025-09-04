@@ -106,15 +106,26 @@ def list_tokens(
       # Create a new token. 
       {cli_name} token create
 
+      # Create a restricted token.
+      {cli_name} token create --token-type workspace_restricted
+
       \b
     """,
+)
+@click.option(
+    "--token-type",
+    type=click.Choice(["workspace", "workspace_restricted"]),
+    default="workspace",
+    show_default=True,
+    help="Type of token to create.",
 )
 @extraclick.pass_service_client
 def create_token(
     service: ServiceClient,
+    token_type: str,
 ):
     res: CreateTokenResponse
-    res = service.gateway.create_token(CreateTokenRequest())
+    res = service.gateway.create_token(CreateTokenRequest(token_type=token_type))
 
     if not res.ok:
         terminal.error(res.err_msg)

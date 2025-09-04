@@ -564,7 +564,7 @@ class ListTokensResponse(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class CreateTokenRequest(betterproto.Message):
-    pass
+    token_type: str = betterproto.string_field(1)
 
 
 @dataclass(eq=False, repr=False)

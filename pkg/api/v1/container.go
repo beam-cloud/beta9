@@ -37,7 +37,7 @@ func NewContainerGroup(
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListContainersByWorkspaceId))
 	g.GET("/:workspaceId/:containerId", auth.WithWorkspaceAuth(group.GetContainer))
 	g.POST("/:workspaceId/:containerId/stop", auth.WithWorkspaceAuth(group.StopContainer))
-	g.POST("/:workspaceId/stop-all", auth.WithWorkspaceAuth(group.StopAllWorkspaceContainers))
+	g.POST("/:workspaceId/stop-all", auth.WithRestrictedWorkspaceAuth(group.StopAllWorkspaceContainers))
 
 	return group
 }
