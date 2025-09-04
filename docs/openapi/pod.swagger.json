@@ -762,6 +762,10 @@
       "properties": {
         "containerPath": {
           "type": "string"
+        },
+        "mode": {
+          "type": "integer",
+          "format": "int32"
         }
       }
     },
