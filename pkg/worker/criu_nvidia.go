@@ -57,8 +57,8 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUMan
 	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, gpuCnt: gpuCnt, available: available}, nil
 }
 
-func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
-	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, request.StubId)
+func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, checkpointId string, request *types.ContainerRequest) (string, error) {
+	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, checkpointId)
 	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
 		AllowOpenTCP: true,
 		LeaveRunning: true,
@@ -76,7 +76,7 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
-	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.request.StubId)
+	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.checkpoint.CheckpointId)
 	workDir := filepath.Join("/tmp", imagePath)
 	err := c.setupRestoreWorkDir(workDir)
 	if err != nil {

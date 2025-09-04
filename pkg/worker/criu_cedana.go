@@ -140,9 +140,9 @@ func (c *CedanaCRIUManager) Run(ctx context.Context, request *types.ContainerReq
 	return exitCode, nil
 }
 
-func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
+func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, checkpointId string, request *types.ContainerRequest) (string, error) {
 	args := &cedanadaemon.DumpReq{
-		Name: request.ContainerId,
+		Name: checkpointId,
 		Type: "job",
 		Criu: &criu.CriuOpts{
 			TcpSkipInFlight: proto.Bool(true),
@@ -150,7 +150,7 @@ func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 			LeaveRunning:    proto.Bool(true),
 			LinkRemap:       proto.Bool(true),
 		},
-		Details: &cedanadaemon.Details{JID: &request.ContainerId},
+		Details: &cedanadaemon.Details{JID: &checkpointId},
 	}
 
 	resp, profilingData, err := c.client.Dump(ctx, args)

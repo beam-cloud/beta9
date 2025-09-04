@@ -170,9 +170,10 @@ def attach_to_container(_: ServiceClient, container_id: str):
 )
 @extraclick.pass_service_client
 def checkpoint_container(service: ServiceClient, container_id: str):
-    res = service.gateway.checkpoint_container(
-        CheckpointContainerRequest(container_id=container_id)
-    )
+    with terminal.progress("Creating checkpoint..."):
+        res = service.gateway.checkpoint_container(
+            CheckpointContainerRequest(container_id=container_id)
+        )
 
     if res.ok:
         terminal.success(f"Checkpoint created for container: {container_id}")

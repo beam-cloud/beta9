@@ -36,7 +36,7 @@ type RestoreOpts struct {
 type CRIUManager interface {
 	Available() bool
 	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error)
-	CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error)
+	CreateCheckpoint(ctx context.Context, checkpointId string, request *types.ContainerRequest) (string, error)
 	RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error)
 }
 
@@ -184,7 +184,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	// Proceed to create the checkpoint
-	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, opts.Request)
+	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, opts.CheckpointId, opts.Request)
 	if err != nil {
 		err := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp)
 		if err != nil {
