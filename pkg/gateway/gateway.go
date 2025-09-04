@@ -257,8 +257,8 @@ func (g *Gateway) initGrpc() error {
 	return nil
 }
 
-// initGrpcGateway exposes gRPC services as HTTP endpoints.
-func (g *Gateway) initGrpcGateway(grpcAddr string) error {
+// initGrpcProxy exposes gRPC services as HTTP endpoints.
+func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	ctx, cancel := context.WithCancel(g.ctx)
 	g.httpServer.RegisterOnShutdown(func() {
 		cancel()
@@ -529,7 +529,7 @@ func (g *Gateway) Start() error {
 		log.Fatal().Err(err).Msg("failed to initialize http server")
 	}
 
-	err = g.initGrpcGateway(fmt.Sprintf(":%d", g.Config.GatewayService.GRPC.Port))
+	err = g.initGrpcProxy(fmt.Sprintf(":%d", g.Config.GatewayService.GRPC.Port))
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to initialize grpc gateway")
 	}
