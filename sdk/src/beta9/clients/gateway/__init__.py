@@ -154,6 +154,18 @@ class StopContainerResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class CheckpointContainerRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class CheckpointContainerResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    checkpoint_id: str = betterproto.string_field(2)
+    error_msg: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
 class ContainerStreamMessage(betterproto.Message):
     attach_request: "AttachToContainerRequest" = betterproto.message_field(
         1, group="payload"
@@ -729,6 +741,15 @@ class GatewayServiceStub(SyncServiceStub):
             ListContainersRequest,
             ListContainersResponse,
         )(list_containers_request)
+
+    def checkpoint_container(
+        self, checkpoint_container_request: "CheckpointContainerRequest"
+    ) -> "CheckpointContainerResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/CheckpointContainer",
+            CheckpointContainerRequest,
+            CheckpointContainerResponse,
+        )(checkpoint_container_request)
 
     def stop_container(
         self, stop_container_request: "StopContainerRequest"

@@ -28,6 +28,7 @@ protoc -I ./pkg/types -I ./pkg/gateway/ --python_betterproto_beta9_out=./sdk/src
 # Repository services
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/types -I ./pkg/gateway/services/repository/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/repository/container_repo.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/types -I ./pkg/gateway/services/repository/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/repository/worker_repo.proto
+protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/types -I ./pkg/gateway/services/repository/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/repository/backend_repo.proto
 
 # Generate code for abstractions
 protoc -I $PROTOC_INCLUDE_PATH -I ./pkg/abstractions/image/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/abstractions/image/image.proto

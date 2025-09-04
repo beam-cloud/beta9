@@ -18,6 +18,8 @@ service GatewayService {
 
   // Containers
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {}
+  rpc CheckpointContainer(CheckpointContainerRequest)
+      returns (CheckpointContainerResponse) {}
   rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {}
   rpc AttachToContainer(stream ContainerStreamMessage)
       returns (stream AttachToContainerResponse) {}
@@ -159,6 +161,14 @@ message StopContainerRequest { string container_id = 1; }
 message StopContainerResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message CheckpointContainerRequest { string container_id = 1; }
+
+message CheckpointContainerResponse {
+  bool ok = 1;
+  string checkpoint_id = 2;
+  string error_msg = 3;
 }
 
 message ContainerStreamMessage {

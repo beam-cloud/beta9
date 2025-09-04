@@ -2341,3 +2341,248 @@ func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId str
 
 	return clipVersion, nil
 }
+
+func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {
+	query := `
+		INSERT INTO checkpoint (
+			checkpoint_id, source_container_id, container_ip, status, remote_key,
+			workspace_id, stub_id, stub_type, app_id, exposed_ports
+		) VALUES (
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+		)
+		RETURNING checkpoint_id, external_id, source_container_id, container_ip, status, remote_key,
+		          workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at;`
+
+	exposedPortsInt32 := make([]int32, len(checkpoint.ExposedPorts))
+	for i, port := range checkpoint.ExposedPorts {
+		exposedPortsInt32[i] = int32(port)
+	}
+
+	var created types.Checkpoint
+	var createdExposedPortsInt32 []int32
+	err := r.client.QueryRowxContext(ctx, query,
+		checkpoint.CheckpointId,
+		checkpoint.SourceContainerId,
+		checkpoint.ContainerIp,
+		checkpoint.Status,
+		checkpoint.RemoteKey,
+		checkpoint.WorkspaceId,
+		checkpoint.StubId,
+		checkpoint.StubType,
+		checkpoint.AppId,
+		pq.Array(exposedPortsInt32),
+	).Scan(
+		&created.CheckpointId,
+		&created.ExternalId,
+		&created.SourceContainerId,
+		&created.ContainerIp,
+		&created.Status,
+		&created.RemoteKey,
+		&created.WorkspaceId,
+		&created.StubId,
+		&created.StubType,
+		&created.AppId,
+		pq.Array(&createdExposedPortsInt32),
+		&created.CreatedAt,
+		&created.LastRestoredAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	created.ExposedPorts = make([]uint32, len(createdExposedPortsInt32))
+	for i, port := range createdExposedPortsInt32 {
+		created.ExposedPorts[i] = uint32(port)
+	}
+	return &created, nil
+}
+
+func (r *PostgresBackendRepository) ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error) {
+	query := `
+		SELECT c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
+		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at
+		FROM checkpoint c
+		INNER JOIN workspace w ON c.workspace_id = w.id
+		WHERE w.external_id = $1 
+		ORDER BY c.created_at DESC;`
+
+	rows, err := r.client.QueryxContext(ctx, query, workspaceExternalId)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var checkpoints []types.Checkpoint
+	for rows.Next() {
+		var checkpoint types.Checkpoint
+		var exposedPortsInt32 []int32
+		err := rows.Scan(
+			&checkpoint.CheckpointId,
+			&checkpoint.ExternalId,
+			&checkpoint.SourceContainerId,
+			&checkpoint.ContainerIp,
+			&checkpoint.Status,
+			&checkpoint.RemoteKey,
+			&checkpoint.WorkspaceId,
+			&checkpoint.StubId,
+			&checkpoint.StubType,
+			&checkpoint.AppId,
+			pq.Array(&exposedPortsInt32),
+			&checkpoint.CreatedAt,
+			&checkpoint.LastRestoredAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+		checkpoint.ExposedPorts = make([]uint32, len(exposedPortsInt32))
+		for i, port := range exposedPortsInt32 {
+			checkpoint.ExposedPorts[i] = uint32(port)
+		}
+		checkpoints = append(checkpoints, checkpoint)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return checkpoints, nil
+}
+
+func (r *PostgresBackendRepository) UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {
+	updateBuilder := squirrel.Update("checkpoint").
+		Where(squirrel.Eq{"checkpoint_id": checkpoint.CheckpointId}).
+		Suffix("RETURNING checkpoint_id, external_id, source_container_id, container_ip, status, remote_key, workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at")
+
+	if checkpoint.ContainerIp != "" {
+		updateBuilder = updateBuilder.Set("container_ip", checkpoint.ContainerIp)
+	}
+	if checkpoint.Status != "" {
+		updateBuilder = updateBuilder.Set("status", checkpoint.Status)
+	}
+	if checkpoint.RemoteKey != "" {
+		updateBuilder = updateBuilder.Set("remote_key", checkpoint.RemoteKey)
+	}
+	if len(checkpoint.ExposedPorts) > 0 {
+		exposedPortsInt32 := make([]int32, len(checkpoint.ExposedPorts))
+		for i, port := range checkpoint.ExposedPorts {
+			exposedPortsInt32[i] = int32(port)
+		}
+		updateBuilder = updateBuilder.Set("exposed_ports", pq.Array(exposedPortsInt32))
+	}
+	if !checkpoint.LastRestoredAt.Time.IsZero() {
+		updateBuilder = updateBuilder.Set("last_restored_at", checkpoint.LastRestoredAt.Time)
+	}
+
+	query, args, err := updateBuilder.PlaceholderFormat(squirrel.Dollar).ToSql()
+	if err != nil {
+		return nil, err
+	}
+
+	var updated types.Checkpoint
+	var exposedPortsInt32 []int32
+	err = r.client.QueryRowxContext(ctx, query, args...).Scan(
+		&updated.CheckpointId,
+		&updated.ExternalId,
+		&updated.SourceContainerId,
+		&updated.ContainerIp,
+		&updated.Status,
+		&updated.RemoteKey,
+		&updated.WorkspaceId,
+		&updated.StubId,
+		&updated.StubType,
+		&updated.AppId,
+		pq.Array(&exposedPortsInt32),
+		&updated.CreatedAt,
+		&updated.LastRestoredAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, &types.ErrCheckpointNotFound{CheckpointId: checkpoint.CheckpointId}
+		}
+		return nil, err
+	}
+	updated.ExposedPorts = make([]uint32, len(exposedPortsInt32))
+	for i, port := range exposedPortsInt32 {
+		updated.ExposedPorts[i] = uint32(port)
+	}
+	return &updated, nil
+}
+
+func (r *PostgresBackendRepository) GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error) {
+	query := `
+		SELECT checkpoint_id, external_id, source_container_id, container_ip, status, remote_key,
+		       workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at
+		FROM checkpoint 
+		WHERE checkpoint_id = $1 
+		LIMIT 1;`
+
+	var checkpoint types.Checkpoint
+	var exposedPortsInt32 []int32
+	err := r.client.QueryRowxContext(ctx, query, checkpointId).Scan(
+		&checkpoint.CheckpointId,
+		&checkpoint.ExternalId,
+		&checkpoint.SourceContainerId,
+		&checkpoint.ContainerIp,
+		&checkpoint.Status,
+		&checkpoint.RemoteKey,
+		&checkpoint.WorkspaceId,
+		&checkpoint.StubId,
+		&checkpoint.StubType,
+		&checkpoint.AppId,
+		pq.Array(&exposedPortsInt32),
+		&checkpoint.CreatedAt,
+		&checkpoint.LastRestoredAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, &types.ErrCheckpointNotFound{CheckpointId: checkpointId}
+		}
+		return nil, err
+	}
+	checkpoint.ExposedPorts = make([]uint32, len(exposedPortsInt32))
+	for i, port := range exposedPortsInt32 {
+		checkpoint.ExposedPorts[i] = uint32(port)
+	}
+	return &checkpoint, nil
+}
+
+func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error) {
+	query := `
+		SELECT c.checkpoint_id, c.external_id, c.source_container_id, c.container_ip, c.status, c.remote_key,
+		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at
+		FROM checkpoint c
+		INNER JOIN stub s ON c.stub_id = s.id
+		WHERE s.external_id = $1 
+		ORDER BY c.created_at DESC
+		LIMIT 1;`
+
+	var checkpoint types.Checkpoint
+	var exposedPortsInt32 []int32
+	err := r.client.QueryRowxContext(ctx, query, stubExternalId).Scan(
+		&checkpoint.CheckpointId,
+		&checkpoint.ExternalId,
+		&checkpoint.SourceContainerId,
+		&checkpoint.ContainerIp,
+		&checkpoint.Status,
+		&checkpoint.RemoteKey,
+		&checkpoint.WorkspaceId,
+		&checkpoint.StubId,
+		&checkpoint.StubType,
+		&checkpoint.AppId,
+		pq.Array(&exposedPortsInt32),
+		&checkpoint.CreatedAt,
+		&checkpoint.LastRestoredAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, &types.ErrCheckpointNotFound{CheckpointId: fmt.Sprintf("stub:%s", stubExternalId)}
+		}
+		return nil, err
+	}
+
+	checkpoint.ExposedPorts = make([]uint32, len(exposedPortsInt32))
+	for i, port := range exposedPortsInt32 {
+		checkpoint.ExposedPorts[i] = uint32(port)
+	}
+
+	return &checkpoint, nil
+}

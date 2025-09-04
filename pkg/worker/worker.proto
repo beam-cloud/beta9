@@ -13,6 +13,7 @@ service RunCService {
   rpc RunCExec(RunCExecRequest) returns (RunCExecResponse) {}
   rpc RunCStreamLogs(RunCStreamLogsRequest) returns (stream RunCLogEntry) {}
   rpc RunCArchive(RunCArchiveRequest) returns (stream RunCArchiveResponse) {}
+  rpc RunCCheckpoint(RunCCheckpointRequest) returns (RunCCheckpointResponse) {}
   rpc RunCSyncWorkspace(gateway.SyncContainerWorkspaceRequest)
       returns (gateway.SyncContainerWorkspaceResponse) {}
   rpc RunCSandboxExec(RunCSandboxExecRequest)
@@ -77,6 +78,14 @@ message RunCArchiveResponse {
   bool success = 2;
   int32 progress = 3;
   string error_msg = 4;
+}
+
+message RunCCheckpointRequest { string container_id = 1; }
+
+message RunCCheckpointResponse {
+  bool ok = 1;
+  string checkpoint_id = 2;
+  string error_msg = 3;
 }
 
 message RunCSandboxExecRequest {

@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+import "types.proto";
+
+service BackendRepositoryService {
+  rpc GetCheckpointById(GetCheckpointByIdRequest)
+      returns (GetCheckpointByIdResponse);
+  rpc GetLatestCheckpointByStubId(GetLatestCheckpointByStubIdRequest)
+      returns (GetLatestCheckpointByStubIdResponse);
+  rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
+  rpc CreateCheckpoint(CreateCheckpointRequest)
+      returns (CreateCheckpointResponse);
+  rpc UpdateCheckpoint(UpdateCheckpointRequest)
+      returns (UpdateCheckpointResponse);
+}
+
+message GetCheckpointByIdRequest { string checkpoint_id = 1; }
+
+message GetCheckpointByIdResponse {
+  bool ok = 1;
+  types.Checkpoint checkpoint = 2;
+  string error_msg = 3;
+}
+
+message GetLatestCheckpointByStubIdRequest { string stub_id = 1; }
+
+message GetLatestCheckpointByStubIdResponse {
+  bool ok = 1;
+  types.Checkpoint checkpoint = 2;
+  string error_msg = 3;
+}
+
+message ListCheckpointsRequest { string workspace_id = 1; }
+
+message ListCheckpointsResponse {
+  bool ok = 1;
+  repeated types.Checkpoint checkpoints = 2;
+  string error_msg = 3;
+}
+
+message CreateCheckpointRequest {
+  string checkpoint_id = 1;
+  string source_container_id = 2;
+  string container_ip = 3;
+  string status = 4;
+  string remote_key = 5;
+  string stub_id = 6;
+  repeated uint32 exposed_ports = 7;
+}
+
+message CreateCheckpointResponse {
+  bool ok = 1;
+  types.Checkpoint checkpoint = 2;
+  string error_msg = 3;
+}
+
+message UpdateCheckpointRequest {
+  string checkpoint_id = 1;
+  string status = 2;
+}
+
+message UpdateCheckpointResponse {
+  bool ok = 1;
+  types.Checkpoint checkpoint = 2;
+  string error_msg = 3;
+}

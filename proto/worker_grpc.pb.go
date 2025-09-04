@@ -24,6 +24,7 @@ const (
 	RunCService_RunCExec_FullMethodName                   = "/runc.RunCService/RunCExec"
 	RunCService_RunCStreamLogs_FullMethodName             = "/runc.RunCService/RunCStreamLogs"
 	RunCService_RunCArchive_FullMethodName                = "/runc.RunCService/RunCArchive"
+	RunCService_RunCCheckpoint_FullMethodName             = "/runc.RunCService/RunCCheckpoint"
 	RunCService_RunCSyncWorkspace_FullMethodName          = "/runc.RunCService/RunCSyncWorkspace"
 	RunCService_RunCSandboxExec_FullMethodName            = "/runc.RunCService/RunCSandboxExec"
 	RunCService_RunCSandboxStatus_FullMethodName          = "/runc.RunCService/RunCSandboxStatus"
@@ -51,6 +52,7 @@ type RunCServiceClient interface {
 	RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error)
 	RunCStreamLogs(ctx context.Context, in *RunCStreamLogsRequest, opts ...grpc.CallOption) (RunCService_RunCStreamLogsClient, error)
 	RunCArchive(ctx context.Context, in *RunCArchiveRequest, opts ...grpc.CallOption) (RunCService_RunCArchiveClient, error)
+	RunCCheckpoint(ctx context.Context, in *RunCCheckpointRequest, opts ...grpc.CallOption) (*RunCCheckpointResponse, error)
 	RunCSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error)
 	RunCSandboxExec(ctx context.Context, in *RunCSandboxExecRequest, opts ...grpc.CallOption) (*RunCSandboxExecResponse, error)
 	RunCSandboxStatus(ctx context.Context, in *RunCSandboxStatusRequest, opts ...grpc.CallOption) (*RunCSandboxStatusResponse, error)
@@ -166,6 +168,15 @@ func (x *runCServiceRunCArchiveClient) Recv() (*RunCArchiveResponse, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+func (c *runCServiceClient) RunCCheckpoint(ctx context.Context, in *RunCCheckpointRequest, opts ...grpc.CallOption) (*RunCCheckpointResponse, error) {
+	out := new(RunCCheckpointResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCCheckpoint_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *runCServiceClient) RunCSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error) {
@@ -321,6 +332,7 @@ type RunCServiceServer interface {
 	RunCExec(context.Context, *RunCExecRequest) (*RunCExecResponse, error)
 	RunCStreamLogs(*RunCStreamLogsRequest, RunCService_RunCStreamLogsServer) error
 	RunCArchive(*RunCArchiveRequest, RunCService_RunCArchiveServer) error
+	RunCCheckpoint(context.Context, *RunCCheckpointRequest) (*RunCCheckpointResponse, error)
 	RunCSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error)
 	RunCSandboxExec(context.Context, *RunCSandboxExecRequest) (*RunCSandboxExecResponse, error)
 	RunCSandboxStatus(context.Context, *RunCSandboxStatusRequest) (*RunCSandboxStatusResponse, error)
@@ -358,6 +370,9 @@ func (UnimplementedRunCServiceServer) RunCStreamLogs(*RunCStreamLogsRequest, Run
 }
 func (UnimplementedRunCServiceServer) RunCArchive(*RunCArchiveRequest, RunCService_RunCArchiveServer) error {
 	return status.Errorf(codes.Unimplemented, "method RunCArchive not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCCheckpoint(context.Context, *RunCCheckpointRequest) (*RunCCheckpointResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCCheckpoint not implemented")
 }
 func (UnimplementedRunCServiceServer) RunCSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCSyncWorkspace not implemented")
@@ -514,6 +529,24 @@ type runCServiceRunCArchiveServer struct {
 
 func (x *runCServiceRunCArchiveServer) Send(m *RunCArchiveResponse) error {
 	return x.ServerStream.SendMsg(m)
+}
+
+func _RunCService_RunCCheckpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCCheckpointRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCCheckpoint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCCheckpoint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCCheckpoint(ctx, req.(*RunCCheckpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _RunCService_RunCSyncWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -822,6 +855,10 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunCExec",
 			Handler:    _RunCService_RunCExec_Handler,
+		},
+		{
+			MethodName: "RunCCheckpoint",
+			Handler:    _RunCService_RunCCheckpoint_Handler,
 		},
 		{
 			MethodName: "RunCSyncWorkspace",

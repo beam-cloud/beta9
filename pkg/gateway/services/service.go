@@ -2,6 +2,7 @@ package gatewayservices
 
 import (
 	"context"
+	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
@@ -27,6 +28,7 @@ type GatewayService struct {
 	usageMetricsRepo repository.UsageMetricsRepository
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
+	clientCache      *sync.Map
 	pb.UnimplementedGatewayServiceServer
 }
 
@@ -68,5 +70,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		usageMetricsRepo: opts.UsageMetricsRepo,
 		tailscale:        opts.Tailscale,
 		keyEventManager:  keyEventManager,
+		clientCache:      &sync.Map{},
 	}, nil
 }

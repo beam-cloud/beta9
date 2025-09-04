@@ -42,8 +42,8 @@ service PodService {
       returns (PodSandboxConnectResponse) {}
   rpc SandboxUpdateTTL(PodSandboxUpdateTTLRequest)
       returns (PodSandboxUpdateTTLResponse) {}
-  rpc SandboxSnapshot(PodSandboxSnapshotRequest)
-      returns (PodSandboxSnapshotResponse) {}
+  rpc SandboxSnapshotFilesystem(PodSandboxSnapshotFilesystemRequest)
+      returns (PodSandboxSnapshotFilesystemResponse) {}
 }
 
 message CreatePodRequest {
@@ -263,12 +263,12 @@ message PodSandboxUpdateTTLResponse {
   string error_msg = 2;
 }
 
-message PodSandboxSnapshotRequest {
+message PodSandboxSnapshotFilesystemRequest {
   string stub_id = 1;
   string container_id = 2;
 }
 
-message PodSandboxSnapshotResponse {
+message PodSandboxSnapshotFilesystemResponse {
   bool ok = 1;
   string error_msg = 2;
   string snapshot_id = 3;

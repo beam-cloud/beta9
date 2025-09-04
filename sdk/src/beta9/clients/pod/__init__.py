@@ -288,13 +288,13 @@ class PodSandboxUpdateTtlResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxSnapshotRequest(betterproto.Message):
+class PodSandboxSnapshotFilesystemRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxSnapshotResponse(betterproto.Message):
+class PodSandboxSnapshotFilesystemResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
     snapshot_id: str = betterproto.string_field(3)
@@ -470,11 +470,12 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxUpdateTtlResponse,
         )(pod_sandbox_update_ttl_request)
 
-    def sandbox_snapshot(
-        self, pod_sandbox_snapshot_request: "PodSandboxSnapshotRequest"
-    ) -> "PodSandboxSnapshotResponse":
+    def sandbox_snapshot_filesystem(
+        self,
+        pod_sandbox_snapshot_filesystem_request: "PodSandboxSnapshotFilesystemRequest",
+    ) -> "PodSandboxSnapshotFilesystemResponse":
         return self._unary_unary(
-            "/pod.PodService/SandboxSnapshot",
-            PodSandboxSnapshotRequest,
-            PodSandboxSnapshotResponse,
-        )(pod_sandbox_snapshot_request)
+            "/pod.PodService/SandboxSnapshotFilesystem",
+            PodSandboxSnapshotFilesystemRequest,
+            PodSandboxSnapshotFilesystemResponse,
+        )(pod_sandbox_snapshot_filesystem_request)
