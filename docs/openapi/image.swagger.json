@@ -1,0 +1,294 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "image.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "ImageService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/images/build": {
+      "post": {
+        "operationId": "ImageService_BuildImage",
+        "responses": {
+          "200": {
+            "description": "A successful response.(streaming responses)",
+            "schema": {
+              "type": "object",
+              "properties": {
+                "result": {
+                  "$ref": "#/definitions/imageBuildImageResponse"
+                },
+                "error": {
+                  "$ref": "#/definitions/rpcStatus"
+                }
+              },
+              "title": "Stream result of imageBuildImageResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/imageBuildImageRequest"
+            }
+          }
+        ],
+        "tags": [
+          "ImageService"
+        ]
+      }
+    },
+    "/images/verify-build": {
+      "post": {
+        "operationId": "ImageService_VerifyImageBuild",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/imageVerifyImageBuildResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/imageVerifyImageBuildRequest"
+            }
+          }
+        ],
+        "tags": [
+          "ImageService"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "imageBuildImageRequest": {
+      "type": "object",
+      "properties": {
+        "pythonVersion": {
+          "type": "string",
+          "title": "These parameters are used for a \"beta9\" managed image"
+        },
+        "pythonPackages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "existingImageUri": {
+          "type": "string",
+          "description": "URI for an existing image in the format",
+          "title": "These parameters are used for an existing image"
+        },
+        "existingImageCreds": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "buildSteps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/imageBuildStep"
+          }
+        },
+        "envVars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dockerfile": {
+          "type": "string"
+        },
+        "buildCtxObject": {
+          "type": "string"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "ignorePython": {
+          "type": "boolean"
+        }
+      }
+    },
+    "imageBuildImageResponse": {
+      "type": "object",
+      "properties": {
+        "imageId": {
+          "type": "string"
+        },
+        "msg": {
+          "type": "string"
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "pythonVersion": {
+          "type": "string"
+        },
+        "warning": {
+          "type": "boolean"
+        }
+      }
+    },
+    "imageBuildStep": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        }
+      }
+    },
+    "imageVerifyImageBuildRequest": {
+      "type": "object",
+      "properties": {
+        "pythonVersion": {
+          "type": "string"
+        },
+        "pythonPackages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "forceRebuild": {
+          "type": "boolean"
+        },
+        "existingImageUri": {
+          "type": "string"
+        },
+        "buildSteps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/imageBuildStep"
+          }
+        },
+        "envVars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dockerfile": {
+          "type": "string"
+        },
+        "buildCtxObject": {
+          "type": "string"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "ignorePython": {
+          "type": "boolean"
+        },
+        "snapshotId": {
+          "type": "string"
+        }
+      }
+    },
+    "imageVerifyImageBuildResponse": {
+      "type": "object",
+      "properties": {
+        "imageId": {
+          "type": "string"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "exists": {
+          "type": "boolean"
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    }
+  }
+}

@@ -5,45 +5,137 @@ option go_package = "github.com/beam-cloud/beta9/proto";
 package pod;
 
 import "types.proto";
+import "google/api/annotations.proto";
 
 service PodService {
-  rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {}
-  rpc SandboxExec(PodSandboxExecRequest) returns (PodSandboxExecResponse) {}
+  rpc CreatePod(CreatePodRequest) returns (CreatePodResponse) {
+    option (google.api.http) = {
+      post: "/pods"
+      body: "*"
+    };
+  }
+  rpc SandboxExec(PodSandboxExecRequest) returns (PodSandboxExecResponse) {
+    option (google.api.http) = {
+      post: "/pods/{container_id}/exec"
+      body: "*"
+    };
+  }
   rpc SandboxStatus(PodSandboxStatusRequest)
-      returns (PodSandboxStatusResponse) {}
+      returns (PodSandboxStatusResponse) {
+        option (google.api.http) = {
+          get: "/pods/{container_id}/status"
+        };
+      }
   rpc SandboxStdout(PodSandboxStdoutRequest)
-      returns (PodSandboxStdoutResponse) {}
+      returns (PodSandboxStdoutResponse) {
+    option (google.api.http) = {
+      get: "/pods/{container_id}/stdout"
+    };
+  }
   rpc SandboxStderr(PodSandboxStderrRequest)
-      returns (PodSandboxStderrResponse) {}
-  rpc SandboxKill(PodSandboxKillRequest) returns (PodSandboxKillResponse) {}
+      returns (PodSandboxStderrResponse) {
+    option (google.api.http) = {
+      get: "/pods/{container_id}/stderr"
+    };
+  }
+  rpc SandboxKill(PodSandboxKillRequest) returns (PodSandboxKillResponse) {
+    option (google.api.http) = {
+      post: "/pods/{container_id}/kill"
+      body: "*"
+    };
+  }
   rpc SandboxListProcesses(PodSandboxListProcessesRequest)
-      returns (PodSandboxListProcessesResponse) {}
+      returns (PodSandboxListProcessesResponse) {
+        option (google.api.http) = {
+          get: "/pods/{container_id}/processes"
+        };
+      }
   rpc SandboxUploadFile(PodSandboxUploadFileRequest)
-      returns (PodSandboxUploadFileResponse) {}
+      returns (PodSandboxUploadFileResponse) {
+    option (google.api.http) = {
+      post: "/pods/{container_id}/files/upload"
+      body: "*"
+    };
+  }
   rpc SandboxDownloadFile(PodSandboxDownloadFileRequest)
-      returns (PodSandboxDownloadFileResponse) {}
+      returns (PodSandboxDownloadFileResponse) {
+    option (google.api.http) = {
+      get: "/pods/{container_id}/files/download/{container_path=**}"
+    };
+  }
   rpc SandboxStatFile(PodSandboxStatFileRequest)
-      returns (PodSandboxStatFileResponse) {}
+      returns (PodSandboxStatFileResponse) {
+    option (google.api.http) = {
+      get: "/pods/{container_id}/files/stat"
+    };
+  }
   rpc SandboxListFiles(PodSandboxListFilesRequest)
-      returns (PodSandboxListFilesResponse) {}
+      returns (PodSandboxListFilesResponse) {
+    option (google.api.http) = {
+      get: "/pods/{container_id}/files"
+    };
+  }
   rpc SandboxDeleteFile(PodSandboxDeleteFileRequest)
-      returns (PodSandboxDeleteFileResponse) {}
+      returns (PodSandboxDeleteFileResponse) {
+    option (google.api.http) = {
+      delete: "/pods/{container_id}/files/{container_path=**}"
+    };
+  }
   rpc SandboxCreateDirectory(PodSandboxCreateDirectoryRequest)
-      returns (PodSandboxCreateDirectoryResponse) {}
+      returns (PodSandboxCreateDirectoryResponse) {
+    option (google.api.http) = {
+      post: "/pods/{container_id}/directories"
+      body: "*"
+    };
+  }
   rpc SandboxDeleteDirectory(PodSandboxDeleteDirectoryRequest)
-      returns (PodSandboxDeleteDirectoryResponse) {}
+      returns (PodSandboxDeleteDirectoryResponse) {
+    option (google.api.http) = {
+      delete: "/pods/{container_id}/directories/{container_path=**}"
+    };
+  }
   rpc SandboxExposePort(PodSandboxExposePortRequest)
-      returns (PodSandboxExposePortResponse) {}
+      returns (PodSandboxExposePortResponse) {
+    option (google.api.http) = {
+      post: "/pods/{container_id}/ports/expose"
+      body: "*"
+    };
+  }
   rpc SandboxReplaceInFiles(PodSandboxReplaceInFilesRequest)
-      returns (PodSandboxReplaceInFilesResponse) {}
+      returns (PodSandboxReplaceInFilesResponse) {
+    option (google.api.http) = {
+      post: "/pods/{container_id}/files/replace"
+      body: "*"
+    };
+  }
   rpc SandboxFindInFiles(PodSandboxFindInFilesRequest)
-      returns (PodSandboxFindInFilesResponse) {}
+      returns (PodSandboxFindInFilesResponse) {
+    option (google.api.http) = {
+      post: "/pods/{container_id}/files/find"
+      body: "*"
+    };
+  }
   rpc SandboxConnect(PodSandboxConnectRequest)
-      returns (PodSandboxConnectResponse) {}
+      returns (PodSandboxConnectResponse) {
+    option (google.api.http) = {
+      post: "/pods/{container_id}/connect"
+      body: "*"
+    };
+  }
   rpc SandboxUpdateTTL(PodSandboxUpdateTTLRequest)
-      returns (PodSandboxUpdateTTLResponse) {}
+      returns (PodSandboxUpdateTTLResponse) {
+    option (google.api.http) = {
+      patch: "/pods/{container_id}/ttl"
+      body: "*"
+    };
+  }
   rpc SandboxSnapshot(PodSandboxSnapshotRequest)
-      returns (PodSandboxSnapshotResponse) {}
+      returns (PodSandboxSnapshotResponse) {
+    option (google.api.http) = {
+      post: "/pods/{container_id}/snapshot"
+      body: "*"
+    };
+  }
 }
 
 message CreatePodRequest {
