@@ -42,6 +42,36 @@ func copyDirectory(src, dst string) error {
 	})
 }
 
+func copyDirectoryExclude(src, dst string, excludePaths []string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+
+		for _, excludePath := range excludePaths {
+			if relPath == excludePath {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
+		dstPath := filepath.Join(dst, relPath)
+
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, info.Mode())
+		}
+
+		return copyFile(path, dstPath)
+	})
+}
+
 func copyFile(src, dst string) error {
 	cmd := exec.Command("cp", src, dst)
 	cmd.Stderr = os.Stderr

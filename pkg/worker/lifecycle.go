@@ -777,6 +777,15 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	// Handle restore from checkpoint if available
 	if s.IsCRIUAvailable(request.GpuCount) && request.Checkpoint != nil {
+		if request.Checkpoint != nil {
+			checkpointPath := s.checkpointPath(request.Checkpoint.CheckpointId)
+
+			err := copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath))
+			if err != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to copy checkpoint directory: %v", err)
+			}
+		}
+
 		exitCode, restored, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 		if restored {
 			return exitCode, err
@@ -796,6 +805,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if err != nil {
 			log.Warn().Str("container_id", request.ContainerId).Msgf("failed to add checkpoint env var to spec: %v", err)
 		}
+
 	}
 
 	bundlePath := filepath.Dir(request.ConfigPath)

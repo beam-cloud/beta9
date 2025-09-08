@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ const (
 	gpuCntEnvKey              = "GPU_COUNT"
 	defaultCheckpointDeadline = 10 * time.Minute
 	readyLogRate              = 10
+	checkpointFsDir           = "filesystem"
 )
 
 type RestoreOpts struct {
@@ -125,8 +127,15 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	}
 
 	outputLogger.Info("Attempting to restore container from checkpoint...")
-	f, err := os.Create(filepath.Join(checkpointSignalDir(request.ContainerId), checkpointCompleteFileName))
+	signalDir := checkpointSignalDir(request.ContainerId)
+	if err := os.MkdirAll(signalDir, 0755); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to create checkpoint signal dir: %v", err)
+		return -1, false, err
+	}
+
+	f, err := os.Create(filepath.Join(signalDir, checkpointCompleteFileName))
 	if err != nil {
+		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to create checkpoint complete file: %v", err)
 		return -1, false, err
 	}
 	defer f.Close()
@@ -169,6 +178,11 @@ type CreateCheckpointOpts struct {
 // Waits for the container to be ready to checkpoint at the desired point in execution, ie.
 // after all processes within a container have reached a checkpointable state
 func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpts) error {
+	instance, exists := s.containerInstances.Get(opts.Request.ContainerId)
+	if !exists {
+		return fmt.Errorf("container instance not found")
+	}
+
 	if opts.CheckpointPIDChan != nil {
 		<-opts.CheckpointPIDChan
 	}
@@ -195,6 +209,16 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 			opts.OutputLogger.Error("Failed to create checkpoint")
 		}
 
+		return err
+	}
+
+	parentDir := filepath.Dir(instance.Overlay.TopLayerPath())
+	upperDir := path.Join(parentDir, "upper")
+
+	os.MkdirAll(checkpointFsDir, 0755)
+	err = copyDirectoryExclude(upperDir, path.Join(checkpointPath, checkpointFsDir), []string{"config.json", "outputs", "snapshot"})
+	if err != nil {
+		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to copy upper directory: %v", err)
 		return err
 	}
 
@@ -263,12 +287,16 @@ func (s *Worker) createSyncFile(request *types.ContainerRequest, checkpointId st
 	return nil
 }
 
+func (s *Worker) checkpointPath(checkpointId string) string {
+	return filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s", checkpointId))
+}
+
 func (s *Worker) waitForSyncFile(request *types.ContainerRequest, outputLogger *slog.Logger) error {
 	timeout := syncFileTimeout
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	syncFilePath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", request.StubId, syncFileExtension))
+	syncFilePath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", request.Checkpoint.CheckpointId, syncFileExtension))
 
 	_, err := os.Stat(syncFilePath)
 	if err == nil {

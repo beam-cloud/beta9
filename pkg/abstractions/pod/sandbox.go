@@ -555,3 +555,28 @@ func (s *GenericPodService) SandboxSnapshotFilesystem(ctx context.Context, in *p
 		SnapshotId: snapshotId,
 	}, nil
 }
+
+func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.PodSandboxSnapshotMemoryRequest) (*pb.PodSandboxSnapshotMemoryResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.Checkpoint(in.ContainerId)
+	if err != nil {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: err.Error(),
+		}, nil
+	}
+
+	return &pb.PodSandboxSnapshotMemoryResponse{
+		Ok:           true,
+		CheckpointId: resp.CheckpointId,
+	}, nil
+}

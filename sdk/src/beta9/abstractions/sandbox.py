@@ -33,6 +33,8 @@ from ..clients.pod import (
     PodSandboxReplaceInFilesRequest,
     PodSandboxSnapshotFilesystemRequest,
     PodSandboxSnapshotFilesystemResponse,
+    PodSandboxSnapshotMemoryRequest,
+    PodSandboxSnapshotMemoryResponse,
     PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
@@ -235,6 +237,59 @@ class Sandbox(Pod):
             error_msg=create_response.error_msg,
         )
 
+    def create_from_memory_snapshot(self, snapshot_id: str) -> "SandboxInstance":
+        """
+        Create a sandbox instance from a filesystem snapshot.
+        This will create a new sandbox instance with any filesystem-level changes made in that original sandbox instance.
+        However, it will not restore any running processes or state present in the original sandbox instance.
+
+        Parameters:
+            snapshot_id (str): The ID of the snapshot to create the sandbox from.
+
+        Returns:
+            SandboxInstance: A new sandbox instance ready for use.
+
+        Example:
+            ```python
+            # Create a sandbox instance from a me   mory snapshot
+            instance = sandbox.create_from_memory_snapshot("snapshot-123")
+            print(f"Sandbox created with ID: {instance.sandbox_id()}")
+            ```
+        """
+
+        terminal.header(f"Creating sandbox from memory snapshot: {snapshot_id}")
+
+        create_response: CreatePodResponse = self.stub.create_pod(
+            CreatePodRequest(
+                checkpoint_id=snapshot_id,
+            )
+        )
+
+        if not create_response.ok:
+            return SandboxInstance(
+                container_id="",
+                ok=False,
+                error_msg=create_response.error_msg,
+            )
+
+        self.stub_id = create_response.stub_id
+
+        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
+
+        if self.keep_warm_seconds < 0:
+            terminal.header(
+                "This sandbox has no timeout, it will run until it is shut down manually."
+            )
+        else:
+            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
+
+        return SandboxInstance(
+            stub_id=self.stub_id,
+            container_id=create_response.container_id,
+            ok=create_response.ok,
+            error_msg=create_response.error_msg,
+        )
+
     def create(self) -> "SandboxInstance":
         """
         Create a new sandbox instance.
@@ -411,6 +466,31 @@ class SandboxInstance(BaseAbstraction):
             raise SandboxProcessError(res.error_msg)
 
         return res.snapshot_id
+
+    def snapshot_memory(self) -> str:
+        """
+        Create a snapshot of the sandbox memory.
+
+        Returns:
+            str: The checkpoint ID.
+
+        Example:
+            ```python
+            # Create a snapshot of the sandbox memory contents
+            checkpoint_id = instance.snapshot_memory()
+            print(f"Checkpoint created with ID: {checkpoint_id}")
+            ```
+        """
+        terminal.header(f"Creating a snapshot of sandbox memory: {self.container_id}")
+
+        res: "PodSandboxSnapshotMemoryResponse" = self.stub.sandbox_snapshot_memory(
+            PodSandboxSnapshotMemoryRequest(stub_id=self.stub_id, container_id=self.container_id)
+        )
+
+        if not res.ok:
+            raise SandboxProcessError(res.error_msg)
+
+        return res.checkpoint_id
 
     def sandbox_id(self) -> str:
         """

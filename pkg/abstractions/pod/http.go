@@ -71,6 +71,7 @@ func (g *podGroup) PodRun(ctx echo.Context) error {
 		cc.AuthInfo,
 		stub,
 		nil,
+		nil,
 	)
 
 	return err

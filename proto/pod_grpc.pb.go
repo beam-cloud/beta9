@@ -39,6 +39,7 @@ const (
 	PodService_SandboxConnect_FullMethodName            = "/pod.PodService/SandboxConnect"
 	PodService_SandboxUpdateTTL_FullMethodName          = "/pod.PodService/SandboxUpdateTTL"
 	PodService_SandboxSnapshotFilesystem_FullMethodName = "/pod.PodService/SandboxSnapshotFilesystem"
+	PodService_SandboxSnapshotMemory_FullMethodName     = "/pod.PodService/SandboxSnapshotMemory"
 )
 
 // PodServiceClient is the client API for PodService service.
@@ -65,6 +66,7 @@ type PodServiceClient interface {
 	SandboxConnect(ctx context.Context, in *PodSandboxConnectRequest, opts ...grpc.CallOption) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(ctx context.Context, in *PodSandboxUpdateTTLRequest, opts ...grpc.CallOption) (*PodSandboxUpdateTTLResponse, error)
 	SandboxSnapshotFilesystem(ctx context.Context, in *PodSandboxSnapshotFilesystemRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotFilesystemResponse, error)
+	SandboxSnapshotMemory(ctx context.Context, in *PodSandboxSnapshotMemoryRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotMemoryResponse, error)
 }
 
 type podServiceClient struct {
@@ -255,6 +257,15 @@ func (c *podServiceClient) SandboxSnapshotFilesystem(ctx context.Context, in *Po
 	return out, nil
 }
 
+func (c *podServiceClient) SandboxSnapshotMemory(ctx context.Context, in *PodSandboxSnapshotMemoryRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotMemoryResponse, error) {
+	out := new(PodSandboxSnapshotMemoryResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxSnapshotMemory_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // PodServiceServer is the server API for PodService service.
 // All implementations must embed UnimplementedPodServiceServer
 // for forward compatibility
@@ -279,6 +290,7 @@ type PodServiceServer interface {
 	SandboxConnect(context.Context, *PodSandboxConnectRequest) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(context.Context, *PodSandboxUpdateTTLRequest) (*PodSandboxUpdateTTLResponse, error)
 	SandboxSnapshotFilesystem(context.Context, *PodSandboxSnapshotFilesystemRequest) (*PodSandboxSnapshotFilesystemResponse, error)
+	SandboxSnapshotMemory(context.Context, *PodSandboxSnapshotMemoryRequest) (*PodSandboxSnapshotMemoryResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
 
@@ -345,6 +357,9 @@ func (UnimplementedPodServiceServer) SandboxUpdateTTL(context.Context, *PodSandb
 }
 func (UnimplementedPodServiceServer) SandboxSnapshotFilesystem(context.Context, *PodSandboxSnapshotFilesystemRequest) (*PodSandboxSnapshotFilesystemResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxSnapshotFilesystem not implemented")
+}
+func (UnimplementedPodServiceServer) SandboxSnapshotMemory(context.Context, *PodSandboxSnapshotMemoryRequest) (*PodSandboxSnapshotMemoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxSnapshotMemory not implemented")
 }
 func (UnimplementedPodServiceServer) mustEmbedUnimplementedPodServiceServer() {}
 
@@ -719,6 +734,24 @@ func _PodService_SandboxSnapshotFilesystem_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _PodService_SandboxSnapshotMemory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxSnapshotMemoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PodServiceServer).SandboxSnapshotMemory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: PodService_SandboxSnapshotMemory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PodServiceServer).SandboxSnapshotMemory(ctx, req.(*PodSandboxSnapshotMemoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // PodService_ServiceDesc is the grpc.ServiceDesc for PodService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -805,6 +838,10 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SandboxSnapshotFilesystem",
 			Handler:    _PodService_SandboxSnapshotFilesystem_Handler,
+		},
+		{
+			MethodName: "SandboxSnapshotMemory",
+			Handler:    _PodService_SandboxSnapshotMemory_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

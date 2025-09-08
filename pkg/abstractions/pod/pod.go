@@ -250,7 +250,7 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 	return instance, nil
 }
 
-func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, snapshotId *string) (string, error) {
+func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, snapshotId *string, checkpoint *types.Checkpoint) (string, error) {
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return "", err
@@ -333,6 +333,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		EntryPoint:        stubConfig.EntryPoint,
 		Ports:             ports,
 		CheckpointEnabled: checkpointEnabled,
+		Checkpoint:        checkpoint,
 	})
 	if err != nil {
 		return "", err
@@ -348,15 +349,36 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 
 func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodRequest) (*pb.CreatePodResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	var err error = nil
+	var checkpoint *types.Checkpoint = nil
+	var stub *types.StubWithRelated = nil
 
-	stub, err := s.backendRepo.GetStubByExternalId(ctx, in.StubId)
-	if err != nil {
-		return &pb.CreatePodResponse{
-			Ok: false,
-		}, nil
+	if in.CheckpointId != nil {
+		checkpoint, err = s.backendRepo.GetCheckpointById(ctx, *in.CheckpointId)
+		if err != nil {
+			return &pb.CreatePodResponse{
+				Ok: false,
+			}, nil
+		}
+
+		stub, err = s.backendRepo.GetStubById(ctx, checkpoint.StubId)
+		if err != nil {
+			return &pb.CreatePodResponse{
+				Ok: false,
+			}, nil
+		}
 	}
 
-	containerId, err := s.run(ctx, authInfo, stub, in.SnapshotId)
+	if stub == nil {
+		stub, err = s.backendRepo.GetStubByExternalId(ctx, in.StubId)
+		if err != nil {
+			return &pb.CreatePodResponse{
+				Ok: false,
+			}, nil
+		}
+	}
+
+	containerId, err := s.run(ctx, authInfo, stub, in.SnapshotId, checkpoint)
 	if err != nil {
 		return &pb.CreatePodResponse{
 			Ok: false,
@@ -366,6 +388,7 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 	return &pb.CreatePodResponse{
 		Ok:          true,
 		ContainerId: containerId,
+		StubId:      stub.ExternalId,
 	}, nil
 }
 
