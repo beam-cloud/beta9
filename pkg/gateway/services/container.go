@@ -107,8 +107,15 @@ func (gws GatewayService) CheckpointContainer(ctx context.Context, in *pb.Checkp
 		}, nil
 	}
 
-	resp, err := client.Checkpoint(in.ContainerId)
-	if err != nil || !resp.Ok {
+	resp, err := client.Checkpoint(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.CheckpointContainerResponse{
+			Ok:       false,
+			ErrorMsg: fmt.Sprintf("Unable to checkpoint container: %v", err),
+		}, nil
+	}
+
+	if !resp.Ok {
 		return &pb.CheckpointContainerResponse{
 			Ok:       false,
 			ErrorMsg: fmt.Sprintf("Unable to checkpoint container: %s", resp.ErrorMsg),
