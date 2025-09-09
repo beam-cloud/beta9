@@ -421,11 +421,11 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 	var ipAddr *netlink.Addr = nil
 	var ipv4LastOctet int = -1
 
-	// For checkpointed containers, we need to use the IP address that was used for the checkpoint
+	// For checkpointed or sandbox containers, we need to use the IP address that was used for the checkpoint
 	// We try to do this in the upper bound of the subnet range
 	// If we have an existing checkpoint, we try to allocate that IP. If it's not available, we can't
 	// launch the container on this worker right now
-	if opts.request.Checkpoint != nil || opts.request.CheckpointEnabled {
+	if opts.request.Checkpoint != nil || opts.request.CheckpointEnabled || opts.request.Stub.Type.Kind() == types.StubTypeSandbox {
 		var ip string
 
 		if opts.request.Checkpoint != nil {
