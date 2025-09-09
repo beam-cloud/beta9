@@ -21,6 +21,8 @@ from ..clients.pod import (
     PodSandboxConnectRequest,
     PodSandboxConnectResponse,
     PodSandboxCreateDirectoryRequest,
+    PodSandboxCreateImageFromFilesystemRequest,
+    PodSandboxCreateImageFromFilesystemResponse,
     PodSandboxDeleteDirectoryRequest,
     PodSandboxDeleteFileRequest,
     PodSandboxDownloadFileRequest,
@@ -31,8 +33,6 @@ from ..clients.pod import (
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
     PodSandboxReplaceInFilesRequest,
-    PodSandboxSnapshotFilesystemRequest,
-    PodSandboxSnapshotFilesystemResponse,
     PodSandboxSnapshotMemoryRequest,
     PodSandboxSnapshotMemoryResponse,
     PodSandboxStatFileRequest,
@@ -399,9 +399,11 @@ class SandboxInstance(BaseAbstraction):
         """
         terminal.header(f"Creating an image from sandbox filesystem: {self.container_id}")
 
-        res: "PodSandboxSnapshotFilesystemResponse" = self.stub.sandbox_snapshot_filesystem(
-            PodSandboxSnapshotFilesystemRequest(
-                stub_id=self.stub_id, container_id=self.container_id
+        res: "PodSandboxCreateImageFromFilesystemResponse" = (
+            self.stub.sandbox_create_image_from_filesystem(
+                PodSandboxCreateImageFromFilesystemRequest(
+                    stub_id=self.stub_id, container_id=self.container_id
+                )
             )
         )
 
