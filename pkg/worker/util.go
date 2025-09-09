@@ -28,9 +28,16 @@ func copyDirectory(src, dst string, excludePaths []string) error {
 			return err
 		}
 
+		// Compute the relative path from src
 		relPath, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
+		}
+
+		// When src is like "/snapshot", relPath == "." means this is the source folder itself.
+		// So we skip it to ensure we copy only its contents.
+		if relPath == "." {
+			return nil
 		}
 
 		for _, excludePath := range excludePaths {
