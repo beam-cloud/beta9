@@ -525,7 +525,7 @@ func (s *GenericPodService) SandboxCreateImageFromFilesystem(ctx context.Context
 		}, nil
 	}
 
-	imageId := fmt.Sprintf("im-%s-%d", in.StubId, time.Now().Unix())
+	imageId := fmt.Sprintf("%s-%d", in.StubId, time.Now().Unix())
 	progressChan := make(chan common.OutputMsg, 1000)
 
 	go func() {

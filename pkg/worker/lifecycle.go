@@ -780,7 +780,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if request.Checkpoint != nil {
 			checkpointPath := s.checkpointPath(request.Checkpoint.CheckpointId)
 
-			err := copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath))
+			err := copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath), []string{})
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Msgf("failed to copy checkpoint directory: %v", err)
 			}

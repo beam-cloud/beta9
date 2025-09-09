@@ -245,8 +245,15 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
 	}
 
+	// If it's not a build request, we need to use the initial_config.json from the base image bundle
+	// Otherwise, we pull in the modified config vars from the running container
+	initialConfigPath := filepath.Join(instance.BundlePath, specBaseName)
+	if !instance.Request.IsBuildRequest() {
+		initialConfigPath = filepath.Join(instance.BundlePath, initialSpecBaseName)
+	}
+
 	// Copy initial config file from the base image bundle
-	err = copyFile(filepath.Join(instance.BundlePath, specBaseName), filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName))
+	err = copyFile(initialConfigPath, filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName))
 	if err != nil {
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
 	}
