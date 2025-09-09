@@ -287,8 +287,8 @@ func generateProgressBar(progress int, total int) string {
 	return fmt.Sprintf("%s\r%s %d%%\n", up, progressBar, (progress*100)/total)
 }
 
-func (c *RunCClient) Checkpoint(containerId string) (*pb.RunCCheckpointResponse, error) {
-	resp, err := c.client.RunCCheckpoint(context.TODO(), &pb.RunCCheckpointRequest{ContainerId: containerId})
+func (c *RunCClient) Checkpoint(ctx context.Context, containerId string) (*pb.RunCCheckpointResponse, error) {
+	resp, err := c.client.RunCCheckpoint(ctx, &pb.RunCCheckpointRequest{ContainerId: containerId})
 	if err != nil {
 		return resp, err
 	}
