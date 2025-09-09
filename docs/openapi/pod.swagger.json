@@ -565,44 +565,6 @@
         ]
       }
     },
-    "/pods/{containerId}/snapshot": {
-      "post": {
-        "operationId": "PodService_SandboxSnapshot",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/podPodSandboxSnapshotResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "containerId",
-            "in": "path",
-            "required": true,
-            "type": "string"
-          },
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/PodServiceSandboxSnapshotBody"
-            }
-          }
-        ],
-        "tags": [
-          "PodService"
-        ]
-      }
-    },
     "/pods/{containerId}/status": {
       "get": {
         "operationId": "PodService_SandboxStatus",
@@ -713,44 +675,6 @@
           "PodService"
         ]
       }
-    },
-    "/pods/{containerId}/ttl": {
-      "patch": {
-        "operationId": "PodService_SandboxUpdateTTL",
-        "responses": {
-          "200": {
-            "description": "A successful response.",
-            "schema": {
-              "$ref": "#/definitions/podPodSandboxUpdateTTLResponse"
-            }
-          },
-          "default": {
-            "description": "An unexpected error response.",
-            "schema": {
-              "$ref": "#/definitions/rpcStatus"
-            }
-          }
-        },
-        "parameters": [
-          {
-            "name": "containerId",
-            "in": "path",
-            "required": true,
-            "type": "string"
-          },
-          {
-            "name": "body",
-            "in": "body",
-            "required": true,
-            "schema": {
-              "$ref": "#/definitions/PodServiceSandboxUpdateTTLBody"
-            }
-          }
-        ],
-        "tags": [
-          "PodService"
-        ]
-      }
     }
   },
   "definitions": {
@@ -832,23 +756,6 @@
         }
       }
     },
-    "PodServiceSandboxSnapshotBody": {
-      "type": "object",
-      "properties": {
-        "stubId": {
-          "type": "string"
-        }
-      }
-    },
-    "PodServiceSandboxUpdateTTLBody": {
-      "type": "object",
-      "properties": {
-        "ttl": {
-          "type": "integer",
-          "format": "int32"
-        }
-      }
-    },
     "PodServiceSandboxUploadFileBody": {
       "type": "object",
       "properties": {
@@ -871,7 +778,10 @@
         "stubId": {
           "type": "string"
         },
-        "snapshotId": {
+        "imageId": {
+          "type": "string"
+        },
+        "checkpointId": {
           "type": "string"
         }
       }
@@ -886,6 +796,9 @@
           "type": "string"
         },
         "errorMsg": {
+          "type": "string"
+        },
+        "stubId": {
           "type": "string"
         }
       }
@@ -911,6 +824,20 @@
           "type": "boolean"
         },
         "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "podPodSandboxCreateImageFromFilesystemResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "imageId": {
           "type": "string"
         }
       }
@@ -1090,7 +1017,7 @@
         }
       }
     },
-    "podPodSandboxSnapshotResponse": {
+    "podPodSandboxSnapshotMemoryResponse": {
       "type": "object",
       "properties": {
         "ok": {
@@ -1099,7 +1026,7 @@
         "errorMsg": {
           "type": "string"
         },
-        "snapshotId": {
+        "checkpointId": {
           "type": "string"
         }
       }

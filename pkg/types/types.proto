@@ -26,6 +26,19 @@ message BuildOptions {
   repeated string build_secrets = 5;
 }
 
+message Checkpoint {
+  string checkpoint_id = 2;
+  string external_id = 3;
+  string source_container_id = 4;
+  string container_ip = 5;
+  string status = 6;
+  string remote_key = 7;
+  string stub_type = 10;
+  repeated uint32 exposed_ports = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp last_restored_at = 14;
+}
+
 message CheckpointState {
   string stub_id = 1;
   string container_id = 2;
@@ -37,11 +50,11 @@ message CheckpointState {
 message ConcurrencyLimit {
   uint32 id = 1;
   string external_id = 2;
-  uint32 gpu_limit = 3;
-  uint32 cpu_millicore_limit = 4;
-  google.protobuf.Timestamp created_at = 5;
-  google.protobuf.Timestamp updated_at = 6;
-  uint32 workspace_id = 7;
+  uint32 workspace_id = 3;
+  uint32 gpu_limit = 4;
+  uint32 cpu_millicore_limit = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
 }
 
 message Container {
@@ -80,7 +93,8 @@ message ContainerRequest {
   repeated uint32 ports = 21;
   double cost_per_ms = 22;
   string app_id = 23;
-  string container_ip = 24;
+  Checkpoint checkpoint = 24;
+  string config_path = 25;
 }
 
 message ContainerState {
@@ -148,8 +162,7 @@ message MountPointConfig {
 }
 
 message NullTime {
-  google.protobuf.Timestamp time = 1;
-  bool valid = 2;
+  NullTime null_time = 1;
 }
 
 message Object {

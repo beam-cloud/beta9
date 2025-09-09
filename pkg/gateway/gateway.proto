@@ -11,39 +11,42 @@ service GatewayService {
   // Auth
   rpc Authorize(AuthorizeRequest) returns (AuthorizeResponse) {
     option (google.api.http) = {
-      post: "/auth/authorize"
+      post : "/auth/authorize"
     };
   }
   rpc SignPayload(SignPayloadRequest) returns (SignPayloadResponse) {
     option (google.api.http) = {
-      post: "/auth/sign"
-      body: "*"
+      post : "/auth/sign"
+      body : "*"
     };
   }
 
   // Objects
   rpc HeadObject(HeadObjectRequest) returns (HeadObjectResponse) {
     option (google.api.http) = {
-      get: "/objects/{hash}"
+      get : "/objects/{hash}"
     };
   }
   rpc CreateObject(CreateObjectRequest) returns (CreateObjectResponse) {
     option (google.api.http) = {
-      post: "/objects"
-      body: "*"
+      post : "/objects"
+      body : "*"
     };
   }
   rpc PutObjectStream(stream PutObjectRequest) returns (PutObjectResponse) {}
 
   // Containers
+  rpc CheckpointContainer(CheckpointContainerRequest)
+      returns (CheckpointContainerResponse) {}
+
   rpc ListContainers(ListContainersRequest) returns (ListContainersResponse) {
     option (google.api.http) = {
-      get: "/containers"
+      get : "/containers"
     };
   }
   rpc StopContainer(StopContainerRequest) returns (StopContainerResponse) {
     option (google.api.http) = {
-      post: "/containers/{container_id}/stop"
+      post : "/containers/{container_id}/stop"
     };
   }
   rpc AttachToContainer(stream ContainerStreamMessage)
@@ -52,142 +55,146 @@ service GatewayService {
   // Tasks
   rpc StartTask(StartTaskRequest) returns (StartTaskResponse) {
     option (google.api.http) = {
-      post: "/tasks/start"
-      body: "*"
+      post : "/tasks/start"
+      body : "*"
     };
   }
   rpc EndTask(EndTaskRequest) returns (EndTaskResponse) {
     option (google.api.http) = {
-      post: "/tasks/end"
-      body: "*"
+      post : "/tasks/end"
+      body : "*"
     };
   }
   rpc StopTasks(StopTasksRequest) returns (StopTasksResponse) {
     option (google.api.http) = {
-      post: "/tasks/stop"
-      body: "*"
+      post : "/tasks/stop"
+      body : "*"
     };
   }
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse) {
     option (google.api.http) = {
-      get: "/tasks"
+      get : "/tasks"
     };
   }
 
   // Stubs
-  rpc GetOrCreateStub(GetOrCreateStubRequest) returns (GetOrCreateStubResponse) {
+  rpc GetOrCreateStub(GetOrCreateStubRequest)
+      returns (GetOrCreateStubResponse) {
     option (google.api.http) = {
-      post: "/stubs"
-      body: "*"
+      post : "/stubs"
+      body : "*"
     };
   }
   rpc DeployStub(DeployStubRequest) returns (DeployStubResponse) {
     option (google.api.http) = {
-      post: "/stubs/deploy"
-      body: "*"
+      post : "/stubs/deploy"
+      body : "*"
     };
   }
   rpc GetURL(GetURLRequest) returns (GetURLResponse) {
     option (google.api.http) = {
-      get: "/stubs/{stub_id}/url"
+      get : "/stubs/{stub_id}/url"
     };
   }
 
   // Deployments
-  rpc ListDeployments(ListDeploymentsRequest) returns (ListDeploymentsResponse) {
+  rpc ListDeployments(ListDeploymentsRequest)
+      returns (ListDeploymentsResponse) {
     option (google.api.http) = {
-      get: "/deployments"
+      get : "/deployments"
     };
   }
   rpc StopDeployment(StopDeploymentRequest) returns (StopDeploymentResponse) {
     option (google.api.http) = {
-      post: "/deployments/{id}/stop"
+      post : "/deployments/{id}/stop"
     };
   }
-  rpc StartDeployment(StartDeploymentRequest) returns (StartDeploymentResponse) {
+  rpc StartDeployment(StartDeploymentRequest)
+      returns (StartDeploymentResponse) {
     option (google.api.http) = {
-      post: "/deployments/{id}/start"
+      post : "/deployments/{id}/start"
     };
   }
-  rpc ScaleDeployment(ScaleDeploymentRequest) returns (ScaleDeploymentResponse) {
+  rpc ScaleDeployment(ScaleDeploymentRequest)
+      returns (ScaleDeploymentResponse) {
     option (google.api.http) = {
-      post: "/deployments/{id}/scale"
-      body: "*"
+      post : "/deployments/{id}/scale"
+      body : "*"
     };
   }
   rpc DeleteDeployment(DeleteDeploymentRequest)
       returns (DeleteDeploymentResponse) {
     option (google.api.http) = {
-      delete: "/deployments/{id}"
+      delete : "/deployments/{id}"
     };
   }
 
   // Pools
   rpc ListPools(ListPoolsRequest) returns (ListPoolsResponse) {
     option (google.api.http) = {
-      get: "/pools"
+      get : "/pools"
     };
   }
 
   // Machines
   rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse) {
     option (google.api.http) = {
-      get: "/machines"
+      get : "/machines"
     };
   }
   rpc CreateMachine(CreateMachineRequest) returns (CreateMachineResponse) {
     option (google.api.http) = {
-      post: "/machines"
-      body: "*"
+      post : "/machines"
+      body : "*"
     };
   }
   rpc DeleteMachine(DeleteMachineRequest) returns (DeleteMachineResponse) {
     option (google.api.http) = {
-      delete: "/machines/{machine_id}"
+      delete : "/machines/{machine_id}"
     };
   }
 
   // Tokens
   rpc ListTokens(ListTokensRequest) returns (ListTokensResponse) {
     option (google.api.http) = {
-      get: "/tokens"
+      get : "/tokens"
     };
   }
   rpc CreateToken(CreateTokenRequest) returns (CreateTokenResponse) {
     option (google.api.http) = {
-      post: "/tokens"
+      post : "/tokens"
     };
   }
   rpc ToggleToken(ToggleTokenRequest) returns (ToggleTokenResponse) {
     option (google.api.http) = {
-      post: "/tokens/{token_id}/toggle"
+      post : "/tokens/{token_id}/toggle"
     };
   }
   rpc DeleteToken(DeleteTokenRequest) returns (DeleteTokenResponse) {
     option (google.api.http) = {
-      delete: "/tokens/{token_id}"
+      delete : "/tokens/{token_id}"
     };
   }
 
   // Workers
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {
     option (google.api.http) = {
-      get: "/workers"
+      get : "/workers"
     };
   }
   rpc CordonWorker(CordonWorkerRequest) returns (CordonWorkerResponse) {
     option (google.api.http) = {
-      post: "/workers/{worker_id}/cordon"
+      post : "/workers/{worker_id}/cordon"
     };
   }
   rpc UncordonWorker(UncordonWorkerRequest) returns (UncordonWorkerResponse) {
     option (google.api.http) = {
-      post: "/workers/{worker_id}/uncordon"
+      post : "/workers/{worker_id}/uncordon"
     };
   }
   rpc DrainWorker(DrainWorkerRequest) returns (DrainWorkerResponse) {
     option (google.api.http) = {
-      post: "/workers/{worker_id}/drain"
+      post : "/workers/{worker_id}/drain"
     };
   }
 
@@ -195,7 +202,7 @@ service GatewayService {
   rpc ExportWorkspaceConfig(ExportWorkspaceConfigRequest)
       returns (ExportWorkspaceConfigResponse) {
     option (google.api.http) = {
-      get: "/workspace/config"
+      get : "/workspace/config"
     };
   }
 }
@@ -293,6 +300,14 @@ message StopContainerRequest { string container_id = 1; }
 message StopContainerResponse {
   bool ok = 1;
   string error_msg = 2;
+}
+
+message CheckpointContainerRequest { string container_id = 1; }
+
+message CheckpointContainerResponse {
+  bool ok = 1;
+  string checkpoint_id = 2;
+  string error_msg = 3;
 }
 
 message ContainerStreamMessage {

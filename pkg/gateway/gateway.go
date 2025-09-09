@@ -288,6 +288,10 @@ func (g *Gateway) registerRepositoryServices() error {
 
 	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
 	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
+
+	br := repositoryservices.NewBackendRepositoryService(g.ctx, g.BackendRepo)
+	pb.RegisterBackendRepositoryServiceServer(g.grpcServer, br)
+
 	return nil
 }
 

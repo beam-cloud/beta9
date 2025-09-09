@@ -228,6 +228,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	request.Ports = append(request.Ports, uint32(types.WorkerShellPort))
 	portsToExpose++
 
+	// Only expose checkpoint exposed ports if they are available
+	if request.Checkpoint != nil {
+		request.Ports = request.Checkpoint.ExposedPorts
+		portsToExpose = len(request.Ports)
+	}
+
 	bindPorts := make([]int, 0, portsToExpose)
 	for i := 0; i < portsToExpose; i++ {
 		bindPort, err := getRandomFreePort()
@@ -494,8 +500,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Mounts = append(spec.Mounts, resolvMount)
 
-	// Add back tmpfs pod mounts from initial spec if they exist
-	if request.Stub.Type.Kind() == types.StubTypePod {
+	// Add back tmpfs pod/sandbox mounts from initial spec if they exist
+	if request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox {
 		for _, m := range options.InitialSpec.Mounts {
 			if m.Source == "none" && m.Type == "tmpfs" {
 				spec.Mounts = append(spec.Mounts, m)
@@ -602,11 +608,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			notFoundErr := &types.ErrContainerStateNotFound{}
 
 			if notFoundErr.From(err) {
-				log.Info().Str("container_id", containerId).Msg("container state not found, returning")
+				log.Warn().Str("container_id", containerId).Msg("container state not found, returning")
 				return
 			}
 		} else if resp.State.Status == string(types.ContainerStatusStopping) {
-			log.Info().Str("container_id", containerId).Msg("container should be stopping, force killing")
+			log.Warn().Str("container_id", containerId).Msg("container should be stopping, force killing")
 			s.stopContainer(containerId, true)
 			return
 		}
@@ -676,10 +682,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
-	if request.CheckpointEnabled {
-		spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount)))
-	}
-
 	// Write runc config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
 	if err != nil {
@@ -692,6 +694,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		log.Error().Str("container_id", containerId).Msgf("failed to write runc config: %v", err)
 		return
 	}
+	request.ConfigPath = configPath
 
 	outputWriter := containerInstance.OutputWriter
 
@@ -729,7 +732,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
 	}()
 
-	exitCode, containerId, _ = s.runContainer(ctx, request, configPath, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -765,17 +768,47 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, configPath string, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, string, error) {
-	// Handle checkpoint creation & restore if applicable
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, error) {
+	// Handle automatic checkpoint creation if applicable
+	// (This occurs when checkpoint_enabled is true and an existing checkpoint is not available)
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
-		exitCode, containerId, err := s.attemptCheckpointOrRestore(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, configPath)
-		if err == nil {
-			return exitCode, containerId, err
-		}
-		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from checkpoint/restore, exit code %d", exitCode)
+		go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 	}
 
-	bundlePath := filepath.Dir(configPath)
+	// Handle restore from checkpoint if available
+	if s.IsCRIUAvailable(request.GpuCount) && request.Checkpoint != nil {
+		if request.Checkpoint != nil {
+			checkpointPath := s.checkpointPath(request.Checkpoint.CheckpointId)
+
+			err := copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath), []string{})
+			if err != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to copy checkpoint directory: %v", err)
+			}
+		}
+
+		exitCode, restored, err := s.attemptRestoreCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+		if restored {
+			return exitCode, err
+		}
+
+		// If this is not a deployment stub, don't fall back to running the container
+		if !restored && !request.Stub.Type.IsDeployment() {
+			return exitCode, err
+		} else if !restored {
+			// Disable checkpoing flag if the restore fails
+			request.CheckpointEnabled = false
+		}
+	}
+
+	if request.CheckpointEnabled {
+		err := addEnvToSpec(request.ConfigPath, []string{fmt.Sprintf("CHECKPOINT_ENABLED=%t", request.CheckpointEnabled && s.IsCRIUAvailable(request.GpuCount))})
+		if err != nil {
+			log.Warn().Str("container_id", request.ContainerId).Msgf("failed to add checkpoint env var to spec: %v", err)
+		}
+
+	}
+
+	bundlePath := filepath.Dir(request.ConfigPath)
 	exitCode, err := s.runcHandle.Run(ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
 		OutputWriter: outputWriter,
 		Started:      startedChan,
@@ -783,12 +816,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}
-	return exitCode, request.ContainerId, err
+
+	return exitCode, err
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {
-	// For images that have a rootfs, set that as the root path
-	// otherwise, assume runc config files are in the rootfs themselves
+	// For images that have a rootfs path, set that as the root path
+	// otherwise, assume OCI spec files are in the root
 	rootPath := filepath.Join(bundlePath, "rootfs")
 	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
 		rootPath = bundlePath
@@ -799,7 +833,7 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 		overlayPath = "/dev/shm"
 	}
 
-	return common.NewContainerOverlay(request.ContainerId, rootPath, overlayPath)
+	return common.NewContainerOverlay(request, rootPath, overlayPath)
 }
 
 func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *atomic.Bool) {

@@ -25,9 +25,10 @@ type TaskMetadata struct {
 type TaskCancellationReason string
 
 const (
-	TaskExpired            TaskCancellationReason = "expired"
-	TaskExceededRetryLimit TaskCancellationReason = "exceeded_retry_limit"
-	TaskRequestCancelled   TaskCancellationReason = "request_cancelled"
+	TaskExpired               TaskCancellationReason = "expired"
+	TaskExceededRetryLimit    TaskCancellationReason = "exceeded_retry_limit"
+	TaskRequestCancelled      TaskCancellationReason = "request_cancelled"
+	TaskInvalidRequestPayload TaskCancellationReason = "invalid_request_payload"
 )
 
 type TaskInterface interface {

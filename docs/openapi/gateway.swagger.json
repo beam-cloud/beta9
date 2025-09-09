@@ -73,7 +73,6 @@
     },
     "/containers": {
       "get": {
-        "summary": "Containers",
         "operationId": "GatewayService_ListContainers",
         "responses": {
           "200": {
@@ -1046,6 +1045,20 @@
         "minContainers": {
           "type": "integer",
           "format": "int64"
+        }
+      }
+    },
+    "gatewayCheckpointContainerResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "checkpointId": {
+          "type": "string"
+        },
+        "errorMsg": {
+          "type": "string"
         }
       }
     },

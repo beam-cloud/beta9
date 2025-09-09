@@ -514,18 +514,18 @@ func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSand
 	}, nil
 }
 
-func (s *GenericPodService) SandboxSnapshot(ctx context.Context, in *pb.PodSandboxSnapshotRequest) (*pb.PodSandboxSnapshotResponse, error) {
+func (s *GenericPodService) SandboxCreateImageFromFilesystem(ctx context.Context, in *pb.PodSandboxCreateImageFromFilesystemRequest) (*pb.PodSandboxCreateImageFromFilesystemResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
-		return &pb.PodSandboxSnapshotResponse{
+		return &pb.PodSandboxCreateImageFromFilesystemResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to connect to sandbox",
 		}, nil
 	}
 
-	snapshotId := fmt.Sprintf("snapshot-%s-%d", in.StubId, time.Now().Unix())
+	imageId := fmt.Sprintf("%s-%d", in.StubId, time.Now().Unix())
 	progressChan := make(chan common.OutputMsg, 1000)
 
 	go func() {
@@ -534,7 +534,7 @@ func (s *GenericPodService) SandboxSnapshot(ctx context.Context, in *pb.PodSandb
 			case <-ctx.Done():
 				return
 			case msg := <-progressChan:
-				log.Info().Str("stub_id", in.StubId).Str("container_id", in.ContainerId).Str("snapshot_id", snapshotId).Msg(msg.Msg)
+				log.Info().Str("stub_id", in.StubId).Str("container_id", in.ContainerId).Str("image_id", imageId).Msg(msg.Msg)
 				if msg.Done {
 					return
 				}
@@ -542,16 +542,41 @@ func (s *GenericPodService) SandboxSnapshot(ctx context.Context, in *pb.PodSandb
 		}
 	}()
 
-	err = client.Archive(ctx, in.ContainerId, snapshotId, progressChan)
+	err = client.Archive(ctx, in.ContainerId, imageId, progressChan)
 	if err != nil {
-		return &pb.PodSandboxSnapshotResponse{
+		return &pb.PodSandboxCreateImageFromFilesystemResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
 	}
 
-	return &pb.PodSandboxSnapshotResponse{
-		Ok:         true,
-		SnapshotId: snapshotId,
+	return &pb.PodSandboxCreateImageFromFilesystemResponse{
+		Ok:      true,
+		ImageId: imageId,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.PodSandboxSnapshotMemoryRequest) (*pb.PodSandboxSnapshotMemoryResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.Checkpoint(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.PodSandboxSnapshotMemoryResponse{
+			Ok:       false,
+			ErrorMsg: err.Error(),
+		}, nil
+	}
+
+	return &pb.PodSandboxSnapshotMemoryResponse{
+		Ok:           true,
+		CheckpointId: resp.CheckpointId,
 	}, nil
 }

@@ -1,11 +1,14 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
+
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // Creates a symlink, but will remove any existing symlinks, files, or directories
@@ -19,16 +22,33 @@ func forceSymlink(source, link string) error {
 	return os.Symlink(source, link)
 }
 
-func copyDirectory(src, dst string) error {
+func copyDirectory(src, dst string, excludePaths []string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
+		// Compute the relative path from src
 		relPath, err := filepath.Rel(src, path)
 		if err != nil {
 			return err
 		}
+
+		// When src is like "/snapshot", relPath == "." means this is the source folder itself.
+		// So we skip it to ensure we copy only its contents.
+		if relPath == "." {
+			return nil
+		}
+
+		for _, excludePath := range excludePaths {
+			if relPath == excludePath {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+		}
+
 		dstPath := filepath.Join(dst, relPath)
 
 		if info.IsDir() {
@@ -102,4 +122,24 @@ func (fl *FileLock) Release() error {
 
 	fl.file = nil
 	return nil
+}
+
+// Adds extra env vars to an existing OCI spec
+func addEnvToSpec(specPath string, extraEnv []string) error {
+	f, err := os.OpenFile(specPath, os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var spec specs.Spec
+	if err := json.NewDecoder(f).Decode(&spec); err != nil {
+		return err
+	}
+
+	spec.Process.Env = append(spec.Process.Env, extraEnv...)
+
+	f.Seek(0, 0)
+	f.Truncate(0)
+	return json.NewEncoder(f).Encode(&spec)
 }

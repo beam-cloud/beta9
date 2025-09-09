@@ -8,9 +8,12 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 type ContainerOverlay struct {
+	request     *types.ContainerRequest
 	containerId string
 	layers      []ContainerOverlayLayer
 	root        string
@@ -25,9 +28,10 @@ type ContainerOverlayLayer struct {
 	merged string
 }
 
-func NewContainerOverlay(containerId string, rootPath string, overlayPath string) *ContainerOverlay {
+func NewContainerOverlay(request *types.ContainerRequest, rootPath string, overlayPath string) *ContainerOverlay {
 	return &ContainerOverlay{
-		containerId: containerId,
+		request:     request,
+		containerId: request.ContainerId,
 		layers:      []ContainerOverlayLayer{},
 		root:        rootPath,
 		overlayPath: overlayPath,

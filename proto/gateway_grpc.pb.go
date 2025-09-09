@@ -24,6 +24,7 @@ const (
 	GatewayService_HeadObject_FullMethodName            = "/gateway.GatewayService/HeadObject"
 	GatewayService_CreateObject_FullMethodName          = "/gateway.GatewayService/CreateObject"
 	GatewayService_PutObjectStream_FullMethodName       = "/gateway.GatewayService/PutObjectStream"
+	GatewayService_CheckpointContainer_FullMethodName   = "/gateway.GatewayService/CheckpointContainer"
 	GatewayService_ListContainers_FullMethodName        = "/gateway.GatewayService/ListContainers"
 	GatewayService_StopContainer_FullMethodName         = "/gateway.GatewayService/StopContainer"
 	GatewayService_AttachToContainer_FullMethodName     = "/gateway.GatewayService/AttachToContainer"
@@ -66,6 +67,7 @@ type GatewayServiceClient interface {
 	CreateObject(ctx context.Context, in *CreateObjectRequest, opts ...grpc.CallOption) (*CreateObjectResponse, error)
 	PutObjectStream(ctx context.Context, opts ...grpc.CallOption) (GatewayService_PutObjectStreamClient, error)
 	// Containers
+	CheckpointContainer(ctx context.Context, in *CheckpointContainerRequest, opts ...grpc.CallOption) (*CheckpointContainerResponse, error)
 	ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error)
 	StopContainer(ctx context.Context, in *StopContainerRequest, opts ...grpc.CallOption) (*StopContainerResponse, error)
 	AttachToContainer(ctx context.Context, opts ...grpc.CallOption) (GatewayService_AttachToContainerClient, error)
@@ -180,6 +182,15 @@ func (x *gatewayServicePutObjectStreamClient) CloseAndRecv() (*PutObjectResponse
 		return nil, err
 	}
 	return m, nil
+}
+
+func (c *gatewayServiceClient) CheckpointContainer(ctx context.Context, in *CheckpointContainerRequest, opts ...grpc.CallOption) (*CheckpointContainerResponse, error) {
+	out := new(CheckpointContainerResponse)
+	err := c.cc.Invoke(ctx, GatewayService_CheckpointContainer_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *gatewayServiceClient) ListContainers(ctx context.Context, in *ListContainersRequest, opts ...grpc.CallOption) (*ListContainersResponse, error) {
@@ -468,6 +479,7 @@ type GatewayServiceServer interface {
 	CreateObject(context.Context, *CreateObjectRequest) (*CreateObjectResponse, error)
 	PutObjectStream(GatewayService_PutObjectStreamServer) error
 	// Containers
+	CheckpointContainer(context.Context, *CheckpointContainerRequest) (*CheckpointContainerResponse, error)
 	ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error)
 	StopContainer(context.Context, *StopContainerRequest) (*StopContainerResponse, error)
 	AttachToContainer(GatewayService_AttachToContainerServer) error
@@ -525,6 +537,9 @@ func (UnimplementedGatewayServiceServer) CreateObject(context.Context, *CreateOb
 }
 func (UnimplementedGatewayServiceServer) PutObjectStream(GatewayService_PutObjectStreamServer) error {
 	return status.Errorf(codes.Unimplemented, "method PutObjectStream not implemented")
+}
+func (UnimplementedGatewayServiceServer) CheckpointContainer(context.Context, *CheckpointContainerRequest) (*CheckpointContainerResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CheckpointContainer not implemented")
 }
 func (UnimplementedGatewayServiceServer) ListContainers(context.Context, *ListContainersRequest) (*ListContainersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListContainers not implemented")
@@ -719,6 +734,24 @@ func (x *gatewayServicePutObjectStreamServer) Recv() (*PutObjectRequest, error) 
 		return nil, err
 	}
 	return m, nil
+}
+
+func _GatewayService_CheckpointContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CheckpointContainerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(GatewayServiceServer).CheckpointContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: GatewayService_CheckpointContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(GatewayServiceServer).CheckpointContainer(ctx, req.(*CheckpointContainerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _GatewayService_ListContainers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1255,6 +1288,10 @@ var GatewayService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateObject",
 			Handler:    _GatewayService_CreateObject_Handler,
+		},
+		{
+			MethodName: "CheckpointContainer",
+			Handler:    _GatewayService_CheckpointContainer_Handler,
 		},
 		{
 			MethodName: "ListContainers",

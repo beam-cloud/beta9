@@ -287,6 +287,14 @@ func generateProgressBar(progress int, total int) string {
 	return fmt.Sprintf("%s\r%s %d%%\n", up, progressBar, (progress*100)/total)
 }
 
+func (c *RunCClient) Checkpoint(ctx context.Context, containerId string) (*pb.RunCCheckpointResponse, error) {
+	resp, err := c.client.RunCCheckpoint(ctx, &pb.RunCCheckpointRequest{ContainerId: containerId})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
 func (c *RunCClient) Archive(ctx context.Context, containerId, imageId string, outputChan chan OutputMsg) error {
 	outputChan <- OutputMsg{Archiving: true, Done: false, Success: false, Msg: "\nSaving image, this may take a few minutes...\n"}
 	stream, err := c.client.RunCArchive(ctx, &pb.RunCArchiveRequest{ContainerId: containerId,

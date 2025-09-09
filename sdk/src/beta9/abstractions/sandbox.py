@@ -21,8 +21,10 @@ from ..clients.pod import (
     PodSandboxConnectRequest,
     PodSandboxConnectResponse,
     PodSandboxCreateDirectoryRequest,
-    PodSandboxDeleteFileRequest,
+    PodSandboxCreateImageFromFilesystemRequest,
+    PodSandboxCreateImageFromFilesystemResponse,
     PodSandboxDeleteDirectoryRequest,
+    PodSandboxDeleteFileRequest,
     PodSandboxDownloadFileRequest,
     PodSandboxExecRequest,
     PodSandboxExposePortRequest,
@@ -31,8 +33,8 @@ from ..clients.pod import (
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
     PodSandboxReplaceInFilesRequest,
-    PodSandboxSnapshotRequest,
-    PodSandboxSnapshotResponse,
+    PodSandboxSnapshotMemoryRequest,
+    PodSandboxSnapshotMemoryResponse,
     PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
     PodSandboxStderrRequest,
@@ -178,9 +180,11 @@ class Sandbox(Pod):
             stub_id=response.stub_id,
         )
 
-    def create_from_snapshot(self, snapshot_id: str) -> "SandboxInstance":
+    def create_from_memory_snapshot(self, snapshot_id: str) -> "SandboxInstance":
         """
         Create a sandbox instance from a filesystem snapshot.
+        This will create a new sandbox instance with any filesystem-level changes made in that original sandbox instance.
+        However, it will not restore any running processes or state present in the original sandbox instance.
 
         Parameters:
             snapshot_id (str): The ID of the snapshot to create the sandbox from.
@@ -190,32 +194,28 @@ class Sandbox(Pod):
 
         Example:
             ```python
-            # Create a sandbox instance from a filesystem snapshot
-            instance = sandbox.create_from_snapshot("snapshot-123")
+            # Create a sandbox instance from a me   mory snapshot
+            instance = sandbox.create_from_memory_snapshot("snapshot-123")
             print(f"Sandbox created with ID: {instance.sandbox_id()}")
             ```
         """
 
-        self.stub_id = "-".join(snapshot_id.split("-")[1:6])
-        self.stub_created = True
-        self.image_id = snapshot_id
-
-        terminal.header(f"Creating sandbox from snapshot: {snapshot_id}")
+        terminal.header(f"Creating sandbox from memory snapshot: {snapshot_id}")
 
         create_response: CreatePodResponse = self.stub.create_pod(
             CreatePodRequest(
-                stub_id=self.stub_id,
-                snapshot_id=snapshot_id,
+                checkpoint_id=snapshot_id,
             )
         )
 
         if not create_response.ok:
             return SandboxInstance(
-                stub_id=self.stub_id,
                 container_id="",
                 ok=False,
                 error_msg=create_response.error_msg,
             )
+
+        self.stub_id = create_response.stub_id
 
         terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
 
@@ -383,30 +383,59 @@ class SandboxInstance(BaseAbstraction):
 
         return res.ok
 
-    def snapshot(self) -> str:
+    def create_image_from_filesystem(self) -> str:
         """
-        Create a snapshot of the sandbox filesystem.
+        Save the current sandbox filesystem state and create an image from it.
 
         Returns:
-            str: The snapshot ID.
+            str: The image ID.
 
         Example:
             ```python
-            # Create a snapshot of the sandbox filesystem
-            snapshot_id = instance.snapshot()
-            print(f"Snapshot created with ID: {snapshot_id}")
+            # Create an image from the sandbox filesystem contents
+            image_id = instance.create_image_from_filesystem()
+            print(f"Image created with ID: {image_id}")
             ```
         """
-        terminal.header(f"Creating snapshot of: {self.container_id}")
+        terminal.header(f"Creating an image from sandbox filesystem: {self.container_id}")
 
-        res: "PodSandboxSnapshotResponse" = self.stub.sandbox_snapshot(
-            PodSandboxSnapshotRequest(stub_id=self.stub_id, container_id=self.container_id)
+        res: "PodSandboxCreateImageFromFilesystemResponse" = (
+            self.stub.sandbox_create_image_from_filesystem(
+                PodSandboxCreateImageFromFilesystemRequest(
+                    stub_id=self.stub_id, container_id=self.container_id
+                )
+            )
         )
 
         if not res.ok:
             raise SandboxProcessError(res.error_msg)
 
-        return res.snapshot_id
+        return res.image_id
+
+    def snapshot_memory(self) -> str:
+        """
+        Create a snapshot of the sandbox memory.
+
+        Returns:
+            str: The checkpoint ID.
+
+        Example:
+            ```python
+            # Create a snapshot of the sandbox memory contents
+            checkpoint_id = instance.snapshot_memory()
+            print(f"Checkpoint created with ID: {checkpoint_id}")
+            ```
+        """
+        terminal.header(f"Creating a snapshot of sandbox memory: {self.container_id}")
+
+        res: "PodSandboxSnapshotMemoryResponse" = self.stub.sandbox_snapshot_memory(
+            PodSandboxSnapshotMemoryRequest(stub_id=self.stub_id, container_id=self.container_id)
+        )
+
+        if not res.ok:
+            raise SandboxProcessError(res.error_msg)
+
+        return res.checkpoint_id
 
     def sandbox_id(self) -> str:
         """
@@ -628,7 +657,7 @@ class SandboxProcessManager:
     def exec(
         self,
         *args,
-        cwd: Optional[str] = None,
+        cwd: Optional[str] = "/workspace",
         env: Optional[Dict[str, str]] = None,
     ) -> "SandboxProcess":
         """
@@ -1469,7 +1498,7 @@ class SandboxFileSystem:
             )
         )
         if not resp.ok:
-            raise SandboxFileSystemError(resp.error_msg)        
+            raise SandboxFileSystemError(resp.error_msg)
 
     def delete_directory(self, sandbox_path: str):
         """

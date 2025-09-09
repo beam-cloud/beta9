@@ -28,7 +28,8 @@ if TYPE_CHECKING:
 @dataclass(eq=False, repr=False)
 class CreatePodRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
-    snapshot_id: Optional[str] = betterproto.string_field(2, optional=True)
+    image_id: Optional[str] = betterproto.string_field(2, optional=True)
+    checkpoint_id: Optional[str] = betterproto.string_field(3, optional=True)
 
 
 @dataclass(eq=False, repr=False)
@@ -36,6 +37,7 @@ class CreatePodResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     container_id: str = betterproto.string_field(2)
     error_msg: str = betterproto.string_field(3)
+    stub_id: str = betterproto.string_field(4)
 
 
 @dataclass(eq=False, repr=False)
@@ -288,16 +290,29 @@ class PodSandboxUpdateTtlResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxSnapshotRequest(betterproto.Message):
+class PodSandboxCreateImageFromFilesystemRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxSnapshotResponse(betterproto.Message):
+class PodSandboxCreateImageFromFilesystemResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
-    snapshot_id: str = betterproto.string_field(3)
+    image_id: str = betterproto.string_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxSnapshotMemoryRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    container_id: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxSnapshotMemoryResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    checkpoint_id: str = betterproto.string_field(3)
 
 
 class PodServiceStub(SyncServiceStub):
@@ -470,11 +485,21 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxUpdateTtlResponse,
         )(pod_sandbox_update_ttl_request)
 
-    def sandbox_snapshot(
-        self, pod_sandbox_snapshot_request: "PodSandboxSnapshotRequest"
-    ) -> "PodSandboxSnapshotResponse":
+    def sandbox_create_image_from_filesystem(
+        self,
+        pod_sandbox_create_image_from_filesystem_request: "PodSandboxCreateImageFromFilesystemRequest",
+    ) -> "PodSandboxCreateImageFromFilesystemResponse":
         return self._unary_unary(
-            "/pod.PodService/SandboxSnapshot",
-            PodSandboxSnapshotRequest,
-            PodSandboxSnapshotResponse,
-        )(pod_sandbox_snapshot_request)
+            "/pod.PodService/SandboxCreateImageFromFilesystem",
+            PodSandboxCreateImageFromFilesystemRequest,
+            PodSandboxCreateImageFromFilesystemResponse,
+        )(pod_sandbox_create_image_from_filesystem_request)
+
+    def sandbox_snapshot_memory(
+        self, pod_sandbox_snapshot_memory_request: "PodSandboxSnapshotMemoryRequest"
+    ) -> "PodSandboxSnapshotMemoryResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxSnapshotMemory",
+            PodSandboxSnapshotMemoryRequest,
+            PodSandboxSnapshotMemoryResponse,
+        )(pod_sandbox_snapshot_memory_request)

@@ -895,21 +895,12 @@ func request_PodService_SandboxUpdateTTL_0(ctx context.Context, marshaler runtim
 	var (
 		protoReq PodSandboxUpdateTTLRequest
 		metadata runtime.ServerMetadata
-		err      error
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
-	}
-	val, ok := pathParams["container_id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
-	}
-	protoReq.ContainerId, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
 	}
 	msg, err := client.SandboxUpdateTTL(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
@@ -919,28 +910,18 @@ func local_request_PodService_SandboxUpdateTTL_0(ctx context.Context, marshaler 
 	var (
 		protoReq PodSandboxUpdateTTLRequest
 		metadata runtime.ServerMetadata
-		err      error
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	val, ok := pathParams["container_id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
-	}
-	protoReq.ContainerId, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
 	}
 	msg, err := server.SandboxUpdateTTL(ctx, &protoReq)
 	return msg, metadata, err
 }
 
-func request_PodService_SandboxSnapshot_0(ctx context.Context, marshaler runtime.Marshaler, client PodServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func request_PodService_SandboxCreateImageFromFilesystem_0(ctx context.Context, marshaler runtime.Marshaler, client PodServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq PodSandboxSnapshotRequest
+		protoReq PodSandboxCreateImageFromFilesystemRequest
 		metadata runtime.ServerMetadata
-		err      error
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
@@ -948,36 +929,46 @@ func request_PodService_SandboxSnapshot_0(ctx context.Context, marshaler runtime
 	if req.Body != nil {
 		_, _ = io.Copy(io.Discard, req.Body)
 	}
-	val, ok := pathParams["container_id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
-	}
-	protoReq.ContainerId, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
-	}
-	msg, err := client.SandboxSnapshot(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	msg, err := client.SandboxCreateImageFromFilesystem(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
 
-func local_request_PodService_SandboxSnapshot_0(ctx context.Context, marshaler runtime.Marshaler, server PodServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+func local_request_PodService_SandboxCreateImageFromFilesystem_0(ctx context.Context, marshaler runtime.Marshaler, server PodServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
-		protoReq PodSandboxSnapshotRequest
+		protoReq PodSandboxCreateImageFromFilesystemRequest
 		metadata runtime.ServerMetadata
-		err      error
 	)
 	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	val, ok := pathParams["container_id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "container_id")
+	msg, err := server.SandboxCreateImageFromFilesystem(ctx, &protoReq)
+	return msg, metadata, err
+}
+
+func request_PodService_SandboxSnapshotMemory_0(ctx context.Context, marshaler runtime.Marshaler, client PodServiceClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq PodSandboxSnapshotMemoryRequest
+		metadata runtime.ServerMetadata
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
-	protoReq.ContainerId, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "container_id", err)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
 	}
-	msg, err := server.SandboxSnapshot(ctx, &protoReq)
+	msg, err := client.SandboxSnapshotMemory(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
+	return msg, metadata, err
+}
+
+func local_request_PodService_SandboxSnapshotMemory_0(ctx context.Context, marshaler runtime.Marshaler, server PodServiceServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
+	var (
+		protoReq PodSandboxSnapshotMemoryRequest
+		metadata runtime.ServerMetadata
+	)
+	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq); err != nil && !errors.Is(err, io.EOF) {
+		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	msg, err := server.SandboxSnapshotMemory(ctx, &protoReq)
 	return msg, metadata, err
 }
 
@@ -1347,13 +1338,13 @@ func RegisterPodServiceHandlerServer(ctx context.Context, mux *runtime.ServeMux,
 		}
 		forward_PodService_SandboxConnect_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPatch, pattern_PodService_SandboxUpdateTTL_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_PodService_SandboxUpdateTTL_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/pod.PodService/SandboxUpdateTTL", runtime.WithHTTPPathPattern("/pods/{container_id}/ttl"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/pod.PodService/SandboxUpdateTTL", runtime.WithHTTPPathPattern("/pod.PodService/SandboxUpdateTTL"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1367,25 +1358,45 @@ func RegisterPodServiceHandlerServer(ctx context.Context, mux *runtime.ServeMux,
 		}
 		forward_PodService_SandboxUpdateTTL_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_PodService_SandboxSnapshot_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_PodService_SandboxCreateImageFromFilesystem_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		var stream runtime.ServerTransportStream
 		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/pod.PodService/SandboxSnapshot", runtime.WithHTTPPathPattern("/pods/{container_id}/snapshot"))
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/pod.PodService/SandboxCreateImageFromFilesystem", runtime.WithHTTPPathPattern("/pod.PodService/SandboxCreateImageFromFilesystem"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := local_request_PodService_SandboxSnapshot_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		resp, md, err := local_request_PodService_SandboxCreateImageFromFilesystem_0(annotatedContext, inboundMarshaler, server, req, pathParams)
 		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_PodService_SandboxSnapshot_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_PodService_SandboxCreateImageFromFilesystem_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_PodService_SandboxSnapshotMemory_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		var stream runtime.ServerTransportStream
+		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/pod.PodService/SandboxSnapshotMemory", runtime.WithHTTPPathPattern("/pod.PodService/SandboxSnapshotMemory"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := local_request_PodService_SandboxSnapshotMemory_0(annotatedContext, inboundMarshaler, server, req, pathParams)
+		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_PodService_SandboxSnapshotMemory_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -1733,11 +1744,11 @@ func RegisterPodServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux,
 		}
 		forward_PodService_SandboxConnect_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPatch, pattern_PodService_SandboxUpdateTTL_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_PodService_SandboxUpdateTTL_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/pod.PodService/SandboxUpdateTTL", runtime.WithHTTPPathPattern("/pods/{container_id}/ttl"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/pod.PodService/SandboxUpdateTTL", runtime.WithHTTPPathPattern("/pod.PodService/SandboxUpdateTTL"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
@@ -1750,68 +1761,87 @@ func RegisterPodServiceHandlerClient(ctx context.Context, mux *runtime.ServeMux,
 		}
 		forward_PodService_SandboxUpdateTTL_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPost, pattern_PodService_SandboxSnapshot_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+	mux.Handle(http.MethodPost, pattern_PodService_SandboxCreateImageFromFilesystem_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
 		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/pod.PodService/SandboxSnapshot", runtime.WithHTTPPathPattern("/pods/{container_id}/snapshot"))
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/pod.PodService/SandboxCreateImageFromFilesystem", runtime.WithHTTPPathPattern("/pod.PodService/SandboxCreateImageFromFilesystem"))
 		if err != nil {
 			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		resp, md, err := request_PodService_SandboxSnapshot_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		resp, md, err := request_PodService_SandboxCreateImageFromFilesystem_0(annotatedContext, inboundMarshaler, client, req, pathParams)
 		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
 		if err != nil {
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_PodService_SandboxSnapshot_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_PodService_SandboxCreateImageFromFilesystem_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+	})
+	mux.Handle(http.MethodPost, pattern_PodService_SandboxSnapshotMemory_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
+		ctx, cancel := context.WithCancel(req.Context())
+		defer cancel()
+		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
+		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/pod.PodService/SandboxSnapshotMemory", runtime.WithHTTPPathPattern("/pod.PodService/SandboxSnapshotMemory"))
+		if err != nil {
+			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		resp, md, err := request_PodService_SandboxSnapshotMemory_0(annotatedContext, inboundMarshaler, client, req, pathParams)
+		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
+		if err != nil {
+			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
+			return
+		}
+		forward_PodService_SandboxSnapshotMemory_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
 
 var (
-	pattern_PodService_CreatePod_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pods"}, ""))
-	pattern_PodService_SandboxExec_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "exec"}, ""))
-	pattern_PodService_SandboxStatus_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "status"}, ""))
-	pattern_PodService_SandboxStdout_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "stdout"}, ""))
-	pattern_PodService_SandboxStderr_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "stderr"}, ""))
-	pattern_PodService_SandboxKill_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "kill"}, ""))
-	pattern_PodService_SandboxListProcesses_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "processes"}, ""))
-	pattern_PodService_SandboxUploadFile_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "files", "upload"}, ""))
-	pattern_PodService_SandboxDownloadFile_0    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3, 3, 0, 4, 1, 5, 4}, []string{"pods", "container_id", "files", "download", "container_path"}, ""))
-	pattern_PodService_SandboxStatFile_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "files", "stat"}, ""))
-	pattern_PodService_SandboxListFiles_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "files"}, ""))
-	pattern_PodService_SandboxDeleteFile_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 3, 0, 4, 1, 5, 3}, []string{"pods", "container_id", "files", "container_path"}, ""))
-	pattern_PodService_SandboxCreateDirectory_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "directories"}, ""))
-	pattern_PodService_SandboxDeleteDirectory_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 3, 0, 4, 1, 5, 3}, []string{"pods", "container_id", "directories", "container_path"}, ""))
-	pattern_PodService_SandboxExposePort_0      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "ports", "expose"}, ""))
-	pattern_PodService_SandboxReplaceInFiles_0  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "files", "replace"}, ""))
-	pattern_PodService_SandboxFindInFiles_0     = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "files", "find"}, ""))
-	pattern_PodService_SandboxConnect_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "connect"}, ""))
-	pattern_PodService_SandboxUpdateTTL_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "ttl"}, ""))
-	pattern_PodService_SandboxSnapshot_0        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "snapshot"}, ""))
+	pattern_PodService_CreatePod_0                        = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0}, []string{"pods"}, ""))
+	pattern_PodService_SandboxExec_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "exec"}, ""))
+	pattern_PodService_SandboxStatus_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "status"}, ""))
+	pattern_PodService_SandboxStdout_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "stdout"}, ""))
+	pattern_PodService_SandboxStderr_0                    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "stderr"}, ""))
+	pattern_PodService_SandboxKill_0                      = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "kill"}, ""))
+	pattern_PodService_SandboxListProcesses_0             = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "processes"}, ""))
+	pattern_PodService_SandboxUploadFile_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "files", "upload"}, ""))
+	pattern_PodService_SandboxDownloadFile_0              = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3, 3, 0, 4, 1, 5, 4}, []string{"pods", "container_id", "files", "download", "container_path"}, ""))
+	pattern_PodService_SandboxStatFile_0                  = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "files", "stat"}, ""))
+	pattern_PodService_SandboxListFiles_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "files"}, ""))
+	pattern_PodService_SandboxDeleteFile_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 3, 0, 4, 1, 5, 3}, []string{"pods", "container_id", "files", "container_path"}, ""))
+	pattern_PodService_SandboxCreateDirectory_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "directories"}, ""))
+	pattern_PodService_SandboxDeleteDirectory_0           = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 3, 0, 4, 1, 5, 3}, []string{"pods", "container_id", "directories", "container_path"}, ""))
+	pattern_PodService_SandboxExposePort_0                = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "ports", "expose"}, ""))
+	pattern_PodService_SandboxReplaceInFiles_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "files", "replace"}, ""))
+	pattern_PodService_SandboxFindInFiles_0               = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2, 2, 3}, []string{"pods", "container_id", "files", "find"}, ""))
+	pattern_PodService_SandboxConnect_0                   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 1, 0, 4, 1, 5, 1, 2, 2}, []string{"pods", "container_id", "connect"}, ""))
+	pattern_PodService_SandboxUpdateTTL_0                 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pod.PodService", "SandboxUpdateTTL"}, ""))
+	pattern_PodService_SandboxCreateImageFromFilesystem_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pod.PodService", "SandboxCreateImageFromFilesystem"}, ""))
+	pattern_PodService_SandboxSnapshotMemory_0            = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1}, []string{"pod.PodService", "SandboxSnapshotMemory"}, ""))
 )
 
 var (
-	forward_PodService_CreatePod_0              = runtime.ForwardResponseMessage
-	forward_PodService_SandboxExec_0            = runtime.ForwardResponseMessage
-	forward_PodService_SandboxStatus_0          = runtime.ForwardResponseMessage
-	forward_PodService_SandboxStdout_0          = runtime.ForwardResponseMessage
-	forward_PodService_SandboxStderr_0          = runtime.ForwardResponseMessage
-	forward_PodService_SandboxKill_0            = runtime.ForwardResponseMessage
-	forward_PodService_SandboxListProcesses_0   = runtime.ForwardResponseMessage
-	forward_PodService_SandboxUploadFile_0      = runtime.ForwardResponseMessage
-	forward_PodService_SandboxDownloadFile_0    = runtime.ForwardResponseMessage
-	forward_PodService_SandboxStatFile_0        = runtime.ForwardResponseMessage
-	forward_PodService_SandboxListFiles_0       = runtime.ForwardResponseMessage
-	forward_PodService_SandboxDeleteFile_0      = runtime.ForwardResponseMessage
-	forward_PodService_SandboxCreateDirectory_0 = runtime.ForwardResponseMessage
-	forward_PodService_SandboxDeleteDirectory_0 = runtime.ForwardResponseMessage
-	forward_PodService_SandboxExposePort_0      = runtime.ForwardResponseMessage
-	forward_PodService_SandboxReplaceInFiles_0  = runtime.ForwardResponseMessage
-	forward_PodService_SandboxFindInFiles_0     = runtime.ForwardResponseMessage
-	forward_PodService_SandboxConnect_0         = runtime.ForwardResponseMessage
-	forward_PodService_SandboxUpdateTTL_0       = runtime.ForwardResponseMessage
-	forward_PodService_SandboxSnapshot_0        = runtime.ForwardResponseMessage
+	forward_PodService_CreatePod_0                        = runtime.ForwardResponseMessage
+	forward_PodService_SandboxExec_0                      = runtime.ForwardResponseMessage
+	forward_PodService_SandboxStatus_0                    = runtime.ForwardResponseMessage
+	forward_PodService_SandboxStdout_0                    = runtime.ForwardResponseMessage
+	forward_PodService_SandboxStderr_0                    = runtime.ForwardResponseMessage
+	forward_PodService_SandboxKill_0                      = runtime.ForwardResponseMessage
+	forward_PodService_SandboxListProcesses_0             = runtime.ForwardResponseMessage
+	forward_PodService_SandboxUploadFile_0                = runtime.ForwardResponseMessage
+	forward_PodService_SandboxDownloadFile_0              = runtime.ForwardResponseMessage
+	forward_PodService_SandboxStatFile_0                  = runtime.ForwardResponseMessage
+	forward_PodService_SandboxListFiles_0                 = runtime.ForwardResponseMessage
+	forward_PodService_SandboxDeleteFile_0                = runtime.ForwardResponseMessage
+	forward_PodService_SandboxCreateDirectory_0           = runtime.ForwardResponseMessage
+	forward_PodService_SandboxDeleteDirectory_0           = runtime.ForwardResponseMessage
+	forward_PodService_SandboxExposePort_0                = runtime.ForwardResponseMessage
+	forward_PodService_SandboxReplaceInFiles_0            = runtime.ForwardResponseMessage
+	forward_PodService_SandboxFindInFiles_0               = runtime.ForwardResponseMessage
+	forward_PodService_SandboxConnect_0                   = runtime.ForwardResponseMessage
+	forward_PodService_SandboxUpdateTTL_0                 = runtime.ForwardResponseMessage
+	forward_PodService_SandboxCreateImageFromFilesystem_0 = runtime.ForwardResponseMessage
+	forward_PodService_SandboxSnapshotMemory_0            = runtime.ForwardResponseMessage
 )

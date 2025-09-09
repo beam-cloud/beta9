@@ -32,6 +32,20 @@ class BuildOptions(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class Checkpoint(betterproto.Message):
+    checkpoint_id: str = betterproto.string_field(2)
+    external_id: str = betterproto.string_field(3)
+    source_container_id: str = betterproto.string_field(4)
+    container_ip: str = betterproto.string_field(5)
+    status: str = betterproto.string_field(6)
+    remote_key: str = betterproto.string_field(7)
+    stub_type: str = betterproto.string_field(10)
+    exposed_ports: List[int] = betterproto.uint32_field(12)
+    created_at: datetime = betterproto.message_field(13)
+    last_restored_at: datetime = betterproto.message_field(14)
+
+
+@dataclass(eq=False, repr=False)
 class CheckpointState(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
@@ -44,11 +58,11 @@ class CheckpointState(betterproto.Message):
 class ConcurrencyLimit(betterproto.Message):
     id: int = betterproto.uint32_field(1)
     external_id: str = betterproto.string_field(2)
-    gpu_limit: int = betterproto.uint32_field(3)
-    cpu_millicore_limit: int = betterproto.uint32_field(4)
-    created_at: datetime = betterproto.message_field(5)
-    updated_at: datetime = betterproto.message_field(6)
-    workspace_id: int = betterproto.uint32_field(7)
+    workspace_id: int = betterproto.uint32_field(3)
+    gpu_limit: int = betterproto.uint32_field(4)
+    cpu_millicore_limit: int = betterproto.uint32_field(5)
+    created_at: datetime = betterproto.message_field(6)
+    updated_at: datetime = betterproto.message_field(7)
 
 
 @dataclass(eq=False, repr=False)
@@ -89,7 +103,8 @@ class ContainerRequest(betterproto.Message):
     ports: List[int] = betterproto.uint32_field(21)
     cost_per_ms: float = betterproto.double_field(22)
     app_id: str = betterproto.string_field(23)
-    container_ip: str = betterproto.string_field(24)
+    checkpoint: "Checkpoint" = betterproto.message_field(24)
+    config_path: str = betterproto.string_field(25)
 
 
 @dataclass(eq=False, repr=False)
@@ -166,8 +181,7 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    time: datetime = betterproto.message_field(1)
-    valid: bool = betterproto.bool_field(2)
+    null_time: "NullTime" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)

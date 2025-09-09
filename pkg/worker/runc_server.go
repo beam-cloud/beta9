@@ -28,6 +28,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
 	"github.com/google/shlex"
+	"github.com/google/uuid"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"google.golang.org/grpc"
 )
@@ -42,9 +43,19 @@ type RunCServer struct {
 	imageClient             *ImageClient
 	port                    int
 	podAddr                 string
+	createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
 }
 
-func NewRunCServer(podAddr string, containerInstances *common.SafeMap[*ContainerInstance], imageClient *ImageClient, containerRepoClient pb.ContainerRepositoryServiceClient, containerNetworkManager *ContainerNetworkManager) (*RunCServer, error) {
+type RunCServerOpts struct {
+	PodAddr                 string
+	ContainerInstances      *common.SafeMap[*ContainerInstance]
+	ImageClient             *ImageClient
+	ContainerRepoClient     pb.ContainerRepositoryServiceClient
+	ContainerNetworkManager *ContainerNetworkManager
+	CreateCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
+}
+
+func NewRunCServer(opts *RunCServerOpts) (*RunCServer, error) {
 	var baseConfigSpec specs.Spec
 	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
 	err := json.Unmarshal([]byte(specTemplate), &baseConfigSpec)
@@ -53,13 +64,14 @@ func NewRunCServer(podAddr string, containerInstances *common.SafeMap[*Container
 	}
 
 	return &RunCServer{
-		podAddr:                 podAddr,
 		runcHandle:              runc.Runc{},
+		podAddr:                 opts.PodAddr,
 		baseConfigSpec:          baseConfigSpec,
-		containerInstances:      containerInstances,
-		imageClient:             imageClient,
-		containerRepoClient:     containerRepoClient,
-		containerNetworkManager: containerNetworkManager,
+		containerInstances:      opts.ContainerInstances,
+		imageClient:             opts.ImageClient,
+		containerRepoClient:     opts.ContainerRepoClient,
+		containerNetworkManager: opts.ContainerNetworkManager,
+		createCheckpoint:        opts.CreateCheckpoint,
 	}, nil
 }
 
@@ -197,6 +209,26 @@ func (s *RunCServer) RunCStreamLogs(req *pb.RunCStreamLogsRequest, stream pb.Run
 	return nil
 }
 
+func (s *RunCServer) RunCCheckpoint(ctx context.Context, in *pb.RunCCheckpointRequest) (*pb.RunCCheckpointResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCCheckpointResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	checkpointId := uuid.New().String()
+	err := s.createCheckpoint(ctx, &CreateCheckpointOpts{
+		Request:      instance.Request,
+		CheckpointId: checkpointId,
+		ContainerIp:  instance.ContainerIp,
+	})
+	if err != nil {
+		log.Error().Str("container_id", in.ContainerId).Msgf("failed to create checkpoint: %v", err)
+		return &pb.RunCCheckpointResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.RunCCheckpointResponse{Ok: true, CheckpointId: checkpointId}, nil
+}
+
 func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCService_RunCArchiveServer) error {
 	ctx := stream.Context()
 	state, err := s.runcHandle.State(ctx, req.ContainerId)
@@ -213,8 +245,15 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
 	}
 
+	// If it's not a build request, we need to use the initial_config.json from the base image bundle
+	// Otherwise, we pull in the modified config vars from the running container
+	initialConfigPath := filepath.Join(instance.BundlePath, specBaseName)
+	if !instance.Request.IsBuildRequest() {
+		initialConfigPath = filepath.Join(instance.BundlePath, initialSpecBaseName)
+	}
+
 	// Copy initial config file from the base image bundle
-	err = copyFile(filepath.Join(instance.BundlePath, specBaseName), filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName))
+	err = copyFile(initialConfigPath, filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName))
 	if err != nil {
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
 	}
@@ -810,7 +849,7 @@ func (s *RunCServer) getHostPathFromContainerPath(containerPath string, instance
 }
 
 func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandboxExposePortRequest) (*pb.RunCSandboxExposePortResponse, error) {
-	_, exists := s.containerInstances.Get(in.ContainerId)
+	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
@@ -855,7 +894,9 @@ func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandb
 		return &pb.RunCSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	instance.Request.Ports = append(instance.Request.Ports, uint32(in.Port))
 	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[int32(in.Port)])
+
 	return &pb.RunCSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err
 }
 
