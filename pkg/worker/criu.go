@@ -215,7 +215,6 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	parentDir := filepath.Dir(instance.Overlay.TopLayerPath())
 	upperDir := path.Join(parentDir, "upper")
 
-	os.MkdirAll(checkpointFsDir, 0755)
 	err = copyDirectory(upperDir, path.Join(checkpointPath, checkpointFsDir), []string{"config.json", "outputs", "snapshot"})
 	if err != nil {
 		log.Error().Str("container_id", opts.Request.ContainerId).Str("checkpoint_id", opts.CheckpointId).Msgf("failed to copy upper directory: %v", err)
