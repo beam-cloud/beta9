@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 @dataclass(eq=False, repr=False)
 class CreatePodRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
-    snapshot_id: Optional[str] = betterproto.string_field(2, optional=True)
+    image_id: Optional[str] = betterproto.string_field(2, optional=True)
     checkpoint_id: Optional[str] = betterproto.string_field(3, optional=True)
 
 
@@ -290,16 +290,16 @@ class PodSandboxUpdateTtlResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxSnapshotFilesystemRequest(betterproto.Message):
+class PodSandboxCreateImageFromFilesystemRequest(betterproto.Message):
     stub_id: str = betterproto.string_field(1)
     container_id: str = betterproto.string_field(2)
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxSnapshotFilesystemResponse(betterproto.Message):
+class PodSandboxCreateImageFromFilesystemResponse(betterproto.Message):
     ok: bool = betterproto.bool_field(1)
     error_msg: str = betterproto.string_field(2)
-    snapshot_id: str = betterproto.string_field(3)
+    image_id: str = betterproto.string_field(3)
 
 
 @dataclass(eq=False, repr=False)
@@ -485,15 +485,15 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxUpdateTtlResponse,
         )(pod_sandbox_update_ttl_request)
 
-    def sandbox_snapshot_filesystem(
+    def sandbox_create_image_from_filesystem(
         self,
-        pod_sandbox_snapshot_filesystem_request: "PodSandboxSnapshotFilesystemRequest",
-    ) -> "PodSandboxSnapshotFilesystemResponse":
+        pod_sandbox_create_image_from_filesystem_request: "PodSandboxCreateImageFromFilesystemRequest",
+    ) -> "PodSandboxCreateImageFromFilesystemResponse":
         return self._unary_unary(
-            "/pod.PodService/SandboxSnapshotFilesystem",
-            PodSandboxSnapshotFilesystemRequest,
-            PodSandboxSnapshotFilesystemResponse,
-        )(pod_sandbox_snapshot_filesystem_request)
+            "/pod.PodService/SandboxCreateImageFromFilesystem",
+            PodSandboxCreateImageFromFilesystemRequest,
+            PodSandboxCreateImageFromFilesystemResponse,
+        )(pod_sandbox_create_image_from_filesystem_request)
 
     def sandbox_snapshot_memory(
         self, pod_sandbox_snapshot_memory_request: "PodSandboxSnapshotMemoryRequest"

@@ -180,63 +180,6 @@ class Sandbox(Pod):
             stub_id=response.stub_id,
         )
 
-    def create_from_filesystem_snapshot(self, snapshot_id: str) -> "SandboxInstance":
-        """
-        Create a sandbox instance from a filesystem snapshot.
-        This will create a new sandbox instance with any filesystem-level changes made in that original sandbox instance.
-        However, it will not restore any running processes or state present in the original sandbox instance.
-
-        Parameters:
-            snapshot_id (str): The ID of the snapshot to create the sandbox from.
-
-        Returns:
-            SandboxInstance: A new sandbox instance ready for use.
-
-        Example:
-            ```python
-            # Create a sandbox instance from a filesystem snapshot
-            instance = sandbox.create_from_filesystem_snapshot("snapshot-123")
-            print(f"Sandbox created with ID: {instance.sandbox_id()}")
-            ```
-        """
-
-        self.stub_id = "-".join(snapshot_id.split("-")[1:6])
-        self.stub_created = True
-        self.image_id = snapshot_id
-
-        terminal.header(f"Creating sandbox from filesystem snapshot: {snapshot_id}")
-
-        create_response: CreatePodResponse = self.stub.create_pod(
-            CreatePodRequest(
-                stub_id=self.stub_id,
-                snapshot_id=snapshot_id,
-            )
-        )
-
-        if not create_response.ok:
-            return SandboxInstance(
-                stub_id=self.stub_id,
-                container_id="",
-                ok=False,
-                error_msg=create_response.error_msg,
-            )
-
-        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
-
-        if self.keep_warm_seconds < 0:
-            terminal.header(
-                "This sandbox has no timeout, it will run until it is shut down manually."
-            )
-        else:
-            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
-
-        return SandboxInstance(
-            stub_id=self.stub_id,
-            container_id=create_response.container_id,
-            ok=create_response.ok,
-            error_msg=create_response.error_msg,
-        )
-
     def create_from_memory_snapshot(self, snapshot_id: str) -> "SandboxInstance":
         """
         Create a sandbox instance from a filesystem snapshot.
@@ -440,21 +383,21 @@ class SandboxInstance(BaseAbstraction):
 
         return res.ok
 
-    def snapshot_filesystem(self) -> str:
+    def create_image_from_filesystem(self) -> str:
         """
-        Create a snapshot of the sandbox filesystem.
+        Save the current sandbox filesystem state and create an image from it.
 
         Returns:
-            str: The snapshot ID.
+            str: The image ID.
 
         Example:
             ```python
-            # Create a snapshot of the sandbox filesystem contents
-            snapshot_id = instance.snapshot_filesystem  ()
-            print(f"Snapshot created with ID: {snapshot_id}")
+            # Create an image from the sandbox filesystem contents
+            image_id = instance.create_image_from_filesystem()
+            print(f"Image created with ID: {image_id}")
             ```
         """
-        terminal.header(f"Creating a snapshot of sandbox filesystem: {self.container_id}")
+        terminal.header(f"Creating an image from sandbox filesystem: {self.container_id}")
 
         res: "PodSandboxSnapshotFilesystemResponse" = self.stub.sandbox_snapshot_filesystem(
             PodSandboxSnapshotFilesystemRequest(
@@ -465,7 +408,7 @@ class SandboxInstance(BaseAbstraction):
         if not res.ok:
             raise SandboxProcessError(res.error_msg)
 
-        return res.snapshot_id
+        return res.image_id
 
     def snapshot_memory(self) -> str:
         """

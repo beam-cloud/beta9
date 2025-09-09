@@ -250,7 +250,7 @@ func (ps *GenericPodService) getOrCreatePodInstance(stubId string, options ...fu
 	return instance, nil
 }
 
-func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, snapshotId *string, checkpoint *types.Checkpoint) (string, error) {
+func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, stub *types.StubWithRelated, imageId *string, checkpoint *types.Checkpoint) (string, error) {
 	stubConfig := types.StubConfigV1{}
 	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
 		return "", err
@@ -312,9 +312,8 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		s.rdb.SetEx(context.Background(), key, 1, ttl)
 	}
 
-	imageId := stubConfig.Runtime.ImageId
-	if snapshotId != nil {
-		imageId = *snapshotId
+	if imageId == nil {
+		imageId = &stubConfig.Runtime.ImageId
 	}
 
 	err = s.scheduler.Run(&types.ContainerRequest{
@@ -327,7 +326,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		GpuCount:          uint32(gpuCount),
 		Mounts:            mounts,
 		Stub:              *stub,
-		ImageId:           imageId,
+		ImageId:           *imageId,
 		WorkspaceId:       authInfo.Workspace.ExternalId,
 		Workspace:         *authInfo.Workspace,
 		EntryPoint:        stubConfig.EntryPoint,
@@ -378,7 +377,7 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 		}
 	}
 
-	containerId, err := s.run(ctx, authInfo, stub, in.SnapshotId, checkpoint)
+	containerId, err := s.run(ctx, authInfo, stub, in.ImageId, checkpoint)
 	if err != nil {
 		return &pb.CreatePodResponse{
 			Ok: false,

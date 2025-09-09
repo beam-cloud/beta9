@@ -19,27 +19,27 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	PodService_CreatePod_FullMethodName                 = "/pod.PodService/CreatePod"
-	PodService_SandboxExec_FullMethodName               = "/pod.PodService/SandboxExec"
-	PodService_SandboxStatus_FullMethodName             = "/pod.PodService/SandboxStatus"
-	PodService_SandboxStdout_FullMethodName             = "/pod.PodService/SandboxStdout"
-	PodService_SandboxStderr_FullMethodName             = "/pod.PodService/SandboxStderr"
-	PodService_SandboxKill_FullMethodName               = "/pod.PodService/SandboxKill"
-	PodService_SandboxListProcesses_FullMethodName      = "/pod.PodService/SandboxListProcesses"
-	PodService_SandboxUploadFile_FullMethodName         = "/pod.PodService/SandboxUploadFile"
-	PodService_SandboxDownloadFile_FullMethodName       = "/pod.PodService/SandboxDownloadFile"
-	PodService_SandboxStatFile_FullMethodName           = "/pod.PodService/SandboxStatFile"
-	PodService_SandboxListFiles_FullMethodName          = "/pod.PodService/SandboxListFiles"
-	PodService_SandboxDeleteFile_FullMethodName         = "/pod.PodService/SandboxDeleteFile"
-	PodService_SandboxCreateDirectory_FullMethodName    = "/pod.PodService/SandboxCreateDirectory"
-	PodService_SandboxDeleteDirectory_FullMethodName    = "/pod.PodService/SandboxDeleteDirectory"
-	PodService_SandboxExposePort_FullMethodName         = "/pod.PodService/SandboxExposePort"
-	PodService_SandboxReplaceInFiles_FullMethodName     = "/pod.PodService/SandboxReplaceInFiles"
-	PodService_SandboxFindInFiles_FullMethodName        = "/pod.PodService/SandboxFindInFiles"
-	PodService_SandboxConnect_FullMethodName            = "/pod.PodService/SandboxConnect"
-	PodService_SandboxUpdateTTL_FullMethodName          = "/pod.PodService/SandboxUpdateTTL"
-	PodService_SandboxSnapshotFilesystem_FullMethodName = "/pod.PodService/SandboxSnapshotFilesystem"
-	PodService_SandboxSnapshotMemory_FullMethodName     = "/pod.PodService/SandboxSnapshotMemory"
+	PodService_CreatePod_FullMethodName                        = "/pod.PodService/CreatePod"
+	PodService_SandboxExec_FullMethodName                      = "/pod.PodService/SandboxExec"
+	PodService_SandboxStatus_FullMethodName                    = "/pod.PodService/SandboxStatus"
+	PodService_SandboxStdout_FullMethodName                    = "/pod.PodService/SandboxStdout"
+	PodService_SandboxStderr_FullMethodName                    = "/pod.PodService/SandboxStderr"
+	PodService_SandboxKill_FullMethodName                      = "/pod.PodService/SandboxKill"
+	PodService_SandboxListProcesses_FullMethodName             = "/pod.PodService/SandboxListProcesses"
+	PodService_SandboxUploadFile_FullMethodName                = "/pod.PodService/SandboxUploadFile"
+	PodService_SandboxDownloadFile_FullMethodName              = "/pod.PodService/SandboxDownloadFile"
+	PodService_SandboxStatFile_FullMethodName                  = "/pod.PodService/SandboxStatFile"
+	PodService_SandboxListFiles_FullMethodName                 = "/pod.PodService/SandboxListFiles"
+	PodService_SandboxDeleteFile_FullMethodName                = "/pod.PodService/SandboxDeleteFile"
+	PodService_SandboxCreateDirectory_FullMethodName           = "/pod.PodService/SandboxCreateDirectory"
+	PodService_SandboxDeleteDirectory_FullMethodName           = "/pod.PodService/SandboxDeleteDirectory"
+	PodService_SandboxExposePort_FullMethodName                = "/pod.PodService/SandboxExposePort"
+	PodService_SandboxReplaceInFiles_FullMethodName            = "/pod.PodService/SandboxReplaceInFiles"
+	PodService_SandboxFindInFiles_FullMethodName               = "/pod.PodService/SandboxFindInFiles"
+	PodService_SandboxConnect_FullMethodName                   = "/pod.PodService/SandboxConnect"
+	PodService_SandboxUpdateTTL_FullMethodName                 = "/pod.PodService/SandboxUpdateTTL"
+	PodService_SandboxCreateImageFromFilesystem_FullMethodName = "/pod.PodService/SandboxCreateImageFromFilesystem"
+	PodService_SandboxSnapshotMemory_FullMethodName            = "/pod.PodService/SandboxSnapshotMemory"
 )
 
 // PodServiceClient is the client API for PodService service.
@@ -65,7 +65,7 @@ type PodServiceClient interface {
 	SandboxFindInFiles(ctx context.Context, in *PodSandboxFindInFilesRequest, opts ...grpc.CallOption) (*PodSandboxFindInFilesResponse, error)
 	SandboxConnect(ctx context.Context, in *PodSandboxConnectRequest, opts ...grpc.CallOption) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(ctx context.Context, in *PodSandboxUpdateTTLRequest, opts ...grpc.CallOption) (*PodSandboxUpdateTTLResponse, error)
-	SandboxSnapshotFilesystem(ctx context.Context, in *PodSandboxSnapshotFilesystemRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotFilesystemResponse, error)
+	SandboxCreateImageFromFilesystem(ctx context.Context, in *PodSandboxCreateImageFromFilesystemRequest, opts ...grpc.CallOption) (*PodSandboxCreateImageFromFilesystemResponse, error)
 	SandboxSnapshotMemory(ctx context.Context, in *PodSandboxSnapshotMemoryRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotMemoryResponse, error)
 }
 
@@ -248,9 +248,9 @@ func (c *podServiceClient) SandboxUpdateTTL(ctx context.Context, in *PodSandboxU
 	return out, nil
 }
 
-func (c *podServiceClient) SandboxSnapshotFilesystem(ctx context.Context, in *PodSandboxSnapshotFilesystemRequest, opts ...grpc.CallOption) (*PodSandboxSnapshotFilesystemResponse, error) {
-	out := new(PodSandboxSnapshotFilesystemResponse)
-	err := c.cc.Invoke(ctx, PodService_SandboxSnapshotFilesystem_FullMethodName, in, out, opts...)
+func (c *podServiceClient) SandboxCreateImageFromFilesystem(ctx context.Context, in *PodSandboxCreateImageFromFilesystemRequest, opts ...grpc.CallOption) (*PodSandboxCreateImageFromFilesystemResponse, error) {
+	out := new(PodSandboxCreateImageFromFilesystemResponse)
+	err := c.cc.Invoke(ctx, PodService_SandboxCreateImageFromFilesystem_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +289,7 @@ type PodServiceServer interface {
 	SandboxFindInFiles(context.Context, *PodSandboxFindInFilesRequest) (*PodSandboxFindInFilesResponse, error)
 	SandboxConnect(context.Context, *PodSandboxConnectRequest) (*PodSandboxConnectResponse, error)
 	SandboxUpdateTTL(context.Context, *PodSandboxUpdateTTLRequest) (*PodSandboxUpdateTTLResponse, error)
-	SandboxSnapshotFilesystem(context.Context, *PodSandboxSnapshotFilesystemRequest) (*PodSandboxSnapshotFilesystemResponse, error)
+	SandboxCreateImageFromFilesystem(context.Context, *PodSandboxCreateImageFromFilesystemRequest) (*PodSandboxCreateImageFromFilesystemResponse, error)
 	SandboxSnapshotMemory(context.Context, *PodSandboxSnapshotMemoryRequest) (*PodSandboxSnapshotMemoryResponse, error)
 	mustEmbedUnimplementedPodServiceServer()
 }
@@ -355,8 +355,8 @@ func (UnimplementedPodServiceServer) SandboxConnect(context.Context, *PodSandbox
 func (UnimplementedPodServiceServer) SandboxUpdateTTL(context.Context, *PodSandboxUpdateTTLRequest) (*PodSandboxUpdateTTLResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxUpdateTTL not implemented")
 }
-func (UnimplementedPodServiceServer) SandboxSnapshotFilesystem(context.Context, *PodSandboxSnapshotFilesystemRequest) (*PodSandboxSnapshotFilesystemResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SandboxSnapshotFilesystem not implemented")
+func (UnimplementedPodServiceServer) SandboxCreateImageFromFilesystem(context.Context, *PodSandboxCreateImageFromFilesystemRequest) (*PodSandboxCreateImageFromFilesystemResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SandboxCreateImageFromFilesystem not implemented")
 }
 func (UnimplementedPodServiceServer) SandboxSnapshotMemory(context.Context, *PodSandboxSnapshotMemoryRequest) (*PodSandboxSnapshotMemoryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SandboxSnapshotMemory not implemented")
@@ -716,20 +716,20 @@ func _PodService_SandboxUpdateTTL_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
-func _PodService_SandboxSnapshotFilesystem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PodSandboxSnapshotFilesystemRequest)
+func _PodService_SandboxCreateImageFromFilesystem_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PodSandboxCreateImageFromFilesystemRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(PodServiceServer).SandboxSnapshotFilesystem(ctx, in)
+		return srv.(PodServiceServer).SandboxCreateImageFromFilesystem(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: PodService_SandboxSnapshotFilesystem_FullMethodName,
+		FullMethod: PodService_SandboxCreateImageFromFilesystem_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(PodServiceServer).SandboxSnapshotFilesystem(ctx, req.(*PodSandboxSnapshotFilesystemRequest))
+		return srv.(PodServiceServer).SandboxCreateImageFromFilesystem(ctx, req.(*PodSandboxCreateImageFromFilesystemRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -836,8 +836,8 @@ var PodService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _PodService_SandboxUpdateTTL_Handler,
 		},
 		{
-			MethodName: "SandboxSnapshotFilesystem",
-			Handler:    _PodService_SandboxSnapshotFilesystem_Handler,
+			MethodName: "SandboxCreateImageFromFilesystem",
+			Handler:    _PodService_SandboxCreateImageFromFilesystem_Handler,
 		},
 		{
 			MethodName: "SandboxSnapshotMemory",

@@ -82,14 +82,14 @@ func NewRuncImageService(
 }
 
 func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
-	if in.SnapshotId != nil && *in.SnapshotId != "" {
-		exists, err := is.builder.Exists(ctx, *in.SnapshotId)
+	if in.ImageId != nil && *in.ImageId != "" {
+		exists, err := is.builder.Exists(ctx, *in.ImageId)
 		if err != nil {
 			return nil, err
 		}
 
 		return &pb.VerifyImageBuildResponse{
-			ImageId: *in.SnapshotId,
+			ImageId: *in.ImageId,
 			Exists:  exists,
 			Valid:   true,
 		}, nil
@@ -187,12 +187,12 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageBuildRequest) (string, bool, bool, *BuildOpts, error) {
 	var valid bool = true
 
-	if in.SnapshotId != nil && *in.SnapshotId != "" {
-		exists, err := is.builder.Exists(ctx, *in.SnapshotId)
+	if in.ImageId != nil && *in.ImageId != "" {
+		exists, err := is.builder.Exists(ctx, *in.ImageId)
 		if err != nil {
 			return "", false, false, nil, err
 		}
-		return *in.SnapshotId, exists, true, nil, nil
+		return *in.ImageId, exists, true, nil, nil
 	}
 
 	tag := in.PythonVersion
