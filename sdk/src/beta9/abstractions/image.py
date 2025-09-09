@@ -454,7 +454,7 @@ class Image(BaseAbstraction):
     @classmethod
     def from_id(cls, image_id: str) -> "Image":
         """
-        Create an Image from a filesystem image.
+        Create an Image from an existing image ID.
         """
         return cls(
             image_id=image_id,
