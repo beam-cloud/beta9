@@ -176,6 +176,6 @@ def checkpoint_container(service: ServiceClient, container_id: str):
         )
 
     if res.ok:
-        terminal.success(f"Checkpoint created for container: {container_id}")
+        terminal.success(f"Checkpoint created for container: {container_id} -> {res.checkpoint_id}")
     else:
         terminal.error(f"{res.error_msg}", exit=False)
