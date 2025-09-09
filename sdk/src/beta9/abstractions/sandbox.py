@@ -657,7 +657,7 @@ class SandboxProcessManager:
     def exec(
         self,
         *args,
-        cwd: Optional[str] = None,
+        cwd: Optional[str] = "/workspace",
         env: Optional[Dict[str, str]] = None,
     ) -> "SandboxProcess":
         """
