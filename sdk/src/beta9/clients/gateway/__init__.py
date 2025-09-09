@@ -733,15 +733,6 @@ class GatewayServiceStub(SyncServiceStub):
             .result()
         )
 
-    def list_containers(
-        self, list_containers_request: "ListContainersRequest"
-    ) -> "ListContainersResponse":
-        return self._unary_unary(
-            "/gateway.GatewayService/ListContainers",
-            ListContainersRequest,
-            ListContainersResponse,
-        )(list_containers_request)
-
     def checkpoint_container(
         self, checkpoint_container_request: "CheckpointContainerRequest"
     ) -> "CheckpointContainerResponse":
@@ -750,6 +741,15 @@ class GatewayServiceStub(SyncServiceStub):
             CheckpointContainerRequest,
             CheckpointContainerResponse,
         )(checkpoint_container_request)
+
+    def list_containers(
+        self, list_containers_request: "ListContainersRequest"
+    ) -> "ListContainersResponse":
+        return self._unary_unary(
+            "/gateway.GatewayService/ListContainers",
+            ListContainersRequest,
+            ListContainersResponse,
+        )(list_containers_request)
 
     def stop_container(
         self, stop_container_request: "StopContainerRequest"
