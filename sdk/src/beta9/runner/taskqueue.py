@@ -6,7 +6,7 @@ import threading
 import time
 import traceback
 from concurrent import futures
-from multiprocessing import Event, Process, set_start_method
+from multiprocessing import Event, Process, Value, set_start_method
 from multiprocessing.synchronize import Event as TEvent
 from typing import Any, List, NamedTuple, Type, Union
 
@@ -62,6 +62,9 @@ class TaskQueueManager:
         ]
         self.task_worker_watchdog_threads: List[threading.Thread] = []
 
+        # Shared workers_ready counter for auto-checkpointing
+        self.workers_ready: Value = Value("i", 0)
+
     def _setup_signal_handlers(self):
         if os.getpid() == self.pid:
             signal.signal(signal.SIGTERM, self._init_shutdown)
@@ -103,6 +106,7 @@ class TaskQueueManager:
                 worker_index=worker_index,
                 parent_pid=self.pid,
                 worker_startup_event=self.task_worker_startup_events[worker_index],
+                workers_ready=self.workers_ready,
             )
         )
 
@@ -162,10 +166,12 @@ class TaskQueueWorker:
         worker_index: int,
         parent_pid: int,
         worker_startup_event: TEvent,
+        workers_ready: Value,
     ) -> None:
         self.worker_index: int = worker_index
         self.parent_pid: int = parent_pid
         self.worker_startup_event: TEvent = worker_startup_event
+        self.workers_ready: Value = workers_ready
 
     def _get_next_task(
         self, taskqueue_stub: TaskQueueServiceStub, stub_id: str, container_id: str
@@ -293,7 +299,7 @@ class TaskQueueWorker:
 
         # If checkpointing is enabled, wait for all workers to be ready before creating a checkpoint
         if cfg.checkpoint_enabled:
-            wait_for_checkpoint()
+            wait_for_checkpoint(workers_ready=self.workers_ready)
 
         with ThreadPoolExecutorOverride() as thread_pool:
             while True:
