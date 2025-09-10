@@ -1589,28 +1589,29 @@ class SandboxFileSystem:
 
     def find_in_files(self, sandbox_path: str, pattern: str) -> List[SandboxFileSearchResult]:
         """
-        Find files matching a pattern in the sandbox.
+        Search file contents in the sandbox using a regular expression pattern.
 
-        This method searches for files within the specified directory
-        that match the given pattern.
+        This method scans files under the given directory and returns matches
+        for the provided regex pattern, including line/column ranges and the
+        matched text for each file.
 
         Parameters:
-            sandbox_path (str): The directory path to search in.
-            pattern (str): The pattern to match files against.
+            sandbox_path (str): The directory path to search under.
+            pattern (str): A regular expression applied to file contents.
 
         Returns:
-            List[SandboxFileSearchResult]: List of matching file information objects.
+            List[SandboxFileSearchResult]: Per-file results with match ranges and text.
 
         Raises:
             SandboxFileSystemError: If the search fails.
 
         Example:
             ```python
-            # Find all Python files
-            python_files = fs.find_in_files("/workspace", "*.py")
+            # Find TODO comments
+            todos = fs.find_in_files("/workspace", r"\bTODO\b")
 
-            # Find all log files
-            log_files = fs.find_in_files("/var/log", "*.log")
+            # Find imports of requests
+            imports = fs.find_in_files("/app", r"^import\s+requests")
             ```
         """
         response = self.sandbox_instance.stub.sandbox_find_in_files(
