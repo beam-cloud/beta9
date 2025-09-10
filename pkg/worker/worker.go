@@ -409,6 +409,7 @@ func (s *Worker) checkForStoppedBuilds(ctx context.Context, cancel context.Cance
 		cancel()
 		return true
 	}})
+
 	go eventbus.ReceiveEvents(ctx)
 }
 

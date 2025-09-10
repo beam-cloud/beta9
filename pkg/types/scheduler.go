@@ -539,15 +539,6 @@ const (
 	CheckpointStatusNotFound         CheckpointStatus = "not_found"
 )
 
-// @go2proto
-type CheckpointState struct {
-	StubId      string           `redis:"stub_id" json:"stub_id"`
-	ContainerId string           `redis:"container_id" json:"container_id"`
-	ContainerIp string           `redis:"container_ip" json:"container_ip"`
-	Status      CheckpointStatus `redis:"status" json:"status"`
-	RemoteKey   string           `redis:"remote_key" json:"remote_key"`
-}
-
 type ErrCheckpointNotFound struct {
 	CheckpointId string
 }

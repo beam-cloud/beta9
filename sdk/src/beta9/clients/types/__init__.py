@@ -46,15 +46,6 @@ class Checkpoint(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class CheckpointState(betterproto.Message):
-    stub_id: str = betterproto.string_field(1)
-    container_id: str = betterproto.string_field(2)
-    container_ip: str = betterproto.string_field(3)
-    status: str = betterproto.string_field(4)
-    remote_key: str = betterproto.string_field(5)
-
-
-@dataclass(eq=False, repr=False)
 class ConcurrencyLimit(betterproto.Message):
     id: int = betterproto.uint32_field(1)
     external_id: str = betterproto.string_field(2)
@@ -181,7 +172,8 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    null_time: "NullTime" = betterproto.message_field(1)
+    time: datetime = betterproto.message_field(1)
+    valid: bool = betterproto.bool_field(2)
 
 
 @dataclass(eq=False, repr=False)
