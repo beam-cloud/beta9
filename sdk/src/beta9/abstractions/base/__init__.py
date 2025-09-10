@@ -27,7 +27,7 @@ def set_channel(
     Use this before importing any abstraction to control which
     gateway to connect to. When you provide a channel, it should already be
     authenticated. When you provide a context, this will authenticate for you.
-    If neither are provided, this uses the default context and will create a
+    If neither is provided, this uses the default context and will create a
     channel. If there is no default context (or config file), then we will
     prompt the user for it.
 
