@@ -39,14 +39,6 @@ message Checkpoint {
   google.protobuf.Timestamp last_restored_at = 14;
 }
 
-message CheckpointState {
-  string stub_id = 1;
-  string container_id = 2;
-  string container_ip = 3;
-  string status = 4;
-  string remote_key = 5;
-}
-
 message ConcurrencyLimit {
   uint32 id = 1;
   string external_id = 2;
@@ -162,7 +154,8 @@ message MountPointConfig {
 }
 
 message NullTime {
-  NullTime null_time = 1;
+  google.protobuf.Timestamp time = 1;
+  bool valid = 2;
 }
 
 message Object {

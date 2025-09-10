@@ -481,43 +481,6 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 	return nil
 }
 
-func (cr *ContainerRedisRepository) UpdateCheckpointState(workspaceName, checkpointId string, checkpointState *types.CheckpointState) error {
-	stateKey := common.RedisKeys.SchedulerCheckpointState(workspaceName, checkpointId)
-	err := cr.rdb.HSet(
-		context.TODO(), stateKey,
-		"stub_id", checkpointState.StubId,
-		"container_id", checkpointState.ContainerId,
-		"container_ip", checkpointState.ContainerIp,
-		"status", string(checkpointState.Status),
-		"remote_key", checkpointState.RemoteKey,
-	).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set checkpoint state <%v>: %w", stateKey, err)
-	}
-
-	return nil
-}
-
-func (cr *ContainerRedisRepository) GetCheckpointState(workspaceName, checkpointId string) (*types.CheckpointState, error) {
-	stateKey := common.RedisKeys.SchedulerCheckpointState(workspaceName, checkpointId)
-
-	res, err := cr.rdb.HGetAll(context.TODO(), stateKey).Result()
-	if err != nil && err != redis.Nil {
-		return nil, fmt.Errorf("failed to get container state: %w", err)
-	}
-
-	if len(res) == 0 {
-		return nil, &types.ErrCheckpointNotFound{CheckpointId: checkpointId}
-	}
-
-	state := &types.CheckpointState{}
-	if err = common.ToStruct(res, state); err != nil {
-		return nil, fmt.Errorf("failed to deserialize checkpoint state <%v>: %v", stateKey, err)
-	}
-
-	return state, nil
-}
-
 func (cr *ContainerRedisRepository) GetStubState(stubId string) (string, error) {
 	stateKey := common.RedisKeys.SchedulerStubState(stubId)
 	state, err := cr.rdb.Get(context.TODO(), stateKey).Result()
