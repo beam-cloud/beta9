@@ -194,7 +194,7 @@ class Sandbox(Pod):
 
         Example:
             ```python
-            # Create a sandbox instance from a me   mory snapshot
+            # Create a sandbox instance from a memory snapshot
             instance = sandbox.create_from_memory_snapshot("snapshot-123")
             print(f"Sandbox created with ID: {instance.sandbox_id()}")
             ```

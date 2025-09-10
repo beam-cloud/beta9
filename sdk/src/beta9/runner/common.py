@@ -527,7 +527,7 @@ CHECKPOINT_CONTAINER_ID_FILE = "/criu/CONTAINER_ID"
 CHECKPOINT_CONTAINER_HOSTNAME_FILE = "/criu/CONTAINER_HOSTNAME"
 
 
-def wait_for_checkpoint():
+def wait_for_checkpoint(workers_ready: Optional[Value] = None):
     def _reload_config():
         # Once we have set the checkpoint signal file, wait for checkpoint to be complete before reloading the config
         while not Path(CHECKPOINT_COMPLETE_FILE).exists():
@@ -537,17 +537,22 @@ def wait_for_checkpoint():
         config.container_id = Path(CHECKPOINT_CONTAINER_ID_FILE).read_text()
         config.container_hostname = Path(CHECKPOINT_CONTAINER_HOSTNAME_FILE).read_text()
 
-    with workers_ready.get_lock():
-        workers_ready.value += 1
+    ready_counter = workers_ready if workers_ready is not None else globals().get("workers_ready")
+    if not ready_counter:
+        return
 
-    if workers_ready.value == config.workers:
+    with ready_counter.get_lock():
+        ready_counter.value += 1
+
+    if ready_counter.value == config.workers:
         Path(CHECKPOINT_SIGNAL_FILE).touch(exist_ok=True)
         return _reload_config()
 
     while True:
-        with workers_ready.get_lock():
-            if workers_ready.value == config.workers:
+        with ready_counter.get_lock():
+            if ready_counter.value == config.workers:
                 break
+
         time.sleep(1)
 
     return _reload_config()
