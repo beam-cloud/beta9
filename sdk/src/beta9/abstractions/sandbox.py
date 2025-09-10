@@ -1489,7 +1489,7 @@ class SandboxFileSystem:
             sandbox_path (str): The path where the directory should be created.
 
         Raises:
-            NotImplementedError: This method is not yet implemented.
+            SandboxFileSystemError: If the directory creation fails.
         """
         resp = self.sandbox_instance.stub.sandbox_create_directory(
             PodSandboxCreateDirectoryRequest(
@@ -1508,7 +1508,7 @@ class SandboxFileSystem:
             sandbox_path (str): The path of the directory to delete.
 
         Raises:
-            NotImplementedError: This method is not yet implemented.
+            SandboxFileSystemError: If the directory deletion fails.
         """
         resp = self.sandbox_instance.stub.sandbox_delete_directory(
             PodSandboxDeleteDirectoryRequest(
