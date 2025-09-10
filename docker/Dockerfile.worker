@@ -65,7 +65,7 @@ RUN <<EOT
 set -eux
 git clone https://github.com/containers/skopeo.git /workspace/skopeo
 cd /workspace/skopeo
-git reset --hard 0114569b17b8fe2858fa850a8eb5bf323adf6e0b
+git reset --hard ac66ca51ec5730b239f757907ccf96bb2d89b83c
 make
 make install
 /usr/local/bin/skopeo --version
