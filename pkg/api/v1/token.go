@@ -12,15 +12,17 @@ import (
 )
 
 type TokenGroup struct {
-	routerGroup *echo.Group
-	config      types.AppConfig
-	backendRepo repository.BackendRepository
+	routerGroup   *echo.Group
+	config        types.AppConfig
+	backendRepo   repository.BackendRepository
+	workspaceRepo repository.WorkspaceRepository
 }
 
-func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, config types.AppConfig) *TokenGroup {
+func NewTokenGroup(g *echo.Group, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository, config types.AppConfig) *TokenGroup {
 	group := &TokenGroup{routerGroup: g,
-		backendRepo: backendRepo,
-		config:      config,
+		backendRepo:   backendRepo,
+		workspaceRepo: workspaceRepo,
+		config:        config,
 	}
 
 	g.PATCH("/admin/:workspaceId", auth.WithClusterAdminAuth(group.ClusterAdminUpdateAllWorkspaceTokens))
@@ -90,6 +92,13 @@ func (g *TokenGroup) ClusterAdminUpdateAllWorkspaceTokens(ctx echo.Context) erro
 		if err != nil {
 			return HTTPInternalServerError("Unable to update token")
 		}
+
+		if req.Disabled {
+			err = g.workspaceRepo.RevokeToken(token.Key)
+			if err != nil {
+				return HTTPInternalServerError("Failed to revoke token")
+			}
+		}
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
@@ -147,6 +156,13 @@ func (g *TokenGroup) ToggleWorkspaceToken(ctx echo.Context) error {
 		return HTTPInternalServerError("Failed to serialize response")
 	}
 
+	if !toggledToken.Active {
+		err = g.workspaceRepo.RevokeToken(token.Key)
+		if err != nil {
+			return HTTPInternalServerError("Failed to revoke token")
+		}
+	}
+
 	return ctx.JSON(http.StatusOK, serializedToken)
 }
 
@@ -172,6 +188,11 @@ func (g *TokenGroup) DeleteWorkspaceToken(ctx echo.Context) error {
 	err = g.backendRepo.DeleteToken(ctx.Request().Context(), workspace.Id, tokenId)
 	if err != nil {
 		return HTTPInternalServerError("Failed to delete token")
+	}
+
+	err = g.workspaceRepo.RevokeToken(token.Key)
+	if err != nil {
+		return HTTPInternalServerError("Failed to revoke token")
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
