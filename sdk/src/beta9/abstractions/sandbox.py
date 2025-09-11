@@ -251,7 +251,7 @@ class Sandbox(Pod):
             ```
         """
 
-        self.entrypoint = ["tini", "--", "tail", "-f", "/dev/null"]
+        self.entrypoint = ["tail", "-f", "/dev/null"]
 
         if not self.prepare_runtime(
             stub_type=SANDBOX_STUB_TYPE,
