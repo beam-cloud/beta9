@@ -460,6 +460,7 @@ func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxEx
 	opts := &runc.ExecOpts{
 		IO:      processIO,
 		Started: started,
+		Detach:  true,
 	}
 
 	stdoutBuf := &common.SafeBuffer{}

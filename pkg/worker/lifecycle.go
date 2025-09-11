@@ -777,7 +777,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	// Handle restore from checkpoint if available
 	if s.IsCRIUAvailable(request.GpuCount) && request.Checkpoint != nil {
-		if request.Checkpoint != nil {
+		if request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable) {
 			checkpointPath := s.checkpointPath(request.Checkpoint.CheckpointId)
 
 			err := copyDirectory(filepath.Join(checkpointPath, checkpointFsDir), filepath.Dir(request.ConfigPath), []string{})

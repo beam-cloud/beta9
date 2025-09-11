@@ -421,79 +421,30 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 	var ipAddr *netlink.Addr = nil
 	var ipv4LastOctet int = -1
 
-	// For checkpointed or sandbox containers, we need to use the IP address that was used for the checkpoint
-	// We try to do this in the upper bound of the subnet range
-	// If we have an existing checkpoint, we try to allocate that IP. If it's not available, we can't
-	// launch the container on this worker right now
-	if opts.request.Checkpoint != nil || opts.request.CheckpointEnabled || opts.request.Stub.Type.Kind() == types.StubTypeSandbox {
-		var ip string
+	// Choose a new address that lies in containerSubnet
+	_, ipNet, _ := net.ParseCIDR(containerSubnet)
+	for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
+		ipStr := ip.String()
 
-		if opts.request.Checkpoint != nil {
-			ip = opts.request.Checkpoint.ContainerIp
+		// Skip the gateway address (i.e. 192.168.1.1)
+		if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
+			continue
 		}
 
-		if ip != "" {
-			log.Info().Str("container_id", opts.containerId).Msgf("checkpoint enabled, using stored IP address: %s", ip)
-
-			ipAddr = &netlink.Addr{
-				IPNet: &net.IPNet{
-					IP:   net.ParseIP(ip),
-					Mask: net.CIDRMask(24, 32),
-				},
-			}
-
-			ipv4LastOctet = int(ipAddr.IP.To4()[3])
-
-			if _, allocated := allocatedSet[ipAddr.IP.String()]; allocated {
-				log.Info().Str("container_id", opts.containerId).Msgf("checkpoint enabled, but preferred IP address is already allocated, cannot use it: %s", ipAddr.IP.String())
-
-				// If we were unable to use the preferred IP address, we need to disable checkpointing
-				// for this container request
-				ipAddr = nil
-				ipv4LastOctet = -1
-
-				opts.request.CheckpointEnabled = false
-				opts.request.Checkpoint = nil
-			}
-		} else {
-			// Assign a random IP address in the range 128-255 to avoid _most_ conflicts with non-checkpointed containers
-			ipAddr, err = assignIpInRange(allocatedSet, 128, 255)
-			if err != nil {
-				return err
-			}
-
-			log.Info().Str("container_id", opts.containerId).Msgf("checkpoint enabled, using random IP address in range 128-255: %s", ipAddr.IP.String())
-
-			ipv4LastOctet = int(ipAddr.IP.To4()[3])
+		if _, allocated := allocatedSet[ipStr]; allocated {
+			continue
 		}
-	}
 
-	if ipAddr == nil {
-		// Choose a new address that lies in containerSubnet
-		_, ipNet, _ := net.ParseCIDR(containerSubnet)
-		for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
-			ipStr := ip.String()
-
-			// Skip the gateway address (i.e. 192.168.1.1)
-			if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
-				continue
-			}
-
-			if _, allocated := allocatedSet[ipStr]; allocated {
-				continue
-			}
-
-			ipAddr = &netlink.Addr{
-				IPNet: &net.IPNet{
-					IP:   ip,
-					Mask: ipNet.Mask,
-				},
-			}
-
-			// Extract the last octet of the IPv4 address
-			ipv4LastOctet = int(ip.To4()[3])
-			break
+		ipAddr = &netlink.Addr{
+			IPNet: &net.IPNet{
+				IP:   ip,
+				Mask: ipNet.Mask,
+			},
 		}
+
+		// Extract the last octet of the IPv4 address
+		ipv4LastOctet = int(ip.To4()[3])
+		break
 	}
 
 	if ipAddr == nil {
@@ -549,6 +500,8 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 	if err != nil {
 		return err
 	}
+
+	log.Info().Str("container_id", opts.containerId).Str("ip_address", ipAddr.IP.String()).Msg("container ip address set")
 
 	containerInstance, exists := m.containerInstances.Get(opts.containerId)
 	if exists {

@@ -251,7 +251,7 @@ class Sandbox(Pod):
             ```
         """
 
-        self.entrypoint = ["tail", "-f", "/dev/null"]
+        self.entrypoint = ["tini", "--", "tail", "-f", "/dev/null"]
 
         if not self.prepare_runtime(
             stub_type=SANDBOX_STUB_TYPE,
@@ -414,7 +414,7 @@ class SandboxInstance(BaseAbstraction):
 
     def snapshot_memory(self) -> str:
         """
-        Create a snapshot of the sandbox memory.
+        Create a memory snapshot of the sandbox (including all running processes and GPU state).
 
         Returns:
             str: The checkpoint ID.
@@ -426,7 +426,7 @@ class SandboxInstance(BaseAbstraction):
             print(f"Checkpoint created with ID: {checkpoint_id}")
             ```
         """
-        terminal.header(f"Creating a snapshot of sandbox memory: {self.container_id}")
+        terminal.header(f"Creating a memory snapshot of sandbox: {self.container_id}")
 
         res: "PodSandboxSnapshotMemoryResponse" = self.stub.sandbox_snapshot_memory(
             PodSandboxSnapshotMemoryRequest(stub_id=self.stub_id, container_id=self.container_id)
