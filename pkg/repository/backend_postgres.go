@@ -2559,7 +2559,7 @@ func (r *PostgresBackendRepository) GetCheckpointById(ctx context.Context, check
 		SELECT checkpoint_id, external_id, source_container_id, container_ip, status, remote_key,
 		       workspace_id, stub_id, stub_type, app_id, exposed_ports, created_at, last_restored_at
 		FROM checkpoint 
-		WHERE checkpoint_id = $1 
+		WHERE checkpoint_id = $1 AND deleted_at IS NULL
 		LIMIT 1;`
 
 	var checkpoint types.Checkpoint
@@ -2598,7 +2598,7 @@ func (r *PostgresBackendRepository) GetLatestCheckpointByStubId(ctx context.Cont
 		       c.workspace_id, c.stub_id, c.stub_type, c.app_id, c.exposed_ports, c.created_at, c.last_restored_at
 		FROM checkpoint c
 		INNER JOIN stub s ON c.stub_id = s.id
-		WHERE s.external_id = $1 
+		WHERE s.external_id = $1 AND c.deleted_at IS NULL
 		ORDER BY c.created_at DESC
 		LIMIT 1;`
 
