@@ -42,7 +42,7 @@ RUN <<EOT
 set -eux
 git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git /workspace/runc \
   && cd /workspace/runc \
-  && git reset --hard d2945750f50a023ca3b1af45a9cf9bad655646d8
+  && git reset --hard d85a78033ba2905f5c57afdc81b73a12be72c03c
 
 cd /workspace/runc
 make
