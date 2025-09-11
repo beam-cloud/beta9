@@ -17,6 +17,7 @@ import (
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/beam-cloud/go-runc"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -87,7 +88,7 @@ func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUMa
 }
 
 func (s *Worker) attemptAutoCheckpoint(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter io.Writer, startedChan chan int, checkpointPIDChan chan int) {
-	checkpointId := request.StubId
+	checkpointId := uuid.New().String()
 
 	// If checkpointing is enabled and there is no existing checkpoint, attempt to create a checkpoint
 	if s.shouldCreateCheckpoint(request) {

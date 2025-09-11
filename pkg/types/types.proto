@@ -37,6 +37,7 @@ message Checkpoint {
   repeated uint32 exposed_ports = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp last_restored_at = 14;
+  NullTime deleted_at = 15;
 }
 
 message ConcurrencyLimit {

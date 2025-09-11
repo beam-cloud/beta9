@@ -43,6 +43,7 @@ class Checkpoint(betterproto.Message):
     exposed_ports: List[int] = betterproto.uint32_field(12)
     created_at: datetime = betterproto.message_field(13)
     last_restored_at: datetime = betterproto.message_field(14)
+    deleted_at: "NullTime" = betterproto.message_field(15)
 
 
 @dataclass(eq=False, repr=False)

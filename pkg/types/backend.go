@@ -389,6 +389,7 @@ type Checkpoint struct {
 	ExposedPorts      []uint32 `db:"exposed_ports" json:"exposed_ports" serializer:"exposed_ports"`
 	CreatedAt         Time     `db:"created_at" json:"created_at" serializer:"created_at"`
 	LastRestoredAt    Time     `db:"last_restored_at" json:"last_restored_at" serializer:"last_restored_at"`
+	DeletedAt         NullTime `db:"deleted_at" json:"deleted_at" serializer:"deleted_at"`
 }
 
 func (c *Checkpoint) ToProto() *pb.Checkpoint {
