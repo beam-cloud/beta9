@@ -1520,7 +1520,7 @@ class SandboxFileSystem:
             raise SandboxFileSystemError(resp.error_msg)
 
     def delete_file(self, sandbox_path: str):
-        """
+        r"""
         Delete a file in the sandbox.
 
         This method removes a file from the sandbox filesystem.
@@ -1551,7 +1551,7 @@ class SandboxFileSystem:
             raise SandboxFileSystemError(response.error_msg)
 
     def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
-        """
+        r"""
         Replace a string in all files in a directory.
 
         This method performs a find-and-replace operation on all files
@@ -1588,7 +1588,7 @@ class SandboxFileSystem:
             raise SandboxFileSystemError(response.error_msg)
 
     def find_in_files(self, sandbox_path: str, pattern: str) -> List[SandboxFileSearchResult]:
-        """
+        r"""
         Search file contents in the sandbox using a regular expression pattern.
 
         This method scans files under the given directory and returns matches
