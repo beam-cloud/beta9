@@ -60,7 +60,7 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUMan
 func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, checkpointId string, request *types.ContainerRequest) (string, error) {
 	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, checkpointId)
 	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
-		AllowOpenTCP: false,
+		AllowOpenTCP: true,
 		LeaveRunning: true,
 		SkipInFlight: true,
 		LinkRemap:    true,
@@ -93,7 +93,7 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
-			AllowOpenTCP: false,
+			AllowOpenTCP: true,
 			TCPClose:     true,
 			LinkRemap:    true,
 			// Logs, irmap cache, sockets for lazy server and other go to working dir
