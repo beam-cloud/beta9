@@ -457,25 +457,18 @@ func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxEx
 		}, err
 	}
 
-	go func() {
-		// exitCode := <-processIO.Done()
-
-		// if state, ok := instance.SandboxProcesses.Load(int32(pid)); ok {
-		// 	ps := state.(*SandboxProcessState)
-		// 	ps.ExitCode = exitCode
-		// 	ps.Status = SandboxProcessStatusExited
-		// 	ps.EndTime = time.Now()
-		// 	instance.SandboxProcesses.Store(int32(pid), ps)
-
-		// 	log.Info().Str("container_id", in.ContainerId).Int("pid", pid).Int("exit_code", exitCode).Msg("sandbox process exited")
-		// }
-	}()
-
 	return &pb.RunCSandboxExecResponse{
 		Ok:  true,
 		Pid: int32(pid),
 	}, nil
 }
+
+type SandboxProcessStatus string
+
+const (
+	SandboxProcessStatusRunning SandboxProcessStatus = "running"
+	SandboxProcessStatusExited  SandboxProcessStatus = "exited"
+)
 
 func (s *RunCServer) RunCSandboxStatus(ctx context.Context, in *pb.RunCSandboxStatusRequest) (*pb.RunCSandboxStatusResponse, error) {
 	instance, exists := s.containerInstances.Get(in.ContainerId)
@@ -494,8 +487,14 @@ func (s *RunCServer) RunCSandboxStatus(ctx context.Context, in *pb.RunCSandboxSt
 		}, nil
 	}
 
+	status := SandboxProcessStatusRunning
+	if exitCode >= 0 {
+		status = SandboxProcessStatusExited
+	}
+
 	return &pb.RunCSandboxStatusResponse{
 		Ok:       true,
+		Status:   string(status),
 		ExitCode: int32(exitCode),
 	}, nil
 }

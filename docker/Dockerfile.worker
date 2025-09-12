@@ -191,9 +191,9 @@ RUN apt-get install -y ripgrep wget
 
 
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.3/goproc-0.1.3-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
+      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.4/goproc-0.1.4-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
     elif [ "$TARGETARCH" = "amd64" ]; then \
-      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.3/goproc-0.1.3-linux-amd64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
+      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.4/goproc-0.1.4-linux-amd64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
     fi
 
 RUN apt-get remove -y curl && \
