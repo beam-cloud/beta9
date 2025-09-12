@@ -451,10 +451,11 @@ func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxEx
 	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
 	if err != nil {
 		log.Error().Str("container_id", in.ContainerId).Msgf("failed to execute sandbox process: %v", err)
+
 		return &pb.RunCSandboxExecResponse{
 			Ok:  false,
 			Pid: -1,
-		}, err
+		}, nil
 	}
 
 	return &pb.RunCSandboxExecResponse{
