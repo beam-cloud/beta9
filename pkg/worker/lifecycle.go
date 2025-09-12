@@ -249,24 +249,6 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 			return err
 		}
 		bindPorts = append(bindPorts, bindPort)
-
-		if request.Stub.Type.Kind() == types.StubTypeSandbox && request.Ports[i] == uint32(types.WorkerSandboxProcessManagerPort) {
-			log.Info().Str("container_id", containerId).Msgf("exposing sandbox process manager port @ %d", bindPort)
-
-			instance, exists := s.containerInstances.Get(containerId)
-			if !exists {
-				return err
-			}
-
-			instance.SandboxProcessManagerPort = bindPort
-			instance.SandboxProcessManager, err = goproc.NewGoProcClient(ctx, uint(bindPort))
-			if err != nil {
-				log.Error().Str("container_id", containerId).Msgf("failed to create sandbox process manager client: %v", err)
-				return err
-			}
-
-			s.containerInstances.Set(containerId, instance)
-		}
 	}
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
@@ -710,6 +692,20 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Modify sandbox entry point to point to process manager binary
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		instance, exists := s.containerInstances.Get(containerId)
+		if !exists {
+			log.Error().Str("container_id", containerId).Msg("instance not found")
+			return
+		}
+
+		instance.SandboxProcessManager, err = goproc.NewGoProcClient(ctx, instance.ContainerIp, uint(types.WorkerSandboxProcessManagerPort))
+		if err != nil {
+			log.Error().Str("container_id", containerId).Msgf("failed to create sandbox process manager client: %v", err)
+			return
+		}
+
+		s.containerInstances.Set(containerId, instance)
+
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
 		spec.Mounts = append(spec.Mounts, specs.Mount{
 			Type:        "bind",
