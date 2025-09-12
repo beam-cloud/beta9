@@ -436,96 +436,38 @@ func (s *RunCServer) RunCSandboxExec(ctx context.Context, in *pb.RunCSandboxExec
 		return &pb.RunCSandboxExecResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	process := s.baseConfigSpec.Process
-	process.Args = parsedCmd
-	process.Cwd = instance.Spec.Process.Cwd
-
-	if in.Cwd != "" {
-		process.Cwd = in.Cwd
-	}
-
+	env := instance.Spec.Process.Env
 	formattedEnv := []string{}
 	for key, value := range in.Env {
 		formattedEnv = append(formattedEnv, fmt.Sprintf("%s=%s", key, value))
 	}
 
-	process.Env = append(instance.Spec.Process.Env, formattedEnv...)
-	return s.handleSandboxExec(ctx, in, instance, process)
+	env = append(env, formattedEnv...)
+
+	return s.handleSandboxExec(ctx, in, instance, env, parsedCmd, in.Cwd)
 }
 
-func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxExecRequest, instance *ContainerInstance, process *specs.Process) (*pb.RunCSandboxExecResponse, error) {
-	started := make(chan int, 1)
-
-	processIO := NewSandboxProcessIO()
-	opts := &runc.ExecOpts{
-		IO:      processIO,
-		Started: started,
-	}
-
-	stdoutBuf := &common.SafeBuffer{}
-	stderrBuf := &common.SafeBuffer{}
-
-	go func() {
-		io.Copy(stdoutBuf, processIO.Stdout())
-	}()
-
-	go func() {
-		io.Copy(stderrBuf, processIO.Stderr())
-	}()
-
-	if !in.Interactive {
-		processIO.Stdin().Close()
-	}
-
-	go func() {
-		err := s.runcHandle.Exec(context.Background(), in.ContainerId, *process, opts)
-		if err != nil {
-			if exitErr, ok := err.(*runc.ExitError); ok {
-				processIO.done <- exitErr.Status
-			} else {
-				processIO.done <- 1
-			}
-			return
-		}
-
-		processIO.done <- 0
-	}()
-
-	pid := <-started
-	if pid == -1 {
+func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxExecRequest, instance *ContainerInstance, env, cmd []string, cwd string) (*pb.RunCSandboxExecResponse, error) {
+	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
+	if err != nil {
 		return &pb.RunCSandboxExecResponse{
 			Ok:  false,
 			Pid: -1,
-		}, nil
+		}, err
 	}
-
-	processState := &SandboxProcessState{
-		Pid:       pid,
-		Args:      process.Args,
-		Stdin:     processIO.Stdin(),
-		Stdout:    processIO.Stdout(),
-		Stderr:    processIO.Stderr(),
-		StartTime: time.Now(),
-		Status:    SandboxProcessStatusRunning,
-		StdoutBuf: stdoutBuf,
-		StderrBuf: stderrBuf,
-		mu:        sync.Mutex{},
-		ExitCode:  -1,
-	}
-	instance.SandboxProcesses.Store(int32(pid), processState)
 
 	go func() {
-		exitCode := <-processIO.Done()
+		// exitCode := <-processIO.Done()
 
-		if state, ok := instance.SandboxProcesses.Load(int32(pid)); ok {
-			ps := state.(*SandboxProcessState)
-			ps.ExitCode = exitCode
-			ps.Status = SandboxProcessStatusExited
-			ps.EndTime = time.Now()
-			instance.SandboxProcesses.Store(int32(pid), ps)
+		// if state, ok := instance.SandboxProcesses.Load(int32(pid)); ok {
+		// 	ps := state.(*SandboxProcessState)
+		// 	ps.ExitCode = exitCode
+		// 	ps.Status = SandboxProcessStatusExited
+		// 	ps.EndTime = time.Now()
+		// 	instance.SandboxProcesses.Store(int32(pid), ps)
 
-			log.Info().Str("container_id", in.ContainerId).Int("pid", pid).Int("exit_code", exitCode).Msg("sandbox process exited")
-		}
+		// 	log.Info().Str("container_id", in.ContainerId).Int("pid", pid).Int("exit_code", exitCode).Msg("sandbox process exited")
+		// }
 	}()
 
 	return &pb.RunCSandboxExecResponse{
@@ -535,7 +477,7 @@ func (s *RunCServer) handleSandboxExec(ctx context.Context, in *pb.RunCSandboxEx
 }
 
 func (s *RunCServer) RunCSandboxStatus(ctx context.Context, in *pb.RunCSandboxStatusRequest) (*pb.RunCSandboxStatusResponse, error) {
-	instance, exists := s.containerInstances.Get(in.ContainerId)
+	_, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.RunCSandboxStatusResponse{
 			Ok:       false,
@@ -543,24 +485,24 @@ func (s *RunCServer) RunCSandboxStatus(ctx context.Context, in *pb.RunCSandboxSt
 		}, nil
 	}
 
-	processState, ok := instance.SandboxProcesses.Load(int32(in.Pid))
-	if !ok {
-		return &pb.RunCSandboxStatusResponse{
-			Ok:       false,
-			ErrorMsg: "Process not found",
-		}, nil
-	}
-	ps := processState.(*SandboxProcessState)
+	// processState, ok := instance.SandboxProcesses.Load(int32(in.Pid))
+	// if !ok {
+	// 	return &pb.RunCSandboxStatusResponse{
+	// 		Ok:       false,
+	// 		ErrorMsg: "Process not found",
+	// 	}, nil
+	// }
+	// ps := processState.(*SandboxProcessState)
 
 	return &pb.RunCSandboxStatusResponse{
-		Ok:       true,
-		Status:   string(ps.Status),
-		ExitCode: int32(ps.ExitCode),
+		Ok: true,
+		// Status:   string(ps.Status),
+		// ExitCode: int32(ps.ExitCode),
 	}, nil
 }
 
 func (s *RunCServer) RunCSandboxStdout(ctx context.Context, in *pb.RunCSandboxStdoutRequest) (*pb.RunCSandboxStdoutResponse, error) {
-	instance, exists := s.containerInstances.Get(in.ContainerId)
+	_, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.RunCSandboxStdoutResponse{
 			Ok:       false,
@@ -568,26 +510,26 @@ func (s *RunCServer) RunCSandboxStdout(ctx context.Context, in *pb.RunCSandboxSt
 		}, nil
 	}
 
-	processState, ok := instance.SandboxProcesses.Load(int32(in.Pid))
-	if !ok {
-		return &pb.RunCSandboxStdoutResponse{
-			Ok:       false,
-			ErrorMsg: "Process not found",
-		}, nil
-	}
+	// processState, ok := instance.SandboxProcesses.Load(int32(in.Pid))
+	// if !ok {
+	// 	return &pb.RunCSandboxStdoutResponse{
+	// 		Ok:       false,
+	// 		ErrorMsg: "Process not found",
+	// 	}, nil
+	// }
 
-	ps := processState.(*SandboxProcessState)
+	// ps := processState.(*SandboxProcessState)
 
-	stdout := ps.StdoutBuf.StringAndReset()
+	// stdout := ps.StdoutBuf.StringAndReset()
 
 	return &pb.RunCSandboxStdoutResponse{
 		Ok:     true,
-		Stdout: stdout,
+		Stdout: "stdout",
 	}, nil
 }
 
 func (s *RunCServer) RunCSandboxStderr(ctx context.Context, in *pb.RunCSandboxStderrRequest) (*pb.RunCSandboxStderrResponse, error) {
-	instance, exists := s.containerInstances.Get(in.ContainerId)
+	_, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.RunCSandboxStderrResponse{
 			Ok:       false,
@@ -595,43 +537,43 @@ func (s *RunCServer) RunCSandboxStderr(ctx context.Context, in *pb.RunCSandboxSt
 		}, nil
 	}
 
-	processState, ok := instance.SandboxProcesses.Load(int32(in.Pid))
-	if !ok {
-		return &pb.RunCSandboxStderrResponse{
-			Ok:       false,
-			ErrorMsg: "Process not found",
-		}, nil
-	}
+	// processState, ok := instance.SandboxProcesses.Load(int32(in.Pid))
+	// if !ok {
+	// 	return &pb.RunCSandboxStderrResponse{
+	// 		Ok:       false,
+	// 		ErrorMsg: "Process not found",
+	// 	}, nil
+	// }
 
-	ps := processState.(*SandboxProcessState)
+	// ps := processState.(*SandboxProcessState)
 
-	stderr := ps.StderrBuf.StringAndReset()
+	// stderr := ps.StderrBuf.StringAndReset()
 
 	return &pb.RunCSandboxStderrResponse{
 		Ok:     true,
-		Stderr: stderr,
+		Stderr: "stderr",
 	}, nil
 }
 
 func (s *RunCServer) RunCSandboxKill(ctx context.Context, in *pb.RunCSandboxKillRequest) (*pb.RunCSandboxKillResponse, error) {
-	instance, exists := s.containerInstances.Get(in.ContainerId)
+	_, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.RunCSandboxKillResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
-	processState, ok := instance.SandboxProcesses.Load(int32(in.Pid))
-	if !ok {
-		return &pb.RunCSandboxKillResponse{Ok: false, ErrorMsg: "Process not found"}, nil
-	}
+	// processState, ok := instance.SandboxProcesses.Load(int32(in.Pid))
+	// if !ok {
+	// 	return &pb.RunCSandboxKillResponse{Ok: false, ErrorMsg: "Process not found"}, nil
+	// }
 
-	ps := processState.(*SandboxProcessState)
+	// ps := processState.(*SandboxProcessState)
 
-	ps.mu.Lock()
-	ps.Status = SandboxProcessStatusExited
-	ps.EndTime = time.Now()
-	ps.mu.Unlock()
+	// ps.mu.Lock()
+	// ps.Status = SandboxProcessStatusExited
+	// ps.EndTime = time.Now()
+	// ps.mu.Unlock()
 
-	syscall.Kill(ps.Pid, syscall.SIGTERM)
+	// syscall.Kill(ps.Pid, syscall.SIGTERM)
 	return &pb.RunCSandboxKillResponse{Ok: true}, nil
 }
 

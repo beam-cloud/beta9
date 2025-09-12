@@ -189,6 +189,13 @@ RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x8
 
 RUN apt-get install -y ripgrep wget
 
+
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.1/goproc-0.1.1-linux-arm64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
+    elif [ "$TARGETARCH" = "amd64" ]; then \
+      wget https://github.com/beam-cloud/goproc/releases/download/v0.1.1/goproc-0.1.1-linux-amd64 -O /usr/local/bin/goproc && chmod +x /usr/local/bin/goproc ; \
+    fi
+
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \
     rm -rf /var/lib/apt/lists/* /var/log/*

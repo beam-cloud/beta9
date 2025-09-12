@@ -19,6 +19,7 @@ require (
 	github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563
 	github.com/beam-cloud/clip v0.0.0-20250815141247-71e2dd6c441d
 	github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1
+	github.com/beam-cloud/goproc v0.1.2
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
 	github.com/cedana/cedana v0.9.240
 	github.com/cenkalti/backoff v2.2.1+incompatible
