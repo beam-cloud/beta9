@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -547,6 +548,8 @@ func (s *RunCServer) RunCSandboxStderr(ctx context.Context, in *pb.RunCSandboxSt
 }
 
 func (s *RunCServer) RunCSandboxKill(ctx context.Context, in *pb.RunCSandboxKillRequest) (*pb.RunCSandboxKillResponse, error) {
+	log.Info().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Msg("killing sandbox process")
+
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {
 		return &pb.RunCSandboxKillResponse{Ok: false, ErrorMsg: "Container not found"}, nil
@@ -554,10 +557,57 @@ func (s *RunCServer) RunCSandboxKill(ctx context.Context, in *pb.RunCSandboxKill
 
 	err := instance.SandboxProcessManager.Kill(int(in.Pid))
 	if err != nil {
+		log.Error().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Msgf("failed to kill sandbox process: %v", err)
 		return &pb.RunCSandboxKillResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	return &pb.RunCSandboxKillResponse{Ok: true}, err
+}
+
+func (s *RunCServer) RunCSandboxListExposedPorts(ctx context.Context, in *pb.RunCSandboxListExposedPortsRequest) (*pb.RunCSandboxListExposedPortsResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxListExposedPortsResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	excludedPorts := []int32{types.WorkerSandboxProcessManagerPort, types.WorkerShellPort}
+	ports := make([]int32, 0)
+	for _, port := range instance.Request.Ports {
+		if slices.Contains(excludedPorts, int32(port)) {
+			continue
+		}
+
+		ports = append(ports, int32(port))
+	}
+
+	if err := s.waitForContainer(ctx, in.ContainerId); err != nil {
+		return &pb.RunCSandboxListExposedPortsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.RunCSandboxListExposedPortsResponse{Ok: true, ExposedPorts: ports}, nil
+}
+
+func (s *RunCServer) RunCSandboxListProcesses(ctx context.Context, in *pb.RunCSandboxListProcessesRequest) (*pb.RunCSandboxListProcessesResponse, error) {
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.RunCSandboxListProcessesResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	if err := s.waitForContainer(ctx, in.ContainerId); err != nil {
+		return &pb.RunCSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	processes := make([]*pb.ProcessInfo, 0)
+	ps, err := instance.SandboxProcessManager.ListProcesses()
+	if err != nil {
+		return &pb.RunCSandboxListProcessesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	for _, process := range ps {
+		processes = append(processes, &pb.ProcessInfo{Pid: int32(process.Pid), ExitCode: int32(process.ExitCode), Cwd: process.Cwd, Cmd: process.Cmd, Env: process.Env, Running: process.Running})
+	}
+
+	return &pb.RunCSandboxListProcessesResponse{Ok: true, Processes: processes}, nil
 }
 
 func (s *RunCServer) RunCSandboxUploadFile(ctx context.Context, in *pb.RunCSandboxUploadFileRequest) (*pb.RunCSandboxUploadFileResponse, error) {
@@ -820,6 +870,8 @@ func (s *RunCServer) RunCSandboxExposePort(ctx context.Context, in *pb.RunCSandb
 	}
 
 	instance.Request.Ports = append(instance.Request.Ports, uint32(in.Port))
+	s.containerInstances.Set(in.ContainerId, instance)
+
 	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[int32(in.Port)])
 
 	return &pb.RunCSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err

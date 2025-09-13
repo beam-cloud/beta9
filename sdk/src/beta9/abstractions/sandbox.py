@@ -32,6 +32,8 @@ from ..clients.pod import (
     PodSandboxFindInFilesRequest,
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
+    PodSandboxListProcessesRequest,
+    PodSandboxListProcessesResponse,
     PodSandboxReplaceInFilesRequest,
     PodSandboxSnapshotMemoryRequest,
     PodSandboxSnapshotMemoryResponse,
@@ -79,6 +81,8 @@ class Sandbox(Pod):
             The volumes and/or cloud buckets to mount into the Sandbox container. Default is an empty list.
         secrets (List[str]):
             The secrets to pass to the Sandbox container.
+        env (Optional[Dict[str, str]]):
+            A dictionary of environment variables to be injected into each Sandbox container. Default is {}.
         sync_local_dir (bool):
             Whether to sync the local directory to the sandbox filesystem on creation. Default is False.
 
@@ -118,6 +122,7 @@ class Sandbox(Pod):
         name: Optional[str] = None,
         volumes: Optional[List[Union[Volume, CloudBucket]]] = [],
         secrets: Optional[List[str]] = None,
+        env: Optional[Dict[str, str]] = {},
         sync_local_dir: bool = False,
     ):
         self.debug_buffer = io.StringIO()
@@ -134,6 +139,7 @@ class Sandbox(Pod):
             name=name,
             volumes=volumes,
             secrets=secrets,
+            env=env,
         )
 
     def debug(self):
@@ -724,7 +730,13 @@ class SandboxProcessManager:
             raise SandboxProcessError(response.error_msg)
 
         if response.pid > 0:
-            process = SandboxProcess(self.sandbox_instance, response.pid)
+            process = SandboxProcess(
+                self.sandbox_instance,
+                pid=response.pid,
+                cwd=cwd,
+                args=command,
+                env=env,
+            )
             self.processes[response.pid] = process
             return process
 
@@ -742,7 +754,25 @@ class SandboxProcessManager:
                 print(f"Process {process.pid} is running")
             ```
         """
-        return list(self.processes.values())
+        processes: PodSandboxListProcessesResponse = (
+            self.sandbox_instance.stub.sandbox_list_processes(
+                PodSandboxListProcessesRequest(container_id=self.sandbox_instance.container_id)
+            )
+        )
+        if not processes.ok:
+            raise SandboxProcessError(processes.error_msg)
+
+        return [
+            SandboxProcess(
+                self.sandbox_instance,
+                pid=process.pid,
+                cwd=process.cwd,
+                args=process.cmd.split(" "),
+                env=process.env,
+                exit_code=process.exit_code,
+            )
+            for process in processes.processes
+        ]
 
     def get_process(self, pid: int) -> "SandboxProcess":
         """
@@ -920,11 +950,23 @@ class SandboxProcess:
         ```
     """
 
-    def __init__(self, sandbox_instance: SandboxInstance, pid: int):
+    def __init__(
+        self,
+        sandbox_instance: SandboxInstance,
+        *,
+        pid: int,
+        cwd: str,
+        args: List[str],
+        env: Dict[str, str],
+        exit_code: int = -1,
+    ):
         self.sandbox_instance = sandbox_instance
         self.pid = pid
-        self.exit_code = -1
+        self.exit_code = exit_code
         self._status = ""
+        self.cwd = cwd
+        self.args = args
+        self.env = env
 
     def wait(self) -> int:
         """

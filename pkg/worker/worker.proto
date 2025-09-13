@@ -46,6 +46,10 @@ service RunCService {
       returns (RunCSandboxReplaceInFilesResponse) {}
   rpc RunCSandboxFindInFiles(RunCSandboxFindInFilesRequest)
       returns (RunCSandboxFindInFilesResponse) {}
+  rpc RunCSandboxListExposedPorts(RunCSandboxListExposedPortsRequest)
+      returns (RunCSandboxListExposedPortsResponse) {}
+  rpc RunCSandboxListProcesses(RunCSandboxListProcessesRequest)
+      returns (RunCSandboxListProcessesResponse) {}
 }
 
 message RunCKillRequest { string container_id = 1; }
@@ -254,4 +258,23 @@ message RunCSandboxFindInFilesResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated types.FileSearchResult results = 3;
+}
+
+message RunCSandboxListExposedPortsRequest {
+  string container_id = 1;
+  int32 port = 2;
+}
+
+message RunCSandboxListExposedPortsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated int32 exposed_ports = 3;
+}
+
+message RunCSandboxListProcessesRequest { string container_id = 1; }
+
+message RunCSandboxListProcessesResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated types.ProcessInfo processes = 3;
 }

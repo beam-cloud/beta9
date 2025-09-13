@@ -129,8 +129,6 @@ service PodService {
       returns (PodSandboxCreateImageFromFilesystemResponse) {}
   rpc SandboxSnapshotMemory(PodSandboxSnapshotMemoryRequest)
       returns (PodSandboxSnapshotMemoryResponse) {}
-  rpc SandboxListProcesses(PodSandboxListProcessesRequest)
-      returns (PodSandboxListProcessesResponse) {}
   rpc SandboxListUrls(PodSandboxListUrlsRequest)
       returns (PodSandboxListUrlsResponse) {}
 }
@@ -203,14 +201,6 @@ message PodSandboxKillRequest {
 message PodSandboxKillResponse {
   bool ok = 1;
   string error_msg = 2;
-}
-
-message PodSandboxListProcessesRequest { string container_id = 1; }
-
-message PodSandboxListProcessesResponse {
-  bool ok = 1;
-  string error_msg = 2;
-  repeated int32 pids = 3;
 }
 
 message PodSandboxUploadFileRequest {
@@ -381,21 +371,10 @@ message PodSandboxListProcessesRequest { string container_id = 1; }
 message PodSandboxListProcessesResponse {
   bool ok = 1;
   string error_msg = 2;
-  repeated ProcessInfo processes = 3;
+  repeated types.ProcessInfo processes = 3;
 }
 
-message ProcessInfo {
-  int32 pid = 1;
-  string command = 2;
-  string status = 3;
-  int32 exit_code = 4;
-}
-
-message PodSandboxListUrlsRequest {
-  string container_id = 1;
-  string stub_id = 2;
-  int32 port = 3;
-}
+message PodSandboxListUrlsRequest { string container_id = 1; }
 
 message PodSandboxListUrlsResponse {
   bool ok = 1;

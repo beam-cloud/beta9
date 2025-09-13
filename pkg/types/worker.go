@@ -152,3 +152,13 @@ const (
 	RuncContainerStatusPaused  string = "paused"
 	RuncContainerStatusStopped string = "stopped"
 )
+
+// @go2proto
+type ProcessInfo struct {
+	Running  bool     `json:"running"`
+	PID      int32    `json:"pid"`
+	Cmd      string   `json:"cmd"`
+	Cwd      string   `json:"cwd"`
+	Env      []string `json:"env"`
+	ExitCode int32    `json:"exit_code"`
+}
