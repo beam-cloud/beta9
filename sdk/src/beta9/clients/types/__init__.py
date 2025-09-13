@@ -196,6 +196,16 @@ class PricingPolicy(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class ProcessInfo(betterproto.Message):
+    running: bool = betterproto.bool_field(1)
+    pid: int = betterproto.int32_field(2)
+    cmd: str = betterproto.string_field(3)
+    cwd: str = betterproto.string_field(4)
+    env: List[str] = betterproto.string_field(5)
+    exit_code: int = betterproto.int32_field(6)
+
+
+@dataclass(eq=False, repr=False)
 class Stub(betterproto.Message):
     id: int = betterproto.uint32_field(1)
     external_id: str = betterproto.string_field(2)

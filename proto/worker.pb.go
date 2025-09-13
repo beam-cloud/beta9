@@ -2442,6 +2442,234 @@ func (x *RunCSandboxFindInFilesResponse) GetResults() []*FileSearchResult {
 	return nil
 }
 
+type RunCSandboxListExposedPortsRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+	Port        int32  `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+}
+
+func (x *RunCSandboxListExposedPortsRequest) Reset() {
+	*x = RunCSandboxListExposedPortsRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_worker_proto_msgTypes[42]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *RunCSandboxListExposedPortsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunCSandboxListExposedPortsRequest) ProtoMessage() {}
+
+func (x *RunCSandboxListExposedPortsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_proto_msgTypes[42]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunCSandboxListExposedPortsRequest.ProtoReflect.Descriptor instead.
+func (*RunCSandboxListExposedPortsRequest) Descriptor() ([]byte, []int) {
+	return file_worker_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *RunCSandboxListExposedPortsRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+func (x *RunCSandboxListExposedPortsRequest) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+type RunCSandboxListExposedPortsResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok           bool    `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrorMsg     string  `protobuf:"bytes,2,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
+	ExposedPorts []int32 `protobuf:"varint,3,rep,packed,name=exposed_ports,json=exposedPorts,proto3" json:"exposed_ports,omitempty"`
+}
+
+func (x *RunCSandboxListExposedPortsResponse) Reset() {
+	*x = RunCSandboxListExposedPortsResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_worker_proto_msgTypes[43]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *RunCSandboxListExposedPortsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunCSandboxListExposedPortsResponse) ProtoMessage() {}
+
+func (x *RunCSandboxListExposedPortsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_proto_msgTypes[43]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunCSandboxListExposedPortsResponse.ProtoReflect.Descriptor instead.
+func (*RunCSandboxListExposedPortsResponse) Descriptor() ([]byte, []int) {
+	return file_worker_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *RunCSandboxListExposedPortsResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *RunCSandboxListExposedPortsResponse) GetErrorMsg() string {
+	if x != nil {
+		return x.ErrorMsg
+	}
+	return ""
+}
+
+func (x *RunCSandboxListExposedPortsResponse) GetExposedPorts() []int32 {
+	if x != nil {
+		return x.ExposedPorts
+	}
+	return nil
+}
+
+type RunCSandboxListProcessesRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	ContainerId string `protobuf:"bytes,1,opt,name=container_id,json=containerId,proto3" json:"container_id,omitempty"`
+}
+
+func (x *RunCSandboxListProcessesRequest) Reset() {
+	*x = RunCSandboxListProcessesRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_worker_proto_msgTypes[44]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *RunCSandboxListProcessesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunCSandboxListProcessesRequest) ProtoMessage() {}
+
+func (x *RunCSandboxListProcessesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_proto_msgTypes[44]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunCSandboxListProcessesRequest.ProtoReflect.Descriptor instead.
+func (*RunCSandboxListProcessesRequest) Descriptor() ([]byte, []int) {
+	return file_worker_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *RunCSandboxListProcessesRequest) GetContainerId() string {
+	if x != nil {
+		return x.ContainerId
+	}
+	return ""
+}
+
+type RunCSandboxListProcessesResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Ok        bool           `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	ErrorMsg  string         `protobuf:"bytes,2,opt,name=error_msg,json=errorMsg,proto3" json:"error_msg,omitempty"`
+	Processes []*ProcessInfo `protobuf:"bytes,3,rep,name=processes,proto3" json:"processes,omitempty"`
+}
+
+func (x *RunCSandboxListProcessesResponse) Reset() {
+	*x = RunCSandboxListProcessesResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_worker_proto_msgTypes[45]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *RunCSandboxListProcessesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunCSandboxListProcessesResponse) ProtoMessage() {}
+
+func (x *RunCSandboxListProcessesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_worker_proto_msgTypes[45]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunCSandboxListProcessesResponse.ProtoReflect.Descriptor instead.
+func (*RunCSandboxListProcessesResponse) Descriptor() ([]byte, []int) {
+	return file_worker_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *RunCSandboxListProcessesResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
+func (x *RunCSandboxListProcessesResponse) GetErrorMsg() string {
+	if x != nil {
+		return x.ErrorMsg
+	}
+	return ""
+}
+
+func (x *RunCSandboxListProcessesResponse) GetProcesses() []*ProcessInfo {
+	if x != nil {
+		return x.Processes
+	}
+	return nil
+}
+
 var File_worker_proto protoreflect.FileDescriptor
 
 var file_worker_proto_rawDesc = []byte{
@@ -2697,7 +2925,33 @@ var file_worker_proto_rawDesc = []byte{
 	0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x31, 0x0a, 0x07, 0x72, 0x65,
 	0x73, 0x75, 0x6c, 0x74, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x17, 0x2e, 0x74, 0x79,
 	0x70, 0x65, 0x73, 0x2e, 0x46, 0x69, 0x6c, 0x65, 0x53, 0x65, 0x61, 0x72, 0x63, 0x68, 0x52, 0x65,
-	0x73, 0x75, 0x6c, 0x74, 0x52, 0x07, 0x72, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x73, 0x32, 0xce, 0x0f,
+	0x73, 0x75, 0x6c, 0x74, 0x52, 0x07, 0x72, 0x65, 0x73, 0x75, 0x6c, 0x74, 0x73, 0x22, 0x5b, 0x0a,
+	0x22, 0x52, 0x75, 0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64, 0x62, 0x6f, 0x78, 0x4c, 0x69, 0x73, 0x74,
+	0x45, 0x78, 0x70, 0x6f, 0x73, 0x65, 0x64, 0x50, 0x6f, 0x72, 0x74, 0x73, 0x52, 0x65, 0x71, 0x75,
+	0x65, 0x73, 0x74, 0x12, 0x21, 0x0a, 0x0c, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72,
+	0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x6f, 0x6e, 0x74, 0x61,
+	0x69, 0x6e, 0x65, 0x72, 0x49, 0x64, 0x12, 0x12, 0x0a, 0x04, 0x70, 0x6f, 0x72, 0x74, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x05, 0x52, 0x04, 0x70, 0x6f, 0x72, 0x74, 0x22, 0x77, 0x0a, 0x23, 0x52, 0x75,
+	0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64, 0x62, 0x6f, 0x78, 0x4c, 0x69, 0x73, 0x74, 0x45, 0x78, 0x70,
+	0x6f, 0x73, 0x65, 0x64, 0x50, 0x6f, 0x72, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x12, 0x0e, 0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f,
+	0x6b, 0x12, 0x1b, 0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02,
+	0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x23,
+	0x0a, 0x0d, 0x65, 0x78, 0x70, 0x6f, 0x73, 0x65, 0x64, 0x5f, 0x70, 0x6f, 0x72, 0x74, 0x73, 0x18,
+	0x03, 0x20, 0x03, 0x28, 0x05, 0x52, 0x0c, 0x65, 0x78, 0x70, 0x6f, 0x73, 0x65, 0x64, 0x50, 0x6f,
+	0x72, 0x74, 0x73, 0x22, 0x44, 0x0a, 0x1f, 0x52, 0x75, 0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64, 0x62,
+	0x6f, 0x78, 0x4c, 0x69, 0x73, 0x74, 0x50, 0x72, 0x6f, 0x63, 0x65, 0x73, 0x73, 0x65, 0x73, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x21, 0x0a, 0x0c, 0x63, 0x6f, 0x6e, 0x74, 0x61, 0x69,
+	0x6e, 0x65, 0x72, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0b, 0x63, 0x6f,
+	0x6e, 0x74, 0x61, 0x69, 0x6e, 0x65, 0x72, 0x49, 0x64, 0x22, 0x81, 0x01, 0x0a, 0x20, 0x52, 0x75,
+	0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64, 0x62, 0x6f, 0x78, 0x4c, 0x69, 0x73, 0x74, 0x50, 0x72, 0x6f,
+	0x63, 0x65, 0x73, 0x73, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x0e,
+	0x0a, 0x02, 0x6f, 0x6b, 0x18, 0x01, 0x20, 0x01, 0x28, 0x08, 0x52, 0x02, 0x6f, 0x6b, 0x12, 0x1b,
+	0x0a, 0x09, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x5f, 0x6d, 0x73, 0x67, 0x18, 0x02, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x08, 0x65, 0x72, 0x72, 0x6f, 0x72, 0x4d, 0x73, 0x67, 0x12, 0x30, 0x0a, 0x09, 0x70,
+	0x72, 0x6f, 0x63, 0x65, 0x73, 0x73, 0x65, 0x73, 0x18, 0x03, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x12,
+	0x2e, 0x74, 0x79, 0x70, 0x65, 0x73, 0x2e, 0x50, 0x72, 0x6f, 0x63, 0x65, 0x73, 0x73, 0x49, 0x6e,
+	0x66, 0x6f, 0x52, 0x09, 0x70, 0x72, 0x6f, 0x63, 0x65, 0x73, 0x73, 0x65, 0x73, 0x32, 0xb1, 0x11,
 	0x0a, 0x0b, 0x52, 0x75, 0x6e, 0x43, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x3b, 0x0a,
 	0x08, 0x52, 0x75, 0x6e, 0x43, 0x4b, 0x69, 0x6c, 0x6c, 0x12, 0x15, 0x2e, 0x72, 0x75, 0x6e, 0x63,
 	0x2e, 0x52, 0x75, 0x6e, 0x43, 0x4b, 0x69, 0x6c, 0x6c, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74,
@@ -2822,10 +3076,24 @@ var file_worker_proto_rawDesc = []byte{
 	0x64, 0x62, 0x6f, 0x78, 0x46, 0x69, 0x6e, 0x64, 0x49, 0x6e, 0x46, 0x69, 0x6c, 0x65, 0x73, 0x52,
 	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x24, 0x2e, 0x72, 0x75, 0x6e, 0x63, 0x2e, 0x52, 0x75,
 	0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64, 0x62, 0x6f, 0x78, 0x46, 0x69, 0x6e, 0x64, 0x49, 0x6e, 0x46,
-	0x69, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x42, 0x23,
-	0x5a, 0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x62, 0x65, 0x61,
-	0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39, 0x2f, 0x70, 0x72,
-	0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x69, 0x6c, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22, 0x00, 0x12, 0x74,
+	0x0a, 0x1b, 0x52, 0x75, 0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64, 0x62, 0x6f, 0x78, 0x4c, 0x69, 0x73,
+	0x74, 0x45, 0x78, 0x70, 0x6f, 0x73, 0x65, 0x64, 0x50, 0x6f, 0x72, 0x74, 0x73, 0x12, 0x28, 0x2e,
+	0x72, 0x75, 0x6e, 0x63, 0x2e, 0x52, 0x75, 0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64, 0x62, 0x6f, 0x78,
+	0x4c, 0x69, 0x73, 0x74, 0x45, 0x78, 0x70, 0x6f, 0x73, 0x65, 0x64, 0x50, 0x6f, 0x72, 0x74, 0x73,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x29, 0x2e, 0x72, 0x75, 0x6e, 0x63, 0x2e, 0x52,
+	0x75, 0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64, 0x62, 0x6f, 0x78, 0x4c, 0x69, 0x73, 0x74, 0x45, 0x78,
+	0x70, 0x6f, 0x73, 0x65, 0x64, 0x50, 0x6f, 0x72, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x22, 0x00, 0x12, 0x6b, 0x0a, 0x18, 0x52, 0x75, 0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64,
+	0x62, 0x6f, 0x78, 0x4c, 0x69, 0x73, 0x74, 0x50, 0x72, 0x6f, 0x63, 0x65, 0x73, 0x73, 0x65, 0x73,
+	0x12, 0x25, 0x2e, 0x72, 0x75, 0x6e, 0x63, 0x2e, 0x52, 0x75, 0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64,
+	0x62, 0x6f, 0x78, 0x4c, 0x69, 0x73, 0x74, 0x50, 0x72, 0x6f, 0x63, 0x65, 0x73, 0x73, 0x65, 0x73,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x26, 0x2e, 0x72, 0x75, 0x6e, 0x63, 0x2e, 0x52,
+	0x75, 0x6e, 0x43, 0x53, 0x61, 0x6e, 0x64, 0x62, 0x6f, 0x78, 0x4c, 0x69, 0x73, 0x74, 0x50, 0x72,
+	0x6f, 0x63, 0x65, 0x73, 0x73, 0x65, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x22,
+	0x00, 0x42, 0x23, 0x5a, 0x21, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f,
+	0x62, 0x65, 0x61, 0x6d, 0x2d, 0x63, 0x6c, 0x6f, 0x75, 0x64, 0x2f, 0x62, 0x65, 0x74, 0x61, 0x39,
+	0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -2840,110 +3108,120 @@ func file_worker_proto_rawDescGZIP() []byte {
 	return file_worker_proto_rawDescData
 }
 
-var file_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
+var file_worker_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_worker_proto_goTypes = []interface{}{
-	(*RunCKillRequest)(nil),                    // 0: runc.RunCKillRequest
-	(*RunCKillResponse)(nil),                   // 1: runc.RunCKillResponse
-	(*RunCExecRequest)(nil),                    // 2: runc.RunCExecRequest
-	(*RunCExecResponse)(nil),                   // 3: runc.RunCExecResponse
-	(*RunCStatusRequest)(nil),                  // 4: runc.RunCStatusRequest
-	(*RunCStatusResponse)(nil),                 // 5: runc.RunCStatusResponse
-	(*RunCStreamLogsRequest)(nil),              // 6: runc.RunCStreamLogsRequest
-	(*RunCLogEntry)(nil),                       // 7: runc.RunCLogEntry
-	(*RunCArchiveRequest)(nil),                 // 8: runc.RunCArchiveRequest
-	(*RunCArchiveResponse)(nil),                // 9: runc.RunCArchiveResponse
-	(*RunCCheckpointRequest)(nil),              // 10: runc.RunCCheckpointRequest
-	(*RunCCheckpointResponse)(nil),             // 11: runc.RunCCheckpointResponse
-	(*RunCSandboxExecRequest)(nil),             // 12: runc.RunCSandboxExecRequest
-	(*RunCSandboxExecResponse)(nil),            // 13: runc.RunCSandboxExecResponse
-	(*RunCSandboxStatusRequest)(nil),           // 14: runc.RunCSandboxStatusRequest
-	(*RunCSandboxStatusResponse)(nil),          // 15: runc.RunCSandboxStatusResponse
-	(*RunCSandboxStdoutRequest)(nil),           // 16: runc.RunCSandboxStdoutRequest
-	(*RunCSandboxStdoutResponse)(nil),          // 17: runc.RunCSandboxStdoutResponse
-	(*RunCSandboxStderrRequest)(nil),           // 18: runc.RunCSandboxStderrRequest
-	(*RunCSandboxStderrResponse)(nil),          // 19: runc.RunCSandboxStderrResponse
-	(*RunCSandboxKillRequest)(nil),             // 20: runc.RunCSandboxKillRequest
-	(*RunCSandboxKillResponse)(nil),            // 21: runc.RunCSandboxKillResponse
-	(*RunCSandboxListFilesRequest)(nil),        // 22: runc.RunCSandboxListFilesRequest
-	(*RunCSandboxListFilesResponse)(nil),       // 23: runc.RunCSandboxListFilesResponse
-	(*RunCSandboxDeleteFileRequest)(nil),       // 24: runc.RunCSandboxDeleteFileRequest
-	(*RunCSandboxDeleteFileResponse)(nil),      // 25: runc.RunCSandboxDeleteFileResponse
-	(*RunCSandboxCreateDirectoryRequest)(nil),  // 26: runc.RunCSandboxCreateDirectoryRequest
-	(*RunCSandboxCreateDirectoryResponse)(nil), // 27: runc.RunCSandboxCreateDirectoryResponse
-	(*RunCSandboxDeleteDirectoryRequest)(nil),  // 28: runc.RunCSandboxDeleteDirectoryRequest
-	(*RunCSandboxDeleteDirectoryResponse)(nil), // 29: runc.RunCSandboxDeleteDirectoryResponse
-	(*RunCSandboxUploadFileRequest)(nil),       // 30: runc.RunCSandboxUploadFileRequest
-	(*RunCSandboxUploadFileResponse)(nil),      // 31: runc.RunCSandboxUploadFileResponse
-	(*RunCSandboxDownloadFileRequest)(nil),     // 32: runc.RunCSandboxDownloadFileRequest
-	(*RunCSandboxDownloadFileResponse)(nil),    // 33: runc.RunCSandboxDownloadFileResponse
-	(*RunCSandboxExposePortRequest)(nil),       // 34: runc.RunCSandboxExposePortRequest
-	(*RunCSandboxExposePortResponse)(nil),      // 35: runc.RunCSandboxExposePortResponse
-	(*RunCSandboxStatFileRequest)(nil),         // 36: runc.RunCSandboxStatFileRequest
-	(*RunCSandboxStatFileResponse)(nil),        // 37: runc.RunCSandboxStatFileResponse
-	(*RunCSandboxReplaceInFilesRequest)(nil),   // 38: runc.RunCSandboxReplaceInFilesRequest
-	(*RunCSandboxReplaceInFilesResponse)(nil),  // 39: runc.RunCSandboxReplaceInFilesResponse
-	(*RunCSandboxFindInFilesRequest)(nil),      // 40: runc.RunCSandboxFindInFilesRequest
-	(*RunCSandboxFindInFilesResponse)(nil),     // 41: runc.RunCSandboxFindInFilesResponse
-	nil,                                        // 42: runc.RunCSandboxExecRequest.EnvEntry
-	(*FileInfo)(nil),                           // 43: types.FileInfo
-	(*FileSearchResult)(nil),                   // 44: types.FileSearchResult
-	(*SyncContainerWorkspaceRequest)(nil),      // 45: gateway.SyncContainerWorkspaceRequest
-	(*SyncContainerWorkspaceResponse)(nil),     // 46: gateway.SyncContainerWorkspaceResponse
+	(*RunCKillRequest)(nil),                     // 0: runc.RunCKillRequest
+	(*RunCKillResponse)(nil),                    // 1: runc.RunCKillResponse
+	(*RunCExecRequest)(nil),                     // 2: runc.RunCExecRequest
+	(*RunCExecResponse)(nil),                    // 3: runc.RunCExecResponse
+	(*RunCStatusRequest)(nil),                   // 4: runc.RunCStatusRequest
+	(*RunCStatusResponse)(nil),                  // 5: runc.RunCStatusResponse
+	(*RunCStreamLogsRequest)(nil),               // 6: runc.RunCStreamLogsRequest
+	(*RunCLogEntry)(nil),                        // 7: runc.RunCLogEntry
+	(*RunCArchiveRequest)(nil),                  // 8: runc.RunCArchiveRequest
+	(*RunCArchiveResponse)(nil),                 // 9: runc.RunCArchiveResponse
+	(*RunCCheckpointRequest)(nil),               // 10: runc.RunCCheckpointRequest
+	(*RunCCheckpointResponse)(nil),              // 11: runc.RunCCheckpointResponse
+	(*RunCSandboxExecRequest)(nil),              // 12: runc.RunCSandboxExecRequest
+	(*RunCSandboxExecResponse)(nil),             // 13: runc.RunCSandboxExecResponse
+	(*RunCSandboxStatusRequest)(nil),            // 14: runc.RunCSandboxStatusRequest
+	(*RunCSandboxStatusResponse)(nil),           // 15: runc.RunCSandboxStatusResponse
+	(*RunCSandboxStdoutRequest)(nil),            // 16: runc.RunCSandboxStdoutRequest
+	(*RunCSandboxStdoutResponse)(nil),           // 17: runc.RunCSandboxStdoutResponse
+	(*RunCSandboxStderrRequest)(nil),            // 18: runc.RunCSandboxStderrRequest
+	(*RunCSandboxStderrResponse)(nil),           // 19: runc.RunCSandboxStderrResponse
+	(*RunCSandboxKillRequest)(nil),              // 20: runc.RunCSandboxKillRequest
+	(*RunCSandboxKillResponse)(nil),             // 21: runc.RunCSandboxKillResponse
+	(*RunCSandboxListFilesRequest)(nil),         // 22: runc.RunCSandboxListFilesRequest
+	(*RunCSandboxListFilesResponse)(nil),        // 23: runc.RunCSandboxListFilesResponse
+	(*RunCSandboxDeleteFileRequest)(nil),        // 24: runc.RunCSandboxDeleteFileRequest
+	(*RunCSandboxDeleteFileResponse)(nil),       // 25: runc.RunCSandboxDeleteFileResponse
+	(*RunCSandboxCreateDirectoryRequest)(nil),   // 26: runc.RunCSandboxCreateDirectoryRequest
+	(*RunCSandboxCreateDirectoryResponse)(nil),  // 27: runc.RunCSandboxCreateDirectoryResponse
+	(*RunCSandboxDeleteDirectoryRequest)(nil),   // 28: runc.RunCSandboxDeleteDirectoryRequest
+	(*RunCSandboxDeleteDirectoryResponse)(nil),  // 29: runc.RunCSandboxDeleteDirectoryResponse
+	(*RunCSandboxUploadFileRequest)(nil),        // 30: runc.RunCSandboxUploadFileRequest
+	(*RunCSandboxUploadFileResponse)(nil),       // 31: runc.RunCSandboxUploadFileResponse
+	(*RunCSandboxDownloadFileRequest)(nil),      // 32: runc.RunCSandboxDownloadFileRequest
+	(*RunCSandboxDownloadFileResponse)(nil),     // 33: runc.RunCSandboxDownloadFileResponse
+	(*RunCSandboxExposePortRequest)(nil),        // 34: runc.RunCSandboxExposePortRequest
+	(*RunCSandboxExposePortResponse)(nil),       // 35: runc.RunCSandboxExposePortResponse
+	(*RunCSandboxStatFileRequest)(nil),          // 36: runc.RunCSandboxStatFileRequest
+	(*RunCSandboxStatFileResponse)(nil),         // 37: runc.RunCSandboxStatFileResponse
+	(*RunCSandboxReplaceInFilesRequest)(nil),    // 38: runc.RunCSandboxReplaceInFilesRequest
+	(*RunCSandboxReplaceInFilesResponse)(nil),   // 39: runc.RunCSandboxReplaceInFilesResponse
+	(*RunCSandboxFindInFilesRequest)(nil),       // 40: runc.RunCSandboxFindInFilesRequest
+	(*RunCSandboxFindInFilesResponse)(nil),      // 41: runc.RunCSandboxFindInFilesResponse
+	(*RunCSandboxListExposedPortsRequest)(nil),  // 42: runc.RunCSandboxListExposedPortsRequest
+	(*RunCSandboxListExposedPortsResponse)(nil), // 43: runc.RunCSandboxListExposedPortsResponse
+	(*RunCSandboxListProcessesRequest)(nil),     // 44: runc.RunCSandboxListProcessesRequest
+	(*RunCSandboxListProcessesResponse)(nil),    // 45: runc.RunCSandboxListProcessesResponse
+	nil,                                         // 46: runc.RunCSandboxExecRequest.EnvEntry
+	(*FileInfo)(nil),                            // 47: types.FileInfo
+	(*FileSearchResult)(nil),                    // 48: types.FileSearchResult
+	(*ProcessInfo)(nil),                         // 49: types.ProcessInfo
+	(*SyncContainerWorkspaceRequest)(nil),       // 50: gateway.SyncContainerWorkspaceRequest
+	(*SyncContainerWorkspaceResponse)(nil),      // 51: gateway.SyncContainerWorkspaceResponse
 }
 var file_worker_proto_depIdxs = []int32{
-	42, // 0: runc.RunCSandboxExecRequest.env:type_name -> runc.RunCSandboxExecRequest.EnvEntry
-	43, // 1: runc.RunCSandboxListFilesResponse.files:type_name -> types.FileInfo
-	43, // 2: runc.RunCSandboxStatFileResponse.file_info:type_name -> types.FileInfo
-	44, // 3: runc.RunCSandboxFindInFilesResponse.results:type_name -> types.FileSearchResult
-	0,  // 4: runc.RunCService.RunCKill:input_type -> runc.RunCKillRequest
-	4,  // 5: runc.RunCService.RunCStatus:input_type -> runc.RunCStatusRequest
-	2,  // 6: runc.RunCService.RunCExec:input_type -> runc.RunCExecRequest
-	6,  // 7: runc.RunCService.RunCStreamLogs:input_type -> runc.RunCStreamLogsRequest
-	8,  // 8: runc.RunCService.RunCArchive:input_type -> runc.RunCArchiveRequest
-	10, // 9: runc.RunCService.RunCCheckpoint:input_type -> runc.RunCCheckpointRequest
-	45, // 10: runc.RunCService.RunCSyncWorkspace:input_type -> gateway.SyncContainerWorkspaceRequest
-	12, // 11: runc.RunCService.RunCSandboxExec:input_type -> runc.RunCSandboxExecRequest
-	14, // 12: runc.RunCService.RunCSandboxStatus:input_type -> runc.RunCSandboxStatusRequest
-	16, // 13: runc.RunCService.RunCSandboxStdout:input_type -> runc.RunCSandboxStdoutRequest
-	18, // 14: runc.RunCService.RunCSandboxStderr:input_type -> runc.RunCSandboxStderrRequest
-	20, // 15: runc.RunCService.RunCSandboxKill:input_type -> runc.RunCSandboxKillRequest
-	22, // 16: runc.RunCService.RunCSandboxListFiles:input_type -> runc.RunCSandboxListFilesRequest
-	30, // 17: runc.RunCService.RunCSandboxUploadFile:input_type -> runc.RunCSandboxUploadFileRequest
-	32, // 18: runc.RunCService.RunCSandboxDownloadFile:input_type -> runc.RunCSandboxDownloadFileRequest
-	36, // 19: runc.RunCService.RunCSandboxStatFile:input_type -> runc.RunCSandboxStatFileRequest
-	24, // 20: runc.RunCService.RunCSandboxDeleteFile:input_type -> runc.RunCSandboxDeleteFileRequest
-	26, // 21: runc.RunCService.RunCSandboxCreateDirectory:input_type -> runc.RunCSandboxCreateDirectoryRequest
-	28, // 22: runc.RunCService.RunCSandboxDeleteDirectory:input_type -> runc.RunCSandboxDeleteDirectoryRequest
-	34, // 23: runc.RunCService.RunCSandboxExposePort:input_type -> runc.RunCSandboxExposePortRequest
-	38, // 24: runc.RunCService.RunCSandboxReplaceInFiles:input_type -> runc.RunCSandboxReplaceInFilesRequest
-	40, // 25: runc.RunCService.RunCSandboxFindInFiles:input_type -> runc.RunCSandboxFindInFilesRequest
-	1,  // 26: runc.RunCService.RunCKill:output_type -> runc.RunCKillResponse
-	5,  // 27: runc.RunCService.RunCStatus:output_type -> runc.RunCStatusResponse
-	3,  // 28: runc.RunCService.RunCExec:output_type -> runc.RunCExecResponse
-	7,  // 29: runc.RunCService.RunCStreamLogs:output_type -> runc.RunCLogEntry
-	9,  // 30: runc.RunCService.RunCArchive:output_type -> runc.RunCArchiveResponse
-	11, // 31: runc.RunCService.RunCCheckpoint:output_type -> runc.RunCCheckpointResponse
-	46, // 32: runc.RunCService.RunCSyncWorkspace:output_type -> gateway.SyncContainerWorkspaceResponse
-	13, // 33: runc.RunCService.RunCSandboxExec:output_type -> runc.RunCSandboxExecResponse
-	15, // 34: runc.RunCService.RunCSandboxStatus:output_type -> runc.RunCSandboxStatusResponse
-	17, // 35: runc.RunCService.RunCSandboxStdout:output_type -> runc.RunCSandboxStdoutResponse
-	19, // 36: runc.RunCService.RunCSandboxStderr:output_type -> runc.RunCSandboxStderrResponse
-	21, // 37: runc.RunCService.RunCSandboxKill:output_type -> runc.RunCSandboxKillResponse
-	23, // 38: runc.RunCService.RunCSandboxListFiles:output_type -> runc.RunCSandboxListFilesResponse
-	31, // 39: runc.RunCService.RunCSandboxUploadFile:output_type -> runc.RunCSandboxUploadFileResponse
-	33, // 40: runc.RunCService.RunCSandboxDownloadFile:output_type -> runc.RunCSandboxDownloadFileResponse
-	37, // 41: runc.RunCService.RunCSandboxStatFile:output_type -> runc.RunCSandboxStatFileResponse
-	25, // 42: runc.RunCService.RunCSandboxDeleteFile:output_type -> runc.RunCSandboxDeleteFileResponse
-	27, // 43: runc.RunCService.RunCSandboxCreateDirectory:output_type -> runc.RunCSandboxCreateDirectoryResponse
-	29, // 44: runc.RunCService.RunCSandboxDeleteDirectory:output_type -> runc.RunCSandboxDeleteDirectoryResponse
-	35, // 45: runc.RunCService.RunCSandboxExposePort:output_type -> runc.RunCSandboxExposePortResponse
-	39, // 46: runc.RunCService.RunCSandboxReplaceInFiles:output_type -> runc.RunCSandboxReplaceInFilesResponse
-	41, // 47: runc.RunCService.RunCSandboxFindInFiles:output_type -> runc.RunCSandboxFindInFilesResponse
-	26, // [26:48] is the sub-list for method output_type
-	4,  // [4:26] is the sub-list for method input_type
-	4,  // [4:4] is the sub-list for extension type_name
-	4,  // [4:4] is the sub-list for extension extendee
-	0,  // [0:4] is the sub-list for field type_name
+	46, // 0: runc.RunCSandboxExecRequest.env:type_name -> runc.RunCSandboxExecRequest.EnvEntry
+	47, // 1: runc.RunCSandboxListFilesResponse.files:type_name -> types.FileInfo
+	47, // 2: runc.RunCSandboxStatFileResponse.file_info:type_name -> types.FileInfo
+	48, // 3: runc.RunCSandboxFindInFilesResponse.results:type_name -> types.FileSearchResult
+	49, // 4: runc.RunCSandboxListProcessesResponse.processes:type_name -> types.ProcessInfo
+	0,  // 5: runc.RunCService.RunCKill:input_type -> runc.RunCKillRequest
+	4,  // 6: runc.RunCService.RunCStatus:input_type -> runc.RunCStatusRequest
+	2,  // 7: runc.RunCService.RunCExec:input_type -> runc.RunCExecRequest
+	6,  // 8: runc.RunCService.RunCStreamLogs:input_type -> runc.RunCStreamLogsRequest
+	8,  // 9: runc.RunCService.RunCArchive:input_type -> runc.RunCArchiveRequest
+	10, // 10: runc.RunCService.RunCCheckpoint:input_type -> runc.RunCCheckpointRequest
+	50, // 11: runc.RunCService.RunCSyncWorkspace:input_type -> gateway.SyncContainerWorkspaceRequest
+	12, // 12: runc.RunCService.RunCSandboxExec:input_type -> runc.RunCSandboxExecRequest
+	14, // 13: runc.RunCService.RunCSandboxStatus:input_type -> runc.RunCSandboxStatusRequest
+	16, // 14: runc.RunCService.RunCSandboxStdout:input_type -> runc.RunCSandboxStdoutRequest
+	18, // 15: runc.RunCService.RunCSandboxStderr:input_type -> runc.RunCSandboxStderrRequest
+	20, // 16: runc.RunCService.RunCSandboxKill:input_type -> runc.RunCSandboxKillRequest
+	22, // 17: runc.RunCService.RunCSandboxListFiles:input_type -> runc.RunCSandboxListFilesRequest
+	30, // 18: runc.RunCService.RunCSandboxUploadFile:input_type -> runc.RunCSandboxUploadFileRequest
+	32, // 19: runc.RunCService.RunCSandboxDownloadFile:input_type -> runc.RunCSandboxDownloadFileRequest
+	36, // 20: runc.RunCService.RunCSandboxStatFile:input_type -> runc.RunCSandboxStatFileRequest
+	24, // 21: runc.RunCService.RunCSandboxDeleteFile:input_type -> runc.RunCSandboxDeleteFileRequest
+	26, // 22: runc.RunCService.RunCSandboxCreateDirectory:input_type -> runc.RunCSandboxCreateDirectoryRequest
+	28, // 23: runc.RunCService.RunCSandboxDeleteDirectory:input_type -> runc.RunCSandboxDeleteDirectoryRequest
+	34, // 24: runc.RunCService.RunCSandboxExposePort:input_type -> runc.RunCSandboxExposePortRequest
+	38, // 25: runc.RunCService.RunCSandboxReplaceInFiles:input_type -> runc.RunCSandboxReplaceInFilesRequest
+	40, // 26: runc.RunCService.RunCSandboxFindInFiles:input_type -> runc.RunCSandboxFindInFilesRequest
+	42, // 27: runc.RunCService.RunCSandboxListExposedPorts:input_type -> runc.RunCSandboxListExposedPortsRequest
+	44, // 28: runc.RunCService.RunCSandboxListProcesses:input_type -> runc.RunCSandboxListProcessesRequest
+	1,  // 29: runc.RunCService.RunCKill:output_type -> runc.RunCKillResponse
+	5,  // 30: runc.RunCService.RunCStatus:output_type -> runc.RunCStatusResponse
+	3,  // 31: runc.RunCService.RunCExec:output_type -> runc.RunCExecResponse
+	7,  // 32: runc.RunCService.RunCStreamLogs:output_type -> runc.RunCLogEntry
+	9,  // 33: runc.RunCService.RunCArchive:output_type -> runc.RunCArchiveResponse
+	11, // 34: runc.RunCService.RunCCheckpoint:output_type -> runc.RunCCheckpointResponse
+	51, // 35: runc.RunCService.RunCSyncWorkspace:output_type -> gateway.SyncContainerWorkspaceResponse
+	13, // 36: runc.RunCService.RunCSandboxExec:output_type -> runc.RunCSandboxExecResponse
+	15, // 37: runc.RunCService.RunCSandboxStatus:output_type -> runc.RunCSandboxStatusResponse
+	17, // 38: runc.RunCService.RunCSandboxStdout:output_type -> runc.RunCSandboxStdoutResponse
+	19, // 39: runc.RunCService.RunCSandboxStderr:output_type -> runc.RunCSandboxStderrResponse
+	21, // 40: runc.RunCService.RunCSandboxKill:output_type -> runc.RunCSandboxKillResponse
+	23, // 41: runc.RunCService.RunCSandboxListFiles:output_type -> runc.RunCSandboxListFilesResponse
+	31, // 42: runc.RunCService.RunCSandboxUploadFile:output_type -> runc.RunCSandboxUploadFileResponse
+	33, // 43: runc.RunCService.RunCSandboxDownloadFile:output_type -> runc.RunCSandboxDownloadFileResponse
+	37, // 44: runc.RunCService.RunCSandboxStatFile:output_type -> runc.RunCSandboxStatFileResponse
+	25, // 45: runc.RunCService.RunCSandboxDeleteFile:output_type -> runc.RunCSandboxDeleteFileResponse
+	27, // 46: runc.RunCService.RunCSandboxCreateDirectory:output_type -> runc.RunCSandboxCreateDirectoryResponse
+	29, // 47: runc.RunCService.RunCSandboxDeleteDirectory:output_type -> runc.RunCSandboxDeleteDirectoryResponse
+	35, // 48: runc.RunCService.RunCSandboxExposePort:output_type -> runc.RunCSandboxExposePortResponse
+	39, // 49: runc.RunCService.RunCSandboxReplaceInFiles:output_type -> runc.RunCSandboxReplaceInFilesResponse
+	41, // 50: runc.RunCService.RunCSandboxFindInFiles:output_type -> runc.RunCSandboxFindInFilesResponse
+	43, // 51: runc.RunCService.RunCSandboxListExposedPorts:output_type -> runc.RunCSandboxListExposedPortsResponse
+	45, // 52: runc.RunCService.RunCSandboxListProcesses:output_type -> runc.RunCSandboxListProcessesResponse
+	29, // [29:53] is the sub-list for method output_type
+	5,  // [5:29] is the sub-list for method input_type
+	5,  // [5:5] is the sub-list for extension type_name
+	5,  // [5:5] is the sub-list for extension extendee
+	0,  // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_worker_proto_init() }
@@ -3458,6 +3736,54 @@ func file_worker_proto_init() {
 				return nil
 			}
 		}
+		file_worker_proto_msgTypes[42].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*RunCSandboxListExposedPortsRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_worker_proto_msgTypes[43].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*RunCSandboxListExposedPortsResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_worker_proto_msgTypes[44].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*RunCSandboxListProcessesRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_worker_proto_msgTypes[45].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*RunCSandboxListProcessesResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -3465,7 +3791,7 @@ func file_worker_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_worker_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   43,
+			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

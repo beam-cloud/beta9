@@ -110,18 +110,6 @@ class PodSandboxKillResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
-class PodSandboxListProcessesRequest(betterproto.Message):
-    container_id: str = betterproto.string_field(1)
-
-
-@dataclass(eq=False, repr=False)
-class PodSandboxListProcessesResponse(betterproto.Message):
-    ok: bool = betterproto.bool_field(1)
-    error_msg: str = betterproto.string_field(2)
-    pids: List[int] = betterproto.int32_field(3)
-
-
-@dataclass(eq=False, repr=False)
 class PodSandboxUploadFileRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     container_path: str = betterproto.string_field(2)
@@ -315,6 +303,32 @@ class PodSandboxSnapshotMemoryResponse(betterproto.Message):
     checkpoint_id: str = betterproto.string_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class PodSandboxListProcessesRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxListProcessesResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    processes: List["_types__.ProcessInfo"] = betterproto.message_field(3)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxListUrlsRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxListUrlsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    urls: Dict[int, str] = betterproto.map_field(
+        2, betterproto.TYPE_INT32, betterproto.TYPE_STRING
+    )
+    error_msg: str = betterproto.string_field(3)
+
+
 class PodServiceStub(SyncServiceStub):
     def create_pod(self, create_pod_request: "CreatePodRequest") -> "CreatePodResponse":
         return self._unary_unary(
@@ -503,3 +517,12 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxSnapshotMemoryRequest,
             PodSandboxSnapshotMemoryResponse,
         )(pod_sandbox_snapshot_memory_request)
+
+    def sandbox_list_urls(
+        self, pod_sandbox_list_urls_request: "PodSandboxListUrlsRequest"
+    ) -> "PodSandboxListUrlsResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxListUrls",
+            PodSandboxListUrlsRequest,
+            PodSandboxListUrlsResponse,
+        )(pod_sandbox_list_urls_request)

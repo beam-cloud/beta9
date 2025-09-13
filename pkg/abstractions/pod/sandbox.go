@@ -130,7 +130,14 @@ func (s *GenericPodService) SandboxKill(ctx context.Context, in *pb.PodSandboxKi
 	if err != nil {
 		return &pb.PodSandboxKillResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to kill sandbox process",
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+
+	if !resp.Ok {
+		return &pb.PodSandboxKillResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
 		}, nil
 	}
 
@@ -158,6 +165,13 @@ func (s *GenericPodService) SandboxUploadFile(ctx context.Context, in *pb.PodSan
 		}, nil
 	}
 
+	if !resp.Ok {
+		return &pb.PodSandboxUploadFileResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+
 	return &pb.PodSandboxUploadFileResponse{
 		Ok: resp.Ok,
 	}, nil
@@ -179,6 +193,13 @@ func (s *GenericPodService) SandboxDownloadFile(ctx context.Context, in *pb.PodS
 		return &pb.PodSandboxDownloadFileResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to download file from sandbox",
+		}, nil
+	}
+
+	if !resp.Ok {
+		return &pb.PodSandboxDownloadFileResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
 		}, nil
 	}
 
@@ -207,6 +228,13 @@ func (s *GenericPodService) SandboxDeleteFile(ctx context.Context, in *pb.PodSan
 		}, nil
 	}
 
+	if !resp.Ok {
+		return &pb.PodSandboxDeleteFileResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+
 	return &pb.PodSandboxDeleteFileResponse{
 		Ok: resp.Ok,
 	}, nil
@@ -231,6 +259,13 @@ func (s *GenericPodService) SandboxCreateDirectory(ctx context.Context, in *pb.P
 		}, nil
 	}
 
+	if !resp.Ok {
+		return &pb.PodSandboxCreateDirectoryResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+
 	return &pb.PodSandboxCreateDirectoryResponse{
 		Ok: resp.Ok,
 	}, nil
@@ -252,6 +287,13 @@ func (s *GenericPodService) SandboxDeleteDirectory(ctx context.Context, in *pb.P
 		return &pb.PodSandboxDeleteDirectoryResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to delete dir in sandbox",
+		}, nil
+	}
+
+	if !resp.Ok {
+		return &pb.PodSandboxDeleteDirectoryResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
 		}, nil
 	}
 
@@ -399,6 +441,13 @@ func (s *GenericPodService) SandboxReplaceInFiles(ctx context.Context, in *pb.Po
 		}, nil
 	}
 
+	if !resp.Ok {
+		return &pb.PodSandboxReplaceInFilesResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+
 	return &pb.PodSandboxReplaceInFilesResponse{
 		Ok: resp.Ok,
 	}, nil
@@ -420,6 +469,13 @@ func (s *GenericPodService) SandboxFindInFiles(ctx context.Context, in *pb.PodSa
 		return &pb.PodSandboxFindInFilesResponse{
 			Ok:       false,
 			ErrorMsg: "Failed to find files",
+		}, nil
+	}
+
+	if !resp.Ok {
+		return &pb.PodSandboxFindInFilesResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
 		}, nil
 	}
 
@@ -578,5 +634,76 @@ func (s *GenericPodService) SandboxSnapshotMemory(ctx context.Context, in *pb.Po
 	return &pb.PodSandboxSnapshotMemoryResponse{
 		Ok:           true,
 		CheckpointId: resp.CheckpointId,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxListUrls(ctx context.Context, in *pb.PodSandboxListUrlsRequest) (*pb.PodSandboxListUrlsResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxListUrlsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	stubId, err := common.ExtractStubIdFromContainerId(in.ContainerId)
+	if err != nil {
+		return &pb.PodSandboxListUrlsResponse{
+			Ok:       false,
+			ErrorMsg: "Invalid container id",
+		}, nil
+	}
+
+	instance, err := s.getOrCreatePodInstance(stubId)
+	if err != nil {
+		return &pb.PodSandboxListUrlsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to get pod instance",
+		}, nil
+	}
+
+	resp, err := client.SandboxListExposedPorts(in.ContainerId)
+	if err != nil {
+		return &pb.PodSandboxListUrlsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to list urls",
+		}, nil
+	}
+
+	urls := make(map[int32]string)
+	for _, port := range resp.ExposedPorts {
+		urls[port] = common.BuildSandboxURL(s.config.GatewayService.HTTP.GetExternalURL(), s.config.GatewayService.InvokeURLType, instance.Stub, port)
+	}
+
+	return &pb.PodSandboxListUrlsResponse{
+		Ok:   true,
+		Urls: urls,
+	}, nil
+}
+
+func (s *GenericPodService) SandboxListProcesses(ctx context.Context, in *pb.PodSandboxListProcessesRequest) (*pb.PodSandboxListProcessesResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxListProcessesResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxListProcesses(in.ContainerId)
+	if err != nil {
+		return &pb.PodSandboxListProcessesResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to list processes",
+		}, nil
+	}
+
+	return &pb.PodSandboxListProcessesResponse{
+		Ok:        true,
+		Processes: resp.Processes,
 	}, nil
 }

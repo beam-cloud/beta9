@@ -17,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	goproc "github.com/beam-cloud/goproc/pkg"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 
 	runc "github.com/beam-cloud/go-runc"
@@ -228,6 +229,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Expose SSH port
 	request.Ports = append(request.Ports, uint32(types.WorkerShellPort))
 	portsToExpose++
+
+	// Expose sandbox process manager port
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		request.Ports = append(request.Ports, uint32(types.WorkerSandboxProcessManagerPort))
+		portsToExpose++
+	}
 
 	// Only expose checkpoint exposed ports if they are available
 	if request.Checkpoint != nil {
@@ -681,6 +688,37 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 			return
 		}
+	}
+
+	// Modify sandbox entry point to point to process manager binary
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		instance, exists := s.containerInstances.Get(containerId)
+		if !exists {
+			log.Error().Str("container_id", containerId).Msg("instance not found")
+			return
+		}
+
+		instance.SandboxProcessManager, err = goproc.NewGoProcClient(ctx, instance.ContainerIp, uint(types.WorkerSandboxProcessManagerPort))
+		if err != nil {
+			log.Error().Str("container_id", containerId).Msgf("failed to create sandbox process manager client: %v", err)
+			return
+		}
+
+		s.containerInstances.Set(containerId, instance)
+
+		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Type:        "bind",
+			Source:      types.WorkerSandboxProcessManagerWorkerPath,
+			Destination: types.WorkerSandboxProcessManagerContainerPath,
+			Options: []string{
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev",
+			},
+		})
 	}
 
 	// Write runc config spec to disk

@@ -19,28 +19,30 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	RunCService_RunCKill_FullMethodName                   = "/runc.RunCService/RunCKill"
-	RunCService_RunCStatus_FullMethodName                 = "/runc.RunCService/RunCStatus"
-	RunCService_RunCExec_FullMethodName                   = "/runc.RunCService/RunCExec"
-	RunCService_RunCStreamLogs_FullMethodName             = "/runc.RunCService/RunCStreamLogs"
-	RunCService_RunCArchive_FullMethodName                = "/runc.RunCService/RunCArchive"
-	RunCService_RunCCheckpoint_FullMethodName             = "/runc.RunCService/RunCCheckpoint"
-	RunCService_RunCSyncWorkspace_FullMethodName          = "/runc.RunCService/RunCSyncWorkspace"
-	RunCService_RunCSandboxExec_FullMethodName            = "/runc.RunCService/RunCSandboxExec"
-	RunCService_RunCSandboxStatus_FullMethodName          = "/runc.RunCService/RunCSandboxStatus"
-	RunCService_RunCSandboxStdout_FullMethodName          = "/runc.RunCService/RunCSandboxStdout"
-	RunCService_RunCSandboxStderr_FullMethodName          = "/runc.RunCService/RunCSandboxStderr"
-	RunCService_RunCSandboxKill_FullMethodName            = "/runc.RunCService/RunCSandboxKill"
-	RunCService_RunCSandboxListFiles_FullMethodName       = "/runc.RunCService/RunCSandboxListFiles"
-	RunCService_RunCSandboxUploadFile_FullMethodName      = "/runc.RunCService/RunCSandboxUploadFile"
-	RunCService_RunCSandboxDownloadFile_FullMethodName    = "/runc.RunCService/RunCSandboxDownloadFile"
-	RunCService_RunCSandboxStatFile_FullMethodName        = "/runc.RunCService/RunCSandboxStatFile"
-	RunCService_RunCSandboxDeleteFile_FullMethodName      = "/runc.RunCService/RunCSandboxDeleteFile"
-	RunCService_RunCSandboxCreateDirectory_FullMethodName = "/runc.RunCService/RunCSandboxCreateDirectory"
-	RunCService_RunCSandboxDeleteDirectory_FullMethodName = "/runc.RunCService/RunCSandboxDeleteDirectory"
-	RunCService_RunCSandboxExposePort_FullMethodName      = "/runc.RunCService/RunCSandboxExposePort"
-	RunCService_RunCSandboxReplaceInFiles_FullMethodName  = "/runc.RunCService/RunCSandboxReplaceInFiles"
-	RunCService_RunCSandboxFindInFiles_FullMethodName     = "/runc.RunCService/RunCSandboxFindInFiles"
+	RunCService_RunCKill_FullMethodName                    = "/runc.RunCService/RunCKill"
+	RunCService_RunCStatus_FullMethodName                  = "/runc.RunCService/RunCStatus"
+	RunCService_RunCExec_FullMethodName                    = "/runc.RunCService/RunCExec"
+	RunCService_RunCStreamLogs_FullMethodName              = "/runc.RunCService/RunCStreamLogs"
+	RunCService_RunCArchive_FullMethodName                 = "/runc.RunCService/RunCArchive"
+	RunCService_RunCCheckpoint_FullMethodName              = "/runc.RunCService/RunCCheckpoint"
+	RunCService_RunCSyncWorkspace_FullMethodName           = "/runc.RunCService/RunCSyncWorkspace"
+	RunCService_RunCSandboxExec_FullMethodName             = "/runc.RunCService/RunCSandboxExec"
+	RunCService_RunCSandboxStatus_FullMethodName           = "/runc.RunCService/RunCSandboxStatus"
+	RunCService_RunCSandboxStdout_FullMethodName           = "/runc.RunCService/RunCSandboxStdout"
+	RunCService_RunCSandboxStderr_FullMethodName           = "/runc.RunCService/RunCSandboxStderr"
+	RunCService_RunCSandboxKill_FullMethodName             = "/runc.RunCService/RunCSandboxKill"
+	RunCService_RunCSandboxListFiles_FullMethodName        = "/runc.RunCService/RunCSandboxListFiles"
+	RunCService_RunCSandboxUploadFile_FullMethodName       = "/runc.RunCService/RunCSandboxUploadFile"
+	RunCService_RunCSandboxDownloadFile_FullMethodName     = "/runc.RunCService/RunCSandboxDownloadFile"
+	RunCService_RunCSandboxStatFile_FullMethodName         = "/runc.RunCService/RunCSandboxStatFile"
+	RunCService_RunCSandboxDeleteFile_FullMethodName       = "/runc.RunCService/RunCSandboxDeleteFile"
+	RunCService_RunCSandboxCreateDirectory_FullMethodName  = "/runc.RunCService/RunCSandboxCreateDirectory"
+	RunCService_RunCSandboxDeleteDirectory_FullMethodName  = "/runc.RunCService/RunCSandboxDeleteDirectory"
+	RunCService_RunCSandboxExposePort_FullMethodName       = "/runc.RunCService/RunCSandboxExposePort"
+	RunCService_RunCSandboxReplaceInFiles_FullMethodName   = "/runc.RunCService/RunCSandboxReplaceInFiles"
+	RunCService_RunCSandboxFindInFiles_FullMethodName      = "/runc.RunCService/RunCSandboxFindInFiles"
+	RunCService_RunCSandboxListExposedPorts_FullMethodName = "/runc.RunCService/RunCSandboxListExposedPorts"
+	RunCService_RunCSandboxListProcesses_FullMethodName    = "/runc.RunCService/RunCSandboxListProcesses"
 )
 
 // RunCServiceClient is the client API for RunCService service.
@@ -69,6 +71,8 @@ type RunCServiceClient interface {
 	RunCSandboxExposePort(ctx context.Context, in *RunCSandboxExposePortRequest, opts ...grpc.CallOption) (*RunCSandboxExposePortResponse, error)
 	RunCSandboxReplaceInFiles(ctx context.Context, in *RunCSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxReplaceInFilesResponse, error)
 	RunCSandboxFindInFiles(ctx context.Context, in *RunCSandboxFindInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxFindInFilesResponse, error)
+	RunCSandboxListExposedPorts(ctx context.Context, in *RunCSandboxListExposedPortsRequest, opts ...grpc.CallOption) (*RunCSandboxListExposedPortsResponse, error)
+	RunCSandboxListProcesses(ctx context.Context, in *RunCSandboxListProcessesRequest, opts ...grpc.CallOption) (*RunCSandboxListProcessesResponse, error)
 }
 
 type runCServiceClient struct {
@@ -323,6 +327,24 @@ func (c *runCServiceClient) RunCSandboxFindInFiles(ctx context.Context, in *RunC
 	return out, nil
 }
 
+func (c *runCServiceClient) RunCSandboxListExposedPorts(ctx context.Context, in *RunCSandboxListExposedPortsRequest, opts ...grpc.CallOption) (*RunCSandboxListExposedPortsResponse, error) {
+	out := new(RunCSandboxListExposedPortsResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxListExposedPorts_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *runCServiceClient) RunCSandboxListProcesses(ctx context.Context, in *RunCSandboxListProcessesRequest, opts ...grpc.CallOption) (*RunCSandboxListProcessesResponse, error) {
+	out := new(RunCSandboxListProcessesResponse)
+	err := c.cc.Invoke(ctx, RunCService_RunCSandboxListProcesses_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RunCServiceServer is the server API for RunCService service.
 // All implementations must embed UnimplementedRunCServiceServer
 // for forward compatibility
@@ -349,6 +371,8 @@ type RunCServiceServer interface {
 	RunCSandboxExposePort(context.Context, *RunCSandboxExposePortRequest) (*RunCSandboxExposePortResponse, error)
 	RunCSandboxReplaceInFiles(context.Context, *RunCSandboxReplaceInFilesRequest) (*RunCSandboxReplaceInFilesResponse, error)
 	RunCSandboxFindInFiles(context.Context, *RunCSandboxFindInFilesRequest) (*RunCSandboxFindInFilesResponse, error)
+	RunCSandboxListExposedPorts(context.Context, *RunCSandboxListExposedPortsRequest) (*RunCSandboxListExposedPortsResponse, error)
+	RunCSandboxListProcesses(context.Context, *RunCSandboxListProcessesRequest) (*RunCSandboxListProcessesResponse, error)
 	mustEmbedUnimplementedRunCServiceServer()
 }
 
@@ -421,6 +445,12 @@ func (UnimplementedRunCServiceServer) RunCSandboxReplaceInFiles(context.Context,
 }
 func (UnimplementedRunCServiceServer) RunCSandboxFindInFiles(context.Context, *RunCSandboxFindInFilesRequest) (*RunCSandboxFindInFilesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxFindInFiles not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxListExposedPorts(context.Context, *RunCSandboxListExposedPortsRequest) (*RunCSandboxListExposedPortsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxListExposedPorts not implemented")
+}
+func (UnimplementedRunCServiceServer) RunCSandboxListProcesses(context.Context, *RunCSandboxListProcessesRequest) (*RunCSandboxListProcessesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxListProcesses not implemented")
 }
 func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
 
@@ -837,6 +867,42 @@ func _RunCService_RunCSandboxFindInFiles_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RunCService_RunCSandboxListExposedPorts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxListExposedPortsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxListExposedPorts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxListExposedPorts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxListExposedPorts(ctx, req.(*RunCSandboxListExposedPortsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _RunCService_RunCSandboxListProcesses_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RunCSandboxListProcessesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RunCServiceServer).RunCSandboxListProcesses(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RunCService_RunCSandboxListProcesses_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RunCServiceServer).RunCSandboxListProcesses(ctx, req.(*RunCSandboxListProcessesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RunCService_ServiceDesc is the grpc.ServiceDesc for RunCService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -923,6 +989,14 @@ var RunCService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunCSandboxFindInFiles",
 			Handler:    _RunCService_RunCSandboxFindInFiles_Handler,
+		},
+		{
+			MethodName: "RunCSandboxListExposedPorts",
+			Handler:    _RunCService_RunCSandboxListExposedPorts_Handler,
+		},
+		{
+			MethodName: "RunCSandboxListProcesses",
+			Handler:    _RunCService_RunCSandboxListProcesses_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

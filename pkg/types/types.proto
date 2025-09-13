@@ -175,6 +175,15 @@ message PricingPolicy {
   double cost_per_task_duration_ms = 4;
 }
 
+message ProcessInfo {
+  bool running = 1;
+  int32 pid = 2;
+  string cmd = 3;
+  string cwd = 4;
+  repeated string env = 5;
+  int32 exit_code = 6;
+}
+
 message Stub {
   uint32 id = 1;
   string external_id = 2;

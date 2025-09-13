@@ -104,6 +104,22 @@ func (c *RunCClient) SandboxExec(containerId, cmd string, env map[string]string,
 	return resp, nil
 }
 
+func (c *RunCClient) SandboxListExposedPorts(containerId string) (*pb.RunCSandboxListExposedPortsResponse, error) {
+	resp, err := c.client.RunCSandboxListExposedPorts(context.TODO(), &pb.RunCSandboxListExposedPortsRequest{ContainerId: containerId})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
+func (c *RunCClient) SandboxListProcesses(containerId string) (*pb.RunCSandboxListProcessesResponse, error) {
+	resp, err := c.client.RunCSandboxListProcesses(context.TODO(), &pb.RunCSandboxListProcessesRequest{ContainerId: containerId})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
 func (c *RunCClient) SandboxStatus(containerId string, pid int32) (*pb.RunCSandboxStatusResponse, error) {
 	resp, err := c.client.RunCSandboxStatus(context.TODO(), &pb.RunCSandboxStatusRequest{ContainerId: containerId, Pid: pid})
 	if err != nil {
@@ -133,6 +149,7 @@ func (c *RunCClient) SandboxKill(containerId string, pid int32) (*pb.RunCSandbox
 	if err != nil {
 		return resp, err
 	}
+
 	return resp, nil
 }
 
