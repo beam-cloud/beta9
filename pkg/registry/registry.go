@@ -31,10 +31,10 @@ type ImageRegistry struct {
 	store              ObjectStore
 	config             types.ImageServiceConfig
 	ImageFileExtension string
-	registry           types.S3ImageRegistry
+	registry           types.S3ImageRegistryConfig
 }
 
-func NewImageRegistry(config types.AppConfig, registry types.S3ImageRegistry) (*ImageRegistry, error) {
+func NewImageRegistry(config types.AppConfig, registry types.S3ImageRegistryConfig) (*ImageRegistry, error) {
 	var (
 		err                error
 		store              ObjectStore
@@ -64,7 +64,7 @@ func NewImageRegistry(config types.AppConfig, registry types.S3ImageRegistry) (*
 	}, nil
 }
 
-func (r *ImageRegistry) Registry() types.S3ImageRegistry {
+func (r *ImageRegistry) Registry() types.S3ImageRegistryConfig {
 	return r.registry
 }
 
@@ -100,10 +100,10 @@ type ObjectStore interface {
 
 type S3Store struct {
 	client *s3.Client
-	config types.S3ImageRegistry
+	config types.S3ImageRegistryConfig
 }
 
-func NewS3Store(config types.S3ImageRegistry) (*S3Store, error) {
+func NewS3Store(config types.S3ImageRegistryConfig) (*S3Store, error) {
 	cfg, err := common.GetAWSConfig(config.AccessKey, config.SecretKey, config.Region, config.Endpoint)
 	if err != nil {
 		return nil, err
