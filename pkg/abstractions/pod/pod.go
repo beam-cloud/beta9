@@ -2,6 +2,7 @@ package pod
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -360,7 +361,14 @@ func (s *GenericPodService) CreatePod(ctx context.Context, in *pb.CreatePodReque
 			}, nil
 		}
 
-		stub, err = s.backendRepo.GetStubById(ctx, checkpoint.StubId)
+		originalStub, err := s.backendRepo.GetStubById(ctx, checkpoint.StubId)
+		if err != nil {
+			return &pb.CreatePodResponse{
+				Ok: false,
+			}, nil
+		}
+
+		stub, err = s.cloneStub(ctx, authInfo.Workspace, originalStub)
 		if err != nil {
 			return &pb.CreatePodResponse{
 				Ok: false,
@@ -398,4 +406,95 @@ func (s *GenericPodService) generateContainerId(stubId string, stubType types.St
 	default:
 		return fmt.Sprintf("%s-%s-%s", podContainerPrefix, stubId, uuid.New().String()[:8])
 	}
+}
+
+// TODO: consolidate this logic with the logic in api/v1/stub.go - for now just clone the object without cloning the object (does not matter for sandboxes/pods)
+func (s *GenericPodService) cloneStub(ctx context.Context, workspace *types.Workspace, stub *types.StubWithRelated) (*types.StubWithRelated, error) {
+	stubConfig := &types.StubConfigV1{}
+	if err := json.Unmarshal([]byte(stub.Config), &stubConfig); err != nil {
+		return nil, err
+	}
+
+	parentSecrets := stubConfig.Secrets
+	stubConfig.Secrets = []types.Secret{}
+
+	if stubConfig.RequiresGPU() {
+		concurrencyLimit, err := s.backendRepo.GetConcurrencyLimitByWorkspaceId(ctx, workspace.ExternalId)
+		if err != nil && concurrencyLimit != nil && concurrencyLimit.GPULimit <= 0 {
+			return nil, err
+		}
+	}
+
+	for _, secret := range parentSecrets {
+		secret, err := s.backendRepo.GetSecretByName(ctx, workspace, secret.Name)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
+
+			return nil, err
+		}
+
+		stubConfig.Secrets = append(stubConfig.Secrets, types.Secret{
+			Name:      secret.Name,
+			Value:     secret.Value,
+			CreatedAt: secret.CreatedAt,
+			UpdatedAt: secret.UpdatedAt,
+		})
+	}
+
+	for _, volumeConfig := range stubConfig.Volumes {
+		parentVolume, err := s.backendRepo.GetVolumeByExternalId(ctx, stub.WorkspaceId, volumeConfig.Id)
+		if err != nil {
+			return nil, err
+		}
+
+		childVolume, err := s.backendRepo.GetOrCreateVolume(ctx, workspace.Id, parentVolume.Name)
+		if err != nil {
+			return nil, err
+		}
+
+		volumeConfig.Id = childVolume.ExternalId
+	}
+
+	err := s.configureVolumes(ctx, stubConfig.Volumes, workspace)
+	if err != nil {
+		return nil, err
+	}
+
+	app, err := s.backendRepo.GetOrCreateApp(ctx, workspace.Id, stub.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	newStub, err := s.backendRepo.GetOrCreateStub(ctx, stub.Name, string(stub.Type), *stubConfig, stub.ObjectId, workspace.Id, true, app.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	stub.Stub = newStub
+	return stub, nil
+}
+
+func (s *GenericPodService) configureVolumes(ctx context.Context, volumes []*pb.Volume, workspace *types.Workspace) error {
+	for i, volume := range volumes {
+
+		if volume.Config != nil {
+			// De-reference secrets
+			accessKey, err := s.backendRepo.GetSecretByName(ctx, workspace, volume.Config.AccessKey)
+			if err != nil {
+				return fmt.Errorf("Failed to get secret: %s", volume.Config.AccessKey)
+			}
+			volumes[i].Config.AccessKey = accessKey.Value
+
+			secretKey, err := s.backendRepo.GetSecretByName(ctx, workspace, volume.Config.SecretKey)
+			if err != nil {
+				return fmt.Errorf("Failed to get secret: %s", volume.Config.SecretKey)
+			}
+
+			volumes[i].Config.SecretKey = secretKey.Value
+		}
+	}
+
+	return nil
 }
