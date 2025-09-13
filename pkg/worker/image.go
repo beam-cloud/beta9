@@ -131,7 +131,7 @@ type ImageClient struct {
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
-	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3.Primary)
+	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
 	}
@@ -311,13 +311,13 @@ func (c *ImageClient) Cleanup() error {
 	return nil
 }
 
-func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string) (*types.S3ImageRegistry, error) {
-	sourceRegistry := c.config.ImageService.Registries.S3.Primary
+func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string) (*types.S3ImageRegistryConfig, error) {
+	sourceRegistry := c.config.ImageService.Registries.S3
 
 	if _, err := os.Stat(archivePath); err != nil {
 		err = c.registry.Pull(ctx, archivePath, imageId)
 		if err != nil {
-			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from primary registry")
+			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
 
 			return nil, err
 		}
@@ -546,17 +546,17 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 			OutputPath: archivePath,
 			Credentials: storage.ClipStorageCredentials{
 				S3: &storage.S3ClipStorageCredentials{
-					AccessKey: c.config.ImageService.Registries.S3.Primary.AccessKey,
-					SecretKey: c.config.ImageService.Registries.S3.Primary.SecretKey,
+					AccessKey: c.config.ImageService.Registries.S3.AccessKey,
+					SecretKey: c.config.ImageService.Registries.S3.SecretKey,
 				},
 			},
 			ProgressChan: progressChan,
 		}, &clipCommon.S3StorageInfo{
-			Bucket:         c.config.ImageService.Registries.S3.Primary.BucketName,
-			Region:         c.config.ImageService.Registries.S3.Primary.Region,
-			Endpoint:       c.config.ImageService.Registries.S3.Primary.Endpoint,
+			Bucket:         c.config.ImageService.Registries.S3.BucketName,
+			Region:         c.config.ImageService.Registries.S3.Region,
+			Endpoint:       c.config.ImageService.Registries.S3.Endpoint,
 			Key:            fmt.Sprintf("%s.clip", imageId),
-			ForcePathStyle: c.config.ImageService.Registries.S3.Primary.ForcePathStyle,
+			ForcePathStyle: c.config.ImageService.Registries.S3.ForcePathStyle,
 		})
 	case registry.LocalImageRegistryStore:
 		err = clip.CreateArchive(clip.CreateOptions{
