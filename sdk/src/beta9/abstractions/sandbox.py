@@ -34,6 +34,8 @@ from ..clients.pod import (
     PodSandboxListFilesRequest,
     PodSandboxListProcessesRequest,
     PodSandboxListProcessesResponse,
+    PodSandboxListUrlsRequest,
+    PodSandboxListUrlsResponse,
     PodSandboxReplaceInFilesRequest,
     PodSandboxSnapshotMemoryRequest,
     PodSandboxSnapshotMemoryResponse,
@@ -523,6 +525,31 @@ class SandboxInstance(BaseAbstraction):
 
         raise SandboxProcessError("Failed to expose port")
 
+    def list_urls(self) -> Dict[int, str]:
+        """
+        List all exposed URLs in the sandbox    .
+
+        Returns:
+            Dict[int, str]: A dictionary of exposed URLs, organized by port.
+
+        Raises:
+            SandboxConnectionError: If listing URLs fails.
+
+        Example:
+            ```python
+            # List all exposed URLs
+            urls = instance.list_urls()
+            print(f"Exposed URLs: {urls}")
+            ```
+        """
+        res: "PodSandboxListUrlsResponse" = self.stub.sandbox_list_urls(
+            PodSandboxListUrlsRequest(container_id=self.container_id)
+        )
+        if not res.ok:
+            raise SandboxConnectionError(res.error_msg)
+
+        return res.urls
+
     def __getstate__(self):
         state = self.__dict__.copy()
 
@@ -740,17 +767,17 @@ class SandboxProcessManager:
             self.processes[response.pid] = process
             return process
 
-    def list_processes(self) -> List["SandboxProcess"]:
+    def list_processes(self) -> Dict[int, "SandboxProcess"]:
         """
         List all processes running in the sandbox.
 
         Returns:
-            List[SandboxProcess]: List of active process objects.
+            Dict[int, SandboxProcess]: Dictionary of active process objects, indexed by PID.
 
         Example:
             ```python
             processes = pm.list_processes()
-            for process in processes:
+            for pid, process in processes.items():
                 print(f"Process {process.pid} is running")
             ```
         """
@@ -762,8 +789,8 @@ class SandboxProcessManager:
         if not processes.ok:
             raise SandboxProcessError(processes.error_msg)
 
-        return [
-            SandboxProcess(
+        return {
+            process.pid: SandboxProcess(
                 self.sandbox_instance,
                 pid=process.pid,
                 cwd=process.cwd,
@@ -772,7 +799,7 @@ class SandboxProcessManager:
                 exit_code=process.exit_code,
             )
             for process in processes.processes
-        ]
+        }
 
     def get_process(self, pid: int) -> "SandboxProcess":
         """
@@ -796,7 +823,9 @@ class SandboxProcessManager:
                 print("Process not found")
             ```
         """
-        if pid not in self.processes:
+        self.processes = self.list_processes()
+
+        if pid not in self.processes.keys():
             raise SandboxProcessError(f"Process with pid {pid} not found")
 
         return self.processes[pid]

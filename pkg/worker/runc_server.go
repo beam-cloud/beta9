@@ -570,7 +570,7 @@ func (s *RunCServer) RunCSandboxListExposedPorts(ctx context.Context, in *pb.Run
 		return &pb.RunCSandboxListExposedPortsResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
-	excludedPorts := []int32{types.WorkerSandboxProcessManagerPort, types.WorkerShellPort}
+	excludedPorts := []int32{types.WorkerSandboxProcessManagerPort, types.WorkerShellPort, int32(containerInnerPort)}
 	ports := make([]int32, 0)
 	for _, port := range instance.Request.Ports {
 		if slices.Contains(excludedPorts, int32(port)) {

@@ -7,9 +7,9 @@ import (
 
 func ExtractStubIdFromContainerId(containerId string) (string, error) {
 	parts := strings.Split(containerId, "-")
-	if len(parts) < 8 {
+	if len(parts) < 7 {
 		return "", errors.New("invalid container id")
 	}
 
-	return strings.Join(parts[2:7], "-"), nil
+	return strings.Join(parts[1:6], "-"), nil
 }
