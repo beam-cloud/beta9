@@ -89,6 +89,9 @@ func (s *GeeseStorage) Mount(localPath string) error {
 		log.Info().Str("local_path", localPath).Str("geesefs_event", string(event)).Interface("data", data).Msg("geesefs: event callback fired")
 	}
 
+	// Cache through mode config
+	flags.CacheThroughModeEnabled = s.config.CacheThroughModeEnabled
+
 	if s.config.DisableVolumeCaching {
 		flags.HashAttr = ""
 	}
