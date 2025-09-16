@@ -2,11 +2,9 @@ package auth
 
 import (
 	"context"
-	"net/http"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"google.golang.org/grpc"
@@ -156,16 +154,6 @@ func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo *Aut
 	return context.WithValue(ctx, authContextKey, authInfo)
 }
 
-func GRPCProxyAuthenticationMiddleware(handlerFunc runtime.HandlerFunc) runtime.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request, pathParams map[string]string) {
-		authHeader := r.Header.Get("Authorization")
-		tokenKey := strings.TrimPrefix(authHeader, "Bearer ")
-
-		if authHeader == "" || tokenKey == "" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-
-		handlerFunc(w, r, pathParams)
-	}
+func CheckWorkspaceRestrictedToken(authInfo *AuthInfo) bool {
+	return authInfo.Token.TokenType == types.TokenTypeWorkspaceRestricted
 }

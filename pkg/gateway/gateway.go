@@ -260,13 +260,10 @@ func (g *Gateway) initGrpc() error {
 // initGrpcProxy exposes gRPC services as HTTP endpoints.
 func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	ctx, cancel := context.WithCancel(g.ctx)
-	authInterceptor := auth.NewAuthInterceptor(g.Config, g.BackendRepo, g.WorkspaceRepo)
 	g.httpServer.RegisterOnShutdown(func() {
 		cancel()
 	})
-	mux := runtime.NewServeMux(
-		runtime.WithMiddlewares(authInterceptor.GRPCProxyAuthenticationMiddleware),
-	)
+	mux := runtime.NewServeMux()
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 	if err := pb.RegisterPodServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
 		return err

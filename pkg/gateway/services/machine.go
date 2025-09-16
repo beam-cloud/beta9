@@ -14,6 +14,14 @@ import (
 func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachinesRequest) (*pb.ListMachinesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+		return &pb.ListMachinesResponse{
+			Ok:       false,
+			ErrMsg:   "Access denied for workspace restricted tokens",
+			Machines: []*pb.Machine{},
+		}, nil
+	}
+
 	gpus, err := gws.workerRepo.GetGpuAvailability()
 	if err != nil {
 		return nil, err
@@ -142,6 +150,13 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 
 func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachineRequest) (*pb.CreateMachineResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+		return &pb.CreateMachineResponse{
+			Ok:     false,
+			ErrMsg: "Access denied for workspace restricted tokens",
+		}, nil
+	}
 	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return &pb.CreateMachineResponse{
 			Ok:     false,
@@ -207,6 +222,14 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 
 func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachineRequest) (*pb.DeleteMachineResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+		return &pb.DeleteMachineResponse{
+			Ok:     false,
+			ErrMsg: "Access denied for workspace restricted tokens",
+		}, nil
+	}
+
 	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return &pb.DeleteMachineResponse{
 			Ok:     false,
