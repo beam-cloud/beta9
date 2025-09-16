@@ -43,6 +43,7 @@ class Checkpoint(betterproto.Message):
     exposed_ports: List[int] = betterproto.uint32_field(12)
     created_at: datetime = betterproto.message_field(13)
     last_restored_at: datetime = betterproto.message_field(14)
+    deleted_at: "NullTime" = betterproto.message_field(15)
 
 
 @dataclass(eq=False, repr=False)
@@ -192,6 +193,16 @@ class PricingPolicy(betterproto.Message):
     cost_model: str = betterproto.string_field(2)
     cost_per_task: float = betterproto.double_field(3)
     cost_per_task_duration_ms: float = betterproto.double_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class ProcessInfo(betterproto.Message):
+    running: bool = betterproto.bool_field(1)
+    pid: int = betterproto.int32_field(2)
+    cmd: str = betterproto.string_field(3)
+    cwd: str = betterproto.string_field(4)
+    env: List[str] = betterproto.string_field(5)
+    exit_code: int = betterproto.int32_field(6)
 
 
 @dataclass(eq=False, repr=False)

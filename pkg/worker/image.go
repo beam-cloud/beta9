@@ -117,8 +117,7 @@ func NewPathInfo(path string) *PathInfo {
 }
 
 type ImageClient struct {
-	primaryRegistry    *registry.ImageRegistry
-	secondaryRegistry  *registry.ImageRegistry
+	registry           *registry.ImageRegistry
 	cacheClient        *blobcache.BlobCacheClient
 	imageCachePath     string
 	imageMountPath     string
@@ -132,20 +131,14 @@ type ImageClient struct {
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
-	primaryRegistry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3.Primary)
-	if err != nil {
-		return nil, err
-	}
-
-	secondaryRegistry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3.Secondary)
+	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
 	}
 
 	c := &ImageClient{
 		config:             config,
-		primaryRegistry:    primaryRegistry,
-		secondaryRegistry:  secondaryRegistry,
+		registry:           registry,
 		cacheClient:        fileCacheManager.GetClient(),
 		imageBundlePath:    imageBundlePath,
 		imageCachePath:     getImageCachePath(),
@@ -318,27 +311,18 @@ func (c *ImageClient) Cleanup() error {
 	return nil
 }
 
-func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string) (*types.S3ImageRegistry, error) {
-	sourceRegistry := c.config.ImageService.Registries.S3.Primary
+func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string) (*types.S3ImageRegistryConfig, error) {
+	sourceRegistry := c.config.ImageService.Registries.S3
 
 	if _, err := os.Stat(archivePath); err != nil {
-		err = c.primaryRegistry.Pull(ctx, archivePath, imageId)
+		err = c.registry.Pull(ctx, archivePath, imageId)
 		if err != nil {
-			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from primary registry")
+			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
 
-			sourceRegistry = c.config.ImageService.Registries.S3.Secondary
-			err = c.secondaryRegistry.Pull(ctx, archivePath, imageId)
-			if err != nil {
-				log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from secondary registry")
-				return nil, err
-			}
-
-			// HACK: Async copy the archives to the primary registry if it exists in the secondary registry
-			if c.primaryRegistry.Registry().BucketName != c.secondaryRegistry.Registry().BucketName &&
-				c.primaryRegistry.Registry().Endpoint != c.secondaryRegistry.Registry().Endpoint {
-				go c.primaryRegistry.CopyImageFromRegistry(context.Background(), imageId, c.secondaryRegistry)
-			}
+			return nil, err
 		}
+
+		return &sourceRegistry, nil
 	}
 
 	return &sourceRegistry, nil
@@ -547,7 +531,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 
 	startTime := time.Now()
 
-	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.primaryRegistry.ImageFileExtension)
+	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
 	archivePath := filepath.Join("/tmp", archiveName)
 
 	defer func() {
@@ -562,17 +546,17 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 			OutputPath: archivePath,
 			Credentials: storage.ClipStorageCredentials{
 				S3: &storage.S3ClipStorageCredentials{
-					AccessKey: c.config.ImageService.Registries.S3.Primary.AccessKey,
-					SecretKey: c.config.ImageService.Registries.S3.Primary.SecretKey,
+					AccessKey: c.config.ImageService.Registries.S3.AccessKey,
+					SecretKey: c.config.ImageService.Registries.S3.SecretKey,
 				},
 			},
 			ProgressChan: progressChan,
 		}, &clipCommon.S3StorageInfo{
-			Bucket:         c.config.ImageService.Registries.S3.Primary.BucketName,
-			Region:         c.config.ImageService.Registries.S3.Primary.Region,
-			Endpoint:       c.config.ImageService.Registries.S3.Primary.Endpoint,
+			Bucket:         c.config.ImageService.Registries.S3.BucketName,
+			Region:         c.config.ImageService.Registries.S3.Region,
+			Endpoint:       c.config.ImageService.Registries.S3.Endpoint,
 			Key:            fmt.Sprintf("%s.clip", imageId),
-			ForcePathStyle: c.config.ImageService.Registries.S3.Primary.ForcePathStyle,
+			ForcePathStyle: c.config.ImageService.Registries.S3.ForcePathStyle,
 		})
 	case registry.LocalImageRegistryStore:
 		err = clip.CreateArchive(clip.CreateOptions{
@@ -591,7 +575,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 
 	// Push the archive to a registry
 	startTime = time.Now()
-	err = c.primaryRegistry.Push(ctx, archivePath, imageId)
+	err = c.registry.Push(ctx, archivePath, imageId)
 	if err != nil {
 		log.Error().Str("image_id", imageId).Err(err).Msg("failed to push image")
 		return err

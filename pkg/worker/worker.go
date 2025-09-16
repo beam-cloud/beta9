@@ -24,6 +24,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
+	goproc "github.com/beam-cloud/goproc/pkg"
 )
 
 const (
@@ -76,20 +77,20 @@ type Worker struct {
 }
 
 type ContainerInstance struct {
-	Id               string
-	StubId           string
-	BundlePath       string
-	Overlay          *common.ContainerOverlay
-	Spec             *specs.Spec
-	Err              error
-	ExitCode         int
-	Port             int
-	OutputWriter     *common.OutputWriter
-	LogBuffer        *common.LogBuffer
-	Request          *types.ContainerRequest
-	StopReason       types.StopContainerReason
-	SandboxProcesses sync.Map
-	ContainerIp      string
+	Id                    string
+	StubId                string
+	BundlePath            string
+	Overlay               *common.ContainerOverlay
+	Spec                  *specs.Spec
+	Err                   error
+	ExitCode              int
+	Port                  int
+	OutputWriter          *common.OutputWriter
+	LogBuffer             *common.LogBuffer
+	Request               *types.ContainerRequest
+	StopReason            types.StopContainerReason
+	SandboxProcessManager *goproc.GoProcClient
+	ContainerIp           string
 }
 
 type ContainerOptions struct {

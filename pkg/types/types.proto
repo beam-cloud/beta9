@@ -37,6 +37,7 @@ message Checkpoint {
   repeated uint32 exposed_ports = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp last_restored_at = 14;
+  NullTime deleted_at = 15;
 }
 
 message ConcurrencyLimit {
@@ -172,6 +173,15 @@ message PricingPolicy {
   string cost_model = 2;
   double cost_per_task = 3;
   double cost_per_task_duration_ms = 4;
+}
+
+message ProcessInfo {
+  bool running = 1;
+  int32 pid = 2;
+  string cmd = 3;
+  string cwd = 4;
+  repeated string env = 5;
+  int32 exit_code = 6;
 }
 
 message Stub {

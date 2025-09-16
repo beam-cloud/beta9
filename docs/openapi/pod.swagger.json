@@ -997,12 +997,29 @@
         "errorMsg": {
           "type": "string"
         },
-        "pids": {
+        "processes": {
           "type": "array",
           "items": {
-            "type": "integer",
-            "format": "int32"
+            "type": "object",
+            "$ref": "#/definitions/typesProcessInfo"
           }
+        }
+      }
+    },
+    "podPodSandboxListUrlsResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "urls": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "errorMsg": {
+          "type": "string"
         }
       }
     },
@@ -1188,6 +1205,34 @@
             "type": "object",
             "$ref": "#/definitions/typesFileSearchMatch"
           }
+        }
+      }
+    },
+    "typesProcessInfo": {
+      "type": "object",
+      "properties": {
+        "running": {
+          "type": "boolean"
+        },
+        "pid": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "cmd": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exitCode": {
+          "type": "integer",
+          "format": "int32"
         }
       }
     }
