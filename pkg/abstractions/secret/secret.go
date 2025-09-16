@@ -62,6 +62,13 @@ func handleErrMsg(err error) string {
 func (s *WorkspaceSecretService) CreateSecret(ctx context.Context, req *pb.CreateSecretRequest) (*pb.CreateSecretResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+		return &pb.CreateSecretResponse{
+			Ok:     false,
+			ErrMsg: "Access denied for workspace restricted tokens",
+		}, nil
+	}
+
 	// Save the secret
 	secret, err := s.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, req.Name, req.Value)
 	if err != nil {
@@ -104,6 +111,13 @@ func (s *WorkspaceSecretService) GetSecret(ctx context.Context, req *pb.GetSecre
 func (s *WorkspaceSecretService) ListSecrets(ctx context.Context, req *pb.ListSecretsRequest) (*pb.ListSecretsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+		return &pb.ListSecretsResponse{
+			Ok:     false,
+			ErrMsg: "Access denied for workspace restricted tokens",
+		}, nil
+	}
+
 	secrets, err := s.backendRepo.ListSecrets(ctx, authInfo.Workspace)
 	if err != nil {
 		return &pb.ListSecretsResponse{
@@ -132,6 +146,13 @@ func (s *WorkspaceSecretService) ListSecrets(ctx context.Context, req *pb.ListSe
 func (s *WorkspaceSecretService) UpdateSecret(ctx context.Context, req *pb.UpdateSecretRequest) (*pb.UpdateSecretResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+		return &pb.UpdateSecretResponse{
+			Ok:     false,
+			ErrMsg: "Access denied for workspace restricted tokens",
+		}, nil
+	}
+
 	_, err := s.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, req.Name, req.Value)
 	if err != nil {
 		return &pb.UpdateSecretResponse{
@@ -148,6 +169,13 @@ func (s *WorkspaceSecretService) UpdateSecret(ctx context.Context, req *pb.Updat
 
 func (s *WorkspaceSecretService) DeleteSecret(ctx context.Context, req *pb.DeleteSecretRequest) (*pb.DeleteSecretResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+		return &pb.DeleteSecretResponse{
+			Ok:     false,
+			ErrMsg: "Access denied for workspace restricted tokens",
+		}, nil
+	}
 
 	err := s.backendRepo.DeleteSecret(ctx, authInfo.Workspace, req.Name)
 	if err != nil {
