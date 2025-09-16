@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +19,19 @@ import (
 const (
 	minNvidiaDriverVersion = 570
 )
+
+type ErrCRIURestoreFailed struct {
+	Stderr string
+}
+
+func (e *ErrCRIURestoreFailed) Error() string {
+	return fmt.Sprintf("CRIU restore failed: %s", e.Stderr)
+}
+
+func IsCRIURestoreError(err error) bool {
+	var criuErr *ErrCRIURestoreFailed
+	return errors.As(err, &criuErr)
+}
 
 type NvidiaCRIUManager struct {
 	runcHandle      runc.Runc
@@ -42,10 +57,10 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUMan
 	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, gpuCnt: gpuCnt, available: available}, nil
 }
 
-func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types.ContainerRequest) (string, error) {
-	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, request.StubId)
+func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, checkpointId string, request *types.ContainerRequest) (string, error) {
+	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, checkpointId)
 	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
-		AllowOpenTCP: true,
+		AllowOpenTCP: false,
 		LeaveRunning: true,
 		SkipInFlight: true,
 		LinkRemap:    true,
@@ -61,27 +76,44 @@ func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, request *types
 
 func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
-	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.request.StubId)
+	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.checkpoint.CheckpointId)
 	workDir := filepath.Join("/tmp", imagePath)
 	err := c.setupRestoreWorkDir(workDir)
 	if err != nil {
 		return -1, err
 	}
 
+	// Create a buffer to capture stderr while still forwarding to the original writer
+	var stderrBuf strings.Builder
+	var outputWriter io.Writer = &stderrBuf
+
+	if opts.runcOpts.OutputWriter != nil {
+		outputWriter = io.MultiWriter(opts.runcOpts.OutputWriter, &stderrBuf)
+	}
+
 	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
 		CheckpointOpts: runc.CheckpointOpts{
-			AllowOpenTCP: true,
+			AllowOpenTCP: false,
+			TCPClose:     true,
 			LinkRemap:    true,
 			// Logs, irmap cache, sockets for lazy server and other go to working dir
 			WorkDir:      workDir,
 			ImagePath:    imagePath,
-			OutputWriter: opts.runcOpts.OutputWriter,
+			OutputWriter: outputWriter,
 			Cgroups:      runc.Soft,
 		},
 		Started: opts.runcOpts.Started,
 	})
+
 	if err != nil {
-		return -1, err
+		stderr := stderrBuf.String()
+
+		// Check if this is a CRIU restore failure by looking for specific error patterns in stderr
+		if strings.Contains(stderr, "criu failed") && strings.Contains(stderr, "type RESTORE") {
+			return -1, &ErrCRIURestoreFailed{Stderr: stderr}
+		}
+
+		return exitCode, err
 	}
 
 	return exitCode, nil

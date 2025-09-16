@@ -58,6 +58,11 @@ class DockerHubCredentials(TypedDict, total=False):
     DOCKERHUB_USERNAME: str
     DOCKERHUB_PASSWORD: str
 
+class GHCRCredentials(TypedDict, total=False):
+    """GitHub Container Registry credentials"""
+
+    GITHUB_USERNAME: str
+    GITHUB_TOKEN: str
 
 class NGCCredentials(TypedDict, total=False):
     """NVIDIA GPU Cloud credentials"""
@@ -72,6 +77,8 @@ ImageCredentialKeys = Literal[
     "AWS_REGION",
     "DOCKERHUB_USERNAME",
     "DOCKERHUB_PASSWORD",
+    "GITHUB_USERNAME",
+    "GITHUB_TOKEN",
     "GCP_ACCESS_TOKEN",
     "NGC_API_KEY",
 ]
@@ -81,6 +88,7 @@ ImageCredentials = Union[
     DockerHubCredentials,
     GCPCredentials,
     NGCCredentials,
+    GHCRCredentials,
     List[ImageCredentialKeys],
 ]
 
@@ -105,7 +113,7 @@ class Image(BaseAbstraction):
         base_image: Optional[str] = None,
         base_image_creds: Optional[ImageCredentials] = None,
         env_vars: Optional[Union[str, List[str], Dict[str, str]]] = None,
-        snapshot_id: Optional[str] = None,
+        image_id: Optional[str] = None,
     ):
         """
         Creates an Image instance.
@@ -166,6 +174,29 @@ class Image(BaseAbstraction):
                 python_version="python3.12",
                 base_image="docker.io/my-org/my-image:0.1.0",
                 base_image_creds=["DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD"],
+            )
+
+            @endpoint(image=image)
+            def handler():
+                pass
+            ```
+
+            GitHub Container Registry (GHCR)
+
+            To use a private image from GitHub Container Registry, export your GitHub credentials.
+
+            ```sh
+            export GITHUB_USERNAME=user123
+            export GITHUB_TOKEN=token123
+            ```
+
+            Then configure the Image object with those environment variables.
+
+            ```python
+            image = Image(
+                python_version="python3.12",
+                base_image="ghcr.io/my-org/my-image:0.1.0",
+                base_image_creds=["GITHUB_USERNAME", "GITHUB_TOKEN"],
             )
 
             @endpoint(image=image)
@@ -298,7 +329,7 @@ class Image(BaseAbstraction):
         self.build_ctx_object = ""
         self.gpu = GpuType.NoGPU
         self.ignore_python = False
-        self.snapshot_id = snapshot_id or ""
+        self.image_id = image_id or ""
         self.include_files_patterns = []
 
         self.with_envs(env_vars or [])
@@ -413,6 +444,7 @@ class Image(BaseAbstraction):
             image_uri: The full URI of the image from the registry.
                 Examples:
                 - Docker Hub: `docker.io/my-org/my-image:0.1.0`
+                - GHCR: `ghcr.io/my-org/my-image:0.1.0`
                 - ECR: `111111111111.dkr.ecr.us-east-1.amazonaws.com/my-image:latest`
                 - GAR: `us-east4-docker.pkg.dev/my-project/my-repo/my-image:0.1.0`
                 - NGC: `nvcr.io/my-org/my-repo:0.1.0`
@@ -431,6 +463,12 @@ class Image(BaseAbstraction):
             image = Image.from_registry(
                 "docker.io/my-org/my-image:latest",
                 credentials=["DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD"]
+            )
+
+            # Private image with GitHub credentials
+            image = Image.from_registry(
+                "ghcr.io/my-org/my-image:0.1.0",
+                credentials=["GITHUB_USERNAME", "GITHUB_TOKEN"]
             )
 
             # ECR image with AWS credentials
@@ -452,12 +490,12 @@ class Image(BaseAbstraction):
         )
 
     @classmethod
-    def from_snapshot(cls, snapshot_id: str) -> "Image":
+    def from_id(cls, image_id: str) -> "Image":
         """
-        Create an Image from a filesystem snapshot.
+        Create an Image from an existing image ID.
         """
         return cls(
-            snapshot_id=snapshot_id,
+            image_id=image_id,
         )
 
     def exists(self) -> Tuple[bool, ImageBuildResult]:
@@ -475,7 +513,7 @@ class Image(BaseAbstraction):
                 secrets=self.secrets,
                 gpu=self.gpu,
                 ignore_python=self.ignore_python,
-                snapshot_id=self.snapshot_id,
+                image_id=self.image_id,
             )
         )
 

@@ -62,8 +62,6 @@ type ContainerRepository interface {
 	GetActiveContainersByWorkspaceId(workspaceId string) ([]types.ContainerState, error)
 	GetActiveContainersByWorkerId(workerId string) ([]types.ContainerState, error)
 	GetFailedContainersByStubId(stubId string) ([]string, error)
-	UpdateCheckpointState(workspaceName, checkpointId string, checkpointState *types.CheckpointState) error
-	GetCheckpointState(workspaceName, checkpointId string) (*types.CheckpointState, error)
 	GetStubState(stubId string) (string, error)
 	SetStubState(stubId, state string) error
 	DeleteStubState(stubId string) error
@@ -128,6 +126,7 @@ type BackendRepository interface {
 	GetOrCreateStub(ctx context.Context, name, stubType string, config types.StubConfigV1, objectId, workspaceId uint, forceCreate bool, appId uint) (types.Stub, error)
 	UpdateStubConfig(ctx context.Context, stubId uint, config *types.StubConfigV1) error
 	GetStubByExternalId(ctx context.Context, externalId string, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
+	GetStubById(ctx context.Context, stubId uint, queryFilters ...types.QueryFilter) (*types.StubWithRelated, error)
 	GetDeploymentBySubdomain(ctx context.Context, subdomain string, version uint) (*types.DeploymentWithRelated, error)
 	GetVolume(ctx context.Context, workspaceId uint, name string) (*types.Volume, error)
 	GetVolumeByExternalId(ctx context.Context, workspaceId uint, externalId string) (*types.Volume, error)
@@ -177,6 +176,11 @@ type BackendRepository interface {
 	DeleteApp(ctx context.Context, appId string) error
 	GetImageClipVersion(ctx context.Context, imageId string) (uint32, error)
 	CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error)
+	CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
+	UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
+	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)
+	GetCheckpointById(ctx context.Context, checkpointId string) (*types.Checkpoint, error)
+	GetLatestCheckpointByStubId(ctx context.Context, stubExternalId string) (*types.Checkpoint, error)
 }
 
 type TaskRepository interface {

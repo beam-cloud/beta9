@@ -65,7 +65,7 @@ func (g *TokenGroup) CreateWorkspaceToken(ctx echo.Context) error {
 }
 
 type ClusterAdminTokensRequestSerializer struct {
-	Disabled bool `json:"enabled"`
+	Disabled bool `json:"disabled"`
 }
 
 func (g *TokenGroup) ClusterAdminUpdateAllWorkspaceTokens(ctx echo.Context) error {

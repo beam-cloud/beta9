@@ -45,7 +45,7 @@ class VerifyImageBuildRequest(betterproto.Message):
     secrets: List[str] = betterproto.string_field(10)
     gpu: str = betterproto.string_field(11)
     ignore_python: bool = betterproto.bool_field(12)
-    snapshot_id: Optional[str] = betterproto.string_field(13, optional=True)
+    image_id: Optional[str] = betterproto.string_field(13, optional=True)
 
 
 @dataclass(eq=False, repr=False)

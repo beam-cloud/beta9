@@ -97,42 +97,42 @@ func WithAssumedStubAuth(next func(ctx echo.Context) error, isPublic func(stubId
 	}
 }
 
+func verifyWorkspaceAuth(ctx echo.Context, workspaceId string) error {
+	cc, ok := ctx.(*HttpAuthContext)
+	if !ok {
+		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
+
+	if cc.AuthInfo == nil {
+		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
+
+	if cc.AuthInfo.Workspace.ExternalId != workspaceId && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
+		return echo.NewHTTPError(http.StatusUnauthorized)
+	}
+
+	return nil
+}
+
 func WithWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
 	return func(ctx echo.Context) error {
-		workspaceId := ctx.Param("workspaceId")
-
-		cc, ok := ctx.(*HttpAuthContext)
-		if !ok {
-			return echo.NewHTTPError(http.StatusUnauthorized)
-		}
-
-		if cc.AuthInfo == nil {
-			return echo.NewHTTPError(http.StatusUnauthorized)
-		}
-
-		if cc.AuthInfo.Workspace.ExternalId != workspaceId && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin {
-			return echo.NewHTTPError(http.StatusUnauthorized)
+		if err := verifyWorkspaceAuth(ctx, ctx.Param("workspaceId")); err != nil {
+			return err
 		}
 
 		return next(ctx)
 	}
 }
 
-// This prevents users with lower level tokens from accessing an endpoint even if they have access to the workspace.
+// This prevents users with restricted tokens from accessing an api endpoint even if they have access to the workspace.
 func WithRestrictedWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
 	return func(ctx echo.Context) error {
-		workspaceId := ctx.Param("workspaceId")
-
-		cc, ok := ctx.(*HttpAuthContext)
-		if !ok {
-			return echo.NewHTTPError(http.StatusUnauthorized)
+		if err := verifyWorkspaceAuth(ctx, ctx.Param("workspaceId")); err != nil {
+			return err
 		}
 
-		if cc.AuthInfo == nil {
-			return echo.NewHTTPError(http.StatusUnauthorized)
-		}
-
-		if (cc.AuthInfo.Workspace.ExternalId != workspaceId && cc.AuthInfo.Token.TokenType != types.TokenTypeClusterAdmin) || cc.AuthInfo.Token.TokenType == types.TokenTypeWorkspaceRestricted {
+		cc, _ := ctx.(*HttpAuthContext)
+		if cc.AuthInfo.Token.TokenType == types.TokenTypeWorkspaceRestricted {
 			return echo.NewHTTPError(http.StatusUnauthorized)
 		}
 

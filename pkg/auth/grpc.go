@@ -2,9 +2,11 @@ package auth
 
 import (
 	"context"
+	"net/http"
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"google.golang.org/grpc"
@@ -43,6 +45,23 @@ func NewAuthInterceptor(config types.AppConfig, backendRepo repository.BackendRe
 	}
 }
 
+func (ai *AuthInterceptor) getToken(tokenKey string) (*types.Token, *types.Workspace, error) {
+	token, workspace, err := ai.workspaceRepo.AuthorizeToken(tokenKey)
+	if err != nil {
+		token, workspace, err = ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
+		if err != nil {
+			return nil, nil, err
+		}
+
+		err = ai.workspaceRepo.SetAuthorizationToken(token, workspace)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	return token, workspace, nil
+}
+
 func (ai *AuthInterceptor) isAuthRequired(method string) bool {
 	return !ai.unauthenticatedMethods[method]
 }
@@ -58,21 +77,13 @@ func (ai *AuthInterceptor) validateToken(md metadata.MD) (*AuthInfo, bool) {
 	var workspace *types.Workspace
 	var err error
 
-	token, workspace, err = ai.workspaceRepo.AuthorizeToken(tokenKey)
+	token, workspace, err = ai.getToken(tokenKey)
 	if err != nil {
-		token, workspace, err = ai.backendRepo.AuthorizeToken(context.TODO(), tokenKey)
-		if err != nil {
-			return nil, false
-		}
-
-		err = ai.workspaceRepo.SetAuthorizationToken(token, workspace)
-		if err != nil {
-			return nil, false
-		}
+		return nil, false
 	}
 
 	// For now, restricted tokens should not be allowed to access grpc calls
-	if !token.Active || token.DisabledByClusterAdmin || token.TokenType == types.TokenTypeWorkspaceRestricted {
+	if !token.Active || token.DisabledByClusterAdmin {
 		return nil, false
 	}
 
@@ -143,4 +154,18 @@ func (ai *AuthInterceptor) Unary() grpc.UnaryServerInterceptor {
 
 func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo *AuthInfo) context.Context {
 	return context.WithValue(ctx, authContextKey, authInfo)
+}
+
+func GRPCProxyAuthenticationMiddleware(handlerFunc runtime.HandlerFunc) runtime.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request, pathParams map[string]string) {
+		authHeader := r.Header.Get("Authorization")
+		tokenKey := strings.TrimPrefix(authHeader, "Bearer ")
+
+		if authHeader == "" || tokenKey == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+
+		handlerFunc(w, r, pathParams)
+	}
 }

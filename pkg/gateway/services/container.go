@@ -10,6 +10,7 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -92,6 +93,79 @@ func (gws GatewayService) getContainersAsAdmin() ([]types.ContainerState, map[st
 	}
 
 	return containerStates, containerWorkerMap, nil
+}
+
+func (gws GatewayService) CheckpointContainer(ctx context.Context, in *pb.CheckpointContainerRequest) (*pb.CheckpointContainerResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	workspaceId := authInfo.Workspace.ExternalId
+
+	client, _, err := gws.getClient(ctx, in.ContainerId, authInfo.Token.Key, workspaceId)
+	if err != nil {
+		return &pb.CheckpointContainerResponse{
+			Ok:       false,
+			ErrorMsg: fmt.Sprintf("Unable to checkpoint container: %s", in.ContainerId),
+		}, nil
+	}
+
+	resp, err := client.Checkpoint(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.CheckpointContainerResponse{
+			Ok:       false,
+			ErrorMsg: fmt.Sprintf("Unable to checkpoint container: %v", err),
+		}, nil
+	}
+
+	if !resp.Ok {
+		return &pb.CheckpointContainerResponse{
+			Ok:       false,
+			ErrorMsg: fmt.Sprintf("Unable to checkpoint container: %s", resp.ErrorMsg),
+		}, nil
+	}
+
+	return &pb.CheckpointContainerResponse{
+		Ok:           true,
+		CheckpointId: resp.CheckpointId,
+	}, nil
+}
+
+func (gws *GatewayService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.RunCClient, *types.ContainerState, error) {
+	container, err := gws.containerRepo.GetContainerState(containerId)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if container == nil {
+		return nil, nil, errors.New("container not found")
+	}
+
+	if container.WorkspaceId != workspaceId {
+		return nil, nil, errors.New("invalid workspace")
+	}
+
+	cacheKey := containerId + ":" + token
+	if cached, ok := gws.clientCache.Load(cacheKey); ok {
+		if client, ok := cached.(*common.RunCClient); ok {
+			return client, container, nil
+		}
+	}
+
+	hostname, err := gws.containerRepo.GetWorkerAddress(ctx, containerId)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, gws.tailscale, gws.appConfig.Tailscale)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client, err := common.NewRunCClient(hostname, token, conn)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	gws.clientCache.Store(cacheKey, client)
+	return client, container, nil
 }
 
 func (gws GatewayService) StopContainer(ctx context.Context, in *pb.StopContainerRequest) (*pb.StopContainerResponse, error) {

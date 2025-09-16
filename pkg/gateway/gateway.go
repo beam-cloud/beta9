@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/labstack/echo-contrib/pprof"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -48,6 +49,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
@@ -255,6 +257,34 @@ func (g *Gateway) initGrpc() error {
 	return nil
 }
 
+// initGrpcProxy exposes gRPC services as HTTP endpoints.
+func (g *Gateway) initGrpcProxy(grpcAddr string) error {
+	ctx, cancel := context.WithCancel(g.ctx)
+	authInterceptor := auth.NewAuthInterceptor(g.Config, g.BackendRepo, g.WorkspaceRepo)
+	g.httpServer.RegisterOnShutdown(func() {
+		cancel()
+	})
+	mux := runtime.NewServeMux(
+		runtime.WithMiddlewares(authInterceptor.GRPCProxyAuthenticationMiddleware),
+	)
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	if err := pb.RegisterPodServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
+		return err
+	}
+	if err := pb.RegisterImageServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
+		return err
+	}
+
+	if err := pb.RegisterGatewayServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
+		return err
+	}
+	// No need to add auth middleware: grpc-gateway maps the 'Authorization' header
+	// to gRPC metadata, and the destination gRPC server's interceptor will handle
+	// authorization for every request.
+	g.baseRouteGroup.Any("/gateway/*", echo.WrapHandler(http.StripPrefix(apiv1.HttpServerBaseRoute+"/gateway", mux)))
+	return nil
+}
+
 // Register repository services
 func (g *Gateway) registerRepositoryServices() error {
 	wr := repositoryservices.NewWorkerRepositoryService(g.ctx, g.workerRepo)
@@ -262,6 +292,10 @@ func (g *Gateway) registerRepositoryServices() error {
 
 	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
 	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
+
+	br := repositoryservices.NewBackendRepositoryService(g.ctx, g.BackendRepo)
+	pb.RegisterBackendRepositoryServiceServer(g.grpcServer, br)
+
 	return nil
 }
 
@@ -501,6 +535,11 @@ func (g *Gateway) Start() error {
 	err = g.initHttp()
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to initialize http server")
+	}
+
+	err = g.initGrpcProxy(fmt.Sprintf(":%d", g.Config.GatewayService.GRPC.Port))
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to initialize grpc gateway")
 	}
 
 	err = g.registerServices()

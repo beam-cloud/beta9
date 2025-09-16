@@ -113,33 +113,3 @@ func (s *ContainerRepositoryService) SetWorkerAddress(ctx context.Context, req *
 
 	return &pb.SetWorkerAddressResponse{Ok: true}, nil
 }
-
-func (s *ContainerRepositoryService) UpdateCheckpointState(ctx context.Context, req *pb.UpdateCheckpointStateRequest) (*pb.UpdateCheckpointStateResponse, error) {
-	checkpointState := types.CheckpointState{
-		StubId:      req.CheckpointState.StubId,
-		ContainerId: req.CheckpointState.ContainerId,
-		ContainerIp: req.CheckpointState.ContainerIp,
-		Status:      types.CheckpointStatus(req.CheckpointState.Status),
-		RemoteKey:   req.CheckpointState.RemoteKey,
-	}
-	err := s.containerRepo.UpdateCheckpointState(req.WorkspaceName, req.CheckpointId, &checkpointState)
-	if err != nil {
-		return &pb.UpdateCheckpointStateResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	return &pb.UpdateCheckpointStateResponse{Ok: true}, nil
-}
-
-func (s *ContainerRepositoryService) GetCheckpointState(ctx context.Context, req *pb.GetCheckpointStateRequest) (*pb.GetCheckpointStateResponse, error) {
-	checkpointState, err := s.containerRepo.GetCheckpointState(req.WorkspaceName, req.CheckpointId)
-	if err != nil {
-		return &pb.GetCheckpointStateResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	return &pb.GetCheckpointStateResponse{Ok: true, CheckpointState: &pb.CheckpointState{
-		Status:      string(checkpointState.Status),
-		ContainerId: checkpointState.ContainerId,
-		StubId:      checkpointState.StubId,
-		RemoteKey:   checkpointState.RemoteKey,
-	}}, nil
-}

@@ -5,5 +5,5 @@ import os
 from beta9 import Sandbox, SandboxInstance
 
 sandbox: SandboxInstance = Sandbox().connect(os.getenv("CONTAINER_ID"))
-snapshot_id = sandbox.snapshot()
-print("Created snapshot of filesystem: ", snapshot_id)
+image_id = sandbox.create_image_from_filesystem()
+print("Created image from filesystem: ", image_id)

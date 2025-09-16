@@ -1,0 +1,2388 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "gateway.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "GatewayService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/auth/authorize": {
+      "post": {
+        "summary": "Auth",
+        "operationId": "GatewayService_Authorize",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayAuthorizeResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/auth/sign": {
+      "post": {
+        "operationId": "GatewayService_SignPayload",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewaySignPayloadResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewaySignPayloadRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/containers": {
+      "get": {
+        "operationId": "GatewayService_ListContainers",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListContainersResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/containers/{containerId}/stop": {
+      "post": {
+        "operationId": "GatewayService_StopContainer",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStopContainerResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "containerId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/deployments": {
+      "get": {
+        "summary": "Deployments",
+        "operationId": "GatewayService_ListDeployments",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListDeploymentsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "filters",
+            "in": "query",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/deployments/{id}": {
+      "delete": {
+        "operationId": "GatewayService_DeleteDeployment",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayDeleteDeploymentResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/deployments/{id}/scale": {
+      "post": {
+        "operationId": "GatewayService_ScaleDeployment",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayScaleDeploymentResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/GatewayServiceScaleDeploymentBody"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/deployments/{id}/start": {
+      "post": {
+        "operationId": "GatewayService_StartDeployment",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStartDeploymentResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/deployments/{id}/stop": {
+      "post": {
+        "operationId": "GatewayService_StopDeployment",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStopDeploymentResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/machines": {
+      "get": {
+        "summary": "Machines",
+        "operationId": "GatewayService_ListMachines",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListMachinesResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "poolName",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      },
+      "post": {
+        "operationId": "GatewayService_CreateMachine",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateMachineResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateMachineRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/machines/{machineId}": {
+      "delete": {
+        "operationId": "GatewayService_DeleteMachine",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayDeleteMachineResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "machineId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "poolName",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/objects": {
+      "post": {
+        "operationId": "GatewayService_CreateObject",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateObjectResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateObjectRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/objects/{hash}": {
+      "get": {
+        "summary": "Objects",
+        "operationId": "GatewayService_HeadObject",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayHeadObjectResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/pools": {
+      "get": {
+        "summary": "Pools",
+        "operationId": "GatewayService_ListPools",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListPoolsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "filters",
+            "in": "query",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/stubs": {
+      "post": {
+        "summary": "Stubs",
+        "operationId": "GatewayService_GetOrCreateStub",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayGetOrCreateStubResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayGetOrCreateStubRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/stubs/deploy": {
+      "post": {
+        "operationId": "GatewayService_DeployStub",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayDeployStubResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayDeployStubRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/stubs/{stubId}/url": {
+      "get": {
+        "operationId": "GatewayService_GetURL",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayGetURLResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "stubId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "deploymentId",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "urlType",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "isShell",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/tasks": {
+      "get": {
+        "operationId": "GatewayService_ListTasks",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListTasksResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "filters",
+            "in": "query",
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int64"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/tasks/end": {
+      "post": {
+        "operationId": "GatewayService_EndTask",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayEndTaskResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayEndTaskRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/tasks/start": {
+      "post": {
+        "summary": "Tasks",
+        "operationId": "GatewayService_StartTask",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStartTaskResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayStartTaskRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/tasks/stop": {
+      "post": {
+        "operationId": "GatewayService_StopTasks",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayStopTasksResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/gatewayStopTasksRequest"
+            }
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/tokens": {
+      "get": {
+        "summary": "Tokens",
+        "operationId": "GatewayService_ListTokens",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListTokensResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "GatewayService"
+        ]
+      },
+      "post": {
+        "operationId": "GatewayService_CreateToken",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayCreateTokenResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "tokenType",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/tokens/{tokenId}": {
+      "delete": {
+        "operationId": "GatewayService_DeleteToken",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayDeleteTokenResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "tokenId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/tokens/{tokenId}/toggle": {
+      "post": {
+        "operationId": "GatewayService_ToggleToken",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayToggleTokenResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "tokenId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/workers": {
+      "get": {
+        "summary": "Workers",
+        "operationId": "GatewayService_ListWorkers",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayListWorkersResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/workers/{workerId}/cordon": {
+      "post": {
+        "operationId": "GatewayService_CordonWorker",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayCordonWorkerResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "workerId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/workers/{workerId}/drain": {
+      "post": {
+        "operationId": "GatewayService_DrainWorker",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayDrainWorkerResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "workerId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/workers/{workerId}/uncordon": {
+      "post": {
+        "operationId": "GatewayService_UncordonWorker",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayUncordonWorkerResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "workerId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    },
+    "/workspace/config": {
+      "get": {
+        "summary": "Workspace",
+        "operationId": "GatewayService_ExportWorkspaceConfig",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/gatewayExportWorkspaceConfigResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "GatewayService"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "GatewayServiceScaleDeploymentBody": {
+      "type": "object",
+      "properties": {
+        "containers": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayAttachToContainerRequest": {
+      "type": "object",
+      "properties": {
+        "containerId": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayAttachToContainerResponse": {
+      "type": "object",
+      "properties": {
+        "output": {
+          "type": "string"
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "exitCode": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "gatewayAuthorizeResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "newToken": {
+          "type": "string"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayAutoscaler": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "maxContainers": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tasksPerContainer": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "minContainers": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayCheckpointContainerResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "checkpointId": {
+          "type": "string"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayCordonWorkerResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayCreateMachineRequest": {
+      "type": "object",
+      "properties": {
+        "poolName": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayCreateMachineResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "machine": {
+          "$ref": "#/definitions/gatewayMachine"
+        },
+        "agentUpstreamUrl": {
+          "type": "string"
+        },
+        "agentUpstreamBranch": {
+          "type": "string"
+        },
+        "agentUpstreamToken": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayCreateObjectRequest": {
+      "type": "object",
+      "properties": {
+        "objectMetadata": {
+          "$ref": "#/definitions/gatewayObjectMetadata"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "format": "int64"
+        },
+        "overwrite": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gatewayCreateObjectResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "presignedUrl": {
+          "type": "string"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayCreateTokenResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "token": {
+          "$ref": "#/definitions/gatewayToken"
+        }
+      }
+    },
+    "gatewayDeleteDeploymentResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDeleteMachineResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDeleteTokenResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDeployStubRequest": {
+      "type": "object",
+      "properties": {
+        "stubId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDeployStubResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "deploymentId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "invokeUrl": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDeployment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "stubId": {
+          "type": "string"
+        },
+        "stubType": {
+          "type": "string"
+        },
+        "stubName": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workspaceName": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "appId": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayDrainWorkerResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayEndTaskRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "taskDuration": {
+          "type": "number",
+          "format": "float"
+        },
+        "taskStatus": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "containerHostname": {
+          "type": "string"
+        },
+        "keepWarmSeconds": {
+          "type": "number",
+          "format": "float"
+        },
+        "result": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
+    "gatewayEndTaskResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gatewayExportWorkspaceConfigResponse": {
+      "type": "object",
+      "properties": {
+        "gatewayHttpHost": {
+          "type": "string"
+        },
+        "gatewayHttpPort": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "gatewayHttpTls": {
+          "type": "boolean"
+        },
+        "gatewayGrpcHost": {
+          "type": "string"
+        },
+        "gatewayGrpcPort": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "gatewayGrpcTls": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayGetOrCreateStubRequest": {
+      "type": "object",
+      "properties": {
+        "objectId": {
+          "type": "string"
+        },
+        "imageId": {
+          "type": "string"
+        },
+        "stubType": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pythonVersion": {
+          "type": "string"
+        },
+        "cpu": {
+          "type": "string",
+          "format": "int64"
+        },
+        "memory": {
+          "type": "string",
+          "format": "int64"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "handler": {
+          "type": "string"
+        },
+        "retries": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "timeout": {
+          "type": "string",
+          "format": "int64"
+        },
+        "keepWarmSeconds": {
+          "type": "number",
+          "format": "float"
+        },
+        "workers": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "maxPendingTasks": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayVolume"
+          }
+        },
+        "forceCreate": {
+          "type": "boolean"
+        },
+        "onStart": {
+          "type": "string"
+        },
+        "callbackUrl": {
+          "type": "string"
+        },
+        "authorized": {
+          "type": "boolean"
+        },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewaySecretVar"
+          }
+        },
+        "autoscaler": {
+          "$ref": "#/definitions/gatewayAutoscaler"
+        },
+        "taskPolicy": {
+          "$ref": "#/definitions/gatewayTaskPolicy"
+        },
+        "concurrentRequests": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "extra": {
+          "type": "string"
+        },
+        "checkpointEnabled": {
+          "type": "boolean"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "onDeploy": {
+          "type": "string"
+        },
+        "onDeployStubId": {
+          "type": "string"
+        },
+        "entrypoint": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "appName": {
+          "type": "string"
+        },
+        "pricing": {
+          "$ref": "#/definitions/typesPricingPolicy"
+        },
+        "inputs": {
+          "$ref": "#/definitions/gatewaySchema"
+        },
+        "outputs": {
+          "$ref": "#/definitions/gatewaySchema"
+        },
+        "tcp": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gatewayGetOrCreateStubResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "stubId": {
+          "type": "string"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "warnMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayGetURLResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayHeadObjectResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "exists": {
+          "type": "boolean"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "objectMetadata": {
+          "$ref": "#/definitions/gatewayObjectMetadata"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "useWorkspaceStorage": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gatewayListContainersResponse": {
+      "type": "object",
+      "properties": {
+        "containers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/typesContainer"
+          }
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayListDeploymentsResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "deployments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayDeployment"
+          }
+        }
+      }
+    },
+    "gatewayListMachinesResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayMachine"
+          }
+        },
+        "gpus": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "gatewayListPoolsResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "pools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayPool"
+          }
+        }
+      }
+    },
+    "gatewayListTasksResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayTask"
+          }
+        },
+        "total": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
+    "gatewayListTokensResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "tokens": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/gatewayToken"
+          }
+        }
+      }
+    },
+    "gatewayListWorkersResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "workers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/typesWorker"
+          }
+        }
+      }
+    },
+    "gatewayMachine": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "cpu": {
+          "type": "string",
+          "format": "int64"
+        },
+        "memory": {
+          "type": "string",
+          "format": "int64"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "gpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "status": {
+          "type": "string"
+        },
+        "poolName": {
+          "type": "string"
+        },
+        "providerName": {
+          "type": "string"
+        },
+        "registrationToken": {
+          "type": "string"
+        },
+        "tailscaleUrl": {
+          "type": "string"
+        },
+        "tailscaleAuth": {
+          "type": "string"
+        },
+        "lastKeepalive": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string"
+        },
+        "agentVersion": {
+          "type": "string"
+        },
+        "machineMetrics": {
+          "$ref": "#/definitions/gatewayMachineMetrics"
+        },
+        "userData": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayMachineMetrics": {
+      "type": "object",
+      "properties": {
+        "totalCpuAvailable": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "totalMemoryAvailable": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "cpuUtilizationPct": {
+          "type": "number",
+          "format": "float"
+        },
+        "memoryUtilizationPct": {
+          "type": "number",
+          "format": "float"
+        },
+        "workerCount": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "containerCount": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "freeGpuCount": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "cacheUsagePct": {
+          "type": "number",
+          "format": "float"
+        },
+        "cacheCapacity": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "cacheMemoryUsage": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "cacheCpuUsage": {
+          "type": "number",
+          "format": "float"
+        }
+      }
+    },
+    "gatewayObjectMetadata": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayPool": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "minFreeGpu": {
+          "type": "string"
+        },
+        "minFreeCpu": {
+          "type": "string"
+        },
+        "minFreeMemory": {
+          "type": "string"
+        },
+        "defaultWorkerCpu": {
+          "type": "string"
+        },
+        "defaultWorkerMemory": {
+          "type": "string"
+        },
+        "defaultWorkerGpuCount": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/definitions/typesWorkerPoolState"
+        }
+      }
+    },
+    "gatewayPutObjectResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayScaleDeploymentResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewaySchema": {
+      "type": "object",
+      "properties": {
+        "fields": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/gatewaySchemaField"
+          }
+        }
+      }
+    },
+    "gatewaySchemaField": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "fields": {
+          "$ref": "#/definitions/gatewaySchema"
+        }
+      }
+    },
+    "gatewaySecretVar": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewaySignPayloadRequest": {
+      "type": "object",
+      "properties": {
+        "payload": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
+    "gatewaySignPayloadResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "signature": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "int64"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayStartDeploymentResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayStartTaskRequest": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        }
+      },
+      "title": "Task messages"
+    },
+    "gatewayStartTaskResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        }
+      }
+    },
+    "gatewayStopContainerResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayStopDeploymentResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayStopTasksRequest": {
+      "type": "object",
+      "properties": {
+        "taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "gatewayStopTasksResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayStringList": {
+      "type": "object",
+      "properties": {
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "gatewaySyncContainerWorkspaceOperation": {
+      "type": "string",
+      "enum": [
+        "WRITE",
+        "DELETE",
+        "MOVED"
+      ],
+      "default": "WRITE"
+    },
+    "gatewaySyncContainerWorkspaceRequest": {
+      "type": "object",
+      "properties": {
+        "containerId": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "newPath": {
+          "type": "string"
+        },
+        "isDir": {
+          "type": "boolean"
+        },
+        "data": {
+          "type": "string",
+          "format": "byte"
+        },
+        "op": {
+          "$ref": "#/definitions/gatewaySyncContainerWorkspaceOperation"
+        }
+      }
+    },
+    "gatewayTask": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "endedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "stubId": {
+          "type": "string"
+        },
+        "stubName": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workspaceName": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "gatewayTaskPolicy": {
+      "type": "object",
+      "properties": {
+        "timeout": {
+          "type": "string",
+          "format": "int64"
+        },
+        "maxRetries": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "ttl": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "gatewayToggleTokenResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "token": {
+          "$ref": "#/definitions/gatewayToken"
+        }
+      }
+    },
+    "gatewayToken": {
+      "type": "object",
+      "properties": {
+        "tokenId": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "reusable": {
+          "type": "boolean"
+        },
+        "workspaceId": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "tokenType": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "gatewayUncordonWorkerResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "gatewayVolume": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "config": {
+          "$ref": "#/definitions/typesMountPointConfig"
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "typesContainer": {
+      "type": "object",
+      "properties": {
+        "containerId": {
+          "type": "string"
+        },
+        "stubId": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "scheduledAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "string"
+        },
+        "machineId": {
+          "type": "string"
+        },
+        "deploymentId": {
+          "type": "string"
+        }
+      }
+    },
+    "typesMountPointConfig": {
+      "type": "object",
+      "properties": {
+        "bucketName": {
+          "type": "string"
+        },
+        "accessKey": {
+          "type": "string"
+        },
+        "secretKey": {
+          "type": "string"
+        },
+        "endpointUrl": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "forcePathStyle": {
+          "type": "boolean"
+        }
+      }
+    },
+    "typesPricingPolicy": {
+      "type": "object",
+      "properties": {
+        "maxInFlight": {
+          "type": "string",
+          "format": "int64"
+        },
+        "costModel": {
+          "type": "string"
+        },
+        "costPerTask": {
+          "type": "number",
+          "format": "double"
+        },
+        "costPerTaskDurationMs": {
+          "type": "number",
+          "format": "double"
+        }
+      }
+    },
+    "typesWorker": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "totalCpu": {
+          "type": "string",
+          "format": "int64"
+        },
+        "totalMemory": {
+          "type": "string",
+          "format": "int64"
+        },
+        "totalGpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "freeCpu": {
+          "type": "string",
+          "format": "int64"
+        },
+        "freeMemory": {
+          "type": "string",
+          "format": "int64"
+        },
+        "freeGpuCount": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "gpu": {
+          "type": "string"
+        },
+        "poolName": {
+          "type": "string"
+        },
+        "machineId": {
+          "type": "string"
+        },
+        "resourceVersion": {
+          "type": "string",
+          "format": "int64"
+        },
+        "requiresPoolSelector": {
+          "type": "boolean"
+        },
+        "priority": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "preemptable": {
+          "type": "boolean"
+        },
+        "buildVersion": {
+          "type": "string"
+        },
+        "activeContainers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/typesContainer"
+          }
+        }
+      }
+    },
+    "typesWorkerPoolState": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string"
+        },
+        "schedulingLatency": {
+          "type": "string",
+          "format": "int64"
+        },
+        "freeGpu": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "freeCpu": {
+          "type": "string",
+          "format": "int64"
+        },
+        "freeMemory": {
+          "type": "string",
+          "format": "int64"
+        },
+        "pendingWorkers": {
+          "type": "string",
+          "format": "int64"
+        },
+        "availableWorkers": {
+          "type": "string",
+          "format": "int64"
+        },
+        "pendingContainers": {
+          "type": "string",
+          "format": "int64"
+        },
+        "runningContainers": {
+          "type": "string",
+          "format": "int64"
+        },
+        "registeredMachines": {
+          "type": "string",
+          "format": "int64"
+        },
+        "pendingMachines": {
+          "type": "string",
+          "format": "int64"
+        },
+        "readyMachines": {
+          "type": "string",
+          "format": "int64"
+        }
+      }
+    }
+  }
+}

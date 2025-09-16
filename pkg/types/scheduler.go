@@ -223,7 +223,8 @@ type ContainerRequest struct {
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
 	AppId             string          `json:"app_id"`
-	ContainerIp       string          `json:"container_ip"`
+	Checkpoint        *Checkpoint     `json:"checkpoint"`
+	ConfigPath        string          `json:"config_path"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -267,6 +268,11 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		}
 	}
 
+	var checkpoint *pb.Checkpoint
+	if c.Checkpoint != nil {
+		checkpoint = c.Checkpoint.ToProto()
+	}
+
 	return &pb.ContainerRequest{
 		ContainerId:       c.ContainerId,
 		EntryPoint:        c.EntryPoint,
@@ -286,11 +292,11 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		RetryCount:        int64(c.RetryCount),
 		PoolSelector:      c.PoolSelector,
 		Preemptable:       c.Preemptable,
-		CheckpointEnabled: c.CheckpointEnabled,
 		Timestamp:         timestamppb.New(c.Timestamp),
 		BuildOptions:      buildOptions,
 		Ports:             c.Ports,
-		ContainerIp:       c.ContainerIp,
+		CheckpointEnabled: c.CheckpointEnabled,
+		Checkpoint:        checkpoint,
 	}
 }
 
@@ -309,6 +315,11 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 			SourceImageCreds: in.BuildOptions.SourceImageCreds,
 			BuildSecrets:     in.BuildOptions.BuildSecrets,
 		}
+	}
+
+	var checkpoint *Checkpoint
+	if in.Checkpoint != nil {
+		checkpoint = NewCheckpointFromProto(in.Checkpoint)
 	}
 
 	return &ContainerRequest{
@@ -333,7 +344,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
 		Ports:             in.Ports,
-		ContainerIp:       in.ContainerIp,
+		Checkpoint:        checkpoint,
 	}
 }
 
@@ -527,15 +538,6 @@ const (
 	CheckpointStatusRestoreFailed    CheckpointStatus = "restore_failed"
 	CheckpointStatusNotFound         CheckpointStatus = "not_found"
 )
-
-// @go2proto
-type CheckpointState struct {
-	StubId      string           `redis:"stub_id" json:"stub_id"`
-	ContainerId string           `redis:"container_id" json:"container_id"`
-	ContainerIp string           `redis:"container_ip" json:"container_ip"`
-	Status      CheckpointStatus `redis:"status" json:"status"`
-	RemoteKey   string           `redis:"remote_key" json:"remote_key"`
-}
 
 type ErrCheckpointNotFound struct {
 	CheckpointId string

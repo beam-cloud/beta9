@@ -42,7 +42,7 @@ RUN <<EOT
 set -eux
 git clone -b dlm/force-compat-mode-on-restore https://github.com/beam-cloud/runc.git /workspace/runc \
   && cd /workspace/runc \
-  && git reset --hard 29bdf366e59697ca12cde1da05b828d579b1eb9a
+  && git reset --hard d2945750f50a023ca3b1af45a9cf9bad655646d8
 
 cd /workspace/runc
 make
@@ -65,6 +65,7 @@ RUN <<EOT
 set -eux
 git clone https://github.com/containers/skopeo.git /workspace/skopeo
 cd /workspace/skopeo
+git reset --hard ac66ca51ec5730b239f757907ccf96bb2d89b83c
 make
 make install
 /usr/local/bin/skopeo --version
@@ -186,7 +187,7 @@ RUN MOUNT_S3_URL=$(if [ "$TARGETARCH" = "arm64" ]; then echo $MOUNT_S3_URL_ARM64
 RUN curl -L https://github.com/NVIDIA/cuda-checkpoint/raw/refs/heads/main/bin/x86_64_Linux/cuda-checkpoint -o /usr/local/bin/cuda-checkpoint && \
     chmod +x /usr/local/bin/cuda-checkpoint
 
-RUN apt-get install -y ripgrep
+RUN apt-get install -y ripgrep wget
 
 RUN apt-get remove -y curl && \
     apt-get clean && apt-get autoremove -y && apt-get autopurge -y && \

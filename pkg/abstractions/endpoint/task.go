@@ -84,6 +84,8 @@ func (t *EndpointTask) Cancel(ctx context.Context, reason types.TaskCancellation
 		task.Status = types.TaskStatusError
 	case types.TaskRequestCancelled:
 		task.Status = types.TaskStatusCancelled
+	case types.TaskInvalidRequestPayload:
+		task.Status = types.TaskStatusError
 	default:
 		task.Status = types.TaskStatusError
 	}
