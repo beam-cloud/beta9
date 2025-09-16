@@ -7,6 +7,7 @@ This directory contains automatically generated OpenAPI (Swagger) schemas for th
 - `pod.swagger.json` - Pod service API endpoints
 - `image.swagger.json` - Image service API endpoints  
 - `gateway.swagger.json` - Gateway service API endpoints
+- `volume.swagger.json` - Volume service API endpoints
 
 ## How to Generate
 
