@@ -271,6 +271,9 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	if err := pb.RegisterImageServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
 		return err
 	}
+	if err := pb.RegisterVolumeServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
+		return err
+	}
 	if err := pb.RegisterGatewayServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
 		return err
 	}

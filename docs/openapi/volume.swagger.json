@@ -1,0 +1,873 @@
+{
+  "swagger": "2.0",
+  "info": {
+    "title": "volume.proto",
+    "version": "version not set"
+  },
+  "tags": [
+    {
+      "name": "VolumeService"
+    }
+  ],
+  "consumes": [
+    "application/json"
+  ],
+  "produces": [
+    "application/json"
+  ],
+  "paths": {
+    "/volumes": {
+      "get": {
+        "operationId": "VolumeService_ListVolumes",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeListVolumesResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "VolumeService"
+        ]
+      },
+      "post": {
+        "operationId": "VolumeService_GetOrCreateVolume",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeGetOrCreateVolumeResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/volumeGetOrCreateVolumeRequest"
+            }
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/copy-path": {
+      "post": {
+        "operationId": "VolumeService_CopyPathStream",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeCopyPathResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "description": " (streaming inputs)",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/volumeCopyPathRequest"
+            }
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/file-service-info": {
+      "get": {
+        "summary": "Multipart Upload",
+        "operationId": "VolumeService_GetFileServiceInfo",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeGetFileServiceInfoResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/multipart-upload": {
+      "post": {
+        "operationId": "VolumeService_CreateMultipartUpload",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeCreateMultipartUploadResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/volumeCreateMultipartUploadRequest"
+            }
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/multipart-upload/abort": {
+      "post": {
+        "operationId": "VolumeService_AbortMultipartUpload",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeAbortMultipartUploadResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/volumeAbortMultipartUploadRequest"
+            }
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/multipart-upload/complete": {
+      "post": {
+        "operationId": "VolumeService_CompleteMultipartUpload",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeCompleteMultipartUploadResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/volumeCompleteMultipartUploadRequest"
+            }
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/presigned-url": {
+      "post": {
+        "operationId": "VolumeService_CreatePresignedURL",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeCreatePresignedURLResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/volumeCreatePresignedURLRequest"
+            }
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/{name}/delete": {
+      "post": {
+        "operationId": "VolumeService_DeleteVolume",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeDeleteVolumeResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/VolumeServiceDeleteVolumeBody"
+            }
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/{originalPath}/move": {
+      "post": {
+        "operationId": "VolumeService_MovePath",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeMovePathResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "originalPath",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/VolumeServiceMovePathBody"
+            }
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/{path}": {
+      "get": {
+        "operationId": "VolumeService_ListPath",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeListPathResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/{path}/delete": {
+      "post": {
+        "operationId": "VolumeService_DeletePath",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeDeletePathResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/VolumeServiceDeletePathBody"
+            }
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    },
+    "/volumes/{path}/stat": {
+      "get": {
+        "operationId": "VolumeService_StatPath",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/volumeStatPathResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "path",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "VolumeService"
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "VolumeServiceDeletePathBody": {
+      "type": "object"
+    },
+    "VolumeServiceDeleteVolumeBody": {
+      "type": "object"
+    },
+    "VolumeServiceMovePathBody": {
+      "type": "object",
+      "properties": {
+        "newPath": {
+          "type": "string"
+        }
+      }
+    },
+    "protobufAny": {
+      "type": "object",
+      "properties": {
+        "@type": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": {}
+    },
+    "rpcStatus": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/protobufAny"
+          }
+        }
+      }
+    },
+    "volumeAbortMultipartUploadRequest": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string"
+        },
+        "volumeName": {
+          "type": "string"
+        },
+        "volumePath": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeAbortMultipartUploadResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeCompleteMultipartUploadRequest": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string"
+        },
+        "volumeName": {
+          "type": "string"
+        },
+        "volumePath": {
+          "type": "string"
+        },
+        "completedParts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/volumeCompletedPart"
+          }
+        }
+      }
+    },
+    "volumeCompleteMultipartUploadResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeCompletedPart": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "etag": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeCopyPathRequest": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string",
+          "format": "byte"
+        }
+      }
+    },
+    "volumeCopyPathResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeCreateMultipartUploadRequest": {
+      "type": "object",
+      "properties": {
+        "volumeName": {
+          "type": "string"
+        },
+        "volumePath": {
+          "type": "string"
+        },
+        "chunkSize": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "fileSize": {
+          "type": "string",
+          "format": "uint64"
+        }
+      }
+    },
+    "volumeCreateMultipartUploadResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "uploadId": {
+          "type": "string"
+        },
+        "fileUploadParts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/volumeFileUploadPart"
+          }
+        }
+      }
+    },
+    "volumeCreatePresignedURLRequest": {
+      "type": "object",
+      "properties": {
+        "volumeName": {
+          "type": "string"
+        },
+        "volumePath": {
+          "type": "string"
+        },
+        "expires": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "method": {
+          "$ref": "#/definitions/volumePresignedURLMethod"
+        },
+        "params": {
+          "$ref": "#/definitions/volumePresignedURLParams"
+        }
+      }
+    },
+    "volumeCreatePresignedURLResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeDeletePathResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "deleted": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "volumeDeleteVolumeResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeFileUploadPart": {
+      "type": "object",
+      "properties": {
+        "number": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "start": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "end": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeGetFileServiceInfoResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "commandVersion": {
+          "type": "integer",
+          "format": "int64"
+        }
+      }
+    },
+    "volumeGetOrCreateVolumeRequest": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeGetOrCreateVolumeResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "volume": {
+          "$ref": "#/definitions/volumeVolumeInstance"
+        }
+      }
+    },
+    "volumeListPathResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "pathInfos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/volumePathInfo"
+          }
+        }
+      }
+    },
+    "volumeListVolumesResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/volumeVolumeInstance"
+          }
+        }
+      }
+    },
+    "volumeMovePathResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "newPath": {
+          "type": "string"
+        }
+      }
+    },
+    "volumePathInfo": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "modTime": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "isDir": {
+          "type": "boolean"
+        }
+      }
+    },
+    "volumePresignedURLMethod": {
+      "type": "string",
+      "enum": [
+        "GetObject",
+        "PutObject",
+        "HeadObject",
+        "UploadPart"
+      ],
+      "default": "GetObject"
+    },
+    "volumePresignedURLParams": {
+      "type": "object",
+      "properties": {
+        "uploadId": {
+          "type": "string"
+        },
+        "partNumber": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "contentLength": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "contentType": {
+          "type": "string"
+        }
+      }
+    },
+    "volumeStatPathResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errMsg": {
+          "type": "string"
+        },
+        "pathInfo": {
+          "$ref": "#/definitions/volumePathInfo"
+        }
+      }
+    },
+    "volumeVolumeInstance": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "size": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "workspaceName": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
