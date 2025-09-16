@@ -5,22 +5,85 @@ import "google/protobuf/timestamp.proto";
 
 package volume;
 
+import "google/api/annotations.proto";
+
 service VolumeService {
-  rpc GetOrCreateVolume(GetOrCreateVolumeRequest) returns (GetOrCreateVolumeResponse) {}
-  rpc DeleteVolume(DeleteVolumeRequest) returns (DeleteVolumeResponse) {}
-  rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse) {}
-  rpc ListPath(ListPathRequest) returns (ListPathResponse) {}
-  rpc DeletePath(DeletePathRequest) returns (DeletePathResponse) {}
-  rpc CopyPathStream(stream CopyPathRequest) returns (CopyPathResponse) {}
-  rpc MovePath(MovePathRequest) returns (MovePathResponse) {}
-  rpc StatPath(StatPathRequest) returns (StatPathResponse) {}
+  rpc GetOrCreateVolume(GetOrCreateVolumeRequest) returns (GetOrCreateVolumeResponse) {
+    option (google.api.http) = {
+      post: "/volumes"
+      body: "*"
+    };
+  }
+  rpc DeleteVolume(DeleteVolumeRequest) returns (DeleteVolumeResponse) {
+    option (google.api.http) = {
+      post: "/volumes/{name}/delete"
+      body: "*"
+    };
+  }
+  rpc ListVolumes(ListVolumesRequest) returns (ListVolumesResponse) {
+    option (google.api.http) = {
+      get: "/volumes"
+    };
+  }
+  rpc ListPath(ListPathRequest) returns (ListPathResponse) {
+    option (google.api.http) = {
+      get: "/volumes/{path}"
+    };
+  }
+  rpc DeletePath(DeletePathRequest) returns (DeletePathResponse) {
+    option (google.api.http) = {
+      post: "/volumes/{path}/delete"
+      body: "*"
+    };
+  }
+  rpc CopyPathStream(stream CopyPathRequest) returns (CopyPathResponse) {
+    option (google.api.http) = {
+      post: "/volumes/copy-path"
+      body: "*"
+    };
+  }
+  rpc MovePath(MovePathRequest) returns (MovePathResponse) {
+    option (google.api.http) = {
+      post: "/volumes/{original_path}/move"
+      body: "*"
+    };
+  }
+  rpc StatPath(StatPathRequest) returns (StatPathResponse) {
+    option (google.api.http) = {
+      get: "/volumes/{path}/stat"
+    };
+  }
 
   // Multipart Upload
-  rpc GetFileServiceInfo(GetFileServiceInfoRequest) returns (GetFileServiceInfoResponse) {}
-  rpc CreatePresignedURL(CreatePresignedURLRequest) returns (CreatePresignedURLResponse) {}
-  rpc CreateMultipartUpload(CreateMultipartUploadRequest) returns (CreateMultipartUploadResponse) {}
-  rpc CompleteMultipartUpload(CompleteMultipartUploadRequest) returns (CompleteMultipartUploadResponse) {}
-  rpc AbortMultipartUpload(AbortMultipartUploadRequest) returns (AbortMultipartUploadResponse) {}
+  rpc GetFileServiceInfo(GetFileServiceInfoRequest) returns (GetFileServiceInfoResponse) {
+    option (google.api.http) = {
+      get: "/volumes/file-service-info"
+    };
+  }
+  rpc CreatePresignedURL(CreatePresignedURLRequest) returns (CreatePresignedURLResponse) {
+    option (google.api.http) = {
+      post: "/volumes/presigned-url"
+      body: "*"
+    };
+  }
+  rpc CreateMultipartUpload(CreateMultipartUploadRequest) returns (CreateMultipartUploadResponse) {
+    option (google.api.http) = {
+      post: "/volumes/multipart-upload"
+      body: "*"
+    };
+  }
+  rpc CompleteMultipartUpload(CompleteMultipartUploadRequest) returns (CompleteMultipartUploadResponse) {
+    option (google.api.http) = {
+      post: "/volumes/multipart-upload/complete"
+      body: "*"
+    };
+  }
+  rpc AbortMultipartUpload(AbortMultipartUploadRequest) returns (AbortMultipartUploadResponse) {
+    option (google.api.http) = {
+      post: "/volumes/multipart-upload/abort"
+      body: "*"
+    };
+  }
 }
 
 message VolumeInstance {
