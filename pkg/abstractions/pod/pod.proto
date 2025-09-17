@@ -123,14 +123,33 @@ service PodService {
     };
   }
   rpc SandboxUpdateTTL(PodSandboxUpdateTTLRequest)
-      returns (PodSandboxUpdateTTLResponse) {}
+      returns (PodSandboxUpdateTTLResponse) {
+    option (google.api.http) = {
+      post : "/pods/{container_id}/ttl"
+      body : "*"
+    };
+  }
   rpc SandboxCreateImageFromFilesystem(
       PodSandboxCreateImageFromFilesystemRequest)
-      returns (PodSandboxCreateImageFromFilesystemResponse) {}
+      returns (PodSandboxCreateImageFromFilesystemResponse) {
+    option (google.api.http) = {
+      post : "/pods/{container_id}/create-image-from-filesystem"
+      body : "*"
+    };
+  }
   rpc SandboxSnapshotMemory(PodSandboxSnapshotMemoryRequest)
-      returns (PodSandboxSnapshotMemoryResponse) {}
+      returns (PodSandboxSnapshotMemoryResponse) {
+    option (google.api.http) = {
+      post : "/pods/{container_id}/snapshot-memory"
+      body : "*"
+    };
+  }
   rpc SandboxListUrls(PodSandboxListUrlsRequest)
-      returns (PodSandboxListUrlsResponse) {}
+      returns (PodSandboxListUrlsResponse) {
+    option (google.api.http) = {
+      get : "/pods/{container_id}/urls"
+    };
+  }
 }
 
 message CreatePodRequest {
