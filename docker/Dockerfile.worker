@@ -52,6 +52,7 @@ cd ..
 
 git clone https://github.com/containers/buildah.git /workspace/buildah
 cd /workspace/buildah
+git reset --hard 9bd608b3c0eaa1476b62763d0bd225745e49d542
 make BUILDTAGS="cni"
 make install
 EOT

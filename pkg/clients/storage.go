@@ -369,7 +369,6 @@ func (c *StorageClient) ValidateBucketAccess(ctx context.Context, bucketName str
 		Bucket: aws.String(bucketName),
 		Key:    aws.String(testObjectKey),
 		Body:   bytes.NewReader([]byte{}),
-		ACL:    s3types.ObjectCannedACLBucketOwnerFullControl,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to write to bucket: %w", err)
