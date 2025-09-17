@@ -163,6 +163,10 @@ func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
 		minContainers = 0
 	}
 
+	if string(i.Stub.Type) == string(types.StubTypeTaskQueue) {
+		minContainers = 0
+	}
+
 	i.ScaleEventChan <- max(result.DesiredContainers, minContainers)
 }
 
