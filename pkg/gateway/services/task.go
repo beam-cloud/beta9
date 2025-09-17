@@ -19,7 +19,7 @@ import (
 func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskRequest) (*pb.StartTaskResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return &pb.StartTaskResponse{
 			Ok: false,
 		}, nil
@@ -67,7 +67,7 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (*pb.EndTaskResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return &pb.EndTaskResponse{
 			Ok: false,
 		}, nil

@@ -52,10 +52,10 @@ func NewDeploymentGroup(
 	g.GET("/:workspaceId/latest", auth.WithWorkspaceAuth(group.ListLatestDeployments))
 	g.GET("/:workspaceId/:deploymentId", auth.WithWorkspaceAuth(group.RetrieveDeployment))
 	g.GET("/:workspaceId/download/:stubId", auth.WithWorkspaceAuth(group.DownloadDeploymentPackage))
-	g.POST("/:workspaceId/stop/:deploymentId", auth.WithRestrictedWorkspaceAuth(group.StopDeployment))
-	g.POST("/:workspaceId/start/:deploymentId", auth.WithRestrictedWorkspaceAuth(group.StartDeployment))
+	g.POST("/:workspaceId/stop/:deploymentId", auth.WithStrictWorkspaceAuth(group.StopDeployment))
+	g.POST("/:workspaceId/start/:deploymentId", auth.WithStrictWorkspaceAuth(group.StartDeployment))
 	g.POST("/:workspaceId/stop-all-active-deployments", auth.WithClusterAdminAuth(group.StopAllActiveDeployments))
-	g.DELETE("/:workspaceId/:deploymentId", auth.WithRestrictedWorkspaceAuth(group.DeleteDeployment))
+	g.DELETE("/:workspaceId/:deploymentId", auth.WithStrictWorkspaceAuth(group.DeleteDeployment))
 	g.GET("/:deploymentId/url", auth.WithAuth(group.GetURL))
 	g.GET("/:workspaceId/:stubType/:deploymentName/:version/url", auth.WithAuth(group.GetURL))
 

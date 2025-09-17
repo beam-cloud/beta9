@@ -154,6 +154,6 @@ func (ai *AuthInterceptor) newContextWithAuth(ctx context.Context, authInfo *Aut
 	return context.WithValue(ctx, authContextKey, authInfo)
 }
 
-func CheckWorkspaceRestrictedToken(authInfo *AuthInfo) bool {
+func IsWorkspaceRestrictedToken(authInfo *AuthInfo) bool {
 	return authInfo.Token.TokenType == types.TokenTypeWorkspaceRestricted
 }

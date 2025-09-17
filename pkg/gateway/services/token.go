@@ -13,7 +13,7 @@ import (
 func (gws *GatewayService) ListTokens(ctx context.Context, req *pb.ListTokensRequest) (*pb.ListTokensResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return &pb.ListTokensResponse{
 			Tokens: []*pb.Token{},
 			Ok:     false,
@@ -61,7 +61,7 @@ func (gws *GatewayService) ListTokens(ctx context.Context, req *pb.ListTokensReq
 func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenRequest) (*pb.CreateTokenResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return &pb.CreateTokenResponse{
 			Ok:     false,
 			ErrMsg: "Access denied for workspace restricted tokens",
@@ -112,7 +112,7 @@ func (gws *GatewayService) CreateToken(ctx context.Context, req *pb.CreateTokenR
 func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenRequest) (*pb.ToggleTokenResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return &pb.ToggleTokenResponse{
 			Ok:     false,
 			ErrMsg: "Access denied for workspace restricted tokens",
@@ -149,7 +149,7 @@ func (gws *GatewayService) ToggleToken(ctx context.Context, req *pb.ToggleTokenR
 func (gws *GatewayService) DeleteToken(ctx context.Context, req *pb.DeleteTokenRequest) (*pb.DeleteTokenResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return &pb.DeleteTokenResponse{
 			Ok:     false,
 			ErrMsg: "Access denied for workspace restricted tokens",

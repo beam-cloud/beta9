@@ -125,7 +125,7 @@ func WithWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context)
 }
 
 // This prevents users with restricted tokens from accessing an api endpoint even if they have access to the workspace.
-func WithRestrictedWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
+func WithStrictWorkspaceAuth(next func(ctx echo.Context) error) func(ctx echo.Context) error {
 	return func(ctx echo.Context) error {
 		if err := verifyWorkspaceAuth(ctx, ctx.Param("workspaceId")); err != nil {
 			return err

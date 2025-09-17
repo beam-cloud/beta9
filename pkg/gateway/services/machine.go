@@ -14,7 +14,7 @@ import (
 func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachinesRequest) (*pb.ListMachinesResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return &pb.ListMachinesResponse{
 			Ok:       false,
 			ErrMsg:   "Access denied for workspace restricted tokens",
@@ -151,7 +151,7 @@ func (gws *GatewayService) ListMachines(ctx context.Context, in *pb.ListMachines
 func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachineRequest) (*pb.CreateMachineResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return &pb.CreateMachineResponse{
 			Ok:     false,
 			ErrMsg: "Access denied for workspace restricted tokens",
@@ -223,7 +223,7 @@ func (gws *GatewayService) CreateMachine(ctx context.Context, in *pb.CreateMachi
 func (gws *GatewayService) DeleteMachine(ctx context.Context, in *pb.DeleteMachineRequest) (*pb.DeleteMachineResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return &pb.DeleteMachineResponse{
 			Ok:     false,
 			ErrMsg: "Access denied for workspace restricted tokens",

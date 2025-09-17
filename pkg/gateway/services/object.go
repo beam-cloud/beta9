@@ -127,7 +127,7 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.CheckWorkspaceRestrictedToken(authInfo) {
+	if auth.IsWorkspaceRestrictedToken(authInfo) {
 		return status.Error(codes.PermissionDenied, "Access denied for workspace restricted tokens")
 	}
 

@@ -20,11 +20,11 @@ func registerSecretRoutes(g *echo.Group, ss *WorkspaceSecretService) *secretGrou
 		ss:         ss,
 	}
 
-	g.POST("/:workspaceId", auth.WithRestrictedWorkspaceAuth(group.CreateSecret))
-	g.GET("/:workspaceId/:secretName", auth.WithRestrictedWorkspaceAuth(group.GetSecret))
-	g.GET("/:workspaceId", auth.WithRestrictedWorkspaceAuth(group.ListSecrets))
-	g.PATCH("/:workspaceId/:secretName", auth.WithRestrictedWorkspaceAuth(group.UpdateSecret))
-	g.DELETE("/:workspaceId/:secretName", auth.WithRestrictedWorkspaceAuth(group.DeleteSecret))
+	g.POST("/:workspaceId", auth.WithStrictWorkspaceAuth(group.CreateSecret))
+	g.GET("/:workspaceId/:secretName", auth.WithStrictWorkspaceAuth(group.GetSecret))
+	g.GET("/:workspaceId", auth.WithStrictWorkspaceAuth(group.ListSecrets))
+	g.PATCH("/:workspaceId/:secretName", auth.WithStrictWorkspaceAuth(group.UpdateSecret))
+	g.DELETE("/:workspaceId/:secretName", auth.WithStrictWorkspaceAuth(group.DeleteSecret))
 
 	return group
 }
