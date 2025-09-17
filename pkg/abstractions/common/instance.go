@@ -163,7 +163,7 @@ func (i *AutoscaledInstance) ConsumeScaleResult(result *AutoscalerResult) {
 		minContainers = 0
 	}
 
-	if string(i.Stub.Type) == string(types.StubTypeTaskQueue) {
+	if string(i.Stub.Type) == types.StubTypeTaskQueue {
 		minContainers = 0
 	}
 
