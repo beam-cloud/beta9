@@ -62,10 +62,10 @@ func handleErrMsg(err error) string {
 func (s *WorkspaceSecretService) CreateSecret(ctx context.Context, req *pb.CreateSecretRequest) (*pb.CreateSecretResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.CreateSecretResponse{
 			Ok:     false,
-			ErrMsg: "Access denied for workspace restricted tokens",
+			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
 
@@ -111,10 +111,10 @@ func (s *WorkspaceSecretService) GetSecret(ctx context.Context, req *pb.GetSecre
 func (s *WorkspaceSecretService) ListSecrets(ctx context.Context, req *pb.ListSecretsRequest) (*pb.ListSecretsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.ListSecretsResponse{
 			Ok:     false,
-			ErrMsg: "Access denied for workspace restricted tokens",
+			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
 
@@ -146,10 +146,10 @@ func (s *WorkspaceSecretService) ListSecrets(ctx context.Context, req *pb.ListSe
 func (s *WorkspaceSecretService) UpdateSecret(ctx context.Context, req *pb.UpdateSecretRequest) (*pb.UpdateSecretResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.UpdateSecretResponse{
 			Ok:     false,
-			ErrMsg: "Access denied for workspace restricted tokens",
+			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
 
@@ -170,10 +170,10 @@ func (s *WorkspaceSecretService) UpdateSecret(ctx context.Context, req *pb.Updat
 func (s *WorkspaceSecretService) DeleteSecret(ctx context.Context, req *pb.DeleteSecretRequest) (*pb.DeleteSecretResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.DeleteSecretResponse{
 			Ok:     false,
-			ErrMsg: "Access denied for workspace restricted tokens",
+			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
 

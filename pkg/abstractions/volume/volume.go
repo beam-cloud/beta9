@@ -94,10 +94,10 @@ func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.Get
 func (vs *GlobalVolumeService) DeleteVolume(ctx context.Context, in *pb.DeleteVolumeRequest) (*pb.DeleteVolumeResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.DeleteVolumeResponse{
 			Ok:     false,
-			ErrMsg: "Access denied for workspace restricted tokens",
+			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
 

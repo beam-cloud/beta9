@@ -85,10 +85,10 @@ func (gws *GatewayService) ListDeployments(ctx context.Context, in *pb.ListDeplo
 func (gws *GatewayService) StopDeployment(ctx context.Context, in *pb.StopDeploymentRequest) (*pb.StopDeploymentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.StopDeploymentResponse{
 			Ok:     false,
-			ErrMsg: "Access denied for workspace restricted tokens",
+			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
 
@@ -163,10 +163,10 @@ func (gws *GatewayService) ScaleDeployment(ctx context.Context, in *pb.ScaleDepl
 func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDeploymentRequest) (*pb.StartDeploymentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.StartDeploymentResponse{
 			Ok:     false,
-			ErrMsg: "Access denied for workspace restricted tokens",
+			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
 
@@ -212,10 +212,10 @@ func (gws *GatewayService) StartDeployment(ctx context.Context, in *pb.StartDepl
 func (gws *GatewayService) DeleteDeployment(ctx context.Context, in *pb.DeleteDeploymentRequest) (*pb.DeleteDeploymentResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.DeleteDeploymentResponse{
 			Ok:     false,
-			ErrMsg: "Access denied for workspace restricted tokens",
+			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
 

@@ -12,10 +12,10 @@ import (
 func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsRequest) (*pb.ListPoolsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.ListPoolsResponse{
 			Ok:     false,
-			ErrMsg: "Access denied for workspace restricted tokens",
+			ErrMsg: "Unauthorized Access",
 		}, nil
 	}
 

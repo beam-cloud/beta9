@@ -10,7 +10,7 @@ import (
 func (gws *GatewayService) ExportWorkspaceConfig(ctx context.Context, in *pb.ExportWorkspaceConfigRequest) (*pb.ExportWorkspaceConfigResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+	if !auth.HasPermission(authInfo) {
 		return &pb.ExportWorkspaceConfigResponse{}, nil
 	}
 

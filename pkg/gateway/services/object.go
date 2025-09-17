@@ -127,8 +127,8 @@ func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStr
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
-		return status.Error(codes.PermissionDenied, "Access denied for workspace restricted tokens")
+	if !auth.HasPermission(authInfo) {
+		return status.Error(codes.PermissionDenied, "Unauthorized Access")
 	}
 
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)

@@ -98,10 +98,11 @@ func (gws GatewayService) getContainersAsAdmin() ([]types.ContainerState, map[st
 func (gws GatewayService) CheckpointContainer(ctx context.Context, in *pb.CheckpointContainerRequest) (*pb.CheckpointContainerResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceId := authInfo.Workspace.ExternalId
-	if auth.IsWorkspaceRestrictedToken(authInfo) {
+
+	if !auth.HasPermission(authInfo) {
 		return &pb.CheckpointContainerResponse{
 			Ok:       false,
-			ErrorMsg: "Access denied for workspace restricted tokens",
+			ErrorMsg: "Unauthorized Access",
 		}, nil
 	}
 
