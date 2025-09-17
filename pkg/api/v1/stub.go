@@ -37,15 +37,15 @@ func NewStubGroup(g *echo.Group, backendRepo repository.BackendRepository, event
 		eventRepo:   eventRepo,
 	}
 
-	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId))           // Allows workspace admins to list stubs specific to their workspace
-	g.GET("/:workspaceId/:stubId", auth.WithWorkspaceAuth(group.RetrieveStub))             // Allows workspace admins to retrieve a specific stub
-	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                                  // Allows cluster admins to list all stubs
-	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))               // Allows workspace admins to get the URL of a stub
-	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL)) // Allows workspace admins to get the URL of a stub by deployment Id
-	g.PATCH("/:workspaceId/:stubId/config", auth.WithWorkspaceAuth(group.UpdateConfig))    // Allows workspace admins to update the config of a stub
-	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                         // Allows users to clone a public stub
-	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                     // Allows users to get the URL of a stub
-	g.GET("/:stubId/config", group.GetConfig)                                              // Allows users to get the config of a stub
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListStubsByWorkspaceId))              // Allows workspace admins to list stubs specific to their workspace
+	g.GET("/:workspaceId/:stubId", auth.WithWorkspaceAuth(group.RetrieveStub))                // Allows workspace admins to retrieve a specific stub
+	g.GET("", auth.WithClusterAdminAuth(group.ListStubs))                                     // Allows cluster admins to list all stubs
+	g.GET("/:workspaceId/:stubId/url", auth.WithWorkspaceAuth(group.GetURL))                  // Allows workspace admins to get the URL of a stub
+	g.GET("/:workspaceId/:stubId/url/:deploymentId", auth.WithWorkspaceAuth(group.GetURL))    // Allows workspace admins to get the URL of a stub by deployment Id
+	g.PATCH("/:workspaceId/:stubId/config", auth.WithStrictWorkspaceAuth(group.UpdateConfig)) // Allows workspace admins to update the config of a stub
+	g.POST("/:stubId/clone", auth.WithAuth(group.CloneStubPublic))                            // Allows users to clone a public stub
+	g.GET("/:stubId/url", auth.WithAuth(group.GetURL))                                        // Allows users to get the URL of a stub
+	g.GET("/:stubId/config", group.GetConfig)                                                 // Allows users to get the config of a stub
 
 	return group
 }

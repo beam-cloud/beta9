@@ -38,7 +38,7 @@ func NewContainerGroup(
 	g.GET("/admin/:containerId", auth.WithClusterAdminAuth(group.GetContainerAsAdmin))
 	g.GET("/:workspaceId/:containerId", auth.WithWorkspaceAuth(group.GetContainer))
 	g.POST("/:workspaceId/:containerId/stop", auth.WithWorkspaceAuth(group.StopContainer))
-	g.POST("/:workspaceId/stop-all", auth.WithWorkspaceAuth(group.StopAllWorkspaceContainers))
+	g.POST("/:workspaceId/stop-all", auth.WithStrictWorkspaceAuth(group.StopAllWorkspaceContainers))
 
 	return group
 }

@@ -36,7 +36,7 @@ func NewAppGroup(g *echo.Group, backendRepo repository.BackendRepository, config
 	g.GET("/:workspaceId/latest", auth.WithWorkspaceAuth(group.ListAppWithLatestActivity))
 	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListApps))
 	g.GET("/:workspaceId/:appId", auth.WithWorkspaceAuth(group.RetrieveApp))
-	g.DELETE("/:workspaceId/:appId", auth.WithWorkspaceAuth(group.DeleteApp))
+	g.DELETE("/:workspaceId/:appId", auth.WithStrictWorkspaceAuth(group.DeleteApp))
 
 	return group
 }

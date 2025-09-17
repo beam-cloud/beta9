@@ -11,6 +11,14 @@ import (
 
 func (gws *GatewayService) ListPools(ctx context.Context, in *pb.ListPoolsRequest) (*pb.ListPoolsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if !auth.HasPermission(authInfo) {
+		return &pb.ListPoolsResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized Access",
+		}, nil
+	}
+
 	if authInfo.Token.TokenType != types.TokenTypeClusterAdmin {
 		return &pb.ListPoolsResponse{
 			Ok:     false,

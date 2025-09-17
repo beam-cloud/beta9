@@ -94,6 +94,13 @@ func (vs *GlobalVolumeService) GetOrCreateVolume(ctx context.Context, in *pb.Get
 func (vs *GlobalVolumeService) DeleteVolume(ctx context.Context, in *pb.DeleteVolumeRequest) (*pb.DeleteVolumeResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if !auth.HasPermission(authInfo) {
+		return &pb.DeleteVolumeResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized Access",
+		}, nil
+	}
+
 	if err := vs.deleteVolume(ctx, authInfo.Workspace, in.Name); err != nil {
 		return &pb.DeleteVolumeResponse{
 			Ok:     false,

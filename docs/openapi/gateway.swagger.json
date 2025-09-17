@@ -776,6 +776,14 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "tokenType",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
         "tags": [
           "GatewayService"
         ]

@@ -30,17 +30,17 @@ func registerVolumeRoutes(g *echo.Group, gvs *GlobalVolumeService) *volumeGroup 
 		gvs:        gvs,
 	}
 
-	g.GET("/:workspaceId", group.ListVolumes)
-	g.POST("/:workspaceId/create/:volumeName", auth.WithWorkspaceAuth(group.CreateVolume))
-	g.PUT("/:workspaceId/upload/:volumePath*", auth.WithWorkspaceAuth(group.UploadFile))
+	g.GET("/:workspaceId", auth.WithWorkspaceAuth(group.ListVolumes))
+	g.POST("/:workspaceId/create/:volumeName", auth.WithStrictWorkspaceAuth(group.CreateVolume))
+	g.PUT("/:workspaceId/upload/:volumePath*", auth.WithStrictWorkspaceAuth(group.UploadFile))
 	g.GET("/:workspaceId/generate-download-token/:volumePath*", auth.WithWorkspaceAuth(group.GenerateDownloadToken))
-	g.GET("/:workspaceId/generate-upload-url/:volumePath*", auth.WithWorkspaceAuth(group.GetUploadURL))
+	g.GET("/:workspaceId/generate-upload-url/:volumePath*", auth.WithStrictWorkspaceAuth(group.GetUploadURL))
 	g.GET("/:workspaceId/generate-download-url/:volumePath*", auth.WithWorkspaceAuth(group.GetDownloadURL))
 	g.GET("/:workspaceId/download-with-token/:volumePath*", group.DownloadFileWithToken)
 	g.GET("/:workspaceId/download/:volumePath*", auth.WithWorkspaceAuth(group.DownloadFile))
 	g.GET("/:workspaceId/ls/:volumePath*", auth.WithWorkspaceAuth(group.Ls))
-	g.DELETE("/:workspaceId/rm/:volumePath*", auth.WithWorkspaceAuth(group.Rm))
-	g.PATCH("/:workspaceId/mv/:volumePath*", auth.WithWorkspaceAuth(group.Mv))
+	g.DELETE("/:workspaceId/rm/:volumePath*", auth.WithStrictWorkspaceAuth(group.Rm))
+	g.PATCH("/:workspaceId/mv/:volumePath*", auth.WithStrictWorkspaceAuth(group.Mv))
 
 	return group
 }

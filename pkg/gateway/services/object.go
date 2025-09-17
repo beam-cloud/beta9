@@ -10,6 +10,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/clients"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -76,6 +78,7 @@ func (gws *GatewayService) HeadObject(ctx context.Context, in *pb.HeadObjectRequ
 
 func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObjectRequest) (*pb.CreateObjectResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)
 
@@ -123,6 +126,10 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {
 	ctx := stream.Context()
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if !auth.HasPermission(authInfo) {
+		return status.Error(codes.PermissionDenied, "Unauthorized Access")
+	}
 
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)

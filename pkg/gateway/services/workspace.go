@@ -10,6 +10,10 @@ import (
 func (gws *GatewayService) ExportWorkspaceConfig(ctx context.Context, in *pb.ExportWorkspaceConfigRequest) (*pb.ExportWorkspaceConfigResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
+	if !auth.HasPermission(authInfo) {
+		return &pb.ExportWorkspaceConfigResponse{}, nil
+	}
+
 	return &pb.ExportWorkspaceConfigResponse{
 		GatewayHttpHost: gws.appConfig.GatewayService.HTTP.ExternalHost,
 		GatewayHttpPort: int32(gws.appConfig.GatewayService.HTTP.ExternalPort),

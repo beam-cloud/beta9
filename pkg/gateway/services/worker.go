@@ -14,6 +14,15 @@ import (
 )
 
 func (gws *GatewayService) ListWorkers(ctx context.Context, in *pb.ListWorkersRequest) (*pb.ListWorkersResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if !auth.HasPermission(authInfo) {
+		return &pb.ListWorkersResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized Access",
+		}, nil
+	}
+
 	if _, err := isClusterAdmin(ctx); err != nil {
 		return &pb.ListWorkersResponse{
 			Ok:     false,
@@ -102,6 +111,15 @@ func sortWorkers(w []*types.Worker) {
 }
 
 func (gws *GatewayService) CordonWorker(ctx context.Context, in *pb.CordonWorkerRequest) (*pb.CordonWorkerResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if !auth.HasPermission(authInfo) {
+		return &pb.CordonWorkerResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized Access",
+		}, nil
+	}
+
 	if _, err := isClusterAdmin(ctx); err != nil {
 		return &pb.CordonWorkerResponse{
 			Ok:     false,
@@ -130,6 +148,14 @@ func (gws *GatewayService) CordonWorker(ctx context.Context, in *pb.CordonWorker
 }
 
 func (gws *GatewayService) UncordonWorker(ctx context.Context, in *pb.UncordonWorkerRequest) (*pb.UncordonWorkerResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if !auth.HasPermission(authInfo) {
+		return &pb.UncordonWorkerResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized Access",
+		}, nil
+	}
 	if _, err := isClusterAdmin(ctx); err != nil {
 		return &pb.UncordonWorkerResponse{
 			Ok:     false,
@@ -159,6 +185,15 @@ func (gws *GatewayService) UncordonWorker(ctx context.Context, in *pb.UncordonWo
 }
 
 func (gws *GatewayService) DrainWorker(ctx context.Context, in *pb.DrainWorkerRequest) (*pb.DrainWorkerResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	if !auth.HasPermission(authInfo) {
+		return &pb.DrainWorkerResponse{
+			Ok:     false,
+			ErrMsg: "Unauthorized Access",
+		}, nil
+	}
+
 	if _, err := isClusterAdmin(ctx); err != nil {
 		return &pb.DrainWorkerResponse{
 			Ok:     false,

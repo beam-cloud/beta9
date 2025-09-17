@@ -23,6 +23,7 @@ import (
 
 func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCreateStubRequest) (*pb.GetOrCreateStubResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
 	var warning string
 
 	valid, errorMsg := types.ValidateCpuAndMemory(in.Cpu, in.Memory, gws.appConfig.GatewayService.StubLimits)

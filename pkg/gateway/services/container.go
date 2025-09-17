@@ -99,6 +99,13 @@ func (gws GatewayService) CheckpointContainer(ctx context.Context, in *pb.Checkp
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 	workspaceId := authInfo.Workspace.ExternalId
 
+	if !auth.HasPermission(authInfo) {
+		return &pb.CheckpointContainerResponse{
+			Ok:       false,
+			ErrorMsg: "Unauthorized Access",
+		}, nil
+	}
+
 	client, _, err := gws.getClient(ctx, in.ContainerId, authInfo.Token.Key, workspaceId)
 	if err != nil {
 		return &pb.CheckpointContainerResponse{
