@@ -923,7 +923,7 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Co
 
 func (c *PostgresBackendRepository) listAllTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
 	// Apply limit// Apply limit
-	pageSize := uint32(filters.Limit)
+	pageSize := filters.Limit
 	if pageSize <= 0 {
 		pageSize = 10
 	}
