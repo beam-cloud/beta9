@@ -926,11 +926,15 @@ func (c *PostgresBackendRepository) listAllTasksWithRelatedPaginated(ctx context
 	filtersWorkspace.All = false
 	filtersWorkspace.WorkspaceID = filters.WorkspaceID
 	filtersWorkspace.ExternalWorkspaceID = 0
+	// We want to get one more result past the page size to check if there is more data
+	filtersWorkspace.Limit = filters.Limit + 1
 
 	filtersExternalWorkspace := filters
 	filtersExternalWorkspace.All = false
 	filtersExternalWorkspace.WorkspaceID = 0
 	filtersExternalWorkspace.ExternalWorkspaceID = filters.WorkspaceID
+	// We want to get one more result past the page size to check if there is more data
+	filtersExternalWorkspace.Limit = filters.Limit + 1
 
 	// Get results from both calls
 	resultWorkspace, err := c.ListTasksWithRelatedPaginated(ctx, filtersWorkspace)
