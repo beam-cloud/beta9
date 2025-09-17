@@ -922,19 +922,25 @@ func (c *PostgresBackendRepository) ListTasksWithRelatedPaginated(ctx context.Co
 }
 
 func (c *PostgresBackendRepository) listAllTasksWithRelatedPaginated(ctx context.Context, filters types.TaskFilter) (common.CursorPaginationInfo[types.TaskWithRelated], error) {
+	// Apply limit// Apply limit
+	pageSize := uint32(filters.Limit)
+	if pageSize <= 0 {
+		pageSize = 10
+	}
+
 	filtersWorkspace := filters
 	filtersWorkspace.All = false
 	filtersWorkspace.WorkspaceID = filters.WorkspaceID
 	filtersWorkspace.ExternalWorkspaceID = 0
 	// We want to get one more result past the page size to check if there is more data
-	filtersWorkspace.Limit = filters.Limit + 1
+	filtersWorkspace.Limit = pageSize + 1
 
 	filtersExternalWorkspace := filters
 	filtersExternalWorkspace.All = false
 	filtersExternalWorkspace.WorkspaceID = 0
 	filtersExternalWorkspace.ExternalWorkspaceID = filters.WorkspaceID
 	// We want to get one more result past the page size to check if there is more data
-	filtersExternalWorkspace.Limit = filters.Limit + 1
+	filtersExternalWorkspace.Limit = pageSize + 1
 
 	// Get results from both calls
 	resultWorkspace, err := c.ListTasksWithRelatedPaginated(ctx, filtersWorkspace)
@@ -959,14 +965,8 @@ func (c *PostgresBackendRepository) listAllTasksWithRelatedPaginated(ctx context
 		return allTasks[i].CreatedAt.After(allTasks[j].CreatedAt.Time)
 	})
 
-	// Apply limit
-	pageSize := int(filters.Limit)
-	if pageSize <= 0 {
-		pageSize = 10
-	}
-
 	var nextCursor string
-	if len(allTasks) > pageSize {
+	if len(allTasks) > int(pageSize) {
 		allTasks = allTasks[:pageSize]
 		lastRow := allTasks[pageSize-1]
 
