@@ -41,8 +41,11 @@ class Task:
         else:
             response.raise_for_status()
 
-        if self._result and self._result.get("base64"):
-            self._result = cloudpickle.loads(base64.b64decode(self._result["base64"]))
+        if self._result:
+            if hasattr(self._result, "get") and self._result.get("base64"):
+                self._result = cloudpickle.loads(base64.b64decode(self._result["base64"]))
+
+            # If it doesn't have a get method and no base64 field, it's probably just a string, return as-is
 
     def status(self) -> TaskStatus:
         """Returns the status of the task"""
@@ -109,7 +112,7 @@ class Task:
                                     self._result = task_data.get("result")
                                     self._outputs = task_data.get("outputs")
 
-                                    if self._result and self._result.get("base64"):
+                                    if hasattr(self._result, "get") and self._result.get("base64"):
                                         self._result = cloudpickle.loads(
                                             base64.b64decode(self._result["base64"])
                                         )
