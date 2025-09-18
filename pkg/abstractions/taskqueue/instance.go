@@ -167,9 +167,8 @@ func (i *taskQueueInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
-		if i.Stub.Type.IsDeployment() {
-
-			// Skip containers with keep warm locks
+		// Skip containers with keep warm locks (for taskqueue & taskqueue/deployment stubs) if it is not a serve
+		if !i.Stub.Type.IsServe() {
 			keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.taskQueueKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
 			if err != nil && err != redis.Nil {
 				log.Error().Str("instance_name", i.Name).Err(err).Msg("error getting keep warm lock for container")
