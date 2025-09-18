@@ -4,11 +4,8 @@ os.environ["GRPC_VERBOSITY"] = os.getenv("GRPC_VERBOSITY") or "NONE"
 
 import sys
 from abc import ABC
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
-from ... import config
 from ...channel import Channel
 from ...channel import get_channel as _get_channel
 from ...config import ConfigContext, get_config_context, set_settings
