@@ -4,11 +4,8 @@ os.environ["GRPC_VERBOSITY"] = os.getenv("GRPC_VERBOSITY") or "NONE"
 
 import sys
 from abc import ABC
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Optional
 
-from ... import config
 from ...channel import Channel
 from ...channel import get_channel as _get_channel
 from ...config import ConfigContext, get_config_context, set_settings
@@ -71,25 +68,10 @@ class BaseAbstraction(ABC):
     def __init_subclass__(cls, /, **kwargs):
         """
         Dynamically load settings depending on if this library is being used
-        by beta9 or beam. This is done by inspecting the first frame loaded
-        onto the stack.
+        by beta9 or beam.
         """
-
         if "beam" in sys.modules:
-
-            @dataclass
-            class SDKSettings(config.SDKSettings):
-                realtime_host: str = os.getenv("REALTIME_HOST", "wss://rt.beam.cloud")
-
-            settings = SDKSettings(
-                name="Beam",
-                api_host=os.getenv("API_HOST", "app.beam.cloud"),
-                api_port=int(os.getenv("API_PORT", 443)),
-                gateway_host=os.getenv("GATEWAY_HOST", "gateway.beam.cloud"),
-                gateway_port=int(os.getenv("GATEWAY_PORT", 443)),
-                config_path=Path("~/.beam/config.ini").expanduser(),
-                use_defaults_in_prompt=True,
-            )
-            set_settings(settings)
+            # Settings will be configured in SDKSettings.__post_init__
+            set_settings()
 
         super().__init_subclass__(**kwargs)

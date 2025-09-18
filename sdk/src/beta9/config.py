@@ -4,6 +4,7 @@ import inspect
 import ipaddress
 import os
 import socket
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Optional, Tuple, Union
@@ -51,6 +52,17 @@ class SDKSettings:
     def __post_init__(self, **kwargs):
         if p := os.getenv("CONFIG_PATH"):
             self.config_path = Path(p).expanduser()
+
+        # Handle Beam-specific environment variables if beam module is loaded
+        if "beam" in sys.modules:
+            self.name = "Beam"
+            self.api_host = os.getenv("API_HOST", "app.beam.cloud")
+            self.api_port = int(os.getenv("API_PORT", 443))
+            self.gateway_host = os.getenv("GATEWAY_HOST", "gateway.beam.cloud")
+            self.gateway_port = int(os.getenv("GATEWAY_PORT", 443))
+            self.config_path = Path("~/.beam/config.ini").expanduser()
+            self.use_defaults_in_prompt = True
+            self.api_token = os.getenv("BEAM_TOKEN")
 
 
 @dataclass
@@ -144,9 +156,11 @@ def get_config_context(name: str = DEFAULT_CONTEXT_NAME) -> ConfigContext:
     if name in contexts:
         return contexts[name]
 
-    gateway_host = os.getenv("BETA9_GATEWAY_HOST", None)
-    gateway_port = os.getenv("BETA9_GATEWAY_PORT", None)
-    token = os.getenv("BETA9_TOKEN", None)
+    settings = get_settings()
+
+    gateway_host = os.getenv("BETA9_GATEWAY_HOST", settings.gateway_host)
+    gateway_port = os.getenv("BETA9_GATEWAY_PORT", settings.gateway_port)
+    token = os.getenv("BETA9_TOKEN", settings.api_token)
 
     if gateway_host and gateway_port and token:
         return ConfigContext(
