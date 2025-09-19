@@ -19,12 +19,6 @@ import (
 func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskRequest) (*pb.StartTaskResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
-	if !auth.HasPermission(authInfo) {
-		return &pb.StartTaskResponse{
-			Ok: false,
-		}, nil
-	}
-
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
 	if err != nil {
 		return &pb.StartTaskResponse{
@@ -66,12 +60,6 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 
 func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (*pb.EndTaskResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
-
-	if !auth.HasPermission(authInfo) {
-		return &pb.EndTaskResponse{
-			Ok: false,
-		}, nil
-	}
 
 	task, err := gws.backendRepo.GetTaskWithRelated(ctx, in.TaskId)
 	if err != nil {
