@@ -302,8 +302,7 @@ func (r *PostgresBackendRepository) RetrieveActiveToken(ctx context.Context, wor
 	query := `
 	SELECT id, external_id, key, created_at, updated_at, active, token_type, reusable, workspace_id
 	FROM token
-	WHERE workspace_id = $1 AND active = TRUE
-	ORDER BY updated_at DESC
+	WHERE workspace_id = $1 AND active = TRUE AND token_type = 'workspace_primary' AND disabled_by_cluster_admin = FALSE
 	LIMIT 1;
 	`
 
