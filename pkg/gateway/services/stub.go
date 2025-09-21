@@ -294,6 +294,8 @@ func (gws *GatewayService) handleCheckpointEnabled(ctx context.Context, authInfo
 	in.Env = append(in.Env, fmt.Sprintf("TRITON_CACHE_DIR=%s", modelCachePath))
 	in.Env = append(in.Env, fmt.Sprintf("TRANSFORMERS_CACHE=%s", modelCachePath))
 	in.Env = append(in.Env, fmt.Sprintf("HF_HOME=%s", modelCachePath))
+	in.Env = append(in.Env, "HF_HUB_DISABLE_XET=1")
+	in.Env = append(in.Env, "HF_HUB_ENABLE_HF_TRANSFER=0")
 
 	in.Volumes = append(in.Volumes, &pb.Volume{
 		Id:        volume.ExternalId,
