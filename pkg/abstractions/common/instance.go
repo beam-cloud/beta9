@@ -453,6 +453,7 @@ func (c *InstanceController) Load(filter *types.DeploymentFilter) error {
 		instance, err := c.getOrCreateInstance(c.ctx, stub.Stub.ExternalId)
 		if err != nil {
 			log.Error().Str("instance_name", stub.Stub.ExternalId).Err(err).Msg("unable to get or create instance")
+			continue
 		}
 		instance.Sync()
 	}
