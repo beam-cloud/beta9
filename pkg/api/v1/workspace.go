@@ -59,6 +59,11 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 		return HTTPInternalServerError("Unable to create workspace")
 	}
 
+	token, err := g.backendRepo.CreateToken(ctx.Request().Context(), workspace.Id, types.TokenTypeWorkspacePrimary, true)
+	if err != nil {
+		return HTTPInternalServerError("Unable to create workspace token")
+	}
+
 	bucketName := types.WorkspaceBucketName(g.config.Storage.WorkspaceStorage.DefaultBucketPrefix, workspace.ExternalId)
 	_, err = g.setupDefaultWorkspaceStorage(ctx, bucketName, workspace.Id)
 	if err != nil {
@@ -68,6 +73,7 @@ func (g *WorkspaceGroup) CreateWorkspace(ctx echo.Context) error {
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"workspace_id": workspace.ExternalId,
+		"token":        token.Key,
 	})
 }
 
