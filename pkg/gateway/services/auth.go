@@ -45,6 +45,15 @@ func (gws *GatewayService) Authorize(ctx context.Context, in *pb.AuthorizeReques
 		}, nil
 	}
 
+	// Also create a workspace primary token
+	_, err = gws.backendRepo.CreateToken(ctx, workspace.Id, types.TokenTypeWorkspacePrimary, true)
+	if err != nil {
+		return &pb.AuthorizeResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to create new workspace primary token",
+		}, nil
+	}
+
 	return &pb.AuthorizeResponse{
 		Ok:          true,
 		NewToken:    token.Key,
