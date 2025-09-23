@@ -236,12 +236,6 @@ func (c *ContainerRequest) IsBuildRequest() bool {
 	return c.BuildOptions.SourceImage != nil || c.BuildOptions.Dockerfile != nil
 }
 
-func (c *ContainerRequest) VolumeCacheCompatible() bool {
-	if c.IsBuildRequest() || c.CheckpointEnabled || c.StorageAvailable() {
-		return false
-	}
-	return c.Workspace.VolumeCacheEnabled
-}
 
 func (c *ContainerRequest) StorageAvailable() bool {
 	return c.Workspace.StorageAvailable()

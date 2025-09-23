@@ -49,7 +49,6 @@ type Worker struct {
 	imageMountPath          string
 	runcHandle              runc.Runc
 	runcServer              *RunCServer
-	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
 	containerNetworkManager *ContainerNetworkManager
 	containerGPUManager     GPUManager
@@ -192,8 +191,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	fileCacheManager := NewFileCacheManager(config, cacheClient)
-	imageClient, err := NewImageClient(config, workerId, workerRepoClient, fileCacheManager)
+	imageClient, err := NewImageClient(config, workerId, workerRepoClient)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +226,6 @@ func NewWorker() (*Worker, error) {
 		gpuCount:                uint32(gpuCount),
 		runcHandle:              runc.Runc{Debug: config.DebugMode},
 		storageManager:          storageManager,
-		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
 		containerNetworkManager: containerNetworkManager,
 		containerMountManager:   NewContainerMountManager(config),

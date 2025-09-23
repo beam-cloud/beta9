@@ -479,14 +479,6 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		})
 	}
 
-	// If volume caching is enabled, set it up and add proper mounts to spec
-	if request.VolumeCacheCompatible() && s.fileCacheManager.CacheAvailable() {
-		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to setup volume caching: %v", err)
-		}
-	}
-
 	// Configure resolv.conf
 	resolvMount := specs.Mount{
 		Type:        "none",

@@ -130,7 +130,7 @@ type ImageClient struct {
 	logger             *ContainerLogger
 }
 
-func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
+func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient) (*ImageClient, error) {
 	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
@@ -139,7 +139,6 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 	c := &ImageClient{
 		config:             config,
 		registry:           registry,
-		cacheClient:        fileCacheManager.GetClient(),
 		imageBundlePath:    imageBundlePath,
 		imageCachePath:     getImageCachePath(),
 		imageMountPath:     getImageMountPath(workerId),
@@ -181,12 +180,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		b := backoff.NewConstantBackOff(pullLazyBackoff)
 
 		operation := func() error {
-			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, sourcePath) {
-				localCachePath = baseBlobFsContentPath
-				return nil
-			}
-
 			if !c.cacheClient.HostsAvailable() {
 				return nil
 			}
@@ -214,7 +207,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				return backoff.Permanent(err)
 			}
 
-			localCachePath = baseBlobFsContentPath
 			outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
 			metrics.RecordImagePullTime(time.Since(pullStartTime))
 			return nil
