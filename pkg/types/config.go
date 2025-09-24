@@ -112,10 +112,16 @@ type CORSConfig struct {
 }
 
 type StubLimits struct {
-	Cpu         uint64 `key:"cpu" json:"cpu"`
-	Memory      uint64 `key:"memory" json:"memory"`
-	MaxReplicas uint64 `key:"maxReplicas" json:"max_replicas"`
-	MaxGpuCount uint32 `key:"maxGpuCount" json:"max_gpu_count"`
+	Cpu          uint64             `key:"cpu" json:"cpu"`
+	Memory       uint64             `key:"memory" json:"memory"`
+	MaxReplicas  uint64             `key:"maxReplicas" json:"max_replicas"`
+	MaxGpuCount  uint32             `key:"maxGpuCount" json:"max_gpu_count"`
+	GPUBlackList GPUBlackListConfig `key:"gpuBlackList" json:"gpu_black_list"`
+}
+
+type GPUBlackListConfig struct {
+	GPUTypes []string `key:"gpuTypes" json:"gpu_types"`
+	Message  string   `key:"message" json:"message"`
 }
 
 // ValidateCpuAndMemory enforces limits on CPU and memory (min and max)

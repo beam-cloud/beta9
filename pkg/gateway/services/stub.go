@@ -86,6 +86,15 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		}, nil
 	}
 
+	if len(gws.appConfig.GatewayService.StubLimits.GPUBlackList.GPUTypes) > 0 {
+		if slices.Contains(gws.appConfig.GatewayService.StubLimits.GPUBlackList.GPUTypes, in.Gpu) {
+			return &pb.GetOrCreateStubResponse{
+				Ok:     false,
+				ErrMsg: gws.appConfig.GatewayService.StubLimits.GPUBlackList.Message,
+			}, nil
+		}
+	}
+
 	var pricing *types.PricingPolicy = nil
 	if in.Pricing != nil {
 		pricing = &types.PricingPolicy{
