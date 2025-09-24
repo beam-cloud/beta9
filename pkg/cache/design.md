@@ -32,3 +32,7 @@ requirements
 
 what im thinking is that when a directory changes, we update all children
 
+
+
+the other concern im having is that this does not solve the image problem
+if we're building layers of images using buildah, we can store and access those layers via fuse
