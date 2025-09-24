@@ -18,6 +18,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -206,6 +207,13 @@ func NewWorker() (*Worker, error) {
 	}
 
 	containerNetworkManager, err := NewContainerNetworkManager(ctx, workerId, workerRepoClient, containerRepoClient, config, containerInstances)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	fs := cache.NewMirrorFs("/tmp/test", 10*time.Second)
+	err = fs.Start("/testfuse")
 	if err != nil {
 		cancel()
 		return nil, err

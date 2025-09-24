@@ -7,3 +7,6 @@ type FileCacheMetadata struct {
 	LastModified time.Time
 	Key          string
 }
+
+type MetadataStore struct {
+}

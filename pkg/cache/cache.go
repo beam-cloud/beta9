@@ -9,4 +9,3 @@ type FileCache interface {
 type fileCache struct {
 	cache map[string]interface{}
 }
-
