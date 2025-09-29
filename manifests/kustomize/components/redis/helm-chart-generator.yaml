@@ -22,3 +22,7 @@ valuesInline:
       notify-keyspace-events AKE
     persistence:
       size: 1Gi
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: 7.2.4-debian-11-r2
