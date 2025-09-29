@@ -7,7 +7,6 @@ releaseName: *name
 name: redis
 repo: https://charts.bitnami.com/bitnami
 version: 18.9.1
-
 namespace: beta9
 includeCRDs: true
 skipTests: true
