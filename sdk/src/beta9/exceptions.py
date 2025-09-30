@@ -130,7 +130,7 @@ class SandboxConnectionError(RuntimeError):
 class SandboxProcessError(RuntimeError):
     def __init__(self, message: str):
         self.message = message
-        super().__init__(f"Sandbox process error: {message}")
+        super().__init__(message)
 
 
 class SandboxFileSystemError(RuntimeError):

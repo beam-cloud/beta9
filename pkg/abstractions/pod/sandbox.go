@@ -33,6 +33,13 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 		}, nil
 	}
 
+	if !resp.Ok {
+		return &pb.PodSandboxExecResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+
 	return &pb.PodSandboxExecResponse{
 		Ok:  true,
 		Pid: resp.Pid,
