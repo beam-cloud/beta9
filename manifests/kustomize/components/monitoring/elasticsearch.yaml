@@ -16,6 +16,17 @@ valuesInline:
     tag: 9.1.2-debian-12-r0
   global:
     kibanaEnabled: true
+  sysctlImage:
+    enabled: false
+    image:
+      registry: docker.io
+      repository: bitnami/os-shell
+      tag: 12-debian-12-r51
+  kibana:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/kibana
+      tag: 9.1.2-debian-12-r0
   master:
     masterOnly: false
     replicaCount: 1
