@@ -25,10 +25,6 @@ patches:
     name: elasticsearch-master
   patch: |-
     - op: remove
-      path: /spec/template/spec/initContainers/0/resources
-    - op: remove
-      path: /spec/template/spec/initContainers/1/resources
-    - op: remove
       path: /spec/template/spec/containers/0/resources
 - target:
     kind: Deployment

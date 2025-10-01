@@ -10,8 +10,19 @@ version: 21.3.1
 namespace: monitoring
 includeCRDs: true
 valuesInline:
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/elasticsearch
+    tag: 9.1.2-debian-12-r0
   global:
     kibanaEnabled: true
+  sysctlImage:
+    enabled: false
+  kibana:
+    image:
+      registry: docker.io
+      repository: bitnamilegacy/kibana
+      tag: 9.1.2-debian-12-r0
   master:
     masterOnly: false
     replicaCount: 1
