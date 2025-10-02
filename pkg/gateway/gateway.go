@@ -287,19 +287,18 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 // wrapGrpcGatewayWithEvents wraps the grpc-gateway handler with event tracking
 func (g *Gateway) wrapGrpcGatewayWithEvents(handler http.Handler) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		rec := &responseRecorder{
-			ResponseWriter: c.Response().Writer,
-			statusCode:     http.StatusOK,
-		}
-		c.Response().Writer = rec
-
-		handler.ServeHTTP(rec, c.Request())
+		handler.ServeHTTP(c.Response(), c.Request())
 
 		method := c.Request().Method
 		path := c.Request().URL.Path
 		userAgent := c.Request().UserAgent()
 		remoteIP := c.RealIP()
 		requestID := c.Response().Header().Get(echo.HeaderXRequestID)
+
+		statusCode := c.Response().Status
+		if statusCode == 0 {
+			statusCode = http.StatusOK
+		}
 
 		workspaceID := ""
 		if workspace := c.Get("workspace"); workspace != nil {
@@ -309,7 +308,6 @@ func (g *Gateway) wrapGrpcGatewayWithEvents(handler http.Handler) echo.HandlerFu
 		}
 
 		errorMessage := ""
-		statusCode := rec.statusCode
 		if statusCode >= 400 {
 			errorMessage = http.StatusText(statusCode)
 		}
@@ -338,21 +336,6 @@ func (g *Gateway) wrapGrpcGatewayWithEvents(handler http.Handler) echo.HandlerFu
 
 		return nil
 	}
-}
-
-// responseRecorder wraps http.ResponseWriter to capture the status code
-type responseRecorder struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (r *responseRecorder) WriteHeader(statusCode int) {
-	r.statusCode = statusCode
-	r.ResponseWriter.WriteHeader(statusCode)
-}
-
-func (r *responseRecorder) Write(b []byte) (int, error) {
-	return r.ResponseWriter.Write(b)
 }
 
 // Register repository services
