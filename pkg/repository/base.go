@@ -236,6 +236,7 @@ type EventRepository interface {
 	PushStubStateUnhealthy(workspaceId string, stubId string, currentState, previousState string, reason string, failedContainers []string)
 	PushWorkerPoolDegradedEvent(poolName string, reasons []string, poolState *types.WorkerPoolState)
 	PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState)
+	PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, errorMessage string, headers map[string]string)
 }
 
 type UsageMetricsRepository interface {

@@ -280,8 +280,79 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	// No need to add auth middleware: grpc-gateway maps the 'Authorization' header
 	// to gRPC metadata, and the destination gRPC server's interceptor will handle
 	// authorization for every request.
-	g.baseRouteGroup.Any("/gateway/*", echo.WrapHandler(http.StripPrefix(apiv1.HttpServerBaseRoute+"/gateway", mux)))
+	g.baseRouteGroup.Any("/gateway/*", g.wrapGrpcGatewayWithEvents(http.StripPrefix(apiv1.HttpServerBaseRoute+"/gateway", mux)))
 	return nil
+}
+
+// wrapGrpcGatewayWithEvents wraps the grpc-gateway handler with event tracking
+func (g *Gateway) wrapGrpcGatewayWithEvents(handler http.Handler) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		rec := &responseRecorder{
+			ResponseWriter: c.Response().Writer,
+			statusCode:     http.StatusOK,
+		}
+		c.Response().Writer = rec
+
+		handler.ServeHTTP(rec, c.Request())
+
+		method := c.Request().Method
+		path := c.Request().URL.Path
+		userAgent := c.Request().UserAgent()
+		remoteIP := c.RealIP()
+		requestID := c.Response().Header().Get(echo.HeaderXRequestID)
+
+		workspaceID := ""
+		if workspace := c.Get("workspace"); workspace != nil {
+			if ws, ok := workspace.(*types.Workspace); ok {
+				workspaceID = ws.ExternalId
+			}
+		}
+
+		errorMessage := ""
+		statusCode := rec.statusCode
+		if statusCode >= 400 {
+			errorMessage = http.StatusText(statusCode)
+		}
+
+		headers := make(map[string]string)
+		for key, values := range c.Request().Header {
+			if len(values) > 0 {
+				switch key {
+				case "Content-Type", "Accept", "X-Request-Id":
+					headers[key] = values[0]
+				}
+			}
+		}
+
+		go g.EventRepo.PushGatewayEndpointCalledEvent(
+			method,
+			path,
+			workspaceID,
+			statusCode,
+			userAgent,
+			remoteIP,
+			requestID,
+			errorMessage,
+			headers,
+		)
+
+		return nil
+	}
+}
+
+// responseRecorder wraps http.ResponseWriter to capture the status code
+type responseRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *responseRecorder) WriteHeader(statusCode int) {
+	r.statusCode = statusCode
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *responseRecorder) Write(b []byte) (int, error) {
+	return r.ResponseWriter.Write(b)
 }
 
 // Register repository services
