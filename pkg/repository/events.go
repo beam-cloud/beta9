@@ -379,6 +379,25 @@ func (t *TCPEventClientRepo) PushWorkerPoolHealthyEvent(poolName string, poolSta
 	)
 }
 
+func (t *TCPEventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string) {
+	t.pushEvent(
+		types.EventGatewayEndpointCalled,
+		types.EventGatewayEndpointSchemaVersion,
+		types.EventGatewayEndpointSchema{
+			Method:       method,
+			Path:         path,
+			WorkspaceID:  workspaceID,
+			StatusCode:   statusCode,
+			UserAgent:    userAgent,
+			RemoteIP:     remoteIP,
+			RequestID:    requestID,
+			ContentType:  contentType,
+			Accept:       accept,
+			ErrorMessage: errorMessage,
+		},
+	)
+}
+
 func sanitizeContainerRequest(request *types.ContainerRequest) types.ContainerRequest {
 	requestCopy := *request
 	requestCopy.Env = nil

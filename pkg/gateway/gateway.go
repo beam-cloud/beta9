@@ -280,7 +280,8 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	// No need to add auth middleware: grpc-gateway maps the 'Authorization' header
 	// to gRPC metadata, and the destination gRPC server's interceptor will handle
 	// authorization for every request.
-	g.baseRouteGroup.Any("/gateway/*", echo.WrapHandler(http.StripPrefix(apiv1.HttpServerBaseRoute+"/gateway", mux)))
+	wrappedHandler := gatewaymiddleware.GatewayEvents(g.EventRepo)(http.StripPrefix(apiv1.HttpServerBaseRoute+"/gateway", mux))
+	g.baseRouteGroup.Any("/gateway/*", wrappedHandler)
 	return nil
 }
 
