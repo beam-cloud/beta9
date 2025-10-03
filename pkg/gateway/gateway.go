@@ -280,62 +280,9 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 	// No need to add auth middleware: grpc-gateway maps the 'Authorization' header
 	// to gRPC metadata, and the destination gRPC server's interceptor will handle
 	// authorization for every request.
-	g.baseRouteGroup.Any("/gateway/*", g.wrapGrpcGatewayWithEvents(http.StripPrefix(apiv1.HttpServerBaseRoute+"/gateway", mux)))
+	wrappedHandler := gatewaymiddleware.GatewayEvents(g.EventRepo)(http.StripPrefix(apiv1.HttpServerBaseRoute+"/gateway", mux))
+	g.baseRouteGroup.Any("/gateway/*", wrappedHandler)
 	return nil
-}
-
-// wrapGrpcGatewayWithEvents wraps the grpc-gateway handler with event tracking
-func (g *Gateway) wrapGrpcGatewayWithEvents(handler http.Handler) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		handler.ServeHTTP(c.Response(), c.Request())
-
-		method := c.Request().Method
-		path := c.Request().URL.Path
-		userAgent := c.Request().UserAgent()
-		remoteIP := c.RealIP()
-		requestID := c.Response().Header().Get(echo.HeaderXRequestID)
-
-		statusCode := c.Response().Status
-		if statusCode == 0 {
-			statusCode = http.StatusOK
-		}
-
-		workspaceID := ""
-		if workspace := c.Get("workspace"); workspace != nil {
-			if ws, ok := workspace.(*types.Workspace); ok {
-				workspaceID = ws.ExternalId
-			}
-		}
-
-		errorMessage := ""
-		if statusCode >= 400 {
-			errorMessage = http.StatusText(statusCode)
-		}
-
-		headers := make(map[string]string)
-		for key, values := range c.Request().Header {
-			if len(values) > 0 {
-				switch key {
-				case "Content-Type", "Accept", "X-Request-Id":
-					headers[key] = values[0]
-				}
-			}
-		}
-
-		go g.EventRepo.PushGatewayEndpointCalledEvent(
-			method,
-			path,
-			workspaceID,
-			statusCode,
-			userAgent,
-			remoteIP,
-			requestID,
-			errorMessage,
-			headers,
-		)
-
-		return nil
-	}
 }
 
 // Register repository services

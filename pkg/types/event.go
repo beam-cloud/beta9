@@ -189,13 +189,14 @@ type EventWorkerPoolStateSchema struct {
 var EventGatewayEndpointSchemaVersion = "1.0"
 
 type EventGatewayEndpointSchema struct {
-	Method       string            `json:"method"`
-	Path         string            `json:"path"`
-	WorkspaceID  string            `json:"workspace_id,omitempty"`
-	StatusCode   int               `json:"status_code"`
-	UserAgent    string            `json:"user_agent,omitempty"`
-	RemoteIP     string            `json:"remote_ip,omitempty"`
-	RequestID    string            `json:"request_id,omitempty"`
-	ErrorMessage string            `json:"error_message,omitempty"`
-	Headers      map[string]string `json:"headers,omitempty"`
+	Method       string `json:"method"`
+	Path         string `json:"path"`
+	WorkspaceID  string `json:"workspace_id,omitempty"`
+	StatusCode   int    `json:"status_code"`
+	UserAgent    string `json:"user_agent,omitempty"`
+	RemoteIP     string `json:"remote_ip,omitempty"`
+	RequestID    string `json:"request_id,omitempty"`
+	ContentType  string `json:"content_type,omitempty"`
+	Accept       string `json:"accept,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
 }

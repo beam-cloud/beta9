@@ -379,7 +379,7 @@ func (t *TCPEventClientRepo) PushWorkerPoolHealthyEvent(poolName string, poolSta
 	)
 }
 
-func (t *TCPEventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, errorMessage string, headers map[string]string) {
+func (t *TCPEventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string) {
 	t.pushEvent(
 		types.EventGatewayEndpointCalled,
 		types.EventGatewayEndpointSchemaVersion,
@@ -391,8 +391,9 @@ func (t *TCPEventClientRepo) PushGatewayEndpointCalledEvent(method, path, worksp
 			UserAgent:    userAgent,
 			RemoteIP:     remoteIP,
 			RequestID:    requestID,
+			ContentType:  contentType,
+			Accept:       accept,
 			ErrorMessage: errorMessage,
-			Headers:      headers,
 		},
 	)
 }
