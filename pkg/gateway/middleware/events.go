@@ -8,7 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
-// GatewayEvents returns a middleware that tracks grpc-gateway endpoint calls by sending events to the event repository
+// GatewayEvents returns middleware that tracks grpc-gateway endpoint calls by sending events to the event repository
 func GatewayEvents(eventRepo repository.EventRepository) func(http.Handler) echo.HandlerFunc {
 	return func(handler http.Handler) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -23,9 +23,6 @@ func GatewayEvents(eventRepo repository.EventRepository) func(http.Handler) echo
 			accept := c.Request().Header.Get(echo.HeaderAccept)
 
 			statusCode := c.Response().Status
-			if statusCode == 0 {
-				statusCode = http.StatusOK
-			}
 
 			workspaceID := ""
 			if workspace := c.Get("workspace"); workspace != nil {
