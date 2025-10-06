@@ -75,6 +75,7 @@ def common(**_):
     help="The format of the output after a successful deployment.",
 )
 @override_config_options
+@extraclick.config_context_option
 @click.pass_context
 def deploy(
     ctx: click.Context,
@@ -82,6 +83,7 @@ def deploy(
     handler: str,
     url_type: str,
     format: str,
+    context: str = None,
     **kwargs,
 ):
     ctx.invoke(
@@ -90,6 +92,7 @@ def deploy(
         handler=handler,
         url_type=url_type,
         format=format,
+        context=context,
         **kwargs,
     )
 
