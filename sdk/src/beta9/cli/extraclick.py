@@ -35,6 +35,7 @@ config_context_param = click.Option(
 config_context_option = click.option(
     "-c",
     "--context",
+    default=config_context_param.default,
     required=config_context_param.required,
     help=config_context_param.help,
     hidden=config_context_param.hidden,
