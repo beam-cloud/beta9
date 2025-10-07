@@ -8,7 +8,7 @@ We take the security of Beta9 and Beam seriously. If you believe you have found 
 
 ### How to Report
 
-Send an email to **security@beam.cloud** with the as much of the following information as possible:
+Send an email to **security@beam.cloud** with as much of the following information as possible:
 
 - Type of issue (e.g. buffer overflow, SQL injection, cross-site scripting, etc.)
 - Full paths of source file(s) related to the manifestation of the issue
