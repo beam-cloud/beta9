@@ -9,8 +9,6 @@ import (
 )
 
 // GatewayEvents returns middleware that tracks grpc-gateway endpoint calls by sending events to the event repository
-// It attempts to resolve the workspace ID from the context (if present) or
-// falls back to resolving it from the bearer token/query token.
 func GatewayEvents(eventRepo repository.EventRepository, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) func(http.Handler) echo.HandlerFunc {
 	return func(handler http.Handler) echo.HandlerFunc {
 		return func(c echo.Context) error {
