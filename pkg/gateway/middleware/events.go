@@ -2,14 +2,14 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/repository"
-	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/labstack/echo/v4"
 )
 
 // GatewayEvents returns middleware that tracks grpc-gateway endpoint calls by sending events to the event repository
-func GatewayEvents(eventRepo repository.EventRepository) func(http.Handler) echo.HandlerFunc {
+func GatewayEvents(eventRepo repository.EventRepository, backendRepo repository.BackendRepository, workspaceRepo repository.WorkspaceRepository) func(http.Handler) echo.HandlerFunc {
 	return func(handler http.Handler) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			handler.ServeHTTP(c.Response(), c.Request())
@@ -25,9 +25,16 @@ func GatewayEvents(eventRepo repository.EventRepository) func(http.Handler) echo
 			statusCode := c.Response().Status
 
 			workspaceID := ""
-			if workspace := c.Get("workspace"); workspace != nil {
-				if ws, ok := workspace.(*types.Workspace); ok {
+			authHeader := c.Request().Header.Get("Authorization")
+			tokenKey := strings.TrimPrefix(authHeader, "Bearer ")
+
+			if tokenKey != "" {
+				if _, ws, err := workspaceRepo.AuthorizeToken(tokenKey); err == nil && ws != nil {
 					workspaceID = ws.ExternalId
+				} else {
+					if _, ws, err := backendRepo.AuthorizeToken(c.Request().Context(), tokenKey); err == nil && ws != nil {
+						workspaceID = ws.ExternalId
+					}
 				}
 			}
 
