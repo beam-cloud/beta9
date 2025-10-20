@@ -160,10 +160,9 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
     git clone https://github.com/checkpoint-restore/criu.git
     cd criu
 
-    # Skip GPU plugins on ARM64 since they're x86_64 specific
     if [ "$(uname -m)" = "x86_64" ]; then
-        make install-lib install-criu install-compel install-amdgpu_plugin install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
-        stat /usr/lib/criu/cuda_plugin.so 
+        make install-lib install-criu install-compel install-cuda_plugin PREFIX=/usr SKIP_PIP_INSTALL=1
+        stat /usr/lib/criu/cuda_plugin.so
     else
         make install-lib install-criu install-compel PREFIX=/usr SKIP_PIP_INSTALL=1
     fi
@@ -171,6 +170,13 @@ if [ "$(uname -m)" = "x86_64" ] || [ "$(uname -m)" = "aarch64" ]; then
     cd .. && rm -rf criu
 fi
 EOT
+
+# Hard-disable any AMDGPU plugin that might exist from base layers or future package updates
+RUN mkdir -p /usr/lib/criu/plugins.disabled && \
+    if [ -e /usr/lib/criu/amdgpu_plugin.so ]; then \
+        mv /usr/lib/criu/amdgpu_plugin.so /usr/lib/criu/plugins.disabled/ ; \
+    fi && \
+    true
 
 ARG TARGETARCH
 
