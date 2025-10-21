@@ -58,11 +58,13 @@ class DockerHubCredentials(TypedDict, total=False):
     DOCKERHUB_USERNAME: str
     DOCKERHUB_PASSWORD: str
 
+
 class GHCRCredentials(TypedDict, total=False):
     """GitHub Container Registry credentials"""
 
     GITHUB_USERNAME: str
     GITHUB_TOKEN: str
+
 
 class NGCCredentials(TypedDict, total=False):
     """NVIDIA GPU Cloud credentials"""
@@ -329,6 +331,7 @@ class Image(BaseAbstraction):
         self.build_ctx_object = ""
         self.gpu = GpuType.NoGPU
         self.ignore_python = False
+        self.override_python_version = False
         self.image_id = image_id or ""
         self.include_files_patterns = []
 
@@ -706,6 +709,15 @@ class Image(BaseAbstraction):
             path = "*"
         self.include_files_patterns.append(path)
 
+        return self
+
+    def add_python_version(self, python_version: PythonVersionAlias) -> "Image":
+        """
+        Add a Python version to the image. This will be used to build the image.
+        """
+        self.python_version = python_version
+        self.ignore_python = False
+        self.override_python_version = True
         return self
 
     def with_envs(
