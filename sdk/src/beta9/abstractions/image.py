@@ -713,7 +713,7 @@ class Image(BaseAbstraction):
 
     def add_python_version(self, python_version: PythonVersionAlias) -> "Image":
         """
-        Add a Python version to the image. This will be used to build the image.
+        Add a specific version of Python to the image. This will override any existing python configuration in the Image.
         """
         self.python_version = python_version
         self.ignore_python = False
