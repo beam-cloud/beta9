@@ -711,9 +711,15 @@ class Image(BaseAbstraction):
 
         return self
 
-    def add_python_version(self, python_version: PythonVersionAlias) -> "Image":
+    def add_python_version(self, python_version: Union[str, PythonVersion]) -> "Image":
         """
         Add a specific version of Python to the image. This will override any existing python configuration in the Image.
+
+        Parameters:
+            python_version: The Python version to add. This can be a string or a PythonVersion enum value. Example: "python3.12" or PythonVersion.Python312.
+
+        Returns:
+            Image: The Image object.
         """
         self.python_version = python_version
         self.ignore_python = False
