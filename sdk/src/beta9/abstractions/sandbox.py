@@ -221,6 +221,7 @@ class Sandbox(Pod):
                 container_id="",
                 ok=False,
                 error_msg=create_response.error_msg,
+                stub_id="",
             )
 
         self.stub_id = create_response.stub_id
@@ -270,6 +271,7 @@ class Sandbox(Pod):
                 container_id="",
                 ok=False,
                 error_msg="Failed to prepare runtime",
+                stub_id="",
             )
 
         terminal.header("Creating sandbox")
