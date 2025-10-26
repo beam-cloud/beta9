@@ -433,11 +433,49 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		log.Warn().Err(err).Str("path", ociPath).Msg("unable to inspect image size")
 	}
 
-	// Note: clipVersion=2 doesn't apply to local builds (BuildAndArchiveImage)
-	// because we don't have a registry reference to index from.
-	// Clip v2 works by indexing from remote registries, which is perfect for
-	// PullAndArchiveImage but not applicable here.
-	// For local builds, we use v1 (extract and archive).
+	// Check clipVersion to determine archiving strategy
+	if c.config.ImageService.ClipVersion == 2 {
+		// v2: Push to registry first, then index from there
+		outputLogger.Info("Creating index-only archive (Clip v2)...\n")
+		
+		// Step 1: Push the built image to a registry
+		// This could be your internal registry or a temporary local registry
+		registryRef, err := c.pushBuiltImageToRegistry(ctx, request.ImageId, ociPath, outputLogger)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to push to registry for v2 indexing, falling back to v1")
+			outputLogger.Info("Failed to push to registry, falling back to v1 method...\n")
+			// Fall through to v1 path
+		} else {
+			// Step 2: Index from the registry
+			archivePath := filepath.Join("/tmp", fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension))
+			defer os.RemoveAll(archivePath)
+
+			err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+				ImageRef:      registryRef,
+				OutputPath:    archivePath,
+				CheckpointMiB: 2,
+				Verbose:       false,
+				AuthConfig:    c.getRegistryAuthConfig(), // Registry credentials
+			})
+			
+			if err != nil {
+				log.Warn().Err(err).Msg("clip v2 indexing failed, falling back to v1")
+				outputLogger.Info("Clip v2 indexing failed, falling back to v1 method...\n")
+				// Fall through to v1 path
+			} else {
+				// v2 succeeded - push the archive and return
+				err = c.registry.Push(ctx, archivePath, request.ImageId)
+				if err != nil {
+					log.Error().Str("image_id", request.ImageId).Err(err).Msg("failed to push image")
+					return err
+				}
+
+				elapsed := time.Since(startTime)
+				log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive created from registry")
+				return nil
+			}
+		}
+	}
 	
 	// v1: extract rootfs and create data-carrying archive
 	outputLogger.Info("Creating legacy archive (Clip v1)...\n")
@@ -676,10 +714,58 @@ func umociUnpackOptions() layer.UnpackOptions {
 	return unpackOptions
 }
 
-// Note: createIndexOnlyArchive was removed because clip v2's CreateFromOCI/CreateFromOCIImage
-// are designed to work with REMOTE REGISTRIES, not local OCI layout directories.
-// For v2, we index directly from the source registry in PullAndArchiveImage.
-// For local builds (BuildAndArchiveImage), we use v1 since there's no registry reference.
+// pushBuiltImageToRegistry pushes a locally built image to a container registry
+// so that clip v2 can index from it. Returns the registry reference.
+func (c *ImageClient) pushBuiltImageToRegistry(ctx context.Context, imageId string, ociPath string, outputLogger *slog.Logger) (string, error) {
+	// Check if we have a registry configured for built images
+	// This should be set in config or environment variable
+	registryHost := os.Getenv("B9_BUILD_REGISTRY")
+	if registryHost == "" {
+		// Default to localhost registry if none specified
+		// You can run: docker run -d -p 5000:5000 --restart=always --name registry registry:2
+		registryHost = "localhost:5000"
+		log.Info().Str("default_registry", registryHost).Msg("no registry configured, using default localhost registry")
+	}
+
+	// Construct the registry reference
+	registryRef := fmt.Sprintf("%s/%s:latest", registryHost, imageId)
+	
+	outputLogger.Info(fmt.Sprintf("Pushing built image to registry: %s\n", registryRef))
+	log.Info().Str("registry_ref", registryRef).Str("oci_path", ociPath).Msg("pushing built image to registry")
+
+	// Use buildah to push from the local OCI layout to the registry
+	// buildah push oci:/path:tag docker://registry/image:tag
+	cmd := exec.CommandContext(ctx, "buildah", "push", 
+		"oci:"+ociPath+":latest", 
+		"docker://"+registryRef)
+	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+	
+	err := cmd.Run()
+	if err != nil {
+		return "", fmt.Errorf("failed to push to registry: %w", err)
+	}
+
+	log.Info().Str("registry_ref", registryRef).Msg("successfully pushed built image to registry")
+	return registryRef, nil
+}
+
+// getRegistryAuthConfig returns the authentication configuration for the container registry
+func (c *ImageClient) getRegistryAuthConfig() string {
+	// Check if we have Docker registry credentials configured
+	username := c.config.ImageService.Registries.Docker.Username
+	password := c.config.ImageService.Registries.Docker.Password
+	
+	if username == "" || password == "" {
+		// No explicit credentials, clip will use default Docker config
+		return ""
+	}
+
+	// Create auth config JSON and base64 encode it
+	// Format: {"username":"user","password":"pass"}
+	authJSON := fmt.Sprintf(`{"username":"%s","password":"%s"}`, username, password)
+	return authJSON  // Clip library expects JSON string, it will encode if needed
+}
 
 func (c *ImageClient) getBuildContext(buildPath string, request *types.ContainerRequest) (string, error) {
 	if request.BuildOptions.BuildCtxObject == nil {
