@@ -695,12 +695,26 @@ func umociUnpackOptions() layer.UnpackOptions {
 // createIndexOnlyArchive creates a clip v2 index-only archive from an OCI layout directory
 // This creates a small metadata-only archive that references OCI layers for lazy loading
 func (c *ImageClient) createIndexOnlyArchive(ctx context.Context, ociPath string, outputPath string, imageRef string) error {
-	return clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-		ImageRef:      "oci:" + ociPath + ":" + imageRef,
-		OutputPath:    outputPath,
+	// For local OCI directories, use the ClipArchiver.CreateFromOCI method
+	// For local filesystem OCI layouts, just use the absolute directory path with the tag
+	archiver := clip.NewClipArchiver()
+	
+	// Get absolute path to ensure proper resolution
+	absOciPath, err := filepath.Abs(ociPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for OCI directory: %w", err)
+	}
+	
+	// Format: /absolute/path/to/oci-dir:tag (no scheme prefix for local directories)
+	imageRefStr := fmt.Sprintf("%s:%s", absOciPath, imageRef)
+	
+	log.Info().Str("oci_path", absOciPath).Str("image_ref", imageRefStr).Msg("creating OCI archive index")
+	
+	return archiver.CreateFromOCI(ctx, clip.IndexOCIImageOptions{
+		ImageRef:      imageRefStr,
 		CheckpointMiB: 2, // Create checkpoints every 2MiB for efficient random access
 		Verbose:       false,
-	})
+	}, outputPath)
 }
 
 func (c *ImageClient) getBuildContext(buildPath string, request *types.ContainerRequest) (string, error) {
