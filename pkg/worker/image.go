@@ -237,6 +237,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		return elapsed, err
 	}
 
+	// Detect storage mode from archive (v1/v2)
+	meta, metaErr := clip.ExtractMetadata(remoteArchivePath)
+
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           remoteArchivePath,
 		MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
@@ -244,19 +247,36 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
-		Credentials: storage.ClipStorageCredentials{
+	}
+
+	// Configure credentials and storage info based on archive type
+	if metaErr == nil && meta.StorageInfo != nil && meta.StorageInfo.Type() == string(clipCommon.StorageModeOCI) {
+		// v2 (OCI index-only): ClipFS will pull from OCI registry using embedded storage info
+		// Optionally provide credentials hint if not embedded
+		homeDir, _ := os.UserHomeDir()
+		dockerConfigPath := filepath.Join(homeDir, ".docker", "config.json")
+		if _, err := os.Stat(dockerConfigPath); err == nil {
+			mountOptions.Credentials = storage.ClipStorageCredentials{
+				DockerConfig: &storage.DockerConfigCredentials{
+					Path: dockerConfigPath,
+				},
+			}
+		}
+	} else {
+		// v1 (legacy S3 data-carrying)
+		mountOptions.Credentials = storage.ClipStorageCredentials{
 			S3: &storage.S3ClipStorageCredentials{
 				AccessKey: sourceRegistry.AccessKey,
 				SecretKey: sourceRegistry.SecretKey,
 			},
-		},
-		StorageInfo: &clipCommon.S3StorageInfo{
+		}
+		mountOptions.StorageInfo = &clipCommon.S3StorageInfo{
 			Bucket:         sourceRegistry.BucketName,
 			Region:         sourceRegistry.Region,
 			Endpoint:       sourceRegistry.Endpoint,
 			Key:            fmt.Sprintf("%s.%s", imageId, registry.LocalImageFileExtension),
 			ForcePathStyle: sourceRegistry.ForcePathStyle,
-		},
+		}
 	}
 
 	// Check if a fuse server exists for this imageId
@@ -374,8 +394,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
-	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
-	defer os.RemoveAll(tmpBundlePath.Path)
 	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
 
@@ -401,6 +419,46 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	} else {
 		log.Warn().Err(err).Str("path", ociPath).Msg("unable to inspect image size")
 	}
+
+	// Check clipVersion to determine archiving strategy
+	if c.config.ImageService.ClipVersion == 2 {
+		// v2: index-only archive from the OCI dir
+		outputLogger.Info("Creating index-only archive (Clip v2)...\n")
+		
+		archivePath := filepath.Join("/tmp", fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension))
+		defer os.RemoveAll(archivePath)
+
+		err = clip.CreateFromOCIDir(ctx, clip.CreateFromOCIDirOptions{
+			OCIDir:        ociPath,
+			OutputPath:    archivePath,
+			CheckpointMiB: 2,
+			Verbose:       false,
+		}, clipCommon.OCIStorageInfo{
+			Registry:   "local",
+			Repository: request.ImageId,
+			Reference:  "latest",
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("failed to create index-only archive")
+			return err
+		}
+
+		// Push the archive to registry
+		err = c.registry.Push(ctx, archivePath, request.ImageId)
+		if err != nil {
+			log.Error().Str("image_id", request.ImageId).Err(err).Msg("failed to push image")
+			return err
+		}
+
+		elapsed := time.Since(startTime)
+		log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive and push completed")
+		return nil
+	}
+
+	// v1 (legacy): extract rootfs and create data-carrying archive
+	outputLogger.Info("Creating legacy archive (Clip v1)...\n")
+	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
+	defer os.RemoveAll(tmpBundlePath.Path)
 
 	engine, err := dir.Open(ociPath)
 	if err != nil {
@@ -450,6 +508,8 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	copyDir := filepath.Join(imageTmpDir, baseImage.Repo)
 	os.MkdirAll(copyDir, 0755)
+	defer os.RemoveAll(baseTmpBundlePath)
+	defer os.RemoveAll(copyDir)
 
 	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
 
@@ -467,14 +527,51 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
+	// Check clipVersion to determine archiving strategy
+	if c.config.ImageService.ClipVersion == 2 {
+		// v2: index-only archive from the OCI dir
+		outputLogger.Info("Creating index-only archive (Clip v2)...\n")
+
+		archivePath := filepath.Join("/tmp", fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension))
+		defer os.RemoveAll(archivePath)
+
+		// Use the local OCI layout path that skopeo created
+		ociDirPath := filepath.Join(imageTmpDir, baseImage.Repo)
+
+		err = clip.CreateFromOCIDir(ctx, clip.CreateFromOCIDirOptions{
+			OCIDir:        ociDirPath,
+			OutputPath:    archivePath,
+			CheckpointMiB: 2,
+			Verbose:       false,
+		}, clipCommon.OCIStorageInfo{
+			Registry:   "local",
+			Repository: baseImage.Repo,
+			Reference:  baseImage.Tag,
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("failed to create index-only archive")
+			return err
+		}
+
+		// Push the archive to registry
+		err = c.registry.Push(ctx, archivePath, request.ImageId)
+		if err != nil {
+			log.Error().Str("image_id", request.ImageId).Err(err).Msg("failed to push image")
+			return err
+		}
+
+		elapsed := time.Since(startTime)
+		log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive and push completed")
+		return nil
+	}
+
+	// v1 (legacy): unpack and create data-carrying archive
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
 	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
 	if err != nil {
 		return fmt.Errorf("unable to unpack image: %v", err)
 	}
-	defer os.RemoveAll(baseTmpBundlePath)
-	defer os.RemoveAll(copyDir)
 
 	outputLogger.Info("Archiving base image...\n")
 	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
