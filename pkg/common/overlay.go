@@ -66,6 +66,19 @@ func (co *ContainerOverlay) AddEmptyLayer() error {
 		return err
 	}
 
+	// Create required directories in the upper layer
+	// These are needed for container runtime and beta9 functionality
+	// In v1, they were created during unpack, but v2 (FUSE mount) skips unpack
+	// Creating them in upper layer ensures overlay has stable paths regardless of FUSE state
+	requiredDirs := []string{"workspace", "volumes", "proc", "sys", "dev", "tmp"}
+	for _, dir := range requiredDirs {
+		upperPath := filepath.Join(upperDir, dir)
+		if err := os.MkdirAll(upperPath, 0755); err != nil {
+			log.Warn().Err(err).Str("path", dir).Msg("failed to create required directory in overlay upper")
+			// Don't fail - directory might already exist in lower layer
+		}
+	}
+
 	mergedDir := filepath.Join(layerDir, "merged")
 	err = os.MkdirAll(mergedDir, 0755)
 	if err != nil {

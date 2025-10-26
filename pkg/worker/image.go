@@ -322,43 +322,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		return elapsed, err
 	}
 
-	// For v2 archives, ensure the FUSE mount is fully operational
-	// and materialize the basic directory structure before overlay mounts on top
-	if metaErr == nil && meta.StorageInfo != nil && meta.StorageInfo.Type() == "oci" {
-		rootfsPath := fmt.Sprintf("%s/%s", c.imageMountPath, imageId)
-		
-		// Wait for mount to be ready by checking if we can stat the root
-		maxRetries := 10
-		for i := 0; i < maxRetries; i++ {
-			if _, err := os.Stat(rootfsPath); err == nil {
-				break
-			}
-			if i == maxRetries-1 {
-				return elapsed, fmt.Errorf("FUSE mount not ready after %d retries", maxRetries)
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		
-		// Materialize the root directory structure by listing it
-		// This ensures the FUSE filesystem has initialized the basic structure
-		if entries, err := os.ReadDir(rootfsPath); err == nil {
-			log.Debug().Str("image_id", imageId).Int("entries", len(entries)).Msg("v2 mount ready, directory structure materialized")
-		}
-		
-		// Ensure required directories exist
-		// For v2, these need to be in the image already (they won't be created)
-		// but we verify they exist by trying to access them
-		for _, dir := range requiredContainerDirectories {
-			fullPath := filepath.Join(rootfsPath, dir)
-			if _, err := os.Stat(fullPath); err != nil {
-				// Try to create it, but it might fail if the FUSE is read-only at this level
-				if err := os.MkdirAll(fullPath, 0755); err != nil {
-					log.Warn().Err(err).Str("path", fullPath).Msg("required directory doesn't exist in v2 image")
-				}
-			}
-		}
-	}
-
 	c.mountedFuseServers.Set(imageId, server)
 	return elapsed, nil
 }
