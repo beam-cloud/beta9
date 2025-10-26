@@ -433,35 +433,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		log.Warn().Err(err).Str("path", ociPath).Msg("unable to inspect image size")
 	}
 
-	// Check clipVersion to determine archiving strategy
-	if c.config.ImageService.ClipVersion == 2 {
-		// v2: index-only archive from the OCI dir (skips rootfs extraction)
-		outputLogger.Info("Creating index-only archive (Clip v2)...\n")
-		
-		archivePath := filepath.Join("/tmp", fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension))
-		defer os.RemoveAll(archivePath)
-
-		err = c.createIndexOnlyArchive(ctx, ociPath, archivePath, "latest")
-		if err != nil {
-			log.Warn().Err(err).Msg("clip v2 not available, falling back to v1")
-			outputLogger.Info("Clip v2 not available, falling back to v1 method...\n")
-			// Fall through to v1 path
-		} else {
-			// v2 succeeded - push the archive and return
-			err = c.registry.Push(ctx, archivePath, request.ImageId)
-			if err != nil {
-				log.Error().Str("image_id", request.ImageId).Err(err).Msg("failed to push image")
-				return err
-			}
-
-			elapsed := time.Since(startTime)
-			log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive and push completed")
-			metrics.RecordImageBuildSpeed(0, elapsed) // Size is small for v2
-			return nil
-		}
-	}
-
-	// v1 (legacy): extract rootfs and create data-carrying archive
+	// Note: clipVersion=2 doesn't apply to local builds (BuildAndArchiveImage)
+	// because we don't have a registry reference to index from.
+	// Clip v2 works by indexing from remote registries, which is perfect for
+	// PullAndArchiveImage but not applicable here.
+	// For local builds, we use v1 (extract and archive).
+	
+	// v1: extract rootfs and create data-carrying archive
 	outputLogger.Info("Creating legacy archive (Clip v1)...\n")
 	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
 	defer os.RemoveAll(tmpBundlePath.Path)
@@ -509,44 +487,33 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		return err
 	}
 
-	baseTmpBundlePath := filepath.Join(c.imageBundlePath, baseImage.Repo)
-	os.MkdirAll(baseTmpBundlePath, 0755)
-
-	copyDir := filepath.Join(imageTmpDir, baseImage.Repo)
-	os.MkdirAll(copyDir, 0755)
-	defer os.RemoveAll(baseTmpBundlePath)
-	defer os.RemoveAll(copyDir)
-
-	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
-
 	imageBytes, err := c.skopeoClient.InspectSizeInBytes(ctx, *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds)
 	if err != nil {
 		log.Warn().Err(err).Msg("unable to inspect image size")
 	}
 	imageSizeMB := float64(imageBytes) / 1024 / 1024
 
-	outputLogger.Info(fmt.Sprintf("Copying image (size: %.2f MB)...\n", imageSizeMB))
 	startTime := time.Now()
-	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds, outputLogger)
-	if err != nil {
-		return err
-	}
-	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
 	// Check clipVersion to determine archiving strategy
 	if c.config.ImageService.ClipVersion == 2 {
-		// v2: index-only archive from the OCI dir (skips rootfs extraction)
-		outputLogger.Info("Creating index-only archive (Clip v2)...\n")
+		// v2: Index directly from remote registry (no local copy needed!)
+		outputLogger.Info(fmt.Sprintf("Creating index-only archive directly from registry (Clip v2, size: %.2f MB)...\n", imageSizeMB))
 
 		archivePath := filepath.Join("/tmp", fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension))
 		defer os.RemoveAll(archivePath)
 
-		// Use the local OCI layout path that skopeo created
-		ociDirPath := filepath.Join(imageTmpDir, baseImage.Repo)
-
-		err = c.createIndexOnlyArchive(ctx, ociDirPath, archivePath, baseImage.Tag)
+		// Index directly from the source registry - no local copy needed!
+		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+			ImageRef:      *request.BuildOptions.SourceImage, // Use registry ref directly
+			OutputPath:    archivePath,
+			CheckpointMiB: 2,
+			Verbose:       false,
+			AuthConfig:    request.BuildOptions.SourceImageCreds, // Pass auth for private registries
+		})
+		
 		if err != nil {
-			log.Warn().Err(err).Msg("clip v2 not available, falling back to v1")
+			log.Warn().Err(err).Msg("clip v2 indexing failed, falling back to v1")
 			outputLogger.Info("Clip v2 not available, falling back to v1 method...\n")
 			// Fall through to v1 path
 		} else {
@@ -558,13 +525,30 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 			}
 
 			elapsed := time.Since(startTime)
-			log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive and push completed")
-			metrics.RecordImageCopySpeed(imageSizeMB, elapsed)
+			log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive created directly from registry")
+			metrics.RecordImageCopySpeed(0.1, elapsed) // Tiny metadata-only archive
 			return nil
 		}
 	}
 
-	// v1 (legacy): unpack and create data-carrying archive
+	// v1 (legacy): copy to local OCI layout, unpack, and create data-carrying archive
+	baseTmpBundlePath := filepath.Join(c.imageBundlePath, baseImage.Repo)
+	os.MkdirAll(baseTmpBundlePath, 0755)
+
+	copyDir := filepath.Join(imageTmpDir, baseImage.Repo)
+	os.MkdirAll(copyDir, 0755)
+	defer os.RemoveAll(baseTmpBundlePath)
+	defer os.RemoveAll(copyDir)
+
+	dest := fmt.Sprintf("oci:%s:%s", baseImage.Repo, baseImage.Tag)
+
+	outputLogger.Info(fmt.Sprintf("Copying image (size: %.2f MB)...\n", imageSizeMB))
+	err = c.skopeoClient.Copy(ctx, *request.BuildOptions.SourceImage, dest, request.BuildOptions.SourceImageCreds, outputLogger)
+	if err != nil {
+		return err
+	}
+	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
+
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
 	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
@@ -692,37 +676,10 @@ func umociUnpackOptions() layer.UnpackOptions {
 	return unpackOptions
 }
 
-// createIndexOnlyArchive creates a clip v2 index-only archive from an OCI layout directory
-// This creates a small metadata-only archive that references OCI layers for lazy loading
-func (c *ImageClient) createIndexOnlyArchive(ctx context.Context, ociPath string, outputPath string, imageRef string) error {
-	// For local OCI directories, use the ClipArchiver.CreateFromOCI method
-	// The oci-layout:// scheme explicitly indicates a local filesystem OCI layout
-	archiver := clip.NewClipArchiver()
-	
-	// Get absolute path to ensure proper resolution
-	absOciPath, err := filepath.Abs(ociPath)
-	if err != nil {
-		return fmt.Errorf("failed to get absolute path for OCI directory: %w", err)
-	}
-	
-	// Try multiple reference formats to find what works:
-	// 1. oci-layout scheme (standard for local OCI layouts)
-	// 2. The tag is already embedded in the OCI layout's index.json, but we specify it for reference selection
-	imageRefStr := fmt.Sprintf("oci-layout://%s:%s", absOciPath, imageRef)
-	
-	log.Info().
-		Str("oci_path", absOciPath).
-		Str("image_ref", imageRefStr).
-		Str("tag", imageRef).
-		Uint32("clip_version", c.config.ImageService.ClipVersion).
-		Msg("creating OCI archive index")
-	
-	return archiver.CreateFromOCI(ctx, clip.IndexOCIImageOptions{
-		ImageRef:      imageRefStr,
-		CheckpointMiB: 2, // Create checkpoints every 2MiB for efficient random access
-		Verbose:       true, // Enable verbose logging to see what clip is doing
-	}, outputPath)
-}
+// Note: createIndexOnlyArchive was removed because clip v2's CreateFromOCI/CreateFromOCIImage
+// are designed to work with REMOTE REGISTRIES, not local OCI layout directories.
+// For v2, we index directly from the source registry in PullAndArchiveImage.
+// For local builds (BuildAndArchiveImage), we use v1 since there's no registry reference.
 
 func (c *ImageClient) getBuildContext(buildPath string, request *types.ContainerRequest) (string, error) {
 	if request.BuildOptions.BuildCtxObject == nil {
