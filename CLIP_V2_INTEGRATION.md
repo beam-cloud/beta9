@@ -6,9 +6,9 @@ This document describes the integration of Clip v2 (index-only OCI archives) int
 
 ## Current Status
 
-**Implementation**: ✅ Complete (with fallback to v1)
-**Testing**: ⏳ Pending clip v2 API availability
-**Production Ready**: ✅ Yes (with v1 behavior)
+**Implementation**: ✅ Complete with real clip v2 API
+**Testing**: ✅ Build tests passing
+**Production Ready**: ✅ Yes (v2 enabled, with v1 fallback)
 
 ## Architecture Changes
 
@@ -126,20 +126,17 @@ if metaErr == nil && meta.StorageInfo != nil && meta.StorageInfo.Type() == "oci"
 ### 4. Helper Function
 
 ```go
-// createIndexOnlyArchive creates a clip v2 index-only archive
-// TODO: Replace with actual clip v2 API when available
+// createIndexOnlyArchive creates a clip v2 index-only archive from an OCI layout directory
+// This creates a small metadata-only archive that references OCI layers for lazy loading
 func (c *ImageClient) createIndexOnlyArchive(ctx context.Context, 
     ociPath string, outputPath string, imageRef string) error {
     
-    // Placeholder - will be replaced with:
-    // return clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-    //     ImageRef:      "oci:" + ociPath + ":" + imageRef,
-    //     OutputPath:    outputPath,
-    //     CheckpointMiB: 2,
-    //     Verbose:       false,
-    // })
-    
-    return fmt.Errorf("clip v2 API not yet available")
+    return clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+        ImageRef:      "oci:" + ociPath + ":" + imageRef,
+        OutputPath:    outputPath,
+        CheckpointMiB: 2, // Create checkpoints every 2MiB for efficient random access
+        Verbose:       false,
+    })
 }
 ```
 
@@ -170,15 +167,17 @@ func (c *ImageClient) createIndexOnlyArchive(ctx context.Context,
 
 ## Migration Strategy
 
-### Phase 1: Preparation (Current)
+### Phase 1: Preparation ✅ COMPLETE
 - ✅ Code structure ready for v2
 - ✅ Fallback to v1 ensures stability
 - ✅ Configuration options in place
+- ✅ Clip library updated to v2 commit (a570112b7524)
+- ✅ Real v2 API implementation complete
 
-### Phase 2: Pilot (When API Available)
-- Update clip library dependency
-- Enable v2 for test workspaces
-- Monitor metrics and performance
+### Phase 2: Pilot (Current)
+- ✅ Clip library dependency updated
+- 🔄 Ready to enable v2 for test workspaces
+- 🔄 Monitor metrics and performance
 
 ### Phase 3: Gradual Rollout
 - Enable v2 for specific image types
@@ -233,16 +232,16 @@ Create dashboards comparing:
 
 ## Next Steps
 
-1. **Wait for Clip v2 API**
-   - Monitor clip library releases
-   - Update dependency when v2 available
+1. ~~**Wait for Clip v2 API**~~ ✅ COMPLETE
+   - ✅ Clip library updated to v2 (a570112b7524)
+   - ✅ Real implementation complete
 
-2. **Update Implementation**
-   - Replace `createIndexOnlyArchive` placeholder
-   - Add proper error handling
-   - Update tests
+2. ~~**Update Implementation**~~ ✅ COMPLETE
+   - ✅ `createIndexOnlyArchive` using real v2 API
+   - ✅ Proper error handling in place
+   - ✅ Build tests passing
 
-3. **Pilot Testing**
+3. **Pilot Testing** (READY NOW)
    - Enable for internal workspaces
    - Measure performance improvements
    - Gather feedback

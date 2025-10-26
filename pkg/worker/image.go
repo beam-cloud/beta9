@@ -693,18 +693,14 @@ func umociUnpackOptions() layer.UnpackOptions {
 }
 
 // createIndexOnlyArchive creates a clip v2 index-only archive from an OCI layout directory
-// TODO: This is a placeholder until clip v2 API is available in the library
-// When available, replace with: clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{...})
+// This creates a small metadata-only archive that references OCI layers for lazy loading
 func (c *ImageClient) createIndexOnlyArchive(ctx context.Context, ociPath string, outputPath string, imageRef string) error {
-	// This will be implemented once the clip v2 API is available
-	// Expected signature:
-	// return clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-	//     ImageRef:      "oci:" + ociPath + ":" + imageRef,
-	//     OutputPath:    outputPath,
-	//     CheckpointMiB: 2,
-	//     Verbose:       false,
-	// })
-	return fmt.Errorf("clip v2 API not yet available")
+	return clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+		ImageRef:      "oci:" + ociPath + ":" + imageRef,
+		OutputPath:    outputPath,
+		CheckpointMiB: 2, // Create checkpoints every 2MiB for efficient random access
+		Verbose:       false,
+	})
 }
 
 func (c *ImageClient) getBuildContext(buildPath string, request *types.ContainerRequest) (string, error) {
