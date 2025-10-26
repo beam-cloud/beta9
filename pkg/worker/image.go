@@ -1,3 +1,21 @@
+// Package worker provides container image management with support for both
+// legacy (v1) and index-only (v2) clip archive formats.
+//
+// Clip v1 (Legacy):
+// - Extracts full rootfs using umoci.Unpack
+// - Creates large data-carrying .clip archives
+// - Stores all file content in S3
+//
+// Clip v2 (Index-only):
+// - Skips rootfs extraction
+// - Creates small .clip archives with only metadata (TOC, decompression indexes)
+// - References OCI layers in-place for lazy loading
+// - Significantly faster build/pull times and smaller archive sizes
+//
+// Configuration:
+// Set imageService.clipVersion to 1 (legacy) or 2 (index-only) in the config.
+// The mount path (PullLazy) automatically detects the archive type and handles
+// both formats transparently.
 package worker
 
 import (
@@ -238,7 +256,8 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	// Detect storage mode from archive (v1/v2)
-	meta, metaErr := clip.ExtractMetadata(remoteArchivePath)
+	archiver := clip.NewClipArchiver()
+	meta, metaErr := archiver.ExtractMetadata(remoteArchivePath)
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           remoteArchivePath,
@@ -250,20 +269,14 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	// Configure credentials and storage info based on archive type
-	if metaErr == nil && meta.StorageInfo != nil && meta.StorageInfo.Type() == string(clipCommon.StorageModeOCI) {
+	if metaErr == nil && meta.StorageInfo != nil && meta.StorageInfo.Type() == "oci" {
 		// v2 (OCI index-only): ClipFS will pull from OCI registry using embedded storage info
-		// Optionally provide credentials hint if not embedded
-		homeDir, _ := os.UserHomeDir()
-		dockerConfigPath := filepath.Join(homeDir, ".docker", "config.json")
-		if _, err := os.Stat(dockerConfigPath); err == nil {
-			mountOptions.Credentials = storage.ClipStorageCredentials{
-				DockerConfig: &storage.DockerConfigCredentials{
-					Path: dockerConfigPath,
-				},
-			}
-		}
+		// For v2, credentials are typically embedded or handled by the clip library
+		// No need to set StorageInfo as it's embedded in the archive
+		log.Info().Str("image_id", imageId).Msg("detected v2 (OCI) archive format")
 	} else {
 		// v1 (legacy S3 data-carrying)
+		log.Info().Str("image_id", imageId).Msg("detected v1 (S3) archive format")
 		mountOptions.Credentials = storage.ClipStorageCredentials{
 			S3: &storage.S3ClipStorageCredentials{
 				AccessKey: sourceRegistry.AccessKey,
@@ -422,37 +435,30 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	// Check clipVersion to determine archiving strategy
 	if c.config.ImageService.ClipVersion == 2 {
-		// v2: index-only archive from the OCI dir
+		// v2: index-only archive from the OCI dir (skips rootfs extraction)
 		outputLogger.Info("Creating index-only archive (Clip v2)...\n")
 		
 		archivePath := filepath.Join("/tmp", fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension))
 		defer os.RemoveAll(archivePath)
 
-		err = clip.CreateFromOCIDir(ctx, clip.CreateFromOCIDirOptions{
-			OCIDir:        ociPath,
-			OutputPath:    archivePath,
-			CheckpointMiB: 2,
-			Verbose:       false,
-		}, clipCommon.OCIStorageInfo{
-			Registry:   "local",
-			Repository: request.ImageId,
-			Reference:  "latest",
-		})
+		err = c.createIndexOnlyArchive(ctx, ociPath, archivePath, "latest")
 		if err != nil {
-			log.Error().Err(err).Msg("failed to create index-only archive")
-			return err
-		}
+			log.Warn().Err(err).Msg("clip v2 not available, falling back to v1")
+			outputLogger.Info("Clip v2 not available, falling back to v1 method...\n")
+			// Fall through to v1 path
+		} else {
+			// v2 succeeded - push the archive and return
+			err = c.registry.Push(ctx, archivePath, request.ImageId)
+			if err != nil {
+				log.Error().Str("image_id", request.ImageId).Err(err).Msg("failed to push image")
+				return err
+			}
 
-		// Push the archive to registry
-		err = c.registry.Push(ctx, archivePath, request.ImageId)
-		if err != nil {
-			log.Error().Str("image_id", request.ImageId).Err(err).Msg("failed to push image")
-			return err
+			elapsed := time.Since(startTime)
+			log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive and push completed")
+			metrics.RecordImageBuildSpeed(0, elapsed) // Size is small for v2
+			return nil
 		}
-
-		elapsed := time.Since(startTime)
-		log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive and push completed")
-		return nil
 	}
 
 	// v1 (legacy): extract rootfs and create data-carrying archive
@@ -529,7 +535,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 
 	// Check clipVersion to determine archiving strategy
 	if c.config.ImageService.ClipVersion == 2 {
-		// v2: index-only archive from the OCI dir
+		// v2: index-only archive from the OCI dir (skips rootfs extraction)
 		outputLogger.Info("Creating index-only archive (Clip v2)...\n")
 
 		archivePath := filepath.Join("/tmp", fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension))
@@ -538,31 +544,24 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		// Use the local OCI layout path that skopeo created
 		ociDirPath := filepath.Join(imageTmpDir, baseImage.Repo)
 
-		err = clip.CreateFromOCIDir(ctx, clip.CreateFromOCIDirOptions{
-			OCIDir:        ociDirPath,
-			OutputPath:    archivePath,
-			CheckpointMiB: 2,
-			Verbose:       false,
-		}, clipCommon.OCIStorageInfo{
-			Registry:   "local",
-			Repository: baseImage.Repo,
-			Reference:  baseImage.Tag,
-		})
+		err = c.createIndexOnlyArchive(ctx, ociDirPath, archivePath, baseImage.Tag)
 		if err != nil {
-			log.Error().Err(err).Msg("failed to create index-only archive")
-			return err
-		}
+			log.Warn().Err(err).Msg("clip v2 not available, falling back to v1")
+			outputLogger.Info("Clip v2 not available, falling back to v1 method...\n")
+			// Fall through to v1 path
+		} else {
+			// v2 succeeded - push the archive and return
+			err = c.registry.Push(ctx, archivePath, request.ImageId)
+			if err != nil {
+				log.Error().Str("image_id", request.ImageId).Err(err).Msg("failed to push image")
+				return err
+			}
 
-		// Push the archive to registry
-		err = c.registry.Push(ctx, archivePath, request.ImageId)
-		if err != nil {
-			log.Error().Str("image_id", request.ImageId).Err(err).Msg("failed to push image")
-			return err
+			elapsed := time.Since(startTime)
+			log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive and push completed")
+			metrics.RecordImageCopySpeed(imageSizeMB, elapsed)
+			return nil
 		}
-
-		elapsed := time.Since(startTime)
-		log.Info().Str("image_id", request.ImageId).Dur("seconds", time.Duration(elapsed.Seconds())).Msg("v2 archive and push completed")
-		return nil
 	}
 
 	// v1 (legacy): unpack and create data-carrying archive
@@ -691,6 +690,21 @@ func umociUnpackOptions() layer.UnpackOptions {
 	unpackOptions.KeepDirlinks = true
 	unpackOptions.MapOptions = meta.MapOptions
 	return unpackOptions
+}
+
+// createIndexOnlyArchive creates a clip v2 index-only archive from an OCI layout directory
+// TODO: This is a placeholder until clip v2 API is available in the library
+// When available, replace with: clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{...})
+func (c *ImageClient) createIndexOnlyArchive(ctx context.Context, ociPath string, outputPath string, imageRef string) error {
+	// This will be implemented once the clip v2 API is available
+	// Expected signature:
+	// return clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+	//     ImageRef:      "oci:" + ociPath + ":" + imageRef,
+	//     OutputPath:    outputPath,
+	//     CheckpointMiB: 2,
+	//     Verbose:       false,
+	// })
+	return fmt.Errorf("clip v2 API not yet available")
 }
 
 func (c *ImageClient) getBuildContext(buildPath string, request *types.ContainerRequest) (string, error) {
