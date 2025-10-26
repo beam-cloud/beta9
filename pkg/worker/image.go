@@ -696,7 +696,7 @@ func umociUnpackOptions() layer.UnpackOptions {
 // This creates a small metadata-only archive that references OCI layers for lazy loading
 func (c *ImageClient) createIndexOnlyArchive(ctx context.Context, ociPath string, outputPath string, imageRef string) error {
 	// For local OCI directories, use the ClipArchiver.CreateFromOCI method
-	// For local filesystem OCI layouts, just use the absolute directory path with the tag
+	// The oci-layout:// scheme explicitly indicates a local filesystem OCI layout
 	archiver := clip.NewClipArchiver()
 	
 	// Get absolute path to ensure proper resolution
@@ -705,15 +705,22 @@ func (c *ImageClient) createIndexOnlyArchive(ctx context.Context, ociPath string
 		return fmt.Errorf("failed to get absolute path for OCI directory: %w", err)
 	}
 	
-	// Format: /absolute/path/to/oci-dir:tag (no scheme prefix for local directories)
-	imageRefStr := fmt.Sprintf("%s:%s", absOciPath, imageRef)
+	// Try multiple reference formats to find what works:
+	// 1. oci-layout scheme (standard for local OCI layouts)
+	// 2. The tag is already embedded in the OCI layout's index.json, but we specify it for reference selection
+	imageRefStr := fmt.Sprintf("oci-layout://%s:%s", absOciPath, imageRef)
 	
-	log.Info().Str("oci_path", absOciPath).Str("image_ref", imageRefStr).Msg("creating OCI archive index")
+	log.Info().
+		Str("oci_path", absOciPath).
+		Str("image_ref", imageRefStr).
+		Str("tag", imageRef).
+		Uint32("clip_version", c.config.ImageService.ClipVersion).
+		Msg("creating OCI archive index")
 	
 	return archiver.CreateFromOCI(ctx, clip.IndexOCIImageOptions{
 		ImageRef:      imageRefStr,
 		CheckpointMiB: 2, // Create checkpoints every 2MiB for efficient random access
-		Verbose:       false,
+		Verbose:       true, // Enable verbose logging to see what clip is doing
 	}, outputPath)
 }
 
