@@ -379,7 +379,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if throttlingEnabled && (s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced) {
 		spec.Linux.Resources.Unified = cgroupV2Parameters
 
-		if s.config.Worker.ResourceLimits.CPUEnforced || s.config.Worker.ResourceLimits.MemoryEnforced {
+		if s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced {
 			resources, err := s.getContainerResources(request)
 			if err != nil {
 				return nil, err
