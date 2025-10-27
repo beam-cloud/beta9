@@ -230,19 +230,26 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		}
 	}
 
-	elapsed := time.Since(startTime)
-	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, registry.RemoteImageFileExtension)
-	sourceRegistry, err := c.pullImageFromRegistry(ctx, remoteArchivePath, imageId)
+    elapsed := time.Since(startTime)
+    // Choose a single on-disk archive path to mount.
+    // - For local registry store, prefer the canonical local path /images/<id>.clip (no duplicate).
+    // - For remote (S3) store, download to cache path /images/cache/<id>.rclip.
+    mountArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, registry.RemoteImageFileExtension)
+    if c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
+        mountArchivePath = fmt.Sprintf("/images/%s.%s", imageId, registry.LocalImageFileExtension)
+    }
+
+    sourceRegistry, err := c.pullImageFromRegistry(ctx, mountArchivePath, imageId)
 	if err != nil {
 		return elapsed, err
 	}
 
     // Detect storage type (v1 S3 data-carrying vs v2 OCI index-only) from the archive metadata
     archiver := clip.NewClipArchiver()
-    meta, _ := archiver.ExtractMetadata(remoteArchivePath)
+    meta, _ := archiver.ExtractMetadata(mountArchivePath)
 
     var mountOptions *clip.MountOptions = &clip.MountOptions{
-        ArchivePath:           remoteArchivePath,
+        ArchivePath:           mountArchivePath,
         MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
         Verbose:               false,
         CachePath:             localCachePath,
@@ -259,8 +266,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
     }
 
     if storageType == string(clipCommon.StorageModeOCI) || strings.ToLower(storageType) == "oci" {
-        // v2 (OCI index-only): ClipFS will read embedded OCI storage info
-        // No extra credentials supplied here; rely on embedded AuthConfig or env
+        // v2 (OCI index-only): ClipFS will read embedded OCI storage info; no S3 info needed
+        // Ensure we don't pass a stale S3 StorageInfo
+        mountOptions.StorageInfo = nil
     } else {
         // v1 (legacy S3 data-carrying)
         mountOptions.Credentials = storage.ClipStorageCredentials{
