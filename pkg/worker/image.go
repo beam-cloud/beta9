@@ -237,27 +237,46 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		return elapsed, err
 	}
 
-	var mountOptions *clip.MountOptions = &clip.MountOptions{
-		ArchivePath:           remoteArchivePath,
-		MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
-		Verbose:               false,
-		CachePath:             localCachePath,
-		ContentCache:          c.cacheClient,
-		ContentCacheAvailable: c.cacheClient != nil,
-		Credentials: storage.ClipStorageCredentials{
-			S3: &storage.S3ClipStorageCredentials{
-				AccessKey: sourceRegistry.AccessKey,
-				SecretKey: sourceRegistry.SecretKey,
-			},
-		},
-		StorageInfo: &clipCommon.S3StorageInfo{
-			Bucket:         sourceRegistry.BucketName,
-			Region:         sourceRegistry.Region,
-			Endpoint:       sourceRegistry.Endpoint,
-			Key:            fmt.Sprintf("%s.%s", imageId, registry.LocalImageFileExtension),
-			ForcePathStyle: sourceRegistry.ForcePathStyle,
-		},
-	}
+    // Detect storage type (v1 S3 data-carrying vs v2 OCI index-only) from the archive metadata
+    archiver := clip.NewClipArchiver()
+    meta, _ := archiver.ExtractMetadata(remoteArchivePath)
+
+    var mountOptions *clip.MountOptions = &clip.MountOptions{
+        ArchivePath:           remoteArchivePath,
+        MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
+        Verbose:               false,
+        CachePath:             localCachePath,
+        ContentCache:          c.cacheClient,
+        ContentCacheAvailable: c.cacheClient != nil,
+    }
+
+    // Default to legacy S3 storage if we cannot detect OCI
+    storageType := ""
+    if meta != nil && meta.StorageInfo != nil {
+        if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
+            storageType = t.Type()
+        }
+    }
+
+    if storageType == string(clipCommon.StorageModeOCI) || strings.ToLower(storageType) == "oci" {
+        // v2 (OCI index-only): ClipFS will read embedded OCI storage info
+        // No extra credentials supplied here; rely on embedded AuthConfig or env
+    } else {
+        // v1 (legacy S3 data-carrying)
+        mountOptions.Credentials = storage.ClipStorageCredentials{
+            S3: &storage.S3ClipStorageCredentials{
+                AccessKey: sourceRegistry.AccessKey,
+                SecretKey: sourceRegistry.SecretKey,
+            },
+        }
+        mountOptions.StorageInfo = &clipCommon.S3StorageInfo{
+            Bucket:         sourceRegistry.BucketName,
+            Region:         sourceRegistry.Region,
+            Endpoint:       sourceRegistry.Endpoint,
+            Key:            fmt.Sprintf("%s.%s", imageId, registry.LocalImageFileExtension),
+            ForcePathStyle: sourceRegistry.ForcePathStyle,
+        }
+    }
 
 	// Check if a fuse server exists for this imageId
 	_, mounted := c.mountedFuseServers.Get(imageId)
@@ -279,7 +298,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		Token:    lockResponse.Token,
 	}))
 
-	startServer, _, server, err := clip.MountArchive(*mountOptions)
+    startServer, _, server, err := clip.MountArchive(*mountOptions)
 	if err != nil {
 		return elapsed, err
 	}
@@ -402,36 +421,61 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		log.Warn().Err(err).Str("path", ociPath).Msg("unable to inspect image size")
 	}
 
-	engine, err := dir.Open(ociPath)
-	if err != nil {
-		return err
-	}
-	defer engine.Close()
+    // If configured for v2, skip unpack and create index-only clip from OCI
+    if c.config.ImageService.ClipVersion == 2 {
+        archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
+        archivePath := filepath.Join("/tmp", archiveName)
 
-	unpackOptions := umociUnpackOptions()
+        archiver := clip.NewClipArchiver()
+        // Prefer using image ref composed similarly to buildah push if supported, else index local OCI dir
+        // The new clip API supports both CreateFromOCI (dir) and CreateFromOCIImage (by ref). We'll use dir.
+        err = archiver.CreateFromOCI(ctx, clip.IndexOCIImageOptions{
+            ImageRef:      fmt.Sprintf("oci:%s:latest", ociPath), // best-effort; archiver may also accept dir via ImageRefOrDir
+            CheckpointMiB: 2,
+            Verbose:       false,
+        }, archivePath)
+        if err != nil {
+            // Fallback: use CreateFromOCIImage with explicit docker ref is not available here; return err
+            return err
+        }
 
-	engineExt := casext.NewEngine(engine)
-	defer engineExt.Close()
+        // Push the resulting .clip via existing registry abstraction
+        if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
+            return err
+        }
+        return nil
+    }
 
-	err = umoci.Unpack(engineExt, "latest", tmpBundlePath.Path, unpackOptions)
-	if err != nil {
-		return err
-	}
+    engine, err := dir.Open(ociPath)
+    if err != nil {
+        return err
+    }
+    defer engine.Close()
 
-	for _, dir := range requiredContainerDirectories {
-		fullPath := filepath.Join(tmpBundlePath.Path, "rootfs", dir)
-		err := os.MkdirAll(fullPath, 0755)
-		if err != nil {
-			return err
-		}
-	}
+    unpackOptions := umociUnpackOptions()
 
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
-	if err != nil {
-		return err
-	}
+    engineExt := casext.NewEngine(engine)
+    defer engineExt.Close()
 
-	return nil
+    err = umoci.Unpack(engineExt, "latest", tmpBundlePath.Path, unpackOptions)
+    if err != nil {
+        return err
+    }
+
+    for _, dir := range requiredContainerDirectories {
+        fullPath := filepath.Join(tmpBundlePath.Path, "rootfs", dir)
+        err := os.MkdirAll(fullPath, 0755)
+        if err != nil {
+            return err
+        }
+    }
+
+    err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
+    if err != nil {
+        return err
+    }
+
+    return nil
 }
 
 func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
@@ -467,22 +511,46 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
-	outputLogger.Info("Unpacking image...\n")
-	tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
-	err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
-	if err != nil {
-		return fmt.Errorf("unable to unpack image: %v", err)
-	}
-	defer os.RemoveAll(baseTmpBundlePath)
-	defer os.RemoveAll(copyDir)
+    if c.config.ImageService.ClipVersion == 2 {
+        // v2: create index-only clip from the local OCI layout we just copied
+        archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
+        archivePath := filepath.Join("/tmp", archiveName)
 
-	outputLogger.Info("Archiving base image...\n")
-	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
-	if err != nil {
-		return err
-	}
+        archiver := clip.NewClipArchiver()
+        // We know dest was oci:<repo>:<tag>, and skopeo copied under /tmp/<repo>
+        // Use the source docker ref directly for robustness
+        srcImage := *request.BuildOptions.SourceImage
+        err = archiver.CreateFromOCI(ctx, clip.IndexOCIImageOptions{
+            ImageRef:      srcImage,
+            CheckpointMiB: 2,
+            Verbose:       false,
+        }, archivePath)
+        if err != nil {
+            return err
+        }
 
-	return nil
+        if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
+            return err
+        }
+        return nil
+    }
+
+    outputLogger.Info("Unpacking image...\n")
+    tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
+    err = c.unpack(ctx, baseImage.Repo, baseImage.Tag, tmpBundlePath)
+    if err != nil {
+        return fmt.Errorf("unable to unpack image: %v", err)
+    }
+    defer os.RemoveAll(baseTmpBundlePath)
+    defer os.RemoveAll(copyDir)
+
+    outputLogger.Info("Archiving base image...\n")
+    err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
+    if err != nil {
+        return err
+    }
+
+    return nil
 }
 
 func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImageTag string, bundlePath *PathInfo) error {

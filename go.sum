@@ -138,6 +138,8 @@ github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563 h1:kn8/lBy
 github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563/go.mod h1:RrA2ruMma4/dN9Sa6wwhyAO1uI6di+tlLB5wuM7TuvQ=
 github.com/beam-cloud/clip v0.0.0-20250815141247-71e2dd6c441d h1:M6RtY4ANRr+NbbCCkL9l8Vksl5mW0F5hWCctaLAD4I8=
 github.com/beam-cloud/clip v0.0.0-20250815141247-71e2dd6c441d/go.mod h1:JqYuoB5waiXZrLmBO0rKM+Kl4iRWqfWb+pI+lk3BX+Q=
+github.com/beam-cloud/clip v0.0.0-20251026230744-3f6619e20f11 h1:3x9i7FQlcgn94og+vHGFF1LUWcRrLL4B1M803Za1nec=
+github.com/beam-cloud/clip v0.0.0-20251026230744-3f6619e20f11/go.mod h1:JqYuoB5waiXZrLmBO0rKM+Kl4iRWqfWb+pI+lk3BX+Q=
 github.com/beam-cloud/geesefs v0.0.0-20250921162405-f983757f032a h1:JQVvP0qKA39xp5ckKGcwkvgMO6BxatnzvgnMz97tt1g=
 github.com/beam-cloud/geesefs v0.0.0-20250921162405-f983757f032a/go.mod h1:utihEuMyzBOeZ6oU2ozzZkJmyzbYBuYrxsLUo1DfZXs=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f h1:XzHOu+erxeBO6D3fKVbd5DAlipl+PYZ3u+Ywb8m7Ovk=
@@ -203,6 +205,8 @@ github.com/cpuguy83/go-md2man/v2 v2.0.0/go.mod h1:maD7wRr/U5Z6m/iR4s+kqSMx2CaBsr
 github.com/cpuguy83/go-md2man/v2 v2.0.2/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
 github.com/cpuguy83/go-md2man/v2 v2.0.4 h1:wfIWP927BUkWJb2NmU/kNDYIBTh/ziUX91+lVfRxZq4=
 github.com/cpuguy83/go-md2man/v2 v2.0.4/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
+github.com/cpuguy83/go-md2man/v2 v2.0.5 h1:ZtcqGrnekaHpVLArFSe4HK5DoKx1T0rq2DwVB0alcyc=
+github.com/cpuguy83/go-md2man/v2 v2.0.5/go.mod h1:tgQtvFlXSQOSOSIRvRPT7W67SCa46tRHOmNcaadrF8o=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/creack/pty v1.1.23 h1:4M6+isWdcStXEf15G/RbrMPOQj1dZ7HPZCGwE4kOeP0=
 github.com/creack/pty v1.1.23/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
@@ -795,6 +799,8 @@ github.com/ulikunitz/xz v0.5.12/go.mod h1:nbz6k7qbPmH4IRqmfOplQw/tblSgqTqBwxkY0o
 github.com/urfave/cli v1.22.4/go.mod h1:Gos4lmkARVdJ6EkW0WaNv/tZAAMe9V7XWyB60NtXRu0=
 github.com/urfave/cli v1.22.14 h1:ebbhrRiGK2i4naQJr+1Xj92HXZCrK7MsyTS/ob3HnAk=
 github.com/urfave/cli v1.22.14/go.mod h1:X0eDS6pD6Exaclxm99NJ3FiCDRED7vIHpx2mDOHLvkA=
+github.com/urfave/cli v1.22.15 h1:nuqt+pdC/KqswQKhETJjo7pvn/k4xMUxgW6liI7XpnM=
+github.com/urfave/cli v1.22.15/go.mod h1:wSan1hmo5zeyLGBjRJbzRTNk8gwoYa2B9n4q9dmRIc0=
 github.com/valyala/bytebufferpool v1.0.0 h1:GqA5TC/0021Y/b9FG4Oi9Mr3q7XYx6KllzawFIhcdPw=
 github.com/valyala/bytebufferpool v1.0.0/go.mod h1:6bBcMArwyJ5K/AmCkWv1jt77kVWyCJ6HpOuEn7z0Csc=
 github.com/valyala/fastrand v1.1.0 h1:f+5HkLW4rsgzdNoleUOB69hyT9IlD2ZQh9GyDMfb5G8=
