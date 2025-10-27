@@ -453,7 +453,44 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
 
-	cmd := exec.CommandContext(ctx, "buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
+    // Pre-pull base image with insecure option if necessary
+    insecureBud := false
+    sourceImage := ""
+    if request.BuildOptions != nil && request.BuildOptions.SourceImage != nil {
+        sourceImage = *request.BuildOptions.SourceImage
+    }
+    if sourceImage != "" {
+        if base, perr := image.ExtractImageNameAndTag(sourceImage); perr == nil {
+            // Treat runner/build registry as insecure if configured
+            if c.config.ImageService.BuildRegistryInsecure &&
+                (base.Registry == c.config.ImageService.BuildRegistry || base.Registry == c.config.ImageService.Runner.BaseImageRegistry) {
+                insecureBud = true
+            }
+            // Also consider localhost registries insecure by default
+            if strings.Contains(base.Registry, "localhost") || strings.HasPrefix(base.Registry, "127.0.0.1") {
+                insecureBud = c.config.ImageService.BuildRegistryInsecure || true
+            }
+        }
+        // buildah pull the base image so bud doesn't attempt HTTPS
+        pullArgs := []string{"--root", imagePath, "pull"}
+        if insecureBud {
+            pullArgs = append(pullArgs, "--tls-verify=false")
+        }
+        pullArgs = append(pullArgs, "docker://"+sourceImage)
+        cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
+        cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+        cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+        if err := cmd.Run(); err != nil {
+            return err
+        }
+    }
+
+    budArgs := []string{"--root", imagePath, "bud"}
+    if insecureBud {
+        budArgs = append(budArgs, "--tls-verify=false")
+    }
+    budArgs = append(budArgs, "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
+    cmd := exec.CommandContext(ctx, "buildah", budArgs...)
 	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 	err = cmd.Run()
