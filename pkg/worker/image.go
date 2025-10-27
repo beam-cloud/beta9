@@ -231,22 +231,48 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
     elapsed := time.Since(startTime)
-    // Choose a single on-disk archive path to mount.
-    // - For local registry store, prefer the canonical local path /images/<id>.clip (no duplicate).
-    // - For remote (S3) store, download to cache path /images/cache/<id>.rclip.
-    mountArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, registry.RemoteImageFileExtension)
-    if c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
-        mountArchivePath = fmt.Sprintf("/images/%s.%s", imageId, registry.LocalImageFileExtension)
-    }
+    // Always download to the registry-native path first (rclip for S3, clip for local)
+    downloadPath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
+    // Ensure parent dir exists
+    _ = os.MkdirAll(filepath.Dir(downloadPath), 0755)
 
-    sourceRegistry, err := c.pullImageFromRegistry(ctx, mountArchivePath, imageId)
+    sourceRegistry, err := c.pullImageFromRegistry(ctx, downloadPath, imageId)
 	if err != nil {
 		return elapsed, err
 	}
 
     // Detect storage type (v1 S3 data-carrying vs v2 OCI index-only) from the archive metadata
     archiver := clip.NewClipArchiver()
-    meta, _ := archiver.ExtractMetadata(mountArchivePath)
+    meta, _ := archiver.ExtractMetadata(downloadPath)
+
+    // Decide final mount archive path:
+    // - v2 (oci): place a single canonical index file at /images/<id>.clip
+    // - v1 (s3/local): mount the downloaded file as-is
+    mountArchivePath := downloadPath
+    if meta != nil {
+        if t, ok := meta.StorageInfo.(interface{ Type() string }); ok && (t.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(t.Type()) == "oci") {
+            canonicalIndexPath := fmt.Sprintf("/images/%s.%s", imageId, registry.LocalImageFileExtension)
+            _ = os.MkdirAll(filepath.Dir(canonicalIndexPath), 0755)
+            if downloadPath != canonicalIndexPath {
+                // Move the downloaded file to the canonical clip index path
+                if err := os.Rename(downloadPath, canonicalIndexPath); err != nil {
+                    // Fallback: copy then remove
+                    if in, e1 := os.Open(downloadPath); e1 == nil {
+                        defer in.Close()
+                        if out, e2 := os.Create(canonicalIndexPath); e2 == nil {
+                            if _, e3 := io.Copy(out, in); e3 == nil {
+                                out.Close()
+                                _ = os.Remove(downloadPath)
+                            } else {
+                                out.Close()
+                            }
+                        }
+                    }
+                }
+            }
+            mountArchivePath = canonicalIndexPath
+        }
+    }
 
     var mountOptions *clip.MountOptions = &clip.MountOptions{
         ArchivePath:           mountArchivePath,
