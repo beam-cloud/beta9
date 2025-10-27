@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,23 +57,23 @@ type ImageMetadata struct {
 }
 
 func NewSkopeoClient(config types.AppConfig) SkopeoClient {
-    // If the runner base registry is localhost and buildRegistryInsecure is true,
-    // default to disabling TLS verification for skopeo operations as well.
-    enableTLS := config.ImageService.EnableTLS
-    if (strings.Contains(config.ImageService.Runner.BaseImageRegistry, "localhost") ||
-        strings.HasPrefix(config.ImageService.Runner.BaseImageRegistry, "127.0.0.1")) &&
-        config.ImageService.BuildRegistryInsecure {
-        enableTLS = false
-    }
+	// If the runner base registry is localhost and buildRegistryInsecure is true,
+	// default to disabling TLS verification for skopeo operations as well.
+	enableTLS := config.ImageService.EnableTLS
+	if (strings.Contains(config.ImageService.Runner.BaseImageRegistry, "localhost") ||
+		strings.HasPrefix(config.ImageService.Runner.BaseImageRegistry, "127.0.0.1")) &&
+		config.ImageService.BuildRegistryInsecure {
+		enableTLS = false
+	}
 
-    return &skopeoClient{
-        pullCommand:    imagePullCommand,
-        commandTimeout: -1,
-        debug:          false,
-        enableTLS:      enableTLS,
-        creds:          "",
-        pDeathSignal:   0,
-    }
+	return &skopeoClient{
+		pullCommand:    imagePullCommand,
+		commandTimeout: -1,
+		debug:          false,
+		enableTLS:      enableTLS,
+		creds:          "",
+		pDeathSignal:   0,
+	}
 }
 
 func (p *skopeoClient) Inspect(ctx context.Context, sourceImage string, creds string, overrideLogger *slog.Logger) (ImageMetadata, error) {
