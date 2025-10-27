@@ -175,35 +175,36 @@ func (co *ContainerOverlay) TopLayerPath() string {
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
-	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", layer.lower, layer.upper, layer.work)
-    err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run()
-    if err == nil {
-        log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer (kernel overlay)")
-        return nil
-    }
+    mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", layer.lower, layer.upper, layer.work)
 
-    // Fallback to fuse-overlayfs when lowerdir is a FUSE filesystem (e.g., ClipFS)
-    // This avoids kernel overlayfs quirks like "wandered into deleted directory" on proc/sys mounts
+    // If the lower is a FUSE mount (e.g., ClipFS), prefer fuse-overlayfs to avoid kernel overlayfs quirks
     if lowerIsFuse(layer.lower) {
         if fuseOverlayfsAvailable() {
-            // fuse-overlayfs uses the same lower/upper/work options
             args := []string{"-o", mntOptions, layer.merged}
-            ferr := exec.Command("fuse-overlayfs", args...).Run()
-            if ferr == nil {
+            if ferr := exec.Command("fuse-overlayfs", args...).Run(); ferr == nil {
                 log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer (fuse-overlayfs)")
                 return nil
+            } else {
+                return ferr
             }
-            // If fuse-overlayfs fails, return that error (higher signal than kernel overlay error)
-            return ferr
         }
-        return errors.New("lowerdir is FUSE; kernel overlay failed and fuse-overlayfs not available")
+        return errors.New("lowerdir is FUSE; fuse-overlayfs not available")
     }
 
-    return err
+    // Otherwise, use kernel overlayfs
+    if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
+        return err
+    }
+    log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer (kernel overlay)")
+    return nil
 }
 
 // lowerIsFuse returns true if the path resides on a FUSE filesystem
 func lowerIsFuse(path string) bool {
+    // Quick heuristic: our ClipFS FUSE mounts live under /images/mnt/
+    if strings.HasPrefix(path, "/images/mnt/") {
+        return true
+    }
     f, err := os.Open("/proc/mounts")
     if err != nil {
         return false
