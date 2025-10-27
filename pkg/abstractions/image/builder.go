@@ -176,12 +176,25 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	// FIXME: This flow can be improved now that containers are running in attached mode.
-	// Send a stop-build event to the worker if the user cancels the build
+    // FIXME: This flow can be improved now that containers are running in attached mode.
+    // Send a stop-build event to the worker if the user cancels the build
 	go b.handleBuildCancellation(ctx, build)
 	defer build.killContainer() // Kill and remove container after the build completes
 
-	err = b.startBuildContainer(ctx, build)
+    // Clip v2 path: convert steps/commands into a Dockerfile so the worker builds via buildah bud,
+    // producing an index-only .clip archive. We avoid runc exec + archive entirely.
+    if b.config.ImageService.ClipVersion == 2 {
+        df, derr := b.renderV2Dockerfile(opts)
+        if derr != nil {
+            build.log(true, "Failed to render Dockerfile.\n")
+            return derr
+        }
+        // Inject the Dockerfile into the request so the worker will build the image if it's missing
+        build.opts.Dockerfile = df
+        build.log(false, "Preparing v2 build (buildah + OCI index)...\n")
+    }
+
+    err = b.startBuildContainer(ctx, build)
 	if err != nil {
 		build.log(true, "Failed to start build container: "+err.Error())
 		return err
@@ -189,26 +202,62 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go build.streamLogs()
 
-	err = b.waitForBuildContainer(ctx, build)
+    err = b.waitForBuildContainer(ctx, build)
 	if err != nil {
 		return err
 	}
 
-	if err := build.prepareCommands(); err != nil {
-		return err
-	}
+    // For v2 builds, the worker built the image from the Dockerfile before the container ran.
+    // Skip container command execution and archiving.
+    if b.config.ImageService.ClipVersion != 2 {
+        if err := build.prepareCommands(); err != nil {
+            return err
+        }
 
-	if err := build.executeCommands(); err != nil {
-		return err
-	}
+        if err := build.executeCommands(); err != nil {
+            return err
+        }
 
-	if err := build.archive(); err != nil {
-		return err
-	}
+        if err := build.archive(); err != nil {
+            return err
+        }
+    }
 
 	build.setSuccess(true)
 	build.logWithImageAndPythonVersion(true, "Build completed successfully")
 	return nil
+}
+
+// renderV2Dockerfile converts build options into a Dockerfile that can be built by the worker
+// using buildah bud. We intentionally avoid executing any commands in a runc container.
+func (b *Builder) renderV2Dockerfile(opts *BuildOpts) (string, error) {
+    base := getSourceImage(opts)
+
+    // Collect commands without environment probing; use provided steps and commands.
+    runLines := []string{}
+    if len(opts.Commands) > 0 {
+        runLines = append(runLines, opts.Commands...)
+    }
+    if len(opts.BuildSteps) > 0 {
+        steps := parseBuildSteps(opts.BuildSteps, opts.PythonVersion, false /*virtualEnv*/)
+        runLines = append(runLines, steps...)
+    }
+
+    // Compose Dockerfile
+    var sb strings.Builder
+    sb.WriteString("FROM ")
+    sb.WriteString(base)
+    sb.WriteString("\n")
+    sb.WriteString("SHELL [\"/bin/sh\", \"-lc\"]\n")
+    for _, line := range runLines {
+        if strings.TrimSpace(line) == "" {
+            continue
+        }
+        sb.WriteString("RUN ")
+        sb.WriteString(line)
+        sb.WriteString("\n")
+    }
+    return sb.String(), nil
 }
 
 // Check if an image already exists in the registry
