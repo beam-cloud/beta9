@@ -290,6 +290,12 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		return nil, err
 	}
 
+    // Compute the final image id that includes all commands/steps
+    finalImageID, err := getImageID(b.opts)
+    if err != nil {
+        return nil, err
+    }
+
 	sourceImage := getSourceImage(b.opts)
 
 	// Allow config to override default build container settings
@@ -316,7 +322,9 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		Env:         b.opts.EnvVars,
 		Cpu:         cpu,
 		Memory:      memory,
-		ImageId:     baseImageID,
+        // For Clip v2 builds we will build and archive the final image id directly.
+        // For legacy v1 builds continue to target the base image for starting the build container.
+        ImageId:     func() string { if b.config.ImageService.ClipVersion == 2 { return finalImageID } ; return baseImageID }(),
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
         // Keepalive using tail on a tmpfs/overlay file, not /dev/null

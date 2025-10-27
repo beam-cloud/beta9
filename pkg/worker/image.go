@@ -242,7 +242,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		return elapsed, err
 	}
 
-	// Detect storage type (v1 S3 data-carrying vs v2 OCI index-only) from the archive metadata
+    // Detect storage type (v1 S3 data-carrying vs v2 OCI index-only) from the archive metadata
 	archiver := clip.NewClipArchiver()
 	meta, _ := archiver.ExtractMetadata(downloadPath)
 
@@ -284,7 +284,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		}
 	}
 
-	var mountOptions *clip.MountOptions = &clip.MountOptions{
+    var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           mountArchivePath,
 		MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
 		Verbose:               false,
@@ -292,6 +292,17 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
 	}
+
+    // Ensure a minimal OCI runtime spec exists in the mount for build containers (v2 path)
+    if request.IsBuildRequest() {
+        configPath := filepath.Join(mountOptions.MountPoint, "config.json")
+        if _, statErr := os.Stat(configPath); statErr != nil {
+            // Write a minimal config.json so lifecycle can proceed
+            _ = os.MkdirAll(mountOptions.MountPoint, 0755)
+            minimal := `{"ociVersion":"1.0.2","process":{"terminal":false,"args":["/bin/sh"],"cwd":"/mnt/code"},"root":{"path":"."}}`
+            _ = os.WriteFile(configPath, []byte(minimal), 0644)
+        }
+    }
 
 	// Default to legacy S3 storage if we cannot detect OCI
 	storageType := ""

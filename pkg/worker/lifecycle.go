@@ -254,7 +254,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
 
 	// Read spec from bundle
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
+    initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
+    if initialBundleSpec == nil && request.IsBuildRequest() {
+        // For Clip v2 builds, there may be no pre-existing config.json; synthesize a minimal spec
+        // so that subsequent code paths can inherit defaults. We'll overwrite fields later.
+        initialBundleSpec = &specs.Spec{Process: &specs.Process{Args: []string{"/bin/sh"}, Cwd: defaultContainerDirectory}}
+    }
 
 	opts := &ContainerOptions{
 		BundlePath:   bundlePath,
@@ -341,8 +346,12 @@ func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.S
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
-		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
-		return nil, err
+        // During v2 build flows, config.json may not exist initially; treat as non-fatal for build requests
+        if os.IsNotExist(err) && isBuildRequest {
+            return nil, nil
+        }
+        log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
+        return nil, err
 	}
 
 	specTemplate := strings.TrimSpace(string(data))
