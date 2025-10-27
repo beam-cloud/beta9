@@ -470,9 +470,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
         archivePath := filepath.Join("/tmp", archiveName)
 
         // Push the just-built image to a docker registry ref that Clip can fetch from (default to localhost)
-        dockerRegistry := os.Getenv("B9_DOCKER_REGISTRY")
+        dockerRegistry := c.config.ImageService.BuildRegistry
         if dockerRegistry == "" {
-            dockerRegistry = "localhost"
+            dockerRegistry = c.config.ImageService.Runner.BaseImageRegistry
+            if dockerRegistry == "" {
+                dockerRegistry = "localhost"
+            }
         }
         localTag := fmt.Sprintf("%s/%s:latest", dockerRegistry, request.ImageId)
         cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", localTag)

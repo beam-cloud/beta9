@@ -185,6 +185,9 @@ type ImageServiceConfig struct {
 	Runner                         RunnerConfig          `key:"runner" json:"runner"`
 	ArchiveNanosecondsPerByte      int64                 `key:"archiveNanosecondsPerByte" json:"archive_nanoseconds_per_byte"`
 	ClipVersion                    uint32                `key:"clipVersion" json:"clip_version"`
+    // BuildRegistry is the docker registry used to tag/push intermediate build images
+    // for v2 indexing (CreateFromOCIImage). If empty, defaults to Runner.BaseImageRegistry.
+    BuildRegistry                  string                `key:"buildRegistry" json:"build_registry"`
 }
 
 type ImageRegistriesConfig struct {

@@ -104,6 +104,7 @@ imageService:
   clipVersion: 2
   registryStore: local
   registryCredentialProvider: docker
+  buildRegistry: registry.localhost:5000
   buildContainerPoolSelector: build
   pythonVersion: python3.10
   registries:
