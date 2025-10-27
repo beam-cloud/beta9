@@ -234,23 +234,59 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 func (b *Builder) renderV2Dockerfile(opts *BuildOpts) (string, error) {
     base := getSourceImage(opts)
 
-    // Collect commands without environment probing; use provided steps and commands.
-    runLines := []string{}
-    if len(opts.Commands) > 0 {
-        runLines = append(runLines, opts.Commands...)
-    }
-    if len(opts.BuildSteps) > 0 {
-        steps := parseBuildSteps(opts.BuildSteps, opts.PythonVersion, false /*virtualEnv*/)
-        runLines = append(runLines, steps...)
-    }
-
-    // Compose Dockerfile
     var sb strings.Builder
     sb.WriteString("FROM ")
     sb.WriteString(base)
     sb.WriteString("\n")
-    // No SHELL directive: OCI manifest ignores it; default /bin/sh -c is sufficient
-    for _, line := range runLines {
+
+    // Determine python install plan without runtime probing
+    micromamba := strings.Contains(opts.PythonVersion, "micromamba")
+    pythonVersion := opts.PythonVersion
+    if pythonVersion == types.Python3.String() {
+        pythonVersion = b.config.ImageService.PythonVersion
+    }
+
+    // If not ignoring python, add python install (standalone) or micromamba config
+    if !(opts.IgnorePython && len(opts.PythonPackages) == 0) {
+        if micromamba {
+            sb.WriteString("RUN micromamba config set use_lockfiles False\n")
+        } else if pythonVersion != "" {
+            installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion)
+            if err != nil {
+                return "", err
+            }
+            sb.WriteString("RUN ")
+            sb.WriteString(installCmd)
+            sb.WriteString("\n")
+        }
+
+        // Pip install for requested packages
+        if len(opts.PythonPackages) > 0 && pythonVersion != "" {
+            // Assume virtual env only when micromamba is requested
+            pipCmd := generatePipInstallCommand(opts.PythonPackages, pythonVersion, micromamba)
+            if strings.TrimSpace(pipCmd) != "" {
+                sb.WriteString("RUN ")
+                sb.WriteString(pipCmd)
+                sb.WriteString("\n")
+            }
+        }
+    }
+
+    // Coalesce build steps (pip/mamba) relative to pythonVersion and micromamba virtual env
+    if len(opts.BuildSteps) > 0 {
+        steps := parseBuildSteps(opts.BuildSteps, pythonVersion, micromamba)
+        for _, line := range steps {
+            if strings.TrimSpace(line) == "" {
+                continue
+            }
+            sb.WriteString("RUN ")
+            sb.WriteString(line)
+            sb.WriteString("\n")
+        }
+    }
+
+    // Append explicit shell commands provided on the image
+    for _, line := range opts.Commands {
         if strings.TrimSpace(line) == "" {
             continue
         }
@@ -258,6 +294,7 @@ func (b *Builder) renderV2Dockerfile(opts *BuildOpts) (string, error) {
         sb.WriteString(line)
         sb.WriteString("\n")
     }
+
     return sb.String(), nil
 }
 
