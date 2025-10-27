@@ -484,7 +484,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
         if err = cmd.Run(); err != nil {
             return err
         }
-        cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "push", localTag, "docker://"+localTag)
+        // Respect insecure registry if configured
+        pushArgs := []string{"--root", imagePath, "push", localTag, "docker://" + localTag}
+        if c.config.ImageService.BuildRegistryInsecure {
+            pushArgs = []string{"--root", imagePath, "push", "--tls-verify=false", localTag, "docker://" + localTag}
+        }
+        cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
         cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
         cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
         if err = cmd.Run(); err != nil {
@@ -496,6 +501,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
             ImageRef:      localTag,
             OutputPath:    archivePath,
             CheckpointMiB: 2,
+            AuthConfig:    "", // rely on docker creds or anonymous for local insecure
         })
         if err != nil {
             return err
@@ -581,10 +587,11 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
     // We know dest was oci:<repo>:<tag>, and skopeo copied under /tmp/<repo>
     // Use the source docker ref directly for robustness
     srcImage := *request.BuildOptions.SourceImage
-    err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+        err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
             ImageRef:      srcImage,
             OutputPath:    archivePath,
             CheckpointMiB: 2,
+            AuthConfig:    "",
         })
         if err != nil {
             return err

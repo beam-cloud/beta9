@@ -188,6 +188,7 @@ type ImageServiceConfig struct {
     // BuildRegistry is the docker registry used to tag/push intermediate build images
     // for v2 indexing (CreateFromOCIImage). If empty, defaults to Runner.BaseImageRegistry.
     BuildRegistry                  string                `key:"buildRegistry" json:"build_registry"`
+    BuildRegistryInsecure          bool                  `key:"buildRegistryInsecure" json:"build_registry_insecure"`
 }
 
 type ImageRegistriesConfig struct {
