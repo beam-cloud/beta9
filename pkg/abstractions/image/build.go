@@ -319,8 +319,8 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		ImageId:     baseImageID,
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
-        // Keepalive command that avoids FUSE POLL on /dev/null
-        EntryPoint:  []string{"/bin/sh", "-c", "while :; do sleep 3600; done"},
+        // Keepalive using tail on a tmpfs/overlay file, not /dev/null
+        EntryPoint:  []string{"/bin/sh", "-c", "touch /run/.keepalive && tail -F /run/.keepalive"},
 		Mounts:      b.mounts,
 	}
 
