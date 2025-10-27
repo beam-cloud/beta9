@@ -100,6 +100,8 @@ imageService:
   # In the worst case, we have seen 10gb images take 20 minutes. That is 1e+10 bytes taking 1200 seconds.
   # That gives 1200 / 1e+10 = 120 ns per byte.
   archiveNanosecondsPerByte: 120
+  # Default to clip v2 (index-only OCI archives). Set to 1 to force legacy.
+  clipVersion: 2
   registryStore: local
   registryCredentialProvider: docker
   buildContainerPoolSelector: build

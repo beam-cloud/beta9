@@ -304,7 +304,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		memory = b.config.ImageService.BuildContainerMemory
 	}
 
-	containerRequest := &types.ContainerRequest{
+    containerRequest := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
 			SourceImage:      &sourceImage,
 			SourceImageCreds: b.opts.BaseImageCreds,
@@ -319,7 +319,8 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		ImageId:     baseImageID,
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
-		EntryPoint:  []string{"tail", "-f", "/dev/null"},
+        // Keepalive command that avoids FUSE POLL on /dev/null
+        EntryPoint:  []string{"/bin/sh", "-c", "while :; do sleep 3600; done"},
 		Mounts:      b.mounts,
 	}
 
