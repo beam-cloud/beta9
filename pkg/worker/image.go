@@ -232,7 +232,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
     elapsed := time.Since(startTime)
-    // Always download to the registry-native path first (rclip for S3, clip for local)
+    // Always fetch the remote archive into the cache directory first
     downloadPath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
     // Ensure parent dir exists
     _ = os.MkdirAll(filepath.Dir(downloadPath), 0755)
@@ -247,8 +247,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
     meta, _ := archiver.ExtractMetadata(downloadPath)
 
     // Decide final mount archive path:
-    // - v2 (oci): place a single canonical index file at /images/<id>.clip
-    // - v1 (s3/local): mount the downloaded file as-is
+    // - v2 (oci): place a single canonical index file at /images/<id>.clip and use that for mount,
+    //             preserving only one on-disk artifact for v2
+    // - v1 (s3/local): mount the downloaded file as-is from the cache to avoid mixing artifacts
     mountArchivePath := downloadPath
     if meta != nil {
         if t, ok := meta.StorageInfo.(interface{ Type() string }); ok && (t.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(t.Type()) == "oci") {
@@ -377,14 +378,25 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	sourceRegistry := c.config.ImageService.Registries.S3
 
 	if _, err := os.Stat(archivePath); err != nil {
-		err = c.registry.Pull(ctx, archivePath, imageId)
-		if err != nil {
-			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
+        // First try pulling from the configured store
+        if err = c.registry.Pull(ctx, archivePath, imageId); err != nil {
+            // If local store failed (object missing), attempt to copy from S3 then retry
+            if c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
+                if s3Registry, e2 := registry.NewImageRegistry(c.config, c.config.ImageService.Registries.S3); e2 == nil {
+                    _ = c.registry.CopyImageFromRegistry(ctx, imageId, s3Registry)
+                    // Retry pull after copy
+                    if err2 := c.registry.Pull(ctx, archivePath, imageId); err2 == nil {
+                        return &sourceRegistry, nil
+                    } else {
+                        err = err2
+                    }
+                }
+            }
+            log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
+            return nil, err
+        }
 
-			return nil, err
-		}
-
-		return &sourceRegistry, nil
+        return &sourceRegistry, nil
 	}
 
 	return &sourceRegistry, nil
