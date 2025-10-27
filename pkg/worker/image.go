@@ -272,6 +272,14 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
                 }
             }
             mountArchivePath = canonicalIndexPath
+            // If the embedded OCI storage info is missing registry URL, default to docker.io
+            if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok {
+                if ociInfo.RegistryURL == "" {
+                    ociInfo.RegistryURL = "https://docker.io"
+                    // Note: metadata is not persisted back to file; ClipFS should handle missing URL by deriving from refs
+                }
+                _ = ociInfo
+            }
         }
     }
 

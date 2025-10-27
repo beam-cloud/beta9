@@ -65,7 +65,7 @@ func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
     df, err := b.renderV2Dockerfile(opts)
     assert.NoError(t, err)
     assert.True(t, strings.HasPrefix(df, "FROM docker.io/library/alpine:3.18\n"))
-    assert.Contains(t, df, "SHELL [\"/bin/sh\", \"-lc\"]\n")
+    // No SHELL directive expected for OCI format builds
     assert.Contains(t, df, "RUN echo one\n")
     assert.Contains(t, df, "RUN echo two\n")
     assert.Contains(t, df, "RUN echo step\n")

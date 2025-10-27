@@ -249,7 +249,7 @@ func (b *Builder) renderV2Dockerfile(opts *BuildOpts) (string, error) {
     sb.WriteString("FROM ")
     sb.WriteString(base)
     sb.WriteString("\n")
-    sb.WriteString("SHELL [\"/bin/sh\", \"-lc\"]\n")
+    // No SHELL directive: OCI manifest ignores it; default /bin/sh -c is sufficient
     for _, line := range runLines {
         if strings.TrimSpace(line) == "" {
             continue
