@@ -636,8 +636,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}()
 
-	// Setup container overlay filesystem
-	err := containerInstance.Overlay.Setup()
+    // Setup container overlay filesystem
+    err := containerInstance.Overlay.Setup()
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup overlay: %v", err)
 		return
@@ -646,6 +646,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
+
+    // Ensure runtime directories exist in rootfs to avoid entrypoint failures (e.g., /bin/sh invalid argument)
+    ensureDirs := []string{"/workspace", types.WorkerUserCodeVolume, types.WorkerContainerVolumePath, "/run", "/tmp"}
+    for _, d := range ensureDirs {
+        p := filepath.Join(spec.Root.Path, strings.TrimPrefix(d, "/"))
+        _ = os.MkdirAll(p, 0755)
+    }
 
 	// Setup container network namespace / devices
 	err = s.containerNetworkManager.Setup(containerId, spec, request)
