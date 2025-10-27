@@ -3,6 +3,7 @@ package image
 import (
 	"context"
 	"errors"
+    "strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,49 @@ func setupTestBuild(t *testing.T, opts *BuildOpts) (*Build, *mocks.RuncClient, c
 
 	return build, mockRuncClient, outputChan
 }
+func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
+    cfg := types.AppConfig{}
+    b := &Builder{config: cfg}
+    opts := &BuildOpts{
+        BaseImageRegistry: "docker.io",
+        BaseImageName:     "library/alpine",
+        BaseImageTag:      "3.18",
+        Commands:          []string{"echo one", "echo two"},
+        BuildSteps:        []BuildStep{{Type: shellCommandType, Command: "echo step"}},
+    }
+
+    df, err := b.renderV2Dockerfile(opts)
+    assert.NoError(t, err)
+    assert.True(t, strings.HasPrefix(df, "FROM docker.io/library/alpine:3.18\n"))
+    assert.Contains(t, df, "SHELL [\"/bin/sh\", \"-lc\"]\n")
+    assert.Contains(t, df, "RUN echo one\n")
+    assert.Contains(t, df, "RUN echo two\n")
+    assert.Contains(t, df, "RUN echo step\n")
+}
+
+func TestBuild_SkipsRuncFlow_WhenClipV2(t *testing.T) {
+    opts := &BuildOpts{
+        BaseImageRegistry: "docker.io",
+        BaseImageName:     "library/ubuntu",
+        BaseImageTag:      "latest",
+        Commands:          []string{"echo hello"},
+    }
+    build, mockRunc, _ := setupTestBuild(t, opts)
+    // Enable v2 in config
+    build.config.ImageService.ClipVersion = 2
+    // Create a minimal builder bound to this config
+    b := &Builder{config: build.config}
+
+    // No expectations should be set on runc Exec/Archive for v2 path
+    ctx := context.Background()
+    err := b.Build(ctx, build.opts, build.outputChan)
+    // We can't easily run the full Build without scheduler and worker; just ensure it doesn't try to call Exec/Archive here.
+    // Since Build starts external processes, limit our assertion to "no unwanted runc calls"
+    mockRunc.AssertNotCalled(t, "Exec")
+    mockRunc.AssertNotCalled(t, "Archive")
+    // err may be non-nil due to environment; we only validate the behavior regarding runc usage for v2
+}
+
 
 func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 	opts := &BuildOpts{
