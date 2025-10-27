@@ -1,21 +1,22 @@
 package image
 
 import (
-	"context"
-	_ "embed"
-	"fmt"
-	"regexp"
-	"time"
+    "context"
+    _ "embed"
+    "fmt"
+    "regexp"
+    "strings"
+    "time"
 
-	"github.com/pkg/errors"
-	"github.com/rs/zerolog/log"
+    "github.com/pkg/errors"
+    "github.com/rs/zerolog/log"
 
-	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/network"
-	"github.com/beam-cloud/beta9/pkg/registry"
-	"github.com/beam-cloud/beta9/pkg/repository"
-	"github.com/beam-cloud/beta9/pkg/scheduler"
-	"github.com/beam-cloud/beta9/pkg/types"
+    "github.com/beam-cloud/beta9/pkg/common"
+    "github.com/beam-cloud/beta9/pkg/network"
+    "github.com/beam-cloud/beta9/pkg/registry"
+    "github.com/beam-cloud/beta9/pkg/repository"
+    "github.com/beam-cloud/beta9/pkg/scheduler"
+    "github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (

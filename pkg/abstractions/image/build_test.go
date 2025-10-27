@@ -86,7 +86,7 @@ func TestBuild_SkipsRuncFlow_WhenClipV2(t *testing.T) {
 
     // No expectations should be set on runc Exec/Archive for v2 path
     ctx := context.Background()
-    err := b.Build(ctx, build.opts, build.outputChan)
+    _ = b.Build(ctx, build.opts, build.outputChan)
     // We can't easily run the full Build without scheduler and worker; just ensure it doesn't try to call Exec/Archive here.
     // Since Build starts external processes, limit our assertion to "no unwanted runc calls"
     mockRunc.AssertNotCalled(t, "Exec")

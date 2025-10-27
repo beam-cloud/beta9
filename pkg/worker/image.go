@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+    "io"
 	"log/slog"
 	"os"
 	"os/exec"
