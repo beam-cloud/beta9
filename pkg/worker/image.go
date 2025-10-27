@@ -469,16 +469,32 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
         archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
         archivePath := filepath.Join("/tmp", archiveName)
 
-        archiver := clip.NewClipArchiver()
-        // Prefer using image ref composed similarly to buildah push if supported, else index local OCI dir
-        // The new clip API supports both CreateFromOCI (dir) and CreateFromOCIImage (by ref). We'll use dir.
-        err = archiver.CreateFromOCI(ctx, clip.IndexOCIImageOptions{
-            ImageRef:      fmt.Sprintf("oci:%s:latest", ociPath), // best-effort; archiver may also accept dir via ImageRefOrDir
+        // Push the just-built image to a docker registry ref that Clip can fetch from (default to localhost)
+        dockerRegistry := os.Getenv("B9_DOCKER_REGISTRY")
+        if dockerRegistry == "" {
+            dockerRegistry = "localhost"
+        }
+        localTag := fmt.Sprintf("%s/%s:latest", dockerRegistry, request.ImageId)
+        cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", localTag)
+        cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+        cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+        if err = cmd.Run(); err != nil {
+            return err
+        }
+        cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "push", localTag, "docker://"+localTag)
+        cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+        cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+        if err = cmd.Run(); err != nil {
+            return err
+        }
+
+        // Index from the docker ref so ClipFS can stream from the registry
+        err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+            ImageRef:      localTag,
+            OutputPath:    archivePath,
             CheckpointMiB: 2,
-            Verbose:       false,
-        }, archivePath)
+        })
         if err != nil {
-            // Fallback: use CreateFromOCIImage with explicit docker ref is not available here; return err
             return err
         }
 
@@ -559,15 +575,14 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
         archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
         archivePath := filepath.Join("/tmp", archiveName)
 
-        archiver := clip.NewClipArchiver()
-        // We know dest was oci:<repo>:<tag>, and skopeo copied under /tmp/<repo>
-        // Use the source docker ref directly for robustness
-        srcImage := *request.BuildOptions.SourceImage
-        err = archiver.CreateFromOCI(ctx, clip.IndexOCIImageOptions{
+    // We know dest was oci:<repo>:<tag>, and skopeo copied under /tmp/<repo>
+    // Use the source docker ref directly for robustness
+    srcImage := *request.BuildOptions.SourceImage
+    err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
             ImageRef:      srcImage,
+            OutputPath:    archivePath,
             CheckpointMiB: 2,
-            Verbose:       false,
-        }, archivePath)
+        })
         if err != nil {
             return err
         }
