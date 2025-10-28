@@ -276,21 +276,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if request.ImageId == "" {
 		return fmt.Errorf("empty image id in request")
 	}
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
-	if initialBundleSpec == nil {
-		// Try to load precomputed initial spec from spec cache
-		specCachePath := filepath.Join("/images", "specs", fmt.Sprintf("%s.initial.json", request.ImageId))
-		if b, err := os.ReadFile(specCachePath); err == nil {
-			var spec specs.Spec
-			if uErr := json.Unmarshal(b, &spec); uErr == nil {
-				initialBundleSpec = &spec
-			}
-		}
-	}
-	if initialBundleSpec == nil && request.IsBuildRequest() {
-		// Fallback minimal spec
-		initialBundleSpec = &specs.Spec{Process: &specs.Process{Args: []string{"/bin/sh"}, Cwd: defaultContainerDirectory}}
-	}
+    initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
 
 	opts := &ContainerOptions{
 		BundlePath:   bundlePath,
@@ -451,8 +437,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if request.Gpu != "" {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
-	// Overwrite with fully constructed env so PATH and image-provided vars take effect deterministically
-	spec.Process.Env = env
+    // v1 behavior: append env to base spec environment (image-provided env included above)
+    spec.Process.Env = append(options.InitialSpec.Process.Env, env...)
 
 	// We need to include the checkpoint signal files in the container spec
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
@@ -614,33 +600,10 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	// Add env vars from request
 	env = append(request.Env, env...)
 
-	// Add env vars from initial spec. This would be the case for regular workers, not build workers.
-	if options.InitialSpec != nil {
-		// Extract PATH from image env if present
-		imageEnv := options.InitialSpec.Process.Env
-		pathVal := ""
-		for _, e := range imageEnv {
-			if strings.HasPrefix(e, "PATH=") {
-				pathVal = e
-				break
-			}
-		}
-		// Build final env with PATH first (from image if available, else a safe default)
-		finalEnv := []string{}
-		if pathVal == "" {
-			pathVal = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-		}
-		finalEnv = append(finalEnv, pathVal)
-		// Append the rest of image env except any other PATH entries to avoid duplicates
-		for _, e := range imageEnv {
-			if strings.HasPrefix(e, "PATH=") {
-				continue
-			}
-			finalEnv = append(finalEnv, e)
-		}
-		// Then append our runtime env
-		env = append(finalEnv, env...)
-	}
+    // Add env vars from initial spec. This would be the case for regular workers, not build workers.
+    if options.InitialSpec != nil {
+        env = append(options.InitialSpec.Process.Env, env...)
+    }
 
 	return env
 }
@@ -737,15 +700,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-	// Ensure runtime directories exist in rootfs (match v1) and bind-mount empty tmpfs over them before runc mounts
-	ensureDirs := []string{"/proc", "/sys", "/dev", "/dev/pts", "/dev/shm", "/run", "/tmp", "/workspace", types.WorkerUserCodeVolume, types.WorkerContainerVolumePath}
-	for _, d := range ensureDirs {
-		p := filepath.Join(spec.Root.Path, strings.TrimPrefix(d, "/"))
-		_ = os.MkdirAll(p, 0755)
-	}
-	// Pre-mount read-only tmpfs bind over /proc to create a stable mountpoint, runc will remount proc over it
-	// This mirrors how v1 had a real directory tree from unpack
-	_ = execBoundTmpfs(filepath.Join(spec.Root.Path, "proc"))
+    // v1 behavior: do NOT pre-mount or create system mount directories; rely on runc base config mounts
 
 	// Setup container network namespace / devices
 	err = s.containerNetworkManager.Setup(containerId, spec, request)

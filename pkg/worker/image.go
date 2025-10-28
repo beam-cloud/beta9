@@ -295,56 +295,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		ContentCacheAvailable: c.cacheClient != nil,
 	}
 
-    // Ensure an initial OCI runtime spec exists in the mount (v2 path): extract env and defaults from image config
-    // Persist initial spec OUTSIDE the mount (FUSE root is read-only and will shadow files)
-    specCacheDir := filepath.Join("/images", "specs")
-    _ = os.MkdirAll(specCacheDir, 0755)
-    initialSpecPath := filepath.Join(specCacheDir, fmt.Sprintf("%s.initial.json", imageId))
-    if _, statErr := os.Stat(initialSpecPath); statErr != nil {
-        // Default PATH plus image env from skopeo inspect
-        env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
-        // Attempt to construct a docker reference from embedded OCI storage info
-        if meta != nil && meta.StorageInfo != nil {
-            if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok {
-                registry := ociInfo.RegistryURL
-                if registry == "" {
-                    registry = "docker.io"
-                }
-                // Strip scheme if present
-                registry = strings.TrimPrefix(strings.TrimPrefix(registry, "https://"), "http://")
-                imageRef := ""
-                if ociInfo.Reference != "" && strings.HasPrefix(ociInfo.Reference, "sha256:") {
-                    imageRef = fmt.Sprintf("%s/%s@%s", registry, ociInfo.Repository, ociInfo.Reference)
-                } else if ociInfo.Reference != "" {
-                    imageRef = fmt.Sprintf("%s/%s:%s", registry, ociInfo.Repository, ociInfo.Reference)
-                } else {
-                    imageRef = fmt.Sprintf("%s/%s:latest", registry, ociInfo.Repository)
-                }
-                if imageRef != "" {
-                    if imgMeta, ierr := c.skopeoClient.Inspect(ctx, imageRef, "", outputLogger); ierr == nil {
-                        if len(imgMeta.Env) > 0 {
-                            env = append(env, imgMeta.Env...)
-                        }
-                    } else {
-                        log.Warn().Err(ierr).Str("image_ref", imageRef).Msg("failed to inspect image for env; using defaults")
-                    }
-                }
-            }
-        }
-        spec := specs.Spec{
-            Version: "1.0.2",
-            Process: &specs.Process{
-                Terminal: false,
-                Args:     []string{"/bin/sh"},
-                Cwd:      types.WorkerUserCodeVolume,
-                Env:      env,
-            },
-            Root: &specs.Root{Path: ".", Readonly: false},
-        }
-        if b, e := json.MarshalIndent(&spec, "", " "); e == nil {
-            _ = os.WriteFile(initialSpecPath, b, 0644)
-        }
-    }
+    // Do not persist or rely on an initial spec file for v2; base runc config will be used instead
 
 	// Default to legacy S3 storage if we cannot detect OCI
 	storageType := ""
