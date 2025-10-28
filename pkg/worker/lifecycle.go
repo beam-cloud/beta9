@@ -344,15 +344,16 @@ func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.S
 		imageConfigPath = filepath.Join(s.imageMountPath, imageId, specBaseName)
 	}
 
-	data, err := os.ReadFile(imageConfigPath)
-	if err != nil {
-        // During v2 build flows, config.json may not exist initially; treat as non-fatal for build requests
-        if os.IsNotExist(err) && isBuildRequest {
+    data, err := os.ReadFile(imageConfigPath)
+    if err != nil {
+        // For v2 images (and many OCI cases), there may be no pre-baked config.json in the mounted root.
+        // Treat missing file as non-fatal and continue with a synthesized/base spec.
+        if os.IsNotExist(err) {
             return nil, nil
         }
         log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
         return nil, err
-	}
+    }
 
 	specTemplate := strings.TrimSpace(string(data))
 	var spec specs.Spec

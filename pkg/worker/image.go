@@ -529,36 +529,22 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-		// Push the just-built image to a docker registry ref that Clip can fetch from (default to localhost)
-		dockerRegistry := c.config.ImageService.BuildRegistry
-		if dockerRegistry == "" {
-			dockerRegistry = c.config.ImageService.Runner.BaseImageRegistry
-			if dockerRegistry == "" {
-				dockerRegistry = "localhost"
-			}
-		}
-		localTag := fmt.Sprintf("%s/%s:latest", dockerRegistry, request.ImageId)
-		cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", localTag)
-		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
-		if err = cmd.Run(); err != nil {
-			return err
-		}
-		// Respect insecure registry if configured
-		pushArgs := []string{"--root", imagePath, "push", localTag, "docker://" + localTag}
-		if c.config.ImageService.BuildRegistryInsecure {
-			pushArgs = []string{"--root", imagePath, "push", "--tls-verify=false", localTag, "docker://" + localTag}
-		}
-		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
-		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
-		if err = cmd.Run(); err != nil {
-			return err
-		}
+        // Determine registry ref for final image, but avoid pushing here; push only after successful build
+        dockerRegistry := c.config.ImageService.BuildRegistry
+        if dockerRegistry == "" {
+            dockerRegistry = c.config.ImageService.Runner.BaseImageRegistry
+            if dockerRegistry == "" {
+                dockerRegistry = "localhost"
+            }
+        }
+        localTag := fmt.Sprintf("%s/%s:latest", dockerRegistry, request.ImageId)
+        if err = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", localTag).Run(); err != nil {
+            return err
+        }
 
-		// Index from the docker ref so ClipFS can stream from the registry
-		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-			ImageRef:      localTag,
+        // Index directly from the local OCI layout we pushed to ociPath (no remote pull required)
+        err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+            ImageRef:      "oci:" + ociPath + ":latest",
 			OutputPath:    archivePath,
 			CheckpointMiB: 2,
 			AuthConfig:    "", // rely on docker creds or anonymous for local insecure
@@ -567,7 +553,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		// Push the resulting .clip via existing registry abstraction
+        // Push the resulting .clip via existing registry abstraction
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
 			return err
 		}
@@ -639,16 +625,14 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
-	if c.config.ImageService.ClipVersion == 2 {
+    if c.config.ImageService.ClipVersion == 2 {
 		// v2: create index-only clip from the local OCI layout we just copied
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-		// We know dest was oci:<repo>:<tag>, and skopeo copied under /tmp/<repo>
-		// Use the source docker ref directly for robustness
-		srcImage := *request.BuildOptions.SourceImage
-		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-			ImageRef:      srcImage,
+        // Index directly from the local OCI layout we just created with skopeo
+        err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+            ImageRef:      dest,
 			OutputPath:    archivePath,
 			CheckpointMiB: 2,
 			AuthConfig:    "",
