@@ -529,7 +529,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-        // Determine registry ref for final image, but avoid pushing here; push only after successful build
+        // Determine registry ref for final image and push it so the indexer can stream from the registry
         dockerRegistry := c.config.ImageService.BuildRegistry
         if dockerRegistry == "" {
             dockerRegistry = c.config.ImageService.Runner.BaseImageRegistry
@@ -542,16 +542,29 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
             return err
         }
 
-        // Index from the local OCI layout directory (no remote fetch)
+        // Push to registry so CreateFromOCIImage can access it via ImageRef
+        pushArgs := []string{"--root", imagePath, "push", localTag, "docker://" + localTag}
+        if c.config.ImageService.BuildRegistryInsecure {
+            pushArgs = []string{"--root", imagePath, "push", "--tls-verify=false", localTag, "docker://" + localTag}
+        }
+        cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
+        cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+        cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+        if err = cmd.Run(); err != nil {
+            return err
+        }
+
+        // Index via remote reference (OCI registry)
         err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-            OCIDir:        ociPath,
-			OutputPath:    archivePath,
-			CheckpointMiB: 2,
+            ImageRef:      localTag,
+            OutputPath:    archivePath,
+            CheckpointMiB: 2,
             Verbose:       false,
-		})
-		if err != nil {
-			return err
-		}
+            AuthConfig:    "",
+        })
+        if err != nil {
+            return err
+        }
 
         // Push the resulting .clip via existing registry abstraction
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
@@ -630,13 +643,14 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-        // Index directly from the local OCI layout we just created with skopeo (no remote fetch)
+        // Index from the source docker reference (remote)
         err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-            OCIDir:        filepath.Join(imageTmpDir, baseImage.Repo),
-			OutputPath:    archivePath,
-			CheckpointMiB: 2,
+            ImageRef:      *request.BuildOptions.SourceImage,
+            OutputPath:    archivePath,
+            CheckpointMiB: 2,
             Verbose:       false,
-		})
+            AuthConfig:    "",
+        })
 		if err != nil {
 			return err
 		}
