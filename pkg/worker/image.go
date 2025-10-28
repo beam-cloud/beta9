@@ -23,6 +23,7 @@ import (
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
+	"encoding/json"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/umoci"
@@ -31,6 +32,7 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const (
@@ -293,14 +295,25 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		ContentCacheAvailable: c.cacheClient != nil,
 	}
 
-    // Ensure a minimal OCI runtime spec exists in the mount for build containers (v2 path)
-    if request.IsBuildRequest() {
-        configPath := filepath.Join(mountOptions.MountPoint, "config.json")
-        if _, statErr := os.Stat(configPath); statErr != nil {
-            // Write a minimal config.json so lifecycle can proceed
-            _ = os.MkdirAll(mountOptions.MountPoint, 0755)
-            minimal := `{"ociVersion":"1.0.2","process":{"terminal":false,"args":["/bin/sh"],"cwd":"/mnt/code"},"root":{"path":"."}}`
-            _ = os.WriteFile(configPath, []byte(minimal), 0644)
+    // Ensure an initial OCI runtime spec exists in the mount (v2 path): derive from base and set PATH
+    initialSpecPath := filepath.Join(mountOptions.MountPoint, "initial_config.json")
+    if _, statErr := os.Stat(initialSpecPath); statErr != nil {
+        // Create a minimal yet usable spec with expected env and PATH
+        _ = os.MkdirAll(mountOptions.MountPoint, 0755)
+        spec := specs.Spec{
+            Version: "1.0.2",
+            Process: &specs.Process{
+                Terminal: false,
+                Args:     []string{"/bin/sh", "-lc", "env >/dev/null"},
+                Cwd:      types.WorkerUserCodeVolume,
+                Env: []string{
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                },
+            },
+            Root: &specs.Root{Path: ".", Readonly: false},
+        }
+        if b, e := json.MarshalIndent(&spec, "", " "); e == nil {
+            _ = os.WriteFile(initialSpecPath, b, 0644)
         }
     }
 
