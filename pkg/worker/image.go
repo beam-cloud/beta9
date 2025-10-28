@@ -542,12 +542,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
             return err
         }
 
-        // Index directly from the local OCI layout we pushed to ociPath (no remote pull required)
+        // Index from the local OCI layout directory (no remote fetch)
         err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-            ImageRef:      "oci:" + ociPath + ":latest",
+            OCIDir:        ociPath,
 			OutputPath:    archivePath,
 			CheckpointMiB: 2,
-			AuthConfig:    "", // rely on docker creds or anonymous for local insecure
+            Verbose:       false,
 		})
 		if err != nil {
 			return err
@@ -630,12 +630,12 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-        // Index directly from the local OCI layout we just created with skopeo
+        // Index directly from the local OCI layout we just created with skopeo (no remote fetch)
         err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-            ImageRef:      dest,
+            OCIDir:        filepath.Join(imageTmpDir, baseImage.Repo),
 			OutputPath:    archivePath,
 			CheckpointMiB: 2,
-			AuthConfig:    "",
+            Verbose:       false,
 		})
 		if err != nil {
 			return err

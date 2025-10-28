@@ -322,11 +322,18 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
 	switch {
-	case request.BuildOptions.Dockerfile != nil:
-		log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
-		if err := s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request); err != nil {
-			return err
-		}
+    case request.BuildOptions.Dockerfile != nil:
+        // Only build from Dockerfile if it actually contains build steps (RUN lines).
+        df := strings.TrimSpace(*request.BuildOptions.Dockerfile)
+        hasRun := strings.HasPrefix(df, "RUN ") || strings.Contains(df, "\nRUN ")
+        if df != "" && hasRun {
+            log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
+            if err := s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request); err != nil {
+                return err
+            }
+            break
+        }
+        fallthrough
 	case request.BuildOptions.SourceImage != nil:
 		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.BuildOptions.SourceImage)
 
