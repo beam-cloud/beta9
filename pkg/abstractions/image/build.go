@@ -290,11 +290,11 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		return nil, err
 	}
 
-    // Compute the final image id that includes all commands/steps
-    finalImageID, err := getImageID(b.opts)
-    if err != nil {
-        return nil, err
-    }
+	// Compute the final image id that includes all commands/steps
+	finalImageID, err := getImageID(b.opts)
+	if err != nil {
+		return nil, err
+	}
 
 	sourceImage := getSourceImage(b.opts)
 
@@ -310,7 +310,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		memory = b.config.ImageService.BuildContainerMemory
 	}
 
-    containerRequest := &types.ContainerRequest{
+	containerRequest := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
 			SourceImage:      &sourceImage,
 			SourceImageCreds: b.opts.BaseImageCreds,
@@ -322,13 +322,17 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		Env:         b.opts.EnvVars,
 		Cpu:         cpu,
 		Memory:      memory,
-        // For Clip v2 builds we will build and archive the final image id directly.
-        // For legacy v1 builds continue to target the base image for starting the build container.
-        ImageId:     func() string { if b.config.ImageService.ClipVersion == 2 { return finalImageID } ; return baseImageID }(),
+		// For Clip v2 builds we will build and archive the final image id directly.
+		// For legacy v1 builds continue to target the base image for starting the build container.
+		ImageId: func() string {
+			if b.config.ImageService.ClipVersion == 2 {
+				return finalImageID
+			}
+			return baseImageID
+		}(),
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
-        // Keepalive using tail on a tmpfs/overlay file, not /dev/null
-        EntryPoint:  []string{"/bin/sh", "-c", "touch /run/.keepalive && tail -F /run/.keepalive"},
+		EntryPoint:  []string{"tail", "-f", "/dev/null"},
 		Mounts:      b.mounts,
 	}
 
