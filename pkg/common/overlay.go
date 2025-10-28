@@ -1,18 +1,17 @@
 package common
 
 import (
-    "bufio"
-    "errors"
-    "fmt"
-    "os"
-    "os/exec"
-    "path/filepath"
-    "strings"
-    "time"
+	"bufio"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
 
-    "github.com/rs/zerolog/log"
+	"github.com/rs/zerolog/log"
 
-    types "github.com/beam-cloud/beta9/pkg/types"
+	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 type ContainerOverlay struct {
@@ -175,44 +174,44 @@ func (co *ContainerOverlay) TopLayerPath() string {
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
-    // Use kernel overlayfs (v1 behavior) and allow exec
-    mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,exec", layer.lower, layer.upper, layer.work)
-    if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
-        return err
-    }
-    log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer (kernel overlay)")
-    return nil
+	// Use kernel overlayfs (v1 behavior) and allow exec
+	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,exec", layer.lower, layer.upper, layer.work)
+	if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
+		return err
+	}
+	log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer (kernel overlay)")
+	return nil
 }
 
 // lowerIsFuse returns true if the path resides on a FUSE filesystem
 func lowerIsFuse(path string) bool {
-    // Quick heuristic: our ClipFS FUSE mounts live under /images/mnt/
-    if strings.HasPrefix(path, "/images/mnt/") {
-        return true
-    }
-    f, err := os.Open("/proc/mounts")
-    if err != nil {
-        return false
-    }
-    defer f.Close()
-    scanner := bufio.NewScanner(f)
-    for scanner.Scan() {
-        line := scanner.Text()
-        // format: <src> <target> <fstype> <options> ...
-        fields := strings.Fields(line)
-        if len(fields) < 3 {
-            continue
-        }
-        target := fields[1]
-        fstype := fields[2]
-        if strings.HasPrefix(path, target) && strings.Contains(strings.ToLower(fstype), "fuse") {
-            return true
-        }
-    }
-    return false
+	// Quick heuristic: our ClipFS FUSE mounts live under /images/mnt/
+	if strings.HasPrefix(path, "/images/mnt/") {
+		return true
+	}
+	f, err := os.Open("/proc/mounts")
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// format: <src> <target> <fstype> <options> ...
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		target := fields[1]
+		fstype := fields[2]
+		if strings.HasPrefix(path, target) && strings.Contains(strings.ToLower(fstype), "fuse") {
+			return true
+		}
+	}
+	return false
 }
 
 func fuseOverlayfsAvailable() bool {
-    _, err := exec.LookPath("fuse-overlayfs")
-    return err == nil
+	_, err := exec.LookPath("fuse-overlayfs")
+	return err == nil
 }
