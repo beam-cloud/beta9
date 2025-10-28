@@ -23,7 +23,6 @@ import (
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
-	"encoding/json"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/umoci"
@@ -32,7 +31,6 @@ import (
 	"github.com/opencontainers/umoci/oci/layer"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 const (
@@ -244,7 +242,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		return elapsed, err
 	}
 
-    // Detect storage type (v1 S3 data-carrying vs v2 OCI index-only) from the archive metadata
+	// Detect storage type (v1 S3 data-carrying vs v2 OCI index-only) from the archive metadata
 	archiver := clip.NewClipArchiver()
 	meta, _ := archiver.ExtractMetadata(downloadPath)
 
@@ -286,7 +284,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		}
 	}
 
-    var mountOptions *clip.MountOptions = &clip.MountOptions{
+	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           mountArchivePath,
 		MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
 		Verbose:               false,
@@ -295,7 +293,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		ContentCacheAvailable: c.cacheClient != nil,
 	}
 
-    // Do not persist or rely on an initial spec file for v2; base runc config will be used instead
+	// Do not persist or rely on an initial spec file for v2; base runc config will be used instead
 
 	// Default to legacy S3 storage if we cannot detect OCI
 	storageType := ""
@@ -522,44 +520,44 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-        // Determine registry ref for final image and push it so the indexer can stream from the registry
-        dockerRegistry := c.config.ImageService.BuildRegistry
-        if dockerRegistry == "" {
-            dockerRegistry = c.config.ImageService.Runner.BaseImageRegistry
-            if dockerRegistry == "" {
-                dockerRegistry = "localhost"
-            }
-        }
-        localTag := fmt.Sprintf("%s/%s:latest", dockerRegistry, request.ImageId)
-        if err = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", localTag).Run(); err != nil {
-            return err
-        }
+		// Determine registry ref for final image and push it so the indexer can stream from the registry
+		dockerRegistry := c.config.ImageService.BuildRegistry
+		if dockerRegistry == "" {
+			dockerRegistry = c.config.ImageService.Runner.BaseImageRegistry
+			if dockerRegistry == "" {
+				dockerRegistry = "localhost"
+			}
+		}
+		localTag := fmt.Sprintf("%s/%s:latest", dockerRegistry, request.ImageId)
+		if err = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", localTag).Run(); err != nil {
+			return err
+		}
 
-        // Push to registry so CreateFromOCIImage can access it via ImageRef
-        pushArgs := []string{"--root", imagePath, "push", localTag, "docker://" + localTag}
-        if c.config.ImageService.BuildRegistryInsecure {
-            pushArgs = []string{"--root", imagePath, "push", "--tls-verify=false", localTag, "docker://" + localTag}
-        }
-        cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
-        cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-        cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
-        if err = cmd.Run(); err != nil {
-            return err
-        }
+		// Push to registry so CreateFromOCIImage can access it via ImageRef
+		pushArgs := []string{"--root", imagePath, "push", localTag, "docker://" + localTag}
+		if c.config.ImageService.BuildRegistryInsecure {
+			pushArgs = []string{"--root", imagePath, "push", "--tls-verify=false", localTag, "docker://" + localTag}
+		}
+		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
+		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+		if err = cmd.Run(); err != nil {
+			return err
+		}
 
-        // Index via remote reference (OCI registry)
-        err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-            ImageRef:      localTag,
-            OutputPath:    archivePath,
-            CheckpointMiB: 2,
-            Verbose:       false,
-            AuthConfig:    "",
-        })
-        if err != nil {
-            return err
-        }
+		// Index via remote reference (OCI registry)
+		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+			ImageRef:      localTag,
+			OutputPath:    archivePath,
+			CheckpointMiB: 2,
+			Verbose:       false,
+			AuthConfig:    "",
+		})
+		if err != nil {
+			return err
+		}
 
-        // Push the resulting .clip via existing registry abstraction
+		// Push the resulting .clip via existing registry abstraction
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
 			return err
 		}
@@ -631,19 +629,19 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
-    if c.config.ImageService.ClipVersion == 2 {
+	if c.config.ImageService.ClipVersion == 2 {
 		// v2: create index-only clip from the local OCI layout we just copied
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-        // Index from the source docker reference (remote)
-        err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-            ImageRef:      *request.BuildOptions.SourceImage,
-            OutputPath:    archivePath,
-            CheckpointMiB: 2,
-            Verbose:       false,
-            AuthConfig:    "",
-        })
+		// Index from the source docker reference (remote)
+		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+			ImageRef:      *request.BuildOptions.SourceImage,
+			OutputPath:    archivePath,
+			CheckpointMiB: 2,
+			Verbose:       false,
+			AuthConfig:    "",
+		})
 		if err != nil {
 			return err
 		}

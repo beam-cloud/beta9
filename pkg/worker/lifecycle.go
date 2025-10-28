@@ -276,7 +276,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if request.ImageId == "" {
 		return fmt.Errorf("empty image id in request")
 	}
-    initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
+	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
 
 	opts := &ContainerOptions{
 		BundlePath:   bundlePath,
@@ -437,8 +437,12 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if request.Gpu != "" {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
-    // v1 behavior: append env to base spec environment (image-provided env included above)
-    spec.Process.Env = append(options.InitialSpec.Process.Env, env...)
+
+	if options.InitialSpec != nil {
+		spec.Process.Env = append(options.InitialSpec.Process.Env, env...)
+	} else {
+		spec.Process.Env = append(spec.Process.Env, env...)
+	}
 
 	// We need to include the checkpoint signal files in the container spec
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
@@ -600,10 +604,10 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 	// Add env vars from request
 	env = append(request.Env, env...)
 
-    // Add env vars from initial spec. This would be the case for regular workers, not build workers.
-    if options.InitialSpec != nil {
-        env = append(options.InitialSpec.Process.Env, env...)
-    }
+	// Add env vars from initial spec. This would be the case for regular workers, not build workers.
+	if options.InitialSpec != nil {
+		env = append(options.InitialSpec.Process.Env, env...)
+	}
 
 	return env
 }
@@ -700,7 +704,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-    // v1 behavior: do NOT pre-mount or create system mount directories; rely on runc base config mounts
+	// v1 behavior: do NOT pre-mount or create system mount directories; rely on runc base config mounts
 
 	// Setup container network namespace / devices
 	err = s.containerNetworkManager.Setup(containerId, spec, request)
