@@ -275,9 +275,18 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
         return fmt.Errorf("empty image id in request")
     }
     initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
+    if initialBundleSpec == nil {
+        // Try to load precomputed initial spec from spec cache
+        specCachePath := filepath.Join("/images", "specs", fmt.Sprintf("%s.initial.json", request.ImageId))
+        if b, err := os.ReadFile(specCachePath); err == nil {
+            var spec specs.Spec
+            if uErr := json.Unmarshal(b, &spec); uErr == nil {
+                initialBundleSpec = &spec
+            }
+        }
+    }
     if initialBundleSpec == nil && request.IsBuildRequest() {
-        // For Clip v2 builds, there may be no pre-existing config.json; synthesize a minimal spec
-        // so that subsequent code paths can inherit defaults. We'll overwrite fields later.
+        // Fallback minimal spec
         initialBundleSpec = &specs.Spec{Process: &specs.Process{Args: []string{"/bin/sh"}, Cwd: defaultContainerDirectory}}
     }
 

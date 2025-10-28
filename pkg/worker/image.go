@@ -296,9 +296,11 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
     // Ensure an initial OCI runtime spec exists in the mount (v2 path): extract env and defaults from image config
-    initialSpecPath := filepath.Join(mountOptions.MountPoint, "initial_config.json")
+    // Persist initial spec OUTSIDE the mount (FUSE root is read-only and will shadow files)
+    specCacheDir := filepath.Join("/images", "specs")
+    _ = os.MkdirAll(specCacheDir, 0755)
+    initialSpecPath := filepath.Join(specCacheDir, fmt.Sprintf("%s.initial.json", imageId))
     if _, statErr := os.Stat(initialSpecPath); statErr != nil {
-        _ = os.MkdirAll(mountOptions.MountPoint, 0755)
         // Default PATH plus image env from skopeo inspect
         env := []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
         // Attempt to construct a docker reference from embedded OCI storage info
