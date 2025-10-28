@@ -5,10 +5,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -567,24 +565,6 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 		return nil, err
 	}
 	return &newSpec, nil
-}
-
-// execBoundTmpfs mounts a small tmpfs over the given path to provide a stable mountpoint
-// similar to v1's extracted rootfs directories. It is a no-op on failure.
-func execBoundTmpfs(path string) error {
-	// Mount tmpfs at the target if possible (ignore errors)
-	// We don't import syscall.Mount here; use /bin/mount for simplicity
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if mkErr := os.MkdirAll(path, 0755); mkErr != nil {
-			return mkErr
-		}
-	}
-	cmd := exec.Command("mount", "-t", "tmpfs", "tmpfs", path)
-	// Pipe away output
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	_ = cmd.Run()
-	return nil
 }
 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
