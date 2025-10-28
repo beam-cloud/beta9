@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -577,6 +578,24 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	return &newSpec, nil
 }
 
+// execBoundTmpfs mounts a small tmpfs over the given path to provide a stable mountpoint
+// similar to v1's extracted rootfs directories. It is a no-op on failure.
+func execBoundTmpfs(path string) error {
+    // Mount tmpfs at the target if possible (ignore errors)
+    // We don't import syscall.Mount here; use /bin/mount for simplicity
+    if _, err := os.Stat(path); os.IsNotExist(err) {
+        if mkErr := os.MkdirAll(path, 0755); mkErr != nil {
+            return mkErr
+        }
+    }
+    cmd := exec.Command("mount", "-t", "tmpfs", "tmpfs", path)
+    // Pipe away output
+    cmd.Stdout = io.Discard
+    cmd.Stderr = io.Discard
+    _ = cmd.Run()
+    return nil
+}
+
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
     // Most of these env vars are required to communicate with the gateway and vice versa
     env := []string{
@@ -717,15 +736,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-    // Ensure runtime directories exist in rootfs to avoid entrypoint failures (e.g., /bin/sh invalid argument)
-    ensureDirs := []string{"/workspace", types.WorkerUserCodeVolume, types.WorkerContainerVolumePath, "/run", "/tmp", "/proc", "/sys", "/dev", "/dev/pts", "/dev/shm"}
+    // Ensure runtime directories exist in rootfs (match v1) and bind-mount empty tmpfs over them before runc mounts
+    ensureDirs := []string{"/proc", "/sys", "/dev", "/dev/pts", "/dev/shm", "/run", "/tmp", "/workspace", types.WorkerUserCodeVolume, types.WorkerContainerVolumePath}
     for _, d := range ensureDirs {
         p := filepath.Join(spec.Root.Path, strings.TrimPrefix(d, "/"))
         _ = os.MkdirAll(p, 0755)
     }
+    // Pre-mount read-only tmpfs bind over /proc to create a stable mountpoint, runc will remount proc over it
+    // This mirrors how v1 had a real directory tree from unpack
+    _ = execBoundTmpfs(filepath.Join(spec.Root.Path, "proc"))
 
 	// Setup container network namespace / devices
-	err = s.containerNetworkManager.Setup(containerId, spec, request)
+    err = s.containerNetworkManager.Setup(containerId, spec, request)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
