@@ -568,26 +568,49 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 }
 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
-	// Most of these env vars are required to communicate with the gateway and vice versa
-	env := []string{
-		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
-		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
-		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
-		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-		fmt.Sprintf("BETA9_GATEWAY_HOST_HTTP=%s", os.Getenv("BETA9_GATEWAY_HOST_HTTP")),
-		fmt.Sprintf("BETA9_GATEWAY_PORT_HTTP=%s", os.Getenv("BETA9_GATEWAY_PORT_HTTP")),
-		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
-		"PYTHONUNBUFFERED=1",
-	}
+    // Most of these env vars are required to communicate with the gateway and vice versa
+    env := []string{
+        fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
+        fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
+        fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
+        fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
+        fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
+        fmt.Sprintf("BETA9_GATEWAY_HOST_HTTP=%s", os.Getenv("BETA9_GATEWAY_HOST_HTTP")),
+        fmt.Sprintf("BETA9_GATEWAY_PORT_HTTP=%s", os.Getenv("BETA9_GATEWAY_PORT_HTTP")),
+        fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
+        "PYTHONUNBUFFERED=1",
+    }
 
 	// Add env vars from request
 	env = append(request.Env, env...)
 
-	// Add env vars from initial spec. This would be the case for regular workers, not build workers.
-	if options.InitialSpec != nil {
-		env = append(options.InitialSpec.Process.Env, env...)
-	}
+    // Add env vars from initial spec. This would be the case for regular workers, not build workers.
+    if options.InitialSpec != nil {
+        // Extract PATH from image env if present
+        imageEnv := options.InitialSpec.Process.Env
+        pathVal := ""
+        for _, e := range imageEnv {
+            if strings.HasPrefix(e, "PATH=") {
+                pathVal = e
+                break
+            }
+        }
+        // Build final env with PATH first (from image if available, else a safe default)
+        finalEnv := []string{}
+        if pathVal == "" {
+            pathVal = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        }
+        finalEnv = append(finalEnv, pathVal)
+        // Append the rest of image env except any other PATH entries to avoid duplicates
+        for _, e := range imageEnv {
+            if strings.HasPrefix(e, "PATH=") {
+                continue
+            }
+            finalEnv = append(finalEnv, e)
+        }
+        // Then append our runtime env
+        env = append(finalEnv, env...)
+    }
 
 	return env
 }
