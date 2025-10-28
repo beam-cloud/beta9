@@ -253,11 +253,18 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 		initialConfigPath = filepath.Join(instance.BundlePath, initialSpecBaseName)
 	}
 
-	// Copy initial config file from the base image bundle
-	err = copyFile(initialConfigPath, filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName))
-	if err != nil {
-		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
-	}
+    // Ensure initial config exists; for v2 (no unpack), derive from image if missing
+    destInitial := filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName)
+    if _, statErr := os.Stat(initialConfigPath); statErr == nil {
+        if err = copyFile(initialConfigPath, destInitial); err != nil {
+            return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
+        }
+    } else {
+        // Derive initial spec from source image metadata via skopeo inspect
+        if err = s.writeInitialSpecFromImage(ctx, instance, destInitial); err != nil {
+            return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
+        }
+    }
 
 	if err := s.addRequestEnvToInitialSpec(instance); err != nil {
 		return err
@@ -324,6 +331,39 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 
 	close(doneChan)
 	return err
+}
+
+// writeInitialSpecFromImage builds an initial_config.json using the base runc config
+// plus environment variables from the source image (via skopeo inspect).
+func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *ContainerInstance, destPath string) error {
+    // Determine image reference
+    imageRef := ""
+    creds := ""
+    if instance.Request.BuildOptions.SourceImage != nil {
+        imageRef = *instance.Request.BuildOptions.SourceImage
+    }
+    creds = instance.Request.BuildOptions.SourceImageCreds
+
+    env := []string{}
+    if imageRef != "" {
+        if imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, imageRef, creds, nil); err == nil {
+            env = append(env, imgMeta.Env...)
+        } else {
+            log.Warn().Str("image_ref", imageRef).Err(err).Msg("failed to inspect image for initial spec env; proceeding with base env only")
+        }
+    }
+
+    // Start from the base config and add image env
+    spec := s.baseConfigSpec
+    if len(env) > 0 {
+        spec.Process.Env = append(spec.Process.Env, env...)
+    }
+
+    b, err := json.MarshalIndent(spec, "", "  ")
+    if err != nil {
+        return err
+    }
+    return os.WriteFile(destPath, b, 0644)
 }
 
 func (s *RunCServer) addRequestEnvToInitialSpec(instance *ContainerInstance) error {
