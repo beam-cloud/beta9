@@ -217,7 +217,22 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 			}
 		}
 	}
-	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
+    outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
+
+    // For Clip v2 build flows, we don't need to run a runc container. The worker already
+    // built and indexed the image; exiting here avoids fragile exec on FUSE-backed roots.
+    if request.IsBuildRequest() && s.config.ImageService.ClipVersion == 2 {
+        exitCode := 0
+        _, _ = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+            ContainerId: containerId,
+            ExitCode:    int32(exitCode),
+        }))
+        // Mark request completed and clean instance state
+        s.completedRequests <- request
+        s.containerInstances.Delete(containerId)
+        _, _ = handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
+        return nil
+    }
 
 	// Determine how many ports we need to expose
 	portsToExpose := len(request.Ports)
