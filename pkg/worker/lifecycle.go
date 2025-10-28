@@ -270,7 +270,10 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
 
-	// Read spec from bundle
+    // Read spec from bundle; guard against empty image IDs
+    if request.ImageId == "" {
+        return fmt.Errorf("empty image id in request")
+    }
     initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
     if initialBundleSpec == nil && request.IsBuildRequest() {
         // For Clip v2 builds, there may be no pre-existing config.json; synthesize a minimal spec

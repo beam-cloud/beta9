@@ -184,6 +184,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
+    // Precompute final image ID so downstream logs/DB persist correctly (v2 path avoids container-side archiving)
+    if imgID, idErr := getImageID(build.opts); idErr == nil {
+        build.imageID = imgID
+    }
+
     // FIXME: This flow can be improved now that containers are running in attached mode.
     // Send a stop-build event to the worker if the user cancels the build
 	go b.handleBuildCancellation(ctx, build)

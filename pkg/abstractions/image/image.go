@@ -129,14 +129,12 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		return err
 	}
 
-	if exists {
-		return stream.Send(&pb.BuildImageResponse{
-			Msg:     "Image already exists",
-			Done:    true,
-			Success: true,
-			ImageId: imageId,
-		})
-	}
+    if exists {
+        // Emit a minimal success response consistent with SDK expectations
+        _ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: imageId})
+        _ = stream.Send(&pb.BuildImageResponse{Msg: "Build completed successfully\n", Done: true, Success: true, ImageId: imageId})
+        return nil
+    }
 
 	clipVersion := is.config.ImageService.ClipVersion
 	buildOptions.ExistingImageCreds = in.ExistingImageCreds
