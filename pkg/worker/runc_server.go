@@ -309,9 +309,10 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 					}
 				}
 			case <-keepaliveTicker.C:
-				err := stream.Send(&pb.RunCArchiveResponse{Done: false, Success: false, Progress: int32(lastProgress), ErrorMsg: ""})
+				// Send a keepalive message to prevent connection timeout during long operations
+				err := stream.Send(&pb.RunCArchiveResponse{Done: false, Success: false, Progress: 0, ErrorMsg: ""})
 				if err != nil {
-					log.Warn().Err(err).Msg("failed to send keepalive progress update")
+					log.Warn().Err(err).Msg("failed to send keepalive message")
 					return
 				}
 			case <-doneChan:
