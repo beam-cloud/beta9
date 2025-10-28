@@ -222,15 +222,16 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
     // For Clip v2 build flows, we don't need to run a runc container. The worker already
     // built and indexed the image; exiting here avoids fragile exec on FUSE-backed roots.
     if request.IsBuildRequest() && s.config.ImageService.ClipVersion == 2 {
+        // Short-circuit build runs: we've already built and indexed. Mark success and return.
         exitCode := 0
         _, _ = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
             ContainerId: containerId,
             ExitCode:    int32(exitCode),
         }))
-        // Mark request completed and clean instance state
-        s.completedRequests <- request
-        s.containerInstances.Delete(containerId)
-        _, _ = handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
+        // Keep instance lifecycle consistent and finalize asynchronously
+        go func() {
+            s.finalizeContainer(containerId, request, &exitCode)
+        }()
         return nil
     }
 

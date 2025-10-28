@@ -126,7 +126,7 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 			build.log(true, "Build was aborted.\n")
 			return ctx.Err()
 
-		case <-retryTicker.C:
+        case <-retryTicker.C:
 			r, err := build.getContainerStatus()
 			if err != nil {
 				build.log(true, "Error occurred while checking container status: "+err.Error())
@@ -139,13 +139,20 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 			}
 
 			exitCode, err := b.containerRepo.GetContainerExitCode(build.containerID)
-			if err == nil && exitCode != 0 {
-				exitCodeMsg := getExitCodeMsg(exitCode)
-				// Wait for any final logs to get sent before returning
-				time.Sleep(200 * time.Millisecond)
-				build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
-				return errors.New(fmt.Sprintf("container exited with error: %s\n", exitCodeMsg))
-			}
+            if err == nil {
+                if exitCode != 0 {
+                    exitCodeMsg := getExitCodeMsg(exitCode)
+                    // Wait for any final logs to get sent before returning
+                    time.Sleep(200 * time.Millisecond)
+                    build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
+                    return errors.New(fmt.Sprintf("container exited with error: %s\n", exitCodeMsg))
+                }
+                // For Clip v2 builds, treat a clean exit as success without requiring Running state
+                if b.config.ImageService.ClipVersion == 2 && exitCode == 0 {
+                    buildContainerRunning = true
+                    continue
+                }
+            }
 		case <-timeoutTicker.C:
 			if err := b.stopBuild(build.containerID); err != nil {
 				log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
