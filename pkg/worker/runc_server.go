@@ -288,6 +288,8 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 	go func() {
 		defer wg.Done()
 		lastProgress := -1
+		keepaliveTicker := time.NewTicker(10 * time.Second)
+		defer keepaliveTicker.Stop()
 
 		for {
 			select {
@@ -305,6 +307,12 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 					if err != nil {
 						return
 					}
+				}
+			case <-keepaliveTicker.C:
+				err := stream.Send(&pb.RunCArchiveResponse{Done: false, Success: false, Progress: int32(lastProgress), ErrorMsg: ""})
+				if err != nil {
+					log.Warn().Err(err).Msg("failed to send keepalive progress update")
+					return
 				}
 			case <-doneChan:
 				return
