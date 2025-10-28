@@ -543,8 +543,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Mounts = append(spec.Mounts, resolvMount)
 
 	// Add back tmpfs pod/sandbox mounts from initial spec if they exist
-	if request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox {
-		for _, m := range options.InitialSpec.Mounts {
+    if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox) && options.InitialSpec != nil {
+        for _, m := range options.InitialSpec.Mounts {
 			if m.Source == "none" && m.Type == "tmpfs" {
 				spec.Mounts = append(spec.Mounts, m)
 			}

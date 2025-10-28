@@ -210,10 +210,12 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go build.streamLogs()
 
-    err = b.waitForBuildContainer(ctx, build)
-	if err != nil {
-		return err
-	}
+    if b.config.ImageService.ClipVersion != 2 {
+        err = b.waitForBuildContainer(ctx, build)
+        if err != nil {
+            return err
+        }
+    }
 
     // For v2 builds, the worker built the image from the Dockerfile before the container ran.
     // Skip container command execution and archiving.
