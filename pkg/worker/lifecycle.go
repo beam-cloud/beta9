@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -218,24 +219,24 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 			}
 		}
 	}
-    outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
+	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
 
-    // For Clip v2 build flows, we don't need to run a runc container. The worker already
-    // built and indexed the image; exiting here avoids fragile exec on FUSE-backed roots.
-    if request.IsBuildRequest() && s.config.ImageService.ClipVersion == 2 {
-        // Short-circuit build runs: we've already built and indexed. Mark success and return.
-        exitCode := 0
-        _, _ = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
-            ContainerId: containerId,
-            ExitCode:    int32(exitCode),
-        }))
-        // Keep instance lifecycle consistent and finalize asynchronously
-        s.containerWg.Add(1)
-        go func() {
-            s.finalizeContainer(containerId, request, &exitCode)
-        }()
-        return nil
-    }
+	// For Clip v2 build flows, we don't need to run a runc container. The worker already
+	// built and indexed the image; exiting here avoids fragile exec on FUSE-backed roots.
+	if request.IsBuildRequest() && s.config.ImageService.ClipVersion == 2 {
+		// Short-circuit build runs: we've already built and indexed. Mark success and return.
+		exitCode := 0
+		_, _ = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+			ContainerId: containerId,
+			ExitCode:    int32(exitCode),
+		}))
+		// Keep instance lifecycle consistent and finalize asynchronously
+		s.containerWg.Add(1)
+		go func() {
+			s.finalizeContainer(containerId, request, &exitCode)
+		}()
+		return nil
+	}
 
 	// Determine how many ports we need to expose
 	portsToExpose := len(request.Ports)
@@ -271,25 +272,25 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
 
-    // Read spec from bundle; guard against empty image IDs
-    if request.ImageId == "" {
-        return fmt.Errorf("empty image id in request")
-    }
-    initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
-    if initialBundleSpec == nil {
-        // Try to load precomputed initial spec from spec cache
-        specCachePath := filepath.Join("/images", "specs", fmt.Sprintf("%s.initial.json", request.ImageId))
-        if b, err := os.ReadFile(specCachePath); err == nil {
-            var spec specs.Spec
-            if uErr := json.Unmarshal(b, &spec); uErr == nil {
-                initialBundleSpec = &spec
-            }
-        }
-    }
-    if initialBundleSpec == nil && request.IsBuildRequest() {
-        // Fallback minimal spec
-        initialBundleSpec = &specs.Spec{Process: &specs.Process{Args: []string{"/bin/sh"}, Cwd: defaultContainerDirectory}}
-    }
+	// Read spec from bundle; guard against empty image IDs
+	if request.ImageId == "" {
+		return fmt.Errorf("empty image id in request")
+	}
+	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
+	if initialBundleSpec == nil {
+		// Try to load precomputed initial spec from spec cache
+		specCachePath := filepath.Join("/images", "specs", fmt.Sprintf("%s.initial.json", request.ImageId))
+		if b, err := os.ReadFile(specCachePath); err == nil {
+			var spec specs.Spec
+			if uErr := json.Unmarshal(b, &spec); uErr == nil {
+				initialBundleSpec = &spec
+			}
+		}
+	}
+	if initialBundleSpec == nil && request.IsBuildRequest() {
+		// Fallback minimal spec
+		initialBundleSpec = &specs.Spec{Process: &specs.Process{Args: []string{"/bin/sh"}, Cwd: defaultContainerDirectory}}
+	}
 
 	opts := &ContainerOptions{
 		BundlePath:   bundlePath,
@@ -352,18 +353,18 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
 	switch {
-    case request.BuildOptions.Dockerfile != nil:
-        // Only build from Dockerfile if it actually contains build steps (RUN lines).
-        df := strings.TrimSpace(*request.BuildOptions.Dockerfile)
-        hasRun := strings.HasPrefix(df, "RUN ") || strings.Contains(df, "\nRUN ")
-        if df != "" && hasRun {
-            log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
-            if err := s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request); err != nil {
-                return err
-            }
-            break
-        }
-        fallthrough
+	case request.BuildOptions.Dockerfile != nil:
+		// Only build from Dockerfile if it actually contains build steps (RUN lines).
+		df := strings.TrimSpace(*request.BuildOptions.Dockerfile)
+		hasRun := strings.HasPrefix(df, "RUN ") || strings.Contains(df, "\nRUN ")
+		if df != "" && hasRun {
+			log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
+			if err := s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request); err != nil {
+				return err
+			}
+			break
+		}
+		fallthrough
 	case request.BuildOptions.SourceImage != nil:
 		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.BuildOptions.SourceImage)
 
@@ -381,16 +382,16 @@ func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.S
 		imageConfigPath = filepath.Join(s.imageMountPath, imageId, specBaseName)
 	}
 
-    data, err := os.ReadFile(imageConfigPath)
-    if err != nil {
-        // For v2 images (and many OCI cases), there may be no pre-baked config.json in the mounted root.
-        // Treat missing file as non-fatal and continue with a synthesized/base spec.
-        if os.IsNotExist(err) {
-            return nil, nil
-        }
-        log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
-        return nil, err
-    }
+	data, err := os.ReadFile(imageConfigPath)
+	if err != nil {
+		// For v2 images (and many OCI cases), there may be no pre-baked config.json in the mounted root.
+		// Treat missing file as non-fatal and continue with a synthesized/base spec.
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
+		return nil, err
+	}
 
 	specTemplate := strings.TrimSpace(string(data))
 	var spec specs.Spec
@@ -450,8 +451,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if request.Gpu != "" {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
-    // Overwrite with fully constructed env so PATH and image-provided vars take effect deterministically
-    spec.Process.Env = env
+	// Overwrite with fully constructed env so PATH and image-provided vars take effect deterministically
+	spec.Process.Env = env
 
 	// We need to include the checkpoint signal files in the container spec
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
@@ -557,8 +558,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Mounts = append(spec.Mounts, resolvMount)
 
 	// Add back tmpfs pod/sandbox mounts from initial spec if they exist
-    if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox) && options.InitialSpec != nil {
-        for _, m := range options.InitialSpec.Mounts {
+	if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox) && options.InitialSpec != nil {
+		for _, m := range options.InitialSpec.Mounts {
 			if m.Source == "none" && m.Type == "tmpfs" {
 				spec.Mounts = append(spec.Mounts, m)
 			}
@@ -581,65 +582,65 @@ func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 // execBoundTmpfs mounts a small tmpfs over the given path to provide a stable mountpoint
 // similar to v1's extracted rootfs directories. It is a no-op on failure.
 func execBoundTmpfs(path string) error {
-    // Mount tmpfs at the target if possible (ignore errors)
-    // We don't import syscall.Mount here; use /bin/mount for simplicity
-    if _, err := os.Stat(path); os.IsNotExist(err) {
-        if mkErr := os.MkdirAll(path, 0755); mkErr != nil {
-            return mkErr
-        }
-    }
-    cmd := exec.Command("mount", "-t", "tmpfs", "tmpfs", path)
-    // Pipe away output
-    cmd.Stdout = io.Discard
-    cmd.Stderr = io.Discard
-    _ = cmd.Run()
-    return nil
+	// Mount tmpfs at the target if possible (ignore errors)
+	// We don't import syscall.Mount here; use /bin/mount for simplicity
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if mkErr := os.MkdirAll(path, 0755); mkErr != nil {
+			return mkErr
+		}
+	}
+	cmd := exec.Command("mount", "-t", "tmpfs", "tmpfs", path)
+	// Pipe away output
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	_ = cmd.Run()
+	return nil
 }
 
 func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, options *ContainerOptions) []string {
-    // Most of these env vars are required to communicate with the gateway and vice versa
-    env := []string{
-        fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
-        fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
-        fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
-        fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
-        fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
-        fmt.Sprintf("BETA9_GATEWAY_HOST_HTTP=%s", os.Getenv("BETA9_GATEWAY_HOST_HTTP")),
-        fmt.Sprintf("BETA9_GATEWAY_PORT_HTTP=%s", os.Getenv("BETA9_GATEWAY_PORT_HTTP")),
-        fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
-        "PYTHONUNBUFFERED=1",
-    }
+	// Most of these env vars are required to communicate with the gateway and vice versa
+	env := []string{
+		fmt.Sprintf("BIND_PORT=%d", containerInnerPort),
+		fmt.Sprintf("CONTAINER_HOSTNAME=%s", fmt.Sprintf("%s:%d", s.podAddr, options.BindPorts[0])),
+		fmt.Sprintf("CONTAINER_ID=%s", request.ContainerId),
+		fmt.Sprintf("BETA9_GATEWAY_HOST=%s", os.Getenv("BETA9_GATEWAY_HOST")),
+		fmt.Sprintf("BETA9_GATEWAY_PORT=%s", os.Getenv("BETA9_GATEWAY_PORT")),
+		fmt.Sprintf("BETA9_GATEWAY_HOST_HTTP=%s", os.Getenv("BETA9_GATEWAY_HOST_HTTP")),
+		fmt.Sprintf("BETA9_GATEWAY_PORT_HTTP=%s", os.Getenv("BETA9_GATEWAY_PORT_HTTP")),
+		fmt.Sprintf("STORAGE_AVAILABLE=%t", request.StorageAvailable()),
+		"PYTHONUNBUFFERED=1",
+	}
 
 	// Add env vars from request
 	env = append(request.Env, env...)
 
-    // Add env vars from initial spec. This would be the case for regular workers, not build workers.
-    if options.InitialSpec != nil {
-        // Extract PATH from image env if present
-        imageEnv := options.InitialSpec.Process.Env
-        pathVal := ""
-        for _, e := range imageEnv {
-            if strings.HasPrefix(e, "PATH=") {
-                pathVal = e
-                break
-            }
-        }
-        // Build final env with PATH first (from image if available, else a safe default)
-        finalEnv := []string{}
-        if pathVal == "" {
-            pathVal = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-        }
-        finalEnv = append(finalEnv, pathVal)
-        // Append the rest of image env except any other PATH entries to avoid duplicates
-        for _, e := range imageEnv {
-            if strings.HasPrefix(e, "PATH=") {
-                continue
-            }
-            finalEnv = append(finalEnv, e)
-        }
-        // Then append our runtime env
-        env = append(finalEnv, env...)
-    }
+	// Add env vars from initial spec. This would be the case for regular workers, not build workers.
+	if options.InitialSpec != nil {
+		// Extract PATH from image env if present
+		imageEnv := options.InitialSpec.Process.Env
+		pathVal := ""
+		for _, e := range imageEnv {
+			if strings.HasPrefix(e, "PATH=") {
+				pathVal = e
+				break
+			}
+		}
+		// Build final env with PATH first (from image if available, else a safe default)
+		finalEnv := []string{}
+		if pathVal == "" {
+			pathVal = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		}
+		finalEnv = append(finalEnv, pathVal)
+		// Append the rest of image env except any other PATH entries to avoid duplicates
+		for _, e := range imageEnv {
+			if strings.HasPrefix(e, "PATH=") {
+				continue
+			}
+			finalEnv = append(finalEnv, e)
+		}
+		// Then append our runtime env
+		env = append(finalEnv, env...)
+	}
 
 	return env
 }
@@ -725,8 +726,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}()
 
-    // Setup container overlay filesystem
-    err := containerInstance.Overlay.Setup()
+	// Setup container overlay filesystem
+	err := containerInstance.Overlay.Setup()
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup overlay: %v", err)
 		return
@@ -736,18 +737,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
-    // Ensure runtime directories exist in rootfs (match v1) and bind-mount empty tmpfs over them before runc mounts
-    ensureDirs := []string{"/proc", "/sys", "/dev", "/dev/pts", "/dev/shm", "/run", "/tmp", "/workspace", types.WorkerUserCodeVolume, types.WorkerContainerVolumePath}
-    for _, d := range ensureDirs {
-        p := filepath.Join(spec.Root.Path, strings.TrimPrefix(d, "/"))
-        _ = os.MkdirAll(p, 0755)
-    }
-    // Pre-mount read-only tmpfs bind over /proc to create a stable mountpoint, runc will remount proc over it
-    // This mirrors how v1 had a real directory tree from unpack
-    _ = execBoundTmpfs(filepath.Join(spec.Root.Path, "proc"))
+	// Ensure runtime directories exist in rootfs (match v1) and bind-mount empty tmpfs over them before runc mounts
+	ensureDirs := []string{"/proc", "/sys", "/dev", "/dev/pts", "/dev/shm", "/run", "/tmp", "/workspace", types.WorkerUserCodeVolume, types.WorkerContainerVolumePath}
+	for _, d := range ensureDirs {
+		p := filepath.Join(spec.Root.Path, strings.TrimPrefix(d, "/"))
+		_ = os.MkdirAll(p, 0755)
+	}
+	// Pre-mount read-only tmpfs bind over /proc to create a stable mountpoint, runc will remount proc over it
+	// This mirrors how v1 had a real directory tree from unpack
+	_ = execBoundTmpfs(filepath.Join(spec.Root.Path, "proc"))
 
 	// Setup container network namespace / devices
-    err = s.containerNetworkManager.Setup(containerId, spec, request)
+	err = s.containerNetworkManager.Setup(containerId, spec, request)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
