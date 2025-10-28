@@ -229,6 +229,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
             ExitCode:    int32(exitCode),
         }))
         // Keep instance lifecycle consistent and finalize asynchronously
+        s.containerWg.Add(1)
         go func() {
             s.finalizeContainer(containerId, request, &exitCode)
         }()
