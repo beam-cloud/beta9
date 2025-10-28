@@ -175,26 +175,8 @@ func (co *ContainerOverlay) TopLayerPath() string {
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
-    // Ensure exec is allowed on the overlay mount to avoid EINVAL on execve for binaries from lower FUSE layers
+    // Use kernel overlayfs (v1 behavior) and allow exec
     mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,exec", layer.lower, layer.upper, layer.work)
-
-    // If the lower is a FUSE mount (e.g., ClipFS), prefer fuse-overlayfs to avoid kernel overlayfs quirks
-    if lowerIsFuse(layer.lower) {
-        if fuseOverlayfsAvailable() {
-            // Harden fuse-overlayfs flags to ensure exec of lower binaries is allowed
-            mntFlags := fmt.Sprintf("%s,allow_other,default_permissions,suid,dev,exec", mntOptions)
-            args := []string{"-o", mntFlags, layer.merged}
-            if ferr := exec.Command("fuse-overlayfs", args...).Run(); ferr == nil {
-                log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer (fuse-overlayfs)")
-                return nil
-            } else {
-                return ferr
-            }
-        }
-        return errors.New("lowerdir is FUSE; fuse-overlayfs not available")
-    }
-
-    // Otherwise, use kernel overlayfs
     if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
         return err
     }
