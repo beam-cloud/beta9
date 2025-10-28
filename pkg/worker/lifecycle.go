@@ -718,7 +718,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
     // Ensure runtime directories exist in rootfs to avoid entrypoint failures (e.g., /bin/sh invalid argument)
-    ensureDirs := []string{"/workspace", types.WorkerUserCodeVolume, types.WorkerContainerVolumePath, "/run", "/tmp"}
+    ensureDirs := []string{"/workspace", types.WorkerUserCodeVolume, types.WorkerContainerVolumePath, "/run", "/tmp", "/proc", "/sys", "/dev", "/dev/pts", "/dev/shm"}
     for _, d := range ensureDirs {
         p := filepath.Join(spec.Root.Path, strings.TrimPrefix(d, "/"))
         _ = os.MkdirAll(p, 0755)
