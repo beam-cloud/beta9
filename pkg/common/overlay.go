@@ -175,7 +175,8 @@ func (co *ContainerOverlay) TopLayerPath() string {
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
-    mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", layer.lower, layer.upper, layer.work)
+    // Ensure exec is allowed on the overlay mount to avoid EINVAL on execve for binaries from lower FUSE layers
+    mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,exec", layer.lower, layer.upper, layer.work)
 
     // If the lower is a FUSE mount (e.g., ClipFS), prefer fuse-overlayfs to avoid kernel overlayfs quirks
     if lowerIsFuse(layer.lower) {
