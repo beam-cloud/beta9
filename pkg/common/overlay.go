@@ -181,7 +181,9 @@ func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
     // If the lower is a FUSE mount (e.g., ClipFS), prefer fuse-overlayfs to avoid kernel overlayfs quirks
     if lowerIsFuse(layer.lower) {
         if fuseOverlayfsAvailable() {
-            args := []string{"-o", mntOptions, layer.merged}
+            // Harden fuse-overlayfs flags to ensure exec of lower binaries is allowed
+            mntFlags := fmt.Sprintf("%s,allow_other,default_permissions,suid,dev,exec", mntOptions)
+            args := []string{"-o", mntFlags, layer.merged}
             if ferr := exec.Command("fuse-overlayfs", args...).Run(); ferr == nil {
                 log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer (fuse-overlayfs)")
                 return nil
