@@ -449,7 +449,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if request.Gpu != "" {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
-	spec.Process.Env = append(spec.Process.Env, env...)
+    // Overwrite with fully constructed env so PATH and image-provided vars take effect deterministically
+    spec.Process.Env = env
 
 	// We need to include the checkpoint signal files in the container spec
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {

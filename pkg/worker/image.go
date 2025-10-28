@@ -335,7 +335,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
             Version: "1.0.2",
             Process: &specs.Process{
                 Terminal: false,
-                Args:     []string{"/bin/sh", "-lc", "env >/dev/null"},
+                Args:     []string{"/bin/sh"},
                 Cwd:      types.WorkerUserCodeVolume,
                 Env:      env,
             },
