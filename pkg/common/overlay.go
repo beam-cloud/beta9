@@ -174,11 +174,15 @@ func (co *ContainerOverlay) TopLayerPath() string {
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
-	// Use kernel overlayfs (v1 behavior) and allow exec
-	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,exec", layer.lower, layer.upper, layer.work)
-	if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
+    // Use kernel overlayfs (v1 behavior). Harden options for FUSE lowers.
+    // - exec: allow execve from overlay
+    // - metacopy=off/redirect_dir=off/index=off: reduce corner cases with FUSE lowers
+    mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s,exec,metacopy=off,redirect_dir=off,index=off", layer.lower, layer.upper, layer.work)
+    if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
 		return err
 	}
+    // Ensure private propagation on the merged mount to avoid subpath issues
+    _ = exec.Command("mount", "--make-private", layer.merged).Run()
 	log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer (kernel overlay)")
 	return nil
 }
