@@ -124,7 +124,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		IgnorePython:     in.IgnorePython,
 	}
 
-	imageId, exists, _, buildOptions, err := is.verifyImage(stream.Context(), verifyReq)
+    imageId, exists, _, buildOptions, err := is.verifyImage(stream.Context(), verifyReq)
 	if err != nil {
 		return err
 	}
@@ -143,14 +143,12 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 
-	go is.builder.Build(ctx, buildOptions, outputChan)
+    go is.builder.Build(ctx, buildOptions, outputChan)
 
-	archivingStage := false
+    archivingStage := false
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
-		if archivingStage && !o.Archiving {
-			continue
-		}
+        // For v2 builds we still stream all logs to the user; do not filter by archiving stage
 
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion, Warning: o.Warning}); err != nil {
 			log.Error().Err(err).Msg("failed to complete build")
@@ -158,7 +156,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 			break
 		}
 
-		if o.Archiving {
+        if o.Archiving {
 			archivingStage = true
 		}
 

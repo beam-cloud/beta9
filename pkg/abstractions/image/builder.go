@@ -187,6 +187,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
     // Precompute final image ID so downstream logs/DB persist correctly (v2 path avoids container-side archiving)
     if imgID, idErr := getImageID(build.opts); idErr == nil {
         build.imageID = imgID
+        // Emit an initial message with the computed image id for the client
+        build.logWithImageAndPythonVersion(false, "Preparing v2 build (buildah + OCI index)...\n")
     }
 
     // FIXME: This flow can be improved now that containers are running in attached mode.
@@ -215,11 +217,11 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go build.streamLogs()
 
-    if b.config.ImageService.ClipVersion != 2 {
-        err = b.waitForBuildContainer(ctx, build)
-        if err != nil {
-            return err
-        }
+    // Always wait for the build container lifecycle to progress so logs stream through.
+    // For v2, waitForBuildContainer treats clean exit (exitCode==0) as success.
+    err = b.waitForBuildContainer(ctx, build)
+    if err != nil {
+        return err
     }
 
     // For v2 builds, the worker built the image from the Dockerfile before the container ran.
@@ -236,6 +238,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
         if err := build.archive(); err != nil {
             return err
         }
+    } else {
+        // Emit a friendly completion line with the final image id
+        build.log(false, "=> Build complete 🎉\n")
     }
 
 	build.setSuccess(true)
