@@ -145,19 +145,14 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 
     go is.builder.Build(ctx, buildOptions, outputChan)
 
-    archivingStage := false
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
-        // For v2 builds we still stream all logs to the user; do not filter by archiving stage
+        // Stream all logs to the user (no archiving-stage filtering for v2)
 
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion, Warning: o.Warning}); err != nil {
 			log.Error().Err(err).Msg("failed to complete build")
 			lastMessage = o
 			break
-		}
-
-        if o.Archiving {
-			archivingStage = true
 		}
 
 		if o.Done {
