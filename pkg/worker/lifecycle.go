@@ -335,15 +335,11 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 }
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
-	// For Clip v2 builds, the Dockerfile is always generated with build steps (by builder.renderV2Dockerfile).
-	// Build via buildah if a Dockerfile is present and contains RUN instructions.
-	if request.BuildOptions.Dockerfile != nil {
-		df := strings.TrimSpace(*request.BuildOptions.Dockerfile)
-		hasRun := strings.HasPrefix(df, "RUN ") || strings.Contains(df, "\nRUN ")
-		if df != "" && hasRun {
-			log.Info().Str("container_id", containerId).Msg("building image from Dockerfile")
-			return s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request)
-		}
+	// For Clip v2 builds, the Dockerfile is rendered by the builder with all build steps.
+	// Build via buildah if a non-empty Dockerfile is present (contains RUN commands for actual builds).
+	if request.BuildOptions.Dockerfile != nil && *request.BuildOptions.Dockerfile != "" {
+		log.Info().Str("container_id", containerId).Msg("building image from Dockerfile")
+		return s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request)
 	}
 
 	// Fallback: pull the source image and archive it
