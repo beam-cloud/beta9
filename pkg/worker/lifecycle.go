@@ -273,7 +273,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	if request.ImageId == "" {
 		return fmt.Errorf("empty image id in request")
 	}
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
+	initialBundleSpec, _ := s.readBundleConfig(request)
 
 	opts := &ContainerOptions{
 		BundlePath:   bundlePath,
@@ -355,20 +355,21 @@ func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.Contai
 	return nil
 }
 
-func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.Spec, error) {
-	imageConfigPath := filepath.Join(s.imageMountPath, imageId, initialSpecBaseName)
-	if isBuildRequest {
-		imageConfigPath = filepath.Join(s.imageMountPath, imageId, specBaseName)
+func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec, error) {
+	imageConfigPath := filepath.Join(s.imageMountPath, request.ImageId, initialSpecBaseName)
+	if request.IsBuildRequest() {
+		imageConfigPath = filepath.Join(s.imageMountPath, request.ImageId, specBaseName)
 	}
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
-		// For v2 images (and many OCI cases), there may be no pre-baked config.json in the mounted root.
-		// Treat missing file as non-fatal and continue with a synthesized/base spec.
+		// For v2 images, there's no pre-baked config.json in the mounted root.
+		// Derive the spec from the source image using skopeo inspect.
 		if os.IsNotExist(err) {
-			return nil, nil
+			log.Info().Str("image_id", request.ImageId).Msg("no bundle config found, deriving from source image")
+			return s.deriveSpecFromSourceImage(request)
 		}
-		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
+		log.Error().Str("image_id", request.ImageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
 		return nil, err
 	}
 
@@ -377,8 +378,66 @@ func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.S
 
 	err = json.Unmarshal([]byte(specTemplate), &spec)
 	if err != nil {
-		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to unmarshal bundle config")
+		log.Error().Str("image_id", request.ImageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to unmarshal bundle config")
 		return nil, err
+	}
+
+	return &spec, nil
+}
+
+// deriveSpecFromSourceImage creates an OCI spec from the source image metadata.
+// This is used for v2 images where we don't have an unpacked bundle with config.json.
+func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*specs.Spec, error) {
+	// Get source image reference from the request
+	var sourceImageRef string
+	var sourceImageCreds string
+
+	if request.BuildOptions.SourceImage != nil {
+		sourceImageRef = *request.BuildOptions.SourceImage
+		sourceImageCreds = request.BuildOptions.SourceImageCreds
+	}
+
+	// If we don't have a source image reference, return nil (will use base spec)
+	if sourceImageRef == "" {
+		log.Warn().Str("image_id", request.ImageId).Msg("no source image reference, using base spec")
+		return nil, nil
+	}
+
+	// Inspect the source image to get its configuration
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, sourceImageRef, sourceImageCreds, nil)
+	if err != nil {
+		log.Warn().Str("image_id", request.ImageId).Str("source_image", sourceImageRef).Err(err).Msg("failed to inspect source image, using base spec")
+		return nil, nil
+	}
+
+	log.Info().Str("image_id", request.ImageId).Str("source_image", sourceImageRef).Msg("derived spec from source image")
+
+	// Start with base runc config spec
+	spec := s.runcServer.baseConfigSpec
+
+	// Apply image configuration
+	if imgMeta.Config != nil {
+		if len(imgMeta.Config.Env) > 0 {
+			spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
+		}
+		if imgMeta.Config.WorkingDir != "" {
+			spec.Process.Cwd = imgMeta.Config.WorkingDir
+		}
+		if imgMeta.Config.User != "" {
+			spec.Process.User.Username = imgMeta.Config.User
+		}
+		// Set default args from Cmd if Entrypoint is not set, or combine them
+		if len(imgMeta.Config.Entrypoint) > 0 {
+			spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
+		} else if len(imgMeta.Config.Cmd) > 0 {
+			spec.Process.Args = imgMeta.Config.Cmd
+		}
+	} else if len(imgMeta.Env) > 0 {
+		// Fallback to legacy Env field if Config is not available
+		spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
 	}
 
 	return &spec, nil
