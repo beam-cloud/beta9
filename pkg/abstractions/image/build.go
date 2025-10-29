@@ -287,7 +287,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		cpu = defaultBuildContainerCpu
 	}
 	memory := b.config.ImageService.BuildContainerMemory
-	if memory == 0 {
+	if memory <= 0 {
 		memory = defaultBuildContainerMemory
 	}
 
