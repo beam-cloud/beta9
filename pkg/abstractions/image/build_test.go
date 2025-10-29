@@ -235,6 +235,34 @@ func TestV1_V2_PythonInstallationParity(t *testing.T) {
             description:          "v1: returns early in setupPythonEnv, v2: returns early in RenderV2Dockerfile",
         },
         {
+            name: "IgnorePython_WithPackages_Ubuntu",
+            opts: &BuildOpts{
+                BaseImageRegistry: "docker.io",
+                BaseImageName:     "library/ubuntu",
+                BaseImageTag:      "22.04",
+                IgnorePython:      true,
+                PythonVersion:     "python3.10",
+                PythonPackages:    []string{"numpy"},
+            },
+            shouldInstallPython:   true,
+            shouldInstallPackages: true,
+            description:          "v1: has packages so continues, probe fails, installs; v2: same logic",
+        },
+        {
+            name: "IgnorePython_WithPackages_Beta9",
+            opts: &BuildOpts{
+                BaseImageRegistry: "registry.localhost:5000",
+                BaseImageName:     "beta9-runner",
+                BaseImageTag:      "py310-latest",
+                IgnorePython:      true,
+                PythonVersion:     "python3.10",
+                PythonPackages:    []string{"numpy"},
+            },
+            shouldInstallPython:   false,
+            shouldInstallPackages: true,
+            description:          "v1: has packages so continues, probe succeeds, skips; v2: detects beta9, skips",
+        },
+        {
             name: "Beta9BaseImage",
             opts: &BuildOpts{
                 BaseImageRegistry: "registry.localhost:5000",
