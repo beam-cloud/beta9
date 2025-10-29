@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
@@ -444,11 +445,78 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 	return nil
 }
 
+// createOCIImageWithProgress creates an OCI index with progress reporting
+func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, outputPath string, checkpointMiB int64, authConfig string) error {
+	outputLogger.Info("Starting OCI image indexing...\n")
+	progressChan := make(chan clip.OCIIndexProgress, 100)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Process progress updates in goroutine
+	go func() {
+		defer wg.Done()
+		for progress := range progressChan {
+			percent := float64(progress.LayerIndex) / float64(progress.TotalLayers) * 100
+
+			switch progress.Stage {
+			case "starting":
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Int("layer", progress.LayerIndex).
+					Int("total", progress.TotalLayers).
+					Msgf("Indexing layer %d/%d (%.0f%%)", progress.LayerIndex, progress.TotalLayers, percent)
+				outputLogger.Info(fmt.Sprintf("Indexing layer %d/%d (%.0f%%)\n",
+					progress.LayerIndex, progress.TotalLayers, percent))
+			case "completed":
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Int("layer", progress.LayerIndex).
+					Int("total", progress.TotalLayers).
+					Int("files", progress.FilesIndexed).
+					Msgf("Completed layer %d/%d (%.0f%%, %d files indexed)", progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed)
+				outputLogger.Info(fmt.Sprintf("Completed layer %d/%d (%.0f%%, %d files indexed)\n",
+					progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed))
+			default:
+				// Log any unexpected stage values for debugging
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Str("stage", progress.Stage).
+					Int("layer", progress.LayerIndex).
+					Int("total", progress.TotalLayers).
+					Msgf("OCI index progress [%s]: layer %d/%d", progress.Stage, progress.LayerIndex, progress.TotalLayers)
+				outputLogger.Info(fmt.Sprintf("OCI index progress [%s]: layer %d/%d\n",
+					progress.Stage, progress.LayerIndex, progress.TotalLayers))
+			}
+		}
+	}()
+
+	// Create index-only clip archive from the OCI image
+	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+		ImageRef:      imageRef,
+		OutputPath:    outputPath,
+		CheckpointMiB: checkpointMiB,
+		AuthConfig:    authConfig,
+		ProgressChan:  progressChan,
+	})
+
+	// Close channel and wait for all progress messages to be logged
+	close(progressChan)
+	wg.Wait()
+
+	if err != nil {
+		return err
+	}
+
+	outputLogger.Info("OCI image indexing completed successfully\n")
+	return nil
+}
+
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	startTime := time.Now()
 
 	// Cache the source image reference for v2 images so we can retrieve it later for non-build containers
-	if c.config.ImageService.ClipVersion == 2 && request.BuildOptions.SourceImage != nil {
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) && request.BuildOptions.SourceImage != nil {
 		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
 	}
 
@@ -573,38 +641,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		outputLogger.Info("Index image...\n")
-		progressChan := make(chan clip.OCIIndexProgress, 100)
-
-		go func() {
-			for progress := range progressChan {
-				percent := float64(progress.LayerIndex) / float64(progress.TotalLayers) * 100
-
-				switch progress.Stage {
-				case "starting":
-					outputLogger.Info(fmt.Sprintf("Indexing layer %d/%d (%.0f%%)\n",
-						progress.LayerIndex, progress.TotalLayers, percent))
-				case "completed":
-					outputLogger.Info(fmt.Sprintf("Completed layer %d/%d (%.0f%%, %d files indexed)\n",
-						progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed))
-				}
-			}
-		}()
-
-		// Create index-only clip archive from the OCI image
-		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-			ImageRef:      localTag,
-			OutputPath:    archivePath,
-			CheckpointMiB: 2,
-			AuthConfig:    "",
-			ProgressChan:  progressChan,
-		})
-		close(progressChan)
-		if err != nil {
+		// Create index-only clip archive with progress reporting
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, localTag, archivePath, 2, ""); err != nil {
 			return err
 		}
-
-		outputLogger.Info("OCI image indexing completed successfully\n")
 
 		// Upload the clip archive to the image registry
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
@@ -652,7 +692,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 
 	// Cache the source image reference for v2 images
-	if c.config.ImageService.ClipVersion == 2 && request.BuildOptions.SourceImage != nil {
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) && request.BuildOptions.SourceImage != nil {
 		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
 	}
 
@@ -688,14 +728,8 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-		// Create index-only clip from the source docker image reference
-		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-			ImageRef:      *request.BuildOptions.SourceImage,
-			OutputPath:    archivePath,
-			CheckpointMiB: 2,
-			AuthConfig:    "",
-		})
-		if err != nil {
+		// Create index-only clip from the source docker image reference with progress reporting
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, archivePath, 2, ""); err != nil {
 			return err
 		}
 
