@@ -287,11 +287,16 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
         pythonVersion = b.config.ImageService.PythonVersion
     }
 
+    // Check if we're using a beta9 base image (which already has Python installed)
+    isBeta9BaseImage := opts.BaseImageName == b.config.ImageService.Runner.BaseImageName &&
+        opts.BaseImageRegistry == b.config.ImageService.Runner.BaseImageRegistry
+
     // If not ignoring python, add python install (standalone) or micromamba config
+    // Skip Python installation for beta9 base images since they already have Python
     if !(opts.IgnorePython && len(opts.PythonPackages) == 0) {
         if micromamba {
             sb.WriteString("RUN micromamba config set use_lockfiles False\n")
-        } else if pythonVersion != "" {
+        } else if pythonVersion != "" && !isBeta9BaseImage {
             installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion)
             if err != nil {
                 return "", err
