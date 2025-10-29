@@ -230,6 +230,16 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 		opts.addPythonRequirements()
 	}
 
+	// For Clip v2 builds, render the Dockerfile BEFORE calculating image ID
+	// to ensure consistency with the Build() flow
+	if is.config.ImageService.ClipVersion == 2 {
+		df, derr := is.builder.RenderV2Dockerfile(opts)
+		if derr != nil {
+			return "", false, false, nil, derr
+		}
+		opts.Dockerfile = df
+	}
+
 	imageId, err := getImageID(opts)
 	if err != nil {
 		valid = false

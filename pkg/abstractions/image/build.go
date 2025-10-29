@@ -276,24 +276,27 @@ func (b *Build) getContainerStatus() (*pb.RunCStatusResponse, error) {
 
 // generateContainerRequest generates a container request for the build container
 func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
-	baseImageID, err := getImageID(&BuildOpts{
-		BaseImageRegistry: b.opts.BaseImageRegistry,
-		BaseImageName:     b.opts.BaseImageName,
-		BaseImageTag:      b.opts.BaseImageTag,
-		BaseImageDigest:   b.opts.BaseImageDigest,
-		ExistingImageUri:  b.opts.ExistingImageUri,
-		EnvVars:           b.opts.EnvVars,
-		Dockerfile:        b.opts.Dockerfile,
-		BuildCtxObject:    b.opts.BuildCtxObject,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// Compute the final image id that includes all commands/steps
-	finalImageID, err := getImageID(b.opts)
-	if err != nil {
-		return nil, err
+	// For v1 builds, we need the base image ID (without build steps) to start the container,
+	// then execute commands inside it. For v2, we use the final image ID since buildah builds
+	// the complete image directly.
+	containerImageID := b.imageID // Default to final image ID (v2 behavior)
+	
+	// For v1, calculate base image ID (without build steps/commands) for the container startup
+	if b.config.ImageService.ClipVersion != 2 {
+		var err error
+		containerImageID, err = getImageID(&BuildOpts{
+			BaseImageRegistry: b.opts.BaseImageRegistry,
+			BaseImageName:     b.opts.BaseImageName,
+			BaseImageTag:      b.opts.BaseImageTag,
+			BaseImageDigest:   b.opts.BaseImageDigest,
+			ExistingImageUri:  b.opts.ExistingImageUri,
+			EnvVars:           b.opts.EnvVars,
+			Dockerfile:        b.opts.Dockerfile,
+			BuildCtxObject:    b.opts.BuildCtxObject,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	sourceImage := getSourceImage(b.opts)
@@ -322,14 +325,10 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		Env:         b.opts.EnvVars,
 		Cpu:         cpu,
 		Memory:      memory,
-		// For Clip v2 builds we will build and archive the final image id directly.
-		// For legacy v1 builds continue to target the base image for starting the build container.
-		ImageId: func() string {
-			if b.config.ImageService.ClipVersion == 2 {
-				return finalImageID
-			}
-			return baseImageID
-		}(),
+		// Use the appropriate image ID based on clip version
+		// v2: final image ID (buildah builds complete image directly)
+		// v1: base image ID (container runs with base image, then commands executed inside)
+		ImageId:     containerImageID,
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},

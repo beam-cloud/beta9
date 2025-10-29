@@ -62,7 +62,7 @@ func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
         BuildSteps:        []BuildStep{{Type: shellCommandType, Command: "echo step"}},
     }
 
-    df, err := b.renderV2Dockerfile(opts)
+    df, err := b.RenderV2Dockerfile(opts)
     assert.NoError(t, err)
     assert.True(t, strings.HasPrefix(df, "FROM docker.io/library/alpine:3.18\n"))
     // No SHELL directive expected for OCI format builds
@@ -86,7 +86,7 @@ func TestBuild_SkipsRuncFlow_WhenClipV2(t *testing.T) {
 
     // No expectations should be set on runc Exec/Archive for v2 path
     // Do not invoke Build here as it requires scheduler/worker; just ensure render path works
-    df, derr := b.renderV2Dockerfile(build.opts)
+    df, derr := b.RenderV2Dockerfile(build.opts)
     assert.NoError(t, derr)
     assert.True(t, strings.HasPrefix(df, "FROM "))
     // We can't easily run the full Build without scheduler and worker; just ensure it doesn't try to call Exec/Archive here.

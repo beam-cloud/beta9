@@ -163,12 +163,6 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 		}
 	}
 
-	var err error
-	build.imageID, err = getImageID(build.opts)
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -221,30 +215,28 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-    // Precompute final image ID so downstream logs/DB persist correctly (v2 path avoids container-side archiving)
-    if imgID, idErr := getImageID(build.opts); idErr == nil {
-        build.imageID = imgID
-        // Emit an initial message with the computed image id for the client
-        build.logWithImageAndPythonVersion(false, "Preparing v2 build (buildah + OCI index)...\n")
+    // Clip v2 path: Render Dockerfile BEFORE calculating image ID so the dockerfile content
+    // is included in the hash. This ensures the image ID is consistent across the build pipeline.
+    if b.config.ImageService.ClipVersion == 2 {
+        df, derr := b.RenderV2Dockerfile(opts)
+        if derr != nil {
+            build.log(true, "Failed to render Dockerfile.\n")
+            return derr
+        }
+        // Set the Dockerfile in opts so it's included in the image ID hash
+        build.opts.Dockerfile = df
+    }
+
+    // Calculate final image ID (includes Dockerfile for v2, commands/steps for v1)
+    build.imageID, err = getImageID(build.opts)
+    if err != nil {
+        return err
     }
 
     // FIXME: This flow can be improved now that containers are running in attached mode.
     // Send a stop-build event to the worker if the user cancels the build
 	go b.handleBuildCancellation(ctx, build)
 	defer build.killContainer() // Kill and remove container after the build completes
-
-    // Clip v2 path: convert steps/commands into a Dockerfile so the worker builds via buildah bud,
-    // producing an index-only .clip archive. We avoid runc exec + archive entirely.
-    if b.config.ImageService.ClipVersion == 2 {
-        df, derr := b.renderV2Dockerfile(opts)
-        if derr != nil {
-            build.log(true, "Failed to render Dockerfile.\n")
-            return derr
-        }
-        // Inject the Dockerfile into the request so the worker will build the image if it's missing
-        build.opts.Dockerfile = df
-        build.log(false, "Preparing v2 build (buildah + OCI index)...\n")
-    }
 
     err = b.startBuildContainer(ctx, build)
 	if err != nil {
@@ -285,9 +277,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	return nil
 }
 
-// renderV2Dockerfile converts build options into a Dockerfile that can be built by the worker
+// RenderV2Dockerfile converts build options into a Dockerfile that can be built by the worker
 // using buildah bud. We intentionally avoid executing any commands in a runc container.
-func (b *Builder) renderV2Dockerfile(opts *BuildOpts) (string, error) {
+func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
     base := getSourceImage(opts)
 
     var sb strings.Builder
