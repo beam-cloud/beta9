@@ -276,33 +276,22 @@ func (b *Build) getContainerStatus() (*pb.RunCStatusResponse, error) {
 
 // generateContainerRequest generates a container request for the build container
 func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
-	// Determine which image ID to use for the container:
-	// - v2: final image ID (buildah builds complete image directly)
-	// - v1: base image ID (container starts with base, then commands executed inside)
-	containerImageID := b.imageID
-	if b.config.ImageService.ClipVersion != 2 {
-		var err error
-		containerImageID, err = getBaseImageID(b.opts)
-		if err != nil {
-			return nil, err
-		}
+	containerImageID, err := b.getContainerImageID()
+	if err != nil {
+		return nil, err
 	}
 
 	sourceImage := getSourceImage(b.opts)
-
-	// Allow config to override default build container settings
-	cpu := defaultBuildContainerCpu
-	memory := defaultBuildContainerMemory
-
-	if b.config.ImageService.BuildContainerCpu > 0 {
-		cpu = b.config.ImageService.BuildContainerCpu
+	cpu := b.config.ImageService.BuildContainerCpu
+	if cpu == 0 {
+		cpu = defaultBuildContainerCpu
+	}
+	memory := b.config.ImageService.BuildContainerMemory
+	if memory == 0 {
+		memory = defaultBuildContainerMemory
 	}
 
-	if b.config.ImageService.BuildContainerMemory > 0 {
-		memory = b.config.ImageService.BuildContainerMemory
-	}
-
-	containerRequest := &types.ContainerRequest{
+	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
 			SourceImage:      &sourceImage,
 			SourceImageCreds: b.opts.BaseImageCreds,
@@ -322,21 +311,42 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 	}
 
 	if b.opts.BuildCtxObject != "" {
-		containerRequest.Stub.Object.ExternalId = b.opts.BuildCtxObject
-		containerRequest.Mounts = append(containerRequest.Mounts, types.Mount{
+		req.Stub.Object.ExternalId = b.opts.BuildCtxObject
+		req.Mounts = append(req.Mounts, types.Mount{
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  false,
 		})
 	}
 
 	if b.opts.Gpu != "" {
-		containerRequest.GpuRequest = []string{b.opts.Gpu}
-		containerRequest.GpuCount = 1
+		req.GpuRequest = []string{b.opts.Gpu}
+		req.GpuCount = 1
 	} else {
-		containerRequest.PoolSelector = b.config.ImageService.BuildContainerPoolSelector
+		req.PoolSelector = b.config.ImageService.BuildContainerPoolSelector
 	}
 
-	return containerRequest, nil
+	return req, nil
+}
+
+// getContainerImageID returns the image ID to use for the build container
+// V2: final image ID (buildah builds complete image)
+// V1: base image ID (container starts with base, then commands are executed inside)
+func (b *Build) getContainerImageID() (string, error) {
+	if b.config.ImageService.ClipVersion == 2 {
+		return b.imageID, nil
+	}
+
+	// For v1, calculate base image ID without build steps/commands
+	return getImageID(&BuildOpts{
+		BaseImageRegistry: b.opts.BaseImageRegistry,
+		BaseImageName:     b.opts.BaseImageName,
+		BaseImageTag:      b.opts.BaseImageTag,
+		BaseImageDigest:   b.opts.BaseImageDigest,
+		ExistingImageUri:  b.opts.ExistingImageUri,
+		EnvVars:           b.opts.EnvVars,
+		Dockerfile:        b.opts.Dockerfile,
+		BuildCtxObject:    b.opts.BuildCtxObject,
+	})
 }
 
 func genContainerId() string {

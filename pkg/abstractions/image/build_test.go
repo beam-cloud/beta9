@@ -71,7 +71,7 @@ func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
     assert.Contains(t, df, "RUN echo step\n")
 }
 
-func TestRenderV2Dockerfile_Beta9BaseImage_SkipsPythonInstall(t *testing.T) {
+func TestRenderV2Dockerfile_PythonInstallation(t *testing.T) {
     cfg := types.AppConfig{
         ImageService: types.ImageServiceConfig{
             Runner: types.RunnerConfig{
@@ -90,30 +90,7 @@ func TestRenderV2Dockerfile_Beta9BaseImage_SkipsPythonInstall(t *testing.T) {
     }
     b := &Builder{config: cfg}
     
-    t.Run("Beta9BaseImage_NoPythonInstall", func(t *testing.T) {
-        opts := &BuildOpts{
-            BaseImageRegistry: "registry.localhost:5000",
-            BaseImageName:     "beta9-runner",
-            BaseImageTag:      "py310-latest",
-            PythonVersion:     "python3.10",
-            PythonPackages:    []string{"requests"},
-        }
-
-        df, err := b.RenderV2Dockerfile(opts)
-        assert.NoError(t, err)
-        assert.True(t, strings.HasPrefix(df, "FROM registry.localhost:5000/beta9-runner:py310-latest\n"))
-        
-        // Should NOT contain Python installation commands
-        assert.NotContains(t, df, "apt-get install", "Should not install Python for beta9 base images")
-        assert.NotContains(t, df, "python-build-standalone", "Should not install Python for beta9 base images")
-        assert.NotContains(t, df, "curl -fsSL", "Should not download Python for beta9 base images")
-        
-        // Should still contain pip install for packages
-        assert.Contains(t, df, "pip install", "Should still install Python packages")
-        assert.Contains(t, df, "requests", "Should install requested package")
-    })
-    
-    t.Run("CustomBaseImage_InstallsPython", func(t *testing.T) {
+    t.Run("WithPythonAndPackages", func(t *testing.T) {
         opts := &BuildOpts{
             BaseImageRegistry: "docker.io",
             BaseImageName:     "library/ubuntu",
@@ -126,16 +103,15 @@ func TestRenderV2Dockerfile_Beta9BaseImage_SkipsPythonInstall(t *testing.T) {
         assert.NoError(t, err)
         assert.True(t, strings.HasPrefix(df, "FROM docker.io/library/ubuntu:22.04\n"))
         
-        // Should contain Python installation commands for custom images
-        assert.Contains(t, df, "apt-get install", "Should install Python for custom base images")
-        assert.Contains(t, df, "python-build-standalone", "Should download Python for custom base images")
+        // Always attempts Python installation (idempotent if already exists)
+        assert.Contains(t, df, "python-build-standalone", "Should attempt Python installation")
         
-        // Should also contain pip install for packages
+        // Should contain pip install for packages
         assert.Contains(t, df, "pip install", "Should install Python packages")
         assert.Contains(t, df, "requests", "Should install requested package")
     })
     
-    t.Run("Beta9BaseImage_WithCommands_NoPythonInstall", func(t *testing.T) {
+    t.Run("WithCommandsAndBuildSteps", func(t *testing.T) {
         opts := &BuildOpts{
             BaseImageRegistry: "registry.localhost:5000",
             BaseImageName:     "beta9-runner",
@@ -147,9 +123,6 @@ func TestRenderV2Dockerfile_Beta9BaseImage_SkipsPythonInstall(t *testing.T) {
 
         df, err := b.RenderV2Dockerfile(opts)
         assert.NoError(t, err)
-        
-        // Should NOT install Python
-        assert.NotContains(t, df, "python-build-standalone", "Should not install Python for beta9 base images")
         
         // Should contain pip install and commands
         assert.Contains(t, df, "pip install", "Should install packages")
