@@ -283,7 +283,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 
 	sourceImage := getSourceImage(b.opts)
 	cpu := b.config.ImageService.BuildContainerCpu
-	if cpu == 0 {
+	if cpu <= 0 {
 		cpu = defaultBuildContainerCpu
 	}
 	memory := b.config.ImageService.BuildContainerMemory
