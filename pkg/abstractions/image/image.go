@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -243,10 +244,22 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 		valid = false
 	}
 
-	// Check registry for existence - this is the source of truth
+	// Check registry for physical existence
 	exists, err := is.builder.Exists(ctx, imageId)
 	if err != nil {
 		return "", false, false, nil, err
+	}
+
+	// Also check database to ensure image metadata is persisted
+	// This prevents duplicate builds when registry has the file but DB record is missing
+	_, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			// Image not in database - needs to be built/recorded
+			exists = false
+		} else {
+			return "", false, false, nil, err
+		}
 	}
 
 	return imageId, exists, valid, opts, nil
