@@ -1,5 +1,5 @@
 clusterName: beta9
-debugMode: false
+debugMode: true
 prettyLogs: true
 database:
   postgres:

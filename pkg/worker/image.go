@@ -130,7 +130,7 @@ type ImageClient struct {
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
-	v2ImageRefs        *common.SafeMap[string]
+	v2ImageRefs *common.SafeMap[string]
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
@@ -154,6 +154,12 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
+	}
+
+	if config.DebugMode {
+		clip.SetLogLevel("debug")
+	} else {
+		clip.SetLogLevel("info")
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
@@ -297,14 +303,12 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           mountArchivePath,
 		MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
-		Verbose:               false,
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
 	}
 
 	// Do not persist or rely on an initial spec file for v2; base runc config will be used instead
-
 	// Default to legacy S3 storage if we cannot detect OCI
 	storageType := ""
 	if meta != nil && meta.StorageInfo != nil {
@@ -313,7 +317,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		}
 	}
 
-	if storageType == string(clipCommon.StorageModeOCI) || strings.ToLower(storageType) == "oci" {
+	if strings.ToLower(storageType) == string(clipCommon.StorageModeOCI) {
 		// v2 (OCI index-only): ClipFS will read embedded OCI storage info; no S3 info needed
 		// Ensure we don't pass a stale S3 StorageInfo
 		mountOptions.StorageInfo = nil
@@ -441,7 +445,6 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 }
 
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
-	outputLogger.Info("Building image from Dockerfile\n")
 	startTime := time.Now()
 
 	// Cache the source image reference for v2 images so we can retrieve it later for non-build containers
@@ -476,7 +479,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	os.MkdirAll(ociPath, 0755)
 
 	// Pre-pull base image with insecure option if necessary
-	insecureBud := false
+	insecure := false
 	sourceImage := ""
 	if request.BuildOptions.SourceImage != nil {
 		sourceImage = *request.BuildOptions.SourceImage
@@ -486,18 +489,19 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			// Treat runner/build registry as insecure if configured
 			if c.config.ImageService.BuildRegistryInsecure &&
 				(base.Registry == c.config.ImageService.BuildRegistry || base.Registry == c.config.ImageService.Runner.BaseImageRegistry) {
-				insecureBud = true
+				insecure = true
 			}
 			// Also consider localhost registries insecure by default
 			if strings.Contains(base.Registry, "localhost") || strings.HasPrefix(base.Registry, "127.0.0.1") {
-				insecureBud = c.config.ImageService.BuildRegistryInsecure || true
+				insecure = c.config.ImageService.BuildRegistryInsecure || true
 			}
 		}
 		// buildah pull the base image so bud doesn't attempt HTTPS
 		pullArgs := []string{"--root", imagePath, "pull"}
-		if insecureBud {
+		if insecure {
 			pullArgs = append(pullArgs, "--tls-verify=false")
 		}
+
 		pullArgs = append(pullArgs, "docker://"+sourceImage)
 		cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
@@ -508,9 +512,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 
 	budArgs := []string{"--root", imagePath, "bud"}
-	if insecureBud {
+	if insecure {
 		budArgs = append(budArgs, "--tls-verify=false")
 	}
+
 	budArgs = append(budArgs, "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
 	cmd := exec.CommandContext(ctx, "buildah", budArgs...)
 	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
@@ -537,7 +542,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 	// Clip v2: Skip unpack and create index-only clip from OCI layout.
 	// The image is pushed to the build registry so the clip indexer can stream from it.
-	if c.config.ImageService.ClipVersion == 2 {
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
@@ -568,22 +573,44 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
+		outputLogger.Info("Index image...\n")
+		progressChan := make(chan clip.OCIIndexProgress, 100)
+
+		go func() {
+			for progress := range progressChan {
+				percent := float64(progress.LayerIndex) / float64(progress.TotalLayers) * 100
+
+				switch progress.Stage {
+				case "starting":
+					outputLogger.Info(fmt.Sprintf("Indexing layer %d/%d (%.0f%%)\n",
+						progress.LayerIndex, progress.TotalLayers, percent))
+				case "completed":
+					outputLogger.Info(fmt.Sprintf("Completed layer %d/%d (%.0f%%, %d files indexed)\n",
+						progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed))
+				}
+			}
+		}()
+
 		// Create index-only clip archive from the OCI image
 		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
 			ImageRef:      localTag,
 			OutputPath:    archivePath,
 			CheckpointMiB: 2,
-			Verbose:       false,
 			AuthConfig:    "",
+			ProgressChan:  progressChan,
 		})
+		close(progressChan)
 		if err != nil {
 			return err
 		}
+
+		outputLogger.Info("OCI image indexing completed successfully\n")
 
 		// Upload the clip archive to the image registry
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
 			return err
 		}
+
 		return nil
 	}
 
@@ -594,7 +621,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	defer engine.Close()
 
 	unpackOptions := umociUnpackOptions()
-
 	engineExt := casext.NewEngine(engine)
 	defer engineExt.Close()
 
@@ -658,7 +684,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
 	// Clip v2: Create index-only clip archive from the source image (no unpack needed)
-	if c.config.ImageService.ClipVersion == 2 {
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
@@ -667,7 +693,6 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 			ImageRef:      *request.BuildOptions.SourceImage,
 			OutputPath:    archivePath,
 			CheckpointMiB: 2,
-			Verbose:       false,
 			AuthConfig:    "",
 		})
 		if err != nil {

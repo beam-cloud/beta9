@@ -222,7 +222,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Clip v2 build short-circuit: For v2 builds, the image was already built via buildah
 	// (see buildOrPullBaseImage) and indexed as a .clip archive. We don't need to run a
 	// runc container or execute any commands inside it. Mark the build as successful and exit.
-	if request.IsBuildRequest() && s.config.ImageService.ClipVersion == 2 {
+	if request.IsBuildRequest() && s.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		exitCode := 0
 		_, _ = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
 			ContainerId: containerId,

@@ -1,22 +1,22 @@
 package image
 
 import (
-    "context"
-    _ "embed"
-    "fmt"
-    "regexp"
-    "strings"
-    "time"
+	"context"
+	_ "embed"
+	"fmt"
+	"regexp"
+	"strings"
+	"time"
 
-    "github.com/pkg/errors"
-    "github.com/rs/zerolog/log"
+	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 
-    "github.com/beam-cloud/beta9/pkg/common"
-    "github.com/beam-cloud/beta9/pkg/network"
-    "github.com/beam-cloud/beta9/pkg/registry"
-    "github.com/beam-cloud/beta9/pkg/repository"
-    "github.com/beam-cloud/beta9/pkg/scheduler"
-    "github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/network"
+	"github.com/beam-cloud/beta9/pkg/registry"
+	"github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/scheduler"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 const (
@@ -112,7 +112,7 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error {
 	// For Clip v2 builds, the worker builds via buildah and short-circuits without running a runc container.
 	// We just wait for the container lifecycle to complete (exit with code 0).
-	if b.config.ImageService.ClipVersion == 2 {
+	if b.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		return b.waitForV2Build(ctx, build)
 	}
 
@@ -166,9 +166,9 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 	return nil
 }
 
-// waitForV2Build waits for a Clip v2 build to complete (buildah bud + index creation)
+// waitForV2Build waits for a CLIP v2 build to complete
 func (b *Builder) waitForV2Build(ctx context.Context, build *Build) error {
-	build.log(false, "Building image with buildah...\n")
+	build.log(false, "Building image...\n")
 
 	containerSpinupTimeout := b.calculateContainerSpinupTimeout(ctx, build.opts)
 	retryTicker := time.NewTicker(100 * time.Millisecond)
@@ -215,23 +215,23 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-    // Prepare opts for image ID calculation (renders Dockerfile for v2 if needed)
-    if err := prepareOptsForImageID(build.opts, b.config.ImageService.ClipVersion, b.RenderV2Dockerfile); err != nil {
-        build.log(true, "Failed to prepare build options.\n")
-        return err
-    }
+	// Prepare opts for image ID calculation (renders Dockerfile for v2 if needed)
+	if err := prepareOptsForImageID(build.opts, b.config.ImageService.ClipVersion, b.RenderV2Dockerfile); err != nil {
+		build.log(true, "Failed to prepare build options.\n")
+		return err
+	}
 
-    // Calculate final image ID (includes Dockerfile for v2, commands/steps for v1)
-    build.imageID, err = getImageID(build.opts)
-    if err != nil {
-        return err
-    }
+	// Calculate final image ID (includes Dockerfile for v2, commands/steps for v1)
+	build.imageID, err = getImageID(build.opts)
+	if err != nil {
+		return err
+	}
 
-    // Send a stop-build event to the worker if the user cancels the build
+	// Send a stop-build event to the worker if the user cancels the build
 	go b.handleBuildCancellation(ctx, build)
 	defer build.killContainer() // Kill and remove container after the build completes
 
-    err = b.startBuildContainer(ctx, build)
+	err = b.startBuildContainer(ctx, build)
 	if err != nil {
 		build.log(true, "Failed to start build container: "+err.Error())
 		return err
@@ -239,31 +239,31 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go build.streamLogs()
 
-    // Always wait for the build container lifecycle to progress so logs stream through.
-    // For v2, waitForBuildContainer treats clean exit (exitCode==0) as success.
-    err = b.waitForBuildContainer(ctx, build)
-    if err != nil {
-        return err
-    }
+	// Always wait for the build container lifecycle to progress so logs stream through.
+	// For v2, waitForBuildContainer treats clean exit (exitCode==0) as success.
+	err = b.waitForBuildContainer(ctx, build)
+	if err != nil {
+		return err
+	}
 
-    // For v2 builds, the worker built the image from the Dockerfile before the container ran.
-    // Skip container command execution and archiving.
-    if b.config.ImageService.ClipVersion != 2 {
-        if err := build.prepareCommands(); err != nil {
-            return err
-        }
+	// For v2 builds, the worker built the image from the Dockerfile before the container ran.
+	// Skip container command execution and archiving.
+	if b.config.ImageService.ClipVersion != 2 {
+		if err := build.prepareCommands(); err != nil {
+			return err
+		}
 
-        if err := build.executeCommands(); err != nil {
-            return err
-        }
+		if err := build.executeCommands(); err != nil {
+			return err
+		}
 
-        if err := build.archive(); err != nil {
-            return err
-        }
-    } else {
-        // Emit a friendly completion line with the final image id
-        build.log(false, "=> Build complete 🎉\n")
-    }
+		if err := build.archive(); err != nil {
+			return err
+		}
+	} else {
+		// Emit a friendly completion line with the final image id
+		build.log(false, "=> Build complete 🎉\n")
+	}
 
 	build.setSuccess(true)
 	build.logWithImageAndPythonVersion(true, "Build completed successfully")
@@ -271,77 +271,77 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 }
 
 // RenderV2Dockerfile converts build options into a Dockerfile that can be built by the worker
-// using buildah bud. We intentionally avoid executing any commands in a runc container.
+// using buildah. We intentionally avoid executing any commands in a runc container.
 func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
-    base := getSourceImage(opts)
+	base := getSourceImage(opts)
 
-    var sb strings.Builder
-    sb.WriteString("FROM ")
-    sb.WriteString(base)
-    sb.WriteString("\n")
+	var sb strings.Builder
+	sb.WriteString("FROM ")
+	sb.WriteString(base)
+	sb.WriteString("\n")
 
-    // Determine python install plan without runtime probing
-    micromamba := strings.Contains(opts.PythonVersion, "micromamba")
-    pythonVersion := opts.PythonVersion
-    if pythonVersion == types.Python3.String() {
-        pythonVersion = b.config.ImageService.PythonVersion
-    }
+	// Determine python install plan without runtime probing
+	micromamba := strings.Contains(opts.PythonVersion, "micromamba")
+	pythonVersion := opts.PythonVersion
+	if pythonVersion == types.Python3.String() {
+		pythonVersion = b.config.ImageService.PythonVersion
+	}
 
-    // Check if we're using a beta9 base image (which already has Python installed)
-    isBeta9BaseImage := opts.BaseImageName == b.config.ImageService.Runner.BaseImageName &&
-        opts.BaseImageRegistry == b.config.ImageService.Runner.BaseImageRegistry
+	// Check if we're using a beta9 base image (which already has Python installed)
+	isBeta9BaseImage := opts.BaseImageName == b.config.ImageService.Runner.BaseImageName &&
+		opts.BaseImageRegistry == b.config.ImageService.Runner.BaseImageRegistry
 
-    // If not ignoring python, add python install (standalone) or micromamba config
-    // Skip Python installation for beta9 base images since they already have Python
-    if !(opts.IgnorePython && len(opts.PythonPackages) == 0) {
-        if micromamba {
-            sb.WriteString("RUN micromamba config set use_lockfiles False\n")
-        } else if pythonVersion != "" && !isBeta9BaseImage {
-            installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion)
-            if err != nil {
-                return "", err
-            }
-            sb.WriteString("RUN ")
-            sb.WriteString(installCmd)
-            sb.WriteString("\n")
-        }
+	// If not ignoring python, add python install (standalone) or micromamba config
+	// Skip Python installation for beta9 base images since they already have Python
+	if !(opts.IgnorePython && len(opts.PythonPackages) == 0) {
+		if micromamba {
+			sb.WriteString("RUN micromamba config set use_lockfiles False\n")
+		} else if pythonVersion != "" && !isBeta9BaseImage {
+			installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString("RUN ")
+			sb.WriteString(installCmd)
+			sb.WriteString("\n")
+		}
 
-        // Pip install for requested packages (use standard pip for dockerfile builds)
-        if len(opts.PythonPackages) > 0 && pythonVersion != "" {
-            // Assume virtual env only when micromamba is requested
-            pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, micromamba)
-            if strings.TrimSpace(pipCmd) != "" {
-                sb.WriteString("RUN ")
-                sb.WriteString(pipCmd)
-                sb.WriteString("\n")
-            }
-        }
-    }
+		// Pip install for requested packages (use standard pip for dockerfile builds)
+		if len(opts.PythonPackages) > 0 && pythonVersion != "" {
+			// Assume virtual env only when micromamba is requested
+			pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, micromamba)
+			if strings.TrimSpace(pipCmd) != "" {
+				sb.WriteString("RUN ")
+				sb.WriteString(pipCmd)
+				sb.WriteString("\n")
+			}
+		}
+	}
 
-    // Coalesce build steps (pip/mamba) relative to pythonVersion and micromamba virtual env
-    if len(opts.BuildSteps) > 0 {
-        steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, micromamba)
-        for _, line := range steps {
-            if strings.TrimSpace(line) == "" {
-                continue
-            }
-            sb.WriteString("RUN ")
-            sb.WriteString(line)
-            sb.WriteString("\n")
-        }
-    }
+	// Coalesce build steps (pip/mamba) relative to pythonVersion and micromamba virtual env
+	if len(opts.BuildSteps) > 0 {
+		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, micromamba)
+		for _, line := range steps {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			sb.WriteString("RUN ")
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	}
 
-    // Append explicit shell commands provided on the image
-    for _, line := range opts.Commands {
-        if strings.TrimSpace(line) == "" {
-            continue
-        }
-        sb.WriteString("RUN ")
-        sb.WriteString(line)
-        sb.WriteString("\n")
-    }
+	// Append explicit shell commands provided on the image
+	for _, line := range opts.Commands {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		sb.WriteString("RUN ")
+		sb.WriteString(line)
+		sb.WriteString("\n")
+	}
 
-    return sb.String(), nil
+	return sb.String(), nil
 }
 
 // Check if an image already exists in the registry
