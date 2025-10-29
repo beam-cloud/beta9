@@ -215,16 +215,10 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-    // Clip v2 path: Render Dockerfile BEFORE calculating image ID so the dockerfile content
-    // is included in the hash. This ensures the image ID is consistent across the build pipeline.
-    if b.config.ImageService.ClipVersion == 2 {
-        df, derr := b.RenderV2Dockerfile(opts)
-        if derr != nil {
-            build.log(true, "Failed to render Dockerfile.\n")
-            return derr
-        }
-        // Set the Dockerfile in opts so it's included in the image ID hash
-        build.opts.Dockerfile = df
+    // Prepare opts for image ID calculation (renders Dockerfile for v2 if needed)
+    if err := prepareOptsForImageID(build.opts, b.config.ImageService.ClipVersion, b.RenderV2Dockerfile); err != nil {
+        build.log(true, "Failed to prepare build options.\n")
+        return err
     }
 
     // Calculate final image ID (includes Dockerfile for v2, commands/steps for v1)
@@ -233,7 +227,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
         return err
     }
 
-    // FIXME: This flow can be improved now that containers are running in attached mode.
     // Send a stop-build event to the worker if the user cancels the build
 	go b.handleBuildCancellation(ctx, build)
 	defer build.killContainer() // Kill and remove container after the build completes
