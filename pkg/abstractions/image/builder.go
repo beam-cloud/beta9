@@ -258,6 +258,7 @@ func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 }
 
 // RenderV2Dockerfile converts build options into a Dockerfile that can be built by buildah.
+// The logic mirrors v1's runtime Python detection, but uses static analysis since we can't probe at runtime.
 func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("FROM ")
@@ -265,6 +266,7 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	sb.WriteString("\n")
 
 	// Skip Python setup if explicitly ignored and no packages requested
+	// This matches v1 behavior in setupPythonEnv()
 	if opts.IgnorePython && len(opts.PythonPackages) == 0 {
 		b.renderCommands(&sb, opts)
 		return sb.String(), nil
@@ -277,11 +279,17 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	}
 	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
 
+	// Check if this is a beta9 base image (which already has Python installed)
+	// This mimics v1's runtime check: if python exists in the container, skip installation
+	isBeta9BaseImage := opts.BaseImageName == b.config.ImageService.Runner.BaseImageName &&
+		opts.BaseImageRegistry == b.config.ImageService.Runner.BaseImageRegistry
+
 	// Python environment setup
 	if isMicromamba {
 		sb.WriteString("RUN micromamba config set use_lockfiles False\n")
-	} else if pythonVersion != "" {
-		// Always attempt to install Python - let Dockerfile handle if it already exists
+	} else if pythonVersion != "" && !isBeta9BaseImage {
+		// Only install Python if NOT a beta9 base image
+		// Beta9 images already have Python, similar to how v1 skips if python probe succeeds
 		if installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion); err != nil {
 			return "", err
 		} else {
@@ -291,7 +299,7 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 		}
 	}
 
-	// Install Python packages
+	// Install Python packages (works with or without prior Python installation)
 	if len(opts.PythonPackages) > 0 && pythonVersion != "" {
 		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
 			sb.WriteString("RUN ")
