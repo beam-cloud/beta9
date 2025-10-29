@@ -376,6 +376,27 @@ func generatePipInstallCommand(pythonPackages []string, pythonVersion string, vi
 	return command
 }
 
+// generateStandardPipInstallCommand generates a pip install command for v2 dockerfile builds
+// using standard Python/pip (not uv-b9 which is only available in v1 mounted environments).
+func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion string, virtualEnv bool) string {
+	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
+
+	// Use standard pip with the specified python version
+	command := fmt.Sprintf("%s -m pip install", pythonVersion)
+	if !virtualEnv {
+		command += " --break-system-packages"
+	}
+
+	if len(flagLines) > 0 {
+		command += " " + strings.Join(flagLines, " ")
+	}
+	if len(packages) > 0 {
+		command += " " + strings.Join(packages, " ")
+	}
+
+	return command
+}
+
 func generateMicromambaInstallCommand(pythonPackages []string) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
@@ -414,8 +435,71 @@ func parseFlagLinesAndPackages(pythonPackages []string) ([]string, []string) {
 	return flagLines, packages
 }
 
+// parseBuildStepsForDockerfile generates RUN commands for v2 dockerfile builds using standard pip.
+// This function coalesces pip and mamba commands into single RUN statements where possible.
+func parseBuildStepsForDockerfile(buildSteps []BuildStep, pythonVersion string, virtualEnv bool) []string {
+	commands := []string{}
+	var (
+		mambaStart int = -1
+		mambaGroup []string
+		pipStart   int = -1
+		pipGroup   []string
+	)
+
+	for _, step := range buildSteps {
+		if step.Type == shellCommandType {
+			commands = append(commands, step.Command)
+		}
+
+		flagCmd := containsFlag(step.Command)
+
+		// Flush any pending pip or mamba groups
+		if pipStart != -1 && (step.Type != pipCommandType || flagCmd) {
+			pipStart, pipGroup = flushStandardPipCommand(commands, pipStart, pipGroup, pythonVersion, virtualEnv)
+		}
+
+		if mambaStart != -1 && (step.Type != micromambaCommandType || flagCmd) {
+			mambaStart, mambaGroup = flushMambaCommand(commands, mambaStart, mambaGroup)
+		}
+
+		if step.Type == pipCommandType {
+			if pipStart == -1 {
+				pipStart = len(commands)
+				commands = append(commands, "")
+			}
+			pipGroup = append(pipGroup, step.Command)
+
+			if flagCmd {
+				pipStart, pipGroup = flushStandardPipCommand(commands, pipStart, pipGroup, pythonVersion, virtualEnv)
+			}
+		}
+
+		if step.Type == micromambaCommandType {
+			if mambaStart == -1 {
+				mambaStart = len(commands)
+				commands = append(commands, "")
+			}
+			mambaGroup = append(mambaGroup, step.Command)
+
+			if flagCmd {
+				mambaStart, mambaGroup = flushMambaCommand(commands, mambaStart, mambaGroup)
+			}
+		}
+	}
+
+	if mambaStart != -1 {
+		commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
+	}
+
+	if pipStart != -1 {
+		commands[pipStart] = generateStandardPipInstallCommand(pipGroup, pythonVersion, virtualEnv)
+	}
+
+	return commands
+}
+
 // Generate the commands to run in the container. This function will coalesce pip and mamba commands
-// into a single command if they are adjacent to each other.
+// into a single command if they are adjacent to each other. Uses uv-b9 for v1 builds.
 func parseBuildSteps(buildSteps []BuildStep, pythonVersion string, virtualEnv bool) []string {
 	commands := []string{}
 	var (
@@ -484,6 +568,11 @@ func flushMambaCommand(commands []string, mambaStart int, mambaGroup []string) (
 
 func flushPipCommand(commands []string, pipStart int, pipGroup []string, pythonVersion string, virtualEnv bool) (int, []string) {
 	commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion, virtualEnv)
+	return -1, nil
+}
+
+func flushStandardPipCommand(commands []string, pipStart int, pipGroup []string, pythonVersion string, virtualEnv bool) (int, []string) {
+	commands[pipStart] = generateStandardPipInstallCommand(pipGroup, pythonVersion, virtualEnv)
 	return -1, nil
 }
 

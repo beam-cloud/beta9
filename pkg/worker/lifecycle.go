@@ -219,16 +219,15 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
 
-	// For Clip v2 build flows, we don't need to run a runc container. The worker already
-	// built and indexed the image; exiting here avoids fragile exec on FUSE-backed roots.
+	// Clip v2 build short-circuit: For v2 builds, the image was already built via buildah
+	// (see buildOrPullBaseImage) and indexed as a .clip archive. We don't need to run a
+	// runc container or execute any commands inside it. Mark the build as successful and exit.
 	if request.IsBuildRequest() && s.config.ImageService.ClipVersion == 2 {
-		// Short-circuit build runs: we've already built and indexed. Mark success and return.
 		exitCode := 0
 		_, _ = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
 			ContainerId: containerId,
 			ExitCode:    int32(exitCode),
 		}))
-		// Keep instance lifecycle consistent and finalize asynchronously
 		s.containerWg.Add(1)
 		go func() {
 			s.finalizeContainer(containerId, request, &exitCode)
@@ -336,25 +335,21 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 }
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
-	switch {
-	case request.BuildOptions.Dockerfile != nil:
-		// Only build from Dockerfile if it actually contains build steps (RUN lines).
+	// For Clip v2 builds, the Dockerfile is always generated with build steps (by builder.renderV2Dockerfile).
+	// Build via buildah if a Dockerfile is present and contains RUN instructions.
+	if request.BuildOptions.Dockerfile != nil {
 		df := strings.TrimSpace(*request.BuildOptions.Dockerfile)
 		hasRun := strings.HasPrefix(df, "RUN ") || strings.Contains(df, "\nRUN ")
 		if df != "" && hasRun {
-			log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
-			if err := s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request); err != nil {
-				return err
-			}
-			break
+			log.Info().Str("container_id", containerId).Msg("building image from Dockerfile")
+			return s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request)
 		}
-		fallthrough
-	case request.BuildOptions.SourceImage != nil:
-		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.BuildOptions.SourceImage)
+	}
 
-		if err := s.imageClient.PullAndArchiveImage(ctx, outputLogger, request); err != nil {
-			return err
-		}
+	// Fallback: pull the source image and archive it
+	if request.BuildOptions.SourceImage != nil {
+		log.Info().Str("container_id", containerId).Msgf("pulling source image: %s", *request.BuildOptions.SourceImage)
+		return s.imageClient.PullAndArchiveImage(ctx, outputLogger, request)
 	}
 
 	return nil
@@ -683,8 +678,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	spec.Root.Readonly = false
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
-
-	// v1 behavior: do NOT pre-mount or create system mount directories; rely on runc base config mounts
 
 	// Setup container network namespace / devices
 	err = s.containerNetworkManager.Setup(containerId, spec, request)

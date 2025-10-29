@@ -515,25 +515,28 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		log.Warn().Err(err).Str("path", ociPath).Msg("unable to inspect image size")
 	}
 
-	// If configured for v2, skip unpack and create index-only clip from OCI
+	// Clip v2: Skip unpack and create index-only clip from OCI layout.
+	// The image is pushed to the build registry so the clip indexer can stream from it.
 	if c.config.ImageService.ClipVersion == 2 {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-		// Determine registry ref for final image and push it so the indexer can stream from the registry
+		// Determine the build registry to push the image to
 		dockerRegistry := c.config.ImageService.BuildRegistry
 		if dockerRegistry == "" {
 			dockerRegistry = c.config.ImageService.Runner.BaseImageRegistry
-			if dockerRegistry == "" {
-				dockerRegistry = "localhost"
-			}
+		}
+		if dockerRegistry == "" {
+			dockerRegistry = "localhost"
 		}
 		localTag := fmt.Sprintf("%s/%s:latest", dockerRegistry, request.ImageId)
+
+		// Tag the built image
 		if err = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", localTag).Run(); err != nil {
 			return err
 		}
 
-		// Push to registry so CreateFromOCIImage can access it via ImageRef
+		// Push to registry (required for clip indexer to access the image)
 		pushArgs := []string{"--root", imagePath, "push", localTag, "docker://" + localTag}
 		if c.config.ImageService.BuildRegistryInsecure {
 			pushArgs = []string{"--root", imagePath, "push", "--tls-verify=false", localTag, "docker://" + localTag}
@@ -545,7 +548,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		// Index via remote reference (OCI registry)
+		// Create index-only clip archive from the OCI image
 		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
 			ImageRef:      localTag,
 			OutputPath:    archivePath,
@@ -557,7 +560,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		// Push the resulting .clip via existing registry abstraction
+		// Upload the clip archive to the image registry
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
 			return err
 		}
@@ -629,12 +632,12 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
 
+	// Clip v2: Create index-only clip archive from the source image (no unpack needed)
 	if c.config.ImageService.ClipVersion == 2 {
-		// v2: create index-only clip from the local OCI layout we just copied
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-		// Index from the source docker reference (remote)
+		// Create index-only clip from the source docker image reference
 		err = clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
 			ImageRef:      *request.BuildOptions.SourceImage,
 			OutputPath:    archivePath,
@@ -646,6 +649,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 			return err
 		}
 
+		// Upload the clip archive to the image registry
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
 			return err
 		}

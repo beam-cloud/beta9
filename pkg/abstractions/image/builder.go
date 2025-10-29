@@ -110,6 +110,13 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 }
 
 func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error {
+	// For Clip v2 builds, the worker builds via buildah and short-circuits without running a runc container.
+	// We just wait for the container lifecycle to complete (exit with code 0).
+	if b.config.ImageService.ClipVersion == 2 {
+		return b.waitForV2Build(ctx, build)
+	}
+
+	// V1 path: wait for the build container to start running
 	build.log(false, "Setting up build container...\n")
 	buildContainerRunning := false
 
@@ -126,7 +133,7 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 			build.log(true, "Build was aborted.\n")
 			return ctx.Err()
 
-        case <-retryTicker.C:
+		case <-retryTicker.C:
 			r, err := build.getContainerStatus()
 			if err != nil {
 				build.log(true, "Error occurred while checking container status: "+err.Error())
@@ -138,34 +145,22 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 				continue
 			}
 
+			// Check if container exited prematurely
 			exitCode, err := b.containerRepo.GetContainerExitCode(build.containerID)
-            if err == nil {
-                if exitCode != 0 {
-                    exitCodeMsg := getExitCodeMsg(exitCode)
-                    // Wait for any final logs to get sent before returning
-                    time.Sleep(200 * time.Millisecond)
-                    build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
-                    return errors.New(fmt.Sprintf("container exited with error: %s\n", exitCodeMsg))
-                }
-                // For Clip v2 builds, treat a clean exit as success without requiring Running state
-                if b.config.ImageService.ClipVersion == 2 && exitCode == 0 {
-                    buildContainerRunning = true
-                    continue
-                }
-            }
+			if err == nil && exitCode != 0 {
+				exitCodeMsg := getExitCodeMsg(exitCode)
+				time.Sleep(200 * time.Millisecond)
+				build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
+				return errors.New(fmt.Sprintf("container exited with error: %s", exitCodeMsg))
+			}
+
 		case <-timeoutTicker.C:
 			if err := b.stopBuild(build.containerID); err != nil {
 				log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
 			}
-
 			build.log(true, fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout))
 			return errors.New(fmt.Sprintf("timeout: container not running after %s seconds", containerSpinupTimeout))
 		}
-	}
-
-	if !buildContainerRunning {
-		build.log(true, "Unable to connect to build container.\n")
-		return errors.New("container not running")
 	}
 
 	var err error
@@ -175,6 +170,48 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 	}
 
 	return nil
+}
+
+// waitForV2Build waits for a Clip v2 build to complete (buildah bud + index creation)
+func (b *Builder) waitForV2Build(ctx context.Context, build *Build) error {
+	build.log(false, "Building image with buildah...\n")
+
+	containerSpinupTimeout := b.calculateContainerSpinupTimeout(ctx, build.opts)
+	retryTicker := time.NewTicker(100 * time.Millisecond)
+	defer retryTicker.Stop()
+	timeoutTicker := time.NewTicker(containerSpinupTimeout)
+	defer timeoutTicker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Info().Str("container_id", build.containerID).Msg("build was aborted")
+			build.log(true, "Build was aborted.\n")
+			return ctx.Err()
+
+		case <-retryTicker.C:
+			// For v2 builds, the worker short-circuits after building via buildah.
+			// Check if the container has exited (indicating build completion).
+			exitCode, err := b.containerRepo.GetContainerExitCode(build.containerID)
+			if err == nil {
+				if exitCode != 0 {
+					exitCodeMsg := getExitCodeMsg(exitCode)
+					time.Sleep(200 * time.Millisecond)
+					build.log(true, fmt.Sprintf("Build failed: %s\n", exitCodeMsg))
+					return errors.New(fmt.Sprintf("build failed: %s", exitCodeMsg))
+				}
+				// Success: buildah build + index creation completed
+				return nil
+			}
+
+		case <-timeoutTicker.C:
+			if err := b.stopBuild(build.containerID); err != nil {
+				log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
+			}
+			build.log(true, fmt.Sprintf("Timeout: build did not complete after %s.\n", containerSpinupTimeout))
+			return errors.New(fmt.Sprintf("timeout: build did not complete after %s", containerSpinupTimeout))
+		}
+	}
 }
 
 // Build user image
@@ -279,10 +316,10 @@ func (b *Builder) renderV2Dockerfile(opts *BuildOpts) (string, error) {
             sb.WriteString("\n")
         }
 
-        // Pip install for requested packages
+        // Pip install for requested packages (use standard pip for dockerfile builds)
         if len(opts.PythonPackages) > 0 && pythonVersion != "" {
             // Assume virtual env only when micromamba is requested
-            pipCmd := generatePipInstallCommand(opts.PythonPackages, pythonVersion, micromamba)
+            pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, micromamba)
             if strings.TrimSpace(pipCmd) != "" {
                 sb.WriteString("RUN ")
                 sb.WriteString(pipCmd)
@@ -293,7 +330,7 @@ func (b *Builder) renderV2Dockerfile(opts *BuildOpts) (string, error) {
 
     // Coalesce build steps (pip/mamba) relative to pythonVersion and micromamba virtual env
     if len(opts.BuildSteps) > 0 {
-        steps := parseBuildSteps(opts.BuildSteps, pythonVersion, micromamba)
+        steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, micromamba)
         for _, line := range steps {
             if strings.TrimSpace(line) == "" {
                 continue

@@ -331,6 +331,26 @@ func TestBuild_archive_Failure(t *testing.T) {
 	mockRuncClient.AssertExpectations(t)
 }
 
+// Test parseBuildStepsForDockerfile (v2) uses standard pip instead of uv-b9
+func Test_parseBuildStepsForDockerfile(t *testing.T) {
+	pythonVersion := "python3.9"
+	steps := []BuildStep{
+		{Type: shellCommandType, Command: "apt update"},
+		{Type: pipCommandType, Command: "requests"},
+		{Type: pipCommandType, Command: "numpy"},
+		{Type: shellCommandType, Command: "echo done"},
+	}
+
+	expected := []string{
+		"apt update",
+		"python3.9 -m pip install --break-system-packages \"requests\" \"numpy\"", // Standard pip for v2
+		"echo done",
+	}
+
+	result := parseBuildStepsForDockerfile(steps, pythonVersion, false)
+	assert.Equal(t, expected, result)
+}
+
 // Test parseBuildSteps specifically for command coalescing
 func Test_parseBuildSteps(t *testing.T) {
 	pythonVersion := "python3.9"
