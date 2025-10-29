@@ -42,9 +42,8 @@ const (
 )
 
 var (
-	baseImageCachePath   string = "/images/cache"
-	baseImageMountPath   string = "/images/mnt/%s"
-	buildahStoragePath   string = "/images/buildah"
+	baseImageCachePath string = "/images/cache"
+	baseImageMountPath string = "/images/mnt/%s"
 )
 
 var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
@@ -520,20 +519,6 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 	return nil
 }
 
-// checkBuildahImageExists checks if an image already exists in buildah's local storage
-func (c *ImageClient) checkBuildahImageExists(ctx context.Context, imagePath, imageRef string) (bool, error) {
-	// Use buildah images to check if the image exists
-	cmd := exec.CommandContext(ctx, "buildah", "--root", imagePath, "images", "--format", "{{.Name}}", imageRef)
-	output, err := cmd.Output()
-	if err != nil {
-		// If the command fails, assume image doesn't exist
-		return false, nil
-	}
-
-	// If output is non-empty, the image exists
-	return len(strings.TrimSpace(string(output))) > 0, nil
-}
-
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	startTime := time.Now()
 
@@ -559,16 +544,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	fmt.Fprintf(f, *request.BuildOptions.Dockerfile)
 	f.Close()
 
-	// Use persistent buildah storage to enable caching of base images across builds
-	imagePath := buildahStoragePath
-	os.MkdirAll(imagePath, 0755)
-
+	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
 	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
 	defer os.RemoveAll(tmpBundlePath.Path)
+	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
 
-	// Determine registry settings and pull base image if needed
+	// Pre-pull base image with insecure option if necessary
 	insecure := false
 	sourceImage := ""
 	if request.BuildOptions.SourceImage != nil {
@@ -586,30 +569,18 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 				insecure = c.config.ImageService.BuildRegistryInsecure || true
 			}
 		}
-
-		// Check if image already exists in buildah's local storage to avoid redundant pulls
-		imageExists, err := c.checkBuildahImageExists(ctx, imagePath, sourceImage)
-		if err != nil {
-			log.Warn().Err(err).Str("image", sourceImage).Msg("failed to check if image exists, will attempt pull")
-			imageExists = false
+		// buildah pull the base image so bud doesn't attempt HTTPS
+		pullArgs := []string{"--root", imagePath, "pull"}
+		if insecure {
+			pullArgs = append(pullArgs, "--tls-verify=false")
 		}
 
-		if !imageExists {
-			outputLogger.Info(fmt.Sprintf("Pulling base image: %s\n", sourceImage))
-			pullArgs := []string{"--root", imagePath, "pull"}
-			if insecure {
-				pullArgs = append(pullArgs, "--tls-verify=false")
-			}
-
-			pullArgs = append(pullArgs, "docker://"+sourceImage)
-			cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
-			cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-			cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
-			if err := cmd.Run(); err != nil {
-				return err
-			}
-		} else {
-			outputLogger.Info(fmt.Sprintf("Using cached base image: %s\n", sourceImage))
+		pullArgs = append(pullArgs, "docker://"+sourceImage)
+		cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
+		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+		if err := cmd.Run(); err != nil {
+			return err
 		}
 	}
 
@@ -634,14 +605,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if err != nil {
 		return err
 	}
-
-	// Clean up the built image from buildah storage (but keep base images cached)
-	// This prevents unbounded storage growth while maintaining base image caching
-	rmCmd := exec.CommandContext(ctx, "buildah", "--root", imagePath, "rmi", request.ImageId+":latest")
-	if rmErr := rmCmd.Run(); rmErr != nil {
-		log.Warn().Err(rmErr).Str("image", request.ImageId).Msg("failed to remove built image from buildah storage")
-	}
-
 	ociImageInfo, err := os.Stat(ociPath)
 	if err == nil {
 		ociImageMB := float64(ociImageInfo.Size()) / 1024 / 1024
@@ -691,12 +654,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		// Upload the clip archive to the image registry
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
 			return err
-		}
-
-		// Clean up the image from buildah storage after clip indexing is complete
-		rmCmd := exec.CommandContext(ctx, "buildah", "--root", imagePath, "rmi", localTag)
-		if rmErr := rmCmd.Run(); rmErr != nil {
-			log.Warn().Err(rmErr).Str("image", localTag).Msg("failed to remove image from buildah storage")
 		}
 
 		return nil
