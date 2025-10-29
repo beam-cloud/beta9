@@ -490,11 +490,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
 
-	if options.InitialSpec != nil {
-		spec.Process.Env = append(options.InitialSpec.Process.Env, env...)
-	} else {
-		spec.Process.Env = append(spec.Process.Env, env...)
-	}
+	// Environment is already assembled in getContainerEnvironment (includes InitialSpec.Env if present)
+	spec.Process.Env = env
 
 	// We need to include the checkpoint signal files in the container spec
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
