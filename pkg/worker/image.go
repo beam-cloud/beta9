@@ -129,6 +129,8 @@ type ImageClient struct {
 	workerId           string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
+	// Cache source image references for v2 images (imageId -> sourceImageRef)
+	v2ImageRefs        *common.SafeMap[string]
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
@@ -148,6 +150,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		workerRepoClient:   workerRepoClient,
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+		v2ImageRefs:        common.NewSafeMap[string](),
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
@@ -273,13 +276,20 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				}
 			}
 			mountArchivePath = canonicalIndexPath
-			// If the embedded OCI storage info is missing registry URL, default to docker.io
+			// Extract and cache the OCI image reference for later use (for deriving spec in non-build containers)
 			if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok {
 				if ociInfo.RegistryURL == "" {
 					ociInfo.RegistryURL = "https://docker.io"
-					// Note: metadata is not persisted back to file; ClipFS should handle missing URL by deriving from refs
 				}
-				_ = ociInfo
+				// Build the full image reference from OCI storage info
+				if ociInfo.Repository != "" && ociInfo.Reference != "" {
+					// Convert registry URL to registry host (strip https://)
+					registryHost := strings.TrimPrefix(ociInfo.RegistryURL, "https://")
+					registryHost = strings.TrimPrefix(registryHost, "http://")
+					sourceRef := fmt.Sprintf("%s/%s:%s", registryHost, ociInfo.Repository, ociInfo.Reference)
+					c.v2ImageRefs.Set(imageId, sourceRef)
+					log.Info().Str("image_id", imageId).Str("source_image", sourceRef).Msg("cached source image reference from clip metadata")
+				}
 			}
 		}
 	}
@@ -358,6 +368,11 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	return elapsed, nil
 }
 
+// GetSourceImageRef retrieves the cached source image reference for a v2 image
+func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
+	return c.v2ImageRefs.Get(imageId)
+}
+
 func (c *ImageClient) Cleanup() error {
 	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
 		log.Info().Str("image_id", imageId).Msg("un-mounting image")
@@ -428,6 +443,11 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	outputLogger.Info("Building image from Dockerfile\n")
 	startTime := time.Now()
+
+	// Cache the source image reference for v2 images so we can retrieve it later for non-build containers
+	if c.config.ImageService.ClipVersion == 2 && request.BuildOptions.SourceImage != nil {
+		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
+	}
 
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
@@ -603,6 +623,11 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	baseImage, err := image.ExtractImageNameAndTag(*request.BuildOptions.SourceImage)
 	if err != nil {
 		return err
+	}
+
+	// Cache the source image reference for v2 images
+	if c.config.ImageService.ClipVersion == 2 && request.BuildOptions.SourceImage != nil {
+		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
 	}
 
 	outputLogger.Info("Inspecting image name and verifying architecture...\n")

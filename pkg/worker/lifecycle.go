@@ -388,18 +388,24 @@ func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec,
 // deriveSpecFromSourceImage creates an OCI spec from the source image metadata.
 // This is used for v2 images where we don't have an unpacked bundle with config.json.
 func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*specs.Spec, error) {
-	// Get source image reference from the request
+	// Get source image reference from the request or from cache
 	var sourceImageRef string
 	var sourceImageCreds string
 
 	if request.BuildOptions.SourceImage != nil {
 		sourceImageRef = *request.BuildOptions.SourceImage
 		sourceImageCreds = request.BuildOptions.SourceImageCreds
+	} else {
+		// For non-build containers, try to get the source image from the cache
+		if ref, ok := s.imageClient.GetSourceImageRef(request.ImageId); ok {
+			sourceImageRef = ref
+			log.Info().Str("image_id", request.ImageId).Str("source_image", sourceImageRef).Msg("retrieved source image from cache")
+		}
 	}
 
 	// If we don't have a source image reference, return nil (will use base spec)
 	if sourceImageRef == "" {
-		log.Warn().Str("image_id", request.ImageId).Msg("no source image reference, using base spec")
+		log.Warn().Str("image_id", request.ImageId).Msg("no source image reference available, using base spec")
 		return nil, nil
 	}
 
@@ -415,13 +421,19 @@ func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*sp
 
 	log.Info().Str("image_id", request.ImageId).Str("source_image", sourceImageRef).Msg("derived spec from source image")
 
-	// Start with base runc config spec
-	spec := s.runcServer.baseConfigSpec
+	// Create a clean spec with only the base config env (TERM=xterm)
+	// We'll let the caller merge this with the request-specific env
+	spec := specs.Spec{
+		Process: &specs.Process{
+			Env: []string{}, // Start with empty env - will be populated from image
+		},
+	}
 
 	// Apply image configuration
 	if imgMeta.Config != nil {
 		if len(imgMeta.Config.Env) > 0 {
-			spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
+			// Only use image env, don't append to base spec to avoid duplicates
+			spec.Process.Env = imgMeta.Config.Env
 		}
 		if imgMeta.Config.WorkingDir != "" {
 			spec.Process.Cwd = imgMeta.Config.WorkingDir
@@ -437,7 +449,7 @@ func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*sp
 		}
 	} else if len(imgMeta.Env) > 0 {
 		// Fallback to legacy Env field if Config is not available
-		spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
+		spec.Process.Env = imgMeta.Env
 	}
 
 	return &spec, nil
