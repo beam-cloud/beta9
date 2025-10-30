@@ -212,6 +212,7 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 		BuildCtxObject: in.BuildCtxObject,
 		BuildSecrets:   buildSecrets,
 		Gpu:            in.Gpu,
+		ClipVersion:    is.config.ImageService.ClipVersion,
 	}
 
 	// Only set default beta9 base image if not using a custom Dockerfile
