@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image/mocks"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -45,6 +46,15 @@ func setupTestBuild(t *testing.T, opts *BuildOpts) (*Build, *mocks.RuncClient, c
 	build, err := NewBuild(context.Background(), opts, outputChan, config)
 	assert.NoError(t, err)
 	build.runcClient = mockRuncClient // Inject the mock client
+
+	// Set up auth info if not already present
+	if build.authInfo == nil {
+		build.authInfo = &auth.AuthInfo{
+			Workspace: &types.Workspace{
+				ExternalId: "test-workspace-id",
+			},
+		}
+	}
 
 	// Mock image ID generation (simplified)
 	build.imageID = "test-image-id"
@@ -590,6 +600,73 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	result := parseBuildStepsForDockerfile(steps, pythonVersion, false)
 	assert.Equal(t, expected, result)
+}
+
+// TestGenerateContainerRequest_SourceImageHandling verifies that SourceImage is correctly set
+// based on whether a custom Dockerfile, custom base image, or beta9 base image is used
+func TestGenerateContainerRequest_SourceImageHandling(t *testing.T) {
+	tests := []struct {
+		name                string
+		opts                *BuildOpts
+		expectedSourceImage *string
+		description         string
+	}{
+		{
+			name: "CustomDockerfile_NoSourceImage",
+			opts: &BuildOpts{
+				Dockerfile:     "FROM ubuntu:22.04\nRUN echo hello",
+				BuildCtxObject: "some-object-id",
+				PythonVersion:  "python3.10",
+				// Note: BaseImageName and BaseImageRegistry are not set for custom Dockerfiles
+			},
+			expectedSourceImage: nil,
+			description:         "Custom Dockerfile should not set SourceImage (Dockerfile has its own FROM)",
+		},
+		{
+			name: "CustomBaseImage_SetsSourceImage",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/ubuntu",
+				BaseImageTag:      "22.04",
+				ExistingImageUri:  "docker.io/library/ubuntu:22.04",
+				PythonVersion:     "python3.10",
+			},
+			expectedSourceImage: stringPtr("docker.io/library/ubuntu:22.04"),
+			description:         "Custom base image (from_registry) should set SourceImage",
+		},
+		{
+			name: "Beta9BaseImage_SetsSourceImage",
+			opts: &BuildOpts{
+				BaseImageRegistry: "registry.localhost:5000",
+				BaseImageName:     "beta9-runner",
+				BaseImageTag:      "py310-latest",
+				PythonVersion:     "python3.10",
+			},
+			expectedSourceImage: stringPtr("registry.localhost:5000/beta9-runner:py310-latest"),
+			description:         "Beta9 base image should set SourceImage",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			build, _, _ := setupTestBuild(t, tt.opts)
+			build.config.ImageService.ClipVersion = 2 // Test with v2
+
+			req, err := build.generateContainerRequest()
+			assert.NoError(t, err)
+
+			if tt.expectedSourceImage == nil {
+				assert.Nil(t, req.BuildOptions.SourceImage, tt.description)
+			} else {
+				assert.NotNil(t, req.BuildOptions.SourceImage, tt.description)
+				assert.Equal(t, *tt.expectedSourceImage, *req.BuildOptions.SourceImage, tt.description)
+			}
+		})
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
 }
 
 // Test parseBuildSteps specifically for command coalescing

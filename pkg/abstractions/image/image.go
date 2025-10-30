@@ -203,26 +203,32 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 	}
 
 	opts := &BuildOpts{
-		BaseImageTag:      baseImageTag,
-		BaseImageName:     is.config.ImageService.Runner.BaseImageName,
-		BaseImageRegistry: is.config.ImageService.Runner.BaseImageRegistry,
-		PythonVersion:     in.PythonVersion,
-		PythonPackages:    in.PythonPackages,
-		Commands:          in.Commands,
-		BuildSteps:        convertBuildSteps(in.BuildSteps),
-		ExistingImageUri:  in.ExistingImageUri,
-		EnvVars:           in.EnvVars,
-		Dockerfile:        in.Dockerfile,
-		BuildCtxObject:    in.BuildCtxObject,
-		BuildSecrets:      buildSecrets,
-		Gpu:               in.Gpu,
+		PythonVersion:  in.PythonVersion,
+		PythonPackages: in.PythonPackages,
+		Commands:       in.Commands,
+		BuildSteps:     convertBuildSteps(in.BuildSteps),
+		EnvVars:        in.EnvVars,
+		Dockerfile:     in.Dockerfile,
+		BuildCtxObject: in.BuildCtxObject,
+		BuildSecrets:   buildSecrets,
+		Gpu:            in.Gpu,
+	}
+
+	// Only set default beta9 base image if not using a custom Dockerfile
+	// Custom Dockerfiles specify their own base image in the FROM instruction
+	if in.Dockerfile == "" {
+		opts.BaseImageTag = baseImageTag
+		opts.BaseImageName = is.config.ImageService.Runner.BaseImageName
+		opts.BaseImageRegistry = is.config.ImageService.Runner.BaseImageRegistry
 	}
 
 	if in.IgnorePython {
 		opts.IgnorePython = true
 	}
 
+	// Handle custom base image (from Image.from_registry or base_image parameter)
 	if in.ExistingImageUri != "" {
+		opts.ExistingImageUri = in.ExistingImageUri
 		opts.handleCustomBaseImage(nil)
 	}
 
