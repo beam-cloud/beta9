@@ -505,3 +505,92 @@ func TestV2WithoutDockerfile_HashesBuildOptions(t *testing.T) {
 	// Should produce different image IDs
 	assert.NotEqual(t, id1, id2, "V2 builds without Dockerfiles should hash build options")
 }
+
+// TestCustomDockerfile_BuildContextChangesInvalidateCache ensures that when files
+// in the build context change, the image ID changes even if Dockerfile stays the same.
+// This is CRITICAL for correctness - if app.py changes but Dockerfile doesn't,
+// we must detect it and rebuild!
+func TestCustomDockerfile_BuildContextChangesInvalidateCache(t *testing.T) {
+	dockerfile := "FROM ubuntu:22.04\nCOPY app.py /app/\nRUN pip install -r /app/requirements.txt"
+
+	// First build with context hash "abc123" (represents original files)
+	opts1 := &BuildOpts{
+		Dockerfile:     dockerfile,
+		BuildCtxObject: "abc123", // Hash of original files
+		ClipVersion:    2,
+	}
+
+	id1, err := getImageID(opts1)
+	require.NoError(t, err)
+
+	// Second build - same Dockerfile but files changed!
+	// BuildCtxObject is different because FileSyncer detected file changes
+	opts2 := &BuildOpts{
+		Dockerfile:     dockerfile, // Same Dockerfile
+		BuildCtxObject: "def456",   // Different hash - app.py changed!
+		ClipVersion:    2,
+	}
+
+	id2, err := getImageID(opts2)
+	require.NoError(t, err)
+
+	// Image IDs MUST be different to trigger rebuild
+	assert.NotEqual(t, id1, id2, "Changing build context files must invalidate cache and produce different image ID")
+}
+
+// TestCustomDockerfile_OnlyDockerfileChanges ensures Dockerfile changes are detected
+func TestCustomDockerfile_OnlyDockerfileChanges(t *testing.T) {
+	buildCtxObject := "abc123" // Same files
+
+	// First build
+	opts1 := &BuildOpts{
+		Dockerfile:     "FROM ubuntu:22.04\nRUN echo 'v1'",
+		BuildCtxObject: buildCtxObject,
+		ClipVersion:    2,
+	}
+
+	id1, err := getImageID(opts1)
+	require.NoError(t, err)
+
+	// Second build - only Dockerfile changed, files the same
+	opts2 := &BuildOpts{
+		Dockerfile:     "FROM ubuntu:22.04\nRUN echo 'v2'", // Changed!
+		BuildCtxObject: buildCtxObject,                      // Same files
+		ClipVersion:    2,
+	}
+
+	id2, err := getImageID(opts2)
+	require.NoError(t, err)
+
+	// Image IDs MUST be different
+	assert.NotEqual(t, id1, id2, "Dockerfile changes must produce different image ID")
+}
+
+// TestCustomDockerfile_NothingChanges ensures cache works when nothing changes
+func TestCustomDockerfile_NothingChanges(t *testing.T) {
+	dockerfile := "FROM ubuntu:22.04\nCOPY app.py /app/"
+	buildCtxObject := "abc123"
+
+	// First build
+	opts1 := &BuildOpts{
+		Dockerfile:     dockerfile,
+		BuildCtxObject: buildCtxObject,
+		ClipVersion:    2,
+	}
+
+	id1, err := getImageID(opts1)
+	require.NoError(t, err)
+
+	// Second build - nothing changed
+	opts2 := &BuildOpts{
+		Dockerfile:     dockerfile,     // Same
+		BuildCtxObject: buildCtxObject, // Same
+		ClipVersion:    2,
+	}
+
+	id2, err := getImageID(opts2)
+	require.NoError(t, err)
+
+	// Image IDs MUST be the same - use cache!
+	assert.Equal(t, id1, id2, "When nothing changes, image ID should be the same to use cache")
+}
