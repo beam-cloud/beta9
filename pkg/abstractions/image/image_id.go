@@ -3,6 +3,7 @@ package image
 import (
 	"fmt"
 
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/mitchellh/hashstructure/v2"
 )
 
@@ -16,7 +17,7 @@ import (
 func getImageID(opts *BuildOpts) (string, error) {
 	// For V2 builds with a Dockerfile, the Dockerfile contains all the build instructions
 	// Base the image ID primarily on the Dockerfile content and build context
-	if opts.ClipVersion == 2 && opts.Dockerfile != "" {
+	if opts.ClipVersion == uint32(types.ClipVersion2) && opts.Dockerfile != "" {
 		hashInput := struct {
 			Dockerfile     string
 			BuildCtxObject string
@@ -38,18 +39,18 @@ func getImageID(opts *BuildOpts) (string, error) {
 	// For V1 builds and V2 builds without Dockerfiles, hash all build options
 	// Order matters for consistency, so we use a struct with defined field order
 	hashInput := struct {
-		BaseImageName    string
-		BaseImageTag     string
-		BaseImageDigest  string
+		BaseImageName     string
+		BaseImageTag      string
+		BaseImageDigest   string
 		BaseImageRegistry string
-		ExistingImageUri string
-		PythonVersion    string
-		PythonPackages   []string
-		Commands         []string
-		BuildSteps       []BuildStep
-		EnvVars          []string
-		Dockerfile       string
-		BuildCtxObject   string
+		ExistingImageUri  string
+		PythonVersion     string
+		PythonPackages    []string
+		Commands          []string
+		BuildSteps        []BuildStep
+		EnvVars           []string
+		Dockerfile        string
+		BuildCtxObject    string
 	}{
 		BaseImageName:     opts.BaseImageName,
 		BaseImageTag:      opts.BaseImageTag,
