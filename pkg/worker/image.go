@@ -46,7 +46,6 @@ var (
 	baseImageMountPath string = "/images/mnt/%s"
 )
 
-
 func getImageCachePath() string {
 	path := baseImageCachePath
 
@@ -368,9 +367,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		return elapsed, err
 	}
 
-	// Note: /workspace and /volumes directories are created in the overlay upper layer
-	// when the container filesystem is set up, so no need to create them here
-
 	c.mountedFuseServers.Set(imageId, server)
 	return elapsed, nil
 }
@@ -676,8 +672,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 
-	// Note: /workspace and /volumes directories are created in the overlay upper layer
-
 	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
 	if err != nil {
 		return err
@@ -779,7 +773,6 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 	tmpBundlePath := filepath.Join(bundlePath.Path + "_")
 	err = umoci.Unpack(engineExt, baseImageTag, tmpBundlePath, unpackOptions)
 	if err == nil {
-		// Note: /workspace and /volumes directories are created in the overlay upper layer
 		return os.Rename(tmpBundlePath, bundlePath.Path)
 	}
 

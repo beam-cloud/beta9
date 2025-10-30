@@ -113,7 +113,7 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 
 func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error {
 	isV2Build := b.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
-	
+
 	// Set appropriate log message based on build version
 	if isV2Build {
 		build.log(false, "Building image...\n")
@@ -177,7 +177,7 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 			if err := b.stopBuild(build.containerID); err != nil {
 				log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
 			}
-			
+
 			timeoutMsg := "Timeout: container not running after %s.\n"
 			if isV2Build {
 				timeoutMsg = "Timeout: build did not complete after %s.\n"
@@ -271,19 +271,19 @@ func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 	var sb strings.Builder
 	sb.WriteString(opts.Dockerfile)
-	
+
 	// Ensure Dockerfile ends with newline before appending
 	if !strings.HasSuffix(opts.Dockerfile, "\n") {
 		sb.WriteString("\n")
 	}
-	
+
 	// Determine Python version and environment type
 	pythonVersion := opts.PythonVersion
 	if pythonVersion == types.Python3.String() {
 		pythonVersion = b.config.ImageService.PythonVersion
 	}
 	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
-	
+
 	// Install Python packages if specified
 	if len(opts.PythonPackages) > 0 && pythonVersion != "" {
 		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
@@ -292,7 +292,7 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 			sb.WriteString("\n")
 		}
 	}
-	
+
 	// Add build steps
 	if len(opts.BuildSteps) > 0 {
 		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
@@ -304,10 +304,10 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 			}
 		}
 	}
-	
+
 	// Add explicit shell commands
 	b.renderCommands(&sb, opts)
-	
+
 	return sb.String()
 }
 
@@ -318,9 +318,6 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	sb.WriteString("FROM ")
 	sb.WriteString(getSourceImage(opts))
 	sb.WriteString("\n")
-
-	// Note: /workspace and /volumes directories are created in the overlay upper layer
-	// at container runtime, so no need to add them to the Dockerfile
 
 	// Skip Python setup if explicitly ignored and no packages requested
 	// This matches v1 behavior in setupPythonEnv()
@@ -381,7 +378,6 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	b.renderCommands(&sb, opts)
 	return sb.String(), nil
 }
-
 
 // renderCommands adds RUN commands for each non-empty command
 func (b *Builder) renderCommands(sb *strings.Builder, opts *BuildOpts) {
