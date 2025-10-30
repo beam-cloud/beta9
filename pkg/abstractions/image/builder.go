@@ -110,21 +110,22 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 }
 
 func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error {
-	// For Clip v2 builds, the worker builds via buildah and short-circuits without running a runc container.
-	// We just wait for the container lifecycle to complete (exit with code 0).
-	if b.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		return b.waitForV2Build(ctx, build)
+	isV2Build := b.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
+	
+	// Set appropriate log message based on build version
+	if isV2Build {
+		build.log(false, "Building image...\n")
+	} else {
+		build.log(false, "Setting up build container...\n")
 	}
-
-	// V1 path: wait for the build container to start running
-	build.log(false, "Setting up build container...\n")
-	buildContainerRunning := false
 
 	containerSpinupTimeout := b.calculateContainerSpinupTimeout(ctx, build.opts)
 	retryTicker := time.NewTicker(100 * time.Millisecond)
 	defer retryTicker.Stop()
 	timeoutTicker := time.NewTicker(containerSpinupTimeout)
 	defer timeoutTicker.Stop()
+
+	buildContainerRunning := false
 
 	for !buildContainerRunning {
 		select {
@@ -134,78 +135,57 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 			return ctx.Err()
 
 		case <-retryTicker.C:
-			r, err := build.getContainerStatus()
-			if err != nil {
-				build.log(true, "Error occurred while checking container status: "+err.Error())
-				return err
-			}
-
-			if r.Running {
-				buildContainerRunning = true
-				continue
-			}
-
-			// Check if container exited prematurely
+			// Check exit code for both v1 and v2 builds
 			exitCode, err := b.containerRepo.GetContainerExitCode(build.containerID)
-			if err == nil && exitCode != 0 {
-				exitCodeMsg := getExitCodeMsg(exitCode)
-				time.Sleep(200 * time.Millisecond)
-				build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
-				return errors.New(fmt.Sprintf("container exited with error: %s", exitCodeMsg))
+			if err == nil {
+				// For v2 builds, exit indicates completion (success or failure)
+				// For v1 builds, non-zero exit indicates premature failure
+				if isV2Build {
+					if exitCode != 0 {
+						exitCodeMsg := getExitCodeMsg(exitCode)
+						time.Sleep(200 * time.Millisecond)
+						build.log(true, fmt.Sprintf("Build failed: %s\n", exitCodeMsg))
+						return errors.New(fmt.Sprintf("build failed: %s", exitCodeMsg))
+					}
+					// Success: buildah build + index creation completed
+					return nil
+				} else if exitCode != 0 {
+					exitCodeMsg := getExitCodeMsg(exitCode)
+					time.Sleep(200 * time.Millisecond)
+					build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
+					return errors.New(fmt.Sprintf("container exited with error: %s", exitCodeMsg))
+				}
+			}
+
+			// For v1 builds, check if container is running
+			if !isV2Build {
+				r, err := build.getContainerStatus()
+				if err != nil {
+					build.log(true, "Error occurred while checking container status: "+err.Error())
+					return err
+				}
+
+				if r.Running {
+					buildContainerRunning = true
+					continue
+				}
 			}
 
 		case <-timeoutTicker.C:
 			if err := b.stopBuild(build.containerID); err != nil {
 				log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
 			}
-			build.log(true, fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout))
-			return errors.New(fmt.Sprintf("timeout: container not running after %s seconds", containerSpinupTimeout))
+			
+			timeoutMsg := "Timeout: container not running after %s.\n"
+			if isV2Build {
+				timeoutMsg = "Timeout: build did not complete after %s.\n"
+			}
+			build.log(true, fmt.Sprintf(timeoutMsg, containerSpinupTimeout))
+			return errors.New(fmt.Sprintf(strings.TrimSuffix(timeoutMsg, ".\n"), containerSpinupTimeout))
 		}
 	}
 
 	return nil
-}
-
-// waitForV2Build waits for a CLIP v2 build to complete
-func (b *Builder) waitForV2Build(ctx context.Context, build *Build) error {
-	build.log(false, "Building image...\n")
-
-	containerSpinupTimeout := b.calculateContainerSpinupTimeout(ctx, build.opts)
-	retryTicker := time.NewTicker(100 * time.Millisecond)
-	defer retryTicker.Stop()
-	timeoutTicker := time.NewTicker(containerSpinupTimeout)
-	defer timeoutTicker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info().Str("container_id", build.containerID).Msg("build was aborted")
-			build.log(true, "Build was aborted.\n")
-			return ctx.Err()
-
-		case <-retryTicker.C:
-			// For v2 builds, the worker short-circuits after building via buildah.
-			// Check if the container has exited (indicating build completion).
-			exitCode, err := b.containerRepo.GetContainerExitCode(build.containerID)
-			if err == nil {
-				if exitCode != 0 {
-					exitCodeMsg := getExitCodeMsg(exitCode)
-					time.Sleep(200 * time.Millisecond)
-					build.log(true, fmt.Sprintf("Build failed: %s\n", exitCodeMsg))
-					return errors.New(fmt.Sprintf("build failed: %s", exitCodeMsg))
-				}
-				// Success: buildah build + index creation completed
-				return nil
-			}
-
-		case <-timeoutTicker.C:
-			if err := b.stopBuild(build.containerID); err != nil {
-				log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
-			}
-			build.log(true, fmt.Sprintf("Timeout: build did not complete after %s.\n", containerSpinupTimeout))
-			return errors.New(fmt.Sprintf("timeout: build did not complete after %s", containerSpinupTimeout))
-		}
-	}
 }
 
 // Build user image
@@ -215,13 +195,17 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	// Prepare opts for image ID calculation (renders Dockerfile for v2 if needed)
-	if err := prepareOptsForImageID(build.opts, b.config.ImageService.ClipVersion, b.RenderV2Dockerfile); err != nil {
-		build.log(true, "Failed to prepare build options.\n")
-		return err
+	// For v2 builds, render Dockerfile from build options if not already provided
+	isV2 := b.config.ImageService.ClipVersion == 2
+	if isV2 && build.opts.Dockerfile == "" && b.hasWorkToDo(build.opts) {
+		build.opts.Dockerfile, err = b.RenderV2Dockerfile(build.opts)
+		if err != nil {
+			build.log(true, "Failed to render Dockerfile.\n")
+			return err
+		}
 	}
 
-	// Calculate final image ID (includes Dockerfile for v2, commands/steps for v1)
+	// Calculate image ID from all build options
 	build.imageID, err = getImageID(build.opts)
 	if err != nil {
 		return err
@@ -239,16 +223,15 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go build.streamLogs()
 
-	// Always wait for the build container lifecycle to progress so logs stream through.
-	// For v2, waitForBuildContainer treats clean exit (exitCode==0) as success.
+	// Wait for the build container lifecycle to complete
 	err = b.waitForBuildContainer(ctx, build)
 	if err != nil {
 		return err
 	}
 
-	// For v2 builds, the worker built the image from the Dockerfile before the container ran.
-	// Skip container command execution and archiving.
-	if b.config.ImageService.ClipVersion != 2 {
+	// V1: Execute commands in container and archive filesystem
+	// V2: Buildah already built the image, just emit success
+	if !isV2 {
 		if err := build.prepareCommands(); err != nil {
 			return err
 		}
@@ -261,7 +244,6 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 			return err
 		}
 	} else {
-		// Emit a friendly completion line with the final image id
 		build.log(false, "=> Build complete 🎉\n")
 	}
 
@@ -270,78 +252,88 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	return nil
 }
 
-// RenderV2Dockerfile converts build options into a Dockerfile that can be built by the worker
-// using buildah. We intentionally avoid executing any commands in a runc container.
-func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
-	base := getSourceImage(opts)
+// hasWorkToDo returns true if there are build steps that need a Dockerfile
+func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
+	return len(opts.Commands) > 0 || len(opts.BuildSteps) > 0 || len(opts.PythonPackages) > 0
+}
 
+// RenderV2Dockerfile converts build options into a Dockerfile that can be built by buildah.
+// The logic mirrors v1's runtime Python detection, but uses static analysis since we can't probe at runtime.
+func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	var sb strings.Builder
 	sb.WriteString("FROM ")
-	sb.WriteString(base)
+	sb.WriteString(getSourceImage(opts))
 	sb.WriteString("\n")
 
-	// Determine python install plan without runtime probing
-	micromamba := strings.Contains(opts.PythonVersion, "micromamba")
+	// Skip Python setup if explicitly ignored and no packages requested
+	// This matches v1 behavior in setupPythonEnv()
+	if opts.IgnorePython && len(opts.PythonPackages) == 0 {
+		b.renderCommands(&sb, opts)
+		return sb.String(), nil
+	}
+
+	// Determine Python version and environment type
 	pythonVersion := opts.PythonVersion
 	if pythonVersion == types.Python3.String() {
 		pythonVersion = b.config.ImageService.PythonVersion
 	}
+	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
 
-	// Check if we're using a beta9 base image (which already has Python installed)
+	// Check if this is a beta9 base image (which already has Python installed)
+	// This mimics v1's runtime check: if python exists in the container, skip installation
 	isBeta9BaseImage := opts.BaseImageName == b.config.ImageService.Runner.BaseImageName &&
 		opts.BaseImageRegistry == b.config.ImageService.Runner.BaseImageRegistry
 
-	// If not ignoring python, add python install (standalone) or micromamba config
-	// Skip Python installation for beta9 base images since they already have Python
-	if !(opts.IgnorePython && len(opts.PythonPackages) == 0) {
-		if micromamba {
-			sb.WriteString("RUN micromamba config set use_lockfiles False\n")
-		} else if pythonVersion != "" && !isBeta9BaseImage {
-			installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion)
-			if err != nil {
-				return "", err
-			}
+	// Python environment setup
+	if isMicromamba {
+		sb.WriteString("RUN micromamba config set use_lockfiles False\n")
+	} else if pythonVersion != "" && !isBeta9BaseImage {
+		// Only install Python if NOT a beta9 base image
+		// Beta9 images already have Python, similar to how v1 skips if python probe succeeds
+		if installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion); err != nil {
+			return "", err
+		} else {
 			sb.WriteString("RUN ")
 			sb.WriteString(installCmd)
 			sb.WriteString("\n")
 		}
+	}
 
-		// Pip install for requested packages (use standard pip for dockerfile builds)
-		if len(opts.PythonPackages) > 0 && pythonVersion != "" {
-			// Assume virtual env only when micromamba is requested
-			pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, micromamba)
-			if strings.TrimSpace(pipCmd) != "" {
+	// Install Python packages (works with or without prior Python installation)
+	if len(opts.PythonPackages) > 0 && pythonVersion != "" {
+		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
+			sb.WriteString("RUN ")
+			sb.WriteString(pipCmd)
+			sb.WriteString("\n")
+		}
+	}
+
+	// Add build steps (coalesced pip/mamba commands)
+	if len(opts.BuildSteps) > 0 {
+		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
+		for _, cmd := range steps {
+			if cmd != "" {
 				sb.WriteString("RUN ")
-				sb.WriteString(pipCmd)
+				sb.WriteString(cmd)
 				sb.WriteString("\n")
 			}
 		}
 	}
 
-	// Coalesce build steps (pip/mamba) relative to pythonVersion and micromamba virtual env
-	if len(opts.BuildSteps) > 0 {
-		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, micromamba)
-		for _, line := range steps {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
+	// Add explicit shell commands
+	b.renderCommands(&sb, opts)
+	return sb.String(), nil
+}
+
+// renderCommands adds RUN commands for each non-empty command
+func (b *Builder) renderCommands(sb *strings.Builder, opts *BuildOpts) {
+	for _, cmd := range opts.Commands {
+		if cmd != "" {
 			sb.WriteString("RUN ")
-			sb.WriteString(line)
+			sb.WriteString(cmd)
 			sb.WriteString("\n")
 		}
 	}
-
-	// Append explicit shell commands provided on the image
-	for _, line := range opts.Commands {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		sb.WriteString("RUN ")
-		sb.WriteString(line)
-		sb.WriteString("\n")
-	}
-
-	return sb.String(), nil
 }
 
 // Check if an image already exists in the registry

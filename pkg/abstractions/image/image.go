@@ -230,9 +230,13 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 		opts.addPythonRequirements()
 	}
 
-	// Prepare opts for image ID calculation (renders Dockerfile for v2 if needed)
-	if err := prepareOptsForImageID(opts, is.config.ImageService.ClipVersion, is.builder.RenderV2Dockerfile); err != nil {
-		return "", false, false, nil, err
+	// For v2 builds, render Dockerfile from build options if not already provided
+	isV2 := is.config.ImageService.ClipVersion == 2
+	if isV2 && opts.Dockerfile == "" && is.builder.hasWorkToDo(opts) {
+		opts.Dockerfile, err = is.builder.RenderV2Dockerfile(opts)
+		if err != nil {
+			return "", false, false, nil, err
+		}
 	}
 
 	imageId, err := getImageID(opts)
@@ -240,15 +244,18 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 		valid = false
 	}
 
+	// Check registry for physical existence
 	exists, err := is.builder.Exists(ctx, imageId)
 	if err != nil {
 		return "", false, false, nil, err
 	}
 
+	// Also check database to ensure image metadata is persisted
+	// This prevents duplicate builds when registry has the file but DB record is missing
 	_, err = is.backendRepo.GetImageClipVersion(ctx, imageId)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// If this check fails, the image is not persisted
+			// Image not in database - needs to be built/recorded
 			exists = false
 		} else {
 			return "", false, false, nil, err

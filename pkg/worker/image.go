@@ -378,6 +378,13 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
 }
 
+// cacheV2SourceImageRef caches the source image reference for a v2 image build
+func (c *ImageClient) cacheV2SourceImageRef(request *types.ContainerRequest) {
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) && request.BuildOptions.SourceImage != nil {
+		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
+	}
+}
+
 func (c *ImageClient) Cleanup() error {
 	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
 		log.Info().Str("image_id", imageId).Msg("un-mounting image")
@@ -516,9 +523,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	startTime := time.Now()
 
 	// Cache the source image reference for v2 images so we can retrieve it later for non-build containers
-	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) && request.BuildOptions.SourceImage != nil {
-		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
-	}
+	c.cacheV2SourceImageRef(request)
 
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
@@ -692,9 +697,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	}
 
 	// Cache the source image reference for v2 images
-	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) && request.BuildOptions.SourceImage != nil {
-		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
-	}
+	c.cacheV2SourceImageRef(request)
 
 	outputLogger.Info("Inspecting image name and verifying architecture...\n")
 	if err := c.inspectAndVerifyImage(ctx, request); err != nil {
