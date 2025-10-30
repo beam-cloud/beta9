@@ -46,7 +46,6 @@ var (
 	baseImageMountPath string = "/images/mnt/%s"
 )
 
-var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
 
 func getImageCachePath() string {
 	path := baseImageCachePath
@@ -369,16 +368,8 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		return elapsed, err
 	}
 
-	// Ensure required directories exist in the mounted image
-	// For V2 images, empty directories may not be preserved in OCI layers
-	// even if they were created in the Dockerfile
-	for _, dir := range requiredContainerDirectories {
-		fullPath := filepath.Join(mountOptions.MountPoint, dir)
-		if err := os.MkdirAll(fullPath, 0755); err != nil {
-			log.Warn().Err(err).Str("path", fullPath).Msg("failed to create required directory in mounted image")
-			// Don't fail the mount if directory creation fails - the mount is already successful
-		}
-	}
+	// Note: /workspace and /volumes directories are created in the overlay upper layer
+	// when the container filesystem is set up, so no need to create them here
 
 	c.mountedFuseServers.Set(imageId, server)
 	return elapsed, nil
@@ -685,13 +676,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 
-	for _, dir := range requiredContainerDirectories {
-		fullPath := filepath.Join(tmpBundlePath.Path, "rootfs", dir)
-		err := os.MkdirAll(fullPath, 0755)
-		if err != nil {
-			return err
-		}
-	}
+	// Note: /workspace and /volumes directories are created in the overlay upper layer
 
 	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
 	if err != nil {
@@ -794,15 +779,7 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 	tmpBundlePath := filepath.Join(bundlePath.Path + "_")
 	err = umoci.Unpack(engineExt, baseImageTag, tmpBundlePath, unpackOptions)
 	if err == nil {
-		for _, dir := range requiredContainerDirectories {
-			fullPath := filepath.Join(tmpBundlePath, "rootfs", dir)
-			err := os.MkdirAll(fullPath, 0755)
-			if err != nil {
-				errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
-				return err
-			}
-		}
-
+		// Note: /workspace and /volumes directories are created in the overlay upper layer
 		return os.Rename(tmpBundlePath, bundlePath.Path)
 	}
 

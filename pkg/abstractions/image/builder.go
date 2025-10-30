@@ -34,8 +34,7 @@ const (
 )
 
 var (
-	buildEnv                      []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_COMPILE_BYTECODE=true"}
-	requiredContainerDirectories  []string = []string{"/workspace", "/volumes"}
+	buildEnv []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_COMPILE_BYTECODE=true"}
 )
 
 type Builder struct {
@@ -211,7 +210,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	// For V2 builds with Dockerfiles, ensure required directories are created
 	// This is a safety check in case the Dockerfile came from a different path
 	if isV2 && build.opts.Dockerfile != "" {
-		build.opts.Dockerfile = ensureRequiredDirectoriesInDockerfile(build.opts.Dockerfile)
+		// Dockerfile is used as-is
 	}
 
 	// Calculate image ID from all build options
@@ -274,9 +273,8 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	sb.WriteString(getSourceImage(opts))
 	sb.WriteString("\n")
 
-	// ALWAYS ensure required container directories exist
-	// This is critical for workspace and volume mounts to work properly
-	b.renderRequiredDirectories(&sb)
+	// Note: /workspace and /volumes directories are created in the overlay upper layer
+	// at container runtime, so no need to add them to the Dockerfile
 
 	// Skip Python setup if explicitly ignored and no packages requested
 	// This matches v1 behavior in setupPythonEnv()
@@ -338,62 +336,6 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	return sb.String(), nil
 }
 
-// renderRequiredDirectories adds a RUN command to create required container directories
-// These directories must exist for workspace and volume mounts to work properly
-func (b *Builder) renderRequiredDirectories(sb *strings.Builder) {
-	if len(requiredContainerDirectories) > 0 {
-		sb.WriteString("RUN mkdir -p")
-		for _, dir := range requiredContainerDirectories {
-			sb.WriteString(" ")
-			sb.WriteString(dir)
-		}
-		sb.WriteString("\n")
-	}
-}
-
-// ensureRequiredDirectoriesInDockerfile appends directory creation commands to a Dockerfile
-// if they don't already exist. This ensures /workspace and /volumes always exist.
-func ensureRequiredDirectoriesInDockerfile(dockerfile string) string {
-	if len(requiredContainerDirectories) == 0 {
-		return dockerfile
-	}
-
-	// Build the mkdir command
-	var mkdirCmd strings.Builder
-	mkdirCmd.WriteString("RUN mkdir -p")
-	for _, dir := range requiredContainerDirectories {
-		mkdirCmd.WriteString(" ")
-		mkdirCmd.WriteString(dir)
-	}
-
-	mkdirCmdStr := mkdirCmd.String()
-
-	// Check if the command already exists in the Dockerfile
-	if strings.Contains(dockerfile, mkdirCmdStr) {
-		return dockerfile
-	}
-
-	// Append the command after the FROM instruction
-	lines := strings.Split(dockerfile, "\n")
-	var result strings.Builder
-	foundFrom := false
-
-	for i, line := range lines {
-		result.WriteString(line)
-		if i < len(lines)-1 || line != "" {
-			result.WriteString("\n")
-		}
-
-		// Insert mkdir command after the first FROM instruction
-		if !foundFrom && strings.HasPrefix(strings.TrimSpace(line), "FROM ") {
-			result.WriteString(mkdirCmdStr)
-			result.WriteString("\n")
-			foundFrom = true
-		}
-	}
-
-	return result.String()
-}
 
 // renderCommands adds RUN commands for each non-empty command
 func (b *Builder) renderCommands(sb *strings.Builder, opts *BuildOpts) {
