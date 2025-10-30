@@ -264,26 +264,45 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 // hasWorkToDo returns true if there are build steps that need a Dockerfile
 func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
-	return len(opts.Commands) > 0 || len(opts.BuildSteps) > 0 || len(opts.PythonPackages) > 0
+	return len(opts.Commands) > 0 || 
+		len(opts.BuildSteps) > 0 || 
+		len(opts.PythonPackages) > 0 || 
+		(opts.PythonVersion != "" && !opts.IgnorePython)
 }
 
 // appendToDockerfile appends additional build steps to a custom Dockerfile
 func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 	var sb strings.Builder
 	sb.WriteString(opts.Dockerfile)
-
+	
 	// Ensure Dockerfile ends with newline before appending
 	if !strings.HasSuffix(opts.Dockerfile, "\n") {
 		sb.WriteString("\n")
 	}
-
+	
 	// Determine Python version and environment type
 	pythonVersion := opts.PythonVersion
 	if pythonVersion == types.Python3.String() {
 		pythonVersion = b.config.ImageService.PythonVersion
 	}
 	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
-
+	
+	// Install Python if a version is specified
+	// For custom Dockerfiles, we can't detect if Python is already installed,
+	// so we install it when explicitly requested via add_python_version()
+	if pythonVersion != "" && !opts.IgnorePython {
+		if isMicromamba {
+			sb.WriteString("RUN micromamba config set use_lockfiles False\n")
+		} else {
+			// Install the requested Python version
+			if installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion); err == nil {
+				sb.WriteString("RUN ")
+				sb.WriteString(installCmd)
+				sb.WriteString("\n")
+			}
+		}
+	}
+	
 	// Install Python packages if specified
 	if len(opts.PythonPackages) > 0 && pythonVersion != "" {
 		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
@@ -292,7 +311,7 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 			sb.WriteString("\n")
 		}
 	}
-
+	
 	// Add build steps
 	if len(opts.BuildSteps) > 0 {
 		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
@@ -304,10 +323,10 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 			}
 		}
 	}
-
+	
 	// Add explicit shell commands
 	b.renderCommands(&sb, opts)
-
+	
 	return sb.String()
 }
 

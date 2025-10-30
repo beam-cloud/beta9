@@ -193,6 +193,14 @@ func TestCustomDockerfile_WithAdditionalPythonPackages(t *testing.T) {
         ImageService: types.ImageServiceConfig{
             PythonVersion: "python3.10",
             ClipVersion:   2, // V2 build
+            Runner: types.RunnerConfig{
+                PythonStandalone: types.PythonStandaloneConfig{
+                    Versions: map[string]string{
+                        "python3.10": "3.10.15+20241002",
+                    },
+                    InstallScriptTemplate: "install python {{.PythonVersion}}",
+                },
+            },
         },
     }
     b := &Builder{config: cfg}
@@ -224,6 +232,9 @@ COPY . /app`
     assert.Contains(t, finalDockerfile, "RUN apt-get update")
     assert.Contains(t, finalDockerfile, "WORKDIR /app")
     
+    // Verify Python installation is included
+    assert.Contains(t, finalDockerfile, "install python", "Should install Python version")
+    
     // Verify additional Python packages are appended
     assert.Contains(t, finalDockerfile, "pip install")
     assert.Contains(t, finalDockerfile, "numpy")
@@ -232,10 +243,118 @@ COPY . /app`
     // Verify additional commands are appended
     assert.Contains(t, finalDockerfile, "echo 'Setup complete'")
     
-    // Verify order: custom Dockerfile first, then additions
+    // Verify order: custom Dockerfile first, then Python install, then packages
     customIdx := strings.Index(finalDockerfile, "FROM ubuntu:22.04")
+    pythonIdx := strings.Index(finalDockerfile, "install python")
     numpyIdx := strings.Index(finalDockerfile, "numpy")
-    assert.True(t, customIdx < numpyIdx, "Custom Dockerfile should come before appended packages")
+    assert.True(t, customIdx < pythonIdx, "Custom Dockerfile should come before Python install")
+    assert.True(t, pythonIdx < numpyIdx, "Python install should come before packages")
+}
+
+// TestCustomDockerfile_WithPythonVersionOnly tests that add_python_version() alone works
+func TestCustomDockerfile_WithPythonVersionOnly(t *testing.T) {
+    cfg := types.AppConfig{
+        ImageService: types.ImageServiceConfig{
+            PythonVersion: "python3.10",
+            ClipVersion:   2,
+            Runner: types.RunnerConfig{
+                PythonStandalone: types.PythonStandaloneConfig{
+                    Versions: map[string]string{
+                        "python3.11": "3.11.10+20241002",
+                    },
+                    InstallScriptTemplate: "install python {{.PythonVersion}}",
+                },
+            },
+        },
+    }
+    b := &Builder{config: cfg}
+    
+    // Simulate: Image.from_dockerfile("Dockerfile").add_python_version("python3.11")
+    customDockerfile := `FROM ubuntu:22.04
+RUN apt-get update`
+    
+    opts := &BuildOpts{
+        Dockerfile:    customDockerfile,
+        PythonVersion: "python3.11",
+        ClipVersion:   2,
+    }
+    
+    // This simulates what happens in builder.Build()
+    var finalDockerfile string
+    if opts.Dockerfile != "" && b.hasWorkToDo(opts) {
+        finalDockerfile = b.appendToDockerfile(opts)
+    } else {
+        finalDockerfile = opts.Dockerfile
+    }
+    
+    // Verify the custom Dockerfile is preserved
+    assert.Contains(t, finalDockerfile, "FROM ubuntu:22.04")
+    
+    // Verify Python installation is included even without packages
+    assert.Contains(t, finalDockerfile, "install python", "Should install Python version")
+    assert.Contains(t, finalDockerfile, "3.11.10+20241002", "Should use correct version")
+}
+
+// TestCustomDockerfile_ExactUserScenario tests the exact scenario from the issue:
+// Image.from_dockerfile("Dockerfile").add_python_version("python3.10").add_python_packages(["numpy", "csaps"])
+func TestCustomDockerfile_ExactUserScenario(t *testing.T) {
+    cfg := types.AppConfig{
+        ImageService: types.ImageServiceConfig{
+            PythonVersion: "python3.9",
+            ClipVersion:   2,
+            Runner: types.RunnerConfig{
+                PythonStandalone: types.PythonStandaloneConfig{
+                    Versions: map[string]string{
+                        "python3.10": "3.10.15+20241002",
+                    },
+                    InstallScriptTemplate: "apt-get update -q && apt-get install -q -y build-essential curl git && curl -fsSL -o python.tgz 'https://example.com/python-{{.PythonVersion}}.tgz' && tar -xzf python.tgz -C /usr/local --strip-components 1 && rm -f python.tgz",
+                },
+            },
+        },
+    }
+    b := &Builder{config: cfg}
+    
+    // Exact user scenario
+    customDockerfile := `FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y curl git
+WORKDIR /workspace`
+    
+    opts := &BuildOpts{
+        Dockerfile:     customDockerfile,
+        PythonVersion:  "python3.10",
+        PythonPackages: []string{"numpy", "csaps"},
+        ClipVersion:    2,
+    }
+    
+    // This simulates what happens in builder.Build()
+    var finalDockerfile string
+    if opts.Dockerfile != "" && b.hasWorkToDo(opts) {
+        finalDockerfile = b.appendToDockerfile(opts)
+    } else {
+        finalDockerfile = opts.Dockerfile
+    }
+    
+    // Verify custom Dockerfile is preserved
+    assert.Contains(t, finalDockerfile, "FROM ubuntu:22.04")
+    assert.Contains(t, finalDockerfile, "WORKDIR /workspace")
+    
+    // Verify Python 3.10 is installed (not the default 3.9)
+    assert.Contains(t, finalDockerfile, "apt-get update -q && apt-get install -q -y build-essential curl git")
+    assert.Contains(t, finalDockerfile, "python-3.10.15+20241002")
+    
+    // Verify Python packages are installed with correct version
+    assert.Contains(t, finalDockerfile, "python3.10")
+    assert.Contains(t, finalDockerfile, "pip install")
+    assert.Contains(t, finalDockerfile, "numpy")
+    assert.Contains(t, finalDockerfile, "csaps")
+    
+    // Verify correct order
+    fromIdx := strings.Index(finalDockerfile, "FROM ubuntu")
+    pythonInstallIdx := strings.Index(finalDockerfile, "python-3.10.15")
+    numpyIdx := strings.Index(finalDockerfile, "numpy")
+    
+    assert.True(t, fromIdx < pythonInstallIdx, "Custom Dockerfile first")
+    assert.True(t, pythonInstallIdx < numpyIdx, "Python install before packages")
 }
 
 func TestRenderV2Dockerfile_PythonInstallation(t *testing.T) {
