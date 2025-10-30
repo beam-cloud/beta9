@@ -34,8 +34,7 @@ const (
 )
 
 var (
-	buildEnv                      []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_COMPILE_BYTECODE=true"}
-	requiredContainerDirectories  []string = []string{"/workspace", "/volumes"}
+	buildEnv []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_COMPILE_BYTECODE=true"}
 )
 
 type Builder struct {
@@ -114,7 +113,7 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 
 func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error {
 	isV2Build := b.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
-	
+
 	// Set appropriate log message based on build version
 	if isV2Build {
 		build.log(false, "Building image...\n")
@@ -178,7 +177,7 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 			if err := b.stopBuild(build.containerID); err != nil {
 				log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
 			}
-			
+
 			timeoutMsg := "Timeout: container not running after %s.\n"
 			if isV2Build {
 				timeoutMsg = "Timeout: build did not complete after %s.\n"
@@ -198,23 +197,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	// For v2 builds, render Dockerfile from build options if not already provided
-	isV2 := b.config.ImageService.ClipVersion == 2
-	if isV2 && build.opts.Dockerfile == "" && b.hasWorkToDo(build.opts) {
-		build.opts.Dockerfile, err = b.RenderV2Dockerfile(build.opts)
-		if err != nil {
-			build.log(true, "Failed to render Dockerfile.\n")
-			return err
-		}
-	}
-
-	// For V2 builds with Dockerfiles, ensure required directories are created
-	// This is a safety check in case the Dockerfile came from a different path
-	if isV2 && build.opts.Dockerfile != "" {
-		build.opts.Dockerfile = ensureRequiredDirectoriesInDockerfile(build.opts.Dockerfile)
-	}
-
-	// Calculate image ID from all build options
+	// Image ID is already calculated in verifyImage with the final Dockerfile
+	// Just use the imageID from opts (passed from verifyImage via BuildImage)
 	build.imageID, err = getImageID(build.opts)
 	if err != nil {
 		return err
@@ -239,7 +223,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	// V1: Execute commands in container and archive filesystem
-	// V2: Buildah already built the image, just emit success
+	// V2: Buildah already built the image
+	isV2 := b.config.ImageService.ClipVersion == 2
 	if !isV2 {
 		if err := build.prepareCommands(); err != nil {
 			return err
@@ -252,18 +237,87 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		if err := build.archive(); err != nil {
 			return err
 		}
-	} else {
-		build.log(false, "=> Build complete 🎉\n")
 	}
 
+	// Send final completion message with image ID
 	build.setSuccess(true)
 	build.logWithImageAndPythonVersion(true, "Build completed successfully")
 	return nil
 }
 
 // hasWorkToDo returns true if there are build steps that need a Dockerfile
+// This is exported so it can be called from verifyImage
 func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
-	return len(opts.Commands) > 0 || len(opts.BuildSteps) > 0 || len(opts.PythonPackages) > 0
+	return len(opts.Commands) > 0 || 
+		len(opts.BuildSteps) > 0 || 
+		len(opts.PythonPackages) > 0 || 
+		(opts.PythonVersion != "" && !opts.IgnorePython)
+}
+
+// appendToDockerfile appends additional build steps to a custom Dockerfile
+// This is exported so it can be called from verifyImage
+func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
+	var sb strings.Builder
+	sb.WriteString(opts.Dockerfile)
+	
+	// Ensure Dockerfile ends with newline before appending
+	if !strings.HasSuffix(opts.Dockerfile, "\n") {
+		sb.WriteString("\n")
+	}
+	
+	// Determine Python version and environment type
+	pythonVersion := opts.PythonVersion
+	if pythonVersion == types.Python3.String() {
+		pythonVersion = b.config.ImageService.PythonVersion
+	}
+	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
+	
+	// Install Python if needed
+	// Match the behavior from RenderV2Dockerfile and setupPythonEnv:
+	// - If ignore_python=true AND no packages → skip Python entirely
+	// - If ignore_python=true BUT has packages → install Python (packages need it)
+	// - If ignore_python=false → install Python when version specified
+	shouldInstallPython := pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0)
+	
+	if shouldInstallPython {
+		if isMicromamba {
+			sb.WriteString("RUN micromamba config set use_lockfiles False\n")
+		} else {
+			// Install the requested Python version
+			if installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion); err == nil {
+				sb.WriteString("RUN ")
+				sb.WriteString(installCmd)
+				sb.WriteString("\n")
+			}
+		}
+	}
+	
+	// Install Python packages if specified
+	// Only install if we have packages and we're not in the "ignore Python with no packages" state
+	if len(opts.PythonPackages) > 0 && pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0) {
+		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
+			sb.WriteString("RUN ")
+			sb.WriteString(pipCmd)
+			sb.WriteString("\n")
+		}
+	}
+	
+	// Add build steps
+	if len(opts.BuildSteps) > 0 {
+		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
+		for _, cmd := range steps {
+			if cmd != "" {
+				sb.WriteString("RUN ")
+				sb.WriteString(cmd)
+				sb.WriteString("\n")
+			}
+		}
+	}
+	
+	// Add explicit shell commands
+	b.renderCommands(&sb, opts)
+	
+	return sb.String()
 }
 
 // RenderV2Dockerfile converts build options into a Dockerfile that can be built by buildah.
@@ -273,10 +327,6 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	sb.WriteString("FROM ")
 	sb.WriteString(getSourceImage(opts))
 	sb.WriteString("\n")
-
-	// ALWAYS ensure required container directories exist
-	// This is critical for workspace and volume mounts to work properly
-	b.renderRequiredDirectories(&sb)
 
 	// Skip Python setup if explicitly ignored and no packages requested
 	// This matches v1 behavior in setupPythonEnv()
@@ -336,63 +386,6 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	// Add explicit shell commands
 	b.renderCommands(&sb, opts)
 	return sb.String(), nil
-}
-
-// renderRequiredDirectories adds a RUN command to create required container directories
-// These directories must exist for workspace and volume mounts to work properly
-func (b *Builder) renderRequiredDirectories(sb *strings.Builder) {
-	if len(requiredContainerDirectories) > 0 {
-		sb.WriteString("RUN mkdir -p")
-		for _, dir := range requiredContainerDirectories {
-			sb.WriteString(" ")
-			sb.WriteString(dir)
-		}
-		sb.WriteString("\n")
-	}
-}
-
-// ensureRequiredDirectoriesInDockerfile appends directory creation commands to a Dockerfile
-// if they don't already exist. This ensures /workspace and /volumes always exist.
-func ensureRequiredDirectoriesInDockerfile(dockerfile string) string {
-	if len(requiredContainerDirectories) == 0 {
-		return dockerfile
-	}
-
-	// Build the mkdir command
-	var mkdirCmd strings.Builder
-	mkdirCmd.WriteString("RUN mkdir -p")
-	for _, dir := range requiredContainerDirectories {
-		mkdirCmd.WriteString(" ")
-		mkdirCmd.WriteString(dir)
-	}
-
-	mkdirCmdStr := mkdirCmd.String()
-
-	// Check if the command already exists in the Dockerfile
-	if strings.Contains(dockerfile, mkdirCmdStr) {
-		return dockerfile
-	}
-
-	// Append the command after the FROM instruction
-	lines := strings.Split(dockerfile, "\n")
-	var result strings.Builder
-	foundFrom := false
-
-	for i, line := range lines {
-		result.WriteString(line)
-		if i < len(lines)-1 || line != "" {
-			result.WriteString("\n")
-		}
-
-		// Insert mkdir command after the first FROM instruction
-		if !foundFrom && strings.HasPrefix(strings.TrimSpace(line), "FROM ") {
-			result.WriteString(mkdirCmdStr)
-			result.WriteString("\n")
-			foundFrom = true
-		}
-	}
-
-	return result.String()
 }
 
 // renderCommands adds RUN commands for each non-empty command

@@ -46,8 +46,6 @@ var (
 	baseImageMountPath string = "/images/mnt/%s"
 )
 
-var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
-
 func getImageCachePath() string {
 	path := baseImageCachePath
 
@@ -175,7 +173,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
-	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
+	localCachePath := c.imageCachePath
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
 	}
@@ -283,6 +281,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				}
 			}
 			mountArchivePath = canonicalIndexPath
+
 			// Extract and cache the OCI image reference for later use (for deriving spec in non-build containers)
 			if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok {
 				if ociInfo.RegistryURL == "" {
@@ -307,6 +306,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
+		UseCheckpoints:        true,
 	}
 
 	// Do not persist or rely on an initial spec file for v2; base runc config will be used instead
@@ -421,6 +421,7 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 					}
 				}
 			}
+
 			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
 			return nil, err
 		}
@@ -473,8 +474,10 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 					Int("layer", progress.LayerIndex).
 					Int("total", progress.TotalLayers).
 					Msgf("Indexing layer %d/%d (%.0f%%)", progress.LayerIndex, progress.TotalLayers, percent)
+
 				outputLogger.Info(fmt.Sprintf("Indexing layer %d/%d (%.0f%%)\n",
 					progress.LayerIndex, progress.TotalLayers, percent))
+
 			case "completed":
 				log.Info().
 					Str("container_id", request.ContainerId).
@@ -482,16 +485,18 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 					Int("total", progress.TotalLayers).
 					Int("files", progress.FilesIndexed).
 					Msgf("Completed layer %d/%d (%.0f%%, %d files indexed)", progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed)
+
 				outputLogger.Info(fmt.Sprintf("Completed layer %d/%d (%.0f%%, %d files indexed)\n",
 					progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed))
+
 			default:
-				// Log any unexpected stage values for debugging
 				log.Info().
 					Str("container_id", request.ContainerId).
 					Str("stage", progress.Stage).
 					Int("layer", progress.LayerIndex).
 					Int("total", progress.TotalLayers).
 					Msgf("OCI index progress [%s]: layer %d/%d", progress.Stage, progress.LayerIndex, progress.TotalLayers)
+
 				outputLogger.Info(fmt.Sprintf("OCI index progress [%s]: layer %d/%d\n",
 					progress.Stage, progress.LayerIndex, progress.TotalLayers))
 			}
@@ -541,12 +546,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if err != nil {
 		return err
 	}
+
 	fmt.Fprintf(f, *request.BuildOptions.Dockerfile)
 	f.Close()
 
 	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
 	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
+
 	defer os.RemoveAll(tmpBundlePath.Path)
 	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
@@ -557,6 +564,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if request.BuildOptions.SourceImage != nil {
 		sourceImage = *request.BuildOptions.SourceImage
 	}
+
 	if sourceImage != "" {
 		if base, perr := image.ExtractImageNameAndTag(sourceImage); perr == nil {
 			// Treat runner/build registry as insecure if configured
@@ -564,6 +572,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 				(base.Registry == c.config.ImageService.BuildRegistry || base.Registry == c.config.ImageService.Runner.BaseImageRegistry) {
 				insecure = true
 			}
+
 			// Also consider localhost registries insecure by default
 			if strings.Contains(base.Registry, "localhost") || strings.HasPrefix(base.Registry, "127.0.0.1") {
 				insecure = c.config.ImageService.BuildRegistryInsecure || true
@@ -605,6 +614,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if err != nil {
 		return err
 	}
+
 	ociImageInfo, err := os.Stat(ociPath)
 	if err == nil {
 		ociImageMB := float64(ociImageInfo.Size()) / 1024 / 1024
@@ -639,6 +649,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if c.config.ImageService.BuildRegistryInsecure {
 			pushArgs = []string{"--root", imagePath, "push", "--tls-verify=false", localTag, "docker://" + localTag}
 		}
+
 		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
@@ -672,14 +683,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	err = umoci.Unpack(engineExt, "latest", tmpBundlePath.Path, unpackOptions)
 	if err != nil {
 		return err
-	}
-
-	for _, dir := range requiredContainerDirectories {
-		fullPath := filepath.Join(tmpBundlePath.Path, "rootfs", dir)
-		err := os.MkdirAll(fullPath, 0755)
-		if err != nil {
-			return err
-		}
 	}
 
 	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
@@ -783,15 +786,6 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 	tmpBundlePath := filepath.Join(bundlePath.Path + "_")
 	err = umoci.Unpack(engineExt, baseImageTag, tmpBundlePath, unpackOptions)
 	if err == nil {
-		for _, dir := range requiredContainerDirectories {
-			fullPath := filepath.Join(tmpBundlePath, "rootfs", dir)
-			err := os.MkdirAll(fullPath, 0755)
-			if err != nil {
-				errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
-				return err
-			}
-		}
-
 		return os.Rename(tmpBundlePath, bundlePath.Path)
 	}
 

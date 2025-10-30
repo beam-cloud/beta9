@@ -220,7 +220,7 @@ worker:
   terminationGracePeriod: 30
   cleanupWorkerInterval: 1m
   cleanupPendingWorkerAgeLimit: 10m
-  blobCacheEnabled: false
+  blobCacheEnabled: true
   containerLogLinesPerHour: 6000
   failover:
     enabled: true
@@ -259,6 +259,34 @@ worker:
       criu:
         # Keep the job running after checkpoint
         leave_running: true
+
+blobcache:
+  global:
+    coordinatorHost: blobcache.beta9.svc.cluster.local:2049
+    defaultLocality: default
+    serverPort: 2049
+    discoveryIntervalS: 5
+    rttThresholdMilliseconds: 1000
+    hostStorageCapacityThresholdPct: 0.95
+    grpcDialTimeoutS: 1
+    grpcMessageSizeBytes: 1073741824 # 1GB
+    debugMode: false
+    prettyLogs: true
+  client:
+    nTopHosts: 3
+    minRetryLengthBytes: 10000000 # 10MB
+    maxGetContentAttempts: 3
+    token:
+    blobfs:
+      maxBackgroundTasks: 256
+      maxReadAheadKB: 1024
+      maxWriteKB: 1024
+      enabled: true
+      mountPoint: /cache
+      directIO: false
+      directMount: false
+      options:
+      - max_read=1048576
 
 providers:
   ec2:

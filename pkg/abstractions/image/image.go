@@ -233,23 +233,28 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 		opts.handleCustomBaseImage(nil)
 	}
 
+	// Add base Python requirements to PythonPackages list
+	// These are merged with user-specified packages in the build process
 	if in.Dockerfile != "" {
 		opts.addPythonRequirements()
 	}
 
-	// For v2 builds, render Dockerfile from build options if not already provided
+	// For V2 builds, render or augment Dockerfile BEFORE calculating image ID
+	// This ensures the image ID matches what will actually be built
 	isV2 := is.config.ImageService.ClipVersion == 2
-	if isV2 && opts.Dockerfile == "" && is.builder.hasWorkToDo(opts) {
-		opts.Dockerfile, err = is.builder.RenderV2Dockerfile(opts)
-		if err != nil {
-			return "", false, false, nil, err
+	if isV2 {
+		if opts.Dockerfile == "" {
+			// No custom Dockerfile: generate one from build options
+			if is.builder.hasWorkToDo(opts) {
+				opts.Dockerfile, err = is.builder.RenderV2Dockerfile(opts)
+				if err != nil {
+					return "", false, false, nil, err
+				}
+			}
+		} else if is.builder.hasWorkToDo(opts) {
+			// Custom Dockerfile with additional steps: append them
+			opts.Dockerfile = is.builder.appendToDockerfile(opts)
 		}
-	}
-
-	// For V2 builds with custom Dockerfiles, ensure required directories are created
-	// This guarantees /workspace and /volumes exist regardless of the base image
-	if isV2 && opts.Dockerfile != "" {
-		opts.Dockerfile = ensureRequiredDirectoriesInDockerfile(opts.Dockerfile)
 	}
 
 	imageId, err := getImageID(opts)
