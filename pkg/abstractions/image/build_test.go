@@ -81,6 +81,162 @@ func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
     assert.Contains(t, df, "RUN echo step\n")
 }
 
+func TestAppendToDockerfile_WithPythonPackages(t *testing.T) {
+    cfg := types.AppConfig{
+        ImageService: types.ImageServiceConfig{
+            PythonVersion: "python3.10",
+        },
+    }
+    b := &Builder{config: cfg}
+    
+    tests := []struct {
+        name       string
+        dockerfile string
+        opts       *BuildOpts
+        wantPip    bool
+        wantCmd    bool
+    }{
+        {
+            name: "AppendPythonPackages",
+            dockerfile: "FROM ubuntu:22.04\nRUN apt-get update",
+            opts: &BuildOpts{
+                Dockerfile:     "FROM ubuntu:22.04\nRUN apt-get update",
+                PythonVersion:  "python3.10",
+                PythonPackages: []string{"numpy", "pandas"},
+            },
+            wantPip: true,
+            wantCmd: false,
+        },
+        {
+            name: "AppendCommands",
+            dockerfile: "FROM ubuntu:22.04",
+            opts: &BuildOpts{
+                Dockerfile: "FROM ubuntu:22.04",
+                Commands:   []string{"echo hello", "apt update"},
+            },
+            wantPip: false,
+            wantCmd: true,
+        },
+        {
+            name: "AppendBoth",
+            dockerfile: "FROM ubuntu:22.04\nRUN apt-get update",
+            opts: &BuildOpts{
+                Dockerfile:     "FROM ubuntu:22.04\nRUN apt-get update",
+                PythonVersion:  "python3.10",
+                PythonPackages: []string{"numpy"},
+                Commands:       []string{"echo done"},
+            },
+            wantPip: true,
+            wantCmd: true,
+        },
+    }
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            result := b.appendToDockerfile(tt.opts)
+            
+            // Should contain original Dockerfile
+            assert.Contains(t, result, "FROM ubuntu:22.04")
+            
+            if tt.wantPip {
+                assert.Contains(t, result, "pip install", "Should contain pip install command")
+                if len(tt.opts.PythonPackages) > 0 {
+                    for _, pkg := range tt.opts.PythonPackages {
+                        assert.Contains(t, result, pkg, "Should contain package: "+pkg)
+                    }
+                }
+            }
+            
+            if tt.wantCmd {
+                for _, cmd := range tt.opts.Commands {
+                    assert.Contains(t, result, cmd, "Should contain command: "+cmd)
+                }
+            }
+            
+            // Verify commands come after original Dockerfile
+            origIdx := strings.Index(result, tt.dockerfile)
+            assert.Equal(t, 0, origIdx, "Original Dockerfile should be at the beginning")
+        })
+    }
+}
+
+func TestAppendToDockerfile_WithBuildSteps(t *testing.T) {
+    cfg := types.AppConfig{
+        ImageService: types.ImageServiceConfig{
+            PythonVersion: "python3.10",
+        },
+    }
+    b := &Builder{config: cfg}
+    
+    dockerfile := "FROM ubuntu:22.04\nRUN apt-get update"
+    opts := &BuildOpts{
+        Dockerfile:    dockerfile,
+        PythonVersion: "python3.10",
+        BuildSteps: []BuildStep{
+            {Type: shellCommandType, Command: "echo step1"},
+            {Type: pipCommandType, Command: "requests"},
+        },
+    }
+    
+    result := b.appendToDockerfile(opts)
+    
+    assert.Contains(t, result, "FROM ubuntu:22.04")
+    assert.Contains(t, result, "echo step1")
+    assert.Contains(t, result, "pip install")
+    assert.Contains(t, result, "requests")
+}
+
+// TestCustomDockerfile_WithAdditionalPythonPackages validates the original issue:
+// Image.from_dockerfile("Dockerfile").add_python_packages(["numpy"]) should work
+func TestCustomDockerfile_WithAdditionalPythonPackages(t *testing.T) {
+    cfg := types.AppConfig{
+        ImageService: types.ImageServiceConfig{
+            PythonVersion: "python3.10",
+            ClipVersion:   2, // V2 build
+        },
+    }
+    b := &Builder{config: cfg}
+    
+    // Simulate: Image.from_dockerfile("Dockerfile").add_python_packages(["numpy"])
+    customDockerfile := `FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y python3 python3-pip
+WORKDIR /app
+COPY . /app`
+    
+    opts := &BuildOpts{
+        Dockerfile:     customDockerfile,
+        PythonVersion:  "python3.10",
+        PythonPackages: []string{"numpy", "pandas"},
+        Commands:       []string{"echo 'Setup complete'"},
+        ClipVersion:    2,
+    }
+    
+    // This simulates what happens in builder.Build()
+    var finalDockerfile string
+    if opts.Dockerfile != "" && b.hasWorkToDo(opts) {
+        finalDockerfile = b.appendToDockerfile(opts)
+    } else {
+        finalDockerfile = opts.Dockerfile
+    }
+    
+    // Verify the custom Dockerfile is preserved
+    assert.Contains(t, finalDockerfile, "FROM ubuntu:22.04")
+    assert.Contains(t, finalDockerfile, "RUN apt-get update")
+    assert.Contains(t, finalDockerfile, "WORKDIR /app")
+    
+    // Verify additional Python packages are appended
+    assert.Contains(t, finalDockerfile, "pip install")
+    assert.Contains(t, finalDockerfile, "numpy")
+    assert.Contains(t, finalDockerfile, "pandas")
+    
+    // Verify additional commands are appended
+    assert.Contains(t, finalDockerfile, "echo 'Setup complete'")
+    
+    // Verify order: custom Dockerfile first, then additions
+    customIdx := strings.Index(finalDockerfile, "FROM ubuntu:22.04")
+    numpyIdx := strings.Index(finalDockerfile, "numpy")
+    assert.True(t, customIdx < numpyIdx, "Custom Dockerfile should come before appended packages")
+}
 
 func TestRenderV2Dockerfile_PythonInstallation(t *testing.T) {
     cfg := types.AppConfig{

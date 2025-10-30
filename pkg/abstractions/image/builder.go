@@ -197,20 +197,22 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	// For v2 builds, render Dockerfile from build options if not already provided
+	// For v2 builds, render or augment Dockerfile
 	isV2 := b.config.ImageService.ClipVersion == 2
-	if isV2 && build.opts.Dockerfile == "" && b.hasWorkToDo(build.opts) {
-		build.opts.Dockerfile, err = b.RenderV2Dockerfile(build.opts)
-		if err != nil {
-			build.log(true, "Failed to render Dockerfile.\n")
-			return err
+	if isV2 {
+		if build.opts.Dockerfile == "" {
+			// No custom Dockerfile: generate one from build options
+			if b.hasWorkToDo(build.opts) {
+				build.opts.Dockerfile, err = b.RenderV2Dockerfile(build.opts)
+				if err != nil {
+					build.log(true, "Failed to render Dockerfile.\n")
+					return err
+				}
+			}
+		} else if b.hasWorkToDo(build.opts) {
+			// Custom Dockerfile with additional steps: append them
+			build.opts.Dockerfile = b.appendToDockerfile(build.opts)
 		}
-	}
-
-	// For V2 builds with Dockerfiles, ensure required directories are created
-	// This is a safety check in case the Dockerfile came from a different path
-	if isV2 && build.opts.Dockerfile != "" {
-		// Dockerfile is used as-is
 	}
 
 	// Calculate image ID from all build options
@@ -263,6 +265,50 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 // hasWorkToDo returns true if there are build steps that need a Dockerfile
 func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 	return len(opts.Commands) > 0 || len(opts.BuildSteps) > 0 || len(opts.PythonPackages) > 0
+}
+
+// appendToDockerfile appends additional build steps to a custom Dockerfile
+func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
+	var sb strings.Builder
+	sb.WriteString(opts.Dockerfile)
+	
+	// Ensure Dockerfile ends with newline before appending
+	if !strings.HasSuffix(opts.Dockerfile, "\n") {
+		sb.WriteString("\n")
+	}
+	
+	// Determine Python version and environment type
+	pythonVersion := opts.PythonVersion
+	if pythonVersion == types.Python3.String() {
+		pythonVersion = b.config.ImageService.PythonVersion
+	}
+	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
+	
+	// Install Python packages if specified
+	if len(opts.PythonPackages) > 0 && pythonVersion != "" {
+		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
+			sb.WriteString("RUN ")
+			sb.WriteString(pipCmd)
+			sb.WriteString("\n")
+		}
+	}
+	
+	// Add build steps
+	if len(opts.BuildSteps) > 0 {
+		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
+		for _, cmd := range steps {
+			if cmd != "" {
+				sb.WriteString("RUN ")
+				sb.WriteString(cmd)
+				sb.WriteString("\n")
+			}
+		}
+	}
+	
+	// Add explicit shell commands
+	b.renderCommands(&sb, opts)
+	
+	return sb.String()
 }
 
 // RenderV2Dockerfile converts build options into a Dockerfile that can be built by buildah.
