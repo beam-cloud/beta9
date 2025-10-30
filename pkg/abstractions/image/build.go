@@ -281,7 +281,6 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		return nil, err
 	}
 
-	sourceImage := getSourceImage(b.opts)
 	cpu := b.config.ImageService.BuildContainerCpu
 	if cpu <= 0 {
 		cpu = defaultBuildContainerCpu
@@ -291,9 +290,17 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		memory = defaultBuildContainerMemory
 	}
 
+	// Only set SourceImage if base image fields are populated
+	// For custom Dockerfiles, the FROM instruction specifies the base image
+	var sourceImagePtr *string
+	if b.opts.BaseImageName != "" && b.opts.BaseImageRegistry != "" {
+		sourceImage := getSourceImage(b.opts)
+		sourceImagePtr = &sourceImage
+	}
+
 	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
-			SourceImage:      &sourceImage,
+			SourceImage:      sourceImagePtr,
 			SourceImageCreds: b.opts.BaseImageCreds,
 			Dockerfile:       &b.opts.Dockerfile,
 			BuildCtxObject:   &b.opts.BuildCtxObject,
@@ -331,12 +338,17 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 // getContainerImageID returns the image ID to use for the build container
 // V2: final image ID (buildah builds complete image)
 // V1: base image ID (container starts with base, then commands are executed inside)
+// For custom Dockerfiles: use the final image ID since we're building from scratch
 func (b *Build) getContainerImageID() (string, error) {
-	if b.config.ImageService.ClipVersion == 2 {
+	isV2 := b.config.ImageService.ClipVersion == 2
+	hasCustomDockerfile := b.opts.Dockerfile != "" && b.opts.BaseImageName == ""
+
+	// For v2 builds OR custom Dockerfiles, use the final image ID
+	if isV2 || hasCustomDockerfile {
 		return b.imageID, nil
 	}
 
-	// For v1, calculate base image ID without build steps/commands
+	// For v1 builds with beta9 base images, calculate base image ID without build steps/commands
 	return getImageID(&BuildOpts{
 		BaseImageRegistry: b.opts.BaseImageRegistry,
 		BaseImageName:     b.opts.BaseImageName,

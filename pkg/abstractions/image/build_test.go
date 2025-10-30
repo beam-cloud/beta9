@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image/mocks"
+	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -46,6 +47,15 @@ func setupTestBuild(t *testing.T, opts *BuildOpts) (*Build, *mocks.RuncClient, c
 	assert.NoError(t, err)
 	build.runcClient = mockRuncClient // Inject the mock client
 
+	// Set up auth info if not already present
+	if build.authInfo == nil {
+		build.authInfo = &auth.AuthInfo{
+			Workspace: &types.Workspace{
+				ExternalId: "test-workspace-id",
+			},
+		}
+	}
+
 	// Mock image ID generation (simplified)
 	build.imageID = "test-image-id"
 
@@ -65,10 +75,160 @@ func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
     df, err := b.RenderV2Dockerfile(opts)
     assert.NoError(t, err)
     assert.True(t, strings.HasPrefix(df, "FROM docker.io/library/alpine:3.18\n"))
+    // Verify required directories are created
+    assert.Contains(t, df, "RUN mkdir -p /workspace /volumes\n")
     // No SHELL directive expected for OCI format builds
     assert.Contains(t, df, "RUN echo one\n")
     assert.Contains(t, df, "RUN echo two\n")
     assert.Contains(t, df, "RUN echo step\n")
+}
+
+// TestRenderV2Dockerfile_AlwaysCreatesRequiredDirectories ensures that required
+// directories (/workspace and /volumes) are ALWAYS created in V2 Dockerfiles
+func TestRenderV2Dockerfile_AlwaysCreatesRequiredDirectories(t *testing.T) {
+    cfg := types.AppConfig{}
+    b := &Builder{config: cfg}
+
+    tests := []struct {
+        name string
+        opts *BuildOpts
+    }{
+        {
+            name: "Beta9BaseImage",
+            opts: &BuildOpts{
+                BaseImageRegistry: "registry.localhost:5000",
+                BaseImageName:     "beta9-runner",
+                BaseImageTag:      "py310-latest",
+                PythonPackages:    []string{"requests"},
+            },
+        },
+        {
+            name: "CustomBaseImage",
+            opts: &BuildOpts{
+                BaseImageRegistry: "docker.io",
+                BaseImageName:     "library/ubuntu",
+                BaseImageTag:      "22.04",
+                Commands:          []string{"apt update"},
+            },
+        },
+        {
+            name: "MinimalBuild",
+            opts: &BuildOpts{
+                BaseImageRegistry: "docker.io",
+                BaseImageName:     "library/alpine",
+                BaseImageTag:      "latest",
+            },
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            df, err := b.RenderV2Dockerfile(tt.opts)
+            assert.NoError(t, err)
+            
+            // MUST contain the mkdir command for required directories
+            assert.Contains(t, df, "RUN mkdir -p /workspace /volumes\n",
+                "All V2 Dockerfiles must create /workspace and /volumes directories")
+            
+            // Verify it comes right after FROM
+            lines := strings.Split(df, "\n")
+            assert.True(t, strings.HasPrefix(lines[0], "FROM "), "First line must be FROM")
+            assert.Equal(t, "RUN mkdir -p /workspace /volumes", lines[1],
+                "Second line must create required directories")
+        })
+    }
+}
+
+// TestEnsureRequiredDirectoriesInDockerfile_CustomDockerfile ensures that custom
+// Dockerfiles get the required directories injected
+func TestEnsureRequiredDirectoriesInDockerfile_CustomDockerfile(t *testing.T) {
+    tests := []struct {
+        name            string
+        inputDockerfile string
+        shouldModify    bool
+    }{
+        {
+            name: "SimpleDockerfile",
+            inputDockerfile: `FROM ubuntu:22.04
+RUN apt-get update
+COPY app.py /app/
+CMD ["python", "/app/app.py"]`,
+            shouldModify: true,
+        },
+        {
+            name: "AlreadyHasDirectories",
+            inputDockerfile: `FROM ubuntu:22.04
+RUN mkdir -p /workspace /volumes
+RUN apt-get update`,
+            shouldModify: false,
+        },
+        {
+            name: "MultiStageDockerfile",
+            inputDockerfile: `FROM golang:1.20 AS builder
+WORKDIR /build
+COPY . .
+RUN go build -o app
+
+FROM ubuntu:22.04
+COPY --from=builder /build/app /app
+CMD ["/app"]`,
+            shouldModify: true,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            result := ensureRequiredDirectoriesInDockerfile(tt.inputDockerfile)
+            
+            // Always must contain the mkdir command
+            assert.Contains(t, result, "RUN mkdir -p /workspace /volumes",
+                "Result must contain directory creation")
+            
+            if tt.shouldModify {
+                assert.NotEqual(t, tt.inputDockerfile, result,
+                    "Dockerfile should be modified")
+                
+                // Verify it's inserted after the first FROM
+                lines := strings.Split(result, "\n")
+                foundFrom := false
+                foundMkdir := false
+                for i, line := range lines {
+                    if !foundFrom && strings.HasPrefix(strings.TrimSpace(line), "FROM ") {
+                        foundFrom = true
+                        // Next line should be mkdir
+                        if i+1 < len(lines) {
+                            assert.Contains(t, lines[i+1], "RUN mkdir -p /workspace /volumes",
+                                "mkdir should be right after first FROM")
+                            foundMkdir = true
+                        }
+                        break
+                    }
+                }
+                assert.True(t, foundFrom && foundMkdir, "Should find FROM and mkdir")
+            } else {
+                assert.Equal(t, tt.inputDockerfile, result,
+                    "Dockerfile should not be modified if directories already exist")
+            }
+        })
+    }
+}
+
+// TestEnsureRequiredDirectoriesInDockerfile_Idempotent ensures calling the function
+// multiple times doesn't add duplicate mkdir commands
+func TestEnsureRequiredDirectoriesInDockerfile_Idempotent(t *testing.T) {
+    dockerfile := `FROM ubuntu:22.04
+RUN apt-get update`
+
+    result1 := ensureRequiredDirectoriesInDockerfile(dockerfile)
+    result2 := ensureRequiredDirectoriesInDockerfile(result1)
+    result3 := ensureRequiredDirectoriesInDockerfile(result2)
+
+    assert.Equal(t, result1, result2, "Second call should not modify")
+    assert.Equal(t, result2, result3, "Third call should not modify")
+    
+    // Should only contain one mkdir command
+    mkdirCount := strings.Count(result3, "RUN mkdir -p /workspace /volumes")
+    assert.Equal(t, 1, mkdirCount, "Should only have one mkdir command")
 }
 
 func TestRenderV2Dockerfile_PythonInstallation(t *testing.T) {
@@ -590,6 +750,73 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	result := parseBuildStepsForDockerfile(steps, pythonVersion, false)
 	assert.Equal(t, expected, result)
+}
+
+// TestGenerateContainerRequest_SourceImageHandling verifies that SourceImage is correctly set
+// based on whether a custom Dockerfile, custom base image, or beta9 base image is used
+func TestGenerateContainerRequest_SourceImageHandling(t *testing.T) {
+	tests := []struct {
+		name                string
+		opts                *BuildOpts
+		expectedSourceImage *string
+		description         string
+	}{
+		{
+			name: "CustomDockerfile_NoSourceImage",
+			opts: &BuildOpts{
+				Dockerfile:     "FROM ubuntu:22.04\nRUN echo hello",
+				BuildCtxObject: "some-object-id",
+				PythonVersion:  "python3.10",
+				// Note: BaseImageName and BaseImageRegistry are not set for custom Dockerfiles
+			},
+			expectedSourceImage: nil,
+			description:         "Custom Dockerfile should not set SourceImage (Dockerfile has its own FROM)",
+		},
+		{
+			name: "CustomBaseImage_SetsSourceImage",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/ubuntu",
+				BaseImageTag:      "22.04",
+				ExistingImageUri:  "docker.io/library/ubuntu:22.04",
+				PythonVersion:     "python3.10",
+			},
+			expectedSourceImage: stringPtr("docker.io/library/ubuntu:22.04"),
+			description:         "Custom base image (from_registry) should set SourceImage",
+		},
+		{
+			name: "Beta9BaseImage_SetsSourceImage",
+			opts: &BuildOpts{
+				BaseImageRegistry: "registry.localhost:5000",
+				BaseImageName:     "beta9-runner",
+				BaseImageTag:      "py310-latest",
+				PythonVersion:     "python3.10",
+			},
+			expectedSourceImage: stringPtr("registry.localhost:5000/beta9-runner:py310-latest"),
+			description:         "Beta9 base image should set SourceImage",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			build, _, _ := setupTestBuild(t, tt.opts)
+			build.config.ImageService.ClipVersion = 2 // Test with v2
+
+			req, err := build.generateContainerRequest()
+			assert.NoError(t, err)
+
+			if tt.expectedSourceImage == nil {
+				assert.Nil(t, req.BuildOptions.SourceImage, tt.description)
+			} else {
+				assert.NotNil(t, req.BuildOptions.SourceImage, tt.description)
+				assert.Equal(t, *tt.expectedSourceImage, *req.BuildOptions.SourceImage, tt.description)
+			}
+		})
+	}
+}
+
+func stringPtr(s string) *string {
+	return &s
 }
 
 // Test parseBuildSteps specifically for command coalescing
