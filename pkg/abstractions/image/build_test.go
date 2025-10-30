@@ -75,10 +75,160 @@ func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
     df, err := b.RenderV2Dockerfile(opts)
     assert.NoError(t, err)
     assert.True(t, strings.HasPrefix(df, "FROM docker.io/library/alpine:3.18\n"))
+    // Verify required directories are created
+    assert.Contains(t, df, "RUN mkdir -p /workspace /volumes\n")
     // No SHELL directive expected for OCI format builds
     assert.Contains(t, df, "RUN echo one\n")
     assert.Contains(t, df, "RUN echo two\n")
     assert.Contains(t, df, "RUN echo step\n")
+}
+
+// TestRenderV2Dockerfile_AlwaysCreatesRequiredDirectories ensures that required
+// directories (/workspace and /volumes) are ALWAYS created in V2 Dockerfiles
+func TestRenderV2Dockerfile_AlwaysCreatesRequiredDirectories(t *testing.T) {
+    cfg := types.AppConfig{}
+    b := &Builder{config: cfg}
+
+    tests := []struct {
+        name string
+        opts *BuildOpts
+    }{
+        {
+            name: "Beta9BaseImage",
+            opts: &BuildOpts{
+                BaseImageRegistry: "registry.localhost:5000",
+                BaseImageName:     "beta9-runner",
+                BaseImageTag:      "py310-latest",
+                PythonPackages:    []string{"requests"},
+            },
+        },
+        {
+            name: "CustomBaseImage",
+            opts: &BuildOpts{
+                BaseImageRegistry: "docker.io",
+                BaseImageName:     "library/ubuntu",
+                BaseImageTag:      "22.04",
+                Commands:          []string{"apt update"},
+            },
+        },
+        {
+            name: "MinimalBuild",
+            opts: &BuildOpts{
+                BaseImageRegistry: "docker.io",
+                BaseImageName:     "library/alpine",
+                BaseImageTag:      "latest",
+            },
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            df, err := b.RenderV2Dockerfile(tt.opts)
+            assert.NoError(t, err)
+            
+            // MUST contain the mkdir command for required directories
+            assert.Contains(t, df, "RUN mkdir -p /workspace /volumes\n",
+                "All V2 Dockerfiles must create /workspace and /volumes directories")
+            
+            // Verify it comes right after FROM
+            lines := strings.Split(df, "\n")
+            assert.True(t, strings.HasPrefix(lines[0], "FROM "), "First line must be FROM")
+            assert.Equal(t, "RUN mkdir -p /workspace /volumes", lines[1],
+                "Second line must create required directories")
+        })
+    }
+}
+
+// TestEnsureRequiredDirectoriesInDockerfile_CustomDockerfile ensures that custom
+// Dockerfiles get the required directories injected
+func TestEnsureRequiredDirectoriesInDockerfile_CustomDockerfile(t *testing.T) {
+    tests := []struct {
+        name            string
+        inputDockerfile string
+        shouldModify    bool
+    }{
+        {
+            name: "SimpleDockerfile",
+            inputDockerfile: `FROM ubuntu:22.04
+RUN apt-get update
+COPY app.py /app/
+CMD ["python", "/app/app.py"]`,
+            shouldModify: true,
+        },
+        {
+            name: "AlreadyHasDirectories",
+            inputDockerfile: `FROM ubuntu:22.04
+RUN mkdir -p /workspace /volumes
+RUN apt-get update`,
+            shouldModify: false,
+        },
+        {
+            name: "MultiStageDockerfile",
+            inputDockerfile: `FROM golang:1.20 AS builder
+WORKDIR /build
+COPY . .
+RUN go build -o app
+
+FROM ubuntu:22.04
+COPY --from=builder /build/app /app
+CMD ["/app"]`,
+            shouldModify: true,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            result := ensureRequiredDirectoriesInDockerfile(tt.inputDockerfile)
+            
+            // Always must contain the mkdir command
+            assert.Contains(t, result, "RUN mkdir -p /workspace /volumes",
+                "Result must contain directory creation")
+            
+            if tt.shouldModify {
+                assert.NotEqual(t, tt.inputDockerfile, result,
+                    "Dockerfile should be modified")
+                
+                // Verify it's inserted after the first FROM
+                lines := strings.Split(result, "\n")
+                foundFrom := false
+                foundMkdir := false
+                for i, line := range lines {
+                    if !foundFrom && strings.HasPrefix(strings.TrimSpace(line), "FROM ") {
+                        foundFrom = true
+                        // Next line should be mkdir
+                        if i+1 < len(lines) {
+                            assert.Contains(t, lines[i+1], "RUN mkdir -p /workspace /volumes",
+                                "mkdir should be right after first FROM")
+                            foundMkdir = true
+                        }
+                        break
+                    }
+                }
+                assert.True(t, foundFrom && foundMkdir, "Should find FROM and mkdir")
+            } else {
+                assert.Equal(t, tt.inputDockerfile, result,
+                    "Dockerfile should not be modified if directories already exist")
+            }
+        })
+    }
+}
+
+// TestEnsureRequiredDirectoriesInDockerfile_Idempotent ensures calling the function
+// multiple times doesn't add duplicate mkdir commands
+func TestEnsureRequiredDirectoriesInDockerfile_Idempotent(t *testing.T) {
+    dockerfile := `FROM ubuntu:22.04
+RUN apt-get update`
+
+    result1 := ensureRequiredDirectoriesInDockerfile(dockerfile)
+    result2 := ensureRequiredDirectoriesInDockerfile(result1)
+    result3 := ensureRequiredDirectoriesInDockerfile(result2)
+
+    assert.Equal(t, result1, result2, "Second call should not modify")
+    assert.Equal(t, result2, result3, "Third call should not modify")
+    
+    // Should only contain one mkdir command
+    mkdirCount := strings.Count(result3, "RUN mkdir -p /workspace /volumes")
+    assert.Equal(t, 1, mkdirCount, "Should only have one mkdir command")
 }
 
 func TestRenderV2Dockerfile_PythonInstallation(t *testing.T) {

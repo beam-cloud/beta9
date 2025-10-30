@@ -246,6 +246,12 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 		}
 	}
 
+	// For V2 builds with custom Dockerfiles, ensure required directories are created
+	// This guarantees /workspace and /volumes exist regardless of the base image
+	if isV2 && opts.Dockerfile != "" {
+		opts.Dockerfile = ensureRequiredDirectoriesInDockerfile(opts.Dockerfile)
+	}
+
 	imageId, err := getImageID(opts)
 	if err != nil {
 		valid = false
