@@ -369,6 +369,17 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		return elapsed, err
 	}
 
+	// Ensure required directories exist in the mounted image
+	// For V2 images, empty directories may not be preserved in OCI layers
+	// even if they were created in the Dockerfile
+	for _, dir := range requiredContainerDirectories {
+		fullPath := filepath.Join(mountOptions.MountPoint, dir)
+		if err := os.MkdirAll(fullPath, 0755); err != nil {
+			log.Warn().Err(err).Str("path", fullPath).Msg("failed to create required directory in mounted image")
+			// Don't fail the mount if directory creation fails - the mount is already successful
+		}
+	}
+
 	c.mountedFuseServers.Set(imageId, server)
 	return elapsed, nil
 }
