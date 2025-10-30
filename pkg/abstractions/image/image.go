@@ -239,6 +239,24 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 		opts.addPythonRequirements()
 	}
 
+	// For V2 builds, render or augment Dockerfile BEFORE calculating image ID
+	// This ensures the image ID matches what will actually be built
+	isV2 := is.config.ImageService.ClipVersion == 2
+	if isV2 {
+		if opts.Dockerfile == "" {
+			// No custom Dockerfile: generate one from build options
+			if is.builder.hasWorkToDo(opts) {
+				opts.Dockerfile, err = is.builder.RenderV2Dockerfile(opts)
+				if err != nil {
+					return "", false, false, nil, err
+				}
+			}
+		} else if is.builder.hasWorkToDo(opts) {
+			// Custom Dockerfile with additional steps: append them
+			opts.Dockerfile = is.builder.appendToDockerfile(opts)
+		}
+	}
+
 	imageId, err := getImageID(opts)
 	if err != nil {
 		valid = false

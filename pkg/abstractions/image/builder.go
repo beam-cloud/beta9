@@ -197,25 +197,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	// For v2 builds, render or augment Dockerfile
-	isV2 := b.config.ImageService.ClipVersion == 2
-	if isV2 {
-		if build.opts.Dockerfile == "" {
-			// No custom Dockerfile: generate one from build options
-			if b.hasWorkToDo(build.opts) {
-				build.opts.Dockerfile, err = b.RenderV2Dockerfile(build.opts)
-				if err != nil {
-					build.log(true, "Failed to render Dockerfile.\n")
-					return err
-				}
-			}
-		} else if b.hasWorkToDo(build.opts) {
-			// Custom Dockerfile with additional steps: append them
-			build.opts.Dockerfile = b.appendToDockerfile(build.opts)
-		}
-	}
-
-	// Calculate image ID from all build options
+	// Image ID is already calculated in verifyImage with the final Dockerfile
+	// Just use the imageID from opts (passed from verifyImage via BuildImage)
 	build.imageID, err = getImageID(build.opts)
 	if err != nil {
 		return err
@@ -240,7 +223,8 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 	}
 
 	// V1: Execute commands in container and archive filesystem
-	// V2: Buildah already built the image, just emit success
+	// V2: Buildah already built the image
+	isV2 := b.config.ImageService.ClipVersion == 2
 	if !isV2 {
 		if err := build.prepareCommands(); err != nil {
 			return err
@@ -253,16 +237,21 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		if err := build.archive(); err != nil {
 			return err
 		}
+	}
+
+	// V2 emits completion message from buildah container logs, so just mark success
+	// V1 needs explicit completion message after archiving
+	build.setSuccess(true)
+	if !isV2 {
+		build.logWithImageAndPythonVersion(true, "Build completed successfully")
 	} else {
 		build.log(false, "=> Build complete 🎉\n")
 	}
-
-	build.setSuccess(true)
-	build.logWithImageAndPythonVersion(true, "Build completed successfully")
 	return nil
 }
 
 // hasWorkToDo returns true if there are build steps that need a Dockerfile
+// This is exported so it can be called from verifyImage
 func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 	return len(opts.Commands) > 0 || 
 		len(opts.BuildSteps) > 0 || 
@@ -271,6 +260,7 @@ func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 }
 
 // appendToDockerfile appends additional build steps to a custom Dockerfile
+// This is exported so it can be called from verifyImage
 func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 	var sb strings.Builder
 	sb.WriteString(opts.Dockerfile)
