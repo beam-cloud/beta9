@@ -287,10 +287,14 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 	}
 	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
 	
-	// Install Python if a version is specified
-	// For custom Dockerfiles, we can't detect if Python is already installed,
-	// so we install it when explicitly requested via add_python_version()
-	if pythonVersion != "" && !opts.IgnorePython {
+	// Install Python if needed
+	// Match the behavior from RenderV2Dockerfile and setupPythonEnv:
+	// - If ignore_python=true AND no packages → skip Python entirely
+	// - If ignore_python=true BUT has packages → install Python (packages need it)
+	// - If ignore_python=false → install Python when version specified
+	shouldInstallPython := pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0)
+	
+	if shouldInstallPython {
 		if isMicromamba {
 			sb.WriteString("RUN micromamba config set use_lockfiles False\n")
 		} else {
@@ -304,7 +308,8 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 	}
 	
 	// Install Python packages if specified
-	if len(opts.PythonPackages) > 0 && pythonVersion != "" {
+	// Only install if we have packages and we're not in the "ignore Python with no packages" state
+	if len(opts.PythonPackages) > 0 && pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0) {
 		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
 			sb.WriteString("RUN ")
 			sb.WriteString(pipCmd)

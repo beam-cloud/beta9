@@ -357,6 +357,234 @@ WORKDIR /workspace`
     assert.True(t, pythonInstallIdx < numpyIdx, "Python install before packages")
 }
 
+// TestCustomDockerfile_IgnorePython_NoPackages tests that ignore_python=true with no packages skips Python
+func TestCustomDockerfile_IgnorePython_NoPackages(t *testing.T) {
+    cfg := types.AppConfig{
+        ImageService: types.ImageServiceConfig{
+            PythonVersion: "python3.10",
+            ClipVersion:   2,
+            Runner: types.RunnerConfig{
+                PythonStandalone: types.PythonStandaloneConfig{
+                    Versions: map[string]string{
+                        "python3.10": "3.10.15+20241002",
+                    },
+                    InstallScriptTemplate: "install python {{.PythonVersion}}",
+                },
+            },
+        },
+    }
+    b := &Builder{config: cfg}
+    
+    // Custom Dockerfile with ignore_python=true and no packages
+    customDockerfile := `FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y nodejs
+WORKDIR /app`
+    
+    opts := &BuildOpts{
+        Dockerfile:    customDockerfile,
+        PythonVersion: "python3.10",
+        IgnorePython:  true,
+        Commands:      []string{"echo 'No Python needed'"},
+        ClipVersion:   2,
+    }
+    
+    var finalDockerfile string
+    if opts.Dockerfile != "" && b.hasWorkToDo(opts) {
+        finalDockerfile = b.appendToDockerfile(opts)
+    } else {
+        finalDockerfile = opts.Dockerfile
+    }
+    
+    // Verify custom Dockerfile is preserved
+    assert.Contains(t, finalDockerfile, "FROM ubuntu:22.04")
+    assert.Contains(t, finalDockerfile, "nodejs")
+    
+    // Verify Python is NOT installed when ignore_python=true and no packages
+    assert.NotContains(t, finalDockerfile, "install python", "Should not install Python when ignore_python=true and no packages")
+    assert.NotContains(t, finalDockerfile, "pip install", "Should not have pip commands")
+    
+    // Verify commands are still executed
+    assert.Contains(t, finalDockerfile, "echo 'No Python needed'")
+}
+
+// TestCustomDockerfile_IgnorePython_WithPackages tests that ignore_python=true WITH packages still installs Python
+func TestCustomDockerfile_IgnorePython_WithPackages(t *testing.T) {
+    cfg := types.AppConfig{
+        ImageService: types.ImageServiceConfig{
+            PythonVersion: "python3.10",
+            ClipVersion:   2,
+            Runner: types.RunnerConfig{
+                PythonStandalone: types.PythonStandaloneConfig{
+                    Versions: map[string]string{
+                        "python3.10": "3.10.15+20241002",
+                    },
+                    InstallScriptTemplate: "install python {{.PythonVersion}}",
+                },
+            },
+        },
+    }
+    b := &Builder{config: cfg}
+    
+    // Custom Dockerfile with ignore_python=true BUT has packages
+    customDockerfile := `FROM ubuntu:22.04
+RUN apt-get update
+WORKDIR /app`
+    
+    opts := &BuildOpts{
+        Dockerfile:     customDockerfile,
+        PythonVersion:  "python3.10",
+        IgnorePython:   true,
+        PythonPackages: []string{"numpy"}, // Has packages, so Python is needed
+        ClipVersion:    2,
+    }
+    
+    var finalDockerfile string
+    if opts.Dockerfile != "" && b.hasWorkToDo(opts) {
+        finalDockerfile = b.appendToDockerfile(opts)
+    } else {
+        finalDockerfile = opts.Dockerfile
+    }
+    
+    // Verify custom Dockerfile is preserved
+    assert.Contains(t, finalDockerfile, "FROM ubuntu:22.04")
+    
+    // Verify Python IS installed because packages need it (even with ignore_python=true)
+    assert.Contains(t, finalDockerfile, "install python", "Should install Python when packages are specified, even with ignore_python=true")
+    assert.Contains(t, finalDockerfile, "pip install", "Should install packages")
+    assert.Contains(t, finalDockerfile, "numpy")
+}
+
+// TestCustomDockerfile_IgnorePython_CompleteScenarios tests all ignore_python scenarios
+func TestCustomDockerfile_IgnorePython_CompleteScenarios(t *testing.T) {
+    cfg := types.AppConfig{
+        ImageService: types.ImageServiceConfig{
+            PythonVersion: "python3.10",
+            ClipVersion:   2,
+            Runner: types.RunnerConfig{
+                PythonStandalone: types.PythonStandaloneConfig{
+                    Versions: map[string]string{
+                        "python3.10": "3.10.15+20241002",
+                    },
+                    InstallScriptTemplate: "install python standalone {{.PythonVersion}}",
+                },
+            },
+        },
+    }
+    b := &Builder{config: cfg}
+    
+    tests := []struct {
+        name              string
+        dockerfile        string
+        pythonVersion     string
+        ignorePython      bool
+        packages          []string
+        commands          []string
+        shouldInstallPy   bool
+        shouldInstallPkgs bool
+        description       string
+    }{
+        {
+            name:              "IgnorePython_NothingElse",
+            dockerfile:        "FROM alpine:latest",
+            pythonVersion:     "python3.10",
+            ignorePython:      true,
+            packages:          []string{},
+            commands:          []string{},
+            shouldInstallPy:   false,
+            shouldInstallPkgs: false,
+            description:       "ignore_python=true, no packages, no commands → no Python",
+        },
+        {
+            name:              "IgnorePython_WithCommands",
+            dockerfile:        "FROM alpine:latest",
+            pythonVersion:     "python3.10",
+            ignorePython:      true,
+            packages:          []string{},
+            commands:          []string{"apk add nodejs"},
+            shouldInstallPy:   false,
+            shouldInstallPkgs: false,
+            description:       "ignore_python=true, no packages, has commands → no Python, but commands run",
+        },
+        {
+            name:              "IgnorePython_WithPackages",
+            dockerfile:        "FROM alpine:latest",
+            pythonVersion:     "python3.10",
+            ignorePython:      true,
+            packages:          []string{"numpy"},
+            commands:          []string{},
+            shouldInstallPy:   true,
+            shouldInstallPkgs: true,
+            description:       "ignore_python=true, has packages → Python installed (packages need it)",
+        },
+        {
+            name:              "Normal_WithPython",
+            dockerfile:        "FROM alpine:latest",
+            pythonVersion:     "python3.10",
+            ignorePython:      false,
+            packages:          []string{},
+            commands:          []string{},
+            shouldInstallPy:   true,
+            shouldInstallPkgs: false,
+            description:       "ignore_python=false, no packages → Python installed",
+        },
+        {
+            name:              "Normal_WithPythonAndPackages",
+            dockerfile:        "FROM alpine:latest",
+            pythonVersion:     "python3.10",
+            ignorePython:      false,
+            packages:          []string{"numpy"},
+            commands:          []string{},
+            shouldInstallPy:   true,
+            shouldInstallPkgs: true,
+            description:       "ignore_python=false, has packages → Python and packages installed",
+        },
+    }
+    
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            opts := &BuildOpts{
+                Dockerfile:     tt.dockerfile,
+                PythonVersion:  tt.pythonVersion,
+                IgnorePython:   tt.ignorePython,
+                PythonPackages: tt.packages,
+                Commands:       tt.commands,
+                ClipVersion:    2,
+            }
+            
+            var finalDockerfile string
+            if opts.Dockerfile != "" && b.hasWorkToDo(opts) {
+                finalDockerfile = b.appendToDockerfile(opts)
+            } else {
+                finalDockerfile = opts.Dockerfile
+            }
+            
+            // Check Python installation
+            if tt.shouldInstallPy {
+                assert.Contains(t, finalDockerfile, "install python standalone", 
+                    "Test %s: %s - should install Python", tt.name, tt.description)
+            } else {
+                assert.NotContains(t, finalDockerfile, "install python standalone", 
+                    "Test %s: %s - should NOT install Python", tt.name, tt.description)
+            }
+            
+            // Check package installation
+            if tt.shouldInstallPkgs {
+                assert.Contains(t, finalDockerfile, "pip install", 
+                    "Test %s: %s - should install packages", tt.name, tt.description)
+            } else {
+                assert.NotContains(t, finalDockerfile, "pip install", 
+                    "Test %s: %s - should NOT install packages", tt.name, tt.description)
+            }
+            
+            // Check commands are always preserved
+            for _, cmd := range tt.commands {
+                assert.Contains(t, finalDockerfile, cmd, 
+                    "Test %s: %s - should include command", tt.name, tt.description)
+            }
+        })
+    }
+}
+
 func TestRenderV2Dockerfile_PythonInstallation(t *testing.T) {
     cfg := types.AppConfig{
         ImageService: types.ImageServiceConfig{
