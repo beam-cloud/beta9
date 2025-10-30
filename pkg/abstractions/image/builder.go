@@ -239,14 +239,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		}
 	}
 
-	// V2 emits completion message from buildah container logs, so just mark success
-	// V1 needs explicit completion message after archiving
+	// Send final completion message with image ID
 	build.setSuccess(true)
-	if !isV2 {
-		build.logWithImageAndPythonVersion(true, "Build completed successfully")
-	} else {
-		build.log(false, "=> Build complete 🎉\n")
-	}
+	build.logWithImageAndPythonVersion(true, "Build completed successfully")
 	return nil
 }
 
