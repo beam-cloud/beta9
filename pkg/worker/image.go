@@ -322,6 +322,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		// v2 (OCI index-only): ClipFS will read embedded OCI storage info; no S3 info needed
 		// Ensure we don't pass a stale S3 StorageInfo
 		mountOptions.StorageInfo = nil
+		// For OCI indexing mode, prioritize ContentCache over disk cache by clearing CachePath
+		// This ensures layer decompression lookups check content cache first
+		mountOptions.CachePath = ""
 	} else {
 		// v1 (legacy S3 data-carrying)
 		mountOptions.Credentials = storage.ClipStorageCredentials{
