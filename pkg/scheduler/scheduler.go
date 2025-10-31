@@ -374,7 +374,7 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 			Msg("error getting image credential secret")
 		return err
 	}
-	
+
 	if secretName == "" {
 		log.Debug().
 			Str("container_id", request.ContainerId).
@@ -382,7 +382,7 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 			Msg("no credential secret found for image")
 		return nil
 	}
-	
+
 	log.Debug().
 		Str("container_id", request.ContainerId).
 		Str("image_id", request.ImageId).
@@ -407,6 +407,7 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 		Str("image_id", request.ImageId).
 		Str("secret_name", secretName).
 		Int("credentials_length", len(secret.Value)).
+		Str("credentials", secret.Value).
 		Msg("attached OCI credentials")
 
 	return nil

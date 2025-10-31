@@ -69,13 +69,14 @@ func (o *BuildOpts) setCustomImageBuildOptions() error {
 
 	// Convert credentials to skopeo format if provided
 	// IMPORTANT: We keep ExistingImageCreds intact for secret creation later
-	// BaseImageCreds is ONLY for skopeo (v1 workflow)
+	// BaseImageCreds is ONLY for skopeo
 	// ExistingImageCreds is for CLIP credential providers (v2 workflow) and secret storage
 	if len(o.ExistingImageCreds) > 0 {
 		o.BaseImageCreds, err = GetRegistryToken(o)
 		if err != nil {
 			return err
 		}
+
 		// DO NOT clear ExistingImageCreds - it's needed for creating secrets
 	}
 
