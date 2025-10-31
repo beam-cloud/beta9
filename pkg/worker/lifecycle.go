@@ -441,10 +441,21 @@ func (s *Worker) buildSpecFromImageMetadata(imgMeta *common.ImageMetadata) *spec
 		},
 	}
 
-	// Use Config if available, otherwise fallback to legacy Env field
+	applyImageMetadataToSpec(&spec, imgMeta)
+	return &spec
+}
+
+// applyImageMetadataToSpec applies image metadata (env, workdir, user, cmd, entrypoint) to an OCI spec
+func applyImageMetadataToSpec(spec *specs.Spec, imgMeta *common.ImageMetadata) {
 	if imgMeta.Config != nil {
 		if len(imgMeta.Config.Env) > 0 {
-			spec.Process.Env = imgMeta.Config.Env
+			// For buildSpecFromImageMetadata: replace env completely for empty specs
+			// For writeInitialSpecFromImage: append to existing base config env
+			if len(spec.Process.Env) == 0 {
+				spec.Process.Env = imgMeta.Config.Env
+			} else {
+				spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
+			}
 		}
 		if imgMeta.Config.WorkingDir != "" {
 			spec.Process.Cwd = imgMeta.Config.WorkingDir
@@ -459,10 +470,13 @@ func (s *Worker) buildSpecFromImageMetadata(imgMeta *common.ImageMetadata) *spec
 			spec.Process.Args = imgMeta.Config.Cmd
 		}
 	} else if len(imgMeta.Env) > 0 {
-		spec.Process.Env = imgMeta.Env
+		// Fallback to legacy Env field if Config is not available
+		if len(spec.Process.Env) == 0 {
+			spec.Process.Env = imgMeta.Env
+		} else {
+			spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
+		}
 	}
-
-	return &spec
 }
 
 // Generate a runc spec from a given request
