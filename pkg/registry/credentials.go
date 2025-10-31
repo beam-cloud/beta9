@@ -205,13 +205,63 @@ func CreateSecretName(registry string) string {
 // This function creates an appropriate credential provider without setting environment variables
 // Returns common.RegistryCredentialProvider
 func CreateProviderFromCredentials(ctx context.Context, registry string, credType CredType, creds map[string]string) common.RegistryCredentialProvider {
-	// Delegate directly to CLIP's implementation which has proper support for:
-	// - ECRProvider for AWS (calls ECR API to get tokens)
-	// - GARProvider for GCP (proper OAuth2 token handling)
-	// - BasicAuthProvider for username/password registries
-	// - TokenProvider for token-based auth
-	// Beta9 should not reimplement this logic!
-	return common.CredentialsToProvider(ctx, registry, creds)
+	if len(creds) == 0 {
+		return common.NewPublicOnlyProvider()
+	}
+
+	switch credType {
+	case CredTypeBasic:
+		// Basic auth with username/password
+		username := ""
+		password := ""
+
+		// Try different username keys
+		for key, value := range creds {
+			keyUpper := strings.ToUpper(key)
+			if strings.Contains(keyUpper, "USERNAME") {
+				username = value
+			}
+			if strings.Contains(keyUpper, "PASSWORD") {
+				password = value
+			}
+		}
+
+		if username != "" && password != "" {
+			return common.NewStaticProvider(map[string]*authn.AuthConfig{
+				registry: {
+					Username: username,
+					Password: password,
+				},
+			})
+		}
+		return common.NewPublicOnlyProvider()
+
+	case CredTypeAWS, CredTypeGCP, CredTypeAzure:
+		// For cloud providers, use KeychainProvider which integrates with AWS SDK, GCP SDK, etc.
+		// KeychainProvider's DefaultKeychain includes ECR, GCR, and other cloud provider support
+		// Set env vars so the SDKs can find credentials
+		for key, value := range creds {
+			os.Setenv(key, value)
+		}
+		return common.NewKeychainProvider()
+
+	case CredTypeToken:
+		// For token-based auth, use token as password with oauth2accesstoken username
+		for _, key := range tokenCredKeys {
+			if token, ok := creds[key]; ok && token != "" {
+				return common.NewStaticProvider(map[string]*authn.AuthConfig{
+					registry: {
+						Username: "oauth2accesstoken",
+						Password: token,
+					},
+				})
+			}
+		}
+		return common.NewPublicOnlyProvider()
+
+	default:
+		return common.NewPublicOnlyProvider()
+	}
 }
 
 // CreateProviderFromEnv creates a CLIP-compatible credential provider from environment variables
@@ -699,11 +749,11 @@ func ParseCredentialsFromJSON(credStr string) (map[string]string, error) {
 
 // CredentialsToProvider converts a credential map and registry to a CLIP-compatible provider
 // This is the main function that should be used to create providers for CLIP
-// It delegates directly to CLIP's implementation which has proper ECRProvider, GARProvider, etc.
 func CredentialsToProvider(ctx context.Context, registry string, creds map[string]string) common.RegistryCredentialProvider {
-	// Just delegate to CLIP's implementation - it will:
-	// 1. Auto-detect credential type (AWS, GCP, basic auth, token, etc.)
-	// 2. Create the appropriate provider (ECRProvider for AWS, GARProvider for GCP, etc.)
-	// 3. Handle token fetching and authentication properly
-	return common.CredentialsToProvider(ctx, registry, creds)
+	if len(creds) == 0 {
+		return common.NewPublicOnlyProvider()
+	}
+
+	credType := DetectCredentialType(registry, creds)
+	return CreateProviderFromCredentials(ctx, registry, credType, creds)
 }
