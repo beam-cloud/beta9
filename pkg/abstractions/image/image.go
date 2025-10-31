@@ -502,15 +502,21 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 		Str("base_image", baseImage).
 		Msg("proceeding with secret creation")
 
-	// Parse registry and credentials
+	// Parse registry
 	registry := reg.ParseRegistry(baseImage)
 	if registry == "" {
 		return fmt.Errorf("failed to parse registry from base image: %s", baseImage)
 	}
 
+	// credStr is ALREADY properly marshaled from line 447 (for ExistingImageCreds)
+	// or from BaseImageCreds (for basic auth)
+	// DO NOT parse and re-marshal, as that causes double-wrapping!
+	secretValue := credStr
+	
+	// For validation only: parse to check if credentials are valid
 	creds, err := is.parseCredentials(credStr)
 	if err != nil {
-		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to parse credentials")
+		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to parse credentials for validation")
 		return nil
 	}
 
@@ -525,12 +531,6 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
 	if !ok || authInfo.Workspace == nil {
 		return fmt.Errorf("no workspace found in context")
-	}
-
-	// Prepare secret
-	secretValue, err := reg.MarshalCredentials(registry, credType, creds)
-	if err != nil {
-		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
 
 	secretName := reg.CreateSecretName(registry)
