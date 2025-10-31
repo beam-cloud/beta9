@@ -54,148 +54,115 @@ func buildBasicAuthToken(username, password string) string {
 }
 
 func validateRequiredCredential(creds map[string]string, key string) (string, error) {
-	value, ok := creds[key]
-	if !ok {
-		return "", fmt.Errorf("%s not found", key)
+	if value := creds[key]; value != "" {
+		return value, nil
 	}
-	if value == "" {
-		return "", fmt.Errorf("%s is empty", key)
-	}
-	return value, nil
+	return "", fmt.Errorf("%s not found or empty", key)
 }
 
 func validateOptionalCredentials(creds map[string]string, usernameKey, passwordKey string) (string, string, bool, error) {
-	username, hasUsername := creds[usernameKey]
-	password, hasPassword := creds[passwordKey]
-
-	if hasUsername && username == "" {
-		return "", "", false, fmt.Errorf("%s set but is empty", usernameKey)
+	username := creds[usernameKey]
+	password := creds[passwordKey]
+	
+	if (username == "" && password != "") || (username != "" && password == "") {
+		return "", "", false, fmt.Errorf("both %s and %s must be provided together", usernameKey, passwordKey)
 	}
-	if hasPassword && password == "" {
-		return "", "", false, fmt.Errorf("%s set but is empty", passwordKey)
-	}
-
-	bothPresent := hasUsername && hasPassword
-	return username, password, bothPresent, nil
+	
+	return username, password, username != "" && password != "", nil
 }
 
-// Amazon Elastic Container Registry
-// Gets the ECR Authorization Token on behalf of the user.
+// Amazon Elastic Container Registry - retrieves ECR authorization token
 func GetECRToken(opts *BuildOpts) (string, error) {
 	creds := opts.ExistingImageCreds
-
-	accessKey, ok := creds["AWS_ACCESS_KEY_ID"]
-	if !ok {
-		return "", fmt.Errorf("AWS_ACCESS_KEY_ID not found")
-	}
-	secretKey, ok := creds["AWS_SECRET_ACCESS_KEY"]
-	if !ok {
-		return "", fmt.Errorf("AWS_SECRET_ACCESS_KEY not found")
-	}
-	sessionToken, ok := creds["AWS_SESSION_TOKEN"]
-	if !ok {
-		sessionToken = ""
-	}
-	region, ok := creds["AWS_REGION"]
-	if !ok {
-		return "", fmt.Errorf("AWS_REGION not found")
-	}
-
-	credentials := credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)
-	cfg, err := config.LoadDefaultConfig(context.TODO(), config.WithRegion(region), config.WithCredentialsProvider(credentials))
+	
+	// Validate required credentials
+	accessKey, err := validateRequiredCredential(creds, "AWS_ACCESS_KEY_ID")
 	if err != nil {
-		return "", fmt.Errorf("error loading AWS configuration: %v", err)
+		return "", err
+	}
+	secretKey, err := validateRequiredCredential(creds, "AWS_SECRET_ACCESS_KEY")
+	if err != nil {
+		return "", err
+	}
+	region, err := validateRequiredCredential(creds, "AWS_REGION")
+	if err != nil {
+		return "", err
+	}
+	sessionToken := creds["AWS_SESSION_TOKEN"] // Optional
+
+	// Configure AWS client
+	credProvider := credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)
+	cfg, err := config.LoadDefaultConfig(context.TODO(), 
+		config.WithRegion(region), 
+		config.WithCredentialsProvider(credProvider))
+	if err != nil {
+		return "", fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	// Create an ECR client with the custom configuration
+	// Get ECR authorization token
 	client := ecr.NewFromConfig(cfg)
-
-	// Get authorization token
 	output, err := client.GetAuthorizationToken(context.TODO(), &ecr.GetAuthorizationTokenInput{})
 	if err != nil {
-		return "", fmt.Errorf("error getting ECR authorization token: %v", err)
+		return "", fmt.Errorf("failed to get ECR token: %w", err)
 	}
 
 	if len(output.AuthorizationData) == 0 || output.AuthorizationData[0].AuthorizationToken == nil {
-		return "", fmt.Errorf("no authorization data returned")
+		return "", fmt.Errorf("no authorization data returned from ECR")
 	}
 
-	// Decode the authorization token to get the username and password
+	// Decode base64 token (format: username:password)
 	base64Token := aws.ToString(output.AuthorizationData[0].AuthorizationToken)
 	decodedToken, err := base64.StdEncoding.DecodeString(base64Token)
-
 	if err != nil {
-		return "", fmt.Errorf("error decoding token: %v", err)
+		return "", fmt.Errorf("failed to decode ECR token: %w", err)
 	}
 
 	parts := strings.SplitN(string(decodedToken), ":", 2)
 	if len(parts) != 2 {
-		return "", fmt.Errorf("decoded token format invalid, expected username:password")
+		return "", fmt.Errorf("invalid ECR token format")
 	}
 
-	// Return the username and password
-	username := parts[0]
-	password := parts[1]
-
-	token := fmt.Sprintf("%s:%s", username, password)
-	return token, nil
+	return buildBasicAuthToken(parts[0], parts[1]), nil
 }
 
-// Google Artifact Registry
+// Google Artifact Registry - uses OAuth2 access token
 func GetGARToken(opts *BuildOpts) (string, error) {
-	creds := opts.ExistingImageCreds
-
-	password, err := validateRequiredCredential(creds, "GCP_ACCESS_TOKEN")
+	token, err := validateRequiredCredential(opts.ExistingImageCreds, "GCP_ACCESS_TOKEN")
 	if err != nil {
 		return "", err
 	}
-
-	username := "oauth2accesstoken"
-	return buildBasicAuthToken(username, password), nil
+	return buildBasicAuthToken("oauth2accesstoken", token), nil
 }
 
+// NVIDIA GPU Cloud - uses API key
 func GetNGCToken(opts *BuildOpts) (string, error) {
-	creds := opts.ExistingImageCreds
-
-	password, err := validateRequiredCredential(creds, "NGC_API_KEY")
+	apiKey, err := validateRequiredCredential(opts.ExistingImageCreds, "NGC_API_KEY")
 	if err != nil {
 		return "", err
 	}
-
-	username := "$oauthtoken"
-	return buildBasicAuthToken(username, password), nil
+	return buildBasicAuthToken("$oauthtoken", apiKey), nil
 }
 
-// GitHub Container Registry
+// GitHub Container Registry - optional username/token authentication
 func GetGHCRToken(opts *BuildOpts) (string, error) {
-	creds := opts.ExistingImageCreds
-
-	username, password, bothPresent, err := validateOptionalCredentials(creds, "GITHUB_USERNAME", "GITHUB_TOKEN")
+	username, password, hasAuth, err := validateOptionalCredentials(opts.ExistingImageCreds, "GITHUB_USERNAME", "GITHUB_TOKEN")
 	if err != nil {
 		return "", err
 	}
-
-	// If either username or password is missing, assume no credentials are needed
-	if !bothPresent {
-		return "", nil
+	if hasAuth {
+		return buildBasicAuthToken(username, password), nil
 	}
-
-	return buildBasicAuthToken(username, password), nil
+	return "", nil // Public access
 }
 
-// Docker Hub
+// Docker Hub - optional username/password authentication
 func GetDockerHubToken(opts *BuildOpts) (string, error) {
-	creds := opts.ExistingImageCreds
-
-	username, password, bothPresent, err := validateOptionalCredentials(creds, "DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD")
+	username, password, hasAuth, err := validateOptionalCredentials(opts.ExistingImageCreds, "DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD")
 	if err != nil {
 		return "", err
 	}
-
-	// If either username or password is missing, assume no credentials are needed
-	if !bothPresent {
-		return "", nil
+	if hasAuth {
+		return buildBasicAuthToken(username, password), nil
 	}
-
-	return buildBasicAuthToken(username, password), nil
+	return "", nil // Public access
 }
