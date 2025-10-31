@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,6 +19,7 @@ import (
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/registry"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
@@ -117,7 +119,7 @@ func NewPathInfo(path string) *PathInfo {
 }
 
 type ImageClient struct {
-	registry           *registry.ImageRegistry
+	registry           *reg.ImageRegistry
 	cacheClient        *blobcache.BlobCacheClient
 	imageCachePath     string
 	imageMountPath     string
@@ -133,7 +135,7 @@ type ImageClient struct {
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
-	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3)
+	registry, err := reg.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +263,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	mountArchivePath := downloadPath
 	if meta != nil {
 		if t, ok := meta.StorageInfo.(interface{ Type() string }); ok && (t.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(t.Type()) == "oci") {
-			canonicalIndexPath := fmt.Sprintf("/images/%s.%s", imageId, registry.LocalImageFileExtension)
+			canonicalIndexPath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
 			_ = os.MkdirAll(filepath.Dir(canonicalIndexPath), 0755)
 			if downloadPath != canonicalIndexPath {
 				// Move the downloaded file to the canonical clip index path
@@ -320,8 +322,12 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 	if strings.ToLower(storageType) == string(clipCommon.StorageModeOCI) {
 		// v2 (OCI index-only): ClipFS will read embedded OCI storage info; no S3 info needed
-		// Ensure we don't pass a stale S3 StorageInfo
 		mountOptions.StorageInfo = nil
+
+		// Attach credential provider for runtime layer loading
+		if provider := c.createCredentialProvider(ctx, request.ImageCredentials, imageId); provider != nil {
+			mountOptions.RegistryCredProvider = provider
+		}
 	} else {
 		// v1 (legacy S3 data-carrying)
 		mountOptions.Credentials = storage.ClipStorageCredentials{
@@ -334,7 +340,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			Bucket:         sourceRegistry.BucketName,
 			Region:         sourceRegistry.Region,
 			Endpoint:       sourceRegistry.Endpoint,
-			Key:            fmt.Sprintf("%s.%s", imageId, registry.LocalImageFileExtension),
+			Key:            fmt.Sprintf("%s.%s", imageId, reg.LocalImageFileExtension),
 			ForcePathStyle: sourceRegistry.ForcePathStyle,
 		}
 	}
@@ -376,6 +382,56 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 // GetSourceImageRef retrieves the cached source image reference for a v2 image
 func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
+}
+
+// createCredentialProvider creates a CLIP credential provider from JSON credentials
+func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsJSON, imageId string) clipCommon.RegistryCredentialProvider {
+	if credentialsJSON == "" {
+		return nil
+	}
+
+	var credData map[string]interface{}
+	if err := json.Unmarshal([]byte(credentialsJSON), &credData); err != nil {
+		log.Warn().
+			Err(err).
+			Str("image_id", imageId).
+			Msg("failed to parse image credentials JSON")
+		return nil
+	}
+
+	registry, _ := credData["registry"].(string)
+	credsMap, _ := credData["credentials"].(map[string]interface{})
+
+	if registry == "" || credsMap == nil {
+		return nil
+	}
+
+	// Convert credentials to environment variables and collect keys
+	credKeys := []string{}
+	for k, v := range credsMap {
+		if strVal, ok := v.(string); ok && strVal != "" {
+			os.Setenv(k, strVal)
+			credKeys = append(credKeys, k)
+		}
+	}
+
+	// Create provider from environment
+	provider, err := reg.CreateProviderFromEnv(ctx, registry, credKeys)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("image_id", imageId).
+			Str("registry", registry).
+			Msg("failed to create credential provider")
+		return nil
+	}
+
+	log.Info().
+		Str("image_id", imageId).
+		Str("registry", registry).
+		Msg("created credential provider for OCI image")
+
+	return provider
 }
 
 // cacheV2SourceImageRef caches the source image reference for a v2 image build
@@ -508,7 +564,6 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		ImageRef:      imageRef,
 		OutputPath:    outputPath,
 		CheckpointMiB: checkpointMiB,
-		AuthConfig:    authConfig,
 		ProgressChan:  progressChan,
 	})
 

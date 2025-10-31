@@ -384,51 +384,66 @@ func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec,
 // deriveSpecFromSourceImage creates an OCI spec from the source image metadata.
 // This is used for v2 images where we don't have an unpacked bundle with config.json.
 func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*specs.Spec, error) {
-	// Get source image reference from the request or from cache
-	var sourceImageRef string
-	var sourceImageCreds string
-
-	if request.BuildOptions.SourceImage != nil {
-		sourceImageRef = *request.BuildOptions.SourceImage
-		sourceImageCreds = request.BuildOptions.SourceImageCreds
-	} else {
-		// For non-build containers, try to get the source image from the cache
-		if ref, ok := s.imageClient.GetSourceImageRef(request.ImageId); ok {
-			sourceImageRef = ref
-			log.Info().Str("image_id", request.ImageId).Str("source_image", sourceImageRef).Msg("retrieved source image from cache")
-		}
-	}
-
-	// If we don't have a source image reference, return nil (will use base spec)
+	// Determine source image reference and credentials
+	sourceImageRef, sourceImageCreds := s.getSourceImageInfo(request)
 	if sourceImageRef == "" {
-		log.Warn().Str("image_id", request.ImageId).Msg("no source image reference available, using base spec")
+		log.Warn().Str("image_id", request.ImageId).Msg("no source image reference, using base spec")
 		return nil, nil
 	}
 
-	// Inspect the source image to get its configuration
+	// Inspect source image with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, sourceImageRef, sourceImageCreds, nil)
 	if err != nil {
-		log.Warn().Str("image_id", request.ImageId).Str("source_image", sourceImageRef).Err(err).Msg("failed to inspect source image, using base spec")
+		log.Warn().
+			Str("image_id", request.ImageId).
+			Str("source_image", sourceImageRef).
+			Err(err).
+			Msg("failed to inspect source image, using base spec")
 		return nil, nil
 	}
 
-	log.Info().Str("image_id", request.ImageId).Str("source_image", sourceImageRef).Msg("derived spec from source image")
+	log.Info().
+		Str("image_id", request.ImageId).
+		Str("source_image", sourceImageRef).
+		Msg("derived spec from source image")
 
-	// Create a clean spec with only the base config env (TERM=xterm)
-	// We'll let the caller merge this with the request-specific env
+	// Build spec from image metadata
+	return s.buildSpecFromImageMetadata(&imgMeta), nil
+}
+
+// getSourceImageInfo retrieves the source image reference and credentials
+func (s *Worker) getSourceImageInfo(request *types.ContainerRequest) (string, string) {
+	// Build containers have source image in BuildOptions
+	if request.BuildOptions.SourceImage != nil {
+		return *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds
+	}
+
+	// Non-build containers: try cache
+	if ref, ok := s.imageClient.GetSourceImageRef(request.ImageId); ok {
+		log.Info().
+			Str("image_id", request.ImageId).
+			Str("source_image", ref).
+			Msg("retrieved source image from cache")
+		return ref, ""
+	}
+
+	return "", ""
+}
+
+// buildSpecFromImageMetadata constructs an OCI spec from image metadata
+func (s *Worker) buildSpecFromImageMetadata(imgMeta *common.ImageMetadata) *specs.Spec {
 	spec := specs.Spec{
 		Process: &specs.Process{
-			Env: []string{}, // Start with empty env - will be populated from image
+			Env: []string{},
 		},
 	}
 
-	// Apply image configuration
+	// Use Config if available, otherwise fallback to legacy Env field
 	if imgMeta.Config != nil {
 		if len(imgMeta.Config.Env) > 0 {
-			// Only use image env, don't append to base spec to avoid duplicates
 			spec.Process.Env = imgMeta.Config.Env
 		}
 		if imgMeta.Config.WorkingDir != "" {
@@ -437,18 +452,17 @@ func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*sp
 		if imgMeta.Config.User != "" {
 			spec.Process.User.Username = imgMeta.Config.User
 		}
-		// Set default args from Cmd if Entrypoint is not set, or combine them
+		// Combine Entrypoint and Cmd, or use Cmd alone
 		if len(imgMeta.Config.Entrypoint) > 0 {
 			spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
 		} else if len(imgMeta.Config.Cmd) > 0 {
 			spec.Process.Args = imgMeta.Config.Cmd
 		}
 	} else if len(imgMeta.Env) > 0 {
-		// Fallback to legacy Env field if Config is not available
 		spec.Process.Env = imgMeta.Env
 	}
 
-	return &spec, nil
+	return &spec
 }
 
 // Generate a runc spec from a given request

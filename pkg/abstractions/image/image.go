@@ -3,6 +3,7 @@ package image
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/registry"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -124,17 +126,17 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		IgnorePython:     in.IgnorePython,
 	}
 
-    imageId, exists, _, buildOptions, err := is.verifyImage(stream.Context(), verifyReq)
+	imageId, exists, _, buildOptions, err := is.verifyImage(stream.Context(), verifyReq)
 	if err != nil {
 		return err
 	}
 
-    if exists {
-        // Emit a minimal success response consistent with SDK expectations
-        _ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: imageId})
-        _ = stream.Send(&pb.BuildImageResponse{Msg: "Build completed successfully\n", Done: true, Success: true, ImageId: imageId})
-        return nil
-    }
+	if exists {
+		// Emit a minimal success response consistent with SDK expectations
+		_ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: imageId})
+		_ = stream.Send(&pb.BuildImageResponse{Msg: "Build completed successfully\n", Done: true, Success: true, ImageId: imageId})
+		return nil
+	}
 
 	clipVersion := is.config.ImageService.ClipVersion
 	buildOptions.ExistingImageCreds = in.ExistingImageCreds
@@ -143,11 +145,11 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 
-    go is.builder.Build(ctx, buildOptions, outputChan)
+	go is.builder.Build(ctx, buildOptions, outputChan)
 
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
-        // Stream all logs to the user (no archiving-stage filtering for v2)
+		// Stream all logs to the user (no archiving-stage filtering for v2)
 
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion, Warning: o.Warning}); err != nil {
 			log.Error().Err(err).Msg("failed to complete build")
@@ -169,6 +171,12 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create image record")
 		return errors.New("failed to create image record")
+	}
+
+	// Create credential secret if base image credentials were provided
+	if err := is.createCredentialSecretIfNeeded(stream.Context(), lastMessage.ImageId, buildOptions); err != nil {
+		log.Error().Err(err).Msg("failed to create credential secret")
+		// Don't fail the build if secret creation fails, just log the error
 	}
 
 	log.Info().Msg("build completed successfully")
@@ -340,4 +348,119 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 		}
 	}
 	return steps
+}
+
+// createCredentialSecretIfNeeded creates a workspace secret for OCI registry credentials
+// if base image credentials were provided during the build
+func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, imageId string, opts *BuildOpts) error {
+	// Only create secrets for OCI images (v2) with credentials
+	if is.config.ImageService.ClipVersion != 2 || opts == nil || opts.BaseImageCreds == "" {
+		return nil
+	}
+
+	baseImage := getSourceImage(opts)
+	if baseImage == "" {
+		return nil
+	}
+
+	// Parse registry and credentials
+	registry := reg.ParseRegistry(baseImage)
+	if registry == "" {
+		return fmt.Errorf("failed to parse registry from base image: %s", baseImage)
+	}
+
+	creds, err := is.parseCredentials(opts.BaseImageCreds)
+	if err != nil {
+		return err
+	}
+
+	// Skip if no valid credentials or public registry
+	credType := reg.DetectCredentialType(registry, creds)
+	if credType == reg.CredTypePublic {
+		log.Info().Str("image_id", imageId).Msg("public registry, skipping secret creation")
+		return nil
+	}
+
+	// Get workspace context
+	authInfo, ok := auth.AuthInfoFromContext(ctx)
+	if !ok || authInfo.Workspace == nil {
+		return fmt.Errorf("no workspace found in context")
+	}
+
+	// Prepare secret
+	secretValue, err := reg.MarshalCredentials(registry, credType, creds)
+	if err != nil {
+		return fmt.Errorf("failed to marshal credentials: %w", err)
+	}
+
+	secretName := reg.CreateSecretName(registry)
+
+	// Create or update secret
+	secret, err := is.upsertSecret(ctx, authInfo, secretName, secretValue, registry)
+	if err != nil {
+		return err
+	}
+
+	// Link secret to image
+	if err := is.backendRepo.SetImageCredentialSecret(ctx, imageId, secretName, secret.ExternalId); err != nil {
+		return fmt.Errorf("failed to associate secret with image: %w", err)
+	}
+
+	log.Info().
+		Str("image_id", imageId).
+		Str("secret_name", secretName).
+		Msg("credential secret saved")
+
+	return nil
+}
+
+// parseCredentials parses credential string (JSON or username:password format)
+func (is *RuncImageService) parseCredentials(credStr string) (map[string]string, error) {
+	var credMap map[string]string
+	
+	// Try JSON format first
+	if err := json.Unmarshal([]byte(credStr), &credMap); err == nil {
+		creds := reg.ParseCredentialsFromEnv(credMap)
+		if len(creds) > 0 {
+			return creds, nil
+		}
+		return nil, fmt.Errorf("no recognizable credentials found")
+	}
+	
+	// Try legacy username:password format
+	parts := strings.SplitN(credStr, ":", 2)
+	if len(parts) == 2 {
+		return map[string]string{
+			"USERNAME": parts[0],
+			"PASSWORD": parts[1],
+		}, nil
+	}
+	
+	return nil, fmt.Errorf("unable to parse credentials")
+}
+
+// upsertSecret creates or updates a secret in the workspace
+func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.AuthInfo, secretName, secretValue, registry string) (*types.Secret, error) {
+	secret, err := is.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secretName)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to check for existing secret: %w", err)
+	}
+
+	if secret != nil {
+		// Update existing secret
+		secret, err = is.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secret.ExternalId, secretValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update secret: %w", err)
+		}
+		log.Info().Str("secret_name", secretName).Str("registry", registry).Msg("updated credential secret")
+	} else {
+		// Create new secret
+		secret, err = is.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create secret: %w", err)
+		}
+		log.Info().Str("secret_name", secretName).Str("registry", registry).Msg("created credential secret")
+	}
+
+	return secret, nil
 }
