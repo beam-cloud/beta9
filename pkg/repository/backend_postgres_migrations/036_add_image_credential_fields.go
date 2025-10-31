@@ -3,15 +3,12 @@ package backend_postgres_migrations
 import (
 	"context"
 	"database/sql"
+
+	"github.com/pressly/goose/v3"
 )
 
 func init() {
-	allMigrations = append(allMigrations, Migration{
-		Number: 36,
-		Name:   "Add credential secret fields to image table",
-		Up:     upAddImageCredentialFields,
-		Down:   downAddImageCredentialFields,
-	})
+	goose.AddMigrationContext(upAddImageCredentialFields, downAddImageCredentialFields)
 }
 
 func upAddImageCredentialFields(ctx context.Context, tx *sql.Tx) error {

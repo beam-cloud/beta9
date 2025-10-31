@@ -17,9 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
-	"github.com/beam-cloud/beta9/pkg/oci"
 	"github.com/beam-cloud/beta9/pkg/registry"
-	"github.com/beam-cloud/beta9/pkg/repository"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
@@ -130,13 +128,13 @@ type ImageClient struct {
 	config             types.AppConfig
 	workerId           string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
-	backendRepo        repository.BackendRepository
+	backendRepoClient  pb.BackendRepositoryServiceClient
 	logger             *ContainerLogger
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs *common.SafeMap[string]
 }
 
-func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, backendRepo repository.BackendRepository, fileCacheManager *FileCacheManager) (*ImageClient, error) {
+func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, backendRepoClient pb.BackendRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
 	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
@@ -151,7 +149,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		imageMountPath:     getImageMountPath(workerId),
 		workerId:           workerId,
 		workerRepoClient:   workerRepoClient,
-		backendRepo:        backendRepo,
+		backendRepoClient:  backendRepoClient,
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		v2ImageRefs:        common.NewSafeMap[string](),
@@ -330,7 +328,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		
 		// Retrieve and set credential provider for OCI images
 		if provider, err := c.getCredentialProviderForImage(ctx, imageId, &request.Workspace); err == nil && provider != nil {
-			mountOptions.CredProvider = provider
+			mountOptions.RegistryCredProvider = provider
 			log.Info().Str("image_id", imageId).Msg("using credential provider for OCI image mount")
 		} else if err != nil {
 			log.Warn().Err(err).Str("image_id", imageId).Msg("failed to get credential provider, using default")
@@ -902,42 +900,20 @@ func (c *ImageClient) getBuildContext(buildPath string, request *types.Container
 }
 
 // getCredentialProviderForImage retrieves the credential provider for an image's OCI registry
+// TODO: Implement gRPC-based credential retrieval when running in worker mode
 func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, workspace *types.Workspace) (registryauth.RegistryCredentialProvider, error) {
-	// Get credential secret associated with the image
-	secretName, _, err := c.backendRepo.GetImageCredentialSecret(ctx, imageId)
-	if err != nil {
-		// No secret associated or error retrieving - return nil provider (will use defaults)
-		return nil, nil
-	}
-	
-	if secretName == "" {
-		// No credential secret configured for this image
-		return nil, nil
-	}
-	
-	// Retrieve and decrypt the secret
-	secret, err := c.backendRepo.GetSecretByNameDecrypted(ctx, workspace, secretName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve credential secret %s: %w", secretName, err)
-	}
-	
-	// Unmarshal the credential secret
-	credSecret, err := oci.UnmarshalCredentials(secret.Value)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal credential secret: %w", err)
-	}
-	
-	// Create CLIP provider from the credentials
-	provider, err := oci.CreateCLIPProvider(ctx, credSecret)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create credential provider: %w", err)
-	}
-	
-	log.Info().
+	// For now, return nil (fall back to default provider)
+	// This will be implemented with gRPC calls to fetch credential secrets
+	// from the gateway in a future update
+	log.Debug().
 		Str("image_id", imageId).
-		Str("registry", credSecret.Registry).
-		Str("cred_type", string(credSecret.Type)).
-		Msg("created credential provider for OCI image")
+		Msg("credential provider retrieval not yet implemented for workers, using default provider")
 	
-	return provider, nil
+	return nil, nil
+	
+	// TODO: Implement the following via gRPC:
+	// 1. Call gateway to get image credential secret name
+	// 2. Call gateway to decrypt and retrieve secret value
+	// 3. Unmarshal credentials
+	// 4. Create and return CLIP provider
 }
