@@ -88,6 +88,7 @@ message ContainerRequest {
   string app_id = 23;
   Checkpoint checkpoint = 24;
   string config_path = 25;
+  string image_credentials = 26;  // JSON-encoded credentials for OCI image
 }
 
 message ContainerState {

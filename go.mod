@@ -17,7 +17,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.58.0
 	github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563
-	github.com/beam-cloud/clip v0.0.0-20251030222509-06c9283a3cd7
+	github.com/beam-cloud/clip v0.0.0-20251031003904-c7bbebe81a21
 	github.com/beam-cloud/go-runc v0.0.0-20250911154456-bb45084abfe1
 	github.com/beam-cloud/goproc v0.1.5
 	github.com/beam-cloud/redislock v0.0.0-20250201162619-1b534b3be324
@@ -29,6 +29,7 @@ require (
 	github.com/go-playground/validator/v10 v10.26.0
 	github.com/go-viper/mapstructure/v2 v2.2.1
 	github.com/gofrs/uuid v4.4.0+incompatible
+	github.com/google/go-containerregistry v0.19.1
 	github.com/google/shlex v0.0.0-20191202100458-e7afc7fbc510
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
@@ -122,7 +123,6 @@ require (
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.0 // indirect
-	github.com/google/go-containerregistry v0.19.1 // indirect
 	github.com/google/s2a-go v0.1.7 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.2 // indirect
 	github.com/googleapis/gax-go/v2 v2.12.3 // indirect

@@ -1,22 +1,18 @@
 package backend_postgres_migrations
 
 import (
-	"context"
 	"database/sql"
+
+	"github.com/pressly/goose/v3"
 )
 
 func init() {
-	allMigrations = append(allMigrations, Migration{
-		Number: 36,
-		Name:   "Add credential secret fields to image table",
-		Up:     upAddImageCredentialFields,
-		Down:   downAddImageCredentialFields,
-	})
+	goose.AddMigration(upAddImageCredentialFields, downAddImageCredentialFields)
 }
 
-func upAddImageCredentialFields(ctx context.Context, tx *sql.Tx) error {
+func upAddImageCredentialFields(tx *sql.Tx) error {
 	// Add columns for storing OCI credential secret references
-	_, err := tx.ExecContext(ctx, `
+	_, err := tx.Exec(`
 		ALTER TABLE image
 		ADD COLUMN IF NOT EXISTS credential_secret_name VARCHAR(255),
 		ADD COLUMN IF NOT EXISTS credential_secret_id VARCHAR(36);
@@ -26,16 +22,16 @@ func upAddImageCredentialFields(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	// Add index on credential_secret_name for faster lookups
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_image_credential_secret_name
 		ON image(credential_secret_name);
 	`)
 	return err
 }
 
-func downAddImageCredentialFields(ctx context.Context, tx *sql.Tx) error {
+func downAddImageCredentialFields(tx *sql.Tx) error {
 	// Drop index first
-	_, err := tx.ExecContext(ctx, `
+	_, err := tx.Exec(`
 		DROP INDEX IF EXISTS idx_image_credential_secret_name;
 	`)
 	if err != nil {
@@ -43,7 +39,7 @@ func downAddImageCredentialFields(ctx context.Context, tx *sql.Tx) error {
 	}
 
 	// Drop columns
-	_, err = tx.ExecContext(ctx, `
+	_, err = tx.Exec(`
 		ALTER TABLE image
 		DROP COLUMN IF EXISTS credential_secret_id,
 		DROP COLUMN IF EXISTS credential_secret_name;

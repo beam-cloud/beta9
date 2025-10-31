@@ -220,6 +220,7 @@ type ContainerRequest struct {
 	Preemptable       bool            `json:"preemptable"`
 	CheckpointEnabled bool            `json:"checkpoint_enabled"`
 	BuildOptions      BuildOptions    `json:"build_options"`
+	ImageCredentials  string          `json:"image_credentials"`  // JSON-encoded credentials for OCI image
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
 	AppId             string          `json:"app_id"`
@@ -294,6 +295,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		Preemptable:       c.Preemptable,
 		Timestamp:         timestamppb.New(c.Timestamp),
 		BuildOptions:      buildOptions,
+		ImageCredentials:  c.ImageCredentials,
 		Ports:             c.Ports,
 		CheckpointEnabled: c.CheckpointEnabled,
 		Checkpoint:        checkpoint,

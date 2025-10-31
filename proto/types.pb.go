@@ -568,6 +568,7 @@ type ContainerRequest struct {
 	AppId             string                 `protobuf:"bytes,23,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
 	Checkpoint        *Checkpoint            `protobuf:"bytes,24,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
 	ConfigPath        string                 `protobuf:"bytes,25,opt,name=config_path,json=configPath,proto3" json:"config_path,omitempty"`
+	ImageCredentials  string                 `protobuf:"bytes,26,opt,name=image_credentials,json=imageCredentials,proto3" json:"image_credentials,omitempty"`
 }
 
 func (x *ContainerRequest) Reset() {
@@ -773,6 +774,13 @@ func (x *ContainerRequest) GetCheckpoint() *Checkpoint {
 func (x *ContainerRequest) GetConfigPath() string {
 	if x != nil {
 		return x.ConfigPath
+	}
+	return ""
+}
+
+func (x *ContainerRequest) GetImageCredentials() string {
+	if x != nil {
+		return x.ImageCredentials
 	}
 	return ""
 }
