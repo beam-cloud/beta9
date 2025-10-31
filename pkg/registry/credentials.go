@@ -14,7 +14,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/beam-cloud/clip/pkg/common"
 	"github.com/google/go-containerregistry/pkg/authn"
-	"github.com/rs/zerolog/log"
 )
 
 // CredType represents the type of registry credentials
@@ -206,69 +205,13 @@ func CreateSecretName(registry string) string {
 // This function creates an appropriate credential provider without setting environment variables
 // Returns common.RegistryCredentialProvider
 func CreateProviderFromCredentials(ctx context.Context, registry string, credType CredType, creds map[string]string) common.RegistryCredentialProvider {
-	if len(creds) == 0 {
-		return common.NewPublicOnlyProvider()
-	}
-
-	// Create a callback provider that handles credentials based on type
-	callback := func(ctx context.Context, reg string, scope string) (*authn.AuthConfig, error) {
-		// Only handle the registry we're configured for
-		if reg != registry {
-			return nil, common.ErrNoCredentials
-		}
-
-		switch credType {
-		case CredTypeBasic:
-			// Basic auth with username/password
-			username := ""
-			password := ""
-
-			// Try different username keys
-			for key, value := range creds {
-				keyUpper := strings.ToUpper(key)
-				if strings.Contains(keyUpper, "USERNAME") {
-					username = value
-				}
-				if strings.Contains(keyUpper, "PASSWORD") {
-					password = value
-				}
-			}
-
-			if username != "" && password != "" {
-				return &authn.AuthConfig{
-					Username: username,
-					Password: password,
-				}, nil
-			}
-			return nil, common.ErrNoCredentials
-
-		case CredTypeAWS, CredTypeGCP, CredTypeAzure:
-			// For cloud providers, we need to set env vars temporarily for the keychain to work
-			// This is unavoidable as the AWS/GCP/Azure SDKs read from environment
-			for key, value := range creds {
-				os.Setenv(key, value)
-			}
-			keychain := common.NewKeychainProvider()
-			return keychain.GetCredentials(ctx, reg, scope)
-
-		case CredTypeToken:
-			// For token-based auth, use token as password with oauth2accesstoken username
-			for _, key := range tokenCredKeys {
-				if token, ok := creds[key]; ok && token != "" {
-					return &authn.AuthConfig{
-						Username: "oauth2accesstoken",
-						Password: token,
-					}, nil
-				}
-			}
-			return nil, common.ErrNoCredentials
-
-		default:
-			return nil, common.ErrNoCredentials
-		}
-	}
-
-	return common.NewCallbackProviderWithName(fmt.Sprintf("creds-%s", registry), callback)
+	// Delegate directly to CLIP's implementation which has proper support for:
+	// - ECRProvider for AWS (calls ECR API to get tokens)
+	// - GARProvider for GCP (proper OAuth2 token handling)
+	// - BasicAuthProvider for username/password registries
+	// - TokenProvider for token-based auth
+	// Beta9 should not reimplement this logic!
+	return common.CredentialsToProvider(ctx, registry, creds)
 }
 
 // CreateProviderFromEnv creates a CLIP-compatible credential provider from environment variables
@@ -756,18 +699,11 @@ func ParseCredentialsFromJSON(credStr string) (map[string]string, error) {
 
 // CredentialsToProvider converts a credential map and registry to a CLIP-compatible provider
 // This is the main function that should be used to create providers for CLIP
+// It delegates directly to CLIP's implementation which has proper ECRProvider, GARProvider, etc.
 func CredentialsToProvider(ctx context.Context, registry string, creds map[string]string) common.RegistryCredentialProvider {
-	if len(creds) == 0 {
-		log.Debug().Str("registry", registry).Msg("no credentials provided, using public access")
-		return common.NewPublicOnlyProvider()
-	}
-
-	credType := DetectCredentialType(registry, creds)
-	log.Debug().
-		Str("registry", registry).
-		Str("cred_type", string(credType)).
-		Int("cred_count", len(creds)).
-		Msg("creating credential provider")
-
-	return CreateProviderFromCredentials(ctx, registry, credType, creds)
+	// Just delegate to CLIP's implementation - it will:
+	// 1. Auto-detect credential type (AWS, GCP, basic auth, token, etc.)
+	// 2. Create the appropriate provider (ECRProvider for AWS, GARProvider for GCP, etc.)
+	// 3. Handle token fetching and authentication properly
+	return common.CredentialsToProvider(ctx, registry, creds)
 }
