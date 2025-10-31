@@ -730,7 +730,13 @@ func ParseCredentialsFromJSON(credStr string) (map[string]string, error) {
 		return nil, nil
 	}
 
-	// Try JSON format first
+	// Try structured format first (from MarshalCredentials)
+	// Format: {"registry":"...", "type":"...", "credentials":{...}}
+	if _, _, creds, err := UnmarshalCredentials(credStr); err == nil && len(creds) > 0 {
+		return creds, nil
+	}
+
+	// Try flat JSON map format
 	var credMap map[string]string
 	if err := json.Unmarshal([]byte(credStr), &credMap); err == nil {
 		return ParseCredentialsFromEnv(credMap), nil
