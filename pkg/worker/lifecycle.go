@@ -411,7 +411,7 @@ func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*sp
 		Msg("derived spec from source image")
 
 	// Build spec from image metadata
-	return s.buildSpecFromImageMetadata(imgMeta), nil
+	return s.buildSpecFromImageMetadata(&imgMeta), nil
 }
 
 // getSourceImageInfo retrieves the source image reference and credentials
@@ -434,7 +434,7 @@ func (s *Worker) getSourceImageInfo(request *types.ContainerRequest) (string, st
 }
 
 // buildSpecFromImageMetadata constructs an OCI spec from image metadata
-func (s *Worker) buildSpecFromImageMetadata(imgMeta *common.SkopeoInspectOutput) *specs.Spec {
+func (s *Worker) buildSpecFromImageMetadata(imgMeta *common.ImageMetadata) *specs.Spec {
 	spec := specs.Spec{
 		Process: &specs.Process{
 			Env: []string{},

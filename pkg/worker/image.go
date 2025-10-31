@@ -323,7 +323,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	if strings.ToLower(storageType) == string(clipCommon.StorageModeOCI) {
 		// v2 (OCI index-only): ClipFS will read embedded OCI storage info; no S3 info needed
 		mountOptions.StorageInfo = nil
-		
+
 		// Attach credential provider for runtime layer loading
 		if provider := c.createCredentialProvider(ctx, request.ImageCredentials, imageId); provider != nil {
 			mountOptions.RegistryCredProvider = provider
@@ -385,11 +385,11 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 }
 
 // createCredentialProvider creates a CLIP credential provider from JSON credentials
-func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsJSON, imageId string) clip.RegistryCredProvider {
+func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsJSON, imageId string) clipCommon.RegistryCredentialProvider {
 	if credentialsJSON == "" {
 		return nil
 	}
-	
+
 	var credData map[string]interface{}
 	if err := json.Unmarshal([]byte(credentialsJSON), &credData); err != nil {
 		log.Warn().
@@ -398,14 +398,14 @@ func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsJ
 			Msg("failed to parse image credentials JSON")
 		return nil
 	}
-	
+
 	registry, _ := credData["registry"].(string)
 	credsMap, _ := credData["credentials"].(map[string]interface{})
-	
+
 	if registry == "" || credsMap == nil {
 		return nil
 	}
-	
+
 	// Convert credentials to environment variables and collect keys
 	credKeys := []string{}
 	for k, v := range credsMap {
@@ -414,7 +414,7 @@ func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsJ
 			credKeys = append(credKeys, k)
 		}
 	}
-	
+
 	// Create provider from environment
 	provider, err := reg.CreateProviderFromEnv(ctx, registry, credKeys)
 	if err != nil {
@@ -425,12 +425,12 @@ func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsJ
 			Msg("failed to create credential provider")
 		return nil
 	}
-	
+
 	log.Info().
 		Str("image_id", imageId).
 		Str("registry", registry).
 		Msg("created credential provider for OCI image")
-	
+
 	return provider
 }
 
@@ -564,7 +564,6 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		ImageRef:      imageRef,
 		OutputPath:    outputPath,
 		CheckpointMiB: checkpointMiB,
-		AuthConfig:    authConfig,
 		ProgressChan:  progressChan,
 	})
 
