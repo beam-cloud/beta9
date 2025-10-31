@@ -138,8 +138,32 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	}
 
 	clipVersion := is.config.ImageService.ClipVersion
+	
+	// CRITICAL: Set ExistingImageCreds BEFORE calling handleCustomBaseImage
+	// This ensures structured credentials are available for both:
+	// 1. Converting to BaseImageCreds for skopeo (v1 workflow)
+	// 2. Creating secrets with structured credentials for CLIP (v2 workflow)
 	buildOptions.ExistingImageCreds = in.ExistingImageCreds
 	buildOptions.ClipVersion = clipVersion
+	
+	log.Info().
+		Str("image_id", imageId).
+		Bool("has_existing_image_creds", in.ExistingImageCreds != nil && len(in.ExistingImageCreds) > 0).
+		Int("existing_image_creds_count", len(in.ExistingImageCreds)).
+		Msg("set ExistingImageCreds on buildOptions")
+	
+	// NOW process the custom base image with credentials available
+	if buildOptions.ExistingImageUri != "" {
+		if err := buildOptions.handleCustomBaseImage(nil); err != nil {
+			log.Error().Err(err).Str("image_id", imageId).Msg("failed to handle custom base image")
+			return err
+		}
+		log.Info().
+			Str("image_id", imageId).
+			Bool("has_base_image_creds", buildOptions.BaseImageCreds != "").
+			Int("base_image_creds_len", len(buildOptions.BaseImageCreds)).
+			Msg("processed custom base image and converted credentials for skopeo")
+	}
 
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
@@ -236,9 +260,10 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 	}
 
 	// Handle custom base image (from Image.from_registry or base_image parameter)
+	// NOTE: Do NOT call handleCustomBaseImage here because ExistingImageCreds
+	// is not available in VerifyImageBuildRequest - it will be set later in BuildImage
 	if in.ExistingImageUri != "" {
 		opts.ExistingImageUri = in.ExistingImageUri
-		opts.handleCustomBaseImage(nil)
 	}
 
 	// Add base Python requirements to PythonPackages list
