@@ -299,18 +299,15 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		sourceImagePtr = &sourceImage
 	}
 
-	// Format ImageCredentials the same way as runtime containers (JSON format)
-	// Parse BaseImageCreds (username:password) and convert to JSON with registry info
+	// Format ImageCredentials in JSON format for CLIP
+	// BaseImageCreds can be either JSON or username:password format
 	imageCredentials := ""
 	if b.opts.BaseImageCreds != "" && sourceImagePtr != nil {
 		registry := reg.ParseRegistry(*sourceImagePtr)
 		if registry != "" {
-			parts := strings.SplitN(b.opts.BaseImageCreds, ":", 2)
-			if len(parts) == 2 {
-				creds := map[string]string{
-					"USERNAME": parts[0],
-					"PASSWORD": parts[1],
-				}
+			// Parse credentials (supports both JSON and legacy format)
+			creds, err := ParseCredentialsFromJSON(b.opts.BaseImageCreds)
+			if err == nil && len(creds) > 0 {
 				credType := reg.DetectCredentialType(registry, creds)
 				imageCredentials, _ = reg.MarshalCredentials(registry, credType, creds)
 			}
