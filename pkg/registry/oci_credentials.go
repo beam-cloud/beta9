@@ -196,6 +196,75 @@ func CreateSecretName(registry string) string {
 	return fmt.Sprintf("oci-registry-%s", normalized)
 }
 
+// CreateProviderFromCredentials creates a CLIP-compatible credential provider from a credential map
+// This function creates an appropriate credential provider without setting environment variables
+// Returns common.RegistryCredentialProvider
+func CreateProviderFromCredentials(ctx context.Context, registry string, credType CredType, creds map[string]string) common.RegistryCredentialProvider {
+	if len(creds) == 0 {
+		return common.NewPublicOnlyProvider()
+	}
+
+	// Create a callback provider that handles credentials based on type
+	callback := func(ctx context.Context, reg string, scope string) (*authn.AuthConfig, error) {
+		// Only handle the registry we're configured for
+		if reg != registry {
+			return nil, common.ErrNoCredentials
+		}
+
+		switch credType {
+		case CredTypeBasic:
+			// Basic auth with username/password
+			username := ""
+			password := ""
+
+			// Try different username keys
+			for key, value := range creds {
+				keyUpper := strings.ToUpper(key)
+				if strings.Contains(keyUpper, "USERNAME") {
+					username = value
+				}
+				if strings.Contains(keyUpper, "PASSWORD") {
+					password = value
+				}
+			}
+
+			if username != "" && password != "" {
+				return &authn.AuthConfig{
+					Username: username,
+					Password: password,
+				}, nil
+			}
+			return nil, common.ErrNoCredentials
+
+		case CredTypeAWS, CredTypeGCP, CredTypeAzure:
+			// For cloud providers, we need to set env vars temporarily for the keychain to work
+			// This is unavoidable as the AWS/GCP/Azure SDKs read from environment
+			for key, value := range creds {
+				os.Setenv(key, value)
+			}
+			keychain := common.NewKeychainProvider()
+			return keychain.GetCredentials(ctx, reg, scope)
+
+		case CredTypeToken:
+			// For token-based auth, use token as password with oauth2accesstoken username
+			for _, key := range tokenCredKeys {
+				if token, ok := creds[key]; ok && token != "" {
+					return &authn.AuthConfig{
+						Username: "oauth2accesstoken",
+						Password: token,
+					}, nil
+				}
+			}
+			return nil, common.ErrNoCredentials
+
+		default:
+			return nil, common.ErrNoCredentials
+		}
+	}
+
+	return common.NewCallbackProviderWithName(fmt.Sprintf("creds-%s", registry), callback)
+}
+
 // CreateProviderFromEnv creates a CLIP-compatible credential provider from environment variables
 // This function reads credentials from the environment based on the provided keys and creates
 // an appropriate credential provider for OCI registries

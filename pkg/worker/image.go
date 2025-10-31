@@ -388,13 +388,16 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 }
 
 // createCredentialProvider creates a CLIP credential provider from JSON credentials
-func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsJSON, imageId string) clipCommon.RegistryCredentialProvider {
-	if credentialsJSON == "" {
+// Credentials are expected in JSON format: {"registry":"...","type":"...","credentials":{...}}
+// This format is used for both build and runtime containers
+func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsStr, imageId string) clipCommon.RegistryCredentialProvider {
+	if credentialsStr == "" {
 		return nil
 	}
 
+	// Parse JSON credentials
 	var credData map[string]interface{}
-	if err := json.Unmarshal([]byte(credentialsJSON), &credData); err != nil {
+	if err := json.Unmarshal([]byte(credentialsStr), &credData); err != nil {
 		log.Warn().
 			Err(err).
 			Str("image_id", imageId).
@@ -402,27 +405,34 @@ func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsJ
 		return nil
 	}
 
+	// Extract registry and credentials
 	registry, _ := credData["registry"].(string)
 	credsMap, _ := credData["credentials"].(map[string]interface{})
 
 	if registry == "" || credsMap == nil {
+		log.Debug().
+			Str("image_id", imageId).
+			Msg("missing registry or credentials in JSON")
 		return nil
 	}
 
-	// Convert credentials to environment variables and collect keys
-	credKeys := []string{}
+	// Convert credentials to string map
+	creds := make(map[string]string)
 	for k, v := range credsMap {
 		if strVal, ok := v.(string); ok && strVal != "" {
-			os.Setenv(k, strVal)
-			credKeys = append(credKeys, k)
+			creds[k] = strVal
 		}
 	}
 
-	// Create provider from environment
-	provider, err := reg.CreateProviderFromEnv(ctx, registry, credKeys)
-	if err != nil {
+	if len(creds) == 0 {
+		return nil
+	}
+
+	// Detect credential type and create provider
+	credType := reg.DetectCredentialType(registry, creds)
+	provider := reg.CreateProviderFromCredentials(ctx, registry, credType, creds)
+	if provider == nil {
 		log.Warn().
-			Err(err).
 			Str("image_id", imageId).
 			Str("registry", registry).
 			Msg("failed to create credential provider")
@@ -570,11 +580,11 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 
 	// Create index-only clip archive from the OCI image
 	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-		ImageRef:         imageRef,
-		OutputPath:       outputPath,
-		CheckpointMiB:    checkpointMiB,
-		ProgressChan:     progressChan,
-		CredProvider:     credProvider,
+		ImageRef:      imageRef,
+		OutputPath:    outputPath,
+		CheckpointMiB: checkpointMiB,
+		ProgressChan:  progressChan,
+		CredProvider:  credProvider,
 	})
 
 	// Close channel and wait for all progress messages to be logged

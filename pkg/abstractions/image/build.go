@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
@@ -298,6 +299,24 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		sourceImagePtr = &sourceImage
 	}
 
+	// Format ImageCredentials the same way as runtime containers (JSON format)
+	// Parse BaseImageCreds (username:password) and convert to JSON with registry info
+	imageCredentials := ""
+	if b.opts.BaseImageCreds != "" && sourceImagePtr != nil {
+		registry := reg.ParseRegistry(*sourceImagePtr)
+		if registry != "" {
+			parts := strings.SplitN(b.opts.BaseImageCreds, ":", 2)
+			if len(parts) == 2 {
+				creds := map[string]string{
+					"USERNAME": parts[0],
+					"PASSWORD": parts[1],
+				}
+				credType := reg.DetectCredentialType(registry, creds)
+				imageCredentials, _ = reg.MarshalCredentials(registry, credType, creds)
+			}
+		}
+	}
+
 	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
 			SourceImage:      sourceImagePtr,
@@ -311,7 +330,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		Cpu:              cpu,
 		Memory:           memory,
 		ImageId:          containerImageID,
-		ImageCredentials: b.opts.BaseImageCreds,
+		ImageCredentials: imageCredentials,
 		WorkspaceId:      b.authInfo.Workspace.ExternalId,
 		Workspace:        *b.authInfo.Workspace,
 		EntryPoint:       []string{"tail", "-f", "/dev/null"},
