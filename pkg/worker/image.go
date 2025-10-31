@@ -335,9 +335,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			Bool("has_source_image_creds", request.BuildOptions.SourceImageCreds != "").
 			Int("credentials_length", len(request.ImageCredentials)).
 			Msg("checking for OCI image credentials")
-		
+
 		var credProvider clipCommon.RegistryCredentialProvider
-		
+
 		if request.ImageCredentials != "" {
 			// Runtime container: credentials already in JSON format from secret
 			credProvider = c.createCredentialProvider(ctx, request.ImageCredentials, imageId)
@@ -374,7 +374,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				}
 			}
 		}
-		
+
 		if credProvider != nil {
 			mountOptions.RegistryCredProvider = credProvider
 			log.Info().
@@ -488,7 +488,7 @@ func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsS
 			Msg("missing registry or credentials in JSON")
 		return nil
 	}
-	
+
 	log.Debug().
 		Str("image_id", imageId).
 		Str("registry", registry).

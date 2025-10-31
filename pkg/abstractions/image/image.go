@@ -473,13 +473,13 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 	secretName := reg.CreateSecretName(registry)
 
 	// Create or update secret
-	secret, err := is.upsertSecret(ctx, authInfo, secretName, secretValue, registry)
+	secret, err := is.upsertSecret(context.Background(), authInfo, secretName, secretValue, registry)
 	if err != nil {
 		return err
 	}
 
 	// Link secret to image
-	if err := is.backendRepo.SetImageCredentialSecret(ctx, imageId, secretName, secret.ExternalId); err != nil {
+	if err := is.backendRepo.SetImageCredentialSecret(context.Background(), imageId, secretName, secret.ExternalId); err != nil {
 		return fmt.Errorf("failed to associate secret with image: %w", err)
 	}
 
@@ -514,7 +514,7 @@ func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.Aut
 		log.Info().Str("secret_name", secretName).Str("registry", registry).Msg("updated credential secret")
 	} else {
 		// Create new secret
-		secret, err = is.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue)
+		secret, err = is.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create secret: %w", err)
 		}
