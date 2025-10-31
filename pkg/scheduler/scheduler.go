@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -346,6 +347,12 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 		return nil
 	}
 
+	// Skip credential attachment for build containers - they already have credentials
+	// in BuildOptions.SourceImageCreds for pulling the base image during the build
+	if strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix) {
+		return nil
+	}
+
 	secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
 	if err != nil || secretName == "" {
 		return err
@@ -436,7 +443,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			}
 
 			// This will account for the preset priorities for the pool type as well as the order of the GPU requests
-			// NOTE: will only work properly if all GPU types and their pools start from 0 and pool priority are incremental by changes of ±1
+			// NOTE: will only work properly if all GPU types and their pools start from 0 and pool priority are incremental by changes of ?1
 			worker.Priority -= int32(priorityModifier)
 		}
 

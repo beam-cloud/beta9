@@ -325,7 +325,14 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		mountOptions.StorageInfo = nil
 
 		// Attach credential provider for runtime layer loading
-		if provider := c.createCredentialProvider(ctx, request.ImageCredentials, imageId); provider != nil {
+		// For build containers, use BuildOptions.SourceImageCreds (credentials for pulling base image)
+		// For runtime containers, use ImageCredentials (credentials attached by scheduler from secrets)
+		credentials := request.ImageCredentials
+		if isBuildContainer && request.BuildOptions.SourceImageCreds != "" {
+			credentials = request.BuildOptions.SourceImageCreds
+		}
+		
+		if provider := c.createCredentialProvider(ctx, credentials, imageId); provider != nil {
 			mountOptions.RegistryCredProvider = provider
 		}
 	} else {
