@@ -447,7 +447,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 		}
 		
 		if isCloudProvider {
-			return fmt.Errorf("cannot create secret for cloud provider registry %s: BaseImageCreds contains temporary token. Must provide structured credentials in ExistingImageCreds (AWS_ACCESS_KEY_ID, GCP_ACCESS_TOKEN, etc.) for CLIP v2 support", registry)
+			return fmt.Errorf("cannot create secret for cloud provider registry %s: BaseImageCreds contains temporary token which is not compatible with CLIP credential providers. SDK must provide structured credentials in ExistingImageCreds (e.g., AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION for ECR; GCP_ACCESS_TOKEN for GCR) for CLIP v2 runtime support", registry)
 		}
 		
 		log.Info().
