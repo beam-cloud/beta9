@@ -251,13 +251,13 @@ func TestCreateProviderFromEnv(t *testing.T) {
 	t.Run("no credentials", func(t *testing.T) {
 		provider, err := CreateProviderFromEnv(ctx, "docker.io", []string{})
 		require.NoError(t, err)
-		assert.Nil(t, provider)
+		assert.NotNil(t, provider) // Returns PublicOnlyProvider for public registry access
 	})
 
 	t.Run("credentials not in environment", func(t *testing.T) {
 		provider, err := CreateProviderFromEnv(ctx, "docker.io", []string{"NONEXISTENT_KEY"})
 		require.NoError(t, err)
-		assert.Nil(t, provider)
+		assert.NotNil(t, provider) // Returns PublicOnlyProvider for public registry access
 	})
 }
 
