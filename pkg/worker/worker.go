@@ -193,7 +193,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	fileCacheManager := NewFileCacheManager(config, cacheClient)
-	imageClient, err := NewImageClient(config, workerId, workerRepoClient, fileCacheManager)
+	imageClient, err := NewImageClient(config, workerId, workerRepoClient, backendRepo, fileCacheManager)
 	if err != nil {
 		return nil, err
 	}

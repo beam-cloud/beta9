@@ -2392,6 +2392,29 @@ func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId str
 	return clipVersion, nil
 }
 
+func (r *PostgresBackendRepository) SetImageCredentialSecret(ctx context.Context, imageId string, secretName string, secretExternalId string) error {
+	query := `
+		UPDATE image 
+		SET credential_secret_name = $2, credential_secret_id = $3
+		WHERE image_id = $1;
+	`
+	_, err := r.client.ExecContext(ctx, query, imageId, secretName, secretExternalId)
+	return err
+}
+
+func (r *PostgresBackendRepository) GetImageCredentialSecret(ctx context.Context, imageId string) (string, string, error) {
+	var secretName sql.NullString
+	var secretId sql.NullString
+	query := `SELECT credential_secret_name, credential_secret_id FROM image WHERE image_id = $1;`
+	
+	err := r.client.QueryRowContext(ctx, query, imageId).Scan(&secretName, &secretId)
+	if err != nil {
+		return "", "", err
+	}
+	
+	return secretName.String, secretId.String, nil
+}
+
 func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {
 	query := `
 		INSERT INTO checkpoint (
