@@ -328,8 +328,30 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		// ImageCredentials contains credentials for:
 		// - Build containers: source image credentials for pulling base image
 		// - Runtime containers: credentials attached by scheduler from secrets
+		log.Debug().
+			Str("image_id", imageId).
+			Str("container_id", request.ContainerId).
+			Bool("has_image_credentials", request.ImageCredentials != "").
+			Int("credentials_length", len(request.ImageCredentials)).
+			Msg("checking for OCI image credentials")
+		
 		if provider := c.createCredentialProvider(ctx, request.ImageCredentials, imageId); provider != nil {
 			mountOptions.RegistryCredProvider = provider
+			log.Info().
+				Str("image_id", imageId).
+				Str("container_id", request.ContainerId).
+				Str("provider_name", provider.Name()).
+				Msg("attached custom credential provider for OCI image")
+		} else if request.ImageCredentials != "" {
+			log.Warn().
+				Str("image_id", imageId).
+				Str("container_id", request.ContainerId).
+				Msg("failed to create credential provider despite having credentials")
+		} else {
+			log.Debug().
+				Str("image_id", imageId).
+				Str("container_id", request.ContainerId).
+				Msg("no image credentials provided, using default provider chain")
 		}
 	} else {
 		// v1 (legacy S3 data-carrying)
@@ -392,15 +414,28 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 // This format is used for both build and runtime containers
 func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsStr, imageId string) clipCommon.RegistryCredentialProvider {
 	if credentialsStr == "" {
+		log.Debug().
+			Str("image_id", imageId).
+			Msg("no credentials string provided")
 		return nil
 	}
+
+	log.Debug().
+		Str("image_id", imageId).
+		Int("cred_str_len", len(credentialsStr)).
+		Msg("attempting to create credential provider from credentials")
 
 	// Parse JSON credentials
 	var credData map[string]interface{}
 	if err := json.Unmarshal([]byte(credentialsStr), &credData); err != nil {
+		previewLen := 100
+		if len(credentialsStr) < previewLen {
+			previewLen = len(credentialsStr)
+		}
 		log.Warn().
 			Err(err).
 			Str("image_id", imageId).
+			Str("credentials_preview", credentialsStr[:previewLen]).
 			Msg("failed to parse image credentials JSON")
 		return nil
 	}
@@ -410,11 +445,19 @@ func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsS
 	credsMap, _ := credData["credentials"].(map[string]interface{})
 
 	if registry == "" || credsMap == nil {
-		log.Debug().
+		log.Warn().
 			Str("image_id", imageId).
+			Bool("has_registry", registry != "").
+			Bool("has_creds_map", credsMap != nil).
 			Msg("missing registry or credentials in JSON")
 		return nil
 	}
+	
+	log.Debug().
+		Str("image_id", imageId).
+		Str("registry", registry).
+		Int("creds_count", len(credsMap)).
+		Msg("parsed credential JSON successfully")
 
 	// Convert credentials to string map
 	creds := make(map[string]string)

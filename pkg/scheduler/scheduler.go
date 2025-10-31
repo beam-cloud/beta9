@@ -344,22 +344,60 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 // attachImageCredentials fetches and attaches OCI credentials to a container request
 func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) error {
 	if request.ImageId == "" {
+		log.Debug().
+			Str("container_id", request.ContainerId).
+			Msg("no image ID, skipping credential attachment")
 		return nil
 	}
 
 	// Skip credential attachment for build containers - they already have credentials
 	// in BuildOptions.SourceImageCreds for pulling the base image during the build
 	if strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix) {
+		log.Debug().
+			Str("container_id", request.ContainerId).
+			Str("image_id", request.ImageId).
+			Msg("build container, skipping credential attachment")
 		return nil
 	}
 
-	secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
-	if err != nil || secretName == "" {
+	log.Debug().
+		Str("container_id", request.ContainerId).
+		Str("image_id", request.ImageId).
+		Msg("checking for image credentials")
+
+	secretName, secretId, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
+	if err != nil {
+		log.Debug().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Str("image_id", request.ImageId).
+			Msg("error getting image credential secret")
 		return err
 	}
+	
+	if secretName == "" {
+		log.Debug().
+			Str("container_id", request.ContainerId).
+			Str("image_id", request.ImageId).
+			Msg("no credential secret found for image")
+		return nil
+	}
+	
+	log.Debug().
+		Str("container_id", request.ContainerId).
+		Str("image_id", request.ImageId).
+		Str("secret_name", secretName).
+		Str("secret_id", secretId).
+		Msg("found credential secret, retrieving secret value")
 
 	secret, err := s.backendRepo.GetSecretByNameDecrypted(context.TODO(), &request.Workspace, secretName)
 	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Str("image_id", request.ImageId).
+			Str("secret_name", secretName).
+			Msg("failed to get secret by name")
 		return err
 	}
 
@@ -368,6 +406,7 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 		Str("container_id", request.ContainerId).
 		Str("image_id", request.ImageId).
 		Str("secret_name", secretName).
+		Int("credentials_length", len(secret.Value)).
 		Msg("attached OCI credentials")
 
 	return nil

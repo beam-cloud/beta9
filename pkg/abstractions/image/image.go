@@ -355,8 +355,16 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 // This works for both v1 and v2 builds to enable credential reuse
 func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, imageId string, opts *BuildOpts) error {
 	if opts == nil {
+		log.Debug().Str("image_id", imageId).Msg("opts is nil, skipping secret creation")
 		return nil
 	}
+
+	log.Debug().
+		Str("image_id", imageId).
+		Str("existing_image_uri", opts.ExistingImageUri).
+		Int("existing_image_creds_count", len(opts.ExistingImageCreds)).
+		Str("base_image_creds", opts.BaseImageCreds).
+		Msg("checking if credentials should be saved as secret")
 
 	// Determine the source image and credentials
 	var baseImage string
@@ -364,28 +372,72 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 
 	// Check if this is a custom base image build (from_registry)
 	if opts.ExistingImageUri != "" && opts.ExistingImageCreds != nil && len(opts.ExistingImageCreds) > 0 {
+		log.Debug().
+			Str("image_id", imageId).
+			Str("existing_image_uri", opts.ExistingImageUri).
+			Msg("processing ExistingImageCreds")
+		
 		baseImage = opts.ExistingImageUri
 		// Convert ExistingImageCreds to JSON format
 		registry, creds, err := GetRegistryCredentials(opts)
 		if err != nil {
-			log.Warn().Err(err).Str("image_id", imageId).Msg("failed to get registry credentials")
+			log.Warn().
+				Err(err).
+				Str("image_id", imageId).
+				Str("existing_image_uri", opts.ExistingImageUri).
+				Msg("failed to get registry credentials, skipping secret creation")
 			return nil
 		}
+		
+		log.Debug().
+			Str("image_id", imageId).
+			Str("registry", registry).
+			Int("creds_count", len(creds)).
+			Msg("got registry credentials")
+		
 		credType := reg.DetectCredentialType(registry, creds)
+		log.Debug().
+			Str("image_id", imageId).
+			Str("cred_type", string(credType)).
+			Msg("detected credential type")
+		
 		credStr, err = reg.MarshalCredentials(registry, credType, creds)
 		if err != nil {
 			return fmt.Errorf("failed to marshal existing image credentials: %w", err)
 		}
+		
+		log.Debug().
+			Str("image_id", imageId).
+			Bool("has_cred_str", credStr != "").
+			Msg("marshaled credentials")
 	} else if opts.BaseImageCreds != "" {
+		log.Debug().
+			Str("image_id", imageId).
+			Msg("using BaseImageCreds")
+		
 		// Use the base image credentials if provided
 		baseImage = getSourceImage(opts)
 		credStr = opts.BaseImageCreds
+	} else {
+		log.Debug().
+			Str("image_id", imageId).
+			Msg("no credentials provided, skipping secret creation")
 	}
 
 	// Nothing to do if no credentials
 	if baseImage == "" || credStr == "" {
+		log.Debug().
+			Str("image_id", imageId).
+			Bool("has_base_image", baseImage != "").
+			Bool("has_cred_str", credStr != "").
+			Msg("missing base image or credentials, skipping secret creation")
 		return nil
 	}
+	
+	log.Debug().
+		Str("image_id", imageId).
+		Str("base_image", baseImage).
+		Msg("proceeding with secret creation")
 
 	// Parse registry and credentials
 	registry := reg.ParseRegistry(baseImage)
