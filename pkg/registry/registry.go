@@ -2,11 +2,13 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -381,4 +383,133 @@ func copyObjects(ctx context.Context, keys []string, sourceObjectStore, destinat
 		log.Info().Str("key", key).Msg("successfully copied object")
 	}
 	return nil
+}
+
+// Credential type constants
+type CredentialType string
+
+const (
+	CredTypePublic   CredentialType = "public"
+	CredTypeBasic    CredentialType = "basic"
+	CredTypeToken    CredentialType = "token"
+	CredTypeAWS      CredentialType = "aws"
+	CredTypeGCP      CredentialType = "gcp"
+	CredTypeAzure    CredentialType = "azure"
+	CredTypeUnknown  CredentialType = "unknown"
+)
+
+// ParseRegistry extracts the registry hostname from an image reference
+func ParseRegistry(imageRef string) string {
+	// Remove tag or digest
+	parts := strings.Split(imageRef, "@")
+	if len(parts) > 1 {
+		imageRef = parts[0]
+	}
+	parts = strings.Split(imageRef, ":")
+	if len(parts) > 1 {
+		imageRef = parts[0]
+	}
+	
+	// Extract registry
+	imageParts := strings.Split(imageRef, "/")
+	if len(imageParts) == 0 {
+		return ""
+	}
+	
+	// If the first part contains a dot or is "localhost", it's likely a registry
+	firstPart := imageParts[0]
+	if strings.Contains(firstPart, ".") || strings.Contains(firstPart, ":") || firstPart == "localhost" {
+		return firstPart
+	}
+	
+	// Otherwise, assume it's Docker Hub
+	return "docker.io"
+}
+
+// DetectCredentialType determines the type of credentials provided
+func DetectCredentialType(registry string, creds map[string]string) CredentialType {
+	if creds == nil || len(creds) == 0 {
+		return CredTypePublic
+	}
+	
+	// Check for AWS ECR
+	if strings.Contains(registry, ".ecr.") && strings.Contains(registry, ".amazonaws.com") {
+		if _, hasKey := creds["AWS_ACCESS_KEY_ID"]; hasKey {
+			return CredTypeAWS
+		}
+	}
+	
+	// Check for GCP GCR/Artifact Registry
+	if strings.Contains(registry, ".gcr.io") || strings.Contains(registry, ".pkg.dev") {
+		if _, hasKey := creds["GCP_SERVICE_ACCOUNT_KEY"]; hasKey {
+			return CredTypeGCP
+		}
+	}
+	
+	// Check for Azure ACR
+	if strings.Contains(registry, ".azurecr.io") {
+		if _, hasKey := creds["AZURE_CLIENT_ID"]; hasKey {
+			return CredTypeAzure
+		}
+	}
+	
+	// Check for token-based auth
+	if token, hasToken := creds["TOKEN"]; hasToken && token != "" {
+		return CredTypeToken
+	}
+	
+	// Check for basic auth
+	if username, hasUsername := creds["USERNAME"]; hasUsername && username != "" {
+		if password, hasPassword := creds["PASSWORD"]; hasPassword && password != "" {
+			return CredTypeBasic
+		}
+	}
+	
+	return CredTypeUnknown
+}
+
+// ParseCredentialsFromEnv parses credentials from environment variable map
+func ParseCredentialsFromEnv(envMap map[string]string) map[string]string {
+	creds := make(map[string]string)
+	
+	// Standard credential keys
+	credKeys := []string{
+		"USERNAME", "PASSWORD", "TOKEN",
+		"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN",
+		"GCP_SERVICE_ACCOUNT_KEY",
+		"AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_TENANT_ID",
+	}
+	
+	for _, key := range credKeys {
+		if value, exists := envMap[key]; exists && value != "" {
+			creds[key] = value
+		}
+	}
+	
+	return creds
+}
+
+// MarshalCredentials serializes credentials into a JSON string for storage
+func MarshalCredentials(registry string, credType CredentialType, creds map[string]string) (string, error) {
+	credData := map[string]interface{}{
+		"registry": registry,
+		"type":     string(credType),
+		"creds":    creds,
+	}
+	
+	data, err := json.Marshal(credData)
+	if err != nil {
+		return "", err
+	}
+	
+	return string(data), nil
+}
+
+// CreateSecretName generates a consistent secret name for a registry
+func CreateSecretName(registry string) string {
+	// Normalize registry name to create a valid secret name
+	secretName := strings.ReplaceAll(registry, ".", "-")
+	secretName = strings.ReplaceAll(secretName, ":", "-")
+	secretName = strings.ToLower(secretName)
+	return fmt.Sprintf("registry-%s", secretName)
 }
