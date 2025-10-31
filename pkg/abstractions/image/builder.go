@@ -224,7 +224,7 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	// V1: Execute commands in container and archive filesystem
 	// V2: Buildah already built the image
-	isV2 := b.config.ImageService.ClipVersion == 2
+	isV2 := b.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
 	if !isV2 {
 		if err := build.prepareCommands(); err != nil {
 			return err
@@ -248,9 +248,9 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 // hasWorkToDo returns true if there are build steps that need a Dockerfile
 // This is exported so it can be called from verifyImage
 func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
-	return len(opts.Commands) > 0 || 
-		len(opts.BuildSteps) > 0 || 
-		len(opts.PythonPackages) > 0 || 
+	return len(opts.Commands) > 0 ||
+		len(opts.BuildSteps) > 0 ||
+		len(opts.PythonPackages) > 0 ||
 		(opts.PythonVersion != "" && !opts.IgnorePython)
 }
 
@@ -259,26 +259,26 @@ func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 	var sb strings.Builder
 	sb.WriteString(opts.Dockerfile)
-	
+
 	// Ensure Dockerfile ends with newline before appending
 	if !strings.HasSuffix(opts.Dockerfile, "\n") {
 		sb.WriteString("\n")
 	}
-	
+
 	// Determine Python version and environment type
 	pythonVersion := opts.PythonVersion
 	if pythonVersion == types.Python3.String() {
 		pythonVersion = b.config.ImageService.PythonVersion
 	}
 	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
-	
+
 	// Install Python if needed
 	// Match the behavior from RenderV2Dockerfile and setupPythonEnv:
 	// - If ignore_python=true AND no packages → skip Python entirely
 	// - If ignore_python=true BUT has packages → install Python (packages need it)
 	// - If ignore_python=false → install Python when version specified
 	shouldInstallPython := pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0)
-	
+
 	if shouldInstallPython {
 		if isMicromamba {
 			sb.WriteString("RUN micromamba config set use_lockfiles False\n")
@@ -291,7 +291,7 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 			}
 		}
 	}
-	
+
 	// Install Python packages if specified
 	// Only install if we have packages and we're not in the "ignore Python with no packages" state
 	if len(opts.PythonPackages) > 0 && pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0) {
@@ -301,7 +301,7 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 			sb.WriteString("\n")
 		}
 	}
-	
+
 	// Add build steps
 	if len(opts.BuildSteps) > 0 {
 		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
@@ -313,10 +313,10 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 			}
 		}
 	}
-	
+
 	// Add explicit shell commands
 	b.renderCommands(&sb, opts)
-	
+
 	return sb.String()
 }
 

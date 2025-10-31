@@ -13,7 +13,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
-	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
@@ -299,21 +298,6 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		sourceImagePtr = &sourceImage
 	}
 
-	// Format ImageCredentials in JSON format for CLIP
-	// BaseImageCreds can be either JSON or username:password format
-	imageCredentials := ""
-	if b.opts.BaseImageCreds != "" && sourceImagePtr != nil {
-		registry := reg.ParseRegistry(*sourceImagePtr)
-		if registry != "" {
-			// Parse credentials (supports both JSON and legacy format)
-			creds, err := ParseCredentialsFromJSON(b.opts.BaseImageCreds)
-			if err == nil && len(creds) > 0 {
-				credType := reg.DetectCredentialType(registry, creds)
-				imageCredentials, _ = reg.MarshalCredentials(registry, credType, creds)
-			}
-		}
-	}
-
 	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
 			SourceImage:      sourceImagePtr,
@@ -322,16 +306,15 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 			BuildCtxObject:   &b.opts.BuildCtxObject,
 			BuildSecrets:     b.opts.BuildSecrets,
 		},
-		ContainerId:      b.containerID,
-		Env:              b.opts.EnvVars,
-		Cpu:              cpu,
-		Memory:           memory,
-		ImageId:          containerImageID,
-		ImageCredentials: imageCredentials,
-		WorkspaceId:      b.authInfo.Workspace.ExternalId,
-		Workspace:        *b.authInfo.Workspace,
-		EntryPoint:       []string{"tail", "-f", "/dev/null"},
-		Mounts:           b.mounts,
+		ContainerId: b.containerID,
+		Env:         b.opts.EnvVars,
+		Cpu:         cpu,
+		Memory:      memory,
+		ImageId:     containerImageID,
+		WorkspaceId: b.authInfo.Workspace.ExternalId,
+		Workspace:   *b.authInfo.Workspace,
+		EntryPoint:  []string{"tail", "-f", "/dev/null"},
+		Mounts:      b.mounts,
 	}
 
 	if b.opts.BuildCtxObject != "" {

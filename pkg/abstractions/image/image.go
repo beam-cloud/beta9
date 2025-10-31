@@ -376,7 +376,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 			Str("image_id", imageId).
 			Str("existing_image_uri", opts.ExistingImageUri).
 			Msg("processing ExistingImageCreds")
-		
+
 		baseImage = opts.ExistingImageUri
 		// Convert ExistingImageCreds to JSON format
 		registry, creds, err := GetRegistryCredentials(opts)
@@ -388,24 +388,24 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 				Msg("failed to get registry credentials, skipping secret creation")
 			return nil
 		}
-		
+
 		log.Debug().
 			Str("image_id", imageId).
 			Str("registry", registry).
 			Int("creds_count", len(creds)).
 			Msg("got registry credentials")
-		
+
 		credType := reg.DetectCredentialType(registry, creds)
 		log.Debug().
 			Str("image_id", imageId).
 			Str("cred_type", string(credType)).
 			Msg("detected credential type")
-		
+
 		credStr, err = reg.MarshalCredentials(registry, credType, creds)
 		if err != nil {
 			return fmt.Errorf("failed to marshal existing image credentials: %w", err)
 		}
-		
+
 		log.Debug().
 			Str("image_id", imageId).
 			Bool("has_cred_str", credStr != "").
@@ -414,7 +414,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 		log.Debug().
 			Str("image_id", imageId).
 			Msg("using BaseImageCreds")
-		
+
 		// Use the base image credentials if provided
 		baseImage = getSourceImage(opts)
 		credStr = opts.BaseImageCreds
@@ -433,7 +433,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 			Msg("missing base image or credentials, skipping secret creation")
 		return nil
 	}
-	
+
 	log.Debug().
 		Str("image_id", imageId).
 		Str("base_image", baseImage).
