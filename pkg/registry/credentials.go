@@ -2,13 +2,19 @@ package registry
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/ecr"
 	"github.com/beam-cloud/clip/pkg/common"
 	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/rs/zerolog/log"
 )
 
 // CredType represents the type of registry credentials
@@ -414,4 +420,333 @@ func UnmarshalCredentials(credentialJSON string) (registry string, credType Cred
 	}
 
 	return registry, credType, creds, nil
+}
+
+// RegistryCredentialGetter is a function that retrieves credentials for a registry
+// It takes a map of raw credentials and returns structured credentials
+type RegistryCredentialGetter func(creds map[string]string) (map[string]string, error)
+
+// RegistryTokenGetter is a function that retrieves credentials as username:password format (legacy)
+type RegistryTokenGetter func(creds map[string]string) (string, error)
+
+// Helper functions for credential validation
+func validateRequiredCredential(creds map[string]string, key string) (string, error) {
+	if value := creds[key]; value != "" {
+		return value, nil
+	}
+	return "", fmt.Errorf("%s not found or empty", key)
+}
+
+func validateOptionalCredentials(creds map[string]string, usernameKey, passwordKey string) (string, string, bool, error) {
+	username, usernameExists := creds[usernameKey]
+	password, passwordExists := creds[passwordKey]
+	
+	// If neither key exists, credentials were not provided (ok for public registries)
+	if !usernameExists && !passwordExists {
+		return "", "", false, nil
+	}
+	
+	// If one or both keys exist but are empty, this is an error
+	if (usernameExists && username == "") || (passwordExists && password == "") {
+		return "", "", false, fmt.Errorf("both %s and %s must be non-empty if provided", usernameKey, passwordKey)
+	}
+	
+	// If only one credential is provided (non-empty), both are required
+	if (username == "" && password != "") || (username != "" && password == "") {
+		return "", "", false, fmt.Errorf("both %s and %s must be provided together", usernameKey, passwordKey)
+	}
+	
+	return username, password, username != "" && password != "", nil
+}
+
+func buildBasicAuthToken(username, password string) string {
+	return fmt.Sprintf("%s:%s", username, password)
+}
+
+func containsAny(s string, substrs ...string) bool {
+	for _, substr := range substrs {
+		if strings.Contains(s, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// Registry domain constants
+var (
+	awsRegistryDomains  = []string{"amazonaws.com"}
+	gcpRegistryDomains  = []string{"pkg.dev", "gcr.io"}
+	ngcRegistryDomains  = []string{"nvcr.io"}
+	ghcrRegistryDomains = []string{"ghcr.io"}
+)
+
+// GetECRCredentials returns structured AWS ECR credentials
+func GetECRCredentials(creds map[string]string) (map[string]string, error) {
+	// Validate required credentials
+	accessKey, err := validateRequiredCredential(creds, "AWS_ACCESS_KEY_ID")
+	if err != nil {
+		return nil, err
+	}
+	secretKey, err := validateRequiredCredential(creds, "AWS_SECRET_ACCESS_KEY")
+	if err != nil {
+		return nil, err
+	}
+	region, err := validateRequiredCredential(creds, "AWS_REGION")
+	if err != nil {
+		return nil, err
+	}
+
+	// Return credentials in structured format for CLIP
+	result := map[string]string{
+		"AWS_ACCESS_KEY_ID":     accessKey,
+		"AWS_SECRET_ACCESS_KEY": secretKey,
+		"AWS_REGION":            region,
+	}
+
+	if sessionToken := creds["AWS_SESSION_TOKEN"]; sessionToken != "" {
+		result["AWS_SESSION_TOKEN"] = sessionToken
+	}
+
+	return result, nil
+}
+
+// GetECRToken retrieves ECR authorization token (legacy format: username:password)
+func GetECRToken(creds map[string]string) (string, error) {
+	// Validate required credentials
+	accessKey, err := validateRequiredCredential(creds, "AWS_ACCESS_KEY_ID")
+	if err != nil {
+		return "", err
+	}
+	secretKey, err := validateRequiredCredential(creds, "AWS_SECRET_ACCESS_KEY")
+	if err != nil {
+		return "", err
+	}
+	region, err := validateRequiredCredential(creds, "AWS_REGION")
+	if err != nil {
+		return "", err
+	}
+	sessionToken := creds["AWS_SESSION_TOKEN"] // Optional
+
+	// Configure AWS client
+	credProvider := credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)
+	cfg, err := config.LoadDefaultConfig(context.TODO(), 
+		config.WithRegion(region), 
+		config.WithCredentialsProvider(credProvider))
+	if err != nil {
+		return "", fmt.Errorf("failed to load AWS config: %w", err)
+	}
+
+	// Get ECR authorization token
+	client := ecr.NewFromConfig(cfg)
+	output, err := client.GetAuthorizationToken(context.TODO(), &ecr.GetAuthorizationTokenInput{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get ECR token: %w", err)
+	}
+
+	if len(output.AuthorizationData) == 0 || output.AuthorizationData[0].AuthorizationToken == nil {
+		return "", fmt.Errorf("no authorization data returned from ECR")
+	}
+
+	// Decode base64 token (format: username:password)
+	base64Token := aws.ToString(output.AuthorizationData[0].AuthorizationToken)
+	decodedToken, err := base64.StdEncoding.DecodeString(base64Token)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode ECR token: %w", err)
+	}
+
+	parts := strings.SplitN(string(decodedToken), ":", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid ECR token format")
+	}
+
+	return buildBasicAuthToken(parts[0], parts[1]), nil
+}
+
+// GetGARCredentials returns structured GCP GAR credentials
+func GetGARCredentials(creds map[string]string) (map[string]string, error) {
+	token, err := validateRequiredCredential(creds, "GCP_ACCESS_TOKEN")
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"GCP_ACCESS_TOKEN": token,
+	}, nil
+}
+
+// GetGARToken returns GCP GAR token (legacy format: username:password)
+func GetGARToken(creds map[string]string) (string, error) {
+	token, err := validateRequiredCredential(creds, "GCP_ACCESS_TOKEN")
+	if err != nil {
+		return "", err
+	}
+	return buildBasicAuthToken("oauth2accesstoken", token), nil
+}
+
+// GetNGCCredentials returns structured NGC credentials
+func GetNGCCredentials(creds map[string]string) (map[string]string, error) {
+	apiKey, err := validateRequiredCredential(creds, "NGC_API_KEY")
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"NGC_API_KEY": apiKey,
+	}, nil
+}
+
+// GetNGCToken returns NGC token (legacy format: username:password)
+func GetNGCToken(creds map[string]string) (string, error) {
+	apiKey, err := validateRequiredCredential(creds, "NGC_API_KEY")
+	if err != nil {
+		return "", err
+	}
+	return buildBasicAuthToken("$oauthtoken", apiKey), nil
+}
+
+// GetGHCRCredentials returns structured GHCR credentials
+func GetGHCRCredentials(creds map[string]string) (map[string]string, error) {
+	username, password, hasAuth, err := validateOptionalCredentials(creds, "GITHUB_USERNAME", "GITHUB_TOKEN")
+	if err != nil {
+		return nil, err
+	}
+	if hasAuth {
+		return map[string]string{
+			"GITHUB_USERNAME": username,
+			"GITHUB_TOKEN":    password,
+		}, nil
+	}
+	return nil, nil // Public access
+}
+
+// GetGHCRToken returns GHCR token (legacy format: username:password)
+func GetGHCRToken(creds map[string]string) (string, error) {
+	username, password, hasAuth, err := validateOptionalCredentials(creds, "GITHUB_USERNAME", "GITHUB_TOKEN")
+	if err != nil {
+		return "", err
+	}
+	if hasAuth {
+		return buildBasicAuthToken(username, password), nil
+	}
+	return "", nil // Public access
+}
+
+// GetDockerHubCredentials returns structured Docker Hub credentials
+func GetDockerHubCredentials(creds map[string]string) (map[string]string, error) {
+	username, password, hasAuth, err := validateOptionalCredentials(creds, "DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD")
+	if err != nil {
+		return nil, err
+	}
+	if hasAuth {
+		return map[string]string{
+			"DOCKERHUB_USERNAME": username,
+			"DOCKERHUB_PASSWORD": password,
+		}, nil
+	}
+	return nil, nil // Public access
+}
+
+// GetDockerHubToken returns Docker Hub token (legacy format: username:password)
+func GetDockerHubToken(creds map[string]string) (string, error) {
+	username, password, hasAuth, err := validateOptionalCredentials(creds, "DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD")
+	if err != nil {
+		return "", err
+	}
+	if hasAuth {
+		return buildBasicAuthToken(username, password), nil
+	}
+	return "", nil // Public access
+}
+
+// GetRegistryCredentialsForImage determines the appropriate credentials for an image URI
+// Returns both the registry name and structured credentials
+func GetRegistryCredentialsForImage(imageURI string, creds map[string]string) (registry string, structuredCreds map[string]string, err error) {
+	registry = ParseRegistry(imageURI)
+	if registry == "" {
+		return "", nil, fmt.Errorf("failed to parse registry from image URI: %s", imageURI)
+	}
+
+	var fn RegistryCredentialGetter
+
+	switch {
+	case containsAny(imageURI, awsRegistryDomains...):
+		fn = GetECRCredentials
+	case containsAny(imageURI, gcpRegistryDomains...):
+		fn = GetGARCredentials
+	case containsAny(imageURI, ngcRegistryDomains...):
+		fn = GetNGCCredentials
+	case containsAny(imageURI, ghcrRegistryDomains...):
+		fn = GetGHCRCredentials
+	default:
+		fn = GetDockerHubCredentials
+	}
+
+	structuredCreds, err = fn(creds)
+	if err != nil {
+		return registry, nil, err
+	}
+
+	return registry, structuredCreds, nil
+}
+
+// GetRegistryTokenForImage determines the appropriate credentials for an image URI
+// Returns credentials in legacy username:password format
+func GetRegistryTokenForImage(imageURI string, creds map[string]string) (string, error) {
+	var fn RegistryTokenGetter
+
+	switch {
+	case containsAny(imageURI, awsRegistryDomains...):
+		fn = GetECRToken
+	case containsAny(imageURI, gcpRegistryDomains...):
+		fn = GetGARToken
+	case containsAny(imageURI, ngcRegistryDomains...):
+		fn = GetNGCToken
+	case containsAny(imageURI, ghcrRegistryDomains...):
+		fn = GetGHCRToken
+	default:
+		fn = GetDockerHubToken
+	}
+
+	return fn(creds)
+}
+
+// ParseCredentialsFromJSON parses credentials from JSON string or username:password format
+// Returns structured credentials
+func ParseCredentialsFromJSON(credStr string) (map[string]string, error) {
+	if credStr == "" {
+		return nil, nil
+	}
+
+	// Try JSON format first
+	var credMap map[string]string
+	if err := json.Unmarshal([]byte(credStr), &credMap); err == nil {
+		return ParseCredentialsFromEnv(credMap), nil
+	}
+
+	// Try legacy username:password format
+	parts := strings.SplitN(credStr, ":", 2)
+	if len(parts) == 2 {
+		return map[string]string{
+			"USERNAME": parts[0],
+			"PASSWORD": parts[1],
+		}, nil
+	}
+
+	return nil, fmt.Errorf("unable to parse credentials: invalid format")
+}
+
+// CredentialsToProvider converts a credential map and registry to a CLIP-compatible provider
+// This is the main function that should be used to create providers for CLIP
+func CredentialsToProvider(ctx context.Context, registry string, creds map[string]string) common.RegistryCredentialProvider {
+	if len(creds) == 0 {
+		log.Debug().Str("registry", registry).Msg("no credentials provided, using public access")
+		return common.NewPublicOnlyProvider()
+	}
+
+	credType := DetectCredentialType(registry, creds)
+	log.Debug().
+		Str("registry", registry).
+		Str("cred_type", string(credType)).
+		Int("cred_count", len(creds)).
+		Msg("creating credential provider")
+
+	return CreateProviderFromCredentials(ctx, registry, credType, creds)
 }
