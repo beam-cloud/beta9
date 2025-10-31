@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,13 +20,11 @@ import (
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/oci"
 	"github.com/beam-cloud/beta9/pkg/registry"
-	"github.com/beam-cloud/beta9/pkg/repository"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
-	"github.com/beam-cloud/clip/pkg/registryauth"
 	"github.com/beam-cloud/clip/pkg/storage"
 	"github.com/cenkalti/backoff/v4"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -130,13 +129,12 @@ type ImageClient struct {
 	config             types.AppConfig
 	workerId           string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
-	backendRepo        repository.BackendRepository
 	logger             *ContainerLogger
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs *common.SafeMap[string]
 }
 
-func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, backendRepo repository.BackendRepository, fileCacheManager *FileCacheManager) (*ImageClient, error) {
+func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
 	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
@@ -151,7 +149,6 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		imageMountPath:     getImageMountPath(workerId),
 		workerId:           workerId,
 		workerRepoClient:   workerRepoClient,
-		backendRepo:        backendRepo,
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		v2ImageRefs:        common.NewSafeMap[string](),
@@ -328,12 +325,46 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		// Ensure we don't pass a stale S3 StorageInfo
 		mountOptions.StorageInfo = nil
 		
-		// Retrieve and set credential provider for OCI images
-		if provider, err := c.getCredentialProviderForImage(ctx, imageId, &request.Workspace); err == nil && provider != nil {
-			mountOptions.CredProvider = provider
-			log.Info().Str("image_id", imageId).Msg("using credential provider for OCI image mount")
-		} else if err != nil {
-			log.Warn().Err(err).Str("image_id", imageId).Msg("failed to get credential provider, using default")
+		// Use credentials from request (passed by scheduler)
+		if request.ImageCredentials != "" {
+			var credData map[string]interface{}
+			if err := json.Unmarshal([]byte(request.ImageCredentials), &credData); err == nil {
+				registry, _ := credData["registry"].(string)
+				credsMap, _ := credData["credentials"].(map[string]interface{})
+				
+				if registry != "" && credsMap != nil {
+					// Convert to string map and build credential keys list
+					credMap := make(map[string]string)
+					credKeys := []string{}
+					for k, v := range credsMap {
+						if strVal, ok := v.(string); ok {
+							credMap[k] = strVal
+							credKeys = append(credKeys, k)
+							// Set in environment for CreateProviderFromEnv to read
+							os.Setenv(k, strVal)
+						}
+					}
+					
+					// Create CLIP provider from credentials
+					if provider, err := oci.CreateProviderFromEnv(ctx, registry, credKeys); err == nil && provider != nil {
+						mountOptions.RegistryCredProvider = provider
+						log.Info().
+							Str("image_id", imageId).
+							Str("registry", registry).
+							Msg("using credential provider from request for OCI image mount")
+					} else if err != nil {
+						log.Warn().
+							Err(err).
+							Str("image_id", imageId).
+							Msg("failed to create credential provider, using default")
+					}
+				}
+			} else {
+				log.Warn().
+					Err(err).
+					Str("image_id", imageId).
+					Msg("failed to parse ImageCredentials JSON, using default provider")
+			}
 		}
 	} else {
 		// v1 (legacy S3 data-carrying)
@@ -901,43 +932,3 @@ func (c *ImageClient) getBuildContext(buildPath string, request *types.Container
 	return buildCtxPath, nil
 }
 
-// getCredentialProviderForImage retrieves the credential provider for an image's OCI registry
-func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, workspace *types.Workspace) (registryauth.RegistryCredentialProvider, error) {
-	// Get credential secret associated with the image
-	secretName, _, err := c.backendRepo.GetImageCredentialSecret(ctx, imageId)
-	if err != nil {
-		// No secret associated or error retrieving - return nil provider (will use defaults)
-		return nil, nil
-	}
-	
-	if secretName == "" {
-		// No credential secret configured for this image
-		return nil, nil
-	}
-	
-	// Retrieve and decrypt the secret
-	secret, err := c.backendRepo.GetSecretByNameDecrypted(ctx, workspace, secretName)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve credential secret %s: %w", secretName, err)
-	}
-	
-	// Unmarshal the credential secret
-	credSecret, err := oci.UnmarshalCredentials(secret.Value)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal credential secret: %w", err)
-	}
-	
-	// Create CLIP provider from the credentials
-	provider, err := oci.CreateCLIPProvider(ctx, credSecret)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create credential provider: %w", err)
-	}
-	
-	log.Info().
-		Str("image_id", imageId).
-		Str("registry", credSecret.Registry).
-		Str("cred_type", string(credSecret.Type)).
-		Msg("created credential provider for OCI image")
-	
-	return provider, nil
-}

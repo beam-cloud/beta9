@@ -345,6 +345,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Preemptable:       in.Preemptable,
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
+		ImageCredentials:  in.ImageCredentials,
 		Ports:             in.Ports,
 		Checkpoint:        checkpoint,
 	}

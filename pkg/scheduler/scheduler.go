@@ -326,6 +326,28 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	request.Gpu = worker.Gpu
 
+	// Fetch OCI image credentials if available (for lazy layer loading)
+	if request.ImageId != "" {
+		secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
+		if err == nil && secretName != "" {
+			secret, err := s.backendRepo.GetSecretByNameDecrypted(context.TODO(), &request.Workspace, secretName)
+			if err == nil {
+				request.ImageCredentials = secret.Value
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Str("image_id", request.ImageId).
+					Str("secret_name", secretName).
+					Msg("added OCI credentials to container request")
+			} else {
+				log.Warn().
+					Err(err).
+					Str("container_id", request.ContainerId).
+					Str("image_id", request.ImageId).
+					Msg("failed to retrieve OCI credentials, container will use default provider")
+			}
+		}
+	}
+
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
