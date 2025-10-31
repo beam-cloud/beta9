@@ -325,23 +325,64 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 
 		// Attach credential provider for runtime layer loading
 		// ImageCredentials contains credentials for:
-		// - Build containers: source image credentials for pulling base image
 		// - Runtime containers: credentials attached by scheduler from secrets
+		// BuildOptions.SourceImageCreds contains credentials for:
+		// - Build containers: source image credentials for pulling base image
 		log.Debug().
 			Str("image_id", imageId).
 			Str("container_id", request.ContainerId).
 			Bool("has_image_credentials", request.ImageCredentials != "").
+			Bool("has_source_image_creds", request.BuildOptions.SourceImageCreds != "").
 			Int("credentials_length", len(request.ImageCredentials)).
 			Msg("checking for OCI image credentials")
 		
-		if provider := c.createCredentialProvider(ctx, request.ImageCredentials, imageId); provider != nil {
-			mountOptions.RegistryCredProvider = provider
+		var credProvider clipCommon.RegistryCredentialProvider
+		
+		if request.ImageCredentials != "" {
+			// Runtime container: credentials already in JSON format from secret
+			credProvider = c.createCredentialProvider(ctx, request.ImageCredentials, imageId)
+		} else if request.BuildOptions.SourceImageCreds != "" {
+			// Build container: credentials may be in legacy username:password or JSON format
+			// Get the source image reference for this image
+			sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
+			if !hasRef {
+				log.Warn().
+					Str("image_id", imageId).
+					Str("container_id", request.ContainerId).
+					Msg("no cached source image reference for build container")
+			} else {
+				registry := reg.ParseRegistry(sourceRef)
+				if registry != "" {
+					// Parse credentials (handles both JSON and username:password formats)
+					creds, err := reg.ParseCredentialsFromJSON(request.BuildOptions.SourceImageCreds)
+					if err != nil {
+						log.Warn().
+							Err(err).
+							Str("image_id", imageId).
+							Str("container_id", request.ContainerId).
+							Str("registry", registry).
+							Msg("failed to parse build credentials for mount")
+					} else if len(creds) > 0 {
+						// Create provider from parsed credentials
+						credProvider = reg.CredentialsToProvider(ctx, registry, creds)
+						log.Info().
+							Str("image_id", imageId).
+							Str("container_id", request.ContainerId).
+							Str("registry", registry).
+							Msg("created credential provider from build options for mount")
+					}
+				}
+			}
+		}
+		
+		if credProvider != nil {
+			mountOptions.RegistryCredProvider = credProvider
 			log.Info().
 				Str("image_id", imageId).
 				Str("container_id", request.ContainerId).
-				Str("provider_name", provider.Name()).
+				Str("provider_name", credProvider.Name()).
 				Msg("attached custom credential provider for OCI image")
-		} else if request.ImageCredentials != "" {
+		} else if request.ImageCredentials != "" || request.BuildOptions.SourceImageCreds != "" {
 			log.Warn().
 				Str("image_id", imageId).
 				Str("container_id", request.ContainerId).
