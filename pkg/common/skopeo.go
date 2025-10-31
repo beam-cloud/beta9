@@ -160,10 +160,10 @@ func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string
 func (p *skopeoClient) inspectArgs(creds string) (out []string) {
 	if creds != "" {
 		out = append(out, "--creds", creds)
-	} else if creds == "" {
-		out = append(out, "--no-creds")
 	} else if p.creds != "" {
 		out = append(out, "--creds", p.creds)
+	} else {
+		out = append(out, "--no-creds")
 	}
 
 	if p.commandTimeout > 0 {
@@ -184,10 +184,10 @@ func (p *skopeoClient) inspectArgs(creds string) (out []string) {
 func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	if creds != "" {
 		out = append(out, "--src-creds", creds)
-	} else if creds == "" {
-		out = append(out, "--src-no-creds")
 	} else if p.creds != "" {
 		out = append(out, "--src-creds", p.creds)
+	} else {
+		out = append(out, "--src-no-creds")
 	}
 
 	if p.commandTimeout > 0 {
