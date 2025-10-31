@@ -220,12 +220,12 @@ type ContainerRequest struct {
 	Preemptable       bool            `json:"preemptable"`
 	CheckpointEnabled bool            `json:"checkpoint_enabled"`
 	BuildOptions      BuildOptions    `json:"build_options"`
-	ImageCredentials  string          `json:"image_credentials"`  // JSON-encoded credentials for OCI image
 	Ports             []uint32        `json:"ports"`
 	CostPerMs         float64         `json:"cost_per_ms"`
 	AppId             string          `json:"app_id"`
 	Checkpoint        *Checkpoint     `json:"checkpoint"`
 	ConfigPath        string          `json:"config_path"`
+	ImageCredentials  string          `json:"image_credentials"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {

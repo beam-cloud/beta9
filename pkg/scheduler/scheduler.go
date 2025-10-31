@@ -362,7 +362,7 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 		Str("image_id", request.ImageId).
 		Str("secret_name", secretName).
 		Msg("attached OCI credentials")
-	
+
 	return nil
 }
 
@@ -436,7 +436,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			}
 
 			// This will account for the preset priorities for the pool type as well as the order of the GPU requests
-			// NOTE: will only work properly if all GPU types and their pools start from 0 and pool priority are incremental by changes of ?1
+			// NOTE: will only work properly if all GPU types and their pools start from 0 and pool priority are incremental by changes of ±1
 			worker.Priority -= int32(priorityModifier)
 		}
 
