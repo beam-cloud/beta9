@@ -374,9 +374,16 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 
 	// Check if this is a custom base image build (from_registry)
 	if opts.ExistingImageUri != "" && opts.ExistingImageCreds != nil && len(opts.ExistingImageCreds) > 0 {
+		// Log the credential keys (NOT values) to help debug
+		credKeys := make([]string, 0, len(opts.ExistingImageCreds))
+		for k := range opts.ExistingImageCreds {
+			credKeys = append(credKeys, k)
+		}
+		
 		log.Info().
 			Str("image_id", imageId).
 			Str("existing_image_uri", opts.ExistingImageUri).
+			Strs("credential_keys", credKeys).
 			Msg("processing ExistingImageCreds from structured credentials")
 
 		baseImage = opts.ExistingImageUri
@@ -391,17 +398,26 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 			return nil
 		}
 
-		log.Debug().
+		// Log what we got after conversion
+		credKeys = make([]string, 0, len(creds))
+		for k := range creds {
+			credKeys = append(credKeys, k)
+		}
+		
+		log.Info().
 			Str("image_id", imageId).
 			Str("registry", registry).
 			Int("creds_count", len(creds)).
-			Msg("got registry credentials")
+			Strs("processed_credential_keys", credKeys).
+			Msg("got registry credentials after processing")
 
 		credType := reg.DetectCredentialType(registry, creds)
-		log.Debug().
+		log.Info().
 			Str("image_id", imageId).
+			Str("registry", registry).
 			Str("cred_type", string(credType)).
-			Msg("detected credential type")
+			Strs("cred_keys", credKeys).
+			Msg("detected credential type for secret")
 
 		credStr, err = reg.MarshalCredentials(registry, credType, creds)
 		if err != nil {
@@ -414,8 +430,8 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 			Msg("marshaled credentials")
 	} else if opts.BaseImageCreds != "" {
 		// BaseImageCreds is in username:password format (for skopeo)
-		// For cloud providers (ECR/GCR/etc.), this is a temporary token and not suitable for secrets
-		// Only use BaseImageCreds for basic auth registries (Docker Hub, GHCR, etc.)
+		// For cloud providers (ECR/GCR/etc.), this is a temporary token and NOT suitable for secrets
+		// We must have structured credentials for cloud providers - this is a configuration error
 		baseImage = getSourceImage(opts)
 		registry := reg.ParseRegistry(baseImage)
 		
@@ -431,11 +447,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 		}
 		
 		if isCloudProvider {
-			log.Warn().
-				Str("image_id", imageId).
-				Str("registry", registry).
-				Msg("skipping secret creation for cloud provider - BaseImageCreds contains temporary token, not structured credentials. Runtime containers may fail if ExistingImageCreds were not provided during build.")
-			return nil
+			return fmt.Errorf("cannot create secret for cloud provider registry %s: BaseImageCreds contains temporary token. Must provide structured credentials in ExistingImageCreds (AWS_ACCESS_KEY_ID, GCP_ACCESS_TOKEN, etc.) for CLIP v2 support", registry)
 		}
 		
 		log.Info().
