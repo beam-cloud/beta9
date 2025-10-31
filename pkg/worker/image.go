@@ -325,14 +325,10 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		mountOptions.StorageInfo = nil
 
 		// Attach credential provider for runtime layer loading
-		// For build containers, use BuildOptions.SourceImageCreds (credentials for pulling base image)
-		// For runtime containers, use ImageCredentials (credentials attached by scheduler from secrets)
-		credentials := request.ImageCredentials
-		if isBuildContainer && request.BuildOptions.SourceImageCreds != "" {
-			credentials = request.BuildOptions.SourceImageCreds
-		}
-		
-		if provider := c.createCredentialProvider(ctx, credentials, imageId); provider != nil {
+		// ImageCredentials contains credentials for:
+		// - Build containers: source image credentials for pulling base image
+		// - Runtime containers: credentials attached by scheduler from secrets
+		if provider := c.createCredentialProvider(ctx, request.ImageCredentials, imageId); provider != nil {
 			mountOptions.RegistryCredProvider = provider
 		}
 	} else {
@@ -566,12 +562,19 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		}
 	}()
 
+	// Create credential provider if credentials are available
+	var credProvider clipCommon.RegistryCredentialProvider
+	if request.ImageCredentials != "" {
+		credProvider = c.createCredentialProvider(ctx, request.ImageCredentials, request.ImageId)
+	}
+
 	// Create index-only clip archive from the OCI image
 	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
-		ImageRef:      imageRef,
-		OutputPath:    outputPath,
-		CheckpointMiB: checkpointMiB,
-		ProgressChan:  progressChan,
+		ImageRef:         imageRef,
+		OutputPath:       outputPath,
+		CheckpointMiB:    checkpointMiB,
+		ProgressChan:     progressChan,
+		CredProvider:     credProvider,
 	})
 
 	// Close channel and wait for all progress messages to be logged
