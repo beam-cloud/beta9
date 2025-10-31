@@ -434,7 +434,17 @@ func validateRequiredCredential(creds map[string]string, key string) (string, er
 	if value := creds[key]; value != "" {
 		return value, nil
 	}
-	return "", fmt.Errorf("%s not found or empty", key)
+	return "", ErrMissingCredential(key)
+}
+
+// ErrMissingCredential returns an error for a missing required credential
+func ErrMissingCredential(key string) error {
+	return fmt.Errorf("%s not found or empty", key)
+}
+
+// ErrBothCredentialsRequired returns an error when both credentials are required
+func ErrBothCredentialsRequired(key1, key2 string) error {
+	return fmt.Errorf("both %s and %s must be provided together", key1, key2)
 }
 
 func validateOptionalCredentials(creds map[string]string, usernameKey, passwordKey string) (string, string, bool, error) {
@@ -448,12 +458,12 @@ func validateOptionalCredentials(creds map[string]string, usernameKey, passwordK
 	
 	// If one or both keys exist but are empty, this is an error
 	if (usernameExists && username == "") || (passwordExists && password == "") {
-		return "", "", false, fmt.Errorf("both %s and %s must be non-empty if provided", usernameKey, passwordKey)
+		return "", "", false, ErrBothCredentialsRequired(usernameKey, passwordKey)
 	}
 	
 	// If only one credential is provided (non-empty), both are required
 	if (username == "" && password != "") || (username != "" && password == "") {
-		return "", "", false, fmt.Errorf("both %s and %s must be provided together", usernameKey, passwordKey)
+		return "", "", false, ErrBothCredentialsRequired(usernameKey, passwordKey)
 	}
 	
 	return username, password, username != "" && password != "", nil
@@ -470,6 +480,11 @@ func containsAny(s string, substrs ...string) bool {
 		}
 	}
 	return false
+}
+
+// ContainsAny checks if string s contains any of the given substrings (exported for testing)
+func ContainsAny(s string, substrs ...string) bool {
+	return containsAny(s, substrs...)
 }
 
 // Registry domain constants
