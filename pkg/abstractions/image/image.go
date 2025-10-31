@@ -510,6 +510,14 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 
 	secretName := reg.CreateSecretName(registry)
 
+	log.Info().
+		Str("image_id", imageId).
+		Str("secret_name", secretName).
+		Str("registry", registry).
+		Str("cred_type", string(credType)).
+		Int("secret_value_len", len(secretValue)).
+		Msg("about to upsert credential secret")
+
 	// Create or update secret
 	secret, err := is.upsertSecret(context.Background(), authInfo, secretName, secretValue, registry)
 	if err != nil {
@@ -524,9 +532,11 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 	log.Info().
 		Str("image_id", imageId).
 		Str("secret_name", secretName).
+		Str("secret_external_id", secret.ExternalId).
 		Str("registry", registry).
 		Str("cred_type", string(credType)).
-		Msg("credential secret saved")
+		Int("secret_value_len", len(secretValue)).
+		Msg("credential secret saved and linked to image")
 
 	return nil
 }
@@ -545,18 +555,39 @@ func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.Aut
 
 	if secret != nil {
 		// Update existing secret
+		log.Info().
+			Str("secret_name", secretName).
+			Str("secret_external_id", secret.ExternalId).
+			Str("registry", registry).
+			Int("new_value_len", len(secretValue)).
+			Msg("updating existing credential secret")
+		
 		secret, err = is.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secret.ExternalId, secretValue)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update secret: %w", err)
 		}
-		log.Info().Str("secret_name", secretName).Str("registry", registry).Msg("updated credential secret")
+		log.Info().
+			Str("secret_name", secretName).
+			Str("secret_external_id", secret.ExternalId).
+			Str("registry", registry).
+			Msg("updated credential secret successfully")
 	} else {
 		// Create new secret
+		log.Info().
+			Str("secret_name", secretName).
+			Str("registry", registry).
+			Int("value_len", len(secretValue)).
+			Msg("creating new credential secret")
+			
 		secret, err = is.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create secret: %w", err)
 		}
-		log.Info().Str("secret_name", secretName).Str("registry", registry).Msg("created credential secret")
+		log.Info().
+			Str("secret_name", secretName).
+			Str("secret_external_id", secret.ExternalId).
+			Str("registry", registry).
+			Msg("created credential secret successfully")
 	}
 
 	return secret, nil
