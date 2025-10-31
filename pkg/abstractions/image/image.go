@@ -10,8 +10,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
-	"github.com/beam-cloud/beta9/pkg/oci"
 	"github.com/beam-cloud/beta9/pkg/registry"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -126,17 +126,17 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 		IgnorePython:     in.IgnorePython,
 	}
 
-    imageId, exists, _, buildOptions, err := is.verifyImage(stream.Context(), verifyReq)
+	imageId, exists, _, buildOptions, err := is.verifyImage(stream.Context(), verifyReq)
 	if err != nil {
 		return err
 	}
 
-    if exists {
-        // Emit a minimal success response consistent with SDK expectations
-        _ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: imageId})
-        _ = stream.Send(&pb.BuildImageResponse{Msg: "Build completed successfully\n", Done: true, Success: true, ImageId: imageId})
-        return nil
-    }
+	if exists {
+		// Emit a minimal success response consistent with SDK expectations
+		_ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: imageId})
+		_ = stream.Send(&pb.BuildImageResponse{Msg: "Build completed successfully\n", Done: true, Success: true, ImageId: imageId})
+		return nil
+	}
 
 	clipVersion := is.config.ImageService.ClipVersion
 	buildOptions.ExistingImageCreds = in.ExistingImageCreds
@@ -145,11 +145,11 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	ctx := stream.Context()
 	outputChan := make(chan common.OutputMsg)
 
-    go is.builder.Build(ctx, buildOptions, outputChan)
+	go is.builder.Build(ctx, buildOptions, outputChan)
 
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
-        // Stream all logs to the user (no archiving-stage filtering for v2)
+		// Stream all logs to the user (no archiving-stage filtering for v2)
 
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion, Warning: o.Warning}); err != nil {
 			log.Error().Err(err).Msg("failed to complete build")
@@ -365,7 +365,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 	}
 
 	// Parse the registry from the base image
-	registry := oci.ParseRegistry(baseImage)
+	registry := reg.ParseRegistry(baseImage)
 	if registry == "" {
 		return fmt.Errorf("failed to parse registry from base image: %s", baseImage)
 	}
@@ -375,7 +375,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 	// 1. "username:password" (legacy format)
 	// 2. JSON map of credential keys to values
 	var credMap map[string]string
-	
+
 	// Try to parse as JSON first
 	if err := json.Unmarshal([]byte(opts.BaseImageCreds), &credMap); err != nil {
 		// Not JSON, try legacy username:password format
@@ -392,27 +392,27 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 	}
 
 	// Filter to only known credential keys
-	creds := oci.ParseCredentialsFromEnv(credMap)
+	creds := reg.ParseCredentialsFromEnv(credMap)
 	if len(creds) == 0 {
 		log.Info().Str("image_id", imageId).Msg("no recognizable credentials found, skipping secret creation")
 		return nil
 	}
 
 	// Detect credential type
-	credType := oci.DetectCredentialType(registry, creds)
-	if credType == oci.CredTypePublic {
+	credType := reg.DetectCredentialType(registry, creds)
+	if credType == reg.CredTypePublic {
 		log.Info().Str("image_id", imageId).Msg("public registry detected, skipping secret creation")
 		return nil
 	}
 
 	// Marshal credentials to JSON
-	secretValue, err := oci.MarshalCredentials(registry, credType, creds)
+	secretValue, err := reg.MarshalCredentials(registry, credType, creds)
 	if err != nil {
 		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
 
 	// Create secret name
-	secretName := oci.CreateSecretName(registry)
+	secretName := reg.CreateSecretName(registry)
 
 	// Get auth info to access workspace
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
@@ -433,7 +433,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 			Str("secret_name", secretName).
 			Str("registry", registry).
 			Msg("updating existing credential secret")
-		
+
 		secret, err = is.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secret.ExternalId, secretValue)
 		if err != nil {
 			return fmt.Errorf("failed to update credential secret: %w", err)
@@ -446,7 +446,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 			Str("registry", registry).
 			Str("cred_type", string(credType)).
 			Msg("creating credential secret")
-		
+
 		secret, err = is.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue)
 		if err != nil {
 			return fmt.Errorf("failed to create credential secret: %w", err)

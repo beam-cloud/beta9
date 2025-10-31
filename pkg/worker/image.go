@@ -18,8 +18,8 @@ import (
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
-	"github.com/beam-cloud/beta9/pkg/oci"
 	"github.com/beam-cloud/beta9/pkg/registry"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
@@ -119,7 +119,7 @@ func NewPathInfo(path string) *PathInfo {
 }
 
 type ImageClient struct {
-	registry           *registry.ImageRegistry
+	registry           *reg.ImageRegistry
 	cacheClient        *blobcache.BlobCacheClient
 	imageCachePath     string
 	imageMountPath     string
@@ -135,7 +135,7 @@ type ImageClient struct {
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
-	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3)
+	registry, err := reg.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +263,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	mountArchivePath := downloadPath
 	if meta != nil {
 		if t, ok := meta.StorageInfo.(interface{ Type() string }); ok && (t.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(t.Type()) == "oci") {
-			canonicalIndexPath := fmt.Sprintf("/images/%s.%s", imageId, registry.LocalImageFileExtension)
+			canonicalIndexPath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
 			_ = os.MkdirAll(filepath.Dir(canonicalIndexPath), 0755)
 			if downloadPath != canonicalIndexPath {
 				// Move the downloaded file to the canonical clip index path
@@ -324,14 +324,14 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		// v2 (OCI index-only): ClipFS will read embedded OCI storage info; no S3 info needed
 		// Ensure we don't pass a stale S3 StorageInfo
 		mountOptions.StorageInfo = nil
-		
+
 		// Use credentials from request (passed by scheduler)
 		if request.ImageCredentials != "" {
 			var credData map[string]interface{}
 			if err := json.Unmarshal([]byte(request.ImageCredentials), &credData); err == nil {
 				registry, _ := credData["registry"].(string)
 				credsMap, _ := credData["credentials"].(map[string]interface{})
-				
+
 				if registry != "" && credsMap != nil {
 					// Convert to string map and build credential keys list
 					credMap := make(map[string]string)
@@ -344,9 +344,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 							os.Setenv(k, strVal)
 						}
 					}
-					
+
 					// Create CLIP provider from credentials
-					if provider, err := oci.CreateProviderFromEnv(ctx, registry, credKeys); err == nil && provider != nil {
+					if provider, err := reg.CreateProviderFromEnv(ctx, registry, credKeys); err == nil && provider != nil {
 						mountOptions.RegistryCredProvider = provider
 						log.Info().
 							Str("image_id", imageId).
@@ -378,7 +378,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			Bucket:         sourceRegistry.BucketName,
 			Region:         sourceRegistry.Region,
 			Endpoint:       sourceRegistry.Endpoint,
-			Key:            fmt.Sprintf("%s.%s", imageId, registry.LocalImageFileExtension),
+			Key:            fmt.Sprintf("%s.%s", imageId, reg.LocalImageFileExtension),
 			ForcePathStyle: sourceRegistry.ForcePathStyle,
 		}
 	}
@@ -931,4 +931,3 @@ func (c *ImageClient) getBuildContext(buildPath string, request *types.Container
 
 	return buildCtxPath, nil
 }
-
