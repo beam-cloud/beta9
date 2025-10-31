@@ -353,107 +353,55 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 // createCredentialSecretIfNeeded creates a workspace secret for OCI registry credentials
 // if base image credentials were provided during the build
 func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, imageId string, opts *BuildOpts) error {
-	// Only create secrets for OCI images (v2) and if credentials were provided
+	// Only create secrets for OCI images (v2) with credentials
 	if is.config.ImageService.ClipVersion != 2 || opts == nil || opts.BaseImageCreds == "" {
 		return nil
 	}
 
-	// Only create secrets if a base image was used
 	baseImage := getSourceImage(opts)
 	if baseImage == "" {
 		return nil
 	}
 
-	// Parse the registry from the base image
+	// Parse registry and credentials
 	registry := reg.ParseRegistry(baseImage)
 	if registry == "" {
 		return fmt.Errorf("failed to parse registry from base image: %s", baseImage)
 	}
 
-	// Parse credentials from the BaseImageCreds string
-	// The format can be:
-	// 1. "username:password" (legacy format)
-	// 2. JSON map of credential keys to values
-	var credMap map[string]string
-
-	// Try to parse as JSON first
-	if err := json.Unmarshal([]byte(opts.BaseImageCreds), &credMap); err != nil {
-		// Not JSON, try legacy username:password format
-		parts := strings.SplitN(opts.BaseImageCreds, ":", 2)
-		if len(parts) == 2 {
-			credMap = map[string]string{
-				"USERNAME": parts[0],
-				"PASSWORD": parts[1],
-			}
-		} else {
-			// Unknown format
-			return fmt.Errorf("unable to parse base image credentials")
-		}
+	creds, err := is.parseCredentials(opts.BaseImageCreds)
+	if err != nil {
+		return err
 	}
 
-	// Filter to only known credential keys
-	creds := reg.ParseCredentialsFromEnv(credMap)
-	if len(creds) == 0 {
-		log.Info().Str("image_id", imageId).Msg("no recognizable credentials found, skipping secret creation")
-		return nil
-	}
-
-	// Detect credential type
+	// Skip if no valid credentials or public registry
 	credType := reg.DetectCredentialType(registry, creds)
 	if credType == reg.CredTypePublic {
-		log.Info().Str("image_id", imageId).Msg("public registry detected, skipping secret creation")
+		log.Info().Str("image_id", imageId).Msg("public registry, skipping secret creation")
 		return nil
 	}
 
-	// Marshal credentials to JSON
-	secretValue, err := reg.MarshalCredentials(registry, credType, creds)
-	if err != nil {
-		return fmt.Errorf("failed to marshal credentials: %w", err)
-	}
-
-	// Create secret name
-	secretName := reg.CreateSecretName(registry)
-
-	// Get auth info to access workspace
+	// Get workspace context
 	authInfo, ok := auth.AuthInfoFromContext(ctx)
 	if !ok || authInfo.Workspace == nil {
 		return fmt.Errorf("no workspace found in context")
 	}
 
-	// Create or update the secret
-	secret, err := is.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secretName)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("failed to check for existing secret: %w", err)
+	// Prepare secret
+	secretValue, err := reg.MarshalCredentials(registry, credType, creds)
+	if err != nil {
+		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
 
-	if secret != nil {
-		// Secret already exists, update it
-		log.Info().
-			Str("image_id", imageId).
-			Str("secret_name", secretName).
-			Str("registry", registry).
-			Msg("updating existing credential secret")
+	secretName := reg.CreateSecretName(registry)
 
-		secret, err = is.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secret.ExternalId, secretValue)
-		if err != nil {
-			return fmt.Errorf("failed to update credential secret: %w", err)
-		}
-	} else {
-		// Create new secret
-		log.Info().
-			Str("image_id", imageId).
-			Str("secret_name", secretName).
-			Str("registry", registry).
-			Str("cred_type", string(credType)).
-			Msg("creating credential secret")
-
-		secret, err = is.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue)
-		if err != nil {
-			return fmt.Errorf("failed to create credential secret: %w", err)
-		}
+	// Create or update secret
+	secret, err := is.upsertSecret(ctx, authInfo, secretName, secretValue, registry)
+	if err != nil {
+		return err
 	}
 
-	// Associate the secret with the image
+	// Link secret to image
 	if err := is.backendRepo.SetImageCredentialSecret(ctx, imageId, secretName, secret.ExternalId); err != nil {
 		return fmt.Errorf("failed to associate secret with image: %w", err)
 	}
@@ -461,8 +409,58 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 	log.Info().
 		Str("image_id", imageId).
 		Str("secret_name", secretName).
-		Str("secret_id", secret.ExternalId).
-		Msg("credential secret created and associated with image")
+		Msg("credential secret saved")
 
 	return nil
+}
+
+// parseCredentials parses credential string (JSON or username:password format)
+func (is *RuncImageService) parseCredentials(credStr string) (map[string]string, error) {
+	var credMap map[string]string
+	
+	// Try JSON format first
+	if err := json.Unmarshal([]byte(credStr), &credMap); err == nil {
+		creds := reg.ParseCredentialsFromEnv(credMap)
+		if len(creds) > 0 {
+			return creds, nil
+		}
+		return nil, fmt.Errorf("no recognizable credentials found")
+	}
+	
+	// Try legacy username:password format
+	parts := strings.SplitN(credStr, ":", 2)
+	if len(parts) == 2 {
+		return map[string]string{
+			"USERNAME": parts[0],
+			"PASSWORD": parts[1],
+		}, nil
+	}
+	
+	return nil, fmt.Errorf("unable to parse credentials")
+}
+
+// upsertSecret creates or updates a secret in the workspace
+func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.AuthInfo, secretName, secretValue, registry string) (*types.Secret, error) {
+	secret, err := is.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secretName)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, fmt.Errorf("failed to check for existing secret: %w", err)
+	}
+
+	if secret != nil {
+		// Update existing secret
+		secret, err = is.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secret.ExternalId, secretValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update secret: %w", err)
+		}
+		log.Info().Str("secret_name", secretName).Str("registry", registry).Msg("updated credential secret")
+	} else {
+		// Create new secret
+		secret, err = is.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create secret: %w", err)
+		}
+		log.Info().Str("secret_name", secretName).Str("registry", registry).Msg("created credential secret")
+	}
+
+	return secret, nil
 }

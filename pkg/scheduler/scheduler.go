@@ -326,31 +326,44 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	request.Gpu = worker.Gpu
 
-	// Fetch OCI image credentials if available (for lazy layer loading)
-	if request.ImageId != "" {
-		secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
-		if err == nil && secretName != "" {
-			secret, err := s.backendRepo.GetSecretByNameDecrypted(context.TODO(), &request.Workspace, secretName)
-			if err == nil {
-				request.ImageCredentials = secret.Value
-				log.Info().
-					Str("container_id", request.ContainerId).
-					Str("image_id", request.ImageId).
-					Str("secret_name", secretName).
-					Msg("added OCI credentials to container request")
-			} else {
-				log.Warn().
-					Err(err).
-					Str("container_id", request.ContainerId).
-					Str("image_id", request.ImageId).
-					Msg("failed to retrieve OCI credentials, container will use default provider")
-			}
-		}
+	// Attach OCI credentials for runtime lazy layer loading
+	if err := s.attachImageCredentials(request); err != nil {
+		log.Warn().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Str("image_id", request.ImageId).
+			Msg("failed to attach OCI credentials, will use default provider")
 	}
 
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
+}
+
+// attachImageCredentials fetches and attaches OCI credentials to a container request
+func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) error {
+	if request.ImageId == "" {
+		return nil
+	}
+
+	secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
+	if err != nil || secretName == "" {
+		return err
+	}
+
+	secret, err := s.backendRepo.GetSecretByNameDecrypted(context.TODO(), &request.Workspace, secretName)
+	if err != nil {
+		return err
+	}
+
+	request.ImageCredentials = secret.Value
+	log.Info().
+		Str("container_id", request.ContainerId).
+		Str("image_id", request.ImageId).
+		Str("secret_name", secretName).
+		Msg("attached OCI credentials")
+	
+	return nil
 }
 
 func filterControllersByFlags(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
@@ -423,7 +436,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 			}
 
 			// This will account for the preset priorities for the pool type as well as the order of the GPU requests
-			// NOTE: will only work properly if all GPU types and their pools start from 0 and pool priority are incremental by changes of ±1
+			// NOTE: will only work properly if all GPU types and their pools start from 0 and pool priority are incremental by changes of ?1
 			worker.Priority -= int32(priorityModifier)
 		}
 
