@@ -359,11 +359,13 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 		return nil
 	}
 
-	log.Debug().
+	log.Info().
 		Str("image_id", imageId).
 		Str("existing_image_uri", opts.ExistingImageUri).
+		Bool("has_existing_image_creds", opts.ExistingImageCreds != nil && len(opts.ExistingImageCreds) > 0).
 		Int("existing_image_creds_count", len(opts.ExistingImageCreds)).
-		Str("base_image_creds", opts.BaseImageCreds).
+		Bool("has_base_image_creds", opts.BaseImageCreds != "").
+		Int("base_image_creds_len", len(opts.BaseImageCreds)).
 		Msg("checking if credentials should be saved as secret")
 
 	// Determine the source image and credentials
@@ -372,10 +374,10 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 
 	// Check if this is a custom base image build (from_registry)
 	if opts.ExistingImageUri != "" && opts.ExistingImageCreds != nil && len(opts.ExistingImageCreds) > 0 {
-		log.Debug().
+		log.Info().
 			Str("image_id", imageId).
 			Str("existing_image_uri", opts.ExistingImageUri).
-			Msg("processing ExistingImageCreds")
+			Msg("processing ExistingImageCreds from structured credentials")
 
 		baseImage = opts.ExistingImageUri
 		// Convert ExistingImageCreds to JSON format
@@ -411,12 +413,36 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 			Bool("has_cred_str", credStr != "").
 			Msg("marshaled credentials")
 	} else if opts.BaseImageCreds != "" {
-		log.Debug().
-			Str("image_id", imageId).
-			Msg("using BaseImageCreds")
-
-		// Use the base image credentials if provided
+		// BaseImageCreds is in username:password format (for skopeo)
+		// For cloud providers (ECR/GCR/etc.), this is a temporary token and not suitable for secrets
+		// Only use BaseImageCreds for basic auth registries (Docker Hub, GHCR, etc.)
 		baseImage = getSourceImage(opts)
+		registry := reg.ParseRegistry(baseImage)
+		
+		// Check if this is a cloud provider registry
+		isCloudProvider := false
+		if registry != "" {
+			registryLower := strings.ToLower(registry)
+			if strings.Contains(registryLower, "amazonaws.com") || // ECR
+				strings.Contains(registryLower, "gcr.io") || strings.Contains(registryLower, "pkg.dev") || // GCR/GAR
+				strings.Contains(registryLower, "azurecr.io") { // ACR
+				isCloudProvider = true
+			}
+		}
+		
+		if isCloudProvider {
+			log.Warn().
+				Str("image_id", imageId).
+				Str("registry", registry).
+				Msg("skipping secret creation for cloud provider - BaseImageCreds contains temporary token, not structured credentials. Runtime containers may fail if ExistingImageCreds were not provided during build.")
+			return nil
+		}
+		
+		log.Info().
+			Str("image_id", imageId).
+			Str("registry", registry).
+			Msg("using BaseImageCreds for basic auth registry")
+
 		credStr = opts.BaseImageCreds
 	} else {
 		log.Debug().
