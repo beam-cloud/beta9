@@ -254,6 +254,35 @@ func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 		(opts.PythonVersion != "" && !opts.IgnorePython)
 }
 
+// renderEnvVarsAndSecrets adds ENV directives and ARG directives to a Dockerfile
+func renderEnvVarsAndSecrets(sb *strings.Builder, opts *BuildOpts) {
+	// Add environment variables
+	if len(opts.EnvVars) > 0 {
+		for _, envVar := range opts.EnvVars {
+			if envVar != "" {
+				sb.WriteString("ENV ")
+				sb.WriteString(envVar)
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	// Add build secrets as ARG directives
+	// Secrets are mounted at build time using buildah --build-arg flag
+	if len(opts.BuildSecrets) > 0 {
+		for _, secret := range opts.BuildSecrets {
+			if secret != "" {
+				// Extract the secret name (format: NAME=value)
+				parts := strings.SplitN(secret, "=", 2)
+				if len(parts) > 0 {
+					secretName := parts[0]
+					sb.WriteString(fmt.Sprintf("ARG %s\n", secretName))
+				}
+			}
+		}
+	}
+}
+
 // appendToDockerfile appends additional build steps to a custom Dockerfile
 // This is exported so it can be called from verifyImage
 func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
@@ -265,6 +294,9 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 		sb.WriteString("\n")
 	}
 
+	// Add environment variables and secrets
+	renderEnvVarsAndSecrets(&sb, opts)
+
 	// Determine Python version and environment type
 	pythonVersion := opts.PythonVersion
 	if pythonVersion == types.Python3.String() {
@@ -274,9 +306,9 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 
 	// Install Python if needed
 	// Match the behavior from RenderV2Dockerfile and setupPythonEnv:
-	// - If ignore_python=true AND no packages → skip Python entirely
-	// - If ignore_python=true BUT has packages → install Python (packages need it)
-	// - If ignore_python=false → install Python when version specified
+	// - If ignore_python=true AND no packages ? skip Python entirely
+	// - If ignore_python=true BUT has packages ? install Python (packages need it)
+	// - If ignore_python=false ? install Python when version specified
 	shouldInstallPython := pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0)
 
 	if shouldInstallPython {
@@ -327,6 +359,9 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	sb.WriteString("FROM ")
 	sb.WriteString(getSourceImage(opts))
 	sb.WriteString("\n")
+
+	// Add environment variables and secrets
+	renderEnvVarsAndSecrets(&sb, opts)
 
 	// Skip Python setup if explicitly ignored and no packages requested
 	// This matches v1 behavior in setupPythonEnv()

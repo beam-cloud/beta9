@@ -723,6 +723,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if insecure {
 			pullArgs = append(pullArgs, "--tls-verify=false")
 		}
+		
+		// Add credentials if provided (in username:password format)
+		if request.BuildOptions.SourceImageCreds != "" {
+			pullArgs = append(pullArgs, "--creds", request.BuildOptions.SourceImageCreds)
+		}
 
 		pullArgs = append(pullArgs, "docker://"+sourceImage)
 		cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
@@ -736,6 +741,20 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	budArgs := []string{"--root", imagePath, "bud"}
 	if insecure {
 		budArgs = append(budArgs, "--tls-verify=false")
+	}
+	
+	// Add credentials for multi-stage builds and private base images
+	if request.BuildOptions.SourceImageCreds != "" {
+		budArgs = append(budArgs, "--creds", request.BuildOptions.SourceImageCreds)
+	}
+	
+	// Add build secrets as build arguments
+	if len(request.BuildOptions.BuildSecrets) > 0 {
+		for _, secret := range request.BuildOptions.BuildSecrets {
+			if secret != "" {
+				budArgs = append(budArgs, "--build-arg", secret)
+			}
+		}
 	}
 
 	budArgs = append(budArgs, "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
