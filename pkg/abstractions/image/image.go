@@ -530,7 +530,7 @@ func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.Aut
 			Int("new_value_len", len(secretValue)).
 			Msg("updating existing credential secret")
 
-		secret, err = is.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secret.ExternalId, secretValue)
+		secret, err = is.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update secret: %w", err)
 		}
