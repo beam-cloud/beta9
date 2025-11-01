@@ -307,7 +307,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
-		UseCheckpoints:        true,
 	}
 
 	// Do not persist or rely on an initial spec file for v2; base runc config will be used instead
