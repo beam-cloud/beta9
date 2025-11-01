@@ -251,6 +251,8 @@ func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
 	return len(opts.Commands) > 0 ||
 		len(opts.BuildSteps) > 0 ||
 		len(opts.PythonPackages) > 0 ||
+		len(opts.EnvVars) > 0 ||
+		len(opts.BuildSecrets) > 0 ||
 		(opts.PythonVersion != "" && !opts.IgnorePython)
 }
 

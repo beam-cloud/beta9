@@ -81,6 +81,155 @@ func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
 	assert.Contains(t, df, "RUN echo step\n")
 }
 
+// Test that RenderV2Dockerfile correctly renders environment variables and secrets
+func TestRenderV2Dockerfile_WithEnvVarsAndSecrets(t *testing.T) {
+	cfg := types.AppConfig{}
+	b := &Builder{config: cfg}
+
+	tests := []struct {
+		name     string
+		opts     *BuildOpts
+		expected []string
+	}{
+		{
+			name: "EnvVars only",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/alpine",
+				BaseImageTag:      "3.18",
+				EnvVars:           []string{"FOO=bar", "BAZ=qux"},
+				IgnorePython:      true,
+			},
+			expected: []string{
+				"FROM docker.io/library/alpine:3.18\n",
+				"ENV FOO=bar\n",
+				"ENV BAZ=qux\n",
+			},
+		},
+		{
+			name: "BuildSecrets only",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/alpine",
+				BaseImageTag:      "3.18",
+				BuildSecrets:      []string{"SECRET1=value1", "SECRET2=value2"},
+				IgnorePython:      true,
+			},
+			expected: []string{
+				"FROM docker.io/library/alpine:3.18\n",
+				"ARG SECRET1\n",
+				"ARG SECRET2\n",
+			},
+		},
+		{
+			name: "Both EnvVars and BuildSecrets",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/alpine",
+				BaseImageTag:      "3.18",
+				EnvVars:           []string{"MY_ENV=production"},
+				BuildSecrets:      []string{"API_KEY=secret123"},
+				IgnorePython:      true,
+			},
+			expected: []string{
+				"FROM docker.io/library/alpine:3.18\n",
+				"ENV MY_ENV=production\n",
+				"ARG API_KEY\n",
+			},
+		},
+		{
+			name: "EnvVars with commands",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/alpine",
+				BaseImageTag:      "3.18",
+				EnvVars:           []string{"DEBIAN_FRONTEND=noninteractive"},
+				Commands:          []string{"apt-get update"},
+				IgnorePython:      true,
+			},
+			expected: []string{
+				"FROM docker.io/library/alpine:3.18\n",
+				"ENV DEBIAN_FRONTEND=noninteractive\n",
+				"RUN apt-get update\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			df, err := b.RenderV2Dockerfile(tt.opts)
+			assert.NoError(t, err)
+
+			for _, expected := range tt.expected {
+				assert.Contains(t, df, expected, "Dockerfile should contain: %s", expected)
+			}
+		})
+	}
+}
+
+// Test that appendToDockerfile correctly renders environment variables and secrets
+func TestAppendToDockerfile_WithEnvVarsAndSecrets(t *testing.T) {
+	cfg := types.AppConfig{}
+	b := &Builder{config: cfg}
+
+	tests := []struct {
+		name     string
+		opts     *BuildOpts
+		expected []string
+	}{
+		{
+			name: "Append EnvVars to existing Dockerfile",
+			opts: &BuildOpts{
+				Dockerfile:   "FROM ubuntu:22.04\nRUN apt-get update",
+				EnvVars:      []string{"NODE_ENV=production", "PORT=8080"},
+				IgnorePython: true,
+			},
+			expected: []string{
+				"FROM ubuntu:22.04\nRUN apt-get update",
+				"ENV NODE_ENV=production\n",
+				"ENV PORT=8080\n",
+			},
+		},
+		{
+			name: "Append BuildSecrets to existing Dockerfile",
+			opts: &BuildOpts{
+				Dockerfile:   "FROM ubuntu:22.04",
+				BuildSecrets: []string{"NPM_TOKEN=token123", "GITHUB_TOKEN=ghp_xxx"},
+				IgnorePython: true,
+			},
+			expected: []string{
+				"FROM ubuntu:22.04",
+				"ARG NPM_TOKEN\n",
+				"ARG GITHUB_TOKEN\n",
+			},
+		},
+		{
+			name: "Append both EnvVars and BuildSecrets",
+			opts: &BuildOpts{
+				Dockerfile:   "FROM ubuntu:22.04\nRUN echo 'building'",
+				EnvVars:      []string{"APP_ENV=staging"},
+				BuildSecrets: []string{"DB_PASSWORD=secret"},
+				IgnorePython: true,
+			},
+			expected: []string{
+				"FROM ubuntu:22.04\nRUN echo 'building'",
+				"ENV APP_ENV=staging\n",
+				"ARG DB_PASSWORD\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := b.appendToDockerfile(tt.opts)
+
+			for _, expected := range tt.expected {
+				assert.Contains(t, result, expected, "Dockerfile should contain: %s", expected)
+			}
+		})
+	}
+}
+
 func TestAppendToDockerfile_WithPythonPackages(t *testing.T) {
 	cfg := types.AppConfig{
 		ImageService: types.ImageServiceConfig{
@@ -492,7 +641,7 @@ func TestCustomDockerfile_IgnorePython_CompleteScenarios(t *testing.T) {
 			commands:          []string{},
 			shouldInstallPy:   false,
 			shouldInstallPkgs: false,
-			description:       "ignore_python=true, no packages, no commands → no Python",
+			description:       "ignore_python=true, no packages, no commands ? no Python",
 		},
 		{
 			name:              "IgnorePython_WithCommands",
@@ -503,7 +652,7 @@ func TestCustomDockerfile_IgnorePython_CompleteScenarios(t *testing.T) {
 			commands:          []string{"apk add nodejs"},
 			shouldInstallPy:   false,
 			shouldInstallPkgs: false,
-			description:       "ignore_python=true, no packages, has commands → no Python, but commands run",
+			description:       "ignore_python=true, no packages, has commands ? no Python, but commands run",
 		},
 		{
 			name:              "IgnorePython_WithPackages",
@@ -514,7 +663,7 @@ func TestCustomDockerfile_IgnorePython_CompleteScenarios(t *testing.T) {
 			commands:          []string{},
 			shouldInstallPy:   true,
 			shouldInstallPkgs: true,
-			description:       "ignore_python=true, has packages → Python installed (packages need it)",
+			description:       "ignore_python=true, has packages ? Python installed (packages need it)",
 		},
 		{
 			name:              "Normal_WithPython",
@@ -525,7 +674,7 @@ func TestCustomDockerfile_IgnorePython_CompleteScenarios(t *testing.T) {
 			commands:          []string{},
 			shouldInstallPy:   true,
 			shouldInstallPkgs: false,
-			description:       "ignore_python=false, no packages → Python installed",
+			description:       "ignore_python=false, no packages ? Python installed",
 		},
 		{
 			name:              "Normal_WithPythonAndPackages",
@@ -536,7 +685,7 @@ func TestCustomDockerfile_IgnorePython_CompleteScenarios(t *testing.T) {
 			commands:          []string{},
 			shouldInstallPy:   true,
 			shouldInstallPkgs: true,
-			description:       "ignore_python=false, has packages → Python and packages installed",
+			description:       "ignore_python=false, has packages ? Python and packages installed",
 		},
 	}
 
@@ -605,7 +754,7 @@ func TestRenderV2Dockerfile_PythonInstallation(t *testing.T) {
 	b := &Builder{config: cfg}
 
 	t.Run("IgnorePython_NoPackages_SkipsPython", func(t *testing.T) {
-		// Matches v1: if IgnorePython && no packages → skip Python entirely
+		// Matches v1: if IgnorePython && no packages ? skip Python entirely
 		opts := &BuildOpts{
 			BaseImageRegistry: "docker.io",
 			BaseImageName:     "library/ubuntu",
@@ -1200,4 +1349,122 @@ func Test_parseBuildSteps(t *testing.T) {
 
 	result := parseBuildSteps(steps, pythonVersion, false)
 	assert.Equal(t, expected, result)
+}
+
+// Test hasWorkToDo correctly identifies when EnvVars or BuildSecrets require a Dockerfile
+func Test_hasWorkToDo(t *testing.T) {
+	config := types.AppConfig{
+		ImageService: types.ImageServiceConfig{
+			PythonVersion: "python3.10",
+			Runner: types.RunnerConfig{
+				BaseImageName:     "base-image",
+				BaseImageRegistry: "docker.io",
+				PythonStandalone: types.PythonStandaloneConfig{
+					InstallScriptTemplate: "echo installing python {{.PythonVersion}}",
+				},
+			},
+		},
+	}
+
+	b := &Builder{
+		config: config,
+	}
+
+	tests := []struct {
+		name     string
+		opts     *BuildOpts
+		expected bool
+		reason   string
+	}{
+		{
+			name: "EnvVars requires work",
+			opts: &BuildOpts{
+				EnvVars:      []string{"FOO=bar", "BAZ=qux"},
+				IgnorePython: true, // Explicitly ignore Python to test EnvVars alone
+			},
+			expected: true,
+			reason:   "EnvVars should trigger Dockerfile generation",
+		},
+		{
+			name: "BuildSecrets requires work",
+			opts: &BuildOpts{
+				BuildSecrets: []string{"SECRET1=value1", "SECRET2=value2"},
+				IgnorePython: true, // Explicitly ignore Python to test secrets alone
+			},
+			expected: true,
+			reason:   "BuildSecrets should trigger Dockerfile generation",
+		},
+		{
+			name: "EnvVars and BuildSecrets together requires work",
+			opts: &BuildOpts{
+				EnvVars:      []string{"FOO=bar"},
+				BuildSecrets: []string{"SECRET1=value1"},
+				IgnorePython: true,
+			},
+			expected: true,
+			reason:   "EnvVars and BuildSecrets together should trigger Dockerfile generation",
+		},
+		{
+			name: "Commands requires work",
+			opts: &BuildOpts{
+				Commands:     []string{"echo hello"},
+				IgnorePython: true,
+			},
+			expected: true,
+			reason:   "Commands should trigger Dockerfile generation",
+		},
+		{
+			name: "BuildSteps requires work",
+			opts: &BuildOpts{
+				BuildSteps:   []BuildStep{{Command: "apt update", Type: "shell"}},
+				IgnorePython: true,
+			},
+			expected: true,
+			reason:   "BuildSteps should trigger Dockerfile generation",
+		},
+		{
+			name: "PythonPackages requires work",
+			opts: &BuildOpts{
+				PythonPackages: []string{"numpy"},
+				PythonVersion:  "python3.10",
+			},
+			expected: true,
+			reason:   "PythonPackages should trigger Dockerfile generation",
+		},
+		{
+			name: "PythonVersion without IgnorePython requires work",
+			opts: &BuildOpts{
+				PythonVersion: "python3.10",
+				IgnorePython:  false,
+			},
+			expected: true,
+			reason:   "PythonVersion without IgnorePython should trigger Dockerfile generation",
+		},
+		{
+			name: "No work needed",
+			opts: &BuildOpts{
+				IgnorePython: true,
+				// No commands, build steps, packages, env vars, or secrets
+			},
+			expected: false,
+			reason:   "Empty opts with IgnorePython should not require work",
+		},
+		{
+			name: "PythonVersion with IgnorePython and no other work",
+			opts: &BuildOpts{
+				PythonVersion: "python3.10",
+				IgnorePython:  true,
+				// No other build steps
+			},
+			expected: false,
+			reason:   "PythonVersion with IgnorePython and no other work should not require Dockerfile",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := b.hasWorkToDo(tt.opts)
+			assert.Equal(t, tt.expected, result, tt.reason)
+		})
+	}
 }
