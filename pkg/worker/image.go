@@ -417,12 +417,12 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
 }
 
-// GetCLIPImageMetadata extracts CLIP image metadata from the archive for a v2 image
+// GetImageMetadata extracts CLIP image metadata from the archive for a v2 image
 // Returns the CLIP metadata directly from the archive (source of truth)
-func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
+func (c *ImageClient) GetImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
 	// Determine the archive path for this image
 	archivePath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
-	
+
 	// Check if the archive exists
 	if _, err := os.Stat(archivePath); os.IsNotExist(err) {
 		// Try cache path as fallback
@@ -431,12 +431,12 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 		} else {
 			archivePath = fmt.Sprintf("%s/%s.clip", c.imageCachePath, imageId)
 		}
-		
+
 		if _, err := os.Stat(archivePath); os.IsNotExist(err) {
 			return nil, false
 		}
 	}
-	
+
 	// Extract metadata from the CLIP archive
 	archiver := clip.NewClipArchiver()
 	meta, err := archiver.ExtractMetadata(archivePath)
@@ -444,14 +444,14 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to extract metadata from clip archive")
 		return nil, false
 	}
-	
+
 	// Check if this is an OCI archive with metadata
 	if meta != nil && meta.StorageInfo != nil {
 		if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok && ociInfo.ImageMetadata != nil {
 			return ociInfo.ImageMetadata, true
 		}
 	}
-	
+
 	return nil, false
 }
 

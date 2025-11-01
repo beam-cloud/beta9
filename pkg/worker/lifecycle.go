@@ -386,8 +386,7 @@ func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec,
 // This is ONLY used for v2 images where we don't have an unpacked bundle with config.json.
 // V1 images always have a config.json, so if we're here, it's a v2 image.
 func (s *Worker) deriveSpecFromV2Image(request *types.ContainerRequest) (*specs.Spec, error) {
-	// Extract metadata from CLIP archive
-	clipMeta, ok := s.imageClient.GetCLIPImageMetadata(request.ImageId)
+	metadata, ok := s.imageClient.GetImageMetadata(request.ImageId)
 	if !ok {
 		log.Warn().
 			Str("image_id", request.ImageId).
@@ -398,14 +397,13 @@ func (s *Worker) deriveSpecFromV2Image(request *types.ContainerRequest) (*specs.
 	log.Info().
 		Str("image_id", request.ImageId).
 		Msg("using metadata from v2 clip archive")
-	
-	return s.buildSpecFromCLIPMetadata(clipMeta), nil
+
+	return s.buildSpecFromMetadata(metadata), nil
 }
 
-
-// buildSpecFromCLIPMetadata constructs an OCI spec from CLIP image metadata
+// buildSpecFromMetadata constructs an OCI spec from image metadata
 // This is the primary path for v2 images with embedded metadata
-func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *specs.Spec {
+func (s *Worker) buildSpecFromMetadata(metadata *clipCommon.ImageMetadata) *specs.Spec {
 	spec := specs.Spec{
 		Process: &specs.Process{
 			Env: []string{},
@@ -413,25 +411,27 @@ func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *
 	}
 
 	// CLIP metadata has a flat structure with all fields at the top level
-	if len(clipMeta.Env) > 0 {
-		spec.Process.Env = clipMeta.Env
+	if len(metadata.Env) > 0 {
+		spec.Process.Env = metadata.Env
 	}
-	if clipMeta.WorkingDir != "" {
-		spec.Process.Cwd = clipMeta.WorkingDir
+
+	if metadata.WorkingDir != "" {
+		spec.Process.Cwd = metadata.WorkingDir
 	}
-	if clipMeta.User != "" {
-		spec.Process.User.Username = clipMeta.User
+
+	if metadata.User != "" {
+		spec.Process.User.Username = metadata.User
 	}
+
 	// Combine Entrypoint and Cmd, or use Cmd alone
-	if len(clipMeta.Entrypoint) > 0 {
-		spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
-	} else if len(clipMeta.Cmd) > 0 {
-		spec.Process.Args = clipMeta.Cmd
+	if len(metadata.Entrypoint) > 0 {
+		spec.Process.Args = append(metadata.Entrypoint, metadata.Cmd...)
+	} else if len(metadata.Cmd) > 0 {
+		spec.Process.Args = metadata.Cmd
 	}
 
 	return &spec
 }
-
 
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {

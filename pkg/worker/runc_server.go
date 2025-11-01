@@ -341,24 +341,27 @@ func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *Co
 	spec := s.baseConfigSpec
 
 	// First try to get cached metadata from CLIP archive (v2 images)
-	if clipMeta, ok := s.imageClient.GetCLIPImageMetadata(instance.Request.ImageId); ok {
+	if metadata, ok := s.imageClient.GetImageMetadata(instance.Request.ImageId); ok {
 		log.Info().Str("image_id", instance.Request.ImageId).Msg("using cached image metadata from clip archive for initial spec")
-		
+
 		// CLIP metadata has a flat structure with all fields at the top level
-		if len(clipMeta.Env) > 0 {
-			spec.Process.Env = append(spec.Process.Env, clipMeta.Env...)
+		if len(metadata.Env) > 0 {
+			spec.Process.Env = append(spec.Process.Env, metadata.Env...)
 		}
-		if clipMeta.WorkingDir != "" {
-			spec.Process.Cwd = clipMeta.WorkingDir
+
+		if metadata.WorkingDir != "" {
+			spec.Process.Cwd = metadata.WorkingDir
 		}
-		if clipMeta.User != "" {
-			spec.Process.User.Username = clipMeta.User
+
+		if metadata.User != "" {
+			spec.Process.User.Username = metadata.User
 		}
+
 		// Set default args from Cmd if Entrypoint is not set, or combine them
-		if len(clipMeta.Entrypoint) > 0 {
-			spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
-		} else if len(clipMeta.Cmd) > 0 {
-			spec.Process.Args = clipMeta.Cmd
+		if len(metadata.Entrypoint) > 0 {
+			spec.Process.Args = append(metadata.Entrypoint, metadata.Cmd...)
+		} else if len(metadata.Cmd) > 0 {
+			spec.Process.Args = metadata.Cmd
 		}
 	} else {
 		// Fallback: use runtime inspection for v1 images or when metadata is not cached
@@ -367,6 +370,7 @@ func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *Co
 		if instance.Request.BuildOptions.SourceImage != nil {
 			imageRef = *instance.Request.BuildOptions.SourceImage
 		}
+
 		creds = instance.Request.BuildOptions.SourceImageCreds
 
 		if imageRef != "" {
@@ -375,7 +379,7 @@ func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *Co
 				log.Warn().Str("image_ref", imageRef).Err(err).Msg("failed to inspect image for initial spec; proceeding with base config only")
 			} else {
 				log.Info().Str("image_ref", imageRef).Msg("using runtime inspection for initial spec")
-				
+
 				// Apply env from skopeo output if available
 				if len(imgMeta.Env) > 0 {
 					spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
@@ -388,6 +392,7 @@ func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *Co
 	if err != nil {
 		return err
 	}
+
 	return os.WriteFile(destPath, b, 0644)
 }
 

@@ -65,7 +65,7 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 		// Without a real CLIP archive, readBundleConfig returns nil gracefully
 		initialSpec, err := worker.readBundleConfig(request)
 		require.NoError(t, err)
-		
+
 		// Spec will be nil without archive (real archives tested in integration tests)
 		assert.Nil(t, initialSpec, "Should return nil when CLIP archive is not present")
 		t.Logf("✅ V2 image correctly attempts to extract from CLIP archive")
@@ -215,8 +215,8 @@ func TestCachedImageMetadata(t *testing.T) {
 	t.Run("UsesCachedMetadata", func(t *testing.T) {
 		// Note: In real use, metadata would be extracted from the CLIP archive on-demand.
 		// Since we don't have actual archives in tests, this test verifies the fallback path.
-		// For v2 images with metadata, GetCLIPImageMetadata() would extract it from the archive.
-		
+		// For v2 images with metadata, GetImageMetadata() would extract it from the archive.
+
 		imageId := "v2-cached-image-123"
 		request := &types.ContainerRequest{
 			ContainerId: "test-container-cached",
@@ -247,20 +247,6 @@ func TestCachedImageMetadata(t *testing.T) {
 		assert.Nil(t, spec, "Should return nil spec when archive metadata is missing")
 
 		t.Logf("✅ Gracefully handled missing v2 archive")
-	})
-}
-
-// TestGetCLIPImageMetadata tests the CLIP image metadata extraction from archives
-func TestGetCLIPImageMetadata(t *testing.T) {
-	t.Run("ExtractsFromArchiveWhenPresent", func(t *testing.T) {
-		// GetCLIPImageMetadata extracts metadata on-demand from CLIP archives.
-		// This test would require creating an actual CLIP archive file.
-		// In real usage:
-		// 1. The archive is downloaded/cached at /images/{imageId}.clip
-		// 2. GetCLIPImageMetadata() extracts OCIStorageInfo.ImageMetadata from it
-		// 3. The metadata is used to build the OCI spec
-		// Integration tests verify this with actual archives.
-		t.Skip("Requires actual CLIP archive file - tested in integration tests")
 	})
 }
 
