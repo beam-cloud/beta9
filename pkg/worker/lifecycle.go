@@ -384,14 +384,22 @@ func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec,
 // deriveSpecFromSourceImage creates an OCI spec from the source image metadata.
 // This is used for v2 images where we don't have an unpacked bundle with config.json.
 func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*specs.Spec, error) {
-	// Determine source image reference and credentials
+	// First try to get cached metadata from CLIP archive (v2 images)
+	if imgMeta, ok := s.imageClient.GetImageMetadata(request.ImageId); ok {
+		log.Info().
+			Str("image_id", request.ImageId).
+			Msg("using cached image metadata from clip archive")
+		return s.buildSpecFromImageMetadata(&imgMeta), nil
+	}
+
+	// Fallback: determine source image reference and credentials for runtime lookup
 	sourceImageRef, sourceImageCreds := s.getSourceImageInfo(request)
 	if sourceImageRef == "" {
-		log.Warn().Str("image_id", request.ImageId).Msg("no source image reference, using base spec")
+		log.Warn().Str("image_id", request.ImageId).Msg("no source image reference or cached metadata, using base spec")
 		return nil, nil
 	}
 
-	// Inspect source image with timeout
+	// Inspect source image with timeout (fallback for v1 images or when metadata is not cached)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -408,7 +416,7 @@ func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*sp
 	log.Info().
 		Str("image_id", request.ImageId).
 		Str("source_image", sourceImageRef).
-		Msg("derived spec from source image")
+		Msg("derived spec from source image via runtime lookup")
 
 	// Build spec from image metadata
 	return s.buildSpecFromImageMetadata(&imgMeta), nil

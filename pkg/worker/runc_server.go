@@ -334,24 +334,17 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 }
 
 // writeInitialSpecFromImage builds an initial_config.json using the base runc config
-// plus full configuration (env, workdir, user, cmd, entrypoint) from the source image (via skopeo inspect).
+// plus full configuration (env, workdir, user, cmd, entrypoint) from the source image.
+// First tries to use cached metadata from CLIP archive, falls back to skopeo inspect if not available.
 func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *ContainerInstance, destPath string) error {
-	// Determine image reference
-	imageRef := ""
-	creds := ""
-	if instance.Request.BuildOptions.SourceImage != nil {
-		imageRef = *instance.Request.BuildOptions.SourceImage
-	}
-	creds = instance.Request.BuildOptions.SourceImageCreds
-
 	// Start from the base config
 	spec := s.baseConfigSpec
 
-	if imageRef != "" {
-		imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, imageRef, creds, nil)
-		if err != nil {
-			log.Warn().Str("image_ref", imageRef).Err(err).Msg("failed to inspect image for initial spec; proceeding with base config only")
-		} else if imgMeta.Config != nil {
+	// First try to get cached metadata from CLIP archive (v2 images)
+	if imgMeta, ok := s.imageClient.GetImageMetadata(instance.Request.ImageId); ok {
+		log.Info().Str("image_id", instance.Request.ImageId).Msg("using cached image metadata from clip archive for initial spec")
+		
+		if imgMeta.Config != nil {
 			// Apply full config from the image
 			if len(imgMeta.Config.Env) > 0 {
 				spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
@@ -371,6 +364,45 @@ func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *Co
 		} else if len(imgMeta.Env) > 0 {
 			// Fallback to legacy Env field if Config is not available
 			spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
+		}
+	} else {
+		// Fallback: use runtime inspection for v1 images or when metadata is not cached
+		imageRef := ""
+		creds := ""
+		if instance.Request.BuildOptions.SourceImage != nil {
+			imageRef = *instance.Request.BuildOptions.SourceImage
+		}
+		creds = instance.Request.BuildOptions.SourceImageCreds
+
+		if imageRef != "" {
+			imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, imageRef, creds, nil)
+			if err != nil {
+				log.Warn().Str("image_ref", imageRef).Err(err).Msg("failed to inspect image for initial spec; proceeding with base config only")
+			} else {
+				log.Info().Str("image_ref", imageRef).Msg("using runtime inspection for initial spec")
+				
+				if imgMeta.Config != nil {
+					// Apply full config from the image
+					if len(imgMeta.Config.Env) > 0 {
+						spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
+					}
+					if imgMeta.Config.WorkingDir != "" {
+						spec.Process.Cwd = imgMeta.Config.WorkingDir
+					}
+					if imgMeta.Config.User != "" {
+						spec.Process.User.Username = imgMeta.Config.User
+					}
+					// Set default args from Cmd if Entrypoint is not set, or combine them
+					if len(imgMeta.Config.Entrypoint) > 0 {
+						spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
+					} else if len(imgMeta.Config.Cmd) > 0 {
+						spec.Process.Args = imgMeta.Config.Cmd
+					}
+				} else if len(imgMeta.Env) > 0 {
+					// Fallback to legacy Env field if Config is not available
+					spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
+				}
+			}
 		}
 	}
 

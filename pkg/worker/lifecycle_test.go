@@ -49,7 +49,9 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 		imageMountPath:     "/tmp/test-images",
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		imageClient: &ImageClient{
-			skopeoClient: mockSkopeo,
+			skopeoClient:    mockSkopeo,
+			v2ImageRefs:     common.NewSafeMap[string](),
+			v2ImageMetadata: common.NewSafeMap[common.ImageMetadata](),
 		},
 		runcServer: &RunCServer{
 			baseConfigSpec: getTestBaseSpec(),
@@ -260,9 +262,10 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 	}
 
 	imageClient := &ImageClient{
-		skopeoClient: mockSkopeo,
-		config:       config,
-		v2ImageRefs:  common.NewSafeMap[string](),
+		skopeoClient:    mockSkopeo,
+		config:          config,
+		v2ImageRefs:     common.NewSafeMap[string](),
+		v2ImageMetadata: common.NewSafeMap[common.ImageMetadata](),
 	}
 
 	worker := &Worker{
@@ -359,6 +362,154 @@ func (m *mockSkopeoClient) Copy(ctx context.Context, source, dest, creds string,
 		return m.copyFunc(ctx, source, dest, creds, logger)
 	}
 	return nil
+}
+
+// TestCachedImageMetadata tests that cached metadata from CLIP archives is used correctly
+func TestCachedImageMetadata(t *testing.T) {
+	config := types.AppConfig{
+		ImageService: types.ImageServiceConfig{
+			ClipVersion: 2,
+		},
+		Worker: types.WorkerConfig{},
+	}
+
+	// Create mock skopeo client (should NOT be called when metadata is cached)
+	skopeoCallCount := 0
+	mockSkopeo := &mockSkopeoClient{
+		inspectFunc: func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {
+			skopeoCallCount++
+			t.Logf("Skopeo.Inspect called (count: %d) - this should NOT happen when metadata is cached", skopeoCallCount)
+			return common.ImageMetadata{}, nil
+		},
+	}
+
+	imageClient := &ImageClient{
+		skopeoClient:    mockSkopeo,
+		config:          config,
+		v2ImageRefs:     common.NewSafeMap[string](),
+		v2ImageMetadata: common.NewSafeMap[common.ImageMetadata](),
+	}
+
+	worker := &Worker{
+		config:             config,
+		imageMountPath:     "/tmp/test-images",
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		imageClient:        imageClient,
+		runcServer: &RunCServer{
+			baseConfigSpec: getTestBaseSpec(),
+		},
+	}
+
+	// Simulate cached metadata from CLIP archive
+	imageId := "v2-cached-image-123"
+	cachedMetadata := common.ImageMetadata{
+		Name:         "cached-image",
+		Architecture: "amd64",
+		Os:           "linux",
+		Digest:       "sha256:abc123",
+		Config: &common.ImageConfig{
+			Env: []string{
+				"PATH=/usr/local/bin:/usr/bin:/bin",
+				"LANG=en_US.UTF-8",
+			},
+			WorkingDir: "/app",
+			User:       "nobody",
+			Cmd:        []string{"/bin/sh", "-c", "echo hello"},
+			Entrypoint: []string{"/entrypoint.sh"},
+		},
+	}
+	imageClient.v2ImageMetadata.Set(imageId, cachedMetadata)
+
+	t.Run("UsesCachedMetadata", func(t *testing.T) {
+		request := &types.ContainerRequest{
+			ContainerId: "test-container-cached",
+			ImageId:     imageId,
+		}
+
+		// Derive spec - should use cached metadata without calling skopeo
+		spec, err := worker.deriveSpecFromSourceImage(request)
+		require.NoError(t, err)
+		require.NotNil(t, spec)
+
+		// Verify skopeo was NOT called
+		assert.Equal(t, 0, skopeoCallCount, "Skopeo.Inspect should not be called when metadata is cached")
+
+		// Verify the spec has the cached metadata
+		assert.Contains(t, spec.Process.Env, "PATH=/usr/local/bin:/usr/bin:/bin")
+		assert.Contains(t, spec.Process.Env, "LANG=en_US.UTF-8")
+		assert.Equal(t, "/app", spec.Process.Cwd)
+		assert.Equal(t, "nobody", spec.Process.User.Username)
+		assert.Equal(t, []string{"/entrypoint.sh", "/bin/sh", "-c", "echo hello"}, spec.Process.Args)
+
+		t.Logf("✅ Successfully used cached metadata for image %s", imageId)
+	})
+
+	t.Run("FallbackToSkopeoWhenNotCached", func(t *testing.T) {
+		// Reset skopeo call count
+		skopeoCallCount = 0
+
+		// Update mock to return valid metadata
+		mockSkopeo.inspectFunc = func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {
+			skopeoCallCount++
+			return common.ImageMetadata{
+				Name:         "fallback-image",
+				Architecture: "amd64",
+				Os:           "linux",
+				Config: &common.ImageConfig{
+					Env: []string{"PATH=/usr/bin:/bin"},
+				},
+			}, nil
+		}
+
+		// Cache source image reference (but not metadata)
+		uncachedImageId := "v2-uncached-image-456"
+		sourceImage := "docker.io/library/alpine:latest"
+		imageClient.v2ImageRefs.Set(uncachedImageId, sourceImage)
+
+		request := &types.ContainerRequest{
+			ContainerId: "test-container-uncached",
+			ImageId:     uncachedImageId,
+		}
+
+		// Derive spec - should fallback to skopeo
+		spec, err := worker.deriveSpecFromSourceImage(request)
+		require.NoError(t, err)
+		require.NotNil(t, spec)
+
+		// Verify skopeo WAS called as fallback
+		assert.Equal(t, 1, skopeoCallCount, "Skopeo.Inspect should be called when metadata is not cached")
+
+		t.Logf("✅ Successfully fell back to skopeo for image without cached metadata")
+	})
+}
+
+// TestGetImageMetadata tests the image metadata retrieval
+func TestGetImageMetadata(t *testing.T) {
+	imageClient := &ImageClient{
+		v2ImageMetadata: common.NewSafeMap[common.ImageMetadata](),
+	}
+
+	imageId := "test-image-123"
+	testMetadata := common.ImageMetadata{
+		Name:         "test-image",
+		Architecture: "amd64",
+		Os:           "linux",
+	}
+
+	t.Run("ReturnsMetadataWhenCached", func(t *testing.T) {
+		imageClient.v2ImageMetadata.Set(imageId, testMetadata)
+
+		meta, ok := imageClient.GetImageMetadata(imageId)
+		assert.True(t, ok, "Should find cached metadata")
+		assert.Equal(t, testMetadata.Name, meta.Name)
+		assert.Equal(t, testMetadata.Architecture, meta.Architecture)
+		assert.Equal(t, testMetadata.Os, meta.Os)
+	})
+
+	t.Run("ReturnsNotFoundWhenNotCached", func(t *testing.T) {
+		_, ok := imageClient.GetImageMetadata("non-existent-image")
+		assert.False(t, ok, "Should not find non-existent metadata")
+	})
 }
 
 // Get a base test spec
