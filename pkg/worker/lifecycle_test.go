@@ -31,13 +31,9 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 				Name:         "ubuntu",
 				Architecture: "amd64",
 				Os:           "linux",
-				Config: &common.ImageConfig{
-					Env: []string{
-						"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-						"UBUNTU_CODENAME=focal",
-					},
-					WorkingDir: "/",
-					Cmd:        []string{"/bin/bash"},
+				Env: []string{
+					"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+					"UBUNTU_CODENAME=focal",
 				},
 			}, nil
 		},
@@ -249,12 +245,9 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 				Name:         "ubuntu",
 				Architecture: "amd64",
 				Os:           "linux",
-				Config: &common.ImageConfig{
-					Env: []string{
-						"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-						"HOME=/root",
-					},
-					WorkingDir: "/",
+				Env: []string{
+					"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+					"HOME=/root",
 				},
 			}, nil
 		},
@@ -430,9 +423,7 @@ func TestCachedImageMetadata(t *testing.T) {
 				Name:         "fallback-image",
 				Architecture: "amd64",
 				Os:           "linux",
-				Config: &common.ImageConfig{
-					Env: []string{"PATH=/usr/bin:/bin"},
-				},
+				Env:          []string{"PATH=/usr/bin:/bin"},
 			}, nil
 		}
 

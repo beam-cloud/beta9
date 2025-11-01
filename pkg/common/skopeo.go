@@ -54,22 +54,6 @@ type ImageMetadata struct {
 		Annotations any    `json:"Annotations"`
 	} `json:"LayersData"`
 	Env []string `json:"Env"`
-	// Config is the OCI configuration from skopeo's JSON output
-	// NOTE: This is only used for the v1/legacy skopeo inspection path.
-	// For v2 images, we use CLIP's ImageMetadata directly, which has these fields at the top level.
-	Config *ImageConfig `json:"Config"`
-}
-
-// ImageConfig represents the OCI image configuration from skopeo output
-// This nested structure is only used for v1/legacy images inspected via skopeo.
-// V2 CLIP images have this data at the top level of their ImageMetadata.
-type ImageConfig struct {
-	User         string              `json:"User"`
-	ExposedPorts map[string]struct{} `json:"ExposedPorts"`
-	Env          []string            `json:"Env"`
-	Entrypoint   []string            `json:"Entrypoint"`
-	Cmd          []string            `json:"Cmd"`
-	WorkingDir   string              `json:"WorkingDir"`
 }
 
 func NewSkopeoClient(config types.AppConfig) SkopeoClient {

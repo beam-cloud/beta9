@@ -480,24 +480,8 @@ func (s *Worker) buildSpecFromImageMetadata(imgMeta *common.ImageMetadata) *spec
 		},
 	}
 
-	// Use Config if available, otherwise fallback to legacy Env field
-	if imgMeta.Config != nil {
-		if len(imgMeta.Config.Env) > 0 {
-			spec.Process.Env = imgMeta.Config.Env
-		}
-		if imgMeta.Config.WorkingDir != "" {
-			spec.Process.Cwd = imgMeta.Config.WorkingDir
-		}
-		if imgMeta.Config.User != "" {
-			spec.Process.User.Username = imgMeta.Config.User
-		}
-		// Combine Entrypoint and Cmd, or use Cmd alone
-		if len(imgMeta.Config.Entrypoint) > 0 {
-			spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
-		} else if len(imgMeta.Config.Cmd) > 0 {
-			spec.Process.Args = imgMeta.Config.Cmd
-		}
-	} else if len(imgMeta.Env) > 0 {
+	// Use Env field from skopeo output
+	if len(imgMeta.Env) > 0 {
 		spec.Process.Env = imgMeta.Env
 	}
 

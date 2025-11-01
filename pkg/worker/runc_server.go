@@ -376,25 +376,8 @@ func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *Co
 			} else {
 				log.Info().Str("image_ref", imageRef).Msg("using runtime inspection for initial spec")
 				
-				if imgMeta.Config != nil {
-					// Apply full config from the image
-					if len(imgMeta.Config.Env) > 0 {
-						spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
-					}
-					if imgMeta.Config.WorkingDir != "" {
-						spec.Process.Cwd = imgMeta.Config.WorkingDir
-					}
-					if imgMeta.Config.User != "" {
-						spec.Process.User.Username = imgMeta.Config.User
-					}
-					// Set default args from Cmd if Entrypoint is not set, or combine them
-					if len(imgMeta.Config.Entrypoint) > 0 {
-						spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
-					} else if len(imgMeta.Config.Cmd) > 0 {
-						spec.Process.Args = imgMeta.Config.Cmd
-					}
-				} else if len(imgMeta.Env) > 0 {
-					// Fallback to legacy Env field if Config is not available
+				// Apply env from skopeo output if available
+				if len(imgMeta.Env) > 0 {
 					spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
 				}
 			}
