@@ -306,9 +306,9 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 
 	// Install Python if needed
 	// Match the behavior from RenderV2Dockerfile and setupPythonEnv:
-	// - If ignore_python=true AND no packages ? skip Python entirely
-	// - If ignore_python=true BUT has packages ? install Python (packages need it)
-	// - If ignore_python=false ? install Python when version specified
+	// - If ignore_python=true AND no packages -> skip Python entirely
+	// - If ignore_python=true BUT has packages -> install Python (packages need it)
+	// - If ignore_python=false -> install Python when version specified
 	shouldInstallPython := pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0)
 
 	if shouldInstallPython {
