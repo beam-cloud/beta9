@@ -360,12 +360,7 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 		return nil
 	}
 
-	log.Debug().
-		Str("container_id", request.ContainerId).
-		Str("image_id", request.ImageId).
-		Msg("checking for image credentials")
-
-	secretName, secretId, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
+	secretName, _, err := s.backendRepo.GetImageCredentialSecret(context.TODO(), request.ImageId)
 	if err != nil {
 		log.Debug().
 			Err(err).
@@ -376,19 +371,8 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 	}
 
 	if secretName == "" {
-		log.Debug().
-			Str("container_id", request.ContainerId).
-			Str("image_id", request.ImageId).
-			Msg("no credential secret found for image")
 		return nil
 	}
-
-	log.Debug().
-		Str("container_id", request.ContainerId).
-		Str("image_id", request.ImageId).
-		Str("secret_name", secretName).
-		Str("secret_id", secretId).
-		Msg("found credential secret, retrieving secret value")
 
 	secret, err := s.backendRepo.GetSecretByNameDecrypted(context.TODO(), &request.Workspace, secretName)
 	if err != nil {
@@ -402,6 +386,7 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 	}
 
 	request.ImageCredentials = secret.Value
+
 	log.Info().
 		Str("container_id", request.ContainerId).
 		Str("image_id", request.ImageId).

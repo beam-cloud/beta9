@@ -288,6 +288,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				if ociInfo.RegistryURL == "" {
 					ociInfo.RegistryURL = "https://docker.io"
 				}
+
 				// Build the full image reference from OCI storage info
 				if ociInfo.Repository != "" && ociInfo.Reference != "" {
 					// Convert registry URL to registry host (strip https://)
