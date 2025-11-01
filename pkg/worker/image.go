@@ -131,9 +131,6 @@ type ImageClient struct {
 	logger             *ContainerLogger
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs *common.SafeMap[string]
-	// Cache image metadata from CLIP archives for v2 images (imageId -> CLIP ImageMetadata)
-	// We use CLIP's metadata directly as the source of truth rather than converting to beta9's format
-	clipImageMetadata *common.SafeMap[*clipCommon.ImageMetadata]
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
@@ -154,7 +151,6 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		v2ImageRefs:        common.NewSafeMap[string](),
-		clipImageMetadata:  common.NewSafeMap[*clipCommon.ImageMetadata](),
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
@@ -303,11 +299,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 					log.Info().Str("image_id", imageId).Str("source_image", sourceRef).Msg("cached source image reference from clip metadata")
 				}
 
-				// Extract and cache embedded image metadata to avoid runtime lookups
-				// We store CLIP's metadata directly as the source of truth
+				// Log that metadata is available in the archive
 				if ociInfo.ImageMetadata != nil {
-					c.clipImageMetadata.Set(imageId, ociInfo.ImageMetadata)
-					log.Info().Str("image_id", imageId).Msg("cached image metadata from clip archive")
+					log.Info().Str("image_id", imageId).Msg("image metadata available in clip archive")
 				}
 			}
 		}
@@ -423,10 +417,42 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
 }
 
-// GetCLIPImageMetadata retrieves the cached CLIP image metadata for a v2 image
-// Returns the CLIP metadata directly (source of truth) and a boolean indicating if it was found
+// GetCLIPImageMetadata extracts CLIP image metadata from the archive for a v2 image
+// Returns the CLIP metadata directly from the archive (source of truth)
 func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
-	return c.clipImageMetadata.Get(imageId)
+	// Determine the archive path for this image
+	archivePath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
+	
+	// Check if the archive exists
+	if _, err := os.Stat(archivePath); os.IsNotExist(err) {
+		// Try cache path as fallback
+		if c.registry != nil && c.registry.ImageFileExtension != "" {
+			archivePath = fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
+		} else {
+			archivePath = fmt.Sprintf("%s/%s.clip", c.imageCachePath, imageId)
+		}
+		
+		if _, err := os.Stat(archivePath); os.IsNotExist(err) {
+			return nil, false
+		}
+	}
+	
+	// Extract metadata from the CLIP archive
+	archiver := clip.NewClipArchiver()
+	meta, err := archiver.ExtractMetadata(archivePath)
+	if err != nil {
+		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to extract metadata from clip archive")
+		return nil, false
+	}
+	
+	// Check if this is an OCI archive with metadata
+	if meta != nil && meta.StorageInfo != nil {
+		if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok && ociInfo.ImageMetadata != nil {
+			return ociInfo.ImageMetadata, true
+		}
+	}
+	
+	return nil, false
 }
 
 // createCredentialProvider creates a CLIP credential provider from JSON credentials
