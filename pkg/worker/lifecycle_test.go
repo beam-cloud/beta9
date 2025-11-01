@@ -9,6 +9,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -49,9 +50,9 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 		imageMountPath:     "/tmp/test-images",
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		imageClient: &ImageClient{
-			skopeoClient:    mockSkopeo,
-			v2ImageRefs:     common.NewSafeMap[string](),
-			v2ImageMetadata: common.NewSafeMap[common.ImageMetadata](),
+			skopeoClient:      mockSkopeo,
+			v2ImageRefs:       common.NewSafeMap[string](),
+			clipImageMetadata: common.NewSafeMap[*clipCommon.ImageMetadata](),
 		},
 		runcServer: &RunCServer{
 			baseConfigSpec: getTestBaseSpec(),
@@ -262,10 +263,10 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 	}
 
 	imageClient := &ImageClient{
-		skopeoClient:    mockSkopeo,
-		config:          config,
-		v2ImageRefs:     common.NewSafeMap[string](),
-		v2ImageMetadata: common.NewSafeMap[common.ImageMetadata](),
+		skopeoClient:      mockSkopeo,
+		config:            config,
+		v2ImageRefs:       common.NewSafeMap[string](),
+		clipImageMetadata: common.NewSafeMap[*clipCommon.ImageMetadata](),
 	}
 
 	worker := &Worker{
@@ -384,10 +385,10 @@ func TestCachedImageMetadata(t *testing.T) {
 	}
 
 	imageClient := &ImageClient{
-		skopeoClient:    mockSkopeo,
-		config:          config,
-		v2ImageRefs:     common.NewSafeMap[string](),
-		v2ImageMetadata: common.NewSafeMap[common.ImageMetadata](),
+		skopeoClient:      mockSkopeo,
+		config:            config,
+		v2ImageRefs:       common.NewSafeMap[string](),
+		clipImageMetadata: common.NewSafeMap[*clipCommon.ImageMetadata](),
 	}
 
 	worker := &Worker{
@@ -400,25 +401,23 @@ func TestCachedImageMetadata(t *testing.T) {
 		},
 	}
 
-	// Simulate cached metadata from CLIP archive
+	// Simulate cached CLIP metadata from archive
 	imageId := "v2-cached-image-123"
-	cachedMetadata := common.ImageMetadata{
+	cachedMetadata := &clipCommon.ImageMetadata{
 		Name:         "cached-image",
 		Architecture: "amd64",
 		Os:           "linux",
 		Digest:       "sha256:abc123",
-		Config: &common.ImageConfig{
-			Env: []string{
-				"PATH=/usr/local/bin:/usr/bin:/bin",
-				"LANG=en_US.UTF-8",
-			},
-			WorkingDir: "/app",
-			User:       "nobody",
-			Cmd:        []string{"/bin/sh", "-c", "echo hello"},
-			Entrypoint: []string{"/entrypoint.sh"},
+		Env: []string{
+			"PATH=/usr/local/bin:/usr/bin:/bin",
+			"LANG=en_US.UTF-8",
 		},
+		WorkingDir: "/app",
+		User:       "nobody",
+		Cmd:        []string{"/bin/sh", "-c", "echo hello"},
+		Entrypoint: []string{"/entrypoint.sh"},
 	}
-	imageClient.v2ImageMetadata.Set(imageId, cachedMetadata)
+	imageClient.clipImageMetadata.Set(imageId, cachedMetadata)
 
 	t.Run("UsesCachedMetadata", func(t *testing.T) {
 		request := &types.ContainerRequest{
@@ -434,14 +433,14 @@ func TestCachedImageMetadata(t *testing.T) {
 		// Verify skopeo was NOT called
 		assert.Equal(t, 0, skopeoCallCount, "Skopeo.Inspect should not be called when metadata is cached")
 
-		// Verify the spec has the cached metadata
+		// Verify the spec has the cached CLIP metadata
 		assert.Contains(t, spec.Process.Env, "PATH=/usr/local/bin:/usr/bin:/bin")
 		assert.Contains(t, spec.Process.Env, "LANG=en_US.UTF-8")
 		assert.Equal(t, "/app", spec.Process.Cwd)
 		assert.Equal(t, "nobody", spec.Process.User.Username)
 		assert.Equal(t, []string{"/entrypoint.sh", "/bin/sh", "-c", "echo hello"}, spec.Process.Args)
 
-		t.Logf("✅ Successfully used cached metadata for image %s", imageId)
+		t.Logf("✅ Successfully used cached CLIP metadata for image %s", imageId)
 	})
 
 	t.Run("FallbackToSkopeoWhenNotCached", func(t *testing.T) {
@@ -483,23 +482,23 @@ func TestCachedImageMetadata(t *testing.T) {
 	})
 }
 
-// TestGetImageMetadata tests the image metadata retrieval
-func TestGetImageMetadata(t *testing.T) {
+// TestGetCLIPImageMetadata tests the CLIP image metadata retrieval
+func TestGetCLIPImageMetadata(t *testing.T) {
 	imageClient := &ImageClient{
-		v2ImageMetadata: common.NewSafeMap[common.ImageMetadata](),
+		clipImageMetadata: common.NewSafeMap[*clipCommon.ImageMetadata](),
 	}
 
 	imageId := "test-image-123"
-	testMetadata := common.ImageMetadata{
+	testMetadata := &clipCommon.ImageMetadata{
 		Name:         "test-image",
 		Architecture: "amd64",
 		Os:           "linux",
 	}
 
 	t.Run("ReturnsMetadataWhenCached", func(t *testing.T) {
-		imageClient.v2ImageMetadata.Set(imageId, testMetadata)
+		imageClient.clipImageMetadata.Set(imageId, testMetadata)
 
-		meta, ok := imageClient.GetImageMetadata(imageId)
+		meta, ok := imageClient.GetCLIPImageMetadata(imageId)
 		assert.True(t, ok, "Should find cached metadata")
 		assert.Equal(t, testMetadata.Name, meta.Name)
 		assert.Equal(t, testMetadata.Architecture, meta.Architecture)
@@ -507,7 +506,7 @@ func TestGetImageMetadata(t *testing.T) {
 	})
 
 	t.Run("ReturnsNotFoundWhenNotCached", func(t *testing.T) {
-		_, ok := imageClient.GetImageMetadata("non-existent-image")
+		_, ok := imageClient.GetCLIPImageMetadata("non-existent-image")
 		assert.False(t, ok, "Should not find non-existent metadata")
 	})
 }

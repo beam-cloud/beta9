@@ -341,29 +341,24 @@ func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *Co
 	spec := s.baseConfigSpec
 
 	// First try to get cached metadata from CLIP archive (v2 images)
-	if imgMeta, ok := s.imageClient.GetImageMetadata(instance.Request.ImageId); ok {
+	if clipMeta, ok := s.imageClient.GetCLIPImageMetadata(instance.Request.ImageId); ok {
 		log.Info().Str("image_id", instance.Request.ImageId).Msg("using cached image metadata from clip archive for initial spec")
 		
-		if imgMeta.Config != nil {
-			// Apply full config from the image
-			if len(imgMeta.Config.Env) > 0 {
-				spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
-			}
-			if imgMeta.Config.WorkingDir != "" {
-				spec.Process.Cwd = imgMeta.Config.WorkingDir
-			}
-			if imgMeta.Config.User != "" {
-				spec.Process.User.Username = imgMeta.Config.User
-			}
-			// Set default args from Cmd if Entrypoint is not set, or combine them
-			if len(imgMeta.Config.Entrypoint) > 0 {
-				spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
-			} else if len(imgMeta.Config.Cmd) > 0 {
-				spec.Process.Args = imgMeta.Config.Cmd
-			}
-		} else if len(imgMeta.Env) > 0 {
-			// Fallback to legacy Env field if Config is not available
-			spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
+		// CLIP metadata has a flat structure with all fields at the top level
+		if len(clipMeta.Env) > 0 {
+			spec.Process.Env = append(spec.Process.Env, clipMeta.Env...)
+		}
+		if clipMeta.WorkingDir != "" {
+			spec.Process.Cwd = clipMeta.WorkingDir
+		}
+		if clipMeta.User != "" {
+			spec.Process.User.Username = clipMeta.User
+		}
+		// Set default args from Cmd if Entrypoint is not set, or combine them
+		if len(clipMeta.Entrypoint) > 0 {
+			spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
+		} else if len(clipMeta.Cmd) > 0 {
+			spec.Process.Args = clipMeta.Cmd
 		}
 	} else {
 		// Fallback: use runtime inspection for v1 images or when metadata is not cached

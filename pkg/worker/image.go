@@ -131,8 +131,9 @@ type ImageClient struct {
 	logger             *ContainerLogger
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs *common.SafeMap[string]
-	// Cache image metadata from CLIP archives for v2 images (imageId -> ImageMetadata)
-	v2ImageMetadata *common.SafeMap[common.ImageMetadata]
+	// Cache image metadata from CLIP archives for v2 images (imageId -> CLIP ImageMetadata)
+	// We use CLIP's metadata directly as the source of truth rather than converting to beta9's format
+	clipImageMetadata *common.SafeMap[*clipCommon.ImageMetadata]
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
@@ -153,7 +154,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		v2ImageRefs:        common.NewSafeMap[string](),
-		v2ImageMetadata:    common.NewSafeMap[common.ImageMetadata](),
+		clipImageMetadata:  common.NewSafeMap[*clipCommon.ImageMetadata](),
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
@@ -303,9 +304,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				}
 
 				// Extract and cache embedded image metadata to avoid runtime lookups
+				// We store CLIP's metadata directly as the source of truth
 				if ociInfo.ImageMetadata != nil {
-					imgMeta := c.convertCLIPMetadataToBeta9(ociInfo.ImageMetadata)
-					c.v2ImageMetadata.Set(imageId, imgMeta)
+					c.clipImageMetadata.Set(imageId, ociInfo.ImageMetadata)
 					log.Info().Str("image_id", imageId).Msg("cached image metadata from clip archive")
 				}
 			}
@@ -422,65 +423,10 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
 }
 
-// GetImageMetadata retrieves the cached image metadata for a v2 image
-// Returns the metadata and a boolean indicating if it was found
-func (c *ImageClient) GetImageMetadata(imageId string) (common.ImageMetadata, bool) {
-	return c.v2ImageMetadata.Get(imageId)
-}
-
-// convertCLIPMetadataToBeta9 converts CLIP ImageMetadata to beta9's ImageMetadata format
-func (c *ImageClient) convertCLIPMetadataToBeta9(clipMeta *clipCommon.ImageMetadata) common.ImageMetadata {
-	beta9Meta := common.ImageMetadata{
-		Name:          clipMeta.Name,
-		Digest:        clipMeta.Digest,
-		RepoTags:      clipMeta.RepoTags,
-		Created:       clipMeta.Created,
-		DockerVersion: clipMeta.DockerVersion,
-		Architecture:  clipMeta.Architecture,
-		Os:            clipMeta.Os,
-		Env:           clipMeta.Env,
-	}
-
-	// Convert Labels from map[string]string to map[string]any
-	if clipMeta.Labels != nil {
-		beta9Meta.Labels = make(map[string]any, len(clipMeta.Labels))
-		for k, v := range clipMeta.Labels {
-			beta9Meta.Labels[k] = v
-		}
-	}
-
-	// Convert LayersData
-	if clipMeta.LayersData != nil {
-		beta9Meta.LayersData = make([]struct {
-			MIMEType    string `json:"MIMEType"`
-			Digest      string `json:"Digest"`
-			Size        int    `json:"Size"`
-			Annotations any    `json:"Annotations"`
-		}, len(clipMeta.LayersData))
-		for i, layer := range clipMeta.LayersData {
-			beta9Meta.LayersData[i].MIMEType = layer.MIMEType
-			beta9Meta.LayersData[i].Digest = layer.Digest
-			beta9Meta.LayersData[i].Size = int(layer.Size)
-			beta9Meta.LayersData[i].Annotations = layer.Annotations
-		}
-	}
-
-	// Convert Layers
-	if clipMeta.Layers != nil {
-		beta9Meta.Layers = clipMeta.Layers
-	}
-
-	// Build Config from CLIP metadata fields
-	beta9Meta.Config = &common.ImageConfig{
-		User:         clipMeta.User,
-		Env:          clipMeta.Env,
-		Entrypoint:   clipMeta.Entrypoint,
-		Cmd:          clipMeta.Cmd,
-		WorkingDir:   clipMeta.WorkingDir,
-		ExposedPorts: clipMeta.ExposedPorts,
-	}
-
-	return beta9Meta
+// GetCLIPImageMetadata retrieves the cached CLIP image metadata for a v2 image
+// Returns the CLIP metadata directly (source of truth) and a boolean indicating if it was found
+func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
+	return c.clipImageMetadata.Get(imageId)
 }
 
 // createCredentialProvider creates a CLIP credential provider from JSON credentials

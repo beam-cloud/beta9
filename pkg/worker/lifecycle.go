@@ -17,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 
@@ -385,11 +386,11 @@ func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec,
 // This is used for v2 images where we don't have an unpacked bundle with config.json.
 func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*specs.Spec, error) {
 	// First try to get cached metadata from CLIP archive (v2 images)
-	if imgMeta, ok := s.imageClient.GetImageMetadata(request.ImageId); ok {
+	if clipMeta, ok := s.imageClient.GetCLIPImageMetadata(request.ImageId); ok {
 		log.Info().
 			Str("image_id", request.ImageId).
 			Msg("using cached image metadata from clip archive")
-		return s.buildSpecFromImageMetadata(&imgMeta), nil
+		return s.buildSpecFromCLIPMetadata(clipMeta), nil
 	}
 
 	// Fallback: determine source image reference and credentials for runtime lookup
@@ -418,7 +419,7 @@ func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*sp
 		Str("source_image", sourceImageRef).
 		Msg("derived spec from source image via runtime lookup")
 
-	// Build spec from image metadata
+	// Build spec from skopeo metadata (legacy path for v1 images)
 	return s.buildSpecFromImageMetadata(&imgMeta), nil
 }
 
@@ -441,7 +442,37 @@ func (s *Worker) getSourceImageInfo(request *types.ContainerRequest) (string, st
 	return "", ""
 }
 
-// buildSpecFromImageMetadata constructs an OCI spec from image metadata
+// buildSpecFromCLIPMetadata constructs an OCI spec from CLIP image metadata
+// This is the primary path for v2 images with embedded metadata
+func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *specs.Spec {
+	spec := specs.Spec{
+		Process: &specs.Process{
+			Env: []string{},
+		},
+	}
+
+	// CLIP metadata has a flat structure with all fields at the top level
+	if len(clipMeta.Env) > 0 {
+		spec.Process.Env = clipMeta.Env
+	}
+	if clipMeta.WorkingDir != "" {
+		spec.Process.Cwd = clipMeta.WorkingDir
+	}
+	if clipMeta.User != "" {
+		spec.Process.User.Username = clipMeta.User
+	}
+	// Combine Entrypoint and Cmd, or use Cmd alone
+	if len(clipMeta.Entrypoint) > 0 {
+		spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
+	} else if len(clipMeta.Cmd) > 0 {
+		spec.Process.Args = clipMeta.Cmd
+	}
+
+	return &spec
+}
+
+// buildSpecFromImageMetadata constructs an OCI spec from skopeo image metadata
+// This is the legacy path for v1 images or when CLIP metadata is not available
 func (s *Worker) buildSpecFromImageMetadata(imgMeta *common.ImageMetadata) *specs.Spec {
 	spec := specs.Spec{
 		Process: &specs.Process{
