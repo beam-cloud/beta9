@@ -111,8 +111,8 @@ github.com/aws/aws-sdk-go-v2/internal/v4a v1.3.13 h1:THZJJ6TU/FOiM7DZFnisYV9d49o
 github.com/aws/aws-sdk-go-v2/internal/v4a v1.3.13/go.mod h1:VISUTg6n+uBaYIWPBaIG0jk7mbBxm7DUqBtU2cUDDWI=
 github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0 h1:1KE7EgE5xiPZ6H19hdF27B/p/CGhB2UNO5wcpOHe0JM=
 github.com/aws/aws-sdk-go-v2/service/ec2 v1.144.0/go.mod h1:hIsHE0PaWAQakLCshKS7VKWMGXaqrAFp4m95s2W9E6c=
-github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4 h1:pwSMMRVj2myoqRpPMDWBEjLqQlIgJ4ujMaMdc/sFd0U=
-github.com/aws/aws-sdk-go-v2/service/ecr v1.24.4/go.mod h1:AOHmGMoPtSY9Zm2zBuwUJQBisIvYAZeA1n7b6f4e880=
+github.com/aws/aws-sdk-go-v2/service/ecr v1.27.0 h1:e9RAM6FgxAN3ca3LKaCr20+YnMqg8vhX/k6WDA8BpT8=
+github.com/aws/aws-sdk-go-v2/service/ecr v1.27.0/go.mod h1:Fa36Bp93PNtMtKHoyIvQnJY8EGTR0UQqRo3NfjW0hT0=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.12.3 h1:eAh2A4b5IzM/lum78bZ590jy36+d/aFLgKF/4Vd1xPE=
 github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.12.3/go.mod h1:0yKJC/kb8sAnmlYa6Zs3QVYqaC8ug2AbnNChv5Ox3uA=
 github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.3.15 h1:2jyRZ9rVIMisyQRnhSS/SqlckveoxXneIumECVFP91Y=
@@ -136,8 +136,8 @@ github.com/aws/smithy-go v1.22.2/go.mod h1:irrKGvNn1InZwb2d7fkIRNucdfwR8R+Ts3wxY
 github.com/aybabtme/rgbterm v0.0.0-20170906152045-cc83f3b3ce59/go.mod h1:q/89r3U2H7sSsE2t6Kca0lfwTK8JdoNGS/yzM/4iH5I=
 github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563 h1:kn8/lBy5kRSLpFAX/xV5GDg31R38Kv8Tp6qcuhpJAfQ=
 github.com/beam-cloud/blobcache-v2 v0.0.0-20250503151236-e2403183f563/go.mod h1:RrA2ruMma4/dN9Sa6wwhyAO1uI6di+tlLB5wuM7TuvQ=
-github.com/beam-cloud/clip v0.0.0-20251031142621-e1187d5df2af h1:98Hh/I5laJqf2d2iUIc49zoygravP1Qgxj9bDWaZksE=
-github.com/beam-cloud/clip v0.0.0-20251031142621-e1187d5df2af/go.mod h1:JqYuoB5waiXZrLmBO0rKM+Kl4iRWqfWb+pI+lk3BX+Q=
+github.com/beam-cloud/clip v0.0.0-20251031205543-4b581f1fb7ef h1:xkVAHrlFDmMTuF79u7o6QCcFFhzfbzfhCMrA8wD5SvA=
+github.com/beam-cloud/clip v0.0.0-20251031205543-4b581f1fb7ef/go.mod h1:gtRNaN7F6tlWW0wM7MWUkaWmY+4ckDlGUtrN6roIWBo=
 github.com/beam-cloud/geesefs v0.0.0-20250921162405-f983757f032a h1:JQVvP0qKA39xp5ckKGcwkvgMO6BxatnzvgnMz97tt1g=
 github.com/beam-cloud/geesefs v0.0.0-20250921162405-f983757f032a/go.mod h1:utihEuMyzBOeZ6oU2ozzZkJmyzbYBuYrxsLUo1DfZXs=
 github.com/beam-cloud/geesefs/s3ext v0.0.0-20250606164905-2f3593d03f4f h1:XzHOu+erxeBO6D3fKVbd5DAlipl+PYZ3u+Ywb8m7Ovk=

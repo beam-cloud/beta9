@@ -153,7 +153,7 @@ type BackendRepository interface {
 	UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint32, cpuMillicoreLimit uint32) (*types.ConcurrencyLimit, error)
 	ListConcurrencyLimitsByWorkspaceId(ctx context.Context, workspaceId string) ([]types.ConcurrencyLimit, error)
 	RevertToConcurrencyLimit(ctx context.Context, workspaceId string, concurrencyLimitId string) (*types.ConcurrencyLimit, error)
-	CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error)
+	CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string, validateName bool) (*types.Secret, error)
 	GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
 	GetSecretsByName(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error)
 	GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)

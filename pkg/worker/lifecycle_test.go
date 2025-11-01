@@ -94,7 +94,7 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 	// Step 2: Create container options with initial spec
 	t.Run("ContainerOptions", func(t *testing.T) {
 		initialSpec, _ := worker.readBundleConfig(request)
-		
+
 		options := &ContainerOptions{
 			BundlePath:   "/tmp/test-bundle",
 			HostBindPort: 8001,
@@ -104,7 +104,7 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 
 		// Step 3: Get container environment
 		env := worker.getContainerEnvironment(request, options)
-		
+
 		t.Logf("Assembled environment (%d vars):", len(env))
 		for i, e := range env {
 			t.Logf("  [%d] %s", i, e)
@@ -137,7 +137,7 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 	// Step 4: Generate full spec from request
 	t.Run("SpecFromRequest", func(t *testing.T) {
 		initialSpec, _ := worker.readBundleConfig(request)
-		
+
 		options := &ContainerOptions{
 			BundlePath:   "/tmp/test-bundle",
 			HostBindPort: 8001,
@@ -180,7 +180,7 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 	// Step 5: Test writing config.json and verify PATH is persisted
 	t.Run("WriteConfigJSON", func(t *testing.T) {
 		initialSpec, _ := worker.readBundleConfig(request)
-		
+
 		options := &ContainerOptions{
 			BundlePath:   "/tmp/test-bundle",
 			HostBindPort: 8001,
@@ -315,7 +315,7 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 		}
 
 		env := worker.getContainerEnvironment(request, options)
-		
+
 		hasPathInEnv := false
 		for _, e := range env {
 			if containsStr(e, "PATH=") {
@@ -335,9 +335,9 @@ func containsStr(s, substr string) bool {
 
 // Mock skopeo client for testing
 type mockSkopeoClient struct {
-	inspectFunc          func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error)
-	inspectSizeFunc      func(ctx context.Context, image string, creds string) (int64, error)
-	copyFunc             func(ctx context.Context, source, dest, creds string, logger *slog.Logger) error
+	inspectFunc     func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error)
+	inspectSizeFunc func(ctx context.Context, image string, creds string) (int64, error)
+	copyFunc        func(ctx context.Context, source, dest, creds string, logger *slog.Logger) error
 }
 
 func (m *mockSkopeoClient) Inspect(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {

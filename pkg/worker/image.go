@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -325,33 +324,36 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		mountOptions.StorageInfo = nil
 
 		// Attach credential provider for runtime layer loading
-		// ImageCredentials contains credentials for:
-		// - Build containers: source image credentials for pulling base image
-		// - Runtime containers: credentials attached by scheduler from secrets
-		log.Debug().
-			Str("image_id", imageId).
-			Str("container_id", request.ContainerId).
-			Bool("has_image_credentials", request.ImageCredentials != "").
-			Int("credentials_length", len(request.ImageCredentials)).
-			Msg("checking for OCI image credentials")
-		
-		if provider := c.createCredentialProvider(ctx, request.ImageCredentials, imageId); provider != nil {
-			mountOptions.RegistryCredProvider = provider
-			log.Info().
-				Str("image_id", imageId).
-				Str("container_id", request.ContainerId).
-				Str("provider_name", provider.Name()).
-				Msg("attached custom credential provider for OCI image")
-		} else if request.ImageCredentials != "" {
-			log.Warn().
-				Str("image_id", imageId).
-				Str("container_id", request.ContainerId).
-				Msg("failed to create credential provider despite having credentials")
-		} else {
-			log.Debug().
-				Str("image_id", imageId).
-				Str("container_id", request.ContainerId).
-				Msg("no image credentials provided, using default provider chain")
+		var credProvider clipCommon.RegistryCredentialProvider
+
+		if request.ImageCredentials != "" {
+			// Runtime container: credentials already in JSON format from secret
+			credProvider = c.createCredentialProvider(ctx, request.ImageCredentials, imageId)
+		} else if request.BuildOptions.SourceImageCreds != "" {
+			// Build container: parse and use source image credentials
+			sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
+			if hasRef {
+				registry := reg.ParseRegistry(sourceRef)
+				if registry != "" {
+					// Parse credentials (handles both JSON and username:password formats)
+					creds, err := reg.ParseCredentialsFromJSON(request.BuildOptions.SourceImageCreds)
+					if err != nil {
+						log.Warn().
+							Err(err).
+							Str("image_id", imageId).
+							Str("container_id", request.ContainerId).
+							Str("registry", registry).
+							Msg("failed to parse build credentials for mount")
+					} else if len(creds) > 0 {
+						credProvider = reg.CredentialsToProvider(ctx, registry, creds)
+					}
+				}
+			}
+		}
+
+		if credProvider != nil {
+			mountOptions.RegistryCredProvider = credProvider
+			log.Info().Str("image_id", imageId).Str("provider", credProvider.Name()).Msg("attached credential provider")
 		}
 	} else {
 		// v1 (legacy S3 data-carrying)
@@ -425,9 +427,9 @@ func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsS
 		Int("cred_str_len", len(credentialsStr)).
 		Msg("attempting to create credential provider from credentials")
 
-	// Parse JSON credentials
-	var credData map[string]interface{}
-	if err := json.Unmarshal([]byte(credentialsStr), &credData); err != nil {
+	// Parse JSON credentials using the registry package helper
+	registry, _, creds, err := reg.UnmarshalCredentials(credentialsStr)
+	if err != nil {
 		previewLen := 100
 		if len(credentialsStr) < previewLen {
 			previewLen = len(credentialsStr)
@@ -440,52 +442,17 @@ func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsS
 		return nil
 	}
 
-	// Extract registry and credentials
-	registry, _ := credData["registry"].(string)
-	credsMap, _ := credData["credentials"].(map[string]interface{})
-
-	if registry == "" || credsMap == nil {
-		log.Warn().
-			Str("image_id", imageId).
-			Bool("has_registry", registry != "").
-			Bool("has_creds_map", credsMap != nil).
-			Msg("missing registry or credentials in JSON")
-		return nil
-	}
-	
-	log.Debug().
-		Str("image_id", imageId).
-		Str("registry", registry).
-		Int("creds_count", len(credsMap)).
-		Msg("parsed credential JSON successfully")
-
-	// Convert credentials to string map
-	creds := make(map[string]string)
-	for k, v := range credsMap {
-		if strVal, ok := v.(string); ok && strVal != "" {
-			creds[k] = strVal
-		}
-	}
-
-	if len(creds) == 0 {
+	if registry == "" || len(creds) == 0 {
+		log.Warn().Str("image_id", imageId).Msg("missing registry or credentials in JSON")
 		return nil
 	}
 
-	// Detect credential type and create provider
-	credType := reg.DetectCredentialType(registry, creds)
-	provider := reg.CreateProviderFromCredentials(ctx, registry, credType, creds)
+	// Create provider using the registry package helper
+	provider := reg.CredentialsToProvider(ctx, registry, creds)
 	if provider == nil {
-		log.Warn().
-			Str("image_id", imageId).
-			Str("registry", registry).
-			Msg("failed to create credential provider")
+		log.Warn().Str("image_id", imageId).Str("registry", registry).Msg("failed to create credential provider")
 		return nil
 	}
-
-	log.Info().
-		Str("image_id", imageId).
-		Str("registry", registry).
-		Msg("created credential provider for OCI image")
 
 	return provider
 }
@@ -616,9 +583,33 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 	}()
 
 	// Create credential provider if credentials are available
+	// For build containers, use SourceImageCreds; for runtime containers, use ImageCredentials
 	var credProvider clipCommon.RegistryCredentialProvider
 	if request.ImageCredentials != "" {
+		// Runtime container: credentials are already in JSON format from secret
 		credProvider = c.createCredentialProvider(ctx, request.ImageCredentials, request.ImageId)
+	} else if request.BuildOptions.SourceImageCreds != "" {
+		// Build container: credentials may be in legacy username:password format or JSON
+		// Parse and convert to proper format for CLIP
+		registry := reg.ParseRegistry(imageRef)
+		if registry != "" {
+			// Parse credentials (handles both JSON and username:password formats)
+			creds, err := reg.ParseCredentialsFromJSON(request.BuildOptions.SourceImageCreds)
+			if err != nil {
+				log.Warn().
+					Err(err).
+					Str("image_id", request.ImageId).
+					Str("registry", registry).
+					Msg("failed to parse build credentials, will try without auth")
+			} else if len(creds) > 0 {
+				// Create provider from parsed credentials
+				credProvider = reg.CredentialsToProvider(ctx, registry, creds)
+				log.Info().
+					Str("image_id", request.ImageId).
+					Str("registry", registry).
+					Msg("created credential provider from build options for OCI indexing")
+			}
+		}
 	}
 
 	// Create index-only clip archive from the OCI image

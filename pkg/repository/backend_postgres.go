@@ -1890,16 +1890,18 @@ func validateEnvironmentVariableName(name string) error {
 	return nil
 }
 
-func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error) {
+func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string, validateName bool) (*types.Secret, error) {
 	query := `
 	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by)
 	VALUES ($1, $2, $3, $4)
 	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
-	err := validateEnvironmentVariableName(name)
-	if err != nil {
-		return nil, err
+	if validateName {
+		err := validateEnvironmentVariableName(name)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
@@ -2406,12 +2408,12 @@ func (r *PostgresBackendRepository) GetImageCredentialSecret(ctx context.Context
 	var secretName sql.NullString
 	var secretId sql.NullString
 	query := `SELECT credential_secret_name, credential_secret_id FROM image WHERE image_id = $1;`
-	
+
 	err := r.client.QueryRowContext(ctx, query, imageId).Scan(&secretName, &secretId)
 	if err != nil {
 		return "", "", err
 	}
-	
+
 	return secretName.String, secretId.String, nil
 }
 
