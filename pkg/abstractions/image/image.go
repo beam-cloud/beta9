@@ -271,7 +271,7 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 
 	// For V2 builds, render or augment Dockerfile BEFORE calculating image ID
 	// This ensures the image ID matches what will actually be built
-	isV2 := is.config.ImageService.ClipVersion == 2
+	isV2 := is.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
 	if isV2 {
 		if opts.Dockerfile == "" {
 			// No custom Dockerfile: generate one from build options
@@ -444,18 +444,8 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 
 	// Nothing to do if no credentials
 	if baseImage == "" || credStr == "" {
-		log.Debug().
-			Str("image_id", imageId).
-			Bool("has_base_image", baseImage != "").
-			Bool("has_cred_str", credStr != "").
-			Msg("missing base image or credentials, skipping secret creation")
 		return nil
 	}
-
-	log.Debug().
-		Str("image_id", imageId).
-		Str("base_image", baseImage).
-		Msg("proceeding with secret creation")
 
 	// Parse registry
 	registry := reg.ParseRegistry(baseImage)
@@ -490,14 +480,6 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 
 	secretName := reg.CreateSecretName(registry)
 
-	log.Info().
-		Str("image_id", imageId).
-		Str("secret_name", secretName).
-		Str("registry", registry).
-		Str("cred_type", string(credType)).
-		Int("secret_value_len", len(secretValue)).
-		Msg("about to upsert credential secret")
-
 	// Create or update secret
 	secret, err := is.upsertSecret(context.Background(), authInfo, secretName, secretValue, registry)
 	if err != nil {
@@ -522,7 +504,6 @@ func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.Aut
 	}
 
 	if secret != nil {
-		// Update existing secret
 		log.Info().
 			Str("secret_name", secretName).
 			Str("secret_external_id", secret.ExternalId).
@@ -534,13 +515,7 @@ func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.Aut
 		if err != nil {
 			return nil, fmt.Errorf("failed to update secret: %w", err)
 		}
-		log.Info().
-			Str("secret_name", secretName).
-			Str("secret_external_id", secret.ExternalId).
-			Str("registry", registry).
-			Msg("updated credential secret successfully")
 	} else {
-		// Create new secret
 		log.Info().
 			Str("secret_name", secretName).
 			Str("registry", registry).
@@ -551,11 +526,6 @@ func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.Aut
 		if err != nil {
 			return nil, fmt.Errorf("failed to create secret: %w", err)
 		}
-		log.Info().
-			Str("secret_name", secretName).
-			Str("secret_external_id", secret.ExternalId).
-			Str("registry", registry).
-			Msg("created credential secret successfully")
 	}
 
 	return secret, nil
