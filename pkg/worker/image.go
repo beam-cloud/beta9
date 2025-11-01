@@ -417,9 +417,9 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
 }
 
-// GetImageMetadata extracts CLIP image metadata from the archive for a v2 image
+// GetCLIPImageMetadata extracts CLIP image metadata from the archive for a v2 image
 // Returns the CLIP metadata directly from the archive (source of truth)
-func (c *ImageClient) GetImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
+func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
 	// Determine the archive path for this image
 	archivePath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
 

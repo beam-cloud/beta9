@@ -334,65 +334,41 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 }
 
 // writeInitialSpecFromImage builds an initial_config.json using the base runc config
-// plus full configuration (env, workdir, user, cmd, entrypoint) from the source image.
-// First tries to use cached metadata from CLIP archive, falls back to skopeo inspect if not available.
+// plus full configuration (env, workdir, user, cmd, entrypoint) from v2 CLIP metadata if available.
+// V1 images always have a config.json so this is only called for v2 images.
+// The base spec is designed to be the fallback when CLIP metadata is not available.
 func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *ContainerInstance, destPath string) error {
-	// Start from the base config
+	// Start from the base config (this is the designed fallback for v1 images)
 	spec := s.baseConfigSpec
 
-	// First try to get cached metadata from CLIP archive (v2 images)
-	if metadata, ok := s.imageClient.GetImageMetadata(instance.Request.ImageId); ok {
-		log.Info().Str("image_id", instance.Request.ImageId).Msg("using cached image metadata from clip archive for initial spec")
+	// Try to get CLIP metadata from archive (v2 images only)
+	clipMeta, ok := s.imageClient.GetCLIPImageMetadata(instance.Request.ImageId)
+	if ok {
+		log.Info().Str("image_id", instance.Request.ImageId).Msg("using v2 image metadata from clip archive for initial spec")
 
 		// CLIP metadata has a flat structure with all fields at the top level
-		if len(metadata.Env) > 0 {
-			spec.Process.Env = append(spec.Process.Env, metadata.Env...)
+		if len(clipMeta.Env) > 0 {
+			spec.Process.Env = append(spec.Process.Env, clipMeta.Env...)
 		}
-
-		if metadata.WorkingDir != "" {
-			spec.Process.Cwd = metadata.WorkingDir
+		if clipMeta.WorkingDir != "" {
+			spec.Process.Cwd = clipMeta.WorkingDir
 		}
-
-		if metadata.User != "" {
-			spec.Process.User.Username = metadata.User
+		if clipMeta.User != "" {
+			spec.Process.User.Username = clipMeta.User
 		}
-
 		// Set default args from Cmd if Entrypoint is not set, or combine them
-		if len(metadata.Entrypoint) > 0 {
-			spec.Process.Args = append(metadata.Entrypoint, metadata.Cmd...)
-		} else if len(metadata.Cmd) > 0 {
-			spec.Process.Args = metadata.Cmd
-		}
-	} else {
-		// Fallback: use runtime inspection for v1 images or when metadata is not cached
-		imageRef := ""
-		creds := ""
-		if instance.Request.BuildOptions.SourceImage != nil {
-			imageRef = *instance.Request.BuildOptions.SourceImage
-		}
-
-		creds = instance.Request.BuildOptions.SourceImageCreds
-
-		if imageRef != "" {
-			imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, imageRef, creds, nil)
-			if err != nil {
-				log.Warn().Str("image_ref", imageRef).Err(err).Msg("failed to inspect image for initial spec; proceeding with base config only")
-			} else {
-				log.Info().Str("image_ref", imageRef).Msg("using runtime inspection for initial spec")
-
-				// Apply env from skopeo output if available
-				if len(imgMeta.Env) > 0 {
-					spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
-				}
-			}
+		if len(clipMeta.Entrypoint) > 0 {
+			spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
+		} else if len(clipMeta.Cmd) > 0 {
+			spec.Process.Args = clipMeta.Cmd
 		}
 	}
+	// If no CLIP metadata, use base spec as-is (designed for v1 images)
 
 	b, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
 		return err
 	}
-
 	return os.WriteFile(destPath, b, 0644)
 }
 
