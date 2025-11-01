@@ -334,45 +334,36 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 }
 
 // writeInitialSpecFromImage builds an initial_config.json using the base runc config
-// plus full configuration (env, workdir, user, cmd, entrypoint) from the source image (via skopeo inspect).
+// plus full configuration (env, workdir, user, cmd, entrypoint) from v2 CLIP metadata if available.
+// V1 images always have a config.json so this is only called for v2 images.
+// The base spec is designed to be the fallback when CLIP metadata is not available.
 func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *ContainerInstance, destPath string) error {
-	// Determine image reference
-	imageRef := ""
-	creds := ""
-	if instance.Request.BuildOptions.SourceImage != nil {
-		imageRef = *instance.Request.BuildOptions.SourceImage
-	}
-	creds = instance.Request.BuildOptions.SourceImageCreds
-
-	// Start from the base config
+	// Start from the base config (this is the designed fallback for v1 images)
 	spec := s.baseConfigSpec
 
-	if imageRef != "" {
-		imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, imageRef, creds, nil)
-		if err != nil {
-			log.Warn().Str("image_ref", imageRef).Err(err).Msg("failed to inspect image for initial spec; proceeding with base config only")
-		} else if imgMeta.Config != nil {
-			// Apply full config from the image
-			if len(imgMeta.Config.Env) > 0 {
-				spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
-			}
-			if imgMeta.Config.WorkingDir != "" {
-				spec.Process.Cwd = imgMeta.Config.WorkingDir
-			}
-			if imgMeta.Config.User != "" {
-				spec.Process.User.Username = imgMeta.Config.User
-			}
-			// Set default args from Cmd if Entrypoint is not set, or combine them
-			if len(imgMeta.Config.Entrypoint) > 0 {
-				spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
-			} else if len(imgMeta.Config.Cmd) > 0 {
-				spec.Process.Args = imgMeta.Config.Cmd
-			}
-		} else if len(imgMeta.Env) > 0 {
-			// Fallback to legacy Env field if Config is not available
-			spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
+	// Try to get CLIP metadata from archive (v2 images only)
+	clipMeta, ok := s.imageClient.GetCLIPImageMetadata(instance.Request.ImageId)
+	if ok {
+		log.Info().Str("image_id", instance.Request.ImageId).Msg("using v2 image metadata from clip archive for initial spec")
+
+		// CLIP metadata has a flat structure with all fields at the top level
+		if len(clipMeta.Env) > 0 {
+			spec.Process.Env = append(spec.Process.Env, clipMeta.Env...)
+		}
+		if clipMeta.WorkingDir != "" {
+			spec.Process.Cwd = clipMeta.WorkingDir
+		}
+		if clipMeta.User != "" {
+			spec.Process.User.Username = clipMeta.User
+		}
+		// Set default args from Cmd if Entrypoint is not set, or combine them
+		if len(clipMeta.Entrypoint) > 0 {
+			spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
+		} else if len(clipMeta.Cmd) > 0 {
+			spec.Process.Args = clipMeta.Cmd
 		}
 	}
+	// If no CLIP metadata, use base spec as-is (designed for v1 images)
 
 	b, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {

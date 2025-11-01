@@ -54,18 +54,6 @@ type ImageMetadata struct {
 		Annotations any    `json:"Annotations"`
 	} `json:"LayersData"`
 	Env []string `json:"Env"`
-	// Full OCI Config for v2 builds
-	Config *ImageConfig `json:"Config"`
-}
-
-// ImageConfig represents the OCI image configuration
-type ImageConfig struct {
-	User         string            `json:"User"`
-	ExposedPorts map[string]struct{} `json:"ExposedPorts"`
-	Env          []string          `json:"Env"`
-	Entrypoint   []string          `json:"Entrypoint"`
-	Cmd          []string          `json:"Cmd"`
-	WorkingDir   string            `json:"WorkingDir"`
 }
 
 func NewSkopeoClient(config types.AppConfig) SkopeoClient {

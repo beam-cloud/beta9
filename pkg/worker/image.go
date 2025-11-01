@@ -298,6 +298,11 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 					c.v2ImageRefs.Set(imageId, sourceRef)
 					log.Info().Str("image_id", imageId).Str("source_image", sourceRef).Msg("cached source image reference from clip metadata")
 				}
+
+				// Log that metadata is available in the archive
+				if ociInfo.ImageMetadata != nil {
+					log.Info().Str("image_id", imageId).Msg("image metadata available in clip archive")
+				}
 			}
 		}
 	}
@@ -410,6 +415,44 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 // GetSourceImageRef retrieves the cached source image reference for a v2 image
 func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
+}
+
+// GetCLIPImageMetadata extracts CLIP image metadata from the archive for a v2 image
+// Returns the CLIP metadata directly from the archive (source of truth)
+func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
+	// Determine the archive path for this image
+	archivePath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
+
+	// Check if the archive exists
+	if _, err := os.Stat(archivePath); os.IsNotExist(err) {
+		// Try cache path as fallback
+		if c.registry != nil && c.registry.ImageFileExtension != "" {
+			archivePath = fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
+		} else {
+			archivePath = fmt.Sprintf("%s/%s.clip", c.imageCachePath, imageId)
+		}
+
+		if _, err := os.Stat(archivePath); os.IsNotExist(err) {
+			return nil, false
+		}
+	}
+
+	// Extract metadata from the CLIP archive
+	archiver := clip.NewClipArchiver()
+	meta, err := archiver.ExtractMetadata(archivePath)
+	if err != nil {
+		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to extract metadata from clip archive")
+		return nil, false
+	}
+
+	// Check if this is an OCI archive with metadata
+	if meta != nil && meta.StorageInfo != nil {
+		if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok && ociInfo.ImageMetadata != nil {
+			return ociInfo.ImageMetadata, true
+		}
+	}
+
+	return nil, false
 }
 
 // createCredentialProvider creates a CLIP credential provider from JSON credentials

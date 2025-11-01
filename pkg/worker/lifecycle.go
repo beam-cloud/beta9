@@ -17,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 
@@ -360,10 +361,10 @@ func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec,
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
 		// For v2 images, there's no pre-baked config.json in the mounted root.
-		// Derive the spec from the source image using skopeo inspect.
+		// Derive the spec from CLIP metadata embedded in the archive.
 		if os.IsNotExist(err) {
-			log.Info().Str("image_id", request.ImageId).Msg("no bundle config found, deriving from source image")
-			return s.deriveSpecFromSourceImage(request)
+			log.Info().Str("image_id", request.ImageId).Msg("no bundle config found, deriving from v2 image metadata")
+			return s.deriveSpecFromV2Image(request)
 		}
 		log.Error().Str("image_id", request.ImageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
 		return nil, err
@@ -381,85 +382,49 @@ func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec,
 	return &spec, nil
 }
 
-// deriveSpecFromSourceImage creates an OCI spec from the source image metadata.
-// This is used for v2 images where we don't have an unpacked bundle with config.json.
-func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*specs.Spec, error) {
-	// Determine source image reference and credentials
-	sourceImageRef, sourceImageCreds := s.getSourceImageInfo(request)
-	if sourceImageRef == "" {
-		log.Warn().Str("image_id", request.ImageId).Msg("no source image reference, using base spec")
-		return nil, nil
-	}
-
-	// Inspect source image with timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, sourceImageRef, sourceImageCreds, nil)
-	if err != nil {
+// deriveSpecFromV2Image creates an OCI spec from v2 image metadata.
+// This is ONLY used for v2 images where we don't have an unpacked bundle with config.json.
+// V1 images always have a config.json, so if we're here, it's a v2 image.
+func (s *Worker) deriveSpecFromV2Image(request *types.ContainerRequest) (*specs.Spec, error) {
+	clipMeta, ok := s.imageClient.GetCLIPImageMetadata(request.ImageId)
+	if !ok {
 		log.Warn().
 			Str("image_id", request.ImageId).
-			Str("source_image", sourceImageRef).
-			Err(err).
-			Msg("failed to inspect source image, using base spec")
+			Msg("no metadata found in v2 image archive, using base spec")
 		return nil, nil
 	}
 
 	log.Info().
 		Str("image_id", request.ImageId).
-		Str("source_image", sourceImageRef).
-		Msg("derived spec from source image")
+		Msg("using metadata from v2 clip archive")
 
-	// Build spec from image metadata
-	return s.buildSpecFromImageMetadata(&imgMeta), nil
+	return s.buildSpecFromCLIPMetadata(clipMeta), nil
 }
 
-// getSourceImageInfo retrieves the source image reference and credentials
-func (s *Worker) getSourceImageInfo(request *types.ContainerRequest) (string, string) {
-	// Build containers have source image in BuildOptions
-	if request.BuildOptions.SourceImage != nil {
-		return *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds
-	}
-
-	// Non-build containers: try cache
-	if ref, ok := s.imageClient.GetSourceImageRef(request.ImageId); ok {
-		log.Info().
-			Str("image_id", request.ImageId).
-			Str("source_image", ref).
-			Msg("retrieved source image from cache")
-		return ref, ""
-	}
-
-	return "", ""
-}
-
-// buildSpecFromImageMetadata constructs an OCI spec from image metadata
-func (s *Worker) buildSpecFromImageMetadata(imgMeta *common.ImageMetadata) *specs.Spec {
+// buildSpecFromCLIPMetadata constructs an OCI spec from CLIP image metadata
+// This is the primary path for v2 images with embedded metadata
+func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *specs.Spec {
 	spec := specs.Spec{
 		Process: &specs.Process{
 			Env: []string{},
 		},
 	}
 
-	// Use Config if available, otherwise fallback to legacy Env field
-	if imgMeta.Config != nil {
-		if len(imgMeta.Config.Env) > 0 {
-			spec.Process.Env = imgMeta.Config.Env
-		}
-		if imgMeta.Config.WorkingDir != "" {
-			spec.Process.Cwd = imgMeta.Config.WorkingDir
-		}
-		if imgMeta.Config.User != "" {
-			spec.Process.User.Username = imgMeta.Config.User
-		}
-		// Combine Entrypoint and Cmd, or use Cmd alone
-		if len(imgMeta.Config.Entrypoint) > 0 {
-			spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
-		} else if len(imgMeta.Config.Cmd) > 0 {
-			spec.Process.Args = imgMeta.Config.Cmd
-		}
-	} else if len(imgMeta.Env) > 0 {
-		spec.Process.Env = imgMeta.Env
+	// CLIP metadata has a flat structure with all fields at the top level
+	if len(clipMeta.Env) > 0 {
+		spec.Process.Env = clipMeta.Env
+	}
+	if clipMeta.WorkingDir != "" {
+		spec.Process.Cwd = clipMeta.WorkingDir
+	}
+	if clipMeta.User != "" {
+		spec.Process.User.Username = clipMeta.User
+	}
+	// Combine Entrypoint and Cmd, or use Cmd alone
+	if len(clipMeta.Entrypoint) > 0 {
+		spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
+	} else if len(clipMeta.Cmd) > 0 {
+		spec.Process.Args = clipMeta.Cmd
 	}
 
 	return &spec
