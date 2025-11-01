@@ -2011,7 +2011,7 @@ func (r *PostgresBackendRepository) DeleteSecret(ctx context.Context, workspace 
 	return nil
 }
 
-func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error) {
+func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretName string, value string) (*types.Secret, error) {
 	query := `
 	UPDATE workspace_secret
 	SET value = $3, last_updated_by = $4, updated_at = CURRENT_TIMESTAMP
@@ -2030,7 +2030,7 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	}
 
 	var secret types.Secret
-	if err := r.client.GetContext(ctx, &secret, query, secretId, workspace.Id, encryptedValue, tokenId); err != nil {
+	if err := r.client.GetContext(ctx, &secret, query, secretName, workspace.Id, encryptedValue, tokenId); err != nil {
 		return nil, err
 	}
 
