@@ -362,6 +362,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				SecretKey: sourceRegistry.SecretKey,
 			},
 		}
+
 		mountOptions.StorageInfo = &clipCommon.S3StorageInfo{
 			Bucket:         sourceRegistry.BucketName,
 			Region:         sourceRegistry.Region,
@@ -415,28 +416,15 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 // This format is used for both build and runtime containers
 func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsStr, imageId string) clipCommon.RegistryCredentialProvider {
 	if credentialsStr == "" {
-		log.Debug().
-			Str("image_id", imageId).
-			Msg("no credentials string provided")
 		return nil
 	}
-
-	log.Debug().
-		Str("image_id", imageId).
-		Int("cred_str_len", len(credentialsStr)).
-		Msg("attempting to create credential provider from credentials")
 
 	// Parse JSON credentials using the registry package helper
 	registry, _, creds, err := reg.UnmarshalCredentials(credentialsStr)
 	if err != nil {
-		previewLen := 100
-		if len(credentialsStr) < previewLen {
-			previewLen = len(credentialsStr)
-		}
 		log.Warn().
 			Err(err).
 			Str("image_id", imageId).
-			Str("credentials_preview", credentialsStr[:previewLen]).
 			Msg("failed to parse image credentials JSON")
 		return nil
 	}
@@ -533,7 +521,7 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 
 // createOCIImageWithProgress creates an OCI index with progress reporting
 func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, outputPath string, checkpointMiB int64, authConfig string) error {
-	outputLogger.Info("Starting OCI image indexing...\n")
+	outputLogger.Info("Indexing image...\n")
 	progressChan := make(chan clip.OCIIndexProgress, 100)
 
 	var wg sync.WaitGroup
@@ -573,9 +561,9 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 					Str("stage", progress.Stage).
 					Int("layer", progress.LayerIndex).
 					Int("total", progress.TotalLayers).
-					Msgf("OCI index progress [%s]: layer %d/%d", progress.Stage, progress.LayerIndex, progress.TotalLayers)
+					Msgf("Index progress [%s]: layer %d/%d", progress.Stage, progress.LayerIndex, progress.TotalLayers)
 
-				outputLogger.Info(fmt.Sprintf("OCI index progress [%s]: layer %d/%d\n",
+				outputLogger.Info(fmt.Sprintf("Index progress [%s]: layer %d/%d\n",
 					progress.Stage, progress.LayerIndex, progress.TotalLayers))
 			}
 		}
@@ -628,7 +616,7 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		return err
 	}
 
-	outputLogger.Info("OCI image indexing completed successfully\n")
+	outputLogger.Info("Image indexing completed successfully\n")
 	return nil
 }
 
@@ -742,9 +730,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if dockerRegistry == "" {
 			dockerRegistry = c.config.ImageService.Runner.BaseImageRegistry
 		}
+
 		if dockerRegistry == "" {
 			dockerRegistry = "localhost"
 		}
+
 		localTag := fmt.Sprintf("%s/%s:latest", dockerRegistry, request.ImageId)
 
 		// Tag the built image
@@ -851,6 +841,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
 			return err
 		}
+
 		return nil
 	}
 
