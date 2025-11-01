@@ -159,7 +159,7 @@ type BackendRepository interface {
 	GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
 	GetSecretsByNameDecrypted(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error)
 	ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error)
-	UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error)
+	UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretName string, value string) (*types.Secret, error)
 	DeleteSecret(ctx context.Context, workspace *types.Workspace, secretName string) error
 	CreateScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) (*types.ScheduledJob, error)
 	DeleteScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) error
