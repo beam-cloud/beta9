@@ -1,15 +1,15 @@
 package common
 
 import (
-    "fmt"
-    "os"
-    "os/exec"
-    "path/filepath"
-    "time"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
 
-    "github.com/rs/zerolog/log"
+	"github.com/rs/zerolog/log"
 
-    types "github.com/beam-cloud/beta9/pkg/types"
+	types "github.com/beam-cloud/beta9/pkg/types"
 )
 
 type ContainerOverlay struct {
@@ -181,11 +181,11 @@ func (co *ContainerOverlay) TopLayerPath() string {
 func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
-    // v1 behavior: plain kernel overlayfs with standard options
-    mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", layer.lower, layer.upper, layer.work)
-    if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
+	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", layer.lower, layer.upper, layer.work)
+	if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
 		return err
 	}
+
 	log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer (kernel overlay)")
 	return nil
 }
