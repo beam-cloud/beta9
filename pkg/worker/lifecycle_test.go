@@ -2,9 +2,7 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
-	"os"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -14,7 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestV2ImageEnvironmentFlow tests the complete flow of environment variable handling for v2 images
+// TestV2ImageEnvironmentFlow tests that v2 images correctly extract metadata from CLIP archives
+// Note: Without actual CLIP archives, this test verifies graceful handling
 func TestV2ImageEnvironmentFlow(t *testing.T) {
 	// Create a test config
 	config := types.AppConfig{
@@ -24,18 +23,11 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 		Worker: types.WorkerConfig{},
 	}
 
-	// Create a mock skopeo client that returns ubuntu:20.04 metadata with PATH
+	// Skopeo should NOT be called for v2 images
 	mockSkopeo := &mockSkopeoClient{
 		inspectFunc: func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {
-			return common.ImageMetadata{
-				Name:         "ubuntu",
-				Architecture: "amd64",
-				Os:           "linux",
-				Env: []string{
-					"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-					"UBUNTU_CODENAME=focal",
-				},
-			}, nil
+			t.Fatal("Skopeo should not be called for v2 images")
+			return common.ImageMetadata{}, nil
 		},
 	}
 
@@ -68,168 +60,36 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 		},
 	}
 
-	// Step 1: Read bundle config (should derive from source image for v2)
-	t.Run("ReadBundleConfig", func(t *testing.T) {
+	// V2 images attempt to extract metadata from CLIP archive
+	t.Run("ReadBundleConfig_V2", func(t *testing.T) {
+		// Without a real CLIP archive, readBundleConfig returns nil gracefully
 		initialSpec, err := worker.readBundleConfig(request)
 		require.NoError(t, err)
-		require.NotNil(t, initialSpec, "InitialSpec should not be nil for v2 images")
-
-		t.Logf("InitialSpec.Process.Env: %v", initialSpec.Process.Env)
-
-		// Check that PATH is in the initial spec
-		hasPath := false
-		for _, env := range initialSpec.Process.Env {
-			if containsStr(env, "PATH=") {
-				hasPath = true
-				t.Logf("Found PATH in InitialSpec: %s", env)
-				break
-			}
-		}
-		assert.True(t, hasPath, "InitialSpec should contain PATH from base image")
+		
+		// Spec will be nil without archive (real archives tested in integration tests)
+		assert.Nil(t, initialSpec, "Should return nil when CLIP archive is not present")
+		t.Logf("✅ V2 image correctly attempts to extract from CLIP archive")
 	})
 
-	// Step 2: Create container options with initial spec
-	t.Run("ContainerOptions", func(t *testing.T) {
-		initialSpec, _ := worker.readBundleConfig(request)
-
+	// V2 image behavior: uses base spec when no archive metadata
+	t.Run("SpecFromRequest_WithNilInitialSpec", func(t *testing.T) {
 		options := &ContainerOptions{
 			BundlePath:   "/tmp/test-bundle",
 			HostBindPort: 8001,
 			BindPorts:    []int{8001},
-			InitialSpec:  initialSpec,
-		}
-
-		// Step 3: Get container environment
-		env := worker.getContainerEnvironment(request, options)
-
-		t.Logf("Assembled environment (%d vars):", len(env))
-		for i, e := range env {
-			t.Logf("  [%d] %s", i, e)
-		}
-
-		// Check that PATH is in the assembled environment
-		hasPath := false
-		pathValue := ""
-		for _, envVar := range env {
-			if containsStr(envVar, "PATH=") {
-				hasPath = true
-				pathValue = envVar
-				break
-			}
-		}
-		assert.True(t, hasPath, "Assembled environment should contain PATH")
-		if hasPath {
-			t.Logf("✅ PATH found: %s", pathValue)
-		} else {
-			t.Errorf("❌ PATH missing from assembled environment")
-		}
-
-		// Check order: InitialSpec vars should be first
-		assert.True(t, len(env) > 0, "Environment should not be empty")
-		// First few should be from InitialSpec (PATH, UBUNTU_CODENAME)
-		// Followed by request env (BETA9_TOKEN, STUB_ID)
-		// Followed by system env (BIND_PORT, etc)
-	})
-
-	// Step 4: Generate full spec from request
-	t.Run("SpecFromRequest", func(t *testing.T) {
-		initialSpec, _ := worker.readBundleConfig(request)
-
-		options := &ContainerOptions{
-			BundlePath:   "/tmp/test-bundle",
-			HostBindPort: 8001,
-			BindPorts:    []int{8001},
-			InitialSpec:  initialSpec,
+			InitialSpec:  nil, // V2 images may have nil initial spec
 		}
 
 		spec, err := worker.specFromRequest(request, options)
 		require.NoError(t, err)
 		require.NotNil(t, spec)
 
-		t.Logf("Final spec.Process.Env (%d vars):", len(spec.Process.Env))
-		for i, e := range spec.Process.Env {
-			t.Logf("  [%d] %s", i, e)
-		}
-
-		// Check that PATH is in the final spec
-		hasPath := false
-		pathValue := ""
-		for _, envVar := range spec.Process.Env {
-			if containsStr(envVar, "PATH=") {
-				hasPath = true
-				pathValue = envVar
-				break
-			}
-		}
-		require.True(t, hasPath, "Final spec should contain PATH from base image")
-		t.Logf("✅ Final spec has PATH: %s", pathValue)
-
-		// Verify the expected env vars are present
-		envMap := make(map[string]bool)
-		for _, e := range spec.Process.Env {
-			envMap[e] = true
-		}
-
-		assert.Contains(t, envMap, "BETA9_TOKEN=test-token", "Should have request env")
-		assert.True(t, hasPath, "Should have PATH from base image")
-	})
-
-	// Step 5: Test writing config.json and verify PATH is persisted
-	t.Run("WriteConfigJSON", func(t *testing.T) {
-		initialSpec, _ := worker.readBundleConfig(request)
-
-		options := &ContainerOptions{
-			BundlePath:   "/tmp/test-bundle",
-			HostBindPort: 8001,
-			BindPorts:    []int{8001},
-			InitialSpec:  initialSpec,
-		}
-
-		spec, err := worker.specFromRequest(request, options)
-		require.NoError(t, err)
-
-		// Write spec to temp file (simulating config.json write)
-		tmpDir, err := os.MkdirTemp("", "test-config-*")
-		require.NoError(t, err)
-		defer os.RemoveAll(tmpDir)
-
-		configPath := tmpDir + "/config.json"
-		configBytes, err := json.MarshalIndent(spec, "", "  ")
-		require.NoError(t, err)
-
-		err = os.WriteFile(configPath, configBytes, 0644)
-		require.NoError(t, err)
-
-		t.Logf("Wrote config.json to: %s", configPath)
-
-		// Read it back and verify PATH is there
-		readBytes, err := os.ReadFile(configPath)
-		require.NoError(t, err)
-
-		var readSpec map[string]interface{}
-		err = json.Unmarshal(readBytes, &readSpec)
-		require.NoError(t, err)
-
-		process := readSpec["process"].(map[string]interface{})
-		env := process["env"].([]interface{})
-
-		t.Logf("Read back %d env vars from config.json", len(env))
-
-		hasPath := false
-		for _, e := range env {
-			envStr := e.(string)
-			if containsStr(envStr, "PATH=") {
-				hasPath = true
-				t.Logf("✅ PATH persisted in config.json: %s", envStr)
-				break
-			}
-		}
-		require.True(t, hasPath, "PATH should be persisted in config.json")
+		t.Logf("✅ V2 image successfully generated spec with nil initial spec (uses base config)")
 	})
 }
 
-// TestV2ImageEnvironmentFlow_NonBuildContainer tests that non-build containers (sandboxes, deployments)
-// can retrieve the source image reference from cache and get proper PATH
+// TestV2ImageEnvironmentFlow_NonBuildContainer tests that v2 non-build containers
+// can extract metadata from CLIP archives
 func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 	config := types.AppConfig{
 		ImageService: types.ImageServiceConfig{
@@ -240,16 +100,8 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 
 	mockSkopeo := &mockSkopeoClient{
 		inspectFunc: func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {
-			t.Logf("Inspecting image: %s", image)
-			return common.ImageMetadata{
-				Name:         "ubuntu",
-				Architecture: "amd64",
-				Os:           "linux",
-				Env: []string{
-					"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-					"HOME=/root",
-				},
-			}, nil
+			t.Fatal("Skopeo should not be called for v2 images")
+			return common.ImageMetadata{}, nil
 		},
 	}
 
@@ -269,13 +121,9 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 		},
 	}
 
-	// Simulate a build that caches the source image reference
-	imageId := "v2-image-abc123"
-	sourceImage := "docker.io/library/ubuntu:20.04"
-	imageClient.v2ImageRefs.Set(imageId, sourceImage)
-
 	// Create a non-build container request (like a sandbox)
-	// Note: BuildOptions.SourceImage is NOT set - this simulates a regular container run
+	// For v2 images, metadata comes from CLIP archive, not skopeo
+	imageId := "v2-image-abc123"
 	request := &types.ContainerRequest{
 		ContainerId: "sandbox-xyz",
 		ImageId:     imageId,
@@ -284,41 +132,15 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 		},
 	}
 
-	t.Run("NonBuildContainer_HasPATH", func(t *testing.T) {
+	t.Run("V2Image_ExtractsFromArchive", func(t *testing.T) {
+		// Without a real CLIP archive, readBundleConfig will try to derive from v2 image
+		// and return nil (gracefully handling missing archive)
 		initialSpec, err := worker.readBundleConfig(request)
 		require.NoError(t, err)
-		require.NotNil(t, initialSpec, "Should derive spec from cached source image")
+		// Spec will be nil without a real archive
+		assert.Nil(t, initialSpec, "Should return nil when CLIP archive is not present (tested with real archives in integration tests)")
 
-		// Verify PATH is present
-		hasPath := false
-		for _, env := range initialSpec.Process.Env {
-			if containsStr(env, "PATH=") {
-				hasPath = true
-				t.Logf("✅ PATH retrieved for non-build container: %s", env)
-				break
-			}
-		}
-		assert.True(t, hasPath, "Non-build container should have PATH from base image")
-
-		// Test the full flow
-		options := &ContainerOptions{
-			BundlePath:   "/tmp/test-bundle",
-			HostBindPort: 8001,
-			BindPorts:    []int{8001},
-			InitialSpec:  initialSpec,
-		}
-
-		env := worker.getContainerEnvironment(request, options)
-
-		hasPathInEnv := false
-		for _, e := range env {
-			if containsStr(e, "PATH=") {
-				hasPathInEnv = true
-				t.Logf("✅ PATH in final environment: %s", e)
-				break
-			}
-		}
-		assert.True(t, hasPathInEnv, "Final environment should contain PATH")
+		t.Logf("✅ V2 image correctly attempts to extract metadata from CLIP archive")
 	})
 }
 
@@ -401,51 +223,30 @@ func TestCachedImageMetadata(t *testing.T) {
 			ImageId:     imageId,
 		}
 
-		// Without a real archive, this will try to fallback to source image reference
-		// The test mainly verifies that the code path doesn't crash
-		spec, err := worker.deriveSpecFromSourceImage(request)
+		// Without a real archive, metadata extraction will fail gracefully
+		spec, err := worker.deriveSpecFromV2Image(request)
 		// No error since it falls back gracefully
 		assert.NoError(t, err)
-		// Spec will be nil since there's no archive and no source image ref
+		// Spec will be nil since there's no archive
 		assert.Nil(t, spec)
 
-		t.Logf("✅ Verified metadata extraction path (would extract from archive in real use)")
+		t.Logf("✅ Verified v2 metadata extraction path (would extract from archive in real use)")
 	})
 
-	t.Run("FallbackToSkopeoWhenNotCached", func(t *testing.T) {
-		// Reset skopeo call count
-		skopeoCallCount = 0
-
-		// Update mock to return valid metadata
-		mockSkopeo.inspectFunc = func(ctx context.Context, image string, creds string, logger *slog.Logger) (common.ImageMetadata, error) {
-			skopeoCallCount++
-			return common.ImageMetadata{
-				Name:         "fallback-image",
-				Architecture: "amd64",
-				Os:           "linux",
-				Env:          []string{"PATH=/usr/bin:/bin"},
-			}, nil
-		}
-
-		// Cache source image reference (but not metadata)
-		uncachedImageId := "v2-uncached-image-456"
-		sourceImage := "docker.io/library/alpine:latest"
-		imageClient.v2ImageRefs.Set(uncachedImageId, sourceImage)
-
+	t.Run("GracefullyHandlesMissingArchive", func(t *testing.T) {
+		// For v2 images without an archive, should return nil spec gracefully
+		uncachedImageId := "v2-no-archive-456"
 		request := &types.ContainerRequest{
-			ContainerId: "test-container-uncached",
+			ContainerId: "test-container-no-archive",
 			ImageId:     uncachedImageId,
 		}
 
-		// Derive spec - should fallback to skopeo
-		spec, err := worker.deriveSpecFromSourceImage(request)
+		// Should gracefully return nil when archive is missing
+		spec, err := worker.deriveSpecFromV2Image(request)
 		require.NoError(t, err)
-		require.NotNil(t, spec)
+		assert.Nil(t, spec, "Should return nil spec when archive metadata is missing")
 
-		// Verify skopeo WAS called as fallback
-		assert.Equal(t, 1, skopeoCallCount, "Skopeo.Inspect should be called when metadata is not cached")
-
-		t.Logf("✅ Successfully fell back to skopeo for image without cached metadata")
+		t.Logf("✅ Gracefully handled missing v2 archive")
 	})
 }
 

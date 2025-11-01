@@ -361,10 +361,10 @@ func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec,
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
 		// For v2 images, there's no pre-baked config.json in the mounted root.
-		// Derive the spec from the source image using skopeo inspect.
+		// Derive the spec from CLIP metadata embedded in the archive.
 		if os.IsNotExist(err) {
-			log.Info().Str("image_id", request.ImageId).Msg("no bundle config found, deriving from source image")
-			return s.deriveSpecFromSourceImage(request)
+			log.Info().Str("image_id", request.ImageId).Msg("no bundle config found, deriving from v2 image metadata")
+			return s.deriveSpecFromV2Image(request)
 		}
 		log.Error().Str("image_id", request.ImageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
 		return nil, err
@@ -382,65 +382,26 @@ func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec,
 	return &spec, nil
 }
 
-// deriveSpecFromSourceImage creates an OCI spec from the source image metadata.
-// This is used for v2 images where we don't have an unpacked bundle with config.json.
-func (s *Worker) deriveSpecFromSourceImage(request *types.ContainerRequest) (*specs.Spec, error) {
-	// First try to get cached metadata from CLIP archive (v2 images)
-	if clipMeta, ok := s.imageClient.GetCLIPImageMetadata(request.ImageId); ok {
-		log.Info().
-			Str("image_id", request.ImageId).
-			Msg("using cached image metadata from clip archive")
-		return s.buildSpecFromCLIPMetadata(clipMeta), nil
-	}
-
-	// Fallback: determine source image reference and credentials for runtime lookup
-	sourceImageRef, sourceImageCreds := s.getSourceImageInfo(request)
-	if sourceImageRef == "" {
-		log.Warn().Str("image_id", request.ImageId).Msg("no source image reference or cached metadata, using base spec")
-		return nil, nil
-	}
-
-	// Inspect source image with timeout (fallback for v1 images or when metadata is not cached)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, sourceImageRef, sourceImageCreds, nil)
-	if err != nil {
+// deriveSpecFromV2Image creates an OCI spec from v2 image metadata.
+// This is ONLY used for v2 images where we don't have an unpacked bundle with config.json.
+// V1 images always have a config.json, so if we're here, it's a v2 image.
+func (s *Worker) deriveSpecFromV2Image(request *types.ContainerRequest) (*specs.Spec, error) {
+	// Extract metadata from CLIP archive
+	clipMeta, ok := s.imageClient.GetCLIPImageMetadata(request.ImageId)
+	if !ok {
 		log.Warn().
 			Str("image_id", request.ImageId).
-			Str("source_image", sourceImageRef).
-			Err(err).
-			Msg("failed to inspect source image, using base spec")
+			Msg("no metadata found in v2 image archive, using base spec")
 		return nil, nil
 	}
 
 	log.Info().
 		Str("image_id", request.ImageId).
-		Str("source_image", sourceImageRef).
-		Msg("derived spec from source image via runtime lookup")
-
-	// Build spec from skopeo metadata (legacy path for v1 images)
-	return s.buildSpecFromImageMetadata(&imgMeta), nil
+		Msg("using metadata from v2 clip archive")
+	
+	return s.buildSpecFromCLIPMetadata(clipMeta), nil
 }
 
-// getSourceImageInfo retrieves the source image reference and credentials
-func (s *Worker) getSourceImageInfo(request *types.ContainerRequest) (string, string) {
-	// Build containers have source image in BuildOptions
-	if request.BuildOptions.SourceImage != nil {
-		return *request.BuildOptions.SourceImage, request.BuildOptions.SourceImageCreds
-	}
-
-	// Non-build containers: try cache
-	if ref, ok := s.imageClient.GetSourceImageRef(request.ImageId); ok {
-		log.Info().
-			Str("image_id", request.ImageId).
-			Str("source_image", ref).
-			Msg("retrieved source image from cache")
-		return ref, ""
-	}
-
-	return "", ""
-}
 
 // buildSpecFromCLIPMetadata constructs an OCI spec from CLIP image metadata
 // This is the primary path for v2 images with embedded metadata
@@ -471,22 +432,6 @@ func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *
 	return &spec
 }
 
-// buildSpecFromImageMetadata constructs an OCI spec from skopeo image metadata
-// This is the legacy path for v1 images or when CLIP metadata is not available
-func (s *Worker) buildSpecFromImageMetadata(imgMeta *common.ImageMetadata) *specs.Spec {
-	spec := specs.Spec{
-		Process: &specs.Process{
-			Env: []string{},
-		},
-	}
-
-	// Use Env field from skopeo output
-	if len(imgMeta.Env) > 0 {
-		spec.Process.Env = imgMeta.Env
-	}
-
-	return &spec
-}
 
 // Generate a runc spec from a given request
 func (s *Worker) specFromRequest(request *types.ContainerRequest, options *ContainerOptions) (*specs.Spec, error) {
