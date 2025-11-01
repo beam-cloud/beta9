@@ -313,43 +313,8 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 	// - If ignore_python=false -> install Python when version specified
 	shouldInstallPython := pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0)
 
-	if shouldInstallPython {
-		if isMicromamba {
-			sb.WriteString("RUN micromamba config set use_lockfiles False\n")
-		} else {
-			// Install the requested Python version
-			if installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion); err == nil {
-				sb.WriteString("RUN ")
-				sb.WriteString(installCmd)
-				sb.WriteString("\n")
-			}
-		}
-	}
-
-	// Install Python packages if specified
-	// Only install if we have packages and we're not in the "ignore Python with no packages" state
-	if len(opts.PythonPackages) > 0 && pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0) {
-		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
-			sb.WriteString("RUN ")
-			sb.WriteString(pipCmd)
-			sb.WriteString("\n")
-		}
-	}
-
-	// Add build steps
-	if len(opts.BuildSteps) > 0 {
-		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
-		for _, cmd := range steps {
-			if cmd != "" {
-				sb.WriteString("RUN ")
-				sb.WriteString(cmd)
-				sb.WriteString("\n")
-			}
-		}
-	}
-
-	// Add explicit shell commands
-	b.renderCommands(&sb, opts)
+	// Use shared helper to render build instructions (strictErrors=false to match original behavior)
+	_ = b.renderDockerfileBuildInstructions(&sb, opts, pythonVersion, isMicromamba, shouldInstallPython, false)
 
 	return sb.String()
 }
@@ -384,22 +349,42 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	isBeta9BaseImage := opts.BaseImageName == b.config.ImageService.Runner.BaseImageName &&
 		opts.BaseImageRegistry == b.config.ImageService.Runner.BaseImageRegistry
 
-	// Python environment setup
-	if isMicromamba {
-		sb.WriteString("RUN micromamba config set use_lockfiles False\n")
-	} else if pythonVersion != "" && !isBeta9BaseImage {
-		// Only install Python if NOT a beta9 base image
-		// Beta9 images already have Python, similar to how v1 skips if python probe succeeds
-		if installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion); err != nil {
-			return "", err
-		} else {
-			sb.WriteString("RUN ")
-			sb.WriteString(installCmd)
-			sb.WriteString("\n")
+	// Determine if we should install Python
+	// Install if: micromamba OR (pythonVersion specified AND NOT beta9 base image)
+	shouldInstallPython := isMicromamba || (pythonVersion != "" && !isBeta9BaseImage)
+
+	// Use shared helper to render build instructions (strictErrors=true to match original behavior)
+	if err := b.renderDockerfileBuildInstructions(&sb, opts, pythonVersion, isMicromamba, shouldInstallPython, true); err != nil {
+		return "", err
+	}
+	return sb.String(), nil
+}
+
+// renderDockerfileBuildInstructions renders Python installation, package installation, build steps, and commands
+// to a strings.Builder. This is the shared logic between appendToDockerfile and RenderV2Dockerfile.
+// Returns an error if Python installation fails (when strictErrors is true).
+func (b *Builder) renderDockerfileBuildInstructions(sb *strings.Builder, opts *BuildOpts, pythonVersion string, isMicromamba bool, shouldInstallPython bool, strictErrors bool) error {
+	// Install Python if needed
+	if shouldInstallPython {
+		if isMicromamba {
+			sb.WriteString("RUN micromamba config set use_lockfiles False\n")
+		} else if pythonVersion != "" {
+			// Install the requested Python version
+			installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion)
+			if err != nil {
+				if strictErrors {
+					return err
+				}
+				// If not strict, silently skip (appendToDockerfile behavior)
+			} else {
+				sb.WriteString("RUN ")
+				sb.WriteString(installCmd)
+				sb.WriteString("\n")
+			}
 		}
 	}
 
-	// Install Python packages (works with or without prior Python installation)
+	// Install Python packages if specified
 	if len(opts.PythonPackages) > 0 && pythonVersion != "" {
 		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
 			sb.WriteString("RUN ")
@@ -408,7 +393,7 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 		}
 	}
 
-	// Add build steps (coalesced pip/mamba commands)
+	// Add build steps
 	if len(opts.BuildSteps) > 0 {
 		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
 		for _, cmd := range steps {
@@ -421,8 +406,8 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	}
 
 	// Add explicit shell commands
-	b.renderCommands(&sb, opts)
-	return sb.String(), nil
+	b.renderCommands(sb, opts)
+	return nil
 }
 
 // renderCommands adds RUN commands for each non-empty command
