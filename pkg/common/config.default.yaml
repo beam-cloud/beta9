@@ -1,5 +1,5 @@
 clusterName: beta9
-debugMode: false
+debugMode: true
 prettyLogs: true
 database:
   postgres:
@@ -100,8 +100,12 @@ imageService:
   # In the worst case, we have seen 10gb images take 20 minutes. That is 1e+10 bytes taking 1200 seconds.
   # That gives 1200 / 1e+10 = 120 ns per byte.
   archiveNanosecondsPerByte: 120
+  # Default to clip v2 (index-only OCI archives). Set to 1 to force legacy.
+  clipVersion: 2
   registryStore: local
   registryCredentialProvider: docker
+  buildRegistry: registry.localhost:5000
+  buildRegistryInsecure: true
   buildContainerPoolSelector: build
   pythonVersion: python3.10
   registries:
@@ -216,7 +220,7 @@ worker:
   terminationGracePeriod: 30
   cleanupWorkerInterval: 1m
   cleanupPendingWorkerAgeLimit: 10m
-  blobCacheEnabled: false
+  blobCacheEnabled: true
   containerLogLinesPerHour: 6000
   failover:
     enabled: true
@@ -255,6 +259,34 @@ worker:
       criu:
         # Keep the job running after checkpoint
         leave_running: true
+
+blobcache:
+  global:
+    coordinatorHost: blobcache.beta9.svc.cluster.local:2049
+    defaultLocality: default
+    serverPort: 2049
+    discoveryIntervalS: 5
+    rttThresholdMilliseconds: 1000
+    hostStorageCapacityThresholdPct: 0.95
+    grpcDialTimeoutS: 1
+    grpcMessageSizeBytes: 1073741824 # 1GB
+    debugMode: false
+    prettyLogs: true
+  client:
+    nTopHosts: 3
+    minRetryLengthBytes: 10000000 # 10MB
+    maxGetContentAttempts: 3
+    token:
+    blobfs:
+      maxBackgroundTasks: 256
+      maxReadAheadKB: 1024
+      maxWriteKB: 1024
+      enabled: true
+      mountPoint: /cache
+      directIO: false
+      directMount: false
+      options:
+      - max_read=1048576
 
 providers:
   ec2:

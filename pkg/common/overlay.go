@@ -66,6 +66,15 @@ func (co *ContainerOverlay) AddEmptyLayer() error {
 		return err
 	}
 
+	// Create required directories in the upper layer
+	// This ensures they exist in the container filesystem regardless of the base image
+	for _, dir := range []string{"workspace", "volumes"} {
+		requiredDir := filepath.Join(upperDir, dir)
+		if err := os.MkdirAll(requiredDir, 0755); err != nil {
+			log.Warn().Err(err).Str("path", requiredDir).Msg("failed to create required directory in upper layer")
+		}
+	}
+
 	mergedDir := filepath.Join(layerDir, "merged")
 	err = os.MkdirAll(mergedDir, 0755)
 	if err != nil {
@@ -173,11 +182,10 @@ func (co *ContainerOverlay) mount(layer *ContainerOverlayLayer) error {
 	startTime := time.Now()
 
 	mntOptions := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", layer.lower, layer.upper, layer.work)
-	err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run()
-	if err != nil {
+	if err := exec.Command("mount", "-t", "overlay", "overlay", "-o", mntOptions, layer.merged).Run(); err != nil {
 		return err
 	}
 
-	log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted layer")
+	log.Info().Str("container_id", co.containerId).Int("layer_index", layer.index).Dur("duration", time.Since(startTime)).Msg("mounted kernel overlay layer")
 	return nil
 }

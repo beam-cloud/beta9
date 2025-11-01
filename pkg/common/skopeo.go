@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,11 +57,20 @@ type ImageMetadata struct {
 }
 
 func NewSkopeoClient(config types.AppConfig) SkopeoClient {
+	// If the runner base registry is localhost and buildRegistryInsecure is true,
+	// default to disabling TLS verification for skopeo operations as well.
+	enableTLS := config.ImageService.EnableTLS
+	if (strings.Contains(config.ImageService.Runner.BaseImageRegistry, "localhost") ||
+		strings.HasPrefix(config.ImageService.Runner.BaseImageRegistry, "127.0.0.1")) &&
+		config.ImageService.BuildRegistryInsecure {
+		enableTLS = false
+	}
+
 	return &skopeoClient{
 		pullCommand:    imagePullCommand,
 		commandTimeout: -1,
 		debug:          false,
-		enableTLS:      config.ImageService.EnableTLS,
+		enableTLS:      enableTLS,
 		creds:          "",
 		pDeathSignal:   0,
 	}
@@ -138,10 +148,10 @@ func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string
 func (p *skopeoClient) inspectArgs(creds string) (out []string) {
 	if creds != "" {
 		out = append(out, "--creds", creds)
-	} else if creds == "" {
-		out = append(out, "--no-creds")
 	} else if p.creds != "" {
 		out = append(out, "--creds", p.creds)
+	} else {
+		out = append(out, "--no-creds")
 	}
 
 	if p.commandTimeout > 0 {
@@ -162,10 +172,10 @@ func (p *skopeoClient) inspectArgs(creds string) (out []string) {
 func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	if creds != "" {
 		out = append(out, "--src-creds", creds)
-	} else if creds == "" {
-		out = append(out, "--src-no-creds")
 	} else if p.creds != "" {
 		out = append(out, "--src-creds", p.creds)
+	} else {
+		out = append(out, "--src-no-creds")
 	}
 
 	if p.commandTimeout > 0 {

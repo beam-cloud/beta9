@@ -97,6 +97,7 @@ class ContainerRequest(betterproto.Message):
     app_id: str = betterproto.string_field(23)
     checkpoint: "Checkpoint" = betterproto.message_field(24)
     config_path: str = betterproto.string_field(25)
+    image_credentials: str = betterproto.string_field(26)
 
 
 @dataclass(eq=False, repr=False)

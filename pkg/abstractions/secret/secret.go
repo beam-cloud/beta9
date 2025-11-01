@@ -70,7 +70,7 @@ func (s *WorkspaceSecretService) CreateSecret(ctx context.Context, req *pb.Creat
 	}
 
 	// Save the secret
-	secret, err := s.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, req.Name, req.Value)
+	secret, err := s.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, req.Name, req.Value, true)
 	if err != nil {
 		return &pb.CreateSecretResponse{
 			Ok:     false,

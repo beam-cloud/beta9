@@ -1890,16 +1890,18 @@ func validateEnvironmentVariableName(name string) error {
 	return nil
 }
 
-func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error) {
+func (r *PostgresBackendRepository) CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string, validateName bool) (*types.Secret, error) {
 	query := `
 	INSERT INTO workspace_secret (name, value, workspace_id, last_updated_by)
 	VALUES ($1, $2, $3, $4)
 	RETURNING id, external_id, name, workspace_id, last_updated_by, created_at, updated_at;
 	`
 
-	err := validateEnvironmentVariableName(name)
-	if err != nil {
-		return nil, err
+	if validateName {
+		err := validateEnvironmentVariableName(name)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	secretKey, err := pkgCommon.ParseSecretKey(*workspace.SigningKey)
@@ -2009,7 +2011,7 @@ func (r *PostgresBackendRepository) DeleteSecret(ctx context.Context, workspace 
 	return nil
 }
 
-func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error) {
+func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretName string, value string) (*types.Secret, error) {
 	query := `
 	UPDATE workspace_secret
 	SET value = $3, last_updated_by = $4, updated_at = CURRENT_TIMESTAMP
@@ -2028,7 +2030,7 @@ func (r *PostgresBackendRepository) UpdateSecret(ctx context.Context, workspace 
 	}
 
 	var secret types.Secret
-	if err := r.client.GetContext(ctx, &secret, query, secretId, workspace.Id, encryptedValue, tokenId); err != nil {
+	if err := r.client.GetContext(ctx, &secret, query, secretName, workspace.Id, encryptedValue, tokenId); err != nil {
 		return nil, err
 	}
 
@@ -2390,6 +2392,29 @@ func (r *PostgresBackendRepository) CreateImage(ctx context.Context, imageId str
 	}
 
 	return clipVersion, nil
+}
+
+func (r *PostgresBackendRepository) SetImageCredentialSecret(ctx context.Context, imageId string, secretName string, secretExternalId string) error {
+	query := `
+		UPDATE image 
+		SET credential_secret_name = $2, credential_secret_id = $3
+		WHERE image_id = $1;
+	`
+	_, err := r.client.ExecContext(ctx, query, imageId, secretName, secretExternalId)
+	return err
+}
+
+func (r *PostgresBackendRepository) GetImageCredentialSecret(ctx context.Context, imageId string) (string, string, error) {
+	var secretName sql.NullString
+	var secretId sql.NullString
+	query := `SELECT credential_secret_name, credential_secret_id FROM image WHERE image_id = $1;`
+
+	err := r.client.QueryRowContext(ctx, query, imageId).Scan(&secretName, &secretId)
+	if err != nil {
+		return "", "", err
+	}
+
+	return secretName.String, secretId.String, nil
 }
 
 func (r *PostgresBackendRepository) CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error) {

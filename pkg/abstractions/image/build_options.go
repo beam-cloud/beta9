@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 )
 
@@ -61,18 +62,19 @@ func (o *BuildOpts) setCustomImageBuildOptions() error {
 		return err
 	}
 
-	if len(o.ExistingImageCreds) > 0 && o.ExistingImageUri != "" {
-		token, err := GetRegistryToken(o)
-		if err != nil {
-			return err
-		}
-		o.BaseImageCreds = token
-	}
-
+	// Set base image details
 	o.BaseImageRegistry = baseImage.Registry
 	o.BaseImageName = baseImage.Repo
 	o.BaseImageTag = baseImage.Tag
 	o.BaseImageDigest = baseImage.Digest
+
+	// Convert credentials to skopeo format if provided
+	if len(o.ExistingImageCreds) > 0 {
+		o.BaseImageCreds, err = reg.GetRegistryTokenForImage(o.ExistingImageUri, o.ExistingImageCreds)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }

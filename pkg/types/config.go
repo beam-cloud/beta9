@@ -172,6 +172,13 @@ type FileServiceConfig struct {
 	Enabled bool `key:"enabled" json:"enabled"`
 }
 
+type ClipVersion uint32
+
+const (
+	ClipVersion1 ClipVersion = 1
+	ClipVersion2 ClipVersion = 2
+)
+
 type ImageServiceConfig struct {
 	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
 	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
@@ -185,6 +192,10 @@ type ImageServiceConfig struct {
 	Runner                         RunnerConfig          `key:"runner" json:"runner"`
 	ArchiveNanosecondsPerByte      int64                 `key:"archiveNanosecondsPerByte" json:"archive_nanoseconds_per_byte"`
 	ClipVersion                    uint32                `key:"clipVersion" json:"clip_version"`
+	// BuildRegistry is the docker registry used to tag/push intermediate build images
+	// for v2 indexing (CreateFromOCIImage). If empty, defaults to Runner.BaseImageRegistry.
+	BuildRegistry         string `key:"buildRegistry" json:"build_registry"`
+	BuildRegistryInsecure bool   `key:"buildRegistryInsecure" json:"build_registry_insecure"`
 }
 
 type ImageRegistriesConfig struct {

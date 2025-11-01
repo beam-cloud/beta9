@@ -320,7 +320,7 @@ func (g *Gateway) registerServices() error {
 	pb.RegisterSimpleQueueServiceServer(g.grpcServer, rq)
 
 	// Register image service
-	is, err := image.NewRuncImageService(g.ctx, image.ImageServiceOpts{
+	is, err := image.NewContainerImageService(g.ctx, image.ImageServiceOpts{
 		Config:        g.Config,
 		ContainerRepo: g.ContainerRepo,
 		Scheduler:     g.Scheduler,

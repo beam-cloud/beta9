@@ -51,7 +51,7 @@ func (g *secretGroup) CreateSecret(ctx echo.Context) error {
 	}
 
 	// Create the secret
-	secret, err := g.ss.backendRepo.CreateSecret(ctx.Request().Context(), &workspace, cc.AuthInfo.Token.Id, secretInput.Name, secretInput.Value)
+	secret, err := g.ss.backendRepo.CreateSecret(ctx.Request().Context(), &workspace, cc.AuthInfo.Token.Id, secretInput.Name, secretInput.Value, true)
 	if err != nil {
 		if err, ok := err.(*pq.Error); ok {
 			if err.Code.Name() == "unique_violation" {

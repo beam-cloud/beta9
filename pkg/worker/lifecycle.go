@@ -17,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	goproc "github.com/beam-cloud/goproc/pkg"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 
@@ -219,6 +220,22 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
 
+	// Clip v2 build short-circuit: For v2 builds, the image was already built via buildah
+	// (see buildOrPullBaseImage) and indexed as a .clip archive. We don't need to run a
+	// runc container or execute any commands inside it. Mark the build as successful and exit.
+	if request.IsBuildRequest() && s.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
+		exitCode := 0
+		_, _ = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+			ContainerId: containerId,
+			ExitCode:    int32(exitCode),
+		}))
+		s.containerWg.Add(1)
+		go func() {
+			s.finalizeContainer(containerId, request, &exitCode)
+		}()
+		return nil
+	}
+
 	// Determine how many ports we need to expose
 	portsToExpose := len(request.Ports)
 	if portsToExpose == 0 {
@@ -253,8 +270,11 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
 
-	// Read spec from bundle
-	initialBundleSpec, _ := s.readBundleConfig(request.ImageId, request.IsBuildRequest())
+	// Read spec from bundle; guard against empty image IDs
+	if request.ImageId == "" {
+		return fmt.Errorf("empty image id in request")
+	}
+	initialBundleSpec, _ := s.readBundleConfig(request)
 
 	opts := &ContainerOptions{
 		BundlePath:   bundlePath,
@@ -316,32 +336,37 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 }
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
-	switch {
-	case request.BuildOptions.Dockerfile != nil:
-		log.Info().Str("container_id", containerId).Msg("lazy-pull failed, building image from Dockerfile")
-		if err := s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request); err != nil {
-			return err
-		}
-	case request.BuildOptions.SourceImage != nil:
-		log.Info().Str("container_id", containerId).Msgf("lazy-pull failed, pulling source image: %s", *request.BuildOptions.SourceImage)
+	// For Clip v2 builds, the Dockerfile is rendered by the builder with all build steps.
+	// Build via buildah if a non-empty Dockerfile is present (contains RUN commands for actual builds).
+	if request.BuildOptions.Dockerfile != nil && *request.BuildOptions.Dockerfile != "" {
+		log.Info().Str("container_id", containerId).Msg("building image from Dockerfile")
+		return s.imageClient.BuildAndArchiveImage(ctx, outputLogger, request)
+	}
 
-		if err := s.imageClient.PullAndArchiveImage(ctx, outputLogger, request); err != nil {
-			return err
-		}
+	// Fallback: pull the source image and archive it
+	if request.BuildOptions.SourceImage != nil {
+		log.Info().Str("container_id", containerId).Msgf("pulling source image: %s", *request.BuildOptions.SourceImage)
+		return s.imageClient.PullAndArchiveImage(ctx, outputLogger, request)
 	}
 
 	return nil
 }
 
-func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.Spec, error) {
-	imageConfigPath := filepath.Join(s.imageMountPath, imageId, initialSpecBaseName)
-	if isBuildRequest {
-		imageConfigPath = filepath.Join(s.imageMountPath, imageId, specBaseName)
+func (s *Worker) readBundleConfig(request *types.ContainerRequest) (*specs.Spec, error) {
+	imageConfigPath := filepath.Join(s.imageMountPath, request.ImageId, initialSpecBaseName)
+	if request.IsBuildRequest() {
+		imageConfigPath = filepath.Join(s.imageMountPath, request.ImageId, specBaseName)
 	}
 
 	data, err := os.ReadFile(imageConfigPath)
 	if err != nil {
-		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
+		// For v2 images, there's no pre-baked config.json in the mounted root.
+		// Derive the spec from CLIP metadata embedded in the archive.
+		if os.IsNotExist(err) {
+			log.Info().Str("image_id", request.ImageId).Msg("no bundle config found, deriving from v2 image metadata")
+			return s.deriveSpecFromV2Image(request)
+		}
+		log.Error().Str("image_id", request.ImageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to read bundle config")
 		return nil, err
 	}
 
@@ -350,11 +375,59 @@ func (s *Worker) readBundleConfig(imageId string, isBuildRequest bool) (*specs.S
 
 	err = json.Unmarshal([]byte(specTemplate), &spec)
 	if err != nil {
-		log.Error().Str("image_id", imageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to unmarshal bundle config")
+		log.Error().Str("image_id", request.ImageId).Str("image_config_path", imageConfigPath).Err(err).Msg("failed to unmarshal bundle config")
 		return nil, err
 	}
 
 	return &spec, nil
+}
+
+// deriveSpecFromV2Image creates an OCI spec from v2 image metadata.
+// This is ONLY used for v2 images where we don't have an unpacked bundle with config.json.
+// V1 images always have a config.json, so if we're here, it's a v2 image.
+func (s *Worker) deriveSpecFromV2Image(request *types.ContainerRequest) (*specs.Spec, error) {
+	clipMeta, ok := s.imageClient.GetCLIPImageMetadata(request.ImageId)
+	if !ok {
+		log.Warn().
+			Str("image_id", request.ImageId).
+			Msg("no metadata found in v2 image archive, using base spec")
+		return nil, nil
+	}
+
+	log.Info().
+		Str("image_id", request.ImageId).
+		Msg("using metadata from v2 clip archive")
+
+	return s.buildSpecFromCLIPMetadata(clipMeta), nil
+}
+
+// buildSpecFromCLIPMetadata constructs an OCI spec from CLIP image metadata
+// This is the primary path for v2 images with embedded metadata
+func (s *Worker) buildSpecFromCLIPMetadata(clipMeta *clipCommon.ImageMetadata) *specs.Spec {
+	spec := specs.Spec{
+		Process: &specs.Process{
+			Env: []string{},
+		},
+	}
+
+	// CLIP metadata has a flat structure with all fields at the top level
+	if len(clipMeta.Env) > 0 {
+		spec.Process.Env = clipMeta.Env
+	}
+	if clipMeta.WorkingDir != "" {
+		spec.Process.Cwd = clipMeta.WorkingDir
+	}
+	if clipMeta.User != "" {
+		spec.Process.User.Username = clipMeta.User
+	}
+	// Combine Entrypoint and Cmd, or use Cmd alone
+	if len(clipMeta.Entrypoint) > 0 {
+		spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
+	} else if len(clipMeta.Cmd) > 0 {
+		spec.Process.Args = clipMeta.Cmd
+	}
+
+	return &spec
 }
 
 // Generate a runc spec from a given request
@@ -403,7 +476,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if request.Gpu != "" {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
-	spec.Process.Env = append(spec.Process.Env, env...)
+
+	// Environment is already assembled in getContainerEnvironment (includes InitialSpec.Env if present)
+	spec.Process.Env = env
 
 	// We need to include the checkpoint signal files in the container spec
 	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
@@ -509,7 +584,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Mounts = append(spec.Mounts, resolvMount)
 
 	// Add back tmpfs pod/sandbox mounts from initial spec if they exist
-	if request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox {
+	if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox) && options.InitialSpec != nil {
 		for _, m := range options.InitialSpec.Mounts {
 			if m.Source == "none" && m.Type == "tmpfs" {
 				spec.Mounts = append(spec.Mounts, m)

@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -10,12 +11,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/registry"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
@@ -43,8 +46,6 @@ var (
 	baseImageCachePath string = "/images/cache"
 	baseImageMountPath string = "/images/mnt/%s"
 )
-
-var requiredContainerDirectories []string = []string{"/workspace", "/volumes"}
 
 func getImageCachePath() string {
 	path := baseImageCachePath
@@ -117,7 +118,7 @@ func NewPathInfo(path string) *PathInfo {
 }
 
 type ImageClient struct {
-	registry           *registry.ImageRegistry
+	registry           *reg.ImageRegistry
 	cacheClient        *blobcache.BlobCacheClient
 	imageCachePath     string
 	imageMountPath     string
@@ -128,10 +129,12 @@ type ImageClient struct {
 	workerId           string
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
+	// Cache source image references for v2 images (imageId -> sourceImageRef)
+	v2ImageRefs *common.SafeMap[string]
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
-	registry, err := registry.NewImageRegistry(config, config.ImageService.Registries.S3)
+	registry, err := reg.NewImageRegistry(config, config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
 	}
@@ -147,9 +150,16 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		workerRepoClient:   workerRepoClient,
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+		v2ImageRefs:        common.NewSafeMap[string](),
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
+	}
+
+	if config.DebugMode {
+		clip.SetLogLevel("debug")
+	} else {
+		clip.SetLogLevel("info")
 	}
 
 	err = os.MkdirAll(c.imageBundlePath, os.ModePerm)
@@ -164,7 +174,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
-	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
+	localCachePath := c.imageCachePath
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
 		localCachePath = ""
 	}
@@ -231,32 +241,141 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	elapsed := time.Since(startTime)
-	remoteArchivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, registry.RemoteImageFileExtension)
-	sourceRegistry, err := c.pullImageFromRegistry(ctx, remoteArchivePath, imageId)
+	// Always fetch the remote archive into the cache directory first
+	downloadPath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
+	// Ensure parent dir exists
+	_ = os.MkdirAll(filepath.Dir(downloadPath), 0755)
+
+	sourceRegistry, err := c.pullImageFromRegistry(ctx, downloadPath, imageId)
 	if err != nil {
 		return elapsed, err
 	}
 
+	// Detect storage type (v1 S3 data-carrying vs v2 OCI index-only) from the archive metadata
+	archiver := clip.NewClipArchiver()
+	meta, _ := archiver.ExtractMetadata(downloadPath)
+
+	// Decide final mount archive path:
+	// - v2 (oci): place a single canonical index file at /images/<id>.clip and use that for mount,
+	//             preserving only one on-disk artifact for v2
+	// - v1 (s3/local): mount the downloaded file as-is from the cache to avoid mixing artifacts
+	mountArchivePath := downloadPath
+	if meta != nil {
+		if t, ok := meta.StorageInfo.(interface{ Type() string }); ok && (t.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(t.Type()) == "oci") {
+			canonicalIndexPath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
+			_ = os.MkdirAll(filepath.Dir(canonicalIndexPath), 0755)
+			if downloadPath != canonicalIndexPath {
+				// Move the downloaded file to the canonical clip index path
+				if err := os.Rename(downloadPath, canonicalIndexPath); err != nil {
+					// Fallback: copy then remove
+					if in, e1 := os.Open(downloadPath); e1 == nil {
+						defer in.Close()
+						if out, e2 := os.Create(canonicalIndexPath); e2 == nil {
+							if _, e3 := io.Copy(out, in); e3 == nil {
+								out.Close()
+								_ = os.Remove(downloadPath)
+							} else {
+								out.Close()
+							}
+						}
+					}
+				}
+			}
+			mountArchivePath = canonicalIndexPath
+
+			// Extract and cache the OCI image reference for later use (for deriving spec in non-build containers)
+			if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok {
+				if ociInfo.RegistryURL == "" {
+					ociInfo.RegistryURL = "https://docker.io"
+				}
+
+				// Build the full image reference from OCI storage info
+				if ociInfo.Repository != "" && ociInfo.Reference != "" {
+					// Convert registry URL to registry host (strip https://)
+					registryHost := strings.TrimPrefix(ociInfo.RegistryURL, "https://")
+					registryHost = strings.TrimPrefix(registryHost, "http://")
+					sourceRef := fmt.Sprintf("%s/%s:%s", registryHost, ociInfo.Repository, ociInfo.Reference)
+					c.v2ImageRefs.Set(imageId, sourceRef)
+					log.Info().Str("image_id", imageId).Str("source_image", sourceRef).Msg("cached source image reference from clip metadata")
+				}
+
+				// Log that metadata is available in the archive
+				if ociInfo.ImageMetadata != nil {
+					log.Info().Str("image_id", imageId).Msg("image metadata available in clip archive")
+				}
+			}
+		}
+	}
+
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
-		ArchivePath:           remoteArchivePath,
+		ArchivePath:           mountArchivePath,
 		MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
-		Verbose:               false,
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
-		Credentials: storage.ClipStorageCredentials{
+	}
+
+	// Do not persist or rely on an initial spec file for v2; base runc config will be used instead
+	// Default to legacy S3 storage if we cannot detect OCI
+	storageType := ""
+	if meta != nil && meta.StorageInfo != nil {
+		if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
+			storageType = t.Type()
+		}
+	}
+
+	if strings.ToLower(storageType) == string(clipCommon.StorageModeOCI) {
+		// v2 (OCI index-only): ClipFS will read embedded OCI storage info; no S3 info needed
+		mountOptions.StorageInfo = nil
+
+		// Attach credential provider for runtime layer loading
+		var credProvider clipCommon.RegistryCredentialProvider
+
+		if request.ImageCredentials != "" {
+			// Runtime container: credentials already in JSON format from secret
+			credProvider = c.createCredentialProvider(ctx, request.ImageCredentials, imageId)
+		} else if request.BuildOptions.SourceImageCreds != "" {
+			// Build container: parse and use source image credentials
+			sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
+			if hasRef {
+				registry := reg.ParseRegistry(sourceRef)
+				if registry != "" {
+					// Parse credentials (handles both JSON and username:password formats)
+					creds, err := reg.ParseCredentialsFromJSON(request.BuildOptions.SourceImageCreds)
+					if err != nil {
+						log.Warn().
+							Err(err).
+							Str("image_id", imageId).
+							Str("container_id", request.ContainerId).
+							Str("registry", registry).
+							Msg("failed to parse build credentials for mount")
+					} else if len(creds) > 0 {
+						credProvider = reg.CredentialsToProvider(ctx, registry, creds)
+					}
+				}
+			}
+		}
+
+		if credProvider != nil {
+			mountOptions.RegistryCredProvider = credProvider
+			log.Info().Str("image_id", imageId).Str("provider", credProvider.Name()).Msg("attached credential provider")
+		}
+	} else {
+		// v1 (legacy S3 data-carrying)
+		mountOptions.Credentials = storage.ClipStorageCredentials{
 			S3: &storage.S3ClipStorageCredentials{
 				AccessKey: sourceRegistry.AccessKey,
 				SecretKey: sourceRegistry.SecretKey,
 			},
-		},
-		StorageInfo: &clipCommon.S3StorageInfo{
+		}
+
+		mountOptions.StorageInfo = &clipCommon.S3StorageInfo{
 			Bucket:         sourceRegistry.BucketName,
 			Region:         sourceRegistry.Region,
 			Endpoint:       sourceRegistry.Endpoint,
-			Key:            fmt.Sprintf("%s.%s", imageId, registry.LocalImageFileExtension),
+			Key:            fmt.Sprintf("%s.%s", imageId, reg.LocalImageFileExtension),
 			ForcePathStyle: sourceRegistry.ForcePathStyle,
-		},
+		}
 	}
 
 	// Check if a fuse server exists for this imageId
@@ -293,6 +412,89 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	return elapsed, nil
 }
 
+// GetSourceImageRef retrieves the cached source image reference for a v2 image
+func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
+	return c.v2ImageRefs.Get(imageId)
+}
+
+// GetCLIPImageMetadata extracts CLIP image metadata from the archive for a v2 image
+// Returns the CLIP metadata directly from the archive (source of truth)
+func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
+	// Determine the archive path for this image
+	archivePath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
+
+	// Check if the archive exists
+	if _, err := os.Stat(archivePath); os.IsNotExist(err) {
+		// Try cache path as fallback
+		if c.registry != nil && c.registry.ImageFileExtension != "" {
+			archivePath = fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
+		} else {
+			archivePath = fmt.Sprintf("%s/%s.clip", c.imageCachePath, imageId)
+		}
+
+		if _, err := os.Stat(archivePath); os.IsNotExist(err) {
+			return nil, false
+		}
+	}
+
+	// Extract metadata from the CLIP archive
+	archiver := clip.NewClipArchiver()
+	meta, err := archiver.ExtractMetadata(archivePath)
+	if err != nil {
+		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to extract metadata from clip archive")
+		return nil, false
+	}
+
+	// Check if this is an OCI archive with metadata
+	if meta != nil && meta.StorageInfo != nil {
+		if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok && ociInfo.ImageMetadata != nil {
+			return ociInfo.ImageMetadata, true
+		}
+	}
+
+	return nil, false
+}
+
+// createCredentialProvider creates a CLIP credential provider from JSON credentials
+// Credentials are expected in JSON format: {"registry":"...","type":"...","credentials":{...}}
+// This format is used for both build and runtime containers
+func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsStr, imageId string) clipCommon.RegistryCredentialProvider {
+	if credentialsStr == "" {
+		return nil
+	}
+
+	// Parse JSON credentials using the registry package helper
+	registry, _, creds, err := reg.UnmarshalCredentials(credentialsStr)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("image_id", imageId).
+			Msg("failed to parse image credentials JSON")
+		return nil
+	}
+
+	if registry == "" || len(creds) == 0 {
+		log.Warn().Str("image_id", imageId).Msg("missing registry or credentials in JSON")
+		return nil
+	}
+
+	// Create provider using the registry package helper
+	provider := reg.CredentialsToProvider(ctx, registry, creds)
+	if provider == nil {
+		log.Warn().Str("image_id", imageId).Str("registry", registry).Msg("failed to create credential provider")
+		return nil
+	}
+
+	return provider
+}
+
+// cacheV2SourceImageRef caches the source image reference for a v2 image build
+func (c *ImageClient) cacheV2SourceImageRef(request *types.ContainerRequest) {
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) && request.BuildOptions.SourceImage != nil {
+		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
+	}
+}
+
 func (c *ImageClient) Cleanup() error {
 	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
 		log.Info().Str("image_id", imageId).Msg("un-mounting image")
@@ -315,10 +517,22 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	sourceRegistry := c.config.ImageService.Registries.S3
 
 	if _, err := os.Stat(archivePath); err != nil {
-		err = c.registry.Pull(ctx, archivePath, imageId)
-		if err != nil {
-			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
+		// First try pulling from the configured store
+		if err = c.registry.Pull(ctx, archivePath, imageId); err != nil {
+			// If local store failed (object missing), attempt to copy from S3 then retry
+			if c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
+				if s3Registry, e2 := registry.NewImageRegistry(c.config, c.config.ImageService.Registries.S3); e2 == nil {
+					_ = c.registry.CopyImageFromRegistry(ctx, imageId, s3Registry)
+					// Retry pull after copy
+					if err2 := c.registry.Pull(ctx, archivePath, imageId); err2 == nil {
+						return &sourceRegistry, nil
+					} else {
+						err = err2
+					}
+				}
+			}
 
+			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
 			return nil, err
 		}
 
@@ -349,9 +563,112 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 	return nil
 }
 
+// createOCIImageWithProgress creates an OCI index with progress reporting
+func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, outputPath string, checkpointMiB int64, authConfig string) error {
+	outputLogger.Info("Indexing image...\n")
+	progressChan := make(chan clip.OCIIndexProgress, 100)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Process progress updates in goroutine
+	go func() {
+		defer wg.Done()
+		for progress := range progressChan {
+			percent := float64(progress.LayerIndex) / float64(progress.TotalLayers) * 100
+
+			switch progress.Stage {
+			case "starting":
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Int("layer", progress.LayerIndex).
+					Int("total", progress.TotalLayers).
+					Msgf("Indexing layer %d/%d (%.0f%%)", progress.LayerIndex, progress.TotalLayers, percent)
+
+				outputLogger.Info(fmt.Sprintf("Indexing layer %d/%d (%.0f%%)\n",
+					progress.LayerIndex, progress.TotalLayers, percent))
+
+			case "completed":
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Int("layer", progress.LayerIndex).
+					Int("total", progress.TotalLayers).
+					Int("files", progress.FilesIndexed).
+					Msgf("Completed layer %d/%d (%.0f%%, %d files indexed)", progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed)
+
+				outputLogger.Info(fmt.Sprintf("Completed layer %d/%d (%.0f%%, %d files indexed)\n",
+					progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed))
+
+			default:
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Str("stage", progress.Stage).
+					Int("layer", progress.LayerIndex).
+					Int("total", progress.TotalLayers).
+					Msgf("Index progress [%s]: layer %d/%d", progress.Stage, progress.LayerIndex, progress.TotalLayers)
+
+				outputLogger.Info(fmt.Sprintf("Index progress [%s]: layer %d/%d\n",
+					progress.Stage, progress.LayerIndex, progress.TotalLayers))
+			}
+		}
+	}()
+
+	// Create credential provider if credentials are available
+	// For build containers, use SourceImageCreds; for runtime containers, use ImageCredentials
+	var credProvider clipCommon.RegistryCredentialProvider
+	if request.ImageCredentials != "" {
+		// Runtime container: credentials are already in JSON format from secret
+		credProvider = c.createCredentialProvider(ctx, request.ImageCredentials, request.ImageId)
+	} else if request.BuildOptions.SourceImageCreds != "" {
+		// Build container: credentials may be in legacy username:password format or JSON
+		// Parse and convert to proper format for CLIP
+		registry := reg.ParseRegistry(imageRef)
+		if registry != "" {
+			// Parse credentials (handles both JSON and username:password formats)
+			creds, err := reg.ParseCredentialsFromJSON(request.BuildOptions.SourceImageCreds)
+			if err != nil {
+				log.Warn().
+					Err(err).
+					Str("image_id", request.ImageId).
+					Str("registry", registry).
+					Msg("failed to parse build credentials, will try without auth")
+			} else if len(creds) > 0 {
+				// Create provider from parsed credentials
+				credProvider = reg.CredentialsToProvider(ctx, registry, creds)
+				log.Info().
+					Str("image_id", request.ImageId).
+					Str("registry", registry).
+					Msg("created credential provider from build options for OCI indexing")
+			}
+		}
+	}
+
+	// Create index-only clip archive from the OCI image
+	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+		ImageRef:      imageRef,
+		OutputPath:    outputPath,
+		CheckpointMiB: checkpointMiB,
+		ProgressChan:  progressChan,
+		CredProvider:  credProvider,
+	})
+
+	// Close channel and wait for all progress messages to be logged
+	close(progressChan)
+	wg.Wait()
+
+	if err != nil {
+		return err
+	}
+
+	outputLogger.Info("Image indexing completed successfully\n")
+	return nil
+}
+
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
-	outputLogger.Info("Building image from Dockerfile\n")
 	startTime := time.Now()
+
+	// Cache the source image reference for v2 images so we can retrieve it later for non-build containers
+	c.cacheV2SourceImageRef(request)
 
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
@@ -369,17 +686,79 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if err != nil {
 		return err
 	}
+
 	fmt.Fprintf(f, *request.BuildOptions.Dockerfile)
 	f.Close()
 
 	imagePath := filepath.Join(buildPath, "image")
 	ociPath := filepath.Join(buildPath, "oci")
 	tmpBundlePath := NewPathInfo(filepath.Join(c.imageBundlePath, request.ImageId))
+
 	defer os.RemoveAll(tmpBundlePath.Path)
 	os.MkdirAll(imagePath, 0755)
 	os.MkdirAll(ociPath, 0755)
 
-	cmd := exec.CommandContext(ctx, "buildah", "--root", imagePath, "bud", "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
+	// Pre-pull base image with insecure option if necessary
+	insecure := false
+	sourceImage := ""
+	if request.BuildOptions.SourceImage != nil {
+		sourceImage = *request.BuildOptions.SourceImage
+	}
+
+	if sourceImage != "" {
+		if base, perr := image.ExtractImageNameAndTag(sourceImage); perr == nil {
+			// Treat runner/build registry as insecure if configured
+			if c.config.ImageService.BuildRegistryInsecure &&
+				(base.Registry == c.config.ImageService.BuildRegistry || base.Registry == c.config.ImageService.Runner.BaseImageRegistry) {
+				insecure = true
+			}
+
+			// Also consider localhost registries insecure by default
+			if strings.Contains(base.Registry, "localhost") || strings.HasPrefix(base.Registry, "127.0.0.1") {
+				insecure = c.config.ImageService.BuildRegistryInsecure || true
+			}
+		}
+		// buildah pull the base image so bud doesn't attempt HTTPS
+		pullArgs := []string{"--root", imagePath, "pull"}
+		if insecure {
+			pullArgs = append(pullArgs, "--tls-verify=false")
+		}
+		
+		// Add credentials if provided (in username:password format)
+		if request.BuildOptions.SourceImageCreds != "" {
+			pullArgs = append(pullArgs, "--creds", request.BuildOptions.SourceImageCreds)
+		}
+
+		pullArgs = append(pullArgs, "docker://"+sourceImage)
+		cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
+		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+	}
+
+	budArgs := []string{"--root", imagePath, "bud"}
+	if insecure {
+		budArgs = append(budArgs, "--tls-verify=false")
+	}
+	
+	// Add credentials for multi-stage builds and private base images
+	if request.BuildOptions.SourceImageCreds != "" {
+		budArgs = append(budArgs, "--creds", request.BuildOptions.SourceImageCreds)
+	}
+	
+	// Add build secrets as build arguments
+	if len(request.BuildOptions.BuildSecrets) > 0 {
+		for _, secret := range request.BuildOptions.BuildSecrets {
+			if secret != "" {
+				budArgs = append(budArgs, "--build-arg", secret)
+			}
+		}
+	}
+
+	budArgs = append(budArgs, "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
+	cmd := exec.CommandContext(ctx, "buildah", budArgs...)
 	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 	err = cmd.Run()
@@ -394,12 +773,62 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if err != nil {
 		return err
 	}
+
 	ociImageInfo, err := os.Stat(ociPath)
 	if err == nil {
 		ociImageMB := float64(ociImageInfo.Size()) / 1024 / 1024
 		metrics.RecordImageBuildSpeed(ociImageMB, time.Since(startTime))
 	} else {
 		log.Warn().Err(err).Str("path", ociPath).Msg("unable to inspect image size")
+	}
+
+	// Clip v2: Skip unpack and create index-only clip from OCI layout.
+	// The image is pushed to the build registry so the clip indexer can stream from it.
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
+		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
+		archivePath := filepath.Join("/tmp", archiveName)
+
+		// Determine the build registry to push the image to
+		dockerRegistry := c.config.ImageService.BuildRegistry
+		if dockerRegistry == "" {
+			dockerRegistry = c.config.ImageService.Runner.BaseImageRegistry
+		}
+
+		if dockerRegistry == "" {
+			dockerRegistry = "localhost"
+		}
+
+		localTag := fmt.Sprintf("%s/%s:latest", dockerRegistry, request.ImageId)
+
+		// Tag the built image
+		if err = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", localTag).Run(); err != nil {
+			return err
+		}
+
+		// Push to registry (required for clip indexer to access the image)
+		pushArgs := []string{"--root", imagePath, "push", localTag, "docker://" + localTag}
+		if c.config.ImageService.BuildRegistryInsecure {
+			pushArgs = []string{"--root", imagePath, "push", "--tls-verify=false", localTag, "docker://" + localTag}
+		}
+
+		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
+		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+		if err = cmd.Run(); err != nil {
+			return err
+		}
+
+		// Create index-only clip archive with progress reporting
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, localTag, archivePath, 2, ""); err != nil {
+			return err
+		}
+
+		// Upload the clip archive to the image registry
+		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
+			return err
+		}
+
+		return nil
 	}
 
 	engine, err := dir.Open(ociPath)
@@ -409,21 +838,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	defer engine.Close()
 
 	unpackOptions := umociUnpackOptions()
-
 	engineExt := casext.NewEngine(engine)
 	defer engineExt.Close()
 
 	err = umoci.Unpack(engineExt, "latest", tmpBundlePath.Path, unpackOptions)
 	if err != nil {
 		return err
-	}
-
-	for _, dir := range requiredContainerDirectories {
-		fullPath := filepath.Join(tmpBundlePath.Path, "rootfs", dir)
-		err := os.MkdirAll(fullPath, 0755)
-		if err != nil {
-			return err
-		}
 	}
 
 	err = c.Archive(ctx, tmpBundlePath, request.ImageId, nil)
@@ -439,6 +859,9 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	if err != nil {
 		return err
 	}
+
+	// Cache the source image reference for v2 images
+	c.cacheV2SourceImageRef(request)
 
 	outputLogger.Info("Inspecting image name and verifying architecture...\n")
 	if err := c.inspectAndVerifyImage(ctx, request); err != nil {
@@ -466,6 +889,24 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		return err
 	}
 	metrics.RecordImageCopySpeed(imageSizeMB, time.Since(startTime))
+
+	// Clip v2: Create index-only clip archive from the source image (no unpack needed)
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
+		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
+		archivePath := filepath.Join("/tmp", archiveName)
+
+		// Create index-only clip from the source docker image reference with progress reporting
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, archivePath, 2, ""); err != nil {
+			return err
+		}
+
+		// Upload the clip archive to the image registry
+		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
+			return err
+		}
+
+		return nil
+	}
 
 	outputLogger.Info("Unpacking image...\n")
 	tmpBundlePath := NewPathInfo(filepath.Join(baseTmpBundlePath, request.ImageId))
@@ -507,15 +948,6 @@ func (c *ImageClient) unpack(ctx context.Context, baseImageName string, baseImag
 	tmpBundlePath := filepath.Join(bundlePath.Path + "_")
 	err = umoci.Unpack(engineExt, baseImageTag, tmpBundlePath, unpackOptions)
 	if err == nil {
-		for _, dir := range requiredContainerDirectories {
-			fullPath := filepath.Join(tmpBundlePath, "rootfs", dir)
-			err := os.MkdirAll(fullPath, 0755)
-			if err != nil {
-				errors.Wrap(err, fmt.Sprintf("creating /%s directory", dir))
-				return err
-			}
-		}
-
 		return os.Rename(tmpBundlePath, bundlePath.Path)
 	}
 
