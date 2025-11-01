@@ -24,7 +24,7 @@ type ImageService interface {
 	BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error
 }
 
-type RuncImageService struct {
+type ContainerImageService struct {
 	pb.UnimplementedImageServiceServer
 	builder         *Builder
 	config          types.AppConfig
@@ -46,7 +46,7 @@ type ImageServiceOpts struct {
 const buildContainerKeepAliveIntervalS int = 10
 const imageContainerTtlS int = 60
 
-func NewRuncImageService(
+func NewContainerImageService(
 	ctx context.Context,
 	opts ImageServiceOpts,
 ) (ImageService, error) {
@@ -65,7 +65,7 @@ func NewRuncImageService(
 		return nil, err
 	}
 
-	is := RuncImageService{
+	is := ContainerImageService{
 		builder:         builder,
 		config:          opts.Config,
 		backendRepo:     opts.BackendRepo,
@@ -81,7 +81,7 @@ func NewRuncImageService(
 	return &is, nil
 }
 
-func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
+func (is *ContainerImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyImageBuildRequest) (*pb.VerifyImageBuildResponse, error) {
 	if in.ImageId != nil && *in.ImageId != "" {
 		exists, err := is.builder.Exists(ctx, *in.ImageId)
 		if err != nil {
@@ -107,7 +107,7 @@ func (is *RuncImageService) VerifyImageBuild(ctx context.Context, in *pb.VerifyI
 	}, nil
 }
 
-func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
+func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.ImageService_BuildImageServer) error {
 	log.Info().Interface("request", in).Msg("incoming image build request")
 
 	verifyReq := &pb.VerifyImageBuildRequest{
@@ -194,7 +194,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	return nil
 }
 
-func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageBuildRequest) (string, bool, bool, *BuildOpts, error) {
+func (is *ContainerImageService) verifyImage(ctx context.Context, in *pb.VerifyImageBuildRequest) (string, bool, bool, *BuildOpts, error) {
 	var valid bool = true
 
 	if in.ImageId != nil && *in.ImageId != "" {
@@ -313,7 +313,7 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 	return imageId, exists, valid, opts, nil
 }
 
-func (is *RuncImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {
+func (is *ContainerImageService) retrieveBuildSecrets(ctx context.Context, secrets []string, authInfo *auth.AuthInfo) ([]string, error) {
 	var buildSecrets []string
 	if secrets != nil {
 		secrets, err := is.backendRepo.GetSecretsByNameDecrypted(ctx, authInfo.Workspace, secrets)
@@ -328,7 +328,7 @@ func (is *RuncImageService) retrieveBuildSecrets(ctx context.Context, secrets []
 	return buildSecrets, nil
 }
 
-func (is *RuncImageService) monitorImageContainers(ctx context.Context) {
+func (is *ContainerImageService) monitorImageContainers(ctx context.Context) {
 	for {
 		select {
 		case event := <-is.keyEventChan:
@@ -375,7 +375,7 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 // createCredentialSecretIfNeeded creates a workspace secret for OCI registry credentials
 // if base image credentials were provided during the build
 // This works for both v1 and v2 builds to enable credential reuse
-func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, imageId string, opts *BuildOpts) error {
+func (is *ContainerImageService) createCredentialSecretIfNeeded(ctx context.Context, imageId string, opts *BuildOpts) error {
 	if opts == nil {
 		log.Debug().Str("image_id", imageId).Msg("opts is nil, skipping secret creation")
 		return nil
@@ -497,7 +497,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 }
 
 // upsertSecret creates or updates a secret in the workspace
-func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.AuthInfo, secretName, secretValue, registry string) (*types.Secret, error) {
+func (is *ContainerImageService) upsertSecret(ctx context.Context, authInfo *auth.AuthInfo, secretName, secretValue, registry string) (*types.Secret, error) {
 	secret, err := is.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secretName)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, fmt.Errorf("failed to check for existing secret: %w", err)
