@@ -9,7 +9,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
-	"github.com/beam-cloud/beta9/pkg/registry"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/scheduler"
@@ -51,12 +50,12 @@ func NewRuncImageService(
 	ctx context.Context,
 	opts ImageServiceOpts,
 ) (ImageService, error) {
-	registry, err := registry.NewImageRegistry(opts.Config, opts.Config.ImageService.Registries.S3)
+	imgRegistry, err := reg.NewImageRegistry(opts.Config, opts.Config.ImageService.Registries.S3)
 	if err != nil {
 		return nil, err
 	}
 
-	builder, err := NewBuilder(opts.Config, registry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo, opts.RedisClient)
+	builder, err := NewBuilder(opts.Config, imgRegistry, opts.Scheduler, opts.Tailscale, opts.ContainerRepo, opts.RedisClient)
 	if err != nil {
 		return nil, err
 	}
@@ -138,19 +137,19 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 	}
 
 	clipVersion := is.config.ImageService.ClipVersion
-	
+
 	// Set ExistingImageCreds for credential processing
 	// Note: Base image fields (Registry, Name, Tag, Digest) were already set in verifyImage
 	// for image ID calculation. Here we only need to process credentials.
 	buildOptions.ExistingImageCreds = in.ExistingImageCreds
 	buildOptions.ClipVersion = clipVersion
-	
+
 	log.Info().
 		Str("image_id", imageId).
 		Bool("has_existing_image_creds", in.ExistingImageCreds != nil && len(in.ExistingImageCreds) > 0).
 		Int("existing_image_creds_count", len(in.ExistingImageCreds)).
 		Msg("set ExistingImageCreds on buildOptions")
-	
+
 	// Process credentials for custom base image (if provided)
 	// Base image fields are already set from verifyImage, we just need to convert credentials
 	if buildOptions.ExistingImageUri != "" && len(buildOptions.ExistingImageCreds) > 0 {
@@ -161,7 +160,7 @@ func (is *RuncImageService) BuildImage(in *pb.BuildImageRequest, stream pb.Image
 			return err
 		}
 		buildOptions.BaseImageCreds = baseImageCreds
-		
+
 		log.Info().
 			Str("image_id", imageId).
 			Bool("has_base_image_creds", buildOptions.BaseImageCreds != "").
@@ -268,7 +267,7 @@ func (is *RuncImageService) verifyImage(ctx context.Context, in *pb.VerifyImageB
 	// but DON'T process credentials yet (not available in VerifyImageBuildRequest)
 	if in.ExistingImageUri != "" {
 		opts.ExistingImageUri = in.ExistingImageUri
-		
+
 		// Extract and set base image fields needed for image ID calculation
 		baseImage, err := ExtractImageNameAndTag(opts.ExistingImageUri)
 		if err != nil {
@@ -418,7 +417,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 		for k := range opts.ExistingImageCreds {
 			credKeys = append(credKeys, k)
 		}
-		
+
 		log.Info().
 			Str("image_id", imageId).
 			Str("existing_image_uri", opts.ExistingImageUri).
@@ -442,7 +441,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 		for k := range creds {
 			credKeys = append(credKeys, k)
 		}
-		
+
 		log.Info().
 			Str("image_id", imageId).
 			Str("registry", registry).
@@ -473,7 +472,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 		// We must have structured credentials for cloud providers - this is a configuration error
 		baseImage = getSourceImage(opts)
 		registry := reg.ParseRegistry(baseImage)
-		
+
 		// Check if this is a cloud provider registry
 		isCloudProvider := false
 		if registry != "" {
@@ -484,11 +483,11 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 				isCloudProvider = true
 			}
 		}
-		
+
 		if isCloudProvider {
 			return fmt.Errorf("cannot create secret for cloud provider registry %s: BaseImageCreds contains temporary token which is not compatible with CLIP credential providers. SDK must provide structured credentials in ExistingImageCreds (e.g., AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION for ECR; GCP_ACCESS_TOKEN for GCR) for CLIP v2 runtime support", registry)
 		}
-		
+
 		log.Info().
 			Str("image_id", imageId).
 			Str("registry", registry).
@@ -526,7 +525,7 @@ func (is *RuncImageService) createCredentialSecretIfNeeded(ctx context.Context, 
 	// or from BaseImageCreds (for basic auth)
 	// DO NOT parse and re-marshal, as that causes double-wrapping!
 	secretValue := credStr
-	
+
 	// For validation only: parse to check if credentials are valid
 	creds, err := is.parseCredentials(credStr)
 	if err != nil {
@@ -600,7 +599,7 @@ func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.Aut
 			Str("registry", registry).
 			Int("new_value_len", len(secretValue)).
 			Msg("updating existing credential secret")
-		
+
 		secret, err = is.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secret.ExternalId, secretValue)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update secret: %w", err)
@@ -617,7 +616,7 @@ func (is *RuncImageService) upsertSecret(ctx context.Context, authInfo *auth.Aut
 			Str("registry", registry).
 			Int("value_len", len(secretValue)).
 			Msg("creating new credential secret")
-			
+
 		secret, err = is.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create secret: %w", err)

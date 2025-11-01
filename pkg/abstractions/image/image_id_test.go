@@ -555,7 +555,7 @@ func TestCustomDockerfile_OnlyDockerfileChanges(t *testing.T) {
 	// Second build - only Dockerfile changed, files the same
 	opts2 := &BuildOpts{
 		Dockerfile:     "FROM ubuntu:22.04\nRUN echo 'v2'", // Changed!
-		BuildCtxObject: buildCtxObject,                      // Same files
+		BuildCtxObject: buildCtxObject,                     // Same files
 		ClipVersion:    2,
 	}
 

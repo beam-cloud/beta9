@@ -80,22 +80,22 @@ func validateRequiredCredential(creds map[string]string, key string) (string, er
 func validateOptionalCredentials(creds map[string]string, usernameKey, passwordKey string) (string, string, bool, error) {
 	username, usernameExists := creds[usernameKey]
 	password, passwordExists := creds[passwordKey]
-	
+
 	// If neither key exists, credentials were not provided (ok for public registries)
 	if !usernameExists && !passwordExists {
 		return "", "", false, nil
 	}
-	
+
 	// If one or both keys exist but are empty, this is an error
 	if (usernameExists && username == "") || (passwordExists && password == "") {
 		return "", "", false, reg.ErrBothCredentialsRequired(usernameKey, passwordKey)
 	}
-	
+
 	// If only one credential is provided (non-empty), both are required
 	if (username == "" && password != "") || (username != "" && password == "") {
 		return "", "", false, reg.ErrBothCredentialsRequired(usernameKey, passwordKey)
 	}
-	
+
 	return username, password, username != "" && password != "", nil
 }
 

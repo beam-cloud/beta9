@@ -253,18 +253,18 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 		initialConfigPath = filepath.Join(instance.BundlePath, initialSpecBaseName)
 	}
 
-    // Ensure initial config exists; for v2 (no unpack), derive from image if missing
-    destInitial := filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName)
-    if _, statErr := os.Stat(initialConfigPath); statErr == nil {
-        if err = copyFile(initialConfigPath, destInitial); err != nil {
-            return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
-        }
-    } else {
-        // Derive initial spec from source image metadata via skopeo inspect
-        if err = s.writeInitialSpecFromImage(ctx, instance, destInitial); err != nil {
-            return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
-        }
-    }
+	// Ensure initial config exists; for v2 (no unpack), derive from image if missing
+	destInitial := filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName)
+	if _, statErr := os.Stat(initialConfigPath); statErr == nil {
+		if err = copyFile(initialConfigPath, destInitial); err != nil {
+			return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
+		}
+	} else {
+		// Derive initial spec from source image metadata via skopeo inspect
+		if err = s.writeInitialSpecFromImage(ctx, instance, destInitial); err != nil {
+			return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
+		}
+	}
 
 	if err := s.addRequestEnvToInitialSpec(instance); err != nil {
 		return err
@@ -336,49 +336,49 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 // writeInitialSpecFromImage builds an initial_config.json using the base runc config
 // plus full configuration (env, workdir, user, cmd, entrypoint) from the source image (via skopeo inspect).
 func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *ContainerInstance, destPath string) error {
-    // Determine image reference
-    imageRef := ""
-    creds := ""
-    if instance.Request.BuildOptions.SourceImage != nil {
-        imageRef = *instance.Request.BuildOptions.SourceImage
-    }
-    creds = instance.Request.BuildOptions.SourceImageCreds
+	// Determine image reference
+	imageRef := ""
+	creds := ""
+	if instance.Request.BuildOptions.SourceImage != nil {
+		imageRef = *instance.Request.BuildOptions.SourceImage
+	}
+	creds = instance.Request.BuildOptions.SourceImageCreds
 
-    // Start from the base config
-    spec := s.baseConfigSpec
+	// Start from the base config
+	spec := s.baseConfigSpec
 
-    if imageRef != "" {
-        imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, imageRef, creds, nil)
-        if err != nil {
-            log.Warn().Str("image_ref", imageRef).Err(err).Msg("failed to inspect image for initial spec; proceeding with base config only")
-        } else if imgMeta.Config != nil {
-            // Apply full config from the image
-            if len(imgMeta.Config.Env) > 0 {
-                spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
-            }
-            if imgMeta.Config.WorkingDir != "" {
-                spec.Process.Cwd = imgMeta.Config.WorkingDir
-            }
-            if imgMeta.Config.User != "" {
-                spec.Process.User.Username = imgMeta.Config.User
-            }
-            // Set default args from Cmd if Entrypoint is not set, or combine them
-            if len(imgMeta.Config.Entrypoint) > 0 {
-                spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
-            } else if len(imgMeta.Config.Cmd) > 0 {
-                spec.Process.Args = imgMeta.Config.Cmd
-            }
-        } else if len(imgMeta.Env) > 0 {
-            // Fallback to legacy Env field if Config is not available
-            spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
-        }
-    }
+	if imageRef != "" {
+		imgMeta, err := s.imageClient.skopeoClient.Inspect(ctx, imageRef, creds, nil)
+		if err != nil {
+			log.Warn().Str("image_ref", imageRef).Err(err).Msg("failed to inspect image for initial spec; proceeding with base config only")
+		} else if imgMeta.Config != nil {
+			// Apply full config from the image
+			if len(imgMeta.Config.Env) > 0 {
+				spec.Process.Env = append(spec.Process.Env, imgMeta.Config.Env...)
+			}
+			if imgMeta.Config.WorkingDir != "" {
+				spec.Process.Cwd = imgMeta.Config.WorkingDir
+			}
+			if imgMeta.Config.User != "" {
+				spec.Process.User.Username = imgMeta.Config.User
+			}
+			// Set default args from Cmd if Entrypoint is not set, or combine them
+			if len(imgMeta.Config.Entrypoint) > 0 {
+				spec.Process.Args = append(imgMeta.Config.Entrypoint, imgMeta.Config.Cmd...)
+			} else if len(imgMeta.Config.Cmd) > 0 {
+				spec.Process.Args = imgMeta.Config.Cmd
+			}
+		} else if len(imgMeta.Env) > 0 {
+			// Fallback to legacy Env field if Config is not available
+			spec.Process.Env = append(spec.Process.Env, imgMeta.Env...)
+		}
+	}
 
-    b, err := json.MarshalIndent(spec, "", "  ")
-    if err != nil {
-        return err
-    }
-    return os.WriteFile(destPath, b, 0644)
+	b, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(destPath, b, 0644)
 }
 
 func (s *RunCServer) addRequestEnvToInitialSpec(instance *ContainerInstance) error {

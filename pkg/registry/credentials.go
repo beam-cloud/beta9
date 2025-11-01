@@ -393,22 +393,22 @@ func ErrBothCredentialsRequired(key1, key2 string) error {
 func validateOptionalCredentials(creds map[string]string, usernameKey, passwordKey string) (string, string, bool, error) {
 	username, usernameExists := creds[usernameKey]
 	password, passwordExists := creds[passwordKey]
-	
+
 	// If neither key exists, credentials were not provided (ok for public registries)
 	if !usernameExists && !passwordExists {
 		return "", "", false, nil
 	}
-	
+
 	// If one or both keys exist but are empty, this is an error
 	if (usernameExists && username == "") || (passwordExists && password == "") {
 		return "", "", false, ErrBothCredentialsRequired(usernameKey, passwordKey)
 	}
-	
+
 	// If only one credential is provided (non-empty), both are required
 	if (username == "" && password != "") || (username != "" && password == "") {
 		return "", "", false, ErrBothCredentialsRequired(usernameKey, passwordKey)
 	}
-	
+
 	return username, password, username != "" && password != "", nil
 }
 
@@ -487,8 +487,8 @@ func GetECRToken(creds map[string]string) (string, error) {
 
 	// Configure AWS client
 	credProvider := credentials.NewStaticCredentialsProvider(accessKey, secretKey, sessionToken)
-	cfg, err := config.LoadDefaultConfig(context.TODO(), 
-		config.WithRegion(region), 
+	cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion(region),
 		config.WithCredentialsProvider(credProvider))
 	if err != nil {
 		return "", fmt.Errorf("failed to load AWS config: %w", err)
