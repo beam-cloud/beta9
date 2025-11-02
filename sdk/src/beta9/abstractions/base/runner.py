@@ -117,6 +117,7 @@ class RunnerAbstraction(BaseAbstraction):
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         tcp: bool = False,
+        block_network: bool = False,
     ) -> None:
         super().__init__()
 
@@ -163,6 +164,7 @@ class RunnerAbstraction(BaseAbstraction):
         self.extra: dict = {}
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
+        self.block_network = block_network
 
         if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
             self.gpu_count = 1
@@ -518,6 +520,7 @@ class RunnerAbstraction(BaseAbstraction):
                 inputs=inputs,
                 outputs=outputs,
                 tcp=self.tcp,
+                block_network=self.block_network,
             )
 
             if _is_stub_created_for_workspace():

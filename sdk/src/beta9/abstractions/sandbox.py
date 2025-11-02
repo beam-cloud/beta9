@@ -87,6 +87,10 @@ class Sandbox(Pod):
             A dictionary of environment variables to be injected into each Sandbox container. Default is {}.
         sync_local_dir (bool):
             Whether to sync the local directory to the sandbox filesystem on creation. Default is False.
+        block_network (bool):
+            Whether to block all outbound network access from the sandbox. When enabled, the sandbox cannot
+            make outbound connections to external services, but inbound connections to exposed ports are still
+            allowed. Default is False.
 
     Example:
         ```python
@@ -126,6 +130,7 @@ class Sandbox(Pod):
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         sync_local_dir: bool = False,
+        block_network: bool = False,
     ):
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
@@ -142,6 +147,7 @@ class Sandbox(Pod):
             volumes=volumes,
             secrets=secrets,
             env=env,
+            block_network=block_network,
         )
 
     def debug(self):

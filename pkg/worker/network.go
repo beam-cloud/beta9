@@ -509,6 +509,31 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 		m.containerInstances.Set(opts.containerId, containerInstance)
 	}
 
+	// Block outbound network access if requested
+	if opts.request.BlockNetwork {
+		// Block IPv4 outbound traffic
+		err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", ipAddr.IP.String(), "-o", m.defaultLink.Attrs().Name, "-j", "DROP")
+		if err != nil {
+			return err
+		}
+
+		// Block IPv6 outbound traffic if enabled
+		if m.ipt6 != nil {
+			// Calculate the corresponding IPv6 address using the last octet of the IPv4 address
+			ipv4LastOctet := int(ipAddr.IP.To4()[3])
+			_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+			ipv6Prefix := ipv6Net.IP.String()
+			ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
+
+			err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-j", "DROP")
+			if err != nil {
+				return err
+			}
+		}
+
+		log.Info().Str("container_id", opts.containerId).Str("ip_address", ipAddr.IP.String()).Msg("outbound network access blocked for container")
+	}
+
 	return nil
 }
 

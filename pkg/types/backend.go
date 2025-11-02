@@ -460,6 +460,7 @@ type StubConfigV1 struct {
 	Inputs             *Schema         `json:"inputs"`
 	Outputs            *Schema         `json:"outputs"`
 	TCP                bool            `json:"tcp"`
+	BlockNetwork       bool            `json:"block_network"`
 }
 
 type StubConfigLimitedValues struct {

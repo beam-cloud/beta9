@@ -225,6 +225,7 @@ type ContainerRequest struct {
 	AppId             string          `json:"app_id"`
 	Checkpoint        *Checkpoint     `json:"checkpoint"`
 	ConfigPath        string          `json:"config_path"`
+	BlockNetwork      bool            `json:"block_network"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {

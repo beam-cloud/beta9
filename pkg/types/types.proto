@@ -88,6 +88,7 @@ message ContainerRequest {
   string app_id = 23;
   Checkpoint checkpoint = 24;
   string config_path = 25;
+  bool block_network = 26;
 }
 
 message ContainerState {
