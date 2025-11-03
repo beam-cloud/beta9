@@ -275,75 +275,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		mountOptions.StorageInfo = nil
 
 		// Attach credential provider for runtime layer loading
-		var credProvider clipCommon.RegistryCredentialProvider
-
-		if request.ImageCredentials != "" {
-			// Runtime container: credentials already in JSON format from secret
-			credProvider = c.createCredentialProvider(ctx, request.ImageCredentials, imageId)
-		} else if request.BuildOptions.SourceImageCreds != "" {
-			// Build container: parse and use source image credentials
-			sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
-			if hasRef {
-				registry := reg.ParseRegistry(sourceRef)
-				if registry != "" {
-					// Parse credentials (handles both JSON and username:password formats)
-					creds, err := reg.ParseCredentialsFromJSON(request.BuildOptions.SourceImageCreds)
-					if err != nil {
-						log.Warn().
-							Err(err).
-							Str("image_id", imageId).
-							Str("container_id", request.ContainerId).
-							Str("registry", registry).
-							Msg("failed to parse build credentials for mount")
-					} else if len(creds) > 0 {
-						credProvider = reg.CredentialsToProvider(ctx, registry, creds)
-					}
-				}
-			}
-		} else {
-			// No explicit credentials provided - check if this image is from our build registry
-			// If so, use build registry credentials from config as fallback
-			sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
-			if hasRef {
-				registry := reg.ParseRegistry(sourceRef)
-				buildRegistry := c.getBuildRegistry()
-				
-				// Check if source image is from our build registry
-				if registry != "" && strings.Contains(sourceRef, buildRegistry) {
-					if c.config.ImageService.BuildRegistryCredentials != "" {
-						// Parse build registry credentials and create provider
-						creds, err := reg.ParseCredentialsFromJSON(c.config.ImageService.BuildRegistryCredentials)
-						if err != nil {
-							// Try as plain username:password format
-							parts := strings.SplitN(c.config.ImageService.BuildRegistryCredentials, ":", 2)
-							if len(parts) == 2 {
-								creds = map[string]string{
-									"USERNAME": parts[0],
-									"PASSWORD": parts[1],
-								}
-							}
-						}
-						
-						if len(creds) > 0 {
-							credProvider = reg.CredentialsToProvider(ctx, registry, creds)
-							log.Info().
-								Str("image_id", imageId).
-								Str("registry", registry).
-								Msg("using build registry credentials from config for v2 image mount")
-						}
-					} else {
-						log.Info().
-							Str("image_id", imageId).
-							Str("registry", registry).
-							Msg("no explicit credentials - relying on ambient auth for v2 image mount")
-					}
-				}
-			}
-		}
-
+		credProvider := c.getCredentialProviderForImage(ctx, imageId, request)
 		if credProvider != nil {
 			mountOptions.RegistryCredProvider = credProvider
-			log.Info().Str("image_id", imageId).Str("provider", credProvider.Name()).Msg("attached credential provider")
 		}
 	} else {
 		// v1 (legacy S3 data-carrying)
@@ -520,34 +454,77 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 	return nil, false
 }
 
-// createCredentialProvider creates a CLIP credential provider from JSON credentials
-// Credentials are expected in JSON format: {"registry":"...","type":"...","credentials":{...}}
-// This format is used for both build and runtime containers
-func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsStr, imageId string) clipCommon.RegistryCredentialProvider {
-	if credentialsStr == "" {
+// getCredentialProviderForImage determines the appropriate credentials for an image
+// Priority: 1) Explicit credentials 2) Build registry credentials 3) None (ambient auth)
+func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
+	// Get the source image reference for this image
+	sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
+	if !hasRef {
 		return nil
 	}
 
-	// Parse JSON credentials using the registry package helper
-	registry, _, creds, err := reg.UnmarshalCredentials(credentialsStr)
-	if err != nil {
+	registry := reg.ParseRegistry(sourceRef)
+	if registry == "" {
+		return nil
+	}
+
+	// Priority 1: Explicit credentials from runtime container (stored as secret)
+	if request.ImageCredentials != "" {
+		return c.parseAndCreateProvider(ctx, request.ImageCredentials, registry, imageId, "runtime secret")
+	}
+
+	// Priority 2: Explicit credentials from build container (user-provided)
+	if request.BuildOptions.SourceImageCreds != "" {
+		return c.parseAndCreateProvider(ctx, request.BuildOptions.SourceImageCreds, registry, imageId, "build options")
+	}
+
+	// Priority 3: Build registry credentials from config (if image is from our build registry)
+	buildRegistry := c.getBuildRegistry()
+	if strings.Contains(sourceRef, buildRegistry) && c.config.ImageService.BuildRegistryCredentials != "" {
+		return c.parseAndCreateProvider(ctx, c.config.ImageService.BuildRegistryCredentials, registry, imageId, "config")
+	}
+
+	// Priority 4: No explicit credentials - rely on ambient auth (IAM role, docker config)
+	log.Info().
+		Str("image_id", imageId).
+		Str("registry", registry).
+		Msg("no explicit credentials found, relying on ambient auth")
+	return nil
+}
+
+// parseAndCreateProvider parses credentials and creates a CLIP provider
+// Supports both JSON format and plain username:password format
+func (c *ImageClient) parseAndCreateProvider(ctx context.Context, credStr string, registry string, imageId string, source string) clipCommon.RegistryCredentialProvider {
+	// Try parsing as structured JSON first
+	creds, err := reg.ParseCredentialsFromJSON(credStr)
+	if err != nil || len(creds) == 0 {
+		// Fallback: try as plain username:password format
+		parts := strings.SplitN(credStr, ":", 2)
+		if len(parts) == 2 {
+			creds = map[string]string{
+				"USERNAME": parts[0],
+				"PASSWORD": parts[1],
+			}
+		}
+	}
+
+	if len(creds) == 0 {
 		log.Warn().
-			Err(err).
 			Str("image_id", imageId).
-			Msg("failed to parse image credentials JSON")
+			Str("registry", registry).
+			Str("source", source).
+			Msg("failed to parse credentials")
 		return nil
 	}
 
-	if registry == "" || len(creds) == 0 {
-		log.Warn().Str("image_id", imageId).Msg("missing registry or credentials in JSON")
-		return nil
-	}
-
-	// Create provider using the registry package helper
 	provider := reg.CredentialsToProvider(ctx, registry, creds)
-	if provider == nil {
-		log.Warn().Str("image_id", imageId).Str("registry", registry).Msg("failed to create credential provider")
-		return nil
+	if provider != nil {
+		log.Info().
+			Str("image_id", imageId).
+			Str("registry", registry).
+			Str("source", source).
+			Str("provider", provider.Name()).
+			Msg("created credential provider")
 	}
 
 	return provider
@@ -642,28 +619,21 @@ func (c *ImageClient) getBuildRegistry() string {
 	return "localhost"
 }
 
-// getBuildRegistryAuthArgs returns buildah authentication arguments for the build registry
-// Uses credentials from config.ImageService.BuildRegistryCredentials or falls back to ambient auth
-func (c *ImageClient) getBuildRegistryAuthArgs(ctx context.Context, buildRegistry string) []string {
+// getBuildRegistryAuthArgs returns buildah authentication arguments for pushing to build registry
+func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string) []string {
 	// For localhost, no auth needed
 	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 		return nil
 	}
 
-	// Use explicit credentials from config if provided
+	// Use explicit credentials from config if provided (in username:password format for buildah)
 	if c.config.ImageService.BuildRegistryCredentials != "" {
-		log.Info().Str("registry", buildRegistry).Msg("using explicit credentials from config for build registry")
+		log.Info().Str("registry", buildRegistry).Msg("using build registry credentials from config")
 		return []string{"--creds", c.config.ImageService.BuildRegistryCredentials}
 	}
 
 	// Fall back to ambient credentials (IAM role, service account, docker config)
-	// - ECR: IAM role attached to pod/instance (buildah will automatically use AWS SDK)
-	// - GCR: Service account with Workload Identity (buildah will use gcloud credentials)
-	// - In-cluster registry: Service account tokens mounted by Kubernetes
-	// - Private registry: credentials in ~/.docker/config.json (set by ImagePullSecrets)
-	log.Info().
-		Str("registry", buildRegistry).
-		Msg("using ambient credentials for build registry (IAM role, service account, or docker config)")
+	log.Info().Str("registry", buildRegistry).Msg("using ambient credentials for build registry")
 	return nil
 }
 
@@ -756,64 +726,8 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		}
 	}()
 
-	// Create credential provider if credentials are available
-	// For build containers, use SourceImageCreds; for runtime containers, use ImageCredentials
-	var credProvider clipCommon.RegistryCredentialProvider
-	if request.ImageCredentials != "" {
-		// Runtime container: credentials are already in JSON format from secret
-		credProvider = c.createCredentialProvider(ctx, request.ImageCredentials, request.ImageId)
-	} else if request.BuildOptions.SourceImageCreds != "" {
-		// Build container: credentials may be in legacy username:password format or JSON
-		// Parse and convert to proper format for CLIP
-		registry := reg.ParseRegistry(imageRef)
-		if registry != "" {
-			// Parse credentials (handles both JSON and username:password formats)
-			creds, err := reg.ParseCredentialsFromJSON(request.BuildOptions.SourceImageCreds)
-			if err != nil {
-				log.Warn().
-					Err(err).
-					Str("image_id", request.ImageId).
-					Str("registry", registry).
-					Msg("failed to parse build credentials, will try without auth")
-			} else if len(creds) > 0 {
-				// Create provider from parsed credentials
-				credProvider = reg.CredentialsToProvider(ctx, registry, creds)
-				log.Info().
-					Str("image_id", request.ImageId).
-					Str("registry", registry).
-					Msg("created credential provider from build options for OCI indexing")
-			}
-		}
-	} else {
-		// For images being pushed to our build registry, use build registry credentials from config
-		registry := reg.ParseRegistry(imageRef)
-		buildRegistry := c.getBuildRegistry()
-		
-		if registry != "" && strings.Contains(imageRef, buildRegistry) {
-			if c.config.ImageService.BuildRegistryCredentials != "" {
-				// Parse build registry credentials
-				creds, err := reg.ParseCredentialsFromJSON(c.config.ImageService.BuildRegistryCredentials)
-				if err != nil {
-					// Try as plain username:password format
-					parts := strings.SplitN(c.config.ImageService.BuildRegistryCredentials, ":", 2)
-					if len(parts) == 2 {
-						creds = map[string]string{
-							"USERNAME": parts[0],
-							"PASSWORD": parts[1],
-						}
-					}
-				}
-				
-				if len(creds) > 0 {
-					credProvider = reg.CredentialsToProvider(ctx, registry, creds)
-					log.Info().
-						Str("image_id", request.ImageId).
-						Str("registry", registry).
-						Msg("using build registry credentials from config for OCI indexing")
-				}
-			}
-		}
-	}
+	// Get credential provider for CLIP indexing
+	credProvider := c.getCredentialProviderForImage(ctx, request.ImageId, request)
 
 	// Create index-only clip archive from the OCI image
 	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
@@ -975,8 +889,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if c.isInsecureRegistry() {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
-		// Add authentication for build registry from config
-		if authArgs := c.getBuildRegistryAuthArgs(ctx, buildRegistry); len(authArgs) > 0 {
+		// Add authentication for build registry
+		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
 		}
 		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
