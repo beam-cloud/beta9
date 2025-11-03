@@ -407,6 +407,7 @@ func (c *ImageClient) cacheOCIMetadata(imageId, workspaceId string, meta *clipCo
 	}
 
 	// Build the source reference from metadata
+	// With StorageImageRef support, this should already contain the correct remote reference
 	var sourceRef string
 	if ociInfo.Repository != "" && ociInfo.Reference != "" {
 		registryHost := strings.TrimPrefix(ociInfo.RegistryURL, "https://")
@@ -414,59 +415,17 @@ func (c *ImageClient) cacheOCIMetadata(imageId, workspaceId string, meta *clipCo
 		sourceRef = fmt.Sprintf("%s/%s:%s", registryHost, ociInfo.Repository, ociInfo.Reference)
 	}
 
-	// IMPORTANT: Check if the metadata reference looks like a local reference
-	// During build optimization, we index from local OCI layout which results in metadata
-	// containing local references (e.g., "latest" tag only, or oci: paths)
-	// In these cases, reconstruct the correct remote registry reference from config
-	needsReconstruction := false
-	if sourceRef == "" {
-		needsReconstruction = true
-	} else if strings.Contains(sourceRef, "localhost") || strings.Contains(sourceRef, "127.0.0.1") {
-		needsReconstruction = true
-	} else if ociInfo.Reference == "latest" && ociInfo.Repository == "latest" {
-		// This indicates indexing from oci:path:latest
-		needsReconstruction = true
-	}
-
-	if needsReconstruction {
-		// Reconstruct the build registry reference using the same logic as during build
-		// This ensures consistent references across workers even when CLIP metadata
-		// contains local references (due to optimization that indexes from local OCI layout)
-		buildRegistry := c.getBuildRegistry()
-		buildRepo := c.config.ImageService.BuildRepository
-		
-		// Use the same tag format as during build
-		var reconstructedRef string
-		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-			reconstructedRef = fmt.Sprintf("%s/%s:%s", buildRegistry, buildRepo, imageId)
-		} else {
-			// For remote registries, include workspace ID in the tag for proper namespacing
-			reconstructedRef = fmt.Sprintf("%s/%s:%s-%s", buildRegistry, buildRepo, workspaceId, imageId)
-		}
-		
-		log.Info().
-			Str("image_id", imageId).
-			Str("workspace_id", workspaceId).
-			Str("metadata_ref", sourceRef).
-			Str("reconstructed_ref", reconstructedRef).
-			Msg("reconstructed build registry reference from config (metadata had local reference)")
-		sourceRef = reconstructedRef
-	}
-
-	// IMPORTANT: Don't overwrite an existing cached reference
-	// During build, we cache the REMOTE registry reference (e.g., ECR)
-	// The CLIP metadata might have a LOCAL reference (e.g., localhost or oci: path)
-	// We must preserve the remote reference for runtime layer fetching to work correctly
+	// Don't overwrite an existing cached reference (build worker may have cached it explicitly)
 	if existingRef, exists := c.v2ImageRefs.Get(imageId); exists {
 		log.Info().
 			Str("image_id", imageId).
 			Str("existing_ref", existingRef).
 			Str("metadata_ref", sourceRef).
-			Msg("keeping existing cached reference (not overwriting with metadata reference)")
+			Msg("keeping existing cached reference (from build)")
 	} else if sourceRef != "" {
-		// Cache the reference (either from metadata or reconstructed)
+		// Cache the reference from metadata (should be correct due to StorageImageRef)
 		c.v2ImageRefs.Set(imageId, sourceRef)
-		log.Info().Str("image_id", imageId).Str("source_image", sourceRef).Msg("cached source image reference")
+		log.Info().Str("image_id", imageId).Str("source_image", sourceRef).Msg("cached source image reference from metadata")
 	}
 
 	// Log metadata availability
@@ -780,6 +739,100 @@ func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, c
 	return nil
 }
 
+// createOCIImageWithProgressAndStorageRef creates an OCI index with separate source and storage references
+// sourceRef: the reference to read/index from (e.g., local OCI layout for fast indexing)
+// storageRef: the reference to store in metadata (e.g., remote registry for runtime)
+func (c *ImageClient) createOCIImageWithProgressAndStorageRef(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, sourceRef, storageRef, outputPath string, checkpointMiB int64) error {
+	outputLogger.Info("Indexing image...\n")
+	progressChan := make(chan clip.OCIIndexProgress, 100)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Process progress updates in goroutine
+	go func() {
+		defer wg.Done()
+		for progress := range progressChan {
+			percent := float64(progress.LayerIndex) / float64(progress.TotalLayers) * 100
+
+			switch progress.Stage {
+			case "starting":
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Int("layer", progress.LayerIndex).
+					Int("total", progress.TotalLayers).
+					Msgf("Indexing layer %d/%d (%.0f%%)", progress.LayerIndex, progress.TotalLayers, percent)
+
+				outputLogger.Info(fmt.Sprintf("Indexing layer %d/%d (%.0f%%)\n",
+					progress.LayerIndex, progress.TotalLayers, percent))
+
+			case "completed":
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Int("layer", progress.LayerIndex).
+					Int("total", progress.TotalLayers).
+					Int("files", progress.FilesIndexed).
+					Msgf("Completed layer %d/%d (%.0f%%, %d files indexed)", progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed)
+
+				outputLogger.Info(fmt.Sprintf("Completed layer %d/%d (%.0f%%, %d files indexed)\n",
+					progress.LayerIndex, progress.TotalLayers, percent, progress.FilesIndexed))
+
+			default:
+				log.Info().
+					Str("container_id", request.ContainerId).
+					Str("stage", progress.Stage).
+					Int("layer", progress.LayerIndex).
+					Int("total", progress.TotalLayers).
+					Msgf("Index progress [%s]: layer %d/%d", progress.Stage, progress.LayerIndex, progress.TotalLayers)
+
+				outputLogger.Info(fmt.Sprintf("Index progress [%s]: layer %d/%d\n",
+					progress.Stage, progress.LayerIndex, progress.TotalLayers))
+			}
+		}
+	}()
+
+	// Get credential provider for CLIP indexing (only needed if indexing from remote)
+	// For local OCI layout indexing, credentials are not needed
+	var credProvider clipCommon.RegistryCredentialProvider
+	if !strings.HasPrefix(sourceRef, "oci:") {
+		credProvider = c.getCredentialProviderForImage(ctx, request.ImageId, request)
+		if credProvider != nil {
+			log.Info().
+				Str("image_id", request.ImageId).
+				Str("source_ref", sourceRef).
+				Msg("credentials provided for CLIP indexing from registry")
+		} else {
+			log.Info().
+				Str("image_id", request.ImageId).
+				Str("source_ref", sourceRef).
+				Msg("no credentials for CLIP indexing, using ambient auth")
+		}
+	}
+
+	// Create index-only clip archive from the OCI image
+	// KEY FEATURE: sourceRef is used for reading/indexing (local, fast)
+	//              storageRef is embedded in metadata (remote, for runtime)
+	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
+		ImageRef:        sourceRef,
+		StorageImageRef: storageRef,
+		OutputPath:      outputPath,
+		CheckpointMiB:   checkpointMiB,
+		ProgressChan:    progressChan,
+		CredProvider:    credProvider,
+	})
+
+	// Close channel and wait for all progress messages to be logged
+	close(progressChan)
+	wg.Wait()
+
+	if err != nil {
+		return err
+	}
+
+	outputLogger.Info("Image indexing completed successfully\n")
+	return nil
+}
+
 func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, outputPath string, checkpointMiB int64, authConfig string) error {
 	outputLogger.Info("Indexing image...\n")
 	progressChan := make(chan clip.OCIIndexProgress, 100)
@@ -973,7 +1026,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 
 	// Clip v2: Skip unpack and create index-only clip from OCI layout.
-	// Strategy: Index from LOCAL OCI layout first (fast), then push to remote registry.
+	// Strategy: Index from LOCAL OCI layout (fast), store REMOTE reference in metadata.
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
@@ -1000,14 +1053,20 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		// OPTIMIZATION 1: Index from LOCAL OCI layout BEFORE pushing to remote
-		// This avoids pulling from remote during CLIP indexing (which is slow and wasteful)
-		// The OCI layout at ociPath was created by line 905 and contains all layers locally
+		// OPTIMIZATION: Index from LOCAL OCI layout (fast, no network) but embed REMOTE reference in metadata
+		// This uses CLIP's StorageImageRef feature to:
+		// 1. Read/index from local OCI layout (source) - avoids pulling from remote
+		// 2. Store the remote registry reference in metadata (storage) - enables runtime layer fetching
 		localOCIRef := fmt.Sprintf("oci:%s:latest", ociPath)
 		outputLogger.Info("Indexing image from local OCI layout...\n")
-		log.Info().Str("image_id", request.ImageId).Str("local_oci_ref", localOCIRef).Msg("indexing from local OCI layout to avoid remote pull")
+		log.Info().
+			Str("image_id", request.ImageId).
+			Str("source_ref", localOCIRef).
+			Str("storage_ref", imageTag).
+			Msg("indexing from local OCI layout with remote storage reference")
 		
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, localOCIRef, archivePath, 2, ""); err != nil {
+		// Pass both source (local) and storage (remote) references to CLIP
+		if err = c.createOCIImageWithProgressAndStorageRef(ctx, outputLogger, request, localOCIRef, imageTag, archivePath, 2); err != nil {
 			return err
 		}
 
@@ -1037,8 +1096,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 
 		// Cache the build registry image reference for v2 mounting
-		// This is CRITICAL: at runtime, CLIP needs to know the remote registry to fetch layers from
-		// We override the local OCI reference with the remote registry reference here
+		// Note: This is now also embedded in the CLIP metadata via StorageImageRef
 		c.v2ImageRefs.Set(request.ImageId, imageTag)
 		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached build registry image reference for runtime")
 
