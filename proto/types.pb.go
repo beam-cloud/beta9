@@ -206,13 +206,6 @@ func (x *BuildOptions) GetBuildSecrets() []string {
 	return nil
 }
 
-func (x *BuildOptions) GetBuildRegistryCreds() string {
-	if x != nil {
-		return x.BuildRegistryCreds
-	}
-	return ""
-}
-
 type Checkpoint struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -570,13 +563,14 @@ type ContainerRequest struct {
 	PoolSelector      string                 `protobuf:"bytes,17,opt,name=pool_selector,json=poolSelector,proto3" json:"pool_selector,omitempty"`
 	Preemptable       bool                   `protobuf:"varint,18,opt,name=preemptable,proto3" json:"preemptable,omitempty"`
 	CheckpointEnabled bool                   `protobuf:"varint,19,opt,name=checkpoint_enabled,json=checkpointEnabled,proto3" json:"checkpoint_enabled,omitempty"`
-	BuildOptions      *BuildOptions          `protobuf:"bytes,20,opt,name=build_options,json=buildOptions,proto3" json:"build_options,omitempty"`
-	Ports             []uint32               `protobuf:"varint,21,rep,packed,name=ports,proto3" json:"ports,omitempty"`
-	CostPerMs         float64                `protobuf:"fixed64,22,opt,name=cost_per_ms,json=costPerMs,proto3" json:"cost_per_ms,omitempty"`
-	AppId             string                 `protobuf:"bytes,23,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	Checkpoint        *Checkpoint            `protobuf:"bytes,24,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
-	ConfigPath        string                 `protobuf:"bytes,25,opt,name=config_path,json=configPath,proto3" json:"config_path,omitempty"`
-	ImageCredentials  string                 `protobuf:"bytes,26,opt,name=image_credentials,json=imageCredentials,proto3" json:"image_credentials,omitempty"`
+	BuildOptions       *BuildOptions          `protobuf:"bytes,20,opt,name=build_options,json=buildOptions,proto3" json:"build_options,omitempty"`
+	Ports              []uint32               `protobuf:"varint,21,rep,packed,name=ports,proto3" json:"ports,omitempty"`
+	CostPerMs          float64                `protobuf:"fixed64,22,opt,name=cost_per_ms,json=costPerMs,proto3" json:"cost_per_ms,omitempty"`
+	AppId              string                 `protobuf:"bytes,23,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	Checkpoint         *Checkpoint            `protobuf:"bytes,24,opt,name=checkpoint,proto3" json:"checkpoint,omitempty"`
+	ConfigPath         string                 `protobuf:"bytes,25,opt,name=config_path,json=configPath,proto3" json:"config_path,omitempty"`
+	ImageCredentials   string                 `protobuf:"bytes,26,opt,name=image_credentials,json=imageCredentials,proto3" json:"image_credentials,omitempty"`
+	BuildRegistryCreds string                 `protobuf:"bytes,27,opt,name=build_registry_creds,json=buildRegistryCreds,proto3" json:"build_registry_creds,omitempty"`
 }
 
 func (x *ContainerRequest) Reset() {
@@ -789,6 +783,13 @@ func (x *ContainerRequest) GetConfigPath() string {
 func (x *ContainerRequest) GetImageCredentials() string {
 	if x != nil {
 		return x.ImageCredentials
+	}
+	return ""
+}
+
+func (x *ContainerRequest) GetBuildRegistryCreds() string {
+	if x != nil {
+		return x.BuildRegistryCreds
 	}
 	return ""
 }

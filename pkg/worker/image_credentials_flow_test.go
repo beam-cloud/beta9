@@ -40,11 +40,9 @@ func TestCredentialFlowForBuiltImage(t *testing.T) {
 	// Create a container request with build registry credentials
 	// These credentials were generated at schedule time by generateBuildRegistryCredentials()
 	request := &types.ContainerRequest{
-		ImageId:     imageId,
-		WorkspaceId: workspaceId,
-		BuildOptions: types.BuildOptions{
-			BuildRegistryCreds: "builduser:buildpass", // Generated token from scheduler
-		},
+		ImageId:            imageId,
+		WorkspaceId:        workspaceId,
+		BuildRegistryCreds: "builduser:buildpass", // Generated token from scheduler
 	}
 
 	// Test 1: Verify credential provider is created for CLIP indexing
@@ -152,11 +150,11 @@ func TestCredentialPriority(t *testing.T) {
 
 			// Create request with various credential options
 			request := &types.ContainerRequest{
-				ImageId:          imageId,
-				ImageCredentials: tt.imageCredentials,
+				ImageId:            imageId,
+				ImageCredentials:   tt.imageCredentials,
+				BuildRegistryCreds: tt.buildRegistryCreds,
 				BuildOptions: types.BuildOptions{
-					SourceImageCreds:   tt.sourceImageCreds,
-					BuildRegistryCreds: tt.buildRegistryCreds,
+					SourceImageCreds: tt.sourceImageCreds,
 				},
 			}
 
@@ -240,10 +238,8 @@ func TestBuildRegistryCredentialUsage(t *testing.T) {
 			client.v2ImageRefs.Set(imageId, tt.cachedImageRef)
 
 			request := &types.ContainerRequest{
-				ImageId: imageId,
-				BuildOptions: types.BuildOptions{
-					BuildRegistryCreds: buildRegistryCreds,
-				},
+				ImageId:            imageId,
+				BuildRegistryCreds: buildRegistryCreds,
 			}
 
 			credProvider := client.getCredentialProviderForImage(ctx, imageId, request)

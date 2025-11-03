@@ -201,32 +201,33 @@ type BuildOptions struct {
 
 // @go2proto
 type ContainerRequest struct {
-	ContainerId       string          `json:"container_id"`
-	EntryPoint        []string        `json:"entry_point"`
-	Env               []string        `json:"env"`
-	Cpu               int64           `json:"cpu"`
-	Memory            int64           `json:"memory"`
-	Gpu               string          `json:"gpu"`
-	GpuRequest        []string        `json:"gpu_request"`
-	GpuCount          uint32          `json:"gpu_count"`
-	ImageId           string          `json:"image_id"`
-	StubId            string          `json:"stub_id"`
-	WorkspaceId       string          `json:"workspace_id"`
-	Workspace         Workspace       `json:"workspace"`
-	Stub              StubWithRelated `json:"stub"`
-	Timestamp         time.Time       `json:"timestamp"`
-	Mounts            []Mount         `json:"mounts"`
-	RetryCount        int             `json:"retry_count"`
-	PoolSelector      string          `json:"pool_selector"`
-	Preemptable       bool            `json:"preemptable"`
-	CheckpointEnabled bool            `json:"checkpoint_enabled"`
-	BuildOptions      BuildOptions    `json:"build_options"`
-	Ports             []uint32        `json:"ports"`
-	CostPerMs         float64         `json:"cost_per_ms"`
-	AppId             string          `json:"app_id"`
-	Checkpoint        *Checkpoint     `json:"checkpoint"`
-	ConfigPath        string          `json:"config_path"`
-	ImageCredentials  string          `json:"image_credentials"`
+	ContainerId        string          `json:"container_id"`
+	EntryPoint         []string        `json:"entry_point"`
+	Env                []string        `json:"env"`
+	Cpu                int64           `json:"cpu"`
+	Memory             int64           `json:"memory"`
+	Gpu                string          `json:"gpu"`
+	GpuRequest         []string        `json:"gpu_request"`
+	GpuCount           uint32          `json:"gpu_count"`
+	ImageId            string          `json:"image_id"`
+	StubId             string          `json:"stub_id"`
+	WorkspaceId        string          `json:"workspace_id"`
+	Workspace          Workspace       `json:"workspace"`
+	Stub               StubWithRelated `json:"stub"`
+	Timestamp          time.Time       `json:"timestamp"`
+	Mounts             []Mount         `json:"mounts"`
+	RetryCount         int             `json:"retry_count"`
+	PoolSelector       string          `json:"pool_selector"`
+	Preemptable        bool            `json:"preemptable"`
+	CheckpointEnabled  bool            `json:"checkpoint_enabled"`
+	BuildOptions       BuildOptions    `json:"build_options"`
+	Ports              []uint32        `json:"ports"`
+	CostPerMs          float64         `json:"cost_per_ms"`
+	AppId              string          `json:"app_id"`
+	Checkpoint         *Checkpoint     `json:"checkpoint"`
+	ConfigPath         string          `json:"config_path"`
+	ImageCredentials   string          `json:"image_credentials"`
+	BuildRegistryCreds string          `json:"build_registry_creds"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {

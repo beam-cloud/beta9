@@ -528,14 +528,14 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 	// the image for both CLIP indexing and runtime layer mounting
 	buildRegistry := c.getBuildRegistry()
 	if buildRegistry != "" && strings.Contains(sourceRef, buildRegistry) {
-		if request.BuildOptions.BuildRegistryCreds != "" {
+		if request.BuildRegistryCreds != "" {
 			log.Info().
 				Str("image_id", imageId).
 				Str("registry", registry).
 				Str("source_ref", sourceRef).
 				Str("build_registry", buildRegistry).
 				Msg("using build registry credentials for image access (image was built and pushed by us)")
-			return c.parseAndCreateProvider(ctx, request.BuildOptions.BuildRegistryCreds, registry, imageId, "build registry")
+			return c.parseAndCreateProvider(ctx, request.BuildRegistryCreds, registry, imageId, "build registry")
 		}
 		log.Info().
 			Str("image_id", imageId).
@@ -681,7 +681,7 @@ func (c *ImageClient) getBuildRegistry() string {
 }
 
 // getBuildRegistryAuthArgs returns buildah authentication arguments for pushing to build registry
-// Uses credentials from BuildOptions.BuildRegistryCreds (generated fresh per-build)
+// buildRegistryCreds should come from request.BuildRegistryCreds (top-level field)
 func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string, buildRegistryCreds string) []string {
 	// For localhost, no auth needed
 	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
@@ -965,7 +965,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 		// Add authentication for build registry (uses credentials from request)
-		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildOptions.BuildRegistryCreds); len(authArgs) > 0 {
+		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCreds); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
 		}
 		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)

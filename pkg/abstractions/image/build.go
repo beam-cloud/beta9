@@ -300,21 +300,22 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 	}
 
 	// Generate fresh credentials for build registry if configured
+	// Generate fresh build registry credentials (if configured)
+	// These are used for: buildah push, CLIP indexing, and runtime layer mounting
 	buildRegistryCreds := ""
 	if b.config.ImageService.BuildRegistry != "" {
-		// Get credentials from workspace secrets/config based on build registry type
 		buildRegistryCreds = b.generateBuildRegistryCredentials()
 	}
 
 	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
-			SourceImage:        sourceImagePtr,
-			SourceImageCreds:   b.opts.BaseImageCreds,
-			Dockerfile:         &b.opts.Dockerfile,
-			BuildCtxObject:     &b.opts.BuildCtxObject,
-			BuildSecrets:       b.opts.BuildSecrets,
-			BuildRegistryCreds: buildRegistryCreds,
+			SourceImage:      sourceImagePtr,
+			SourceImageCreds: b.opts.BaseImageCreds,
+			Dockerfile:       &b.opts.Dockerfile,
+			BuildCtxObject:   &b.opts.BuildCtxObject,
+			BuildSecrets:     b.opts.BuildSecrets,
 		},
+		BuildRegistryCreds: buildRegistryCreds,
 		ContainerId: b.containerID,
 		Env:         b.opts.EnvVars,
 		Cpu:         cpu,

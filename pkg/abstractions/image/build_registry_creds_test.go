@@ -189,8 +189,8 @@ func TestGenerateBuildRegistryCredentialsIntegration(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, req)
 
-	// Verify BuildRegistryCreds was set
-	assert.Equal(t, "builduser:buildpass", req.BuildOptions.BuildRegistryCreds)
+	// Verify BuildRegistryCreds was set at top-level (not in BuildOptions)
+	assert.Equal(t, "builduser:buildpass", req.BuildRegistryCreds)
 }
 
 func TestGenerateBuildRegistryCredentialsNoConfig(t *testing.T) {
@@ -240,5 +240,5 @@ func TestGenerateBuildRegistryCredentialsNoConfig(t *testing.T) {
 	assert.NotNil(t, req)
 
 	// Verify BuildRegistryCreds is empty when no build registry configured
-	assert.Empty(t, req.BuildOptions.BuildRegistryCreds)
+	assert.Empty(t, req.BuildRegistryCreds)
 }
