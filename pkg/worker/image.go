@@ -602,31 +602,34 @@ func (c *ImageClient) getBuildRegistry() string {
 }
 
 // getBuildRegistryAuthArgs returns buildah authentication arguments for the build registry
-// This uses Beta9's internal registry credentials, NOT the user's source image credentials
+// This uses Beta9's internal registry credentials from config, NOT the user's source image credentials
 func (c *ImageClient) getBuildRegistryAuthArgs(ctx context.Context, buildRegistry string) []string {
 	// For localhost, no auth needed
 	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 		return nil
 	}
 
-	// Use Docker registry credentials from config if BuildRegistry is docker.io or not explicitly set
-	// This handles the common case where BuildRegistry is Docker Hub
+	// Use Docker Hub credentials from config
 	if strings.Contains(buildRegistry, "docker.io") || buildRegistry == "docker.io" {
 		username := c.config.ImageService.Registries.Docker.Username
 		password := c.config.ImageService.Registries.Docker.Password
 		if username != "" && password != "" {
 			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
 		}
+		log.Warn().Str("registry", buildRegistry).Msg("Docker Hub build registry configured but no credentials in config.ImageService.Registries.Docker")
+		return nil
 	}
 
-	// For other registries (ECR, GCR, private registries), rely on:
-	// 1. Environment variables (AWS_ACCESS_KEY_ID for ECR, etc.)
-	// 2. Service account tokens (for in-cluster registries)
-	// 3. Docker config.json (buildah will check ~/.docker/config.json)
-	// If none are available, buildah will attempt anonymous access
+	// For ECR, GCR, and in-cluster registries: let buildah use ambient credentials
+	// - ECR: IAM role attached to pod/instance (buildah will automatically use AWS SDK)
+	// - GCR: Service account with Workload Identity (buildah will use gcloud credentials)
+	// - In-cluster registry: Service account tokens mounted by Kubernetes
+	// - Private registry: credentials in ~/.docker/config.json (set by ImagePullSecrets)
+	// 
+	// No explicit config needed - just let it "just work" with ambient credentials
 	log.Info().
 		Str("registry", buildRegistry).
-		Msg("no explicit credentials for build registry - relying on environment/service account")
+		Msg("using ambient credentials for build registry (IAM role, service account, or docker config)")
 	return nil
 }
 
@@ -636,7 +639,9 @@ func (c *ImageClient) isInsecureRegistry() bool {
 	return c.config.ImageService.BuildRegistryInsecure
 }
 
-// getBuildahAuthArgs returns buildah authentication arguments from credentials
+// getBuildahAuthArgs returns buildah authentication arguments from user-provided credentials
+// Expects credentials in username:password format (either directly or in JSON)
+// For ECR/GCR, users should pass pre-generated tokens, not raw AWS/GCP credentials
 func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, creds string) []string {
 	if creds == "" {
 		return nil
@@ -649,7 +654,7 @@ func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, c
 		return nil
 	}
 
-	// Check for basic username/password auth
+	// Check for basic username/password auth (covers most registries including pre-generated ECR/GCR tokens)
 	if username, ok := parsedCreds["USERNAME"]; ok {
 		if password, ok := parsedCreds["PASSWORD"]; ok {
 			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
@@ -663,14 +668,8 @@ func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, c
 		}
 	}
 
-	// For ECR: use username:password format from parsed creds
-	// The credentials should already be in the right format from GetECRToken
-	if _, hasAwsKey := parsedCreds["AWS_ACCESS_KEY_ID"]; hasAwsKey {
-		// For ECR, we need to get a token. The ParseCredentialsFromJSON should have this,
-		// but if not, buildah will use environment variables
-		log.Info().Str("image_ref", imageRef).Msg("detected AWS credentials for buildah - will use environment or token")
-	}
-
+	// No valid username:password found
+	log.Warn().Str("image_ref", imageRef).Msg("credentials provided but no valid username:password found")
 	return nil
 }
 
