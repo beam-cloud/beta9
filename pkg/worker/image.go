@@ -275,9 +275,19 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		mountOptions.StorageInfo = nil
 
 		// Attach credential provider for runtime layer loading
+		// NOTE: This is CRITICAL for CLIP V2 - at runtime, CLIP pulls layers on-demand
+		// from the registry as the container accesses files. We use the SAME credentials
+		// that were used to push and index the image.
 		credProvider := c.getCredentialProviderForImage(ctx, imageId, request)
 		if credProvider != nil {
+			log.Info().
+				Str("image_id", imageId).
+				Msg("credentials provided for runtime CLIP layer mounting")
 			mountOptions.RegistryCredProvider = credProvider
+		} else {
+			log.Info().
+				Str("image_id", imageId).
+				Msg("no credentials for runtime CLIP layer mounting, using ambient auth")
 		}
 	} else {
 		// v1 (legacy S3 data-carrying)
@@ -455,40 +465,91 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 }
 
 // getCredentialProviderForImage determines the appropriate credentials for an image
-// Priority: 1) Explicit credentials 2) Build registry credentials 3) None (ambient auth)
+// This is used for BOTH CLIP indexing (at build time) AND layer mounting (at runtime)
+//
+// CLIP V2 Flow:
+// 1. Build: Image is pushed to build registry (e.g., registry.example.com/userimages:workspace-image)
+// 2. Cache: We store this image ref in v2ImageRefs
+// 3. Index: CLIP reads OCI manifest from registry (needs credentials)
+// 4. Runtime: CLIP pulls layers on-demand from registry (needs credentials)
+//
+// Credential Priority:
+// 1. Runtime secrets (ImageCredentials) - for sensitive runtime-only access
+// 2. Custom base image creds (SourceImageCreds) - for pulling FROM custom registries
+// 3. Build registry creds (BuildRegistryCreds) - for images WE built and pushed
+// 4. Ambient auth - IAM roles, docker config, etc.
 func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	// Get the source image reference for this image
 	sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
 	if !hasRef {
+		log.Debug().
+			Str("image_id", imageId).
+			Msg("no cached image reference found, cannot determine credentials")
 		return nil
 	}
 
 	registry := reg.ParseRegistry(sourceRef)
 	if registry == "" {
+		log.Debug().
+			Str("image_id", imageId).
+			Str("source_ref", sourceRef).
+			Msg("could not parse registry from image reference")
 		return nil
 	}
 
+	log.Debug().
+		Str("image_id", imageId).
+		Str("source_ref", sourceRef).
+		Str("registry", registry).
+		Msg("determining credentials for image")
+
 	// Priority 1: Explicit credentials from runtime container (stored as secret)
 	if request.ImageCredentials != "" {
+		log.Info().
+			Str("image_id", imageId).
+			Str("registry", registry).
+			Msg("using runtime secret credentials for image access")
 		return c.parseAndCreateProvider(ctx, request.ImageCredentials, registry, imageId, "runtime secret")
 	}
 
-	// Priority 2: Explicit credentials from build container (user-provided)
+	// Priority 2: Explicit credentials from build container (user-provided for custom base images)
+	// This is used when pulling FROM a custom private registry during build
 	if request.BuildOptions.SourceImageCreds != "" {
+		log.Info().
+			Str("image_id", imageId).
+			Str("registry", registry).
+			Str("source_ref", sourceRef).
+			Msg("using custom base image credentials for image access")
 		return c.parseAndCreateProvider(ctx, request.BuildOptions.SourceImageCreds, registry, imageId, "build options")
 	}
 
 	// Priority 3: Build registry credentials from request (if image is from our build registry)
+	// This is the KEY for CLIP V2: we use the SAME credentials that were used to PUSH
+	// the image for both CLIP indexing and runtime layer mounting
 	buildRegistry := c.getBuildRegistry()
-	if strings.Contains(sourceRef, buildRegistry) && request.BuildOptions.BuildRegistryCreds != "" {
-		return c.parseAndCreateProvider(ctx, request.BuildOptions.BuildRegistryCreds, registry, imageId, "build registry")
+	if buildRegistry != "" && strings.Contains(sourceRef, buildRegistry) {
+		if request.BuildOptions.BuildRegistryCreds != "" {
+			log.Info().
+				Str("image_id", imageId).
+				Str("registry", registry).
+				Str("source_ref", sourceRef).
+				Str("build_registry", buildRegistry).
+				Msg("using build registry credentials for image access (image was built and pushed by us)")
+			return c.parseAndCreateProvider(ctx, request.BuildOptions.BuildRegistryCreds, registry, imageId, "build registry")
+		}
+		log.Info().
+			Str("image_id", imageId).
+			Str("registry", registry).
+			Str("build_registry", buildRegistry).
+			Msg("image is from build registry but no credentials provided, using ambient auth")
 	}
 
 	// Priority 4: No explicit credentials - rely on ambient auth (IAM role, docker config)
 	log.Info().
 		Str("image_id", imageId).
 		Str("registry", registry).
-		Msg("no explicit credentials found, relying on ambient auth")
+		Str("source_ref", sourceRef).
+		Msg("no explicit credentials found, relying on ambient auth (IAM role, docker config, etc)")
 	return nil
 }
 
@@ -728,7 +789,20 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 	}()
 
 	// Get credential provider for CLIP indexing
+	// NOTE: This is CRITICAL - CLIP needs credentials to read the OCI manifest and layer metadata
+	// from the registry. We use the SAME credentials that were used to push the image.
 	credProvider := c.getCredentialProviderForImage(ctx, request.ImageId, request)
+	if credProvider != nil {
+		log.Info().
+			Str("image_id", request.ImageId).
+			Str("image_ref", imageRef).
+			Msg("credentials provided for CLIP indexing from registry")
+	} else {
+		log.Info().
+			Str("image_id", request.ImageId).
+			Str("image_ref", imageRef).
+			Msg("no credentials for CLIP indexing, using ambient auth")
+	}
 
 	// Create index-only clip archive from the OCI image
 	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
