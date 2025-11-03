@@ -225,6 +225,7 @@ type ContainerRequest struct {
 	AppId             string          `json:"app_id"`
 	Checkpoint        *Checkpoint     `json:"checkpoint"`
 	ConfigPath        string          `json:"config_path"`
+	ImageCredentials  string          `json:"image_credentials"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -294,6 +295,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		Preemptable:       c.Preemptable,
 		Timestamp:         timestamppb.New(c.Timestamp),
 		BuildOptions:      buildOptions,
+		ImageCredentials:  c.ImageCredentials,
 		Ports:             c.Ports,
 		CheckpointEnabled: c.CheckpointEnabled,
 		Checkpoint:        checkpoint,
@@ -343,6 +345,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Preemptable:       in.Preemptable,
 		PoolSelector:      in.PoolSelector,
 		BuildOptions:      bo,
+		ImageCredentials:  in.ImageCredentials,
 		Ports:             in.Ports,
 		Checkpoint:        checkpoint,
 	}

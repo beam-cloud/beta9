@@ -153,13 +153,13 @@ type BackendRepository interface {
 	UpdateConcurrencyLimit(ctx context.Context, concurrencyLimitId uint, gpuLimit uint32, cpuMillicoreLimit uint32) (*types.ConcurrencyLimit, error)
 	ListConcurrencyLimitsByWorkspaceId(ctx context.Context, workspaceId string) ([]types.ConcurrencyLimit, error)
 	RevertToConcurrencyLimit(ctx context.Context, workspaceId string, concurrencyLimitId string) (*types.ConcurrencyLimit, error)
-	CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string) (*types.Secret, error)
+	CreateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, name string, value string, validateName bool) (*types.Secret, error)
 	GetSecretByName(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
 	GetSecretsByName(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error)
 	GetSecretByNameDecrypted(ctx context.Context, workspace *types.Workspace, name string) (*types.Secret, error)
 	GetSecretsByNameDecrypted(ctx context.Context, workspace *types.Workspace, names []string) ([]types.Secret, error)
 	ListSecrets(ctx context.Context, workspace *types.Workspace) ([]types.Secret, error)
-	UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretId string, value string) (*types.Secret, error)
+	UpdateSecret(ctx context.Context, workspace *types.Workspace, tokenId uint, secretName string, value string) (*types.Secret, error)
 	DeleteSecret(ctx context.Context, workspace *types.Workspace, secretName string) error
 	CreateScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) (*types.ScheduledJob, error)
 	DeleteScheduledJob(ctx context.Context, scheduledJob *types.ScheduledJob) error
@@ -176,6 +176,8 @@ type BackendRepository interface {
 	DeleteApp(ctx context.Context, appId string) error
 	GetImageClipVersion(ctx context.Context, imageId string) (uint32, error)
 	CreateImage(ctx context.Context, imageId string, clipVersion uint32) (uint32, error)
+	SetImageCredentialSecret(ctx context.Context, imageId string, secretName string, secretExternalId string) error
+	GetImageCredentialSecret(ctx context.Context, imageId string) (string, string, error)
 	CreateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
 	UpdateCheckpoint(ctx context.Context, checkpoint *types.Checkpoint) (*types.Checkpoint, error)
 	ListCheckpoints(ctx context.Context, workspaceExternalId string) ([]types.Checkpoint, error)
