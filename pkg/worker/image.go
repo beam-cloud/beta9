@@ -553,10 +553,12 @@ func (c *ImageClient) createCredentialProvider(ctx context.Context, credentialsS
 	return provider
 }
 
-// cacheV2SourceImageRef caches the source image reference for a v2 image build
+// cacheV2SourceImageRef caches the source image reference for v2 images pulled from external registries
+// For built images, the reference is cached after build/push in BuildAndArchiveImage
 func (c *ImageClient) cacheV2SourceImageRef(request *types.ContainerRequest) {
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) && request.BuildOptions.SourceImage != nil {
 		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
+		log.Info().Str("image_id", request.ImageId).Str("source_image", *request.BuildOptions.SourceImage).Msg("cached source image reference for pull")
 	}
 }
 
@@ -837,9 +839,6 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	startTime := time.Now()
 
-	// Cache the source image reference for v2 images so we can retrieve it later for non-build containers
-	c.cacheV2SourceImageRef(request)
-
 	buildPath, err := os.MkdirTemp("", "")
 	if err != nil {
 		return err
@@ -990,6 +989,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if err = cmd.Run(); err != nil {
 			return err
 		}
+
+		// Cache the build registry image reference for v2 mounting
+		// This is what CLIP will reference when fetching layers at runtime
+		c.v2ImageRefs.Set(request.ImageId, imageTag)
+		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached build registry image reference")
 
 		// Create index-only clip archive with progress reporting
 		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, archivePath, 2, ""); err != nil {
