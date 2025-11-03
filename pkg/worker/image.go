@@ -601,13 +601,10 @@ func (c *ImageClient) getBuildRegistry() string {
 	return "localhost"
 }
 
-// isInsecureRegistry returns true if TLS verification should be disabled for the registry
-func (c *ImageClient) isInsecureRegistry(registry string) bool {
-	if !c.config.ImageService.BuildRegistryInsecure {
-		return false
-	}
-	// Treat localhost and 127.0.0.1 as insecure when BuildRegistryInsecure is enabled
-	return strings.Contains(registry, "localhost") || strings.HasPrefix(registry, "127.0.0.1")
+// isInsecureRegistry returns true if TLS verification should be disabled
+// Uses the BuildRegistryInsecure config flag - no auto-detection or hardcoded addresses
+func (c *ImageClient) isInsecureRegistry() bool {
+	return c.config.ImageService.BuildRegistryInsecure
 }
 
 // getBuildahAuthArgs returns buildah authentication arguments from credentials
@@ -790,10 +787,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 
 	if sourceImage != "" {
-		// Determine if we need insecure mode for the source image
-		if base, perr := image.ExtractImageNameAndTag(sourceImage); perr == nil {
-			insecure = c.isInsecureRegistry(base.Registry)
-		}
+		// Use configured insecure mode for all registry operations
+		insecure = c.isInsecureRegistry()
 		
 		// buildah pull the base image so bud doesn't attempt HTTPS
 		pullArgs := []string{"--root", imagePath, "pull"}
@@ -866,7 +861,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		archivePath := filepath.Join("/tmp", archiveName)
 
 		// Get build registry and construct tag
+		// The build registry is where we push intermediate images so CLIP indexer can stream from them
 		buildRegistry := c.getBuildRegistry()
+		if buildRegistry == "localhost" {
+			log.Warn().Str("image_id", request.ImageId).Msg("using localhost as build registry - CLIP indexer may not be able to access this")
+		}
 		localTag := fmt.Sprintf("%s/%s:latest", buildRegistry, request.ImageId)
 
 		// Tag the built image
@@ -876,7 +875,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		// Build push arguments with authentication
 		pushArgs := []string{"--root", imagePath, "push"}
-		if c.isInsecureRegistry(buildRegistry) {
+		if c.isInsecureRegistry() {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 		// Add authentication if credentials are provided
