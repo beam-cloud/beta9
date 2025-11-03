@@ -300,6 +300,45 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 					}
 				}
 			}
+		} else {
+			// No explicit credentials provided - check if this image is from our build registry
+			// If so, use build registry credentials from config as fallback
+			sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
+			if hasRef {
+				registry := reg.ParseRegistry(sourceRef)
+				buildRegistry := c.getBuildRegistry()
+				
+				// Check if source image is from our build registry
+				if registry != "" && strings.Contains(sourceRef, buildRegistry) {
+					if c.config.ImageService.BuildRegistryCredentials != "" {
+						// Parse build registry credentials and create provider
+						creds, err := reg.ParseCredentialsFromJSON(c.config.ImageService.BuildRegistryCredentials)
+						if err != nil {
+							// Try as plain username:password format
+							parts := strings.SplitN(c.config.ImageService.BuildRegistryCredentials, ":", 2)
+							if len(parts) == 2 {
+								creds = map[string]string{
+									"USERNAME": parts[0],
+									"PASSWORD": parts[1],
+								}
+							}
+						}
+						
+						if len(creds) > 0 {
+							credProvider = reg.CredentialsToProvider(ctx, registry, creds)
+							log.Info().
+								Str("image_id", imageId).
+								Str("registry", registry).
+								Msg("using build registry credentials from config for v2 image mount")
+						}
+					} else {
+						log.Info().
+							Str("image_id", imageId).
+							Str("registry", registry).
+							Msg("no explicit credentials - relying on ambient auth for v2 image mount")
+					}
+				}
+			}
 		}
 
 		if credProvider != nil {
@@ -741,6 +780,35 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 					Str("image_id", request.ImageId).
 					Str("registry", registry).
 					Msg("created credential provider from build options for OCI indexing")
+			}
+		}
+	} else {
+		// For images being pushed to our build registry, use build registry credentials from config
+		registry := reg.ParseRegistry(imageRef)
+		buildRegistry := c.getBuildRegistry()
+		
+		if registry != "" && strings.Contains(imageRef, buildRegistry) {
+			if c.config.ImageService.BuildRegistryCredentials != "" {
+				// Parse build registry credentials
+				creds, err := reg.ParseCredentialsFromJSON(c.config.ImageService.BuildRegistryCredentials)
+				if err != nil {
+					// Try as plain username:password format
+					parts := strings.SplitN(c.config.ImageService.BuildRegistryCredentials, ":", 2)
+					if len(parts) == 2 {
+						creds = map[string]string{
+							"USERNAME": parts[0],
+							"PASSWORD": parts[1],
+						}
+					}
+				}
+				
+				if len(creds) > 0 {
+					credProvider = reg.CredentialsToProvider(ctx, registry, creds)
+					log.Info().
+						Str("image_id", request.ImageId).
+						Str("registry", registry).
+						Msg("using build registry credentials from config for OCI indexing")
+				}
 			}
 		}
 	}
