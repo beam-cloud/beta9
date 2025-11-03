@@ -298,9 +298,6 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		sourceImagePtr = &sourceImage
 	}
 
-	// NOTE: BuildRegistryCreds is now injected by the scheduler (see pkg/scheduler/scheduler.go:attachBuildRegistryCredentials)
-	// This ensures ALL containers (build + runtime) get the same credentials
-
 	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
 			SourceImage:      sourceImagePtr,

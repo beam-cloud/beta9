@@ -26,13 +26,13 @@ func TestCredentialFlowForBuiltImage(t *testing.T) {
 	}
 
 	client := &ImageClient{
-		config: config,
+		config:      config,
 		v2ImageRefs: common.NewSafeMap[string](),
 	}
 
 	imageId := "test-image-123"
 	workspaceId := "workspace-456"
-	
+
 	// Simulate what happens after buildah push: cache the image reference
 	pushedImageRef := "registry.example.com/userimages:workspace-456-test-image-123"
 	client.v2ImageRefs.Set(imageId, pushedImageRef)
@@ -40,18 +40,18 @@ func TestCredentialFlowForBuiltImage(t *testing.T) {
 	// Create a container request with build registry credentials
 	// These credentials were generated at schedule time by generateBuildRegistryCredentials()
 	request := &types.ContainerRequest{
-		ImageId:            imageId,
-		WorkspaceId:        workspaceId,
-		BuildRegistryCreds: "builduser:buildpass", // Generated token from scheduler
+		ImageId:                  imageId,
+		WorkspaceId:              workspaceId,
+		BuildRegistryCredentials: "builduser:buildpass", // Generated token from scheduler
 	}
 
 	// Test 1: Verify credential provider is created for CLIP indexing
 	t.Run("CLIP indexing uses build registry credentials", func(t *testing.T) {
 		credProvider := client.getCredentialProviderForImage(ctx, imageId, request)
-		
+
 		// Should return a credential provider (not nil)
 		assert.NotNil(t, credProvider, "CLIP indexing should have credentials")
-		
+
 		// The provider should be usable (this would normally be passed to CLIP)
 		// In production, CLIP would call this provider to get auth for layer fetching
 	})
@@ -59,10 +59,10 @@ func TestCredentialFlowForBuiltImage(t *testing.T) {
 	// Test 2: Verify the same credentials are used at runtime
 	t.Run("Runtime layer mounting uses same build registry credentials", func(t *testing.T) {
 		credProvider := client.getCredentialProviderForImage(ctx, imageId, request)
-		
+
 		// Should return the SAME credential provider
 		assert.NotNil(t, credProvider, "Runtime should have credentials")
-		
+
 		// This demonstrates that the SAME token generated at schedule time is used for:
 		// - buildah push (in BuildAndArchiveImage)
 		// - CLIP indexing (in createOCIImageWithProgress)
@@ -83,58 +83,58 @@ func TestCredentialPriority(t *testing.T) {
 	imageId := "test-image-123"
 
 	tests := []struct {
-		name                   string
-		imageRef               string
-		imageCredentials       string
-		sourceImageCreds       string
-		buildRegistryCreds     string
-		expectedCredSource     string
-		expectCredentials      bool
+		name                     string
+		imageRef                 string
+		imageCredentials         string
+		sourceImageCreds         string
+		buildRegistryCredentials string
+		expectedCredSource       string
+		expectCredentials        bool
 	}{
 		{
-			name:               "Priority 1: Runtime secret credentials",
-			imageRef:           "registry.example.com/userimages:ws-img",
-			imageCredentials:   "runtime:secret",
-			sourceImageCreds:   "source:creds",
-			buildRegistryCreds: "build:creds",
-			expectedCredSource: "runtime secret",
-			expectCredentials:  true,
+			name:                     "Priority 1: Runtime secret credentials",
+			imageRef:                 "registry.example.com/userimages:ws-img",
+			imageCredentials:         "runtime:secret",
+			sourceImageCreds:         "source:creds",
+			buildRegistryCredentials: "build:creds",
+			expectedCredSource:       "runtime secret",
+			expectCredentials:        true,
 		},
 		{
-			name:               "Priority 2: Custom base image credentials",
-			imageRef:           "custom-registry.com/myimage:latest",
-			imageCredentials:   "",
-			sourceImageCreds:   "custom:creds",
-			buildRegistryCreds: "build:creds",
-			expectedCredSource: "build options",
-			expectCredentials:  true,
+			name:                     "Priority 2: Custom base image credentials",
+			imageRef:                 "custom-registry.com/myimage:latest",
+			imageCredentials:         "",
+			sourceImageCreds:         "custom:creds",
+			buildRegistryCredentials: "build:creds",
+			expectedCredSource:       "build options",
+			expectCredentials:        true,
 		},
 		{
-			name:               "Priority 3: Build registry credentials (image from build registry)",
-			imageRef:           "registry.example.com/userimages:ws-img",
-			imageCredentials:   "",
-			sourceImageCreds:   "",
-			buildRegistryCreds: "build:creds",
-			expectedCredSource: "build registry",
-			expectCredentials:  true,
+			name:                     "Priority 3: Build registry credentials (image from build registry)",
+			imageRef:                 "registry.example.com/userimages:ws-img",
+			imageCredentials:         "",
+			sourceImageCreds:         "",
+			buildRegistryCredentials: "build:creds",
+			expectedCredSource:       "build registry",
+			expectCredentials:        true,
 		},
 		{
-			name:               "Priority 4: No credentials (ambient auth)",
-			imageRef:           "registry.example.com/userimages:ws-img",
-			imageCredentials:   "",
-			sourceImageCreds:   "",
-			buildRegistryCreds: "",
-			expectedCredSource: "ambient",
-			expectCredentials:  false,
+			name:                     "Priority 4: No credentials (ambient auth)",
+			imageRef:                 "registry.example.com/userimages:ws-img",
+			imageCredentials:         "",
+			sourceImageCreds:         "",
+			buildRegistryCredentials: "",
+			expectedCredSource:       "ambient",
+			expectCredentials:        false,
 		},
 		{
-			name:               "Build registry creds NOT used for non-build-registry images",
-			imageRef:           "docker.io/library/ubuntu:20.04",
-			imageCredentials:   "",
-			sourceImageCreds:   "",
-			buildRegistryCreds: "build:creds",
-			expectedCredSource: "ambient",
-			expectCredentials:  false, // Should fall back to ambient since not from build registry
+			name:                     "Build registry creds NOT used for non-build-registry images",
+			imageRef:                 "docker.io/library/ubuntu:20.04",
+			imageCredentials:         "",
+			sourceImageCreds:         "",
+			buildRegistryCredentials: "build:creds",
+			expectedCredSource:       "ambient",
+			expectCredentials:        false, // Should fall back to ambient since not from build registry
 		},
 	}
 
@@ -150,9 +150,9 @@ func TestCredentialPriority(t *testing.T) {
 
 			// Create request with various credential options
 			request := &types.ContainerRequest{
-				ImageId:            imageId,
-				ImageCredentials:   tt.imageCredentials,
-				BuildRegistryCreds: tt.buildRegistryCreds,
+				ImageId:                  imageId,
+				ImageCredentials:         tt.imageCredentials,
+				BuildRegistryCredentials: tt.buildRegistryCredentials,
 				BuildOptions: types.BuildOptions{
 					SourceImageCreds: tt.sourceImageCreds,
 				},
@@ -172,51 +172,51 @@ func TestCredentialPriority(t *testing.T) {
 // TestBuildRegistryCredentialUsage demonstrates when BuildRegistryCreds are used
 func TestBuildRegistryCredentialUsage(t *testing.T) {
 	ctx := context.Background()
-	
+
 	imageId := "test-image"
-	buildRegistryCreds := "ecr-token:abc123" // Simulated ECR token
-	
+	buildRegistryCredentials := "ecr-token:abc123" // Simulated ECR token
+
 	tests := []struct {
-		name              string
-		buildRegistry     string
-		cachedImageRef    string
+		name                string
+		buildRegistry       string
+		cachedImageRef      string
 		shouldUseBuildCreds bool
-		description       string
+		description         string
 	}{
 		{
-			name:              "Built image pushed to ECR",
-			buildRegistry:     "123456789012.dkr.ecr.us-east-1.amazonaws.com",
-			cachedImageRef:    "123456789012.dkr.ecr.us-east-1.amazonaws.com/userimages:ws-img",
+			name:                "Built image pushed to ECR",
+			buildRegistry:       "123456789012.dkr.ecr.us-east-1.amazonaws.com",
+			cachedImageRef:      "123456789012.dkr.ecr.us-east-1.amazonaws.com/userimages:ws-img",
 			shouldUseBuildCreds: true,
-			description:       "Image was built and pushed to our ECR build registry",
+			description:         "Image was built and pushed to our ECR build registry",
 		},
 		{
-			name:              "Built image pushed to GCR",
-			buildRegistry:     "us-central1-docker.pkg.dev/project/repo",
-			cachedImageRef:    "us-central1-docker.pkg.dev/project/repo/userimages:ws-img",
+			name:                "Built image pushed to GCR",
+			buildRegistry:       "us-central1-docker.pkg.dev/project/repo",
+			cachedImageRef:      "us-central1-docker.pkg.dev/project/repo/userimages:ws-img",
 			shouldUseBuildCreds: true,
-			description:       "Image was built and pushed to our GCR build registry",
+			description:         "Image was built and pushed to our GCR build registry",
 		},
 		{
-			name:              "Built image pushed to private registry",
-			buildRegistry:     "registry.company.com",
-			cachedImageRef:    "registry.company.com/userimages:ws-img",
+			name:                "Built image pushed to private registry",
+			buildRegistry:       "registry.company.com",
+			cachedImageRef:      "registry.company.com/userimages:ws-img",
 			shouldUseBuildCreds: true,
-			description:       "Image was built and pushed to our private build registry",
+			description:         "Image was built and pushed to our private build registry",
 		},
 		{
-			name:              "Base image from Docker Hub",
-			buildRegistry:     "registry.company.com",
-			cachedImageRef:    "docker.io/library/python:3.11",
+			name:                "Base image from Docker Hub",
+			buildRegistry:       "registry.company.com",
+			cachedImageRef:      "docker.io/library/python:3.11",
 			shouldUseBuildCreds: false,
-			description:       "Using a base image from Docker Hub without building",
+			description:         "Using a base image from Docker Hub without building",
 		},
 		{
-			name:              "Base image from custom registry",
-			buildRegistry:     "registry.company.com",
-			cachedImageRef:    "custom-registry.io/myorg/myimage:v1",
+			name:                "Base image from custom registry",
+			buildRegistry:       "registry.company.com",
+			cachedImageRef:      "custom-registry.io/myorg/myimage:v1",
 			shouldUseBuildCreds: false,
-			description:       "Using a base image from a different registry",
+			description:         "Using a base image from a different registry",
 		},
 	}
 
@@ -238,17 +238,17 @@ func TestBuildRegistryCredentialUsage(t *testing.T) {
 			client.v2ImageRefs.Set(imageId, tt.cachedImageRef)
 
 			request := &types.ContainerRequest{
-				ImageId:            imageId,
-				BuildRegistryCreds: buildRegistryCreds,
+				ImageId:                  imageId,
+				BuildRegistryCredentials: buildRegistryCredentials,
 			}
 
 			credProvider := client.getCredentialProviderForImage(ctx, imageId, request)
 
 			if tt.shouldUseBuildCreds {
-				assert.NotNil(t, credProvider, 
+				assert.NotNil(t, credProvider,
 					"should use build registry credentials: %s", tt.description)
 			} else {
-				assert.Nil(t, credProvider, 
+				assert.Nil(t, credProvider,
 					"should NOT use build registry credentials: %s", tt.description)
 			}
 		})
@@ -282,6 +282,6 @@ func TestTokenLifecycleDocumentation(t *testing.T) {
 	// - Containers running > 12 hours may fail to pull new layers
 	// - Workaround: Use IAM roles on worker nodes for ambient auth
 	// - Future: Implement token refresh mechanism
-	
+
 	t.Log("Token lifecycle documented - see test comments")
 }

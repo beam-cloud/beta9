@@ -365,7 +365,7 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (string
 	// For OCI images, move to canonical location
 	canonicalPath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
 	_ = os.MkdirAll(filepath.Dir(canonicalPath), 0755)
-	
+
 	if downloadPath != canonicalPath {
 		// Move file to canonical location (with fallback to copy+remove)
 		if err := os.Rename(downloadPath, canonicalPath); err != nil {
@@ -386,7 +386,7 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (string
 
 	// Cache OCI metadata for later use
 	c.cacheOCIMetadata(imageId, meta)
-	
+
 	return canonicalPath, meta
 }
 
@@ -528,14 +528,14 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 	// the image for both CLIP indexing and runtime layer mounting
 	buildRegistry := c.getBuildRegistry()
 	if buildRegistry != "" && strings.Contains(sourceRef, buildRegistry) {
-		if request.BuildRegistryCreds != "" {
+		if request.BuildRegistryCredentials != "" {
 			log.Info().
 				Str("image_id", imageId).
 				Str("registry", registry).
 				Str("source_ref", sourceRef).
 				Str("build_registry", buildRegistry).
 				Msg("using build registry credentials for image access (image was built and pushed by us)")
-			return c.parseAndCreateProvider(ctx, request.BuildRegistryCreds, registry, imageId, "build registry")
+			return c.parseAndCreateProvider(ctx, request.BuildRegistryCredentials, registry, imageId, "build registry")
 		}
 		log.Info().
 			Str("image_id", imageId).
@@ -682,16 +682,16 @@ func (c *ImageClient) getBuildRegistry() string {
 
 // getBuildRegistryAuthArgs returns buildah authentication arguments for pushing to build registry
 // buildRegistryCreds should come from request.BuildRegistryCreds (top-level field)
-func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string, buildRegistryCreds string) []string {
+func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string, buildRegistryCredentials string) []string {
 	// For localhost, no auth needed
 	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 		return nil
 	}
 
 	// Use explicit credentials from BuildOptions if provided (generated fresh in scheduler)
-	if buildRegistryCreds != "" {
+	if buildRegistryCredentials != "" {
 		log.Info().Str("registry", buildRegistry).Msg("using build registry credentials from request")
-		return []string{"--creds", buildRegistryCreds}
+		return []string{"--creds", buildRegistryCredentials}
 	}
 
 	// Fall back to ambient credentials (IAM role, service account, docker config)
@@ -866,13 +866,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if sourceImage != "" {
 		// Use configured insecure mode for all registry operations
 		insecure = c.isInsecureRegistry()
-		
+
 		// buildah pull the base image so bud doesn't attempt HTTPS
 		pullArgs := []string{"--root", imagePath, "pull"}
 		if insecure {
 			pullArgs = append(pullArgs, "--tls-verify=false")
 		}
-		
+
 		// Add credentials if provided
 		if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
 			pullArgs = append(pullArgs, authArgs...)
@@ -891,12 +891,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	if insecure {
 		budArgs = append(budArgs, "--tls-verify=false")
 	}
-	
+
 	// Add credentials for multi-stage builds and private base images
 	if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
 		budArgs = append(budArgs, authArgs...)
 	}
-	
+
 	// Add build secrets as build arguments
 	if len(request.BuildOptions.BuildSecrets) > 0 {
 		for _, secret := range request.BuildOptions.BuildSecrets {
@@ -943,7 +943,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 			log.Warn().Str("image_id", request.ImageId).Msg("using localhost as build registry - CLIP indexer may not be able to access this")
 		}
-		
+
 		// Construct image tag with workspace and image ID
 		// For localhost: localhost/userimages:image_id
 		// For remote registry: registry/userimages:workspace_id-image_id
@@ -965,7 +965,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 		// Add authentication for build registry (uses credentials from request)
-		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCreds); len(authArgs) > 0 {
+		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
 		}
 		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)

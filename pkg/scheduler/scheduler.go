@@ -423,8 +423,8 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 	}
 
 	// Check if we have credentials configured for the build registry
-	buildRegistryCreds := s.config.ImageService.BuildRegistryCredentials
-	if buildRegistryCreds.Type == "" || len(buildRegistryCreds.Credentials) == 0 {
+	buildRegistryCredentials := s.config.ImageService.BuildRegistryCredentials
+	if buildRegistryCredentials.Type == "" || len(buildRegistryCredentials.Credentials) == 0 {
 		log.Debug().
 			Str("container_id", request.ContainerId).
 			Str("build_registry", buildRegistry).
@@ -436,13 +436,13 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 	dummyImageRef := buildRegistry + "/userimages:dummy"
 
 	// Generate fresh token using the credentials from config
-	token, err := reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCreds.Credentials)
+	token, err := reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCredentials.Credentials)
 	if err != nil {
 		log.Warn().
 			Err(err).
 			Str("container_id", request.ContainerId).
 			Str("build_registry", buildRegistry).
-			Str("cred_type", buildRegistryCreds.Type).
+			Str("cred_type", buildRegistryCredentials.Type).
 			Msg("failed to generate build registry token, will use ambient auth")
 		return nil // Don't fail the request, just log and continue
 	}
@@ -451,17 +451,17 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 		log.Debug().
 			Str("container_id", request.ContainerId).
 			Str("build_registry", buildRegistry).
-			Str("cred_type", buildRegistryCreds.Type).
+			Str("cred_type", buildRegistryCredentials.Type).
 			Msg("no token generated (public registry?), will use ambient auth")
 		return nil
 	}
 
-	request.BuildRegistryCreds = token
+	request.BuildRegistryCredentials = token
 
 	log.Info().
 		Str("container_id", request.ContainerId).
 		Str("build_registry", buildRegistry).
-		Str("cred_type", buildRegistryCreds.Type).
+		Str("cred_type", buildRegistryCredentials.Type).
 		Msg("attached build registry credentials to request")
 
 	return nil

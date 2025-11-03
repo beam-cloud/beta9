@@ -98,6 +98,7 @@ class ContainerRequest(betterproto.Message):
     checkpoint: "Checkpoint" = betterproto.message_field(24)
     config_path: str = betterproto.string_field(25)
     image_credentials: str = betterproto.string_field(26)
+    build_registry_credentials: str = betterproto.string_field(27)
 
 
 @dataclass(eq=False, repr=False)
@@ -174,8 +175,7 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    time: datetime = betterproto.message_field(1)
-    valid: bool = betterproto.bool_field(2)
+    null_time: "NullTime" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)
