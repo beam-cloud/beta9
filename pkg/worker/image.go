@@ -601,6 +601,35 @@ func (c *ImageClient) getBuildRegistry() string {
 	return "localhost"
 }
 
+// getBuildRegistryAuthArgs returns buildah authentication arguments for the build registry
+// This uses Beta9's internal registry credentials, NOT the user's source image credentials
+func (c *ImageClient) getBuildRegistryAuthArgs(ctx context.Context, buildRegistry string) []string {
+	// For localhost, no auth needed
+	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+		return nil
+	}
+
+	// Use Docker registry credentials from config if BuildRegistry is docker.io or not explicitly set
+	// This handles the common case where BuildRegistry is Docker Hub
+	if strings.Contains(buildRegistry, "docker.io") || buildRegistry == "docker.io" {
+		username := c.config.ImageService.Registries.Docker.Username
+		password := c.config.ImageService.Registries.Docker.Password
+		if username != "" && password != "" {
+			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
+		}
+	}
+
+	// For other registries (ECR, GCR, private registries), rely on:
+	// 1. Environment variables (AWS_ACCESS_KEY_ID for ECR, etc.)
+	// 2. Service account tokens (for in-cluster registries)
+	// 3. Docker config.json (buildah will check ~/.docker/config.json)
+	// If none are available, buildah will attempt anonymous access
+	log.Info().
+		Str("registry", buildRegistry).
+		Msg("no explicit credentials for build registry - relying on environment/service account")
+	return nil
+}
+
 // isInsecureRegistry returns true if TLS verification should be disabled
 // Uses the BuildRegistryInsecure config flag - no auto-detection or hardcoded addresses
 func (c *ImageClient) isInsecureRegistry() bool {
@@ -874,12 +903,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 
 		// Build push arguments with authentication
+		// IMPORTANT: Use build registry credentials (internal), NOT user's source image credentials
 		pushArgs := []string{"--root", imagePath, "push"}
 		if c.isInsecureRegistry() {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
-		// Add authentication if credentials are provided
-		if authArgs := c.getBuildahAuthArgs(ctx, localTag, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
+		// Add authentication for internal build registry
+		if authArgs := c.getBuildRegistryAuthArgs(ctx, buildRegistry); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
 		}
 		pushArgs = append(pushArgs, localTag, "docker://"+localTag)
