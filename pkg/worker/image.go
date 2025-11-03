@@ -14,9 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ecr"
-	ecrtypes "github.com/aws/aws-sdk-go-v2/service/ecr/types"
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
@@ -642,87 +639,6 @@ func (c *ImageClient) isInsecureRegistry() bool {
 	return c.config.ImageService.BuildRegistryInsecure
 }
 
-// isECRRegistry returns true if the registry is AWS ECR
-func (c *ImageClient) isECRRegistry(registry string) bool {
-	return strings.Contains(strings.ToLower(registry), ".ecr.") && strings.Contains(strings.ToLower(registry), ".amazonaws.com")
-}
-
-// ensureECRRepository creates an ECR repository if it doesn't exist
-// repository should be in format: workspace_id/image_id
-func (c *ImageClient) ensureECRRepository(ctx context.Context, registry string, repository string, outputLogger *slog.Logger) error {
-	// Parse region from registry URL
-	// Format: account-id.dkr.ecr.region.amazonaws.com
-	parts := strings.Split(registry, ".")
-	if len(parts) < 4 {
-		return fmt.Errorf("invalid ECR registry format: %s", registry)
-	}
-	
-	region := ""
-	for i, part := range parts {
-		if part == "ecr" && i+1 < len(parts) {
-			region = parts[i+1]
-			break
-		}
-	}
-	
-	if region == "" {
-		return fmt.Errorf("could not parse region from ECR registry: %s", registry)
-	}
-
-	outputLogger.Info(fmt.Sprintf("Ensuring ECR repository exists: %s in region %s\n", repository, region))
-	log.Info().Str("registry", registry).Str("repository", repository).Str("region", region).Msg("ensuring ECR repository exists")
-
-	// Get AWS credentials from config or use ambient credentials (IAM role)
-	cfg, err := common.GetAWSConfig("", "", region, "")
-	if err != nil {
-		return fmt.Errorf("failed to get AWS config: %w", err)
-	}
-
-	// Create ECR client
-	ecrClient := ecr.NewFromConfig(cfg)
-
-	// Try to describe the repository first
-	_, err = ecrClient.DescribeRepositories(ctx, &ecr.DescribeRepositoriesInput{
-		RepositoryNames: []string{repository},
-	})
-
-	if err == nil {
-		// Repository already exists
-		outputLogger.Info(fmt.Sprintf("ECR repository %s already exists\n", repository))
-		log.Info().Str("repository", repository).Msg("ECR repository already exists")
-		return nil
-	}
-
-	// Check if error is "repository not found"
-	if !strings.Contains(err.Error(), "RepositoryNotFoundException") {
-		// Some other error occurred
-		log.Warn().Err(err).Str("repository", repository).Msg("failed to describe ECR repository")
-		// Don't fail - we'll try to create it anyway
-	}
-
-	// Create the repository
-	_, err = ecrClient.CreateRepository(ctx, &ecr.CreateRepositoryInput{
-		RepositoryName: aws.String(repository),
-		ImageScanningConfiguration: &ecrtypes.ImageScanningConfiguration{
-			ScanOnPush: false,
-		},
-	})
-
-	if err != nil {
-		// Check if error is "repository already exists" - this is fine
-		if strings.Contains(err.Error(), "RepositoryAlreadyExistsException") {
-			outputLogger.Info(fmt.Sprintf("ECR repository %s already exists\n", repository))
-			log.Info().Str("repository", repository).Msg("ECR repository already exists")
-			return nil
-		}
-		return fmt.Errorf("failed to create ECR repository: %w", err)
-	}
-
-	outputLogger.Info(fmt.Sprintf("Created ECR repository: %s\n", repository))
-	log.Info().Str("repository", repository).Msg("created ECR repository")
-	return nil
-}
-
 // getBuildahAuthArgs returns buildah authentication arguments from user-provided credentials
 // Expects credentials in username:password format (either directly or in JSON)
 // For ECR/GCR, users should pass pre-generated tokens, not raw AWS/GCP credentials
@@ -972,52 +888,40 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-		// Get build registry and construct tag
-		// The build registry is where we push intermediate images so CLIP indexer can stream from them
+		// Get build registry and construct tag with workspace namespacing
 		buildRegistry := c.getBuildRegistry()
 		if buildRegistry == "localhost" {
 			log.Warn().Str("image_id", request.ImageId).Msg("using localhost as build registry - CLIP indexer may not be able to access this")
 		}
 		
-		// Construct repository path with workspace namespace for ECR/cloud registries
-		// For localhost: localhost/image_id:latest
-		// For ECR: registry.ecr.region.amazonaws.com/workspace_id/image_id:latest
-		var repositoryPath string
-		if c.isECRRegistry(buildRegistry) {
-			// ECR format: namespace by workspace ID
-			repositoryPath = fmt.Sprintf("%s/%s", request.WorkspaceId, request.ImageId)
+		// Construct repository path with workspace namespace for all registries
+		// For localhost: localhost/image_id:latest (no workspace namespace for local dev)
+		// For any other registry: registry/workspace_id/image_id:latest
+		var imageTag string
+		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+			imageTag = fmt.Sprintf("%s/%s:latest", buildRegistry, request.ImageId)
 		} else {
-			// Local or other registries: just use image ID
-			repositoryPath = request.ImageId
+			imageTag = fmt.Sprintf("%s/%s/%s:latest", buildRegistry, request.WorkspaceId, request.ImageId)
 		}
-		localTag := fmt.Sprintf("%s/%s:latest", buildRegistry, repositoryPath)
 
 		// Tag the built image
-		if err = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", localTag).Run(); err != nil {
+		if err = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", imageTag).Run(); err != nil {
 			return err
 		}
 
-		// Create ECR repository if needed (before pushing)
-		if c.isECRRegistry(buildRegistry) {
-			if err := c.ensureECRRepository(ctx, buildRegistry, repositoryPath, outputLogger); err != nil {
-				log.Error().Err(err).Str("registry", buildRegistry).Str("repository", repositoryPath).Msg("failed to ensure ECR repository exists")
-				// Don't fail the build - repository might already exist and we just don't have describe permissions
-			}
-		}
-
 		// Build push arguments with authentication
-		// IMPORTANT: Use build registry credentials (internal), NOT user's source image credentials
 		pushArgs := []string{"--root", imagePath, "push"}
 		if c.isInsecureRegistry() {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
-		// Add authentication for internal build registry
+		// Add authentication for build registry (uses ambient credentials for cloud registries)
 		if authArgs := c.getBuildRegistryAuthArgs(ctx, buildRegistry); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
 		}
-		pushArgs = append(pushArgs, localTag, "docker://"+localTag)
+		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
 
 		// Push to registry (required for clip indexer to access the image)
+		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
 		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
@@ -1026,7 +930,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 
 		// Create index-only clip archive with progress reporting
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, localTag, archivePath, 2, ""); err != nil {
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, archivePath, 2, ""); err != nil {
 			return err
 		}
 
