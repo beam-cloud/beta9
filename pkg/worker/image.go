@@ -791,34 +791,26 @@ func (c *ImageClient) createOCIImageWithProgressAndStorageRef(ctx context.Contex
 		}
 	}()
 
-	// Get credential provider for CLIP indexing (only needed if indexing from remote)
-	// For local OCI layout indexing, credentials are not needed
-	var credProvider clipCommon.RegistryCredentialProvider
-	if !strings.HasPrefix(sourceRef, "oci:") {
-		credProvider = c.getCredentialProviderForImage(ctx, request.ImageId, request)
-		if credProvider != nil {
-			log.Info().
-				Str("image_id", request.ImageId).
-				Str("source_ref", sourceRef).
-				Msg("credentials provided for CLIP indexing from registry")
-		} else {
-			log.Info().
-				Str("image_id", request.ImageId).
-				Str("source_ref", sourceRef).
-				Msg("no credentials for CLIP indexing, using ambient auth")
-		}
-	}
+	// When indexing from local OCI layout, we explicitly do NOT provide credentials
+	// This ensures CLIP cannot access the remote registry during indexing (we only want local reads)
+	// The storageRef is stored in metadata for runtime use, but shouldn't be accessed during indexing
+	log.Info().
+		Str("image_id", request.ImageId).
+		Str("source_ref", sourceRef).
+		Str("storage_ref", storageRef).
+		Msg("indexing from local OCI layout (no remote access, no credentials)")
 
 	// Create index-only clip archive from the OCI image
 	// KEY FEATURE: sourceRef is used for reading/indexing (local, fast)
 	//              storageRef is embedded in metadata (remote, for runtime)
+	//              credProvider is nil to prevent any remote access during indexing
 	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
 		ImageRef:        sourceRef,
 		StorageImageRef: storageRef,
 		OutputPath:      outputPath,
 		CheckpointMiB:   checkpointMiB,
 		ProgressChan:    progressChan,
-		CredProvider:    credProvider,
+		CredProvider:    nil, // Explicitly nil - no remote access during local indexing
 	})
 
 	// Close channel and wait for all progress messages to be logged
