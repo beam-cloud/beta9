@@ -602,31 +602,24 @@ func (c *ImageClient) getBuildRegistry() string {
 }
 
 // getBuildRegistryAuthArgs returns buildah authentication arguments for the build registry
-// This uses Beta9's internal registry credentials from config, NOT the user's source image credentials
+// Uses credentials from config.ImageService.BuildRegistryCredentials or falls back to ambient auth
 func (c *ImageClient) getBuildRegistryAuthArgs(ctx context.Context, buildRegistry string) []string {
 	// For localhost, no auth needed
 	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 		return nil
 	}
 
-	// Use Docker Hub credentials from config
-	if strings.Contains(buildRegistry, "docker.io") || buildRegistry == "docker.io" {
-		username := c.config.ImageService.Registries.Docker.Username
-		password := c.config.ImageService.Registries.Docker.Password
-		if username != "" && password != "" {
-			return []string{"--creds", fmt.Sprintf("%s:%s", username, password)}
-		}
-		log.Warn().Str("registry", buildRegistry).Msg("Docker Hub build registry configured but no credentials in config.ImageService.Registries.Docker")
-		return nil
+	// Use explicit credentials from config if provided
+	if c.config.ImageService.BuildRegistryCredentials != "" {
+		log.Info().Str("registry", buildRegistry).Msg("using explicit credentials from config for build registry")
+		return []string{"--creds", c.config.ImageService.BuildRegistryCredentials}
 	}
 
-	// For ECR, GCR, and in-cluster registries: let buildah use ambient credentials
+	// Fall back to ambient credentials (IAM role, service account, docker config)
 	// - ECR: IAM role attached to pod/instance (buildah will automatically use AWS SDK)
 	// - GCR: Service account with Workload Identity (buildah will use gcloud credentials)
 	// - In-cluster registry: Service account tokens mounted by Kubernetes
 	// - Private registry: credentials in ~/.docker/config.json (set by ImagePullSecrets)
-	// 
-	// No explicit config needed - just let it "just work" with ambient credentials
 	log.Info().
 		Str("registry", buildRegistry).
 		Msg("using ambient credentials for build registry (IAM role, service account, or docker config)")
@@ -888,20 +881,21 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
 
-		// Get build registry and construct tag with workspace namespacing
+		// Get build registry and construct tag
+		// Uses a single repository "userimages" with workspace and image ID in the tag
 		buildRegistry := c.getBuildRegistry()
-		if buildRegistry == "localhost" {
+		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 			log.Warn().Str("image_id", request.ImageId).Msg("using localhost as build registry - CLIP indexer may not be able to access this")
 		}
 		
-		// Construct repository path with workspace namespace for all registries
-		// For localhost: localhost/image_id:latest (no workspace namespace for local dev)
-		// For any other registry: registry/workspace_id/image_id:latest
+		// Construct image tag with workspace and image ID
+		// For localhost: localhost/userimages:image_id
+		// For remote registry: registry/userimages:workspace_id-image_id
 		var imageTag string
 		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-			imageTag = fmt.Sprintf("%s/%s:latest", buildRegistry, request.ImageId)
+			imageTag = fmt.Sprintf("%s/userimages:%s", buildRegistry, request.ImageId)
 		} else {
-			imageTag = fmt.Sprintf("%s/%s/%s:latest", buildRegistry, request.WorkspaceId, request.ImageId)
+			imageTag = fmt.Sprintf("%s/userimages:%s-%s", buildRegistry, request.WorkspaceId, request.ImageId)
 		}
 
 		// Tag the built image
@@ -914,7 +908,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if c.isInsecureRegistry() {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
-		// Add authentication for build registry (uses ambient credentials for cloud registries)
+		// Add authentication for build registry from config
 		if authArgs := c.getBuildRegistryAuthArgs(ctx, buildRegistry); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
 		}

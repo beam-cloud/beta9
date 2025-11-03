@@ -194,8 +194,12 @@ type ImageServiceConfig struct {
 	ClipVersion                    uint32                `key:"clipVersion" json:"clip_version"`
 	// BuildRegistry is the docker registry used to tag/push intermediate build images
 	// for v2 indexing (CreateFromOCIImage). If empty, defaults to Runner.BaseImageRegistry.
-	BuildRegistry         string `key:"buildRegistry" json:"build_registry"`
-	BuildRegistryInsecure bool   `key:"buildRegistryInsecure" json:"build_registry_insecure"`
+	// Format: registry.example.com/userimages (the single repository for all user images)
+	BuildRegistry string `key:"buildRegistry" json:"build_registry"`
+	// BuildRegistryCredentials are credentials for pushing to the build registry
+	// Format: username:password or can be empty to use ambient credentials (IAM, docker config)
+	BuildRegistryCredentials string `key:"buildRegistryCredentials" json:"build_registry_credentials"`
+	BuildRegistryInsecure    bool   `key:"buildRegistryInsecure" json:"build_registry_insecure"`
 }
 
 type ImageRegistriesConfig struct {
