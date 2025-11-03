@@ -791,26 +791,37 @@ func (c *ImageClient) createOCIImageWithProgressAndStorageRef(ctx context.Contex
 		}
 	}()
 
-	// When indexing from local OCI layout, we explicitly do NOT provide credentials
-	// This ensures CLIP cannot access the remote registry during indexing (we only want local reads)
-	// The storageRef is stored in metadata for runtime use, but shouldn't be accessed during indexing
-	log.Info().
-		Str("image_id", request.ImageId).
-		Str("source_ref", sourceRef).
-		Str("storage_ref", storageRef).
-		Msg("indexing from local OCI layout (no remote access, no credentials)")
+	// Get credential provider for CLIP
+	// CLIP needs credentials to properly handle the StorageImageRef metadata
+	// It may validate the storage ref format but won't actually pull layers during indexing
+	// (all layer data is read from the local sourceRef)
+	credProvider := c.getCredentialProviderForImage(ctx, request.ImageId, request)
+	if credProvider != nil {
+		log.Info().
+			Str("image_id", request.ImageId).
+			Str("source_ref", sourceRef).
+			Str("storage_ref", storageRef).
+			Str("provider", credProvider.Name()).
+			Msg("indexing from local OCI layout with credentials for storage ref metadata")
+	} else {
+		log.Info().
+			Str("image_id", request.ImageId).
+			Str("source_ref", sourceRef).
+			Str("storage_ref", storageRef).
+			Msg("indexing from local OCI layout, using ambient auth for storage ref metadata")
+	}
 
 	// Create index-only clip archive from the OCI image
-	// KEY FEATURE: sourceRef is used for reading/indexing (local, fast)
-	//              storageRef is embedded in metadata (remote, for runtime)
-	//              credProvider is nil to prevent any remote access during indexing
+	// KEY FEATURE: sourceRef is used for reading/indexing (local OCI layout - fast, no network)
+	//              storageRef is embedded in metadata (remote registry - for runtime)
+	//              Credentials are provided so CLIP can properly format the storage ref metadata
 	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
 		ImageRef:        sourceRef,
 		StorageImageRef: storageRef,
 		OutputPath:      outputPath,
 		CheckpointMiB:   checkpointMiB,
 		ProgressChan:    progressChan,
-		CredProvider:    nil, // Explicitly nil - no remote access during local indexing
+		CredProvider:    credProvider,
 	})
 
 	// Close channel and wait for all progress messages to be logged
