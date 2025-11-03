@@ -433,7 +433,7 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 	}
 
 	// Build a dummy image reference for the build registry
-	dummyImageRef := buildRegistry + "/userimages:dummy"
+	dummyImageRef := buildRegistry + "/" + s.config.ImageService.BuildRepository + ":dummy"
 
 	// Generate fresh token using the credentials from config
 	token, err := reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCredentials.Credentials)
@@ -462,6 +462,7 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 		Str("container_id", request.ContainerId).
 		Str("build_registry", buildRegistry).
 		Str("cred_type", buildRegistryCredentials.Type).
+		Int("credentials_length", len(token)).
 		Msg("attached build registry credentials to request")
 
 	return nil
