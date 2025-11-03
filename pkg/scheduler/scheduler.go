@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
+	reg "github.com/beam-cloud/beta9/pkg/registry"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
@@ -24,6 +25,7 @@ const (
 
 type Scheduler struct {
 	ctx                   context.Context
+	config                types.AppConfig
 	backendRepo           repo.BackendRepository
 	workerRepo            repo.WorkerRepository
 	workerPoolManager     *WorkerPoolManager
@@ -95,6 +97,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 	return &Scheduler{
 		ctx:                   ctx,
+		config:                config,
 		eventBus:              eventBus,
 		backendRepo:           backendRepo,
 		workerRepo:            workerRepo,
@@ -336,6 +339,14 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 			Msg("failed to attach OCI credentials, will use default provider")
 	}
 
+	// Attach build registry credentials for push + runtime layer loading
+	if err := s.attachBuildRegistryCredentials(request); err != nil {
+		log.Warn().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Msg("failed to attach build registry credentials to request")
+	}
+
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
@@ -394,6 +405,64 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 		Int("credentials_length", len(secret.Value)).
 		Str("credentials", secret.Value).
 		Msg("attached OCI credentials")
+
+	return nil
+}
+
+// attachBuildRegistryCredentials generates and attaches build registry credentials to a container request
+// These credentials are used for both build-time (push) and runtime (CLIP layer mounting)
+func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerRequest) error {
+	// Check if build registry is configured
+	buildRegistry := s.config.ImageService.BuildRegistry
+	if buildRegistry == "" || buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+		log.Debug().
+			Str("container_id", request.ContainerId).
+			Str("build_registry", buildRegistry).
+			Msg("no remote build registry configured, skipping credential generation")
+		return nil
+	}
+
+	// Check if we have credentials configured for the build registry
+	buildRegistryCreds := s.config.ImageService.BuildRegistryCredentials
+	if buildRegistryCreds.Type == "" || len(buildRegistryCreds.Credentials) == 0 {
+		log.Debug().
+			Str("container_id", request.ContainerId).
+			Str("build_registry", buildRegistry).
+			Msg("no build registry credentials in config, will use ambient auth")
+		return nil
+	}
+
+	// Build a dummy image reference for the build registry
+	dummyImageRef := buildRegistry + "/userimages:dummy"
+
+	// Generate fresh token using the credentials from config
+	token, err := reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCreds.Credentials)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Str("build_registry", buildRegistry).
+			Str("cred_type", buildRegistryCreds.Type).
+			Msg("failed to generate build registry token, will use ambient auth")
+		return nil // Don't fail the request, just log and continue
+	}
+
+	if token == "" {
+		log.Debug().
+			Str("container_id", request.ContainerId).
+			Str("build_registry", buildRegistry).
+			Str("cred_type", buildRegistryCreds.Type).
+			Msg("no token generated (public registry?), will use ambient auth")
+		return nil
+	}
+
+	request.BuildRegistryCreds = token
+
+	log.Info().
+		Str("container_id", request.ContainerId).
+		Str("build_registry", buildRegistry).
+		Str("cred_type", buildRegistryCreds.Type).
+		Msg("attached build registry credentials to request")
 
 	return nil
 }

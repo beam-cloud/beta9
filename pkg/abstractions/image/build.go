@@ -13,7 +13,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
-	reg "github.com/beam-cloud/beta9/pkg/registry"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
@@ -299,13 +298,8 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		sourceImagePtr = &sourceImage
 	}
 
-	// Generate fresh credentials for build registry if configured
-	// Generate fresh build registry credentials (if configured)
-	// These are used for: buildah push, CLIP indexing, and runtime layer mounting
-	buildRegistryCreds := ""
-	if b.config.ImageService.BuildRegistry != "" {
-		buildRegistryCreds = b.generateBuildRegistryCredentials()
-	}
+	// NOTE: BuildRegistryCreds is now injected by the scheduler (see pkg/scheduler/scheduler.go:attachBuildRegistryCredentials)
+	// This ensures ALL containers (build + runtime) get the same credentials
 
 	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
@@ -315,7 +309,6 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 			BuildCtxObject:   &b.opts.BuildCtxObject,
 			BuildSecrets:     b.opts.BuildSecrets,
 		},
-		BuildRegistryCreds: buildRegistryCreds,
 		ContainerId: b.containerID,
 		Env:         b.opts.EnvVars,
 		Cpu:         cpu,
@@ -344,53 +337,6 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 
 	return req, nil
 }
-
-// generateBuildRegistryCredentials generates fresh credentials for the build registry
-// This uses the same dynamic token generation as custom base images
-// generateBuildRegistryCredentials generates fresh credentials for the build registry
-// Uses credentials from config to generate a fresh token via GetRegistryTokenForImage
-func (b *Build) generateBuildRegistryCredentials() string {
-	buildRegistry := b.config.ImageService.BuildRegistry
-	if buildRegistry == "" || buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-		return ""
-	}
-
-	// Check if we have configured credentials in config
-	buildRegistryCreds := b.config.ImageService.BuildRegistryCredentials
-	if buildRegistryCreds.Type == "" || len(buildRegistryCreds.Credentials) == 0 {
-		log.Info().Str("registry", buildRegistry).Msg("no build registry credentials in config, will use ambient auth")
-		return ""
-	}
-
-	// Build a dummy image reference for the build registry
-	dummyImageRef := fmt.Sprintf("%s/userimages:dummy", buildRegistry)
-
-	// Generate fresh token using the credentials from config
-	token, err := reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCreds.Credentials)
-	if err != nil {
-		log.Warn().
-			Err(err).
-			Str("registry", buildRegistry).
-			Str("cred_type", buildRegistryCreds.Type).
-			Msg("failed to generate build registry token, will use ambient auth")
-		return ""
-	}
-
-	if token == "" {
-		log.Info().
-			Str("registry", buildRegistry).
-			Str("cred_type", buildRegistryCreds.Type).
-			Msg("no token generated (public registry?), will use ambient auth")
-		return ""
-	}
-
-	log.Info().
-		Str("registry", buildRegistry).
-		Str("cred_type", buildRegistryCreds.Type).
-		Msg("generated fresh build registry token")
-	return token
-}
-
 
 // getContainerImageID returns the image ID to use for the build container
 // V2: final image ID (buildah builds complete image)
