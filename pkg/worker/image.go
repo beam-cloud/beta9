@@ -478,10 +478,10 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 		return c.parseAndCreateProvider(ctx, request.BuildOptions.SourceImageCreds, registry, imageId, "build options")
 	}
 
-	// Priority 3: Build registry credentials from config (if image is from our build registry)
+	// Priority 3: Build registry credentials from request (if image is from our build registry)
 	buildRegistry := c.getBuildRegistry()
-	if strings.Contains(sourceRef, buildRegistry) && c.config.ImageService.BuildRegistryCredentials != "" {
-		return c.parseAndCreateProvider(ctx, c.config.ImageService.BuildRegistryCredentials, registry, imageId, "config")
+	if strings.Contains(sourceRef, buildRegistry) && request.BuildOptions.BuildRegistryCreds != "" {
+		return c.parseAndCreateProvider(ctx, request.BuildOptions.BuildRegistryCreds, registry, imageId, "build registry")
 	}
 
 	// Priority 4: No explicit credentials - rely on ambient auth (IAM role, docker config)
@@ -620,16 +620,17 @@ func (c *ImageClient) getBuildRegistry() string {
 }
 
 // getBuildRegistryAuthArgs returns buildah authentication arguments for pushing to build registry
-func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string) []string {
+// Uses credentials from BuildOptions.BuildRegistryCreds (generated fresh per-build)
+func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string, buildRegistryCreds string) []string {
 	// For localhost, no auth needed
 	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 		return nil
 	}
 
-	// Use explicit credentials from config if provided (in username:password format for buildah)
-	if c.config.ImageService.BuildRegistryCredentials != "" {
-		log.Info().Str("registry", buildRegistry).Msg("using build registry credentials from config")
-		return []string{"--creds", c.config.ImageService.BuildRegistryCredentials}
+	// Use explicit credentials from BuildOptions if provided (generated fresh in scheduler)
+	if buildRegistryCreds != "" {
+		log.Info().Str("registry", buildRegistry).Msg("using build registry credentials from request")
+		return []string{"--creds", buildRegistryCreds}
 	}
 
 	// Fall back to ambient credentials (IAM role, service account, docker config)
@@ -889,8 +890,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if c.isInsecureRegistry() {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
-		// Add authentication for build registry
-		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry); len(authArgs) > 0 {
+		// Add authentication for build registry (uses credentials from request)
+		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildOptions.BuildRegistryCreds); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
 		}
 		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)

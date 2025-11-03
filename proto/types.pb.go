@@ -131,11 +131,12 @@ type BuildOptions struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	SourceImage      string   `protobuf:"bytes,1,opt,name=source_image,json=sourceImage,proto3" json:"source_image,omitempty"`
-	Dockerfile       string   `protobuf:"bytes,2,opt,name=dockerfile,proto3" json:"dockerfile,omitempty"`
-	BuildCtxObject   string   `protobuf:"bytes,3,opt,name=build_ctx_object,json=buildCtxObject,proto3" json:"build_ctx_object,omitempty"`
-	SourceImageCreds string   `protobuf:"bytes,4,opt,name=source_image_creds,json=sourceImageCreds,proto3" json:"source_image_creds,omitempty"`
-	BuildSecrets     []string `protobuf:"bytes,5,rep,name=build_secrets,json=buildSecrets,proto3" json:"build_secrets,omitempty"`
+	SourceImage        string   `protobuf:"bytes,1,opt,name=source_image,json=sourceImage,proto3" json:"source_image,omitempty"`
+	Dockerfile         string   `protobuf:"bytes,2,opt,name=dockerfile,proto3" json:"dockerfile,omitempty"`
+	BuildCtxObject     string   `protobuf:"bytes,3,opt,name=build_ctx_object,json=buildCtxObject,proto3" json:"build_ctx_object,omitempty"`
+	SourceImageCreds   string   `protobuf:"bytes,4,opt,name=source_image_creds,json=sourceImageCreds,proto3" json:"source_image_creds,omitempty"`
+	BuildSecrets       []string `protobuf:"bytes,5,rep,name=build_secrets,json=buildSecrets,proto3" json:"build_secrets,omitempty"`
+	BuildRegistryCreds string   `protobuf:"bytes,6,opt,name=build_registry_creds,json=buildRegistryCreds,proto3" json:"build_registry_creds,omitempty"`
 }
 
 func (x *BuildOptions) Reset() {
@@ -203,6 +204,13 @@ func (x *BuildOptions) GetBuildSecrets() []string {
 		return x.BuildSecrets
 	}
 	return nil
+}
+
+func (x *BuildOptions) GetBuildRegistryCreds() string {
+	if x != nil {
+		return x.BuildRegistryCreds
+	}
+	return ""
 }
 
 type Checkpoint struct {

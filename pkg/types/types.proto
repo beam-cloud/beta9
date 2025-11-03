@@ -24,6 +24,7 @@ message BuildOptions {
   string build_ctx_object = 3;
   string source_image_creds = 4;
   repeated string build_secrets = 5;
+  string build_registry_creds = 6;
 }
 
 message Checkpoint {
