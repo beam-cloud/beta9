@@ -251,7 +251,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	// Extract metadata and determine the mount archive path
-	mountArchivePath, meta := c.processPulledArchive(downloadPath, imageId)
+	mountArchivePath, meta := c.processPulledArchive(downloadPath, imageId, request.WorkspaceId)
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           mountArchivePath,
@@ -344,7 +344,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 // processPulledArchive handles the pulled archive, extracts metadata, and determines the mount path
 // For v2 OCI images: moves to canonical location and caches metadata
 // For v1 S3 images: uses the download path as-is
-func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (string, *clipCommon.ClipArchiveMetadata) {
+func (c *ImageClient) processPulledArchive(downloadPath, imageId, workspaceId string) (string, *clipCommon.ClipArchiveMetadata) {
 	// Extract metadata from the archive
 	archiver := clip.NewClipArchiver()
 	meta, _ := archiver.ExtractMetadata(downloadPath)
@@ -385,13 +385,13 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (string
 	}
 
 	// Cache OCI metadata for later use
-	c.cacheOCIMetadata(imageId, meta)
+	c.cacheOCIMetadata(imageId, workspaceId, meta)
 
 	return canonicalPath, meta
 }
 
 // cacheOCIMetadata extracts and caches OCI image metadata
-func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArchiveMetadata) {
+func (c *ImageClient) cacheOCIMetadata(imageId, workspaceId string, meta *clipCommon.ClipArchiveMetadata) {
 	if meta == nil {
 		return
 	}
@@ -406,13 +406,67 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 		ociInfo.RegistryURL = "https://docker.io"
 	}
 
-	// Build and cache the full image reference
+	// Build the source reference from metadata
+	var sourceRef string
 	if ociInfo.Repository != "" && ociInfo.Reference != "" {
 		registryHost := strings.TrimPrefix(ociInfo.RegistryURL, "https://")
 		registryHost = strings.TrimPrefix(registryHost, "http://")
-		sourceRef := fmt.Sprintf("%s/%s:%s", registryHost, ociInfo.Repository, ociInfo.Reference)
+		sourceRef = fmt.Sprintf("%s/%s:%s", registryHost, ociInfo.Repository, ociInfo.Reference)
+	}
+
+	// IMPORTANT: Check if the metadata reference looks like a local reference
+	// During build optimization, we index from local OCI layout which results in metadata
+	// containing local references (e.g., "latest" tag only, or oci: paths)
+	// In these cases, reconstruct the correct remote registry reference from config
+	needsReconstruction := false
+	if sourceRef == "" {
+		needsReconstruction = true
+	} else if strings.Contains(sourceRef, "localhost") || strings.Contains(sourceRef, "127.0.0.1") {
+		needsReconstruction = true
+	} else if ociInfo.Reference == "latest" && ociInfo.Repository == "latest" {
+		// This indicates indexing from oci:path:latest
+		needsReconstruction = true
+	}
+
+	if needsReconstruction {
+		// Reconstruct the build registry reference using the same logic as during build
+		// This ensures consistent references across workers even when CLIP metadata
+		// contains local references (due to optimization that indexes from local OCI layout)
+		buildRegistry := c.getBuildRegistry()
+		buildRepo := c.config.ImageService.BuildRepository
+		
+		// Use the same tag format as during build
+		var reconstructedRef string
+		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+			reconstructedRef = fmt.Sprintf("%s/%s:%s", buildRegistry, buildRepo, imageId)
+		} else {
+			// For remote registries, include workspace ID in the tag for proper namespacing
+			reconstructedRef = fmt.Sprintf("%s/%s:%s-%s", buildRegistry, buildRepo, workspaceId, imageId)
+		}
+		
+		log.Info().
+			Str("image_id", imageId).
+			Str("workspace_id", workspaceId).
+			Str("metadata_ref", sourceRef).
+			Str("reconstructed_ref", reconstructedRef).
+			Msg("reconstructed build registry reference from config (metadata had local reference)")
+		sourceRef = reconstructedRef
+	}
+
+	// IMPORTANT: Don't overwrite an existing cached reference
+	// During build, we cache the REMOTE registry reference (e.g., ECR)
+	// The CLIP metadata might have a LOCAL reference (e.g., localhost or oci: path)
+	// We must preserve the remote reference for runtime layer fetching to work correctly
+	if existingRef, exists := c.v2ImageRefs.Get(imageId); exists {
+		log.Info().
+			Str("image_id", imageId).
+			Str("existing_ref", existingRef).
+			Str("metadata_ref", sourceRef).
+			Msg("keeping existing cached reference (not overwriting with metadata reference)")
+	} else if sourceRef != "" {
+		// Cache the reference (either from metadata or reconstructed)
 		c.v2ImageRefs.Set(imageId, sourceRef)
-		log.Info().Str("image_id", imageId).Str("source_image", sourceRef).Msg("cached source image reference from clip metadata")
+		log.Info().Str("image_id", imageId).Str("source_image", sourceRef).Msg("cached source image reference")
 	}
 
 	// Log metadata availability
@@ -919,7 +973,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 
 	// Clip v2: Skip unpack and create index-only clip from OCI layout.
-	// The image is pushed to the build registry so the clip indexer can stream from it.
+	// Strategy: Index from LOCAL OCI layout first (fast), then push to remote registry.
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join("/tmp", archiveName)
@@ -946,6 +1000,18 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
+		// OPTIMIZATION 1: Index from LOCAL OCI layout BEFORE pushing to remote
+		// This avoids pulling from remote during CLIP indexing (which is slow and wasteful)
+		// The OCI layout at ociPath was created by line 905 and contains all layers locally
+		localOCIRef := fmt.Sprintf("oci:%s:latest", ociPath)
+		outputLogger.Info("Indexing image from local OCI layout...\n")
+		log.Info().Str("image_id", request.ImageId).Str("local_oci_ref", localOCIRef).Msg("indexing from local OCI layout to avoid remote pull")
+		
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, localOCIRef, archivePath, 2, ""); err != nil {
+			return err
+		}
+
+		// Now push the actual image to the build registry for runtime use
 		// Build push arguments with authentication
 		pushArgs := []string{"--root", imagePath, "push"}
 		if c.isInsecureRegistry() {
@@ -961,8 +1027,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
 
-		// Push to registry (required for clip indexer to access the image)
-		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
+		// Push to remote registry (required for runtime layer loading across workers)
+		outputLogger.Info(fmt.Sprintf("Pushing image to build registry: %s\n", imageTag))
 		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
@@ -971,14 +1037,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 
 		// Cache the build registry image reference for v2 mounting
-		// This is what CLIP will reference when fetching layers at runtime
+		// This is CRITICAL: at runtime, CLIP needs to know the remote registry to fetch layers from
+		// We override the local OCI reference with the remote registry reference here
 		c.v2ImageRefs.Set(request.ImageId, imageTag)
-		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached build registry image reference")
-
-		// Create index-only clip archive with progress reporting
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, archivePath, 2, ""); err != nil {
-			return err
-		}
+		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached build registry image reference for runtime")
 
 		// Upload the clip archive to the image registry
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
