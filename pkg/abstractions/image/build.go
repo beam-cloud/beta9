@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -347,72 +346,50 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 
 // generateBuildRegistryCredentials generates fresh credentials for the build registry
 // This uses the same dynamic token generation as custom base images
+// generateBuildRegistryCredentials generates fresh credentials for the build registry
+// Uses credentials from config to generate a fresh token via GetRegistryTokenForImage
 func (b *Build) generateBuildRegistryCredentials() string {
 	buildRegistry := b.config.ImageService.BuildRegistry
 	if buildRegistry == "" || buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 		return ""
 	}
 
-	// Check if we have configured credentials for this registry type
-	// For ECR: use AWS credentials from environment/config
-	// For GCR: use GCP credentials from environment/config
-	// For others: return empty (will use ambient auth)
-	
-	// Build a dummy image reference for the build registry to determine registry type
-	dummyImageRef := fmt.Sprintf("%s/userimages:dummy", buildRegistry)
-	
-	// Check if this is an ECR registry
-	if strings.Contains(strings.ToLower(buildRegistry), ".ecr.") && strings.Contains(strings.ToLower(buildRegistry), ".amazonaws.com") {
-		// For ECR, try to get credentials from environment
-		creds := make(map[string]string)
-		if accessKey := os.Getenv("AWS_ACCESS_KEY_ID"); accessKey != "" {
-			creds["AWS_ACCESS_KEY_ID"] = accessKey
-		}
-		if secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY"); secretKey != "" {
-			creds["AWS_SECRET_ACCESS_KEY"] = secretKey
-		}
-		if sessionToken := os.Getenv("AWS_SESSION_TOKEN"); sessionToken != "" {
-			creds["AWS_SESSION_TOKEN"] = sessionToken
-		}
-		
-		// Extract region from registry URL or use environment
-		region := extractRegionFromECR(buildRegistry)
-		if region == "" {
-			region = os.Getenv("AWS_REGION")
-		}
-		if region == "" {
-			region = os.Getenv("AWS_DEFAULT_REGION")
-		}
-		if region != "" {
-			creds["AWS_REGION"] = region
-		}
-		
-		// Generate fresh ECR token
-		if len(creds) > 0 {
-			token, err := reg.GetRegistryTokenForImage(dummyImageRef, creds)
-			if err == nil && token != "" {
-				return token
-			}
-			log.Warn().Err(err).Str("registry", buildRegistry).Msg("failed to generate ECR token, will use ambient auth")
-		}
+	// Check if we have configured credentials in config
+	buildRegistryCreds := b.config.ImageService.BuildRegistryCredentials
+	if buildRegistryCreds.Type == "" || len(buildRegistryCreds.Credentials) == 0 {
+		log.Info().Str("registry", buildRegistry).Msg("no build registry credentials in config, will use ambient auth")
+		return ""
 	}
-	
-	// For other registries (GCR, ACR, etc.) or if token generation failed,
-	// return empty string to use ambient authentication
-	return ""
+
+	// Build a dummy image reference for the build registry
+	dummyImageRef := fmt.Sprintf("%s/userimages:dummy", buildRegistry)
+
+	// Generate fresh token using the credentials from config
+	token, err := reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCreds.Credentials)
+	if err != nil {
+		log.Warn().
+			Err(err).
+			Str("registry", buildRegistry).
+			Str("cred_type", buildRegistryCreds.Type).
+			Msg("failed to generate build registry token, will use ambient auth")
+		return ""
+	}
+
+	if token == "" {
+		log.Info().
+			Str("registry", buildRegistry).
+			Str("cred_type", buildRegistryCreds.Type).
+			Msg("no token generated (public registry?), will use ambient auth")
+		return ""
+	}
+
+	log.Info().
+		Str("registry", buildRegistry).
+		Str("cred_type", buildRegistryCreds.Type).
+		Msg("generated fresh build registry token")
+	return token
 }
 
-// extractRegionFromECR extracts the AWS region from an ECR registry URL
-// Example: 123456789012.dkr.ecr.us-east-1.amazonaws.com -> us-east-1
-func extractRegionFromECR(registry string) string {
-	parts := strings.Split(registry, ".")
-	for i, part := range parts {
-		if part == "ecr" && i+1 < len(parts) {
-			return parts[i+1]
-		}
-	}
-	return ""
-}
 
 // getContainerImageID returns the image ID to use for the build container
 // V2: final image ID (buildah builds complete image)
