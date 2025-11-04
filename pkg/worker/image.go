@@ -463,9 +463,9 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 	// We check both the registry domain AND the build repository name to avoid false positives
 	buildRegistry := c.getBuildRegistry()
 	buildRepoName := c.config.ImageService.BuildRepositoryName
-	if buildRegistry != "" && buildRepoName != "" && 
-		strings.Contains(sourceRef, buildRegistry) && 
-		strings.Contains(sourceRef, buildRepoName) && 
+	if buildRegistry != "" && buildRepoName != "" &&
+		strings.Contains(sourceRef, buildRegistry) &&
+		strings.Contains(sourceRef, buildRepoName) &&
 		request.BuildRegistryCredentials != "" {
 		return c.parseAndCreateProvider(ctx, request.BuildRegistryCredentials, registry, imageId, "build registry")
 	}
@@ -718,9 +718,14 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	startTime := time.Now()
 
-	buildPath, err := os.MkdirTemp("", "")
+	// Use /dev/shm (tmpfs/RAM) for buildah storage to eliminate disk I/O bottlenecks
+	buildPath, err := os.MkdirTemp("/dev/shm", "buildah-")
 	if err != nil {
-		return err
+		// Fallback to /tmp if /dev/shm is not available
+		buildPath, err = os.MkdirTemp("", "")
+		if err != nil {
+			return err
+		}
 	}
 	defer os.RemoveAll(buildPath)
 
@@ -757,7 +762,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		insecure = c.config.ImageService.BuildRegistryInsecure
 
 		// buildah pull the base image so bud doesn't attempt HTTPS
-		pullArgs := []string{"--root", imagePath, "pull"}
+		pullArgs := []string{"--root", imagePath, "--storage-driver=vfs", "pull"}
 		if insecure {
 			pullArgs = append(pullArgs, "--tls-verify=false")
 		}
@@ -776,13 +781,16 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 	}
 
-	budArgs := []string{"--root", imagePath, "bud"}
+	budArgs := []string{"--root", imagePath, "--storage-driver=vfs", "bud"}
 	if insecure {
 		budArgs = append(budArgs, "--tls-verify=false")
 	}
 
 	// Enable layer caching for faster rebuilds
 	budArgs = append(budArgs, "--layers")
+
+	// Use parallel jobs for faster layer processing
+	budArgs = append(budArgs, "--jobs", "8")
 
 	// Add credentials for multi-stage builds and private base images
 	if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
@@ -832,13 +840,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		log.Warn().Str("image_id", request.ImageId).Msg("image build complete, pushing to registry")
 
 		// Build push arguments with authentication and optimization flags
-		pushArgs := []string{"--root", imagePath, "push"}
+		pushArgs := []string{"--root", imagePath, "--storage-driver=vfs", "push"}
 		if c.config.ImageService.BuildRegistryInsecure {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// Use faster gzip compression (level 1) for compatibility with CLIP indexer
-		// Level 1 is significantly faster than default level 6 with minimal size impact
+		// TODO: Disable compression for fast networks to eliminate I/O overhead (make configurable)
 		pushArgs = append(pushArgs, "--compression-format", "gzip")
 		pushArgs = append(pushArgs, "--compression-level", "1")
 
@@ -890,7 +897,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 
 	// Push to local OCI layout (v1 clip path)
-	v1PushArgs := []string{"--root", imagePath, "push", request.ImageId + ":latest", "oci:" + ociPath + ":latest"}
+	v1PushArgs := []string{"--root", imagePath, "--storage-driver=vfs", "push", request.ImageId + ":latest", "oci:" + ociPath + ":latest"}
 	cmd = exec.CommandContext(ctx, "buildah", v1PushArgs...)
 	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
