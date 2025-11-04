@@ -193,7 +193,7 @@ type ImageServiceConfig struct {
 	ArchiveNanosecondsPerByte      int64                          `key:"archiveNanosecondsPerByte" json:"archive_nanoseconds_per_byte"`
 	ClipVersion                    uint32                         `key:"clipVersion" json:"clip_version"`
 	BuildRegistry                  string                         `key:"buildRegistry" json:"build_registry"`
-	BuildRepository                string                         `key:"buildRepository" json:"build_repository"`
+	BuildRepositoryName            string                         `key:"buildRepositoryName" json:"build_repository_name"`
 	BuildRegistryCredentials       BuildRegistryCredentialsConfig `key:"buildRegistryCredentials" json:"build_registry_credentials"`
 	BuildRegistryInsecure          bool                           `key:"buildRegistryInsecure" json:"build_registry_insecure"`
 }

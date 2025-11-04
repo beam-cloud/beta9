@@ -794,20 +794,20 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		archivePath := filepath.Join("/tmp", archiveName)
 
 		// Get build registry and construct tag
-		// Uses a single repository "beta9-users" with workspace and image ID in the tag
+		// Uses a single repository with workspace and image ID in the tag
 		buildRegistry := c.getBuildRegistry()
 		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 			log.Warn().Str("image_id", request.ImageId).Msg("using localhost as build registry - CLIP indexer may not be able to access this")
 		}
 
 		// Construct image tag with workspace and image ID
-		// For localhost: localhost/beta9-users:image_id
-		// For remote registry: registry/beta9-users:workspace_id-image_id
+		// For localhost: localhost/buildRepositoryName:image_id
+		// For remote registry: registry/buildRepositoryName:workspace_id-image_id
 		var imageTag string
 		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-			imageTag = fmt.Sprintf("%s/beta9-users:%s", buildRegistry, request.ImageId)
+			imageTag = fmt.Sprintf("%s/%s:%s", buildRegistry, c.config.ImageService.BuildRepositoryName, request.ImageId)
 		} else {
-			imageTag = fmt.Sprintf("%s/beta9-users:%s-%s", buildRegistry, request.WorkspaceId, request.ImageId)
+			imageTag = fmt.Sprintf("%s/%s:%s-%s", buildRegistry, c.config.ImageService.BuildRepositoryName, request.WorkspaceId, request.ImageId)
 		}
 
 		// Build with final tag directly

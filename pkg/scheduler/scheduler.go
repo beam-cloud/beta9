@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"sort"
@@ -412,7 +413,6 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 // attachBuildRegistryCredentials generates and attaches build registry credentials to a container request
 // These credentials are used for both build-time (push) and runtime (CLIP layer mounting)
 func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerRequest) error {
-	// Check if build registry is configured
 	buildRegistry := s.config.ImageService.BuildRegistry
 	if buildRegistry == "" || buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 		log.Debug().
@@ -433,7 +433,7 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 	}
 
 	// Build a dummy image reference for the build registry
-	dummyImageRef := buildRegistry + "/beta9-users:dummy"
+	dummyImageRef := fmt.Sprintf("%s/%s:dummy", buildRegistry, s.config.ImageService.BuildRepositoryName)
 
 	// Generate fresh token using the credentials from config
 	token, err := reg.GetRegistryTokenForImage(dummyImageRef, buildRegistryCredentials.Credentials)
