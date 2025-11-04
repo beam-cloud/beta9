@@ -58,20 +58,17 @@ RUN uv pip install --system --python python3.11 "numpy" "accelerate"
 **Improvement**: Optimized buildah push command for faster registry uploads.
 
 **Optimizations Added**:
-1. **zstd compression** - Fast compression with excellent ratios
-   - `--compression-format zstd`
-   - `--compression-level 3` (balanced for speed/size)
+1. **Fast gzip compression** - Compatible with CLIP indexer
+   - `--compression-format gzip`
+   - `--compression-level 1` (fast compression, CLIP-compatible)
 
 2. **Parallel processing** - Concurrent layer compression
    - `--jobs 4` (processes 4 layers simultaneously)
 
-3. **Optimized digest handling** - Skip redundant verification
-   - `--digestfile /dev/null` (digest computed during build)
-
 **Expected Performance Gain**:
-- 2-3x faster push times for large images
-- More efficient network utilization
-- Reduced build-to-deploy time
+- 2-3x faster push times for large images through parallelization
+- Faster compression with level 1 (vs default level 6)
+- Compatible with CLIP indexer's gzip layer expectations
 
 **Files Modified**:
 - `pkg/worker/image.go` - Enhanced buildah push arguments

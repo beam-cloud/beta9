@@ -827,17 +827,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// Add compression for faster layer pushing
-		// zstd provides excellent compression with fast decompression
-		pushArgs = append(pushArgs, "--compression-format", "zstd")
-		pushArgs = append(pushArgs, "--compression-level", "3") // Balance between speed and compression
+		// Use faster gzip compression for compatibility with CLIP indexer
+		// Level 1 provides good speed with reasonable compression
+		pushArgs = append(pushArgs, "--compression-format", "gzip")
+		pushArgs = append(pushArgs, "--compression-level", "1")
 		
 		// Use parallel jobs for faster compression and pushing
 		// This allows multiple layers to be processed concurrently
 		pushArgs = append(pushArgs, "--jobs", "4")
-		
-		// Disable digest verification for faster pushing (digest is computed during build)
-		pushArgs = append(pushArgs, "--digestfile", "/dev/null")
 
 		// Add authentication for build registry (uses credentials from request)
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {

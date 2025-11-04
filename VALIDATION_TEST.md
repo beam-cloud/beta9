@@ -59,18 +59,16 @@ Testing that image push uses optimized settings.
 ### Generated Buildah Command
 ```bash
 buildah --root /path/to/image push \
-  --compression-format zstd \
-  --compression-level 3 \
+  --compression-format gzip \
+  --compression-level 1 \
   --jobs 4 \
-  --digestfile /dev/null \
   image-tag docker://image-tag
 ```
 
 ### Optimizations: ✅ VERIFIED
-- ✅ zstd compression (faster than gzip)
-- ✅ Level 3 compression (balanced speed/size)
+- ✅ gzip compression (CLIP indexer compatible)
+- ✅ Level 1 compression (fast compression vs default level 6)
 - ✅ 4 parallel jobs (concurrent layer processing)
-- ✅ Optimized digest handling
 
 ---
 
