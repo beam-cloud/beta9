@@ -271,24 +271,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	if strings.ToLower(storageType) == string(clipCommon.StorageModeOCI) {
-		// v2 (OCI index-only): ClipFS will read embedded OCI storage info; no S3 info needed
+		// v2: ClipFS reads embedded OCI storage info from archive
 		mountOptions.StorageInfo = nil
-
-		// Attach credential provider for runtime layer loading
-		// NOTE: This is CRITICAL for CLIP V2 - at runtime, CLIP pulls layers on-demand
-		// from the registry as the container accesses files. We use the SAME credentials
-		// that were used to push and index the image.
-		credProvider := c.getCredentialProviderForImage(ctx, imageId, request)
-		if credProvider != nil {
-			log.Info().
-				Str("image_id", imageId).
-				Msg("credentials provided for runtime CLIP layer mounting")
-			mountOptions.RegistryCredProvider = credProvider
-		} else {
-			log.Info().
-				Str("image_id", imageId).
-				Msg("no credentials for runtime CLIP layer mounting, using ambient auth")
-		}
+		mountOptions.RegistryCredProvider = c.getCredentialProviderForImage(ctx, imageId, request)
 	} else {
 		// v1 (legacy S3 data-carrying)
 		mountOptions.Credentials = storage.ClipStorageCredentials{
@@ -341,9 +326,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	return elapsed, nil
 }
 
-// processPulledArchive handles the pulled archive, extracts metadata, and determines the mount path
-// For v2 OCI images: moves to canonical location and caches metadata
-// For v1 S3 images: uses the download path as-is
+// processPulledArchive extracts metadata and moves v2 OCI archives to canonical location
 func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (string, *clipCommon.ClipArchiveMetadata) {
 	// Extract metadata from the archive
 	archiver := clip.NewClipArchiver()
@@ -401,23 +384,16 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 		return
 	}
 
-	// Default registry to Docker Hub if not specified
 	if ociInfo.RegistryURL == "" {
 		ociInfo.RegistryURL = "https://docker.io"
 	}
 
-	// Build and cache the full image reference
 	if ociInfo.Repository != "" && ociInfo.Reference != "" {
 		registryHost := strings.TrimPrefix(ociInfo.RegistryURL, "https://")
 		registryHost = strings.TrimPrefix(registryHost, "http://")
 		sourceRef := fmt.Sprintf("%s/%s:%s", registryHost, ociInfo.Repository, ociInfo.Reference)
 		c.v2ImageRefs.Set(imageId, sourceRef)
-		log.Info().Str("image_id", imageId).Str("source_image", sourceRef).Msg("cached source image reference from clip metadata")
-	}
-
-	// Log metadata availability
-	if ociInfo.ImageMetadata != nil {
-		log.Info().Str("image_id", imageId).Msg("image metadata available in clip archive")
+		log.Info().Str("image_id", imageId).Str("source_ref", sourceRef).Msg("cached image reference from metadata")
 	}
 }
 
@@ -426,8 +402,7 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 	return c.v2ImageRefs.Get(imageId)
 }
 
-// GetCLIPImageMetadata extracts CLIP image metadata from the archive for a v2 image
-// Returns the CLIP metadata directly from the archive (source of truth)
+// GetCLIPImageMetadata extracts CLIP image metadata from the archive
 func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
 	// Determine the archive path for this image
 	archivePath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
@@ -465,88 +440,42 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 }
 
 // getCredentialProviderForImage determines the appropriate credentials for an image
+// Priority: runtime credentials > source image credentials > build registry credentials > ambient auth
 func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
-	// Get the source image reference for this image
 	sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
 	if !hasRef {
-		log.Debug().
-			Str("image_id", imageId).
-			Msg("no cached image reference found, cannot determine credentials")
 		return nil
 	}
 
 	registry := reg.ParseRegistry(sourceRef)
 	if registry == "" {
-		log.Debug().
-			Str("image_id", imageId).
-			Str("source_ref", sourceRef).
-			Msg("could not parse registry from image reference")
 		return nil
 	}
 
-	log.Debug().
-		Str("image_id", imageId).
-		Str("source_ref", sourceRef).
-		Str("registry", registry).
-		Msg("determining credentials for image")
-
-	// Priority 1: Explicit credentials from runtime container (stored as secret)
+	// Priority 1: Runtime credentials (from secret)
 	if request.ImageCredentials != "" {
-		log.Info().
-			Str("image_id", imageId).
-			Str("registry", registry).
-			Msg("using runtime secret credentials for image access")
 		return c.parseAndCreateProvider(ctx, request.ImageCredentials, registry, imageId, "runtime secret")
 	}
 
-	// Priority 2: Explicit credentials from build container (user-provided for custom base images)
-	// This is used when pulling FROM a custom private registry during build
+	// Priority 2: Source image credentials (for custom base images)
 	if request.BuildOptions.SourceImageCreds != "" {
-		log.Info().
-			Str("image_id", imageId).
-			Str("registry", registry).
-			Str("source_ref", sourceRef).
-			Msg("using custom base image credentials for image access")
-		return c.parseAndCreateProvider(ctx, request.BuildOptions.SourceImageCreds, registry, imageId, "build options")
+		return c.parseAndCreateProvider(ctx, request.BuildOptions.SourceImageCreds, registry, imageId, "source image")
 	}
 
-	// Priority 3: Build registry credentials from request (if image is from our build registry)
-	// This is the KEY for CLIP V2: we use the SAME credentials that were used to PUSH
-	// the image for both CLIP indexing and runtime layer mounting
+	// Priority 3: Build registry credentials (for images we built and pushed)
 	buildRegistry := c.getBuildRegistry()
-	if buildRegistry != "" && strings.Contains(sourceRef, buildRegistry) {
-		if request.BuildRegistryCredentials != "" {
-			log.Info().
-				Str("image_id", imageId).
-				Str("registry", registry).
-				Str("source_ref", sourceRef).
-				Str("build_registry", buildRegistry).
-				Msg("using build registry credentials for image access (image was built and pushed by us)")
-			return c.parseAndCreateProvider(ctx, request.BuildRegistryCredentials, registry, imageId, "build registry")
-		}
-		log.Info().
-			Str("image_id", imageId).
-			Str("registry", registry).
-			Str("build_registry", buildRegistry).
-			Msg("image is from build registry but no credentials provided, using ambient auth")
+	if buildRegistry != "" && strings.Contains(sourceRef, buildRegistry) && request.BuildRegistryCredentials != "" {
+		return c.parseAndCreateProvider(ctx, request.BuildRegistryCredentials, registry, imageId, "build registry")
 	}
 
-	// Priority 4: No explicit credentials - rely on ambient auth (IAM role, docker config)
-	log.Info().
-		Str("image_id", imageId).
-		Str("registry", registry).
-		Str("source_ref", sourceRef).
-		Msg("no explicit credentials found, relying on ambient auth (IAM role, docker config, etc)")
+	// Priority 4: Ambient auth (IAM role, docker config, etc.)
 	return nil
 }
 
-// parseAndCreateProvider parses credentials and creates a CLIP provider
-// Supports both JSON format and plain username:password format
+// parseAndCreateProvider parses credentials and creates a CLIP credential provider
 func (c *ImageClient) parseAndCreateProvider(ctx context.Context, credStr string, registry string, imageId string, source string) clipCommon.RegistryCredentialProvider {
-	// Try parsing as structured JSON first
 	creds, err := reg.ParseCredentialsFromJSON(credStr)
 	if err != nil || len(creds) == 0 {
-		// Fallback: try as plain username:password format
 		parts := strings.SplitN(credStr, ":", 2)
 		if len(parts) == 2 {
 			creds = map[string]string{
@@ -557,33 +486,22 @@ func (c *ImageClient) parseAndCreateProvider(ctx context.Context, credStr string
 	}
 
 	if len(creds) == 0 {
-		log.Warn().
-			Str("image_id", imageId).
-			Str("registry", registry).
-			Str("source", source).
-			Msg("failed to parse credentials")
 		return nil
 	}
 
 	provider := reg.CredentialsToProvider(ctx, registry, creds)
 	if provider != nil {
-		log.Info().
-			Str("image_id", imageId).
-			Str("registry", registry).
-			Str("source", source).
-			Str("provider", provider.Name()).
-			Msg("created credential provider")
+		log.Info().Str("image_id", imageId).Str("registry", registry).Str("source", source).Msg("using credentials")
 	}
 
 	return provider
 }
 
-// cacheV2SourceImageRef caches the source image reference for v2 images pulled from external registries
-// For built images, the reference is cached after build/push in BuildAndArchiveImage
+// cacheV2SourceImageRef caches the source image reference for external images
 func (c *ImageClient) cacheV2SourceImageRef(request *types.ContainerRequest) {
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) && request.BuildOptions.SourceImage != nil {
 		c.v2ImageRefs.Set(request.ImageId, *request.BuildOptions.SourceImage)
-		log.Info().Str("image_id", request.ImageId).Str("source_image", *request.BuildOptions.SourceImage).Msg("cached source image reference for pull")
+		log.Info().Str("image_id", request.ImageId).Str("source_image", *request.BuildOptions.SourceImage).Msg("cached image reference")
 	}
 }
 
@@ -769,29 +687,13 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		}
 	}()
 
-	// Get credential provider for CLIP indexing
-	// NOTE: This is CRITICAL - CLIP needs credentials to read the OCI manifest and layer metadata
-	// from the registry. We use the SAME credentials that were used to push the image.
-	credProvider := c.getCredentialProviderForImage(ctx, request.ImageId, request)
-	if credProvider != nil {
-		log.Info().
-			Str("image_id", request.ImageId).
-			Str("image_ref", imageRef).
-			Msg("credentials provided for CLIP indexing from registry")
-	} else {
-		log.Info().
-			Str("image_id", request.ImageId).
-			Str("image_ref", imageRef).
-			Msg("no credentials for CLIP indexing, using ambient auth")
-	}
-
 	// Create index-only clip archive from the OCI image
 	err := clip.CreateFromOCIImage(ctx, clip.CreateFromOCIImageOptions{
 		ImageRef:      imageRef,
 		OutputPath:    outputPath,
 		CheckpointMiB: checkpointMiB,
 		ProgressChan:  progressChan,
-		CredProvider:  credProvider,
+		CredProvider:  c.getCredentialProviderForImage(ctx, request.ImageId, request),
 	})
 
 	// Close channel and wait for all progress messages to be logged
@@ -942,10 +844,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		log.Warn().Str("image_id", request.ImageId).Msg("image push complete")
 
-		// Cache the build registry image reference for v2 mounting
-		// This is what CLIP will reference when fetching layers at runtime
 		c.v2ImageRefs.Set(request.ImageId, imageTag)
-		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached build registry image reference")
+		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached image reference")
 
 		// Create index-only clip archive with progress reporting
 		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, archivePath, 2); err != nil {
@@ -1015,7 +915,6 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		return err
 	}
 
-	// Cache the source image reference for v2 images
 	c.cacheV2SourceImageRef(request)
 
 	outputLogger.Info("Inspecting image name and verifying architecture...\n")
