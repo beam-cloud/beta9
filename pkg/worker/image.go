@@ -600,12 +600,12 @@ func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string) {
 	graphroot = filepath.Join("/dev/shm", "buildah-storage")
 	runroot = filepath.Join("/dev/shm", "buildah-run")
 	tmpdir = filepath.Join("/dev/shm", "buildah-tmp")
-	
+
 	// Create directories with proper permissions
 	_ = os.MkdirAll(graphroot, 0o700)
 	_ = os.MkdirAll(runroot, 0o700)
 	_ = os.MkdirAll(tmpdir, 0o700)
-	
+
 	return
 }
 
@@ -625,11 +625,11 @@ mountopt = "nodev,metacopy=on,redirect_dir=on"
 		return "", err
 	}
 	defer f.Close()
-	
+
 	if _, err := f.WriteString(conf); err != nil {
 		return "", err
 	}
-	
+
 	return f.Name(), nil
 }
 
@@ -780,20 +780,19 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 	defer os.RemoveAll(buildPath)
 
-	// Set up fast paths for buildah operations - use /dev/shm (tmpfs) for all storage
+	// Set up paths for buildah operations - use /dev/shm (ram disk) for all storage we can
 	graphroot, runroot, tmpdir := c.setupBuildahDirs()
 	defer os.RemoveAll(graphroot)
 	defer os.RemoveAll(runroot)
 	defer os.RemoveAll(tmpdir)
 
-	// Use overlay driver for better performance (much faster than vfs)
 	storageDriver := "overlay"
 	storageConf, err := c.writeStorageConf(graphroot, runroot)
 	if err != nil {
-		// Fall back to vfs if overlay config fails
 		log.Warn().Err(err).Msg("failed to write overlay storage config, falling back to vfs")
 		storageDriver = "vfs"
 	}
+
 	defer func() {
 		if storageConf != "" {
 			os.Remove(storageConf)
@@ -1054,7 +1053,6 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	// Clip v2: Create index-only clip archive from the source image (no unpack needed)
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
-		// Use fast tmpfs storage for better performance
 		archivePath := filepath.Join("/dev/shm", archiveName)
 
 		// Create index-only clip from the source docker image reference with progress reporting
@@ -1126,7 +1124,6 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 	startTime := time.Now()
 
 	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
-	// Use fast tmpfs storage for better performance
 	archivePath := filepath.Join("/dev/shm", archiveName)
 
 	defer func() {
