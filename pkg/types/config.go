@@ -196,6 +196,11 @@ type ImageServiceConfig struct {
 	BuildRepositoryName            string                         `key:"buildRepositoryName" json:"build_repository_name"`
 	BuildRegistryCredentials       BuildRegistryCredentialsConfig `key:"buildRegistryCredentials" json:"build_registry_credentials"`
 	BuildRegistryInsecure          bool                           `key:"buildRegistryInsecure" json:"build_registry_insecure"`
+	// Build performance optimization settings
+	BuildStorageDriver         string `key:"buildStorageDriver" json:"build_storage_driver"`                   // Storage driver for buildah (overlay, vfs). Default: overlay
+	BuildRegistrySupportsZstd  bool   `key:"buildRegistrySupportsZstd" json:"build_registry_supports_zstd"`    // Whether registry supports zstd compression. Default: false
+	DisableCompression         bool   `key:"disableCompression" json:"disable_compression"`                    // Disable compression for fast private networks. Default: false
+	FastNVMEPath               string `key:"fastNVMEPath" json:"fast_nvme_path"`                               // Path to NVMe storage for buildah graphroot. Default: /mnt/nvme
 }
 
 // BuildRegistryCredentialsConfig stores credentials for generating tokens for the build registry
