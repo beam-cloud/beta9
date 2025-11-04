@@ -603,7 +603,9 @@ func GetDockerHubCredentials(creds map[string]string) (map[string]string, error)
 }
 
 // GetDockerHubToken returns Docker Hub token (legacy format: username:password)
+// Also serves as the default handler for generic registries with basic auth
 func GetDockerHubToken(creds map[string]string) (string, error) {
+	// Try Docker Hub specific keys first
 	username, password, hasAuth, err := validateOptionalCredentials(creds, "DOCKERHUB_USERNAME", "DOCKERHUB_PASSWORD")
 	if err != nil {
 		return "", err
@@ -611,6 +613,25 @@ func GetDockerHubToken(creds map[string]string) (string, error) {
 	if hasAuth {
 		return buildBasicAuthToken(username, password), nil
 	}
+	
+	// Fall back to generic USERNAME/PASSWORD for non-Docker Hub registries
+	username, password, hasAuth, err = validateOptionalCredentials(creds, "USERNAME", "PASSWORD")
+	if err != nil {
+		return "", err
+	}
+	if hasAuth {
+		return buildBasicAuthToken(username, password), nil
+	}
+	
+	// Also try REGISTRY_USERNAME/REGISTRY_PASSWORD
+	username, password, hasAuth, err = validateOptionalCredentials(creds, "REGISTRY_USERNAME", "REGISTRY_PASSWORD")
+	if err != nil {
+		return "", err
+	}
+	if hasAuth {
+		return buildBasicAuthToken(username, password), nil
+	}
+	
 	return "", nil // Public access
 }
 
