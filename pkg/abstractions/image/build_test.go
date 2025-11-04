@@ -1246,7 +1246,7 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"command -v uv >/dev/null 2>&1 || python3.9 -m pip install --break-system-packages uv && uv pip install --python python3.9 --break-system-packages \"requests\" \"numpy\"", // uv for faster installation
+		"uv pip install --system --python python3.9 \"requests\" \"numpy\"", // uv with --system flag
 		"echo done",
 	}
 

@@ -36,16 +36,19 @@ RUN command -v uv >/dev/null 2>&1 || python3.11 -m pip install --break-system-pa
 ## Test 2: UV Performance Improvement
 Testing that package installation uses uv for faster builds.
 
-### Generated Command
-```bash
-command -v uv >/dev/null 2>&1 || python3.11 -m pip install --break-system-packages uv && \
-uv pip install --python python3.11 --break-system-packages "numpy" "accelerate"
+### Generated Dockerfile
+```dockerfile
+FROM docker.io/library/ubuntu:22.04
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN curl -sSf https://example.com/install.sh | sh -s -- 3.11.10+20241002
+RUN uv pip install --system --python python3.11 "numpy" "accelerate"
 ```
 
 ### Benefits: ✅ VERIFIED
-- Checks for uv availability
-- Installs uv if needed (one-time cost)
-- Uses uv for all subsequent package installations
+- Copies pre-built uv binary from official image (no installation needed)
+- Zero overhead - uv is instantly available
+- Uses `--system` flag for system-wide package installation  
+- More reliable than installing uv via pip
 - Expected speed improvement: 10-100x faster than standard pip
 
 ---

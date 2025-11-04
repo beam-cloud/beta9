@@ -31,21 +31,27 @@ Fixed critical dockerfile rendering issues and significantly improved image buil
 
 **Benefits**:
 - `uv` is 10-100x faster than pip for package installation
-- Automatically falls back to pip if uv is not available
-- Uses efficient caching and parallel downloads
+- Pre-built binary copied from official `ghcr.io/astral-sh/uv:latest` image using `COPY --from=`
+- No installation overhead - uv is instantly available
+- Uses `--system` flag for system-wide package installation
+- More efficient and reliable than installing uv via pip
 
 **Implementation**:
-```bash
+```dockerfile
 # Before:
+FROM docker.io/library/ubuntu:22.04
 RUN python3.11 -m pip install --break-system-packages "numpy" "accelerate"
 
 # After:
-RUN command -v uv >/dev/null 2>&1 || python3.11 -m pip install --break-system-packages uv && \
-    uv pip install --python python3.11 --break-system-packages "numpy" "accelerate"
+FROM docker.io/library/ubuntu:22.04
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+RUN python3.11 installation...
+RUN uv pip install --system --python python3.11 "numpy" "accelerate"
 ```
 
 **Files Modified**:
-- `pkg/abstractions/image/build.go` - Updated `generateStandardPipInstallCommand()`
+- `pkg/abstractions/image/builder.go` - Added COPY --from= for uv binary
+- `pkg/abstractions/image/build.go` - Updated `generateStandardPipInstallCommand()` with --system flag
 - `pkg/abstractions/image/build_test.go` - Updated test expectations
 
 ### 3. Faster Image Push with Buildah
@@ -113,9 +119,9 @@ image = Image().add_python_version("python3.11").add_python_packages(["numpy", "
 
 ```dockerfile
 FROM docker.io/library/ubuntu:22.04
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 RUN curl -sSf https://example.com/install.sh | sh -s -- 3.11.10+20241002
-RUN command -v uv >/dev/null 2>&1 || python3.11 -m pip install --break-system-packages uv && \
-    uv pip install --python python3.11 --break-system-packages "numpy" "accelerate"
+RUN uv pip install --system --python python3.11 "numpy" "accelerate"
 ```
 
 ## Impact

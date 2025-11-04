@@ -384,23 +384,14 @@ func generatePipInstallCommand(pythonPackages []string, pythonVersion string, vi
 }
 
 // generateStandardPipInstallCommand generates a pip install command for v2 dockerfile builds
-// using uv for faster installation. uv is much faster than pip and is automatically used by
-// installing it via pip if not already present.
+// using uv for faster installation. uv is copied from the official ghcr.io/astral-sh/uv image
+// for maximum efficiency and speed.
 func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion string, virtualEnv bool) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	// Use uv for faster package installation
-	// First install uv if not present, then use it to install packages
-	var commands []string
-	
-	// Install uv using pip if not already installed
-	commands = append(commands, fmt.Sprintf("command -v uv >/dev/null 2>&1 || %s -m pip install --break-system-packages uv", pythonVersion))
-	
 	// Use uv pip install for much faster installation
-	command := fmt.Sprintf("uv pip install --python %s", pythonVersion)
-	if !virtualEnv {
-		command += " --break-system-packages"
-	}
+	// The uv binary should be copied in the Dockerfile via: COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+	command := fmt.Sprintf("uv pip install --system --python %s", pythonVersion)
 
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
@@ -408,11 +399,8 @@ func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion st
 	if len(packages) > 0 {
 		command += " " + strings.Join(packages, " ")
 	}
-	
-	commands = append(commands, command)
 
-	// Join with && to ensure uv is installed before use
-	return strings.Join(commands, " && ")
+	return command
 }
 
 func generateMicromambaInstallCommand(pythonPackages []string) string {
