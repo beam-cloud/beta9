@@ -923,6 +923,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		// Use gzip with fast compression level
 		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
 
+		// Enable parallel blob uploads for faster push (critical for multi-layer images)
+		// This allows multiple blobs to be uploaded concurrently instead of sequentially
+		pushArgs = append(pushArgs, "--jobs", "8")
+
+		// Skip signature removal to reduce overhead
+		pushArgs = append(pushArgs, "--remove-signatures")
+
 		// Add retry logic for network resilience
 		pushArgs = append(pushArgs, "--retry", "3")
 		pushArgs = append(pushArgs, "--retry-delay", "2s")
