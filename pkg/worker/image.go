@@ -883,7 +883,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	// Clip v2: Build and push directly to registry, skip OCI layout
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
-		// Use fast tmpdir instead of /tmp for better performance
 		archivePath := filepath.Join(tmpdir, archiveName)
 
 		// Get build registry and construct tag
