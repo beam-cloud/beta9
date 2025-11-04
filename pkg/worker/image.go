@@ -669,7 +669,6 @@ func (c *ImageClient) getBuildRegistry() string {
 }
 
 // getBuildRegistryAuthArgs returns buildah authentication arguments for pushing to build registry
-// buildRegistryCreds should come from request.BuildRegistryCreds (top-level field)
 func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string, buildRegistryCredentials string) []string {
 	// For localhost, no auth needed
 	if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
