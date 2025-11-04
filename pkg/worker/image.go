@@ -609,16 +609,27 @@ func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string) {
 	return
 }
 
-// writeStorageConf creates a containers/storage configuration file for overlay driver
-func (c *ImageClient) writeStorageConf(graphroot, runroot string) (string, error) {
-	conf := fmt.Sprintf(`[storage]
+// writeStorageConf creates a containers/storage configuration file
+func (c *ImageClient) writeStorageConf(graphroot, runroot, driver string) (string, error) {
+	var conf string
+	if driver == "overlay" {
+		conf = fmt.Sprintf(`[storage]
 driver = "overlay"
 graphroot = "%s"
 runroot = "%s"
 
 [storage.options.overlay]
-mountopt = "nodev,metacopy=on,redirect_dir=on"
+mountopt = "nodev"
+force_mask = "0000"
 `, graphroot, runroot)
+	} else {
+		// vfs driver config
+		conf = fmt.Sprintf(`[storage]
+driver = "vfs"
+graphroot = "%s"
+runroot = "%s"
+`, graphroot, runroot)
+	}
 
 	f, err := os.CreateTemp(runroot, "storage-*.conf")
 	if err != nil {
@@ -787,10 +798,15 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	defer os.RemoveAll(tmpdir)
 
 	storageDriver := "overlay"
-	storageConf, err := c.writeStorageConf(graphroot, runroot)
+	storageConf, err := c.writeStorageConf(graphroot, runroot, storageDriver)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to write overlay storage config, falling back to vfs")
 		storageDriver = "vfs"
+		// Write vfs config for fallback case
+		storageConf, err = c.writeStorageConf(graphroot, runroot, storageDriver)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to write vfs storage config")
+		}
 	}
 
 	defer func() {
@@ -914,28 +930,39 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		log.Warn().Str("image_id", request.ImageId).Msg("image build complete, pushing to registry")
 
-		// Build push arguments with authentication and optimization flags
-		pushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push"}
-		if c.config.ImageService.BuildRegistryInsecure {
-			pushArgs = append(pushArgs, "--tls-verify=false")
-		}
-
-		// Use gzip with fast compression level
-		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
-
-		// Add retry logic for network resilience
-		pushArgs = append(pushArgs, "--retry", "3")
-		pushArgs = append(pushArgs, "--retry-delay", "2s")
-
-		// Add authentication for build registry (uses credentials from request)
-		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
-			pushArgs = append(pushArgs, authArgs...)
-		}
-		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
-
-		// Push to registry (required for clip indexer to access the image)
+		// Use skopeo copy instead of buildah push for better internal blob upload performance
+		// Skopeo has superior parallelism and chunking for registry operations
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
-		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
+		
+		skopeoArgs := []string{"copy"}
+		
+		// Optimize for fast networks: disable compression to eliminate CPU overhead
+		// With high bandwidth, raw upload is faster than compress->upload->decompress
+		skopeoArgs = append(skopeoArgs, "--dest-compress=false")
+		
+		// Disable TLS verification if needed
+		if c.config.ImageService.BuildRegistryInsecure {
+			skopeoArgs = append(skopeoArgs, "--src-tls-verify=false", "--dest-tls-verify=false")
+		}
+		
+		// Add destination credentials
+		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
+			// Convert --creds to --dest-creds for skopeo
+			for i, arg := range authArgs {
+				if arg == "--creds" && i+1 < len(authArgs) {
+					skopeoArgs = append(skopeoArgs, "--dest-creds", authArgs[i+1])
+					break
+				}
+			}
+		}
+		
+		// Source: containers-storage (buildah's storage)
+		// Use default store - storage driver is configured via CONTAINERS_STORAGE_CONF env var
+		srcRef := fmt.Sprintf("containers-storage:%s", imageTag)
+		destRef := fmt.Sprintf("docker://%s", imageTag)
+		skopeoArgs = append(skopeoArgs, srcRef, destRef)
+		
+		cmd = exec.CommandContext(ctx, "skopeo", skopeoArgs...)
 		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
