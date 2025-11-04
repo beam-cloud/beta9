@@ -298,6 +298,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		Ports:             c.Ports,
 		CheckpointEnabled: c.CheckpointEnabled,
 		Checkpoint:        checkpoint,
+		BlockNetwork:      c.BlockNetwork,
 	}
 }
 
@@ -346,6 +347,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		BuildOptions:      bo,
 		Ports:             in.Ports,
 		Checkpoint:        checkpoint,
+		BlockNetwork:      in.BlockNetwork,
 	}
 }
 
