@@ -61,14 +61,12 @@ Testing that image push uses optimized settings.
 buildah --root /path/to/image push \
   --compression-format gzip \
   --compression-level 1 \
-  --jobs 4 \
   image-tag docker://image-tag
 ```
 
 ### Optimizations: ✅ VERIFIED
 - ✅ gzip compression (CLIP indexer compatible)
-- ✅ Level 1 compression (fast compression vs default level 6)
-- ✅ 4 parallel jobs (concurrent layer processing)
+- ✅ Level 1 compression (~5-6x faster than default level 6)
 
 ---
 

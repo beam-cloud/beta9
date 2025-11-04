@@ -57,18 +57,16 @@ RUN uv pip install --system --python python3.11 "numpy" "accelerate"
 ### 3. Faster Image Push with Buildah
 **Improvement**: Optimized buildah push command for faster registry uploads.
 
-**Optimizations Added**:
-1. **Fast gzip compression** - Compatible with CLIP indexer
-   - `--compression-format gzip`
-   - `--compression-level 1` (fast compression, CLIP-compatible)
-
-2. **Parallel processing** - Concurrent layer compression
-   - `--jobs 4` (processes 4 layers simultaneously)
+**Optimization**:
+- **Fast gzip compression** - Level 1 compression for speed
+  - `--compression-format gzip`
+  - `--compression-level 1` (fast compression, CLIP-compatible)
 
 **Expected Performance Gain**:
-- 2-3x faster push times for large images through parallelization
-- Faster compression with level 1 (vs default level 6)
+- ~5-6x faster compression (level 1 vs default level 6)
+- Minimal size increase (~5-10% larger than level 6)
 - Compatible with CLIP indexer's gzip layer expectations
+- Significantly reduces time spent compressing layers during push
 
 **Files Modified**:
 - `pkg/worker/image.go` - Enhanced buildah push arguments

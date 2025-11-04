@@ -827,14 +827,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// Use faster gzip compression for compatibility with CLIP indexer
-		// Level 1 provides good speed with reasonable compression
+		// Use faster gzip compression (level 1) for compatibility with CLIP indexer
+		// Level 1 is significantly faster than default level 6 with minimal size impact
 		pushArgs = append(pushArgs, "--compression-format", "gzip")
 		pushArgs = append(pushArgs, "--compression-level", "1")
-		
-		// Use parallel jobs for faster compression and pushing
-		// This allows multiple layers to be processed concurrently
-		pushArgs = append(pushArgs, "--jobs", "4")
 
 		// Add authentication for build registry (uses credentials from request)
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
