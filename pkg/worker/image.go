@@ -460,8 +460,13 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 	// Priority 2: Build registry credentials (for images we built and pushed)
 	// This must come before source image credentials because when we build with a custom base image,
 	// the final image is in the build registry, not the source image registry
+	// We check both the registry domain AND the build repository name to avoid false positives
 	buildRegistry := c.getBuildRegistry()
-	if buildRegistry != "" && strings.Contains(sourceRef, buildRegistry) && request.BuildRegistryCredentials != "" {
+	buildRepoName := c.config.ImageService.BuildRepositoryName
+	if buildRegistry != "" && buildRepoName != "" && 
+		strings.Contains(sourceRef, buildRegistry) && 
+		strings.Contains(sourceRef, buildRepoName) && 
+		request.BuildRegistryCredentials != "" {
 		return c.parseAndCreateProvider(ctx, request.BuildRegistryCredentials, registry, imageId, "build registry")
 	}
 
@@ -837,10 +842,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		pushArgs = append(pushArgs, "--compression-format", "gzip")
 		pushArgs = append(pushArgs, "--compression-level", "1")
 
-		// Enable parallel layer pushes for significant speedup (buildah 1.24+)
-		// Push up to 8 layers concurrently to maximize throughput
-		pushArgs = append(pushArgs, "--jobs", "8")
-
 		// Add retry logic for network resilience
 		pushArgs = append(pushArgs, "--retry", "3")
 		pushArgs = append(pushArgs, "--retry-delay", "2s")
@@ -889,8 +890,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 
 	// Push to local OCI layout (v1 clip path)
-	// Note: --jobs is less beneficial for local pushes, but doesn't hurt
-	v1PushArgs := []string{"--root", imagePath, "push", "--jobs", "4", request.ImageId + ":latest", "oci:" + ociPath + ":latest"}
+	v1PushArgs := []string{"--root", imagePath, "push", request.ImageId + ":latest", "oci:" + ociPath + ":latest"}
 	cmd = exec.CommandContext(ctx, "buildah", v1PushArgs...)
 	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
