@@ -40,7 +40,6 @@ const (
 	imageTmpDir        string = "/tmp"
 	metricsSourceLabel        = "image_client"
 	pullLazyBackoff           = 1000 * time.Millisecond
-	defaultFastNVME    string = "/mnt/nvme"
 )
 
 var (
@@ -594,21 +593,11 @@ func (c *ImageClient) getBuildRegistry() string {
 	return "localhost"
 }
 
-// fastBuildahDirs creates and returns optimal paths for buildah operations
-// graphroot: on NVMe for overlay driver (fast but requires real filesystem)
-// runroot: on tmpfs (/dev/shm) for locks and temporary runtime data
-// tmpdir: on tmpfs (/dev/shm) for temporary build artifacts
-func (c *ImageClient) fastBuildahDirs(buildPath string) (graphroot, runroot, tmpdir string) {
-	// Get NVMe path from config or use default
-	nvmePath := c.config.ImageService.FastNVMEPath
-	if nvmePath == "" {
-		nvmePath = defaultFastNVME
-	}
-
-	// Prefer NVMe for graphroot (overlay needs real filesystem, not tmpfs)
-	graphroot = filepath.Join(nvmePath, "containers")
-	
-	// Use tmpfs for runroot and tmpdir to avoid slow disk I/O
+// setupBuildahDirs creates and returns optimal paths for buildah operations using /dev/shm
+// All paths use tmpfs (/dev/shm) for fast I/O and to avoid slow disk bottlenecks
+func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string) {
+	// Use /dev/shm for all paths - tmpfs is fast and overlay can work here for builds
+	graphroot = filepath.Join("/dev/shm", "buildah-storage")
 	runroot = filepath.Join("/dev/shm", "buildah-run")
 	tmpdir = filepath.Join("/dev/shm", "buildah-tmp")
 	
@@ -653,17 +642,6 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 		"BUILDAH_LAYERS=true",
 	)
 	return env
-}
-
-// getStorageDriver returns the storage driver to use for buildah operations
-// Defaults to "overlay" for better performance unless explicitly set to "vfs"
-func (c *ImageClient) getStorageDriver() string {
-	driver := c.config.ImageService.BuildStorageDriver
-	if driver == "" {
-		// Default to overlay for much better performance
-		driver = "overlay"
-	}
-	return driver
 }
 
 // getBuildRegistryAuthArgs returns buildah authentication arguments for pushing to build registry
@@ -802,29 +780,25 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 	defer os.RemoveAll(buildPath)
 
-	// Set up fast paths for buildah operations (NVMe for graphroot, tmpfs for runroot/tmpdir)
-	graphroot, runroot, tmpdir := c.fastBuildahDirs(buildPath)
+	// Set up fast paths for buildah operations - use /dev/shm (tmpfs) for all storage
+	graphroot, runroot, tmpdir := c.setupBuildahDirs()
+	defer os.RemoveAll(graphroot)
 	defer os.RemoveAll(runroot)
 	defer os.RemoveAll(tmpdir)
 
-	// Get storage driver (defaults to overlay for better performance)
-	storageDriver := c.getStorageDriver()
-	
-	// Create storage configuration for overlay driver
-	var storageConf string
-	if storageDriver == "overlay" {
-		storageConf, err = c.writeStorageConf(graphroot, runroot)
-		if err != nil {
-			// Fall back to vfs if overlay config fails
-			log.Warn().Err(err).Msg("failed to write overlay storage config, falling back to vfs")
-			storageDriver = "vfs"
-		}
-		defer func() {
-			if storageConf != "" {
-				os.Remove(storageConf)
-			}
-		}()
+	// Use overlay driver for better performance (much faster than vfs)
+	storageDriver := "overlay"
+	storageConf, err := c.writeStorageConf(graphroot, runroot)
+	if err != nil {
+		// Fall back to vfs if overlay config fails
+		log.Warn().Err(err).Msg("failed to write overlay storage config, falling back to vfs")
+		storageDriver = "vfs"
 	}
+	defer func() {
+		if storageConf != "" {
+			os.Remove(storageConf)
+		}
+	}()
 
 	buildCtxPath, err := c.getBuildContext(buildPath, request)
 	if err != nil {
@@ -948,16 +922,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// Configure compression based on settings
-		// Priority: DisableCompression > zstd (if supported) > gzip (default)
-		switch {
-		case c.config.ImageService.DisableCompression:
-			pushArgs = append(pushArgs, "--disable-compression")
-		case c.config.ImageService.BuildRegistrySupportsZstd:
-			pushArgs = append(pushArgs, "--compression-format", "zstd", "--compression-level", "1")
-		default:
-			pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
-		}
+		// Use gzip with fast compression level
+		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
 
 		// Add retry logic for network resilience
 		pushArgs = append(pushArgs, "--retry", "3")
