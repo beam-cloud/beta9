@@ -440,7 +440,7 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 }
 
 // getCredentialProviderForImage determines the appropriate credentials for an image
-// Priority: runtime credentials > source image credentials > build registry credentials > ambient auth
+// Priority: runtime credentials > build registry credentials > source image credentials > ambient auth
 func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
 	if !hasRef {
@@ -457,15 +457,17 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 		return c.parseAndCreateProvider(ctx, request.ImageCredentials, registry, imageId, "runtime secret")
 	}
 
-	// Priority 2: Source image credentials (for custom base images)
-	if request.BuildOptions.SourceImageCreds != "" {
-		return c.parseAndCreateProvider(ctx, request.BuildOptions.SourceImageCreds, registry, imageId, "source image")
-	}
-
-	// Priority 3: Build registry credentials (for images we built and pushed)
+	// Priority 2: Build registry credentials (for images we built and pushed)
+	// This must come before source image credentials because when we build with a custom base image,
+	// the final image is in the build registry, not the source image registry
 	buildRegistry := c.getBuildRegistry()
 	if buildRegistry != "" && strings.Contains(sourceRef, buildRegistry) && request.BuildRegistryCredentials != "" {
 		return c.parseAndCreateProvider(ctx, request.BuildRegistryCredentials, registry, imageId, "build registry")
+	}
+
+	// Priority 3: Source image credentials (for external images pulled directly without building)
+	if request.BuildOptions.SourceImageCreds != "" {
+		return c.parseAndCreateProvider(ctx, request.BuildOptions.SourceImageCreds, registry, imageId, "source image")
 	}
 
 	// Priority 4: Ambient auth (IAM role, docker config, etc.)
@@ -774,6 +776,9 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		budArgs = append(budArgs, "--tls-verify=false")
 	}
 
+	// Enable layer caching for faster rebuilds
+	budArgs = append(budArgs, "--layers")
+
 	// Add credentials for multi-stage builds and private base images
 	if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
 		budArgs = append(budArgs, authArgs...)
@@ -832,6 +837,14 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		pushArgs = append(pushArgs, "--compression-format", "gzip")
 		pushArgs = append(pushArgs, "--compression-level", "1")
 
+		// Enable parallel layer pushes for significant speedup (buildah 1.24+)
+		// Push up to 8 layers concurrently to maximize throughput
+		pushArgs = append(pushArgs, "--jobs", "8")
+
+		// Add retry logic for network resilience
+		pushArgs = append(pushArgs, "--retry", "3")
+		pushArgs = append(pushArgs, "--retry-delay", "2s")
+
 		// Add authentication for build registry (uses credentials from request)
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
@@ -875,7 +888,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		return err
 	}
 
-	cmd = exec.CommandContext(ctx, "buildah", "--root", imagePath, "push", request.ImageId+":latest", "oci:"+ociPath+":latest")
+	// Push to local OCI layout (v1 clip path)
+	// Note: --jobs is less beneficial for local pushes, but doesn't hurt
+	v1PushArgs := []string{"--root", imagePath, "push", "--jobs", "4", request.ImageId + ":latest", "oci:" + ociPath + ":latest"}
+	cmd = exec.CommandContext(ctx, "buildah", v1PushArgs...)
 	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 	err = cmd.Run()
