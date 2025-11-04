@@ -593,6 +593,57 @@ func (c *ImageClient) getBuildRegistry() string {
 	return "localhost"
 }
 
+// setupBuildahDirs creates and returns optimal paths for buildah operations using /dev/shm
+// All paths use tmpfs (/dev/shm) for fast I/O and to avoid slow disk bottlenecks
+func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string) {
+	// Use /dev/shm for all paths - tmpfs is fast and overlay can work here for builds
+	graphroot = filepath.Join("/dev/shm", "buildah-storage")
+	runroot = filepath.Join("/dev/shm", "buildah-run")
+	tmpdir = filepath.Join("/dev/shm", "buildah-tmp")
+
+	// Create directories with proper permissions
+	_ = os.MkdirAll(graphroot, 0o700)
+	_ = os.MkdirAll(runroot, 0o700)
+	_ = os.MkdirAll(tmpdir, 0o700)
+
+	return
+}
+
+// writeStorageConf creates a containers/storage configuration file for overlay driver
+func (c *ImageClient) writeStorageConf(graphroot, runroot string) (string, error) {
+	conf := fmt.Sprintf(`[storage]
+driver = "overlay"
+graphroot = "%s"
+runroot = "%s"
+
+[storage.options.overlay]
+mountopt = "nodev,metacopy=on,redirect_dir=on"
+`, graphroot, runroot)
+
+	f, err := os.CreateTemp(runroot, "storage-*.conf")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(conf); err != nil {
+		return "", err
+	}
+
+	return f.Name(), nil
+}
+
+// buildahEnv returns environment variables for buildah to use fast storage paths
+func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
+	env := append(os.Environ(),
+		"TMPDIR="+tmpdir,
+		"XDG_RUNTIME_DIR="+runroot,
+		"CONTAINERS_STORAGE_CONF="+storageConf,
+		"BUILDAH_LAYERS=true",
+	)
+	return env
+}
+
 // getBuildRegistryAuthArgs returns buildah authentication arguments for pushing to build registry
 func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string, buildRegistryCredentials string) []string {
 	// For localhost, no auth needed
@@ -729,6 +780,25 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 	defer os.RemoveAll(buildPath)
 
+	// Set up paths for buildah operations - use /dev/shm (ram disk) for all storage we can
+	graphroot, runroot, tmpdir := c.setupBuildahDirs()
+	defer os.RemoveAll(graphroot)
+	defer os.RemoveAll(runroot)
+	defer os.RemoveAll(tmpdir)
+
+	storageDriver := "overlay"
+	storageConf, err := c.writeStorageConf(graphroot, runroot)
+	if err != nil {
+		log.Warn().Err(err).Msg("failed to write overlay storage config, falling back to vfs")
+		storageDriver = "vfs"
+	}
+
+	defer func() {
+		if storageConf != "" {
+			os.Remove(storageConf)
+		}
+	}()
+
 	buildCtxPath, err := c.getBuildContext(buildPath, request)
 	if err != nil {
 		return err
@@ -762,7 +832,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		insecure = c.config.ImageService.BuildRegistryInsecure
 
 		// buildah pull the base image so bud doesn't attempt HTTPS
-		pullArgs := []string{"--root", imagePath, "--storage-driver=vfs", "pull"}
+		pullArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "pull"}
 		if insecure {
 			pullArgs = append(pullArgs, "--tls-verify=false")
 		}
@@ -774,6 +844,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		pullArgs = append(pullArgs, "docker://"+sourceImage)
 		cmd := exec.CommandContext(ctx, "buildah", pullArgs...)
+		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err := cmd.Run(); err != nil {
@@ -781,13 +852,16 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 	}
 
-	budArgs := []string{"--root", imagePath, "--storage-driver=vfs", "bud"}
+	budArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "bud"}
 	if insecure {
 		budArgs = append(budArgs, "--tls-verify=false")
 	}
 
 	// Enable layer caching for faster rebuilds
 	budArgs = append(budArgs, "--layers")
+
+	// Use docker format to avoid conversion at push time
+	budArgs = append(budArgs, "--format", "docker")
 
 	// Use parallel jobs for faster layer processing
 	budArgs = append(budArgs, "--jobs", "8")
@@ -809,7 +883,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	// Clip v2: Build and push directly to registry, skip OCI layout
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
-		archivePath := filepath.Join("/tmp", archiveName)
+		archivePath := filepath.Join(tmpdir, archiveName)
 
 		// Get build registry and construct tag
 		// Uses a single repository with workspace and image ID in the tag
@@ -831,6 +905,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		// Build with final tag directly
 		budArgs = append(budArgs, "-f", tempDockerFile, "-t", imageTag, buildCtxPath)
 		cmd := exec.CommandContext(ctx, "buildah", budArgs...)
+		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err = cmd.Run(); err != nil {
@@ -840,14 +915,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		log.Warn().Str("image_id", request.ImageId).Msg("image build complete, pushing to registry")
 
 		// Build push arguments with authentication and optimization flags
-		pushArgs := []string{"--root", imagePath, "--storage-driver=vfs", "push"}
+		pushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push"}
 		if c.config.ImageService.BuildRegistryInsecure {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// TODO: Disable compression for fast networks to eliminate I/O overhead (make configurable)
-		pushArgs = append(pushArgs, "--compression-format", "gzip")
-		pushArgs = append(pushArgs, "--compression-level", "1")
+		// Use gzip with fast compression level
+		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
 
 		// Add retry logic for network resilience
 		pushArgs = append(pushArgs, "--retry", "3")
@@ -862,6 +936,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		// Push to registry (required for clip indexer to access the image)
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
 		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
+		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err = cmd.Run(); err != nil {
@@ -889,6 +964,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	// Clip v1: Build, push to OCI layout, then process locally
 	budArgs = append(budArgs, "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
 	cmd := exec.CommandContext(ctx, "buildah", budArgs...)
+	cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 	err = cmd.Run()
@@ -897,8 +973,9 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 
 	// Push to local OCI layout (v1 clip path)
-	v1PushArgs := []string{"--root", imagePath, "--storage-driver=vfs", "push", request.ImageId + ":latest", "oci:" + ociPath + ":latest"}
+	v1PushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push", request.ImageId + ":latest", "oci:" + ociPath + ":latest"}
 	cmd = exec.CommandContext(ctx, "buildah", v1PushArgs...)
+	cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 	cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 	err = cmd.Run()
@@ -975,7 +1052,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 	// Clip v2: Create index-only clip archive from the source image (no unpack needed)
 	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
-		archivePath := filepath.Join("/tmp", archiveName)
+		archivePath := filepath.Join("/dev/shm", archiveName)
 
 		// Create index-only clip from the source docker image reference with progress reporting
 		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, archivePath, 2); err != nil {
@@ -1046,7 +1123,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 	startTime := time.Now()
 
 	archiveName := fmt.Sprintf("%s.%s.tmp", imageId, c.registry.ImageFileExtension)
-	archivePath := filepath.Join("/tmp", archiveName)
+	archivePath := filepath.Join("/dev/shm", archiveName)
 
 	defer func() {
 		os.RemoveAll(archivePath)
