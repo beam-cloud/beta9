@@ -609,9 +609,11 @@ func (c *ImageClient) setupBuildahDirs() (graphroot, runroot, tmpdir string) {
 	return
 }
 
-// writeStorageConf creates a containers/storage configuration file for overlay driver
-func (c *ImageClient) writeStorageConf(graphroot, runroot string) (string, error) {
-	conf := fmt.Sprintf(`[storage]
+// writeStorageConf creates a containers/storage configuration file
+func (c *ImageClient) writeStorageConf(graphroot, runroot, driver string) (string, error) {
+	var conf string
+	if driver == "overlay" {
+		conf = fmt.Sprintf(`[storage]
 driver = "overlay"
 graphroot = "%s"
 runroot = "%s"
@@ -620,6 +622,14 @@ runroot = "%s"
 mountopt = "nodev"
 force_mask = "0000"
 `, graphroot, runroot)
+	} else {
+		// vfs driver config
+		conf = fmt.Sprintf(`[storage]
+driver = "vfs"
+graphroot = "%s"
+runroot = "%s"
+`, graphroot, runroot)
+	}
 
 	f, err := os.CreateTemp(runroot, "storage-*.conf")
 	if err != nil {
@@ -788,10 +798,15 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	defer os.RemoveAll(tmpdir)
 
 	storageDriver := "overlay"
-	storageConf, err := c.writeStorageConf(graphroot, runroot)
+	storageConf, err := c.writeStorageConf(graphroot, runroot, storageDriver)
 	if err != nil {
 		log.Warn().Err(err).Msg("failed to write overlay storage config, falling back to vfs")
 		storageDriver = "vfs"
+		// Write vfs config for fallback case
+		storageConf, err = c.writeStorageConf(graphroot, runroot, storageDriver)
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to write vfs storage config")
+		}
 	}
 
 	defer func() {
