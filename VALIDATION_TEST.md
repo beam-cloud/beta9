@@ -1,9 +1,9 @@
 # Validation Test Results
 
 ## Test 1: Dockerfile Rendering Fix
-Testing that `Image().add_python_packages()` works without calling `add_python_version()` first.
+Testing that `Image().add_python_packages()` works in pods/sandboxes where `ignore_python=True` is set.
 
-### Scenario: IgnorePython=true with BuildSteps
+### Scenario: IgnorePython=true with BuildSteps (Pods/Sandboxes)
 ```go
 opts := &BuildOpts{
     BaseImageRegistry: "docker.io",

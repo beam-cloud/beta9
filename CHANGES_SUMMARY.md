@@ -6,17 +6,18 @@ Fixed critical dockerfile rendering issues and significantly improved image buil
 ## Issues Fixed
 
 ### 1. Dockerfile Rendering Bug
-**Problem**: When using `Image().add_python_packages(["numpy", "accelerate"])` without calling `add_python_version()` first, the pip install commands were not being rendered in the Dockerfile.
+**Problem**: When using `Image().add_python_packages(["numpy", "accelerate"])` in pods/sandboxes where `ignore_python=True` is set, the pip install commands were not being rendered in the Dockerfile.
 
 **Root Cause**: 
-- The `RenderV2Dockerfile` function had an early exit condition that only checked `IgnorePython` flag and `PythonPackages` list
+- Pods and sandboxes set `ignore_python=True` on images to avoid Python setup overhead
+- The `RenderV2Dockerfile` function had an early exit condition: `if IgnorePython && len(PythonPackages) == 0`
 - When packages are added via `add_python_packages()`, they are stored in `BuildSteps` (not `PythonPackages`)
-- The early exit happened before `BuildSteps` were processed, causing pip commands to be skipped
+- The early exit happened before `BuildSteps` were processed, causing pip commands to be skipped even when Python packages were needed
 
 **Fix**:
 - Added `hasPipOrMambaSteps()` helper function to check if there are pip/micromamba commands in BuildSteps
 - Updated early exit condition to: `IgnorePython && len(PythonPackages) == 0 && !hasPipOrMambaSteps(BuildSteps)`
-- Added safety check to ensure `pythonVersion` is never empty when there are packages or pip BuildSteps
+- Now correctly installs Python and packages when BuildSteps contain pip/mamba commands, even when `ignore_python=True`
 - Applied same logic to both `RenderV2Dockerfile()` and `appendToDockerfile()` for consistency
 
 **Files Modified**:

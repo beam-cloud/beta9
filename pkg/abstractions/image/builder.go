@@ -304,10 +304,6 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 	if pythonVersion == types.Python3.String() {
 		pythonVersion = b.config.ImageService.PythonVersion
 	}
-	// Ensure pythonVersion is never empty if we have packages or pip BuildSteps
-	if pythonVersion == "" && (len(opts.PythonPackages) > 0 || hasPipOrMambaSteps(opts.BuildSteps)) {
-		pythonVersion = b.config.ImageService.PythonVersion
-	}
 	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
 
 	// Install Python if needed
@@ -389,10 +385,6 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	// Determine Python version and environment type
 	pythonVersion := opts.PythonVersion
 	if pythonVersion == types.Python3.String() {
-		pythonVersion = b.config.ImageService.PythonVersion
-	}
-	// Ensure pythonVersion is never empty if we have packages or pip BuildSteps
-	if pythonVersion == "" && (len(opts.PythonPackages) > 0 || hasPipOrMambaSteps(opts.BuildSteps)) {
 		pythonVersion = b.config.ImageService.PythonVersion
 	}
 	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
