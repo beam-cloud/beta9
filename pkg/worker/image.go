@@ -655,15 +655,16 @@ func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.
 	return nil
 }
 
-// createOCIImageWithProgress creates an OCI index with progress reporting
-// getBuildRegistry returns the registry to use for pushing intermediate build images
+// getBuildRegistry returns the registry to use for final and intermediate build images
 func (c *ImageClient) getBuildRegistry() string {
 	if c.config.ImageService.BuildRegistry != "" {
 		return c.config.ImageService.BuildRegistry
 	}
+
 	if c.config.ImageService.Runner.BaseImageRegistry != "" {
 		return c.config.ImageService.Runner.BaseImageRegistry
 	}
+
 	return "localhost"
 }
 
@@ -720,7 +721,7 @@ func (c *ImageClient) getBuildahAuthArgs(ctx context.Context, imageRef string, c
 	return nil
 }
 
-func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, outputPath string, checkpointMiB int64, authConfig string) error {
+func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest, imageRef, outputPath string, checkpointMiB int64) error {
 	outputLogger.Info("Indexing image...\n")
 	progressChan := make(chan clip.OCIIndexProgress, 100)
 
@@ -886,6 +887,81 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 	}
 
+	// Clip v2: Build and push directly to registry, skip OCI layout
+	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
+		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
+		archivePath := filepath.Join("/tmp", archiveName)
+
+		// Get build registry and construct tag
+		// Uses a single repository "beta9-users" with workspace and image ID in the tag
+		buildRegistry := c.getBuildRegistry()
+		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+			log.Warn().Str("image_id", request.ImageId).Msg("using localhost as build registry - CLIP indexer may not be able to access this")
+		}
+
+		// Construct image tag with workspace and image ID
+		// For localhost: localhost/beta9-users:image_id
+		// For remote registry: registry/beta9-users:workspace_id-image_id
+		var imageTag string
+		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
+			imageTag = fmt.Sprintf("%s/beta9-users:%s", buildRegistry, request.ImageId)
+		} else {
+			imageTag = fmt.Sprintf("%s/beta9-users:%s-%s", buildRegistry, request.WorkspaceId, request.ImageId)
+		}
+
+		// Build with final tag directly
+		budArgs = append(budArgs, "-f", tempDockerFile, "-t", imageTag, buildCtxPath)
+		cmd := exec.CommandContext(ctx, "buildah", budArgs...)
+		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+		if err = cmd.Run(); err != nil {
+			return err
+		}
+
+		log.Warn().Str("image_id", request.ImageId).Msg("image build complete, pushing to registry")
+
+		// Build push arguments with authentication
+		pushArgs := []string{"--root", imagePath, "push"}
+		if c.config.ImageService.BuildRegistryInsecure {
+			pushArgs = append(pushArgs, "--tls-verify=false")
+		}
+
+		// Add authentication for build registry (uses credentials from request)
+		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
+			pushArgs = append(pushArgs, authArgs...)
+		}
+		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
+
+		// Push to registry (required for clip indexer to access the image)
+		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
+		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
+		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
+		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
+		if err = cmd.Run(); err != nil {
+			return err
+		}
+
+		log.Warn().Str("image_id", request.ImageId).Msg("image push complete")
+
+		// Cache the build registry image reference for v2 mounting
+		// This is what CLIP will reference when fetching layers at runtime
+		c.v2ImageRefs.Set(request.ImageId, imageTag)
+		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached build registry image reference")
+
+		// Create index-only clip archive with progress reporting
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, archivePath, 2); err != nil {
+			return err
+		}
+
+		// Upload the clip archive to the image registry
+		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	// Clip v1: Build, push to OCI layout, then process locally
 	budArgs = append(budArgs, "-f", tempDockerFile, "-t", request.ImageId+":latest", buildCtxPath)
 	cmd := exec.CommandContext(ctx, "buildah", budArgs...)
 	cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
@@ -909,73 +985,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		metrics.RecordImageBuildSpeed(ociImageMB, time.Since(startTime))
 	} else {
 		log.Warn().Err(err).Str("path", ociPath).Msg("unable to inspect image size")
-	}
-
-	// Clip v2: Skip unpack and create index-only clip from OCI layout.
-	// The image is pushed to the build registry so the clip indexer can stream from it.
-	if c.config.ImageService.ClipVersion == uint32(types.ClipVersion2) {
-		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
-		archivePath := filepath.Join("/tmp", archiveName)
-
-		// Get build registry and construct tag
-		// Uses a single repository "beta9-users" with workspace and image ID in the tag
-		buildRegistry := c.getBuildRegistry()
-		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-			log.Warn().Str("image_id", request.ImageId).Msg("using localhost as build registry - CLIP indexer may not be able to access this")
-		}
-
-		// Construct image tag with workspace and image ID
-		// For localhost: localhost/beta9-users:image_id
-		// For remote registry: registry/beta9-users:workspace_id-image_id
-		var imageTag string
-		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-			imageTag = fmt.Sprintf("%s/beta9-users:%s", buildRegistry, request.ImageId)
-		} else {
-			imageTag = fmt.Sprintf("%s/beta9-users:%s-%s", buildRegistry, request.WorkspaceId, request.ImageId)
-		}
-
-		// Tag the built image
-		if err = exec.CommandContext(ctx, "buildah", "--root", imagePath, "tag", request.ImageId+":latest", imageTag).Run(); err != nil {
-			return err
-		}
-
-		// Build push arguments with authentication
-		pushArgs := []string{"--root", imagePath, "push"}
-		if c.config.ImageService.BuildRegistryInsecure {
-			pushArgs = append(pushArgs, "--tls-verify=false")
-		}
-
-		// Add authentication for build registry (uses credentials from request)
-		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
-			pushArgs = append(pushArgs, authArgs...)
-		}
-		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
-
-		// Push to registry (required for clip indexer to access the image)
-		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
-		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
-		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
-		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
-		if err = cmd.Run(); err != nil {
-			return err
-		}
-
-		// Cache the build registry image reference for v2 mounting
-		// This is what CLIP will reference when fetching layers at runtime
-		c.v2ImageRefs.Set(request.ImageId, imageTag)
-		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached build registry image reference")
-
-		// Create index-only clip archive with progress reporting
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, archivePath, 2, ""); err != nil {
-			return err
-		}
-
-		// Upload the clip archive to the image registry
-		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
-			return err
-		}
-
-		return nil
 	}
 
 	engine, err := dir.Open(ociPath)
@@ -1043,7 +1052,7 @@ func (c *ImageClient) PullAndArchiveImage(ctx context.Context, outputLogger *slo
 		archivePath := filepath.Join("/tmp", archiveName)
 
 		// Create index-only clip from the source docker image reference with progress reporting
-		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, archivePath, 2, ""); err != nil {
+		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, *request.BuildOptions.SourceImage, archivePath, 2); err != nil {
 			return err
 		}
 
