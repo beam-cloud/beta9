@@ -183,11 +183,10 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 		return errors.New("failed to create image record")
 	}
 
-	// Create credential secret if base image credentials were provided
-	// This enables subsequent builds/runtime to reuse the credentials
+	// Create credential secret ONLY for unmodified images (not pushed to build registry)
+	// Modified images use build registry credentials instead
 	if err := is.createCredentialSecretIfNeeded(stream.Context(), lastMessage.ImageId, buildOptions); err != nil {
 		log.Error().Err(err).Msg("failed to create credential secret")
-		// Don't fail the build if secret creation fails, just log the error
 	}
 
 	log.Info().Msg("build completed successfully")
@@ -373,103 +372,53 @@ func convertBuildSteps(buildSteps []*pb.BuildStep) []BuildStep {
 }
 
 // createCredentialSecretIfNeeded creates a workspace secret for OCI registry credentials
-// if base image credentials were provided during the build
-// This works for both v1 and v2 builds to enable credential reuse
+// ONLY for unmodified images that were not pushed to the build registry.
+// Modified images use build registry credentials instead.
 func (is *ContainerImageService) createCredentialSecretIfNeeded(ctx context.Context, imageId string, opts *BuildOpts) error {
 	if opts == nil {
-		log.Debug().Str("image_id", imageId).Msg("opts is nil, skipping secret creation")
 		return nil
 	}
 
+	// Check if this image was modified (built/pushed to build registry)
+	wasModified := is.builder.hasWorkToDo(opts) || opts.Dockerfile != ""
+	if wasModified {
+		log.Debug().
+			Str("image_id", imageId).
+			Msg("image was modified and pushed to build registry, skipping credential secret creation")
+		return nil
+	}
+
+	// Image was NOT modified - it's just an indexed base image in external registry
+	// Store credentials as secret for runtime access
 	log.Info().
 		Str("image_id", imageId).
 		Str("existing_image_uri", opts.ExistingImageUri).
-		Bool("has_existing_image_creds", opts.ExistingImageCreds != nil && len(opts.ExistingImageCreds) > 0).
-		Int("existing_image_creds_count", len(opts.ExistingImageCreds)).
-		Bool("has_base_image_creds", opts.BaseImageCreds != "").
-		Int("base_image_creds_len", len(opts.BaseImageCreds)).
-		Msg("checking if credentials should be saved as secret")
+		Msg("unmodified image - storing credentials for runtime access")
 
-	// Determine the source image and credentials
-	var baseImage string
-	var credStr string
-
-	// Check if this is a custom base image build (from_registry)
-	if opts.ExistingImageUri != "" && opts.ExistingImageCreds != nil && len(opts.ExistingImageCreds) > 0 {
-		baseImage = opts.ExistingImageUri
-		registry, creds, err := reg.GetRegistryCredentialsForImage(opts.ExistingImageUri, opts.ExistingImageCreds)
-		if err != nil {
-			log.Warn().Err(err).Str("image_id", imageId).Msg("failed to get registry credentials, skipping secret creation")
-			return nil
-		}
-
-		credType := reg.DetectCredentialType(registry, creds)
-		credStr, err = reg.MarshalCredentials(registry, credType, creds)
-		if err != nil {
-			return fmt.Errorf("failed to marshal existing image credentials: %w", err)
-		}
-	} else if opts.BaseImageCreds != "" {
-		// BaseImageCreds is in username:password format (for skopeo)
-		// For cloud providers (ECR/GCR/etc.), this is a temporary token and NOT suitable for secrets
-		// We must have structured credentials for cloud providers - this is a configuration error
-		baseImage = getSourceImage(opts)
-		registry := reg.ParseRegistry(baseImage)
-
-		// Check if this is a cloud provider registry
-		isCloudProvider := false
-		if registry != "" {
-			registryLower := strings.ToLower(registry)
-			if strings.Contains(registryLower, "amazonaws.com") || // ECR
-				strings.Contains(registryLower, "gcr.io") || strings.Contains(registryLower, "pkg.dev") || // GCR/GAR
-				strings.Contains(registryLower, "azurecr.io") { // ACR
-				isCloudProvider = true
-			}
-		}
-
-		if isCloudProvider {
-			return fmt.Errorf("cannot create secret for cloud provider registry %s: BaseImageCreds contains temporary token which is not compatible with CLIP credential providers. SDK must provide structured credentials in ExistingImageCreds (e.g., AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION for ECR; GCP_ACCESS_TOKEN for GCR) for CLIP v2 runtime support", registry)
-		}
-
-		log.Info().
-			Str("image_id", imageId).
-			Str("registry", registry).
-			Msg("using BaseImageCreds for basic auth registry")
-
-		credStr = opts.BaseImageCreds
-	} else {
-		log.Debug().
-			Str("image_id", imageId).
-			Msg("no credentials provided, skipping secret creation")
-	}
-
-	// Nothing to do if no credentials
-	if baseImage == "" || credStr == "" {
+	// Only create secret if credentials were provided
+	if opts.ExistingImageCreds == nil || len(opts.ExistingImageCreds) == 0 {
 		return nil
 	}
 
-	// Parse registry
-	registry := reg.ParseRegistry(baseImage)
-	if registry == "" {
-		return fmt.Errorf("failed to parse registry from base image: %s", baseImage)
+	if opts.ExistingImageUri == "" {
+		return nil
 	}
 
-	// credStr is ALREADY properly marshaled from line 447 (for ExistingImageCreds)
-	// or from BaseImageCreds (for basic auth)
-	// DO NOT parse and re-marshal, as that causes double-wrapping!
-	secretValue := credStr
-
-	// For validation only: parse to check if credentials are valid
-	creds, err := reg.ParseCredentialsFromJSON(credStr)
+	// Get structured credentials
+	registry, creds, err := reg.GetRegistryCredentialsForImage(opts.ExistingImageUri, opts.ExistingImageCreds)
 	if err != nil {
-		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to parse credentials for validation")
+		log.Warn().Err(err).Str("image_id", imageId).Msg("failed to get registry credentials")
 		return nil
 	}
 
-	// Skip if no valid credentials or public registry
 	credType := reg.DetectCredentialType(registry, creds)
 	if credType == reg.CredTypePublic || len(creds) == 0 {
-		log.Debug().Str("image_id", imageId).Msg("public registry or no credentials, skipping secret creation")
 		return nil
+	}
+
+	secretValue, err := reg.MarshalCredentials(registry, credType, creds)
+	if err != nil {
+		return fmt.Errorf("failed to marshal credentials: %w", err)
 	}
 
 	// Get workspace context
@@ -480,23 +429,19 @@ func (is *ContainerImageService) createCredentialSecretIfNeeded(ctx context.Cont
 
 	secretName := reg.CreateSecretName(registry)
 
-	// Create or update secret
 	secret, err := is.upsertSecret(context.Background(), authInfo, secretName, secretValue, registry)
 	if err != nil {
 		return err
 	}
 
-	// Link secret to image
 	if err := is.backendRepo.SetImageCredentialSecret(context.Background(), imageId, secretName, secret.ExternalId); err != nil {
 		return fmt.Errorf("failed to associate secret with image: %w", err)
 	}
 
-	log.Info().Str("image_id", imageId).Str("secret_name", secretName).Msg("credential secret saved")
-
+	log.Info().Str("image_id", imageId).Str("secret_name", secretName).Msg("stored credential secret")
 	return nil
 }
 
-// upsertSecret creates or updates a secret in the workspace
 func (is *ContainerImageService) upsertSecret(ctx context.Context, authInfo *auth.AuthInfo, secretName, secretValue, registry string) (*types.Secret, error) {
 	secret, err := is.backendRepo.GetSecretByName(ctx, authInfo.Workspace, secretName)
 	if err != nil && err != sql.ErrNoRows {
@@ -504,24 +449,11 @@ func (is *ContainerImageService) upsertSecret(ctx context.Context, authInfo *aut
 	}
 
 	if secret != nil {
-		log.Info().
-			Str("secret_name", secretName).
-			Str("secret_external_id", secret.ExternalId).
-			Str("registry", registry).
-			Int("new_value_len", len(secretValue)).
-			Msg("updating existing credential secret")
-
 		secret, err = is.backendRepo.UpdateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue)
 		if err != nil {
 			return nil, fmt.Errorf("failed to update secret: %w", err)
 		}
 	} else {
-		log.Info().
-			Str("secret_name", secretName).
-			Str("registry", registry).
-			Int("value_len", len(secretValue)).
-			Msg("creating new credential secret")
-
 		secret, err = is.backendRepo.CreateSecret(ctx, authInfo.Workspace, authInfo.Token.Id, secretName, secretValue, false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create secret: %w", err)
