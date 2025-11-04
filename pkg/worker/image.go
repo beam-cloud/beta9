@@ -617,7 +617,7 @@ graphroot = "%s"
 runroot = "%s"
 
 [storage.options.overlay]
-mountopt = "nodev,metacopy=on"
+mountopt = "nodev,metacopy=on,redirect_dir=off"
 `, graphroot, runroot)
 
 	f, err := os.CreateTemp(runroot, "storage-*.conf")
