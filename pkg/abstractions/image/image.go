@@ -130,7 +130,6 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 	}
 
 	if exists {
-		// Emit a minimal success response consistent with SDK expectations
 		_ = stream.Send(&pb.BuildImageResponse{Msg: "Image already exists\n", Done: false, Success: true, ImageId: imageId})
 		_ = stream.Send(&pb.BuildImageResponse{Msg: "Build completed successfully\n", Done: true, Success: true, ImageId: imageId})
 		return nil
@@ -159,8 +158,6 @@ func (is *ContainerImageService) BuildImage(in *pb.BuildImageRequest, stream pb.
 
 	var lastMessage common.OutputMsg
 	for o := range outputChan {
-		// Stream all logs to the user (no archiving-stage filtering for v2)
-
 		if err := stream.Send(&pb.BuildImageResponse{Msg: o.Msg, Done: o.Done, Success: o.Success, ImageId: o.ImageId, PythonVersion: o.PythonVersion, Warning: o.Warning}); err != nil {
 			log.Error().Err(err).Msg("failed to complete build")
 			lastMessage = o
