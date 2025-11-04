@@ -465,19 +465,6 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 }
 
 // getCredentialProviderForImage determines the appropriate credentials for an image
-// This is used for BOTH CLIP indexing (at build time) AND layer mounting (at runtime)
-//
-// CLIP V2 Flow:
-// 1. Build: Image is pushed to build registry (e.g., registry.example.com/userimages:workspace-image)
-// 2. Cache: We store this image ref in v2ImageRefs
-// 3. Index: CLIP reads OCI manifest from registry (needs credentials)
-// 4. Runtime: CLIP pulls layers on-demand from registry (needs credentials)
-//
-// Credential Priority:
-// 1. Runtime secrets (ImageCredentials) - for sensitive runtime-only access
-// 2. Custom base image creds (SourceImageCreds) - for pulling FROM custom registries
-// 3. Build registry creds (BuildRegistryCreds) - for images WE built and pushed
-// 4. Ambient auth - IAM roles, docker config, etc.
 func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId string, request *types.ContainerRequest) clipCommon.RegistryCredentialProvider {
 	// Get the source image reference for this image
 	sourceRef, hasRef := c.v2ImageRefs.Get(imageId)
@@ -699,12 +686,6 @@ func (c *ImageClient) getBuildRegistryAuthArgs(buildRegistry string, buildRegist
 	return nil
 }
 
-// isInsecureRegistry returns true if TLS verification should be disabled
-// Uses the BuildRegistryInsecure config flag - no auto-detection or hardcoded addresses
-func (c *ImageClient) isInsecureRegistry() bool {
-	return c.config.ImageService.BuildRegistryInsecure
-}
-
 // getBuildahAuthArgs returns buildah authentication arguments from user-provided credentials
 // Expects credentials in username:password format (either directly or in JSON)
 // For ECR/GCR, users should pass pre-generated tokens, not raw AWS/GCP credentials
@@ -864,8 +845,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	}
 
 	if sourceImage != "" {
-		// Use configured insecure mode for all registry operations
-		insecure = c.isInsecureRegistry()
+		insecure = c.config.ImageService.BuildRegistryInsecure
 
 		// buildah pull the base image so bud doesn't attempt HTTPS
 		pullArgs := []string{"--root", imagePath, "pull"}
@@ -938,20 +918,20 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		archivePath := filepath.Join("/tmp", archiveName)
 
 		// Get build registry and construct tag
-		// Uses a single repository "userimages" with workspace and image ID in the tag
+		// Uses a single repository "beta9-users" with workspace and image ID in the tag
 		buildRegistry := c.getBuildRegistry()
 		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 			log.Warn().Str("image_id", request.ImageId).Msg("using localhost as build registry - CLIP indexer may not be able to access this")
 		}
 
 		// Construct image tag with workspace and image ID
-		// For localhost: localhost/userimages:image_id
-		// For remote registry: registry/userimages:workspace_id-image_id
+		// For localhost: localhost/beta9-users:image_id
+		// For remote registry: registry/beta9-users:workspace_id-image_id
 		var imageTag string
 		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
-			imageTag = fmt.Sprintf("%s/userimages:%s", buildRegistry, request.ImageId)
+			imageTag = fmt.Sprintf("%s/beta9-users:%s", buildRegistry, request.ImageId)
 		} else {
-			imageTag = fmt.Sprintf("%s/userimages:%s-%s", buildRegistry, request.WorkspaceId, request.ImageId)
+			imageTag = fmt.Sprintf("%s/beta9-users:%s-%s", buildRegistry, request.WorkspaceId, request.ImageId)
 		}
 
 		// Tag the built image
@@ -961,9 +941,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		// Build push arguments with authentication
 		pushArgs := []string{"--root", imagePath, "push"}
-		if c.isInsecureRegistry() {
+		if c.config.ImageService.BuildRegistryInsecure {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
+
 		// Add authentication for build registry (uses credentials from request)
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
