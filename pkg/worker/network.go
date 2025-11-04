@@ -511,13 +511,13 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 
 	// Block outbound network access if requested
 	if opts.request.BlockNetwork {
-		// Block IPv4 outbound traffic (but allow established/related connections for exposed ports)
-		err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", ipAddr.IP.String(), "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP")
+		// Block IPv4 outbound traffic (but allow reply packets for exposed ports)
+		err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", ipAddr.IP.String(), "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED", "-j", "DROP")
 		if err != nil {
 			return err
 		}
 
-		// Block IPv6 outbound traffic if enabled (but allow established/related connections for exposed ports)
+		// Block IPv6 outbound traffic if enabled (but allow reply packets for exposed ports)
 		if m.ipt6 != nil {
 			// Calculate the corresponding IPv6 address using the last octet of the IPv4 address
 			ipv4LastOctet := int(ipAddr.IP.To4()[3])
@@ -525,7 +525,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 			ipv6Prefix := ipv6Net.IP.String()
 			ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
 
-			err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP")
+			err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED", "-j", "DROP")
 			if err != nil {
 				return err
 			}
