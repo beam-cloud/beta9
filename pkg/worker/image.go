@@ -821,11 +821,23 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		log.Warn().Str("image_id", request.ImageId).Msg("image build complete, pushing to registry")
 
-		// Build push arguments with authentication
+		// Build push arguments with authentication and optimization flags
 		pushArgs := []string{"--root", imagePath, "push"}
 		if c.config.ImageService.BuildRegistryInsecure {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
+
+		// Add compression for faster layer pushing
+		// zstd provides excellent compression with fast decompression
+		pushArgs = append(pushArgs, "--compression-format", "zstd")
+		pushArgs = append(pushArgs, "--compression-level", "3") // Balance between speed and compression
+		
+		// Use parallel jobs for faster compression and pushing
+		// This allows multiple layers to be processed concurrently
+		pushArgs = append(pushArgs, "--jobs", "4")
+		
+		// Disable digest verification for faster pushing (digest is computed during build)
+		pushArgs = append(pushArgs, "--digestfile", "/dev/null")
 
 		// Add authentication for build registry (uses credentials from request)
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {

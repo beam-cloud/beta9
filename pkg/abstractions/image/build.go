@@ -384,12 +384,20 @@ func generatePipInstallCommand(pythonPackages []string, pythonVersion string, vi
 }
 
 // generateStandardPipInstallCommand generates a pip install command for v2 dockerfile builds
-// using standard Python/pip (not uv-b9 which is only available in v1 mounted environments).
+// using uv for faster installation. uv is much faster than pip and is automatically used by
+// installing it via pip if not already present.
 func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion string, virtualEnv bool) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	// Use standard pip with the specified python version
-	command := fmt.Sprintf("%s -m pip install", pythonVersion)
+	// Use uv for faster package installation
+	// First install uv if not present, then use it to install packages
+	var commands []string
+	
+	// Install uv using pip if not already installed
+	commands = append(commands, fmt.Sprintf("command -v uv >/dev/null 2>&1 || %s -m pip install --break-system-packages uv", pythonVersion))
+	
+	// Use uv pip install for much faster installation
+	command := fmt.Sprintf("uv pip install --python %s", pythonVersion)
 	if !virtualEnv {
 		command += " --break-system-packages"
 	}
@@ -400,8 +408,11 @@ func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion st
 	if len(packages) > 0 {
 		command += " " + strings.Join(packages, " ")
 	}
+	
+	commands = append(commands, command)
 
-	return command
+	// Join with && to ensure uv is installed before use
+	return strings.Join(commands, " && ")
 }
 
 func generateMicromambaInstallCommand(pythonPackages []string) string {

@@ -1234,7 +1234,7 @@ func TestBuild_archive_Failure(t *testing.T) {
 	mockRuncClient.AssertExpectations(t)
 }
 
-// Test parseBuildStepsForDockerfile (v2) uses standard pip instead of uv-b9
+// Test parseBuildStepsForDockerfile (v2) uses uv for faster installation
 func Test_parseBuildStepsForDockerfile(t *testing.T) {
 	pythonVersion := "python3.9"
 	steps := []BuildStep{
@@ -1246,7 +1246,7 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"python3.9 -m pip install --break-system-packages \"requests\" \"numpy\"", // Standard pip for v2
+		"command -v uv >/dev/null 2>&1 || python3.9 -m pip install --break-system-packages uv && uv pip install --python python3.9 --break-system-packages \"requests\" \"numpy\"", // uv for faster installation
 		"echo done",
 	}
 
