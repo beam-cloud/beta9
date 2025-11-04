@@ -941,7 +941,8 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		}
 		
 		// Source: containers-storage (buildah's storage)
-		srcRef := fmt.Sprintf("containers-storage:[%s]%s", storageDriver, imageTag)
+		// Use default store - storage driver is configured via CONTAINERS_STORAGE_CONF env var
+		srcRef := fmt.Sprintf("containers-storage:%s", imageTag)
 		destRef := fmt.Sprintf("docker://%s", imageTag)
 		skopeoArgs = append(skopeoArgs, srcRef, destRef)
 		
