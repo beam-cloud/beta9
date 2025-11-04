@@ -821,11 +821,16 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 
 		log.Warn().Str("image_id", request.ImageId).Msg("image build complete, pushing to registry")
 
-		// Build push arguments with authentication
+		// Build push arguments with authentication and optimization flags
 		pushArgs := []string{"--root", imagePath, "push"}
 		if c.config.ImageService.BuildRegistryInsecure {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
+
+		// Use faster gzip compression (level 1) for compatibility with CLIP indexer
+		// Level 1 is significantly faster than default level 6 with minimal size impact
+		pushArgs = append(pushArgs, "--compression-format", "gzip")
+		pushArgs = append(pushArgs, "--compression-level", "1")
 
 		// Add authentication for build registry (uses credentials from request)
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {

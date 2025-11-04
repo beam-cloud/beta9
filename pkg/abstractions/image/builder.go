@@ -296,6 +296,12 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 		sb.WriteString("\n")
 	}
 
+	// Copy uv binary from official image if we have any Python packages to install
+	// This is much faster than installing uv via pip
+	if len(opts.PythonPackages) > 0 || hasPipOrMambaSteps(opts.BuildSteps) {
+		sb.WriteString("COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv\n")
+	}
+
 	// Add environment variables and secrets
 	renderEnvVarsAndSecrets(&sb, opts)
 
@@ -308,10 +314,10 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 
 	// Install Python if needed
 	// Match the behavior from RenderV2Dockerfile and setupPythonEnv:
-	// - If ignore_python=true AND no packages -> skip Python entirely
-	// - If ignore_python=true BUT has packages -> install Python (packages need it)
+	// - If ignore_python=true AND no packages AND no pip/mamba BuildSteps -> skip Python entirely
+	// - If ignore_python=true BUT has packages OR pip/mamba BuildSteps -> install Python (packages need it)
 	// - If ignore_python=false -> install Python when version specified
-	shouldInstallPython := pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0)
+	shouldInstallPython := pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0 || hasPipOrMambaSteps(opts.BuildSteps))
 
 	if shouldInstallPython {
 		if isMicromamba {
@@ -354,6 +360,16 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 	return sb.String()
 }
 
+// hasPipOrMambaSteps checks if there are any pip or micromamba commands in BuildSteps
+func hasPipOrMambaSteps(buildSteps []BuildStep) bool {
+	for _, step := range buildSteps {
+		if step.Type == pipCommandType || step.Type == micromambaCommandType {
+			return true
+		}
+	}
+	return false
+}
+
 // RenderV2Dockerfile converts build options into a Dockerfile that can be built by buildah.
 // The logic mirrors v1's runtime Python detection, but uses static analysis since we can't probe at runtime.
 func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
@@ -362,12 +378,18 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	sb.WriteString(getSourceImage(opts))
 	sb.WriteString("\n")
 
+	// Copy uv binary from official image if we have any Python packages to install
+	// This is much faster than installing uv via pip
+	if len(opts.PythonPackages) > 0 || hasPipOrMambaSteps(opts.BuildSteps) {
+		sb.WriteString("COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv\n")
+	}
+
 	// Add environment variables and secrets
 	renderEnvVarsAndSecrets(&sb, opts)
 
-	// Skip Python setup if explicitly ignored and no packages requested
+	// Skip Python setup if explicitly ignored, no packages requested, AND no pip/mamba BuildSteps
 	// This matches v1 behavior in setupPythonEnv()
-	if opts.IgnorePython && len(opts.PythonPackages) == 0 {
+	if opts.IgnorePython && len(opts.PythonPackages) == 0 && !hasPipOrMambaSteps(opts.BuildSteps) {
 		b.renderCommands(&sb, opts)
 		return sb.String(), nil
 	}
