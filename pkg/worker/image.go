@@ -463,9 +463,9 @@ func (c *ImageClient) getCredentialProviderForImage(ctx context.Context, imageId
 	// We check both the registry domain AND the build repository name to avoid false positives
 	buildRegistry := c.getBuildRegistry()
 	buildRepoName := c.config.ImageService.BuildRepositoryName
-	if buildRegistry != "" && buildRepoName != "" && 
-		strings.Contains(sourceRef, buildRegistry) && 
-		strings.Contains(sourceRef, buildRepoName) && 
+	if buildRegistry != "" && buildRepoName != "" &&
+		strings.Contains(sourceRef, buildRegistry) &&
+		strings.Contains(sourceRef, buildRepoName) &&
 		request.BuildRegistryCredentials != "" {
 		return c.parseAndCreateProvider(ctx, request.BuildRegistryCredentials, registry, imageId, "build registry")
 	}
@@ -791,7 +791,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 	budArgs = append(budArgs, "--layers")
 
 	// Use parallel jobs for faster layer processing
-	budArgs = append(budArgs, "--jobs", "4")
+	budArgs = append(budArgs, "--jobs", "8")
 
 	// Add credentials for multi-stage builds and private base images
 	if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
@@ -854,9 +854,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		// Add retry logic for network resilience
 		pushArgs = append(pushArgs, "--retry", "3")
 		pushArgs = append(pushArgs, "--retry-delay", "2s")
-
-		// Force disable content de-duplication to speed up push
-		pushArgs = append(pushArgs, "--disable-content-trust")
 
 		// Add authentication for build registry (uses credentials from request)
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
