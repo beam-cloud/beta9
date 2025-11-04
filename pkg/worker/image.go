@@ -718,8 +718,7 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *slog.Logger, request *types.ContainerRequest) error {
 	startTime := time.Now()
 
-	// Use /dev/shm (tmpfs/RAM) for buildah storage to eliminate disk I/O bottleneck
-	// This dramatically improves commit and push performance
+	// Use /dev/shm (tmpfs/RAM) for buildah storage to eliminate disk I/O bottlenecks
 	buildPath, err := os.MkdirTemp("/dev/shm", "buildah-")
 	if err != nil {
 		// Fallback to /tmp if /dev/shm is not available
@@ -846,8 +845,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// Disable compression for fast networks to eliminate I/O overhead
-		// This significantly reduces commit time by avoiding compression work
+		// TODO: Disable compression for fast networks to eliminate I/O overhead (make configurable)
 		pushArgs = append(pushArgs, "--compression-format", "gzip")
 		pushArgs = append(pushArgs, "--compression-level", "1")
 
