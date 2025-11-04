@@ -254,3 +254,9 @@ RUN echo "timeout 60" >> /etc/criu/default.conf
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,ngx,video
 ENV _BUILDAH_STARTED_IN_USERNS="" \
     BUILDAH_ISOLATION=chroot
+
+# Configure buildah/containers for better concurrency
+# image_parallel_copies controls how many layers can be pushed/pulled simultaneously
+RUN mkdir -p /etc/containers && \
+    echo '[engine]' > /etc/containers/containers.conf && \
+    echo 'image_parallel_copies = 8' >> /etc/containers/containers.conf
