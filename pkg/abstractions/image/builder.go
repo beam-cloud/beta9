@@ -390,6 +390,17 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	// Skip Python setup if explicitly ignored, no packages requested, AND no pip/mamba BuildSteps
 	// This matches v1 behavior in setupPythonEnv()
 	if opts.IgnorePython && len(opts.PythonPackages) == 0 && !hasPipOrMambaSteps(opts.BuildSteps) {
+		// Still need to render shell commands from BuildSteps (from add_commands())
+		if len(opts.BuildSteps) > 0 {
+			steps := parseBuildStepsForDockerfile(opts.BuildSteps, "", false)
+			for _, cmd := range steps {
+				if cmd != "" {
+					sb.WriteString("RUN ")
+					sb.WriteString(cmd)
+					sb.WriteString("\n")
+				}
+			}
+		}
 		b.renderCommands(&sb, opts)
 		return sb.String(), nil
 	}

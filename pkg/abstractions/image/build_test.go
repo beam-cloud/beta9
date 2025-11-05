@@ -127,26 +127,22 @@ func TestRenderV2Dockerfile_FromRegistryWithChainedCommands(t *testing.T) {
 			},
 		},
 		{
-			name: "from_registry with python packages (should still work with ignore_python=true)",
+			name: "from_registry without ignore_python flag still works",
 			opts: &BuildOpts{
 				BaseImageRegistry: "docker.io",
-				BaseImageName:     "library/python",
-				BaseImageTag:      "3.11-slim",
-				ExistingImageUri:  "python:3.11-slim",
-				PythonPackages:    []string{"numpy", "pandas"},
-				PythonVersion:     "python3",
-				IgnorePython:      true, // Set by from_registry
+				BaseImageName:     "library/ubuntu",
+				BaseImageTag:      "22.04",
+				ExistingImageUri:  "ubuntu:22.04",
+				BuildSteps:        []BuildStep{{Type: shellCommandType, Command: "echo 'test'"}},
+				IgnorePython:      false, // Not ignored, should still render commands
 			},
 			expected: []string{
-				"FROM docker.io/library/python:3.11-slim\n",
-				"COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv\n",
-				"uv pip install --system",
-				"numpy",
-				"pandas",
+				"FROM docker.io/library/ubuntu:22.04\n",
+				"RUN echo 'test'\n",
 			},
 		},
 		{
-			name: "from_registry with mixed build steps",
+			name: "from_registry with mixed build steps (shell and pip)",
 			opts: &BuildOpts{
 				BaseImageRegistry: "docker.io",
 				BaseImageName:     "library/python",
