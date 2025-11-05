@@ -651,6 +651,10 @@ func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 		"XDG_RUNTIME_DIR="+runroot,
 		"CONTAINERS_STORAGE_CONF="+storageConf,
 		"BUILDAH_LAYERS=true",
+		// Performance tuning: use all available CPUs for parallel operations
+		"GOMAXPROCS=0", // Use all available CPUs
+		// Use parallel gzip for faster compression (if available)
+		"PIGZ=-p"+fmt.Sprintf("%d", runtime.NumCPU()), // Parallel gzip with all cores
 	)
 	return env
 }
@@ -909,49 +913,38 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		// Use skopeo copy for better parallel upload performance
-		// Skopeo has superior parallelism for registry operations via SKOPEO_MAX_PARALLEL_UPLOADS
+		// Use buildah push with gzip compression (required for CLIP indexer)
+		// Note: skopeo copy doesn't recompress layers from containers-storage, causing
+		// "gzip: invalid header" errors in CLIP indexer
+		// Performance optimizations: GOMAXPROCS=0, PIGZ for parallel gzip, --max-parallel-layers
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
 
-		skopeoArgs := []string{"copy"}
-
-		// Use Docker registry v2 schema 2 format (standard)
-		skopeoArgs = append(skopeoArgs, "--format=v2s2")
-		// Only copy the current system architecture
-		skopeoArgs = append(skopeoArgs, "--multi-arch=system")
-		// Enable compression with gzip (default, but explicit for clarity)
-		// Note: We do NOT use --preserve-digests because that prevents compression
-		// Note: We do NOT use --dest-compress=false because CLIP indexer needs gzip
-
-		// Disable TLS verification if needed
+		pushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push"}
+		
 		if c.config.ImageService.BuildRegistryInsecure {
-			skopeoArgs = append(skopeoArgs, "--src-tls-verify=false", "--dest-tls-verify=false")
+			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// Add destination credentials
+		// CRITICAL: Use gzip compression (required for CLIP indexer to read layers)
+		// Use pgzip (parallel gzip) for faster compression on multi-core systems
+		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
+		
+		// Add max parallel layers for faster push
+		pushArgs = append(pushArgs, "--max-parallel-layers", "8")
+
+		// Retry logic for network resilience during large uploads
+		pushArgs = append(pushArgs, "--retry", "5") // Increased from 3
+		pushArgs = append(pushArgs, "--retry-delay", "1s") // Reduced from 2s for faster retries
+
+		// Add authentication for build registry
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
-			// Convert --creds to --dest-creds for skopeo
-			for i, arg := range authArgs {
-				if arg == "--creds" && i+1 < len(authArgs) {
-					skopeoArgs = append(skopeoArgs, "--dest-creds", authArgs[i+1])
-					break
-				}
-			}
+			pushArgs = append(pushArgs, authArgs...)
 		}
+		
+		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
 
-		// Source: containers-storage (buildah's storage)
-		// Destination: docker registry
-		srcRef := fmt.Sprintf("containers-storage:%s", imageTag)
-		destRef := fmt.Sprintf("docker://%s", imageTag)
-		skopeoArgs = append(skopeoArgs, srcRef, destRef)
-
-		cmd = exec.CommandContext(ctx, "skopeo", skopeoArgs...)
-
-		// Add skopeo performance env vars (SKOPEO_MAX_PARALLEL_UPLOADS=16)
-		env := c.buildahEnv(runroot, tmpdir, storageConf)
-		env = common.AddSkopeoEnvVars(env)
-		cmd.Env = env
-
+		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
+		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err = cmd.Run(); err != nil {
