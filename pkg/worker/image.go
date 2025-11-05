@@ -914,9 +914,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
 
 		skopeoArgs := []string{"copy"}
-		skopeoArgs = append(skopeoArgs, "--format=v2s2")
-		skopeoArgs = append(skopeoArgs, "--multi-arch=system")
-		skopeoArgs = append(skopeoArgs, "--preserve-digests")
 
 		// Disable TLS verification if needed
 		if c.config.ImageService.BuildRegistryInsecure {
