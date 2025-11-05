@@ -123,7 +123,13 @@ func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string
 
 	args = append(args, p.copyArgs(creds)...)
 	cmd := exec.CommandContext(ctx, p.pullCommand, args...)
-	cmd.Env = os.Environ()
+	
+	// Set environment with aggressive parallelism for maximum throughput
+	// These values can be overridden by setting the env vars before starting the service
+	env := os.Environ()
+	env = p.addSkopeoPerformanceEnv(env)
+	cmd.Env = env
+	
 	cmd.Dir = imageTmpDir
 	cmd.Stdout = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", p.pullCommand)) }}
 	cmd.Stderr = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", p.pullCommand)) }}
@@ -201,6 +207,34 @@ func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	out = append(out, "--dest-compress=false")
 
 	return out
+}
+
+// addSkopeoPerformanceEnv adds performance-tuning environment variables for skopeo
+// These control parallel blob transfers and other performance characteristics
+func (p *skopeoClient) addSkopeoPerformanceEnv(env []string) []string {
+	// Check if already set in environment to allow override
+	hasMaxParallelDownloads := false
+	hasMaxParallelUploads := false
+	
+	for _, e := range env {
+		if strings.HasPrefix(e, "SKOPEO_MAX_PARALLEL_DOWNLOADS=") {
+			hasMaxParallelDownloads = true
+		}
+		if strings.HasPrefix(e, "SKOPEO_MAX_PARALLEL_UPLOADS=") {
+			hasMaxParallelUploads = true
+		}
+	}
+	
+	// Set aggressive defaults if not already configured
+	// These values work well for fast networks and multi-core systems
+	if !hasMaxParallelDownloads {
+		env = append(env, "SKOPEO_MAX_PARALLEL_DOWNLOADS=16")
+	}
+	if !hasMaxParallelUploads {
+		env = append(env, "SKOPEO_MAX_PARALLEL_UPLOADS=16")
+	}
+	
+	return env
 }
 
 func (p *skopeoClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
