@@ -917,7 +917,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		skopeoArgs = append(skopeoArgs, "--format=v2s2")
 		skopeoArgs = append(skopeoArgs, "--multi-arch=system")
 		skopeoArgs = append(skopeoArgs, "--preserve-digests")
-		skopeoArgs = append(skopeoArgs, "--dest-compress=false")
 
 		// Disable TLS verification if needed
 		if c.config.ImageService.BuildRegistryInsecure {

@@ -197,7 +197,6 @@ func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	out = append(out, "--format=v2s2")
 	out = append(out, "--multi-arch=system")
 	out = append(out, "--preserve-digests")
-	out = append(out, "--dest-compress=false")
 
 	return out
 }
