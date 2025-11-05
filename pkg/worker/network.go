@@ -542,7 +542,7 @@ func (m *ContainerNetworkManager) setupBlockNetwork(containerId string, request 
 	containerIp := containerIpResponse.IpAddress
 
 	// Block IPv4 outbound traffic (but allow reply packets for exposed ports)
-	err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", containerIp, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED", "-j", "DROP")
+	err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", containerIp, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP")
 	if err != nil {
 		return err
 	}
@@ -559,7 +559,7 @@ func (m *ContainerNetworkManager) setupBlockNetwork(containerId string, request 
 		ipv6Prefix := ipv6Net.IP.String()
 		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
 
-		err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED", "-j", "DROP")
+		err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP")
 		if err != nil {
 			return err
 		}
