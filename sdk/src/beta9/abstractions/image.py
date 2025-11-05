@@ -443,11 +443,6 @@ class Image(BaseAbstraction):
         This is a convenient helper method to create an Image that uses a base image
         from a container registry (Docker Hub, ECR, GAR, NGC, etc.) with optional credentials.
 
-        When using an image from a registry, Python installation is skipped by default since
-        registry images are assumed to already contain their required runtime. You can still
-        chain Python packages or commands to this image - Python packages will be installed
-        using the Python available in the base image.
-
         Parameters:
             image_uri: The full URI of the image from the registry.
                 Examples:
@@ -490,21 +485,12 @@ class Image(BaseAbstraction):
                 "nvcr.io/nvidia/tensorrt:24.10-py3",
                 credentials=["NGC_API_KEY"]
             )
-
-            # Chain additional commands or packages
-            image = Image.from_registry("ubuntu:22.04").add_commands([
-                "apt update && apt install -y netcat"
-            ])
             ```
         """
-        img = cls(
+        return cls(
             base_image=image_uri,
             base_image_creds=credentials,
         )
-        # Skip Python installation by default when using a registry image
-        # Python packages can still be added later and will use the base image's Python
-        img.ignore_python = True
-        return img
 
     @classmethod
     def from_id(cls, image_id: str) -> "Image":
