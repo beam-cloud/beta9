@@ -99,7 +99,7 @@ class ContainerRequest(betterproto.Message):
     config_path: str = betterproto.string_field(25)
     image_credentials: str = betterproto.string_field(26)
     build_registry_credentials: str = betterproto.string_field(27)
-    block_network: bool = betterproto.bool_field(26)
+    block_network: bool = betterproto.bool_field(28)
 
 
 @dataclass(eq=False, repr=False)
