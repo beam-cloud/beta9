@@ -644,13 +644,15 @@ runroot = "%s"
 	return f.Name(), nil
 }
 
-// buildahEnv returns environment variables for buildah to use fast storage paths
+// buildahEnv returns environment variables for buildah
 func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 	env := append(os.Environ(),
 		"TMPDIR="+tmpdir,
 		"XDG_RUNTIME_DIR="+runroot,
 		"CONTAINERS_STORAGE_CONF="+storageConf,
 		"BUILDAH_LAYERS=true",
+		"GOMAXPROCS=0",
+		"PIGZ=-p"+fmt.Sprintf("%d", runtime.NumCPU()),
 	)
 	return env
 }
@@ -909,44 +911,26 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		// Use skopeo copy instead of buildah push for better internal blob upload performance
-		// Skopeo has superior parallelism and chunking for registry operations
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
 
-		skopeoArgs := []string{"copy"}
-		skopeoArgs = append(skopeoArgs, "--format=v2s2")
-		skopeoArgs = append(skopeoArgs, "--multi-arch=system")
-		skopeoArgs = append(skopeoArgs, "--preserve-digests")
-		skopeoArgs = append(skopeoArgs, "--dest-compress=false")
+		pushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push"}
 
-		// Disable TLS verification if needed
 		if c.config.ImageService.BuildRegistryInsecure {
-			skopeoArgs = append(skopeoArgs, "--src-tls-verify=false", "--dest-tls-verify=false")
+			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// Add destination credentials
+		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
+		pushArgs = append(pushArgs, "--retry", "5")
+		pushArgs = append(pushArgs, "--retry-delay", "1s")
+
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
-			// Convert --creds to --dest-creds for skopeo
-			for i, arg := range authArgs {
-				if arg == "--creds" && i+1 < len(authArgs) {
-					skopeoArgs = append(skopeoArgs, "--dest-creds", authArgs[i+1])
-					break
-				}
-			}
+			pushArgs = append(pushArgs, authArgs...)
 		}
 
-		// Source: containers-storage (buildah's storage)
-		// Use default store - storage driver is configured via CONTAINERS_STORAGE_CONF env var
-		srcRef := fmt.Sprintf("containers-storage:%s", imageTag)
-		destRef := fmt.Sprintf("docker://%s", imageTag)
-		skopeoArgs = append(skopeoArgs, srcRef, destRef)
+		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
 
-		cmd = exec.CommandContext(ctx, "skopeo", skopeoArgs...)
-
-		env := c.buildahEnv(runroot, tmpdir, storageConf)
-		env = common.AddSkopeoEnvVars(env)
-		cmd.Env = env
-
+		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
+		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err = cmd.Run(); err != nil {
