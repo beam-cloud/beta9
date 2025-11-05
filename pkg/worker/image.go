@@ -913,34 +913,22 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		// Use buildah push with gzip compression (required for CLIP indexer)
-		// Note: skopeo copy doesn't recompress layers from containers-storage, causing
-		// "gzip: invalid header" errors in CLIP indexer
-		// Performance optimizations: GOMAXPROCS=0, PIGZ for parallel gzip, --max-parallel-layers
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
 
 		pushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push"}
-		
+
 		if c.config.ImageService.BuildRegistryInsecure {
 			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// CRITICAL: Use gzip compression (required for CLIP indexer to read layers)
-		// Use pgzip (parallel gzip) for faster compression on multi-core systems
 		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
-		
-		// Add max parallel layers for faster push
-		pushArgs = append(pushArgs, "--max-parallel-layers", "8")
+		pushArgs = append(pushArgs, "--retry", "5")
+		pushArgs = append(pushArgs, "--retry-delay", "1s")
 
-		// Retry logic for network resilience during large uploads
-		pushArgs = append(pushArgs, "--retry", "5") // Increased from 3
-		pushArgs = append(pushArgs, "--retry-delay", "1s") // Reduced from 2s for faster retries
-
-		// Add authentication for build registry
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
 			pushArgs = append(pushArgs, authArgs...)
 		}
-		
+
 		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
 
 		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
