@@ -296,12 +296,6 @@ func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
 		sb.WriteString("\n")
 	}
 
-	// Copy uv binary from official image if we have any Python packages to install
-	// This is much faster than installing uv via pip
-	if len(opts.PythonPackages) > 0 || hasPipOrMambaSteps(opts.BuildSteps) {
-		sb.WriteString("COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv\n")
-	}
-
 	// Add environment variables and secrets
 	renderEnvVarsAndSecrets(&sb, opts)
 
@@ -377,12 +371,6 @@ func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
 	sb.WriteString("FROM ")
 	sb.WriteString(getSourceImage(opts))
 	sb.WriteString("\n")
-
-	// Copy uv binary from official image if we have any Python packages to install
-	// This is much faster than installing uv via pip
-	if len(opts.PythonPackages) > 0 || hasPipOrMambaSteps(opts.BuildSteps) {
-		sb.WriteString("COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv\n")
-	}
 
 	// Add environment variables and secrets
 	renderEnvVarsAndSecrets(&sb, opts)

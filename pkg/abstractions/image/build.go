@@ -384,14 +384,10 @@ func generatePipInstallCommand(pythonPackages []string, pythonVersion string, vi
 }
 
 // generateStandardPipInstallCommand generates a pip install command for v2 dockerfile builds
-// using uv for faster installation. uv is copied from the official ghcr.io/astral-sh/uv image
-// for maximum efficiency and speed.
 func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion string, virtualEnv bool) string {
 	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
 
-	// Use uv pip install for much faster installation
-	// The uv binary should be copied in the Dockerfile via: COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-	command := fmt.Sprintf("uv pip install --system --python %s", pythonVersion)
+	command := fmt.Sprintf("%s -m pip install", pythonVersion)
 
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")

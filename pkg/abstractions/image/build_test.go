@@ -171,9 +171,8 @@ func TestRenderV2Dockerfile_FromRegistryWithChainedCommands(t *testing.T) {
 			},
 			expected: []string{
 				"FROM docker.io/library/python:3.11-slim\n",
-				"COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv\n",
 				"RUN apt update\n",
-				"RUN uv pip install --system",
+				"RUN python3.10 -m pip install",
 				"numpy",
 				"RUN apt clean\n",
 			},
@@ -246,8 +245,7 @@ func TestRenderV2Dockerfile_ComprehensiveChaining(t *testing.T) {
 			},
 			expected: []string{
 				"FROM docker.io/library/python:3.11-slim\n",
-				"COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv\n",
-				"RUN uv pip install --system",
+				"RUN python3.10 -m pip install",
 				"numpy",
 				"pandas",
 				"RUN echo 'installed packages'\n",
@@ -271,10 +269,9 @@ func TestRenderV2Dockerfile_ComprehensiveChaining(t *testing.T) {
 			},
 			expected: []string{
 				"FROM docker.io/library/python:3.11-slim\n",
-				"COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv\n",
 				"ENV API_KEY=secret\n",
 				"RUN apt update\n",
-				"RUN uv pip install --system",
+				"RUN python3.10 -m pip install",
 				"requests",
 				"RUN apt clean\n",
 			},
@@ -1509,7 +1506,7 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"uv pip install --system --python python3.9 \"requests\" \"numpy\"", // uv with --system flag
+		"python3.9 -m pip install \"requests\" \"numpy\"",
 		"echo done",
 	}
 
