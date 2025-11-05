@@ -19,6 +19,7 @@ import (
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	pb "github.com/beam-cloud/beta9/proto"
 
 	"github.com/beam-cloud/beta9/pkg/storage"
@@ -46,8 +47,10 @@ type Worker struct {
 	podAddr                 string
 	podHostName             string
 	imageMountPath          string
-	containerRuntime        ContainerRuntime
-	runcServer              *RuncServer
+	runtime                 runtime.Runtime // Primary runtime (default from config)
+	runcRuntime             runtime.Runtime // Always runc for fallback
+	gvisorRuntime           runtime.Runtime // Optional gVisor runtime
+	runcServer              *RunCServer
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
 	containerNetworkManager *ContainerNetworkManager
@@ -90,6 +93,8 @@ type ContainerInstance struct {
 	StopReason            types.StopContainerReason
 	SandboxProcessManager *goproc.GoProcClient
 	ContainerIp           string
+	Runtime               runtime.Runtime // The runtime used for this container
+	OOMWatcher            *runtime.OOMWatcher // OOM watcher for this container
 }
 
 type ContainerOptions struct {
@@ -141,15 +146,45 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	// Create container runtime based on config
-	runtimeType := RuntimeType(config.Worker.ContainerRuntime)
-	containerRuntime, err := NewContainerRuntime(runtimeType, config)
+	// Create container runtimes
+	// Always create runc as fallback
+	runcRuntime, err := runtime.New(runtime.Config{
+		Type:  "runc",
+		Debug: config.DebugMode,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create container runtime: %v", err)
+		return nil, fmt.Errorf("failed to create runc runtime: %v", err)
 	}
 
-	if !containerRuntime.Available() {
-		return nil, fmt.Errorf("container runtime %s is not available", runtimeType)
+	// Create default runtime based on config
+	var defaultRuntime runtime.Runtime
+	var gvisorRuntime runtime.Runtime
+
+	runtimeType := config.Worker.ContainerRuntime
+	if runtimeType == "" {
+		runtimeType = "runc"
+	}
+
+	switch runtimeType {
+	case "runc":
+		defaultRuntime = runcRuntime
+	case "gvisor":
+		gvisorRuntime, err = runtime.New(runtime.Config{
+			Type:          "gvisor",
+			RunscPath:     "runsc",
+			RunscRoot:     "/run/gvisor",
+			RunscPlatform: "", // Use default platform
+			Debug:         config.DebugMode,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
+			defaultRuntime = runcRuntime
+		} else {
+			defaultRuntime = gvisorRuntime
+		}
+	default:
+		log.Warn().Str("runtime", runtimeType).Msg("unknown runtime type, using runc")
+		defaultRuntime = runcRuntime
 	}
 
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
@@ -236,7 +271,9 @@ func NewWorker() (*Worker, error) {
 		memoryLimit:             memoryLimit,
 		gpuType:                 gpuType,
 		gpuCount:                uint32(gpuCount),
-		containerRuntime:        containerRuntime,
+		runtime:                 defaultRuntime,
+		runcRuntime:             runcRuntime,
+		gvisorRuntime:           gvisorRuntime,
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
@@ -688,5 +725,39 @@ func (s *Worker) shutdown() error {
 		errs = errors.Join(errs, err)
 	}
 
+	// Close runtimes
+	if s.runcRuntime != nil {
+		s.runcRuntime.Close()
+	}
+	if s.gvisorRuntime != nil {
+		s.gvisorRuntime.Close()
+	}
+
 	return errs
+}
+
+// selectRuntime selects the appropriate runtime for a container request
+func (s *Worker) selectRuntime(request *types.ContainerRequest) runtime.Runtime {
+	// Policy for runtime selection:
+	// 1. GPU workloads must use runc (gVisor doesn't support GPU)
+	// 2. Checkpoint/restore workloads must use runc (gVisor doesn't support CRIU)
+	// 3. Otherwise use the default runtime from config
+
+	if request.RequiresGPU() {
+		log.Debug().Str("container_id", request.ContainerId).Msg("using runc for GPU workload")
+		return s.runcRuntime
+	}
+
+	if request.CheckpointEnabled || request.Checkpoint != nil {
+		log.Debug().Str("container_id", request.ContainerId).Msg("using runc for checkpoint workload")
+		return s.runcRuntime
+	}
+
+	// Use default runtime
+	selectedRuntime := s.runtime
+	log.Debug().Str("container_id", request.ContainerId).
+		Str("runtime", selectedRuntime.Name()).
+		Msg("selected runtime for container")
+	
+	return selectedRuntime
 }

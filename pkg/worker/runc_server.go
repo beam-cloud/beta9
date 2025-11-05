@@ -26,6 +26,7 @@ import (
 	pb "github.com/beam-cloud/beta9/proto"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/go-runc"
 	"github.com/google/shlex"
@@ -35,7 +36,7 @@ import (
 )
 
 type RunCServer struct {
-	runcHandle     runc.Runc
+	runcHandle     runc.Runc // Keep for backwards compatibility
 	baseConfigSpec specs.Spec
 	pb.UnimplementedRunCServiceServer
 	containerInstances      *common.SafeMap[*ContainerInstance]
@@ -101,11 +102,31 @@ func (s *RunCServer) Start() error {
 }
 
 func (s *RunCServer) RunCKill(ctx context.Context, in *pb.RunCKillRequest) (*pb.RunCKillResponse, error) {
-	_ = s.runcHandle.Kill(ctx, in.ContainerId, int(syscall.SIGTERM), &runc.KillOpts{
+	// Get container instance to use the correct runtime
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	
+	// If no instance or runtime, fall back to direct runc calls
+	if !exists || instance.Runtime == nil {
+		_ = s.runcHandle.Kill(ctx, in.ContainerId, int(syscall.SIGTERM), &runc.KillOpts{
+			All: true,
+		})
+
+		err := s.runcHandle.Delete(ctx, in.ContainerId, &runc.DeleteOpts{
+			Force: true,
+		})
+
+		return &pb.RunCKillResponse{
+			Ok: err == nil,
+		}, nil
+	}
+
+	// Use the runtime for this container
+	rt := instance.Runtime
+	_ = rt.Kill(ctx, in.ContainerId, syscall.SIGTERM, &runtime.KillOpts{
 		All: true,
 	})
 
-	err := s.runcHandle.Delete(ctx, in.ContainerId, &runc.DeleteOpts{
+	err := rt.Delete(ctx, in.ContainerId, &runtime.DeleteOpts{
 		Force: true,
 	})
 
@@ -158,7 +179,25 @@ func (s *RunCServer) RunCExec(ctx context.Context, in *pb.RunCExecRequest) (*pb.
 }
 
 func (s *RunCServer) RunCStatus(ctx context.Context, in *pb.RunCStatusRequest) (*pb.RunCStatusResponse, error) {
-	state, err := s.runcHandle.State(ctx, in.ContainerId)
+	// Get container instance to use the correct runtime
+	instance, exists := s.containerInstances.Get(in.ContainerId)
+	
+	// If no instance or runtime, fall back to direct runc calls
+	if !exists || instance.Runtime == nil {
+		state, err := s.runcHandle.State(ctx, in.ContainerId)
+		if err != nil {
+			return &pb.RunCStatusResponse{
+				Running: false,
+			}, nil
+		}
+
+		return &pb.RunCStatusResponse{
+			Running: state.Status == types.RuncContainerStatusRunning,
+		}, nil
+	}
+
+	// Use the runtime for this container
+	state, err := instance.Runtime.State(ctx, in.ContainerId)
 	if err != nil {
 		return &pb.RunCStatusResponse{
 			Running: false,
@@ -216,6 +255,14 @@ func (s *RunCServer) RunCCheckpoint(ctx context.Context, in *pb.RunCCheckpointRe
 		return &pb.RunCCheckpointResponse{Ok: false, ErrorMsg: "Container not found"}, nil
 	}
 
+	// Check if runtime supports checkpointing
+	if instance.Runtime != nil && !instance.Runtime.Capabilities().CheckpointRestore {
+		return &pb.RunCCheckpointResponse{
+			Ok:       false,
+			ErrorMsg: fmt.Sprintf("Runtime %s does not support checkpoint/restore", instance.Runtime.Name()),
+		}, nil
+	}
+
 	checkpointId := uuid.New().String()
 	err := s.createCheckpoint(ctx, &CreateCheckpointOpts{
 		Request:      instance.Request,
@@ -232,18 +279,36 @@ func (s *RunCServer) RunCCheckpoint(ctx context.Context, in *pb.RunCCheckpointRe
 
 func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCService_RunCArchiveServer) error {
 	ctx := stream.Context()
-	state, err := s.runcHandle.State(ctx, req.ContainerId)
-	if err != nil {
+	
+	instance, exists := s.containerInstances.Get(req.ContainerId)
+	if !exists {
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
+	}
+
+	// Use the runtime for this container, fallback to runcHandle if not available
+	var state *runtime.State
+	var err error
+	
+	if instance.Runtime != nil {
+		s, e := instance.Runtime.State(ctx, req.ContainerId)
+		if e != nil {
+			return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
+		}
+		state = &s
+	} else {
+		runcState, e := s.runcHandle.State(ctx, req.ContainerId)
+		if e != nil {
+			return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
+		}
+		state = &runtime.State{
+			ID:     runcState.ID,
+			Pid:    runcState.Pid,
+			Status: runcState.Status,
+		}
 	}
 
 	if state.Status != types.RuncContainerStatusRunning {
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not running"})
-	}
-
-	instance, exists := s.containerInstances.Get(req.ContainerId)
-	if !exists {
-		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
 	}
 
 	// If it's not a build request, we need to use the initial_config.json from the base image bundle
