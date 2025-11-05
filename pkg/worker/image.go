@@ -873,14 +873,9 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		budArgs = append(budArgs, "--tls-verify=false")
 	}
 
-	// Enable layer caching for faster rebuilds
-	budArgs = append(budArgs, "--layers")
-
-	// Use docker format to avoid conversion at push time
-	budArgs = append(budArgs, "--format", "docker")
-
-	// Use parallel jobs for faster layer processing
-	budArgs = append(budArgs, "--jobs", "8")
+	budArgs = append(budArgs, "--layers")           // Enable layer caching for faster rebuilds
+	budArgs = append(budArgs, "--format", "docker") // Use docker format to avoid conversion at push time
+	budArgs = append(budArgs, "--jobs", "8")        // Use parallel jobs for faster layer processing
 
 	// Add credentials for multi-stage builds and private base images
 	if authArgs := c.getBuildahAuthArgs(ctx, sourceImage, request.BuildOptions.SourceImageCreds); len(authArgs) > 0 {
@@ -915,7 +910,7 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if buildRegistry == "localhost" || strings.HasPrefix(buildRegistry, "127.0.0.1") {
 			imageTag = fmt.Sprintf("%s/%s:%s", buildRegistry, c.config.ImageService.BuildRepositoryName, request.ImageId)
 		} else {
-			imageTag = fmt.Sprintf("%s/%s:%s-%s", buildRegistry, c.config.ImageService.BuildRepositoryName, request.WorkspaceId, request.ImageId)
+			imageTag = fmt.Sprintf("%s/%s:%s", buildRegistry, c.config.ImageService.BuildRepositoryName, request.ImageId)
 		}
 
 		// Build with final tag directly
@@ -933,18 +928,15 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		// Use skopeo copy instead of buildah push for better internal blob upload performance
 		// Skopeo has superior parallelism and chunking for registry operations
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
-		
+
 		skopeoArgs := []string{"copy"}
-		
-		// Optimize for fast networks: disable compression to eliminate CPU overhead
-		// With high bandwidth, raw upload is faster than compress->upload->decompress
 		skopeoArgs = append(skopeoArgs, "--dest-compress=false")
-		
+
 		// Disable TLS verification if needed
 		if c.config.ImageService.BuildRegistryInsecure {
 			skopeoArgs = append(skopeoArgs, "--src-tls-verify=false", "--dest-tls-verify=false")
 		}
-		
+
 		// Add destination credentials
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
 			// Convert --creds to --dest-creds for skopeo
@@ -955,13 +947,13 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 				}
 			}
 		}
-		
+
 		// Source: containers-storage (buildah's storage)
 		// Use default store - storage driver is configured via CONTAINERS_STORAGE_CONF env var
 		srcRef := fmt.Sprintf("containers-storage:%s", imageTag)
 		destRef := fmt.Sprintf("docker://%s", imageTag)
 		skopeoArgs = append(skopeoArgs, srcRef, destRef)
-		
+
 		cmd = exec.CommandContext(ctx, "skopeo", skopeoArgs...)
 		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
@@ -970,17 +962,15 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		log.Warn().Str("image_id", request.ImageId).Msg("image push complete")
-
 		c.v2ImageRefs.Set(request.ImageId, imageTag)
 		log.Info().Str("image_id", request.ImageId).Str("image_tag", imageTag).Msg("cached image reference")
 
-		// Create index-only clip archive with progress reporting
+		// Create the image index (CLIP archive)
 		if err = c.createOCIImageWithProgress(ctx, outputLogger, request, imageTag, archivePath, 2); err != nil {
 			return err
 		}
 
-		// Upload the clip archive to the image registry
+		// Upload the clip archive to object storage
 		if err = c.registry.Push(ctx, archivePath, request.ImageId); err != nil {
 			return err
 		}
