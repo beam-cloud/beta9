@@ -194,6 +194,11 @@ func (p *skopeoClient) copyArgs(creds string) (out []string) {
 		out = append(out, "--debug")
 	}
 
+	// Note: We intentionally do NOT add these flags here:
+	// - --preserve-digests: Would prevent layer compression (breaks CLIP indexer)
+	// - --dest-compress=false: Would disable compression (breaks CLIP indexer)
+	// CLIP indexer requires gzip-compressed layers, which is skopeo's default
+
 	return out
 }
 

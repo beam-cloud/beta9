@@ -909,29 +909,49 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		// Build push arguments with authentication and optimization flags
-		pushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push"}
-		if c.config.ImageService.BuildRegistryInsecure {
-			pushArgs = append(pushArgs, "--tls-verify=false")
-		}
-
-		// Use gzip with fast compression level
-		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
-
-		// Add retry logic for network resilience
-		pushArgs = append(pushArgs, "--retry", "3")
-		pushArgs = append(pushArgs, "--retry-delay", "2s")
-
-		// Add authentication for build registry (uses credentials from request)
-		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
-			pushArgs = append(pushArgs, authArgs...)
-		}
-		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
-
-		// Push to registry (required for clip indexer to access the image)
+		// Use skopeo copy for better parallel upload performance
+		// Skopeo has superior parallelism for registry operations via SKOPEO_MAX_PARALLEL_UPLOADS
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
-		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
-		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
+
+		skopeoArgs := []string{"copy"}
+
+		// Use Docker registry v2 schema 2 format (standard)
+		skopeoArgs = append(skopeoArgs, "--format=v2s2")
+		// Only copy the current system architecture
+		skopeoArgs = append(skopeoArgs, "--multi-arch=system")
+		// Enable compression with gzip (default, but explicit for clarity)
+		// Note: We do NOT use --preserve-digests because that prevents compression
+		// Note: We do NOT use --dest-compress=false because CLIP indexer needs gzip
+
+		// Disable TLS verification if needed
+		if c.config.ImageService.BuildRegistryInsecure {
+			skopeoArgs = append(skopeoArgs, "--src-tls-verify=false", "--dest-tls-verify=false")
+		}
+
+		// Add destination credentials
+		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
+			// Convert --creds to --dest-creds for skopeo
+			for i, arg := range authArgs {
+				if arg == "--creds" && i+1 < len(authArgs) {
+					skopeoArgs = append(skopeoArgs, "--dest-creds", authArgs[i+1])
+					break
+				}
+			}
+		}
+
+		// Source: containers-storage (buildah's storage)
+		// Destination: docker registry
+		srcRef := fmt.Sprintf("containers-storage:%s", imageTag)
+		destRef := fmt.Sprintf("docker://%s", imageTag)
+		skopeoArgs = append(skopeoArgs, srcRef, destRef)
+
+		cmd = exec.CommandContext(ctx, "skopeo", skopeoArgs...)
+
+		// Add skopeo performance env vars (SKOPEO_MAX_PARALLEL_UPLOADS=16)
+		env := c.buildahEnv(runroot, tmpdir, storageConf)
+		env = common.AddSkopeoEnvVars(env)
+		cmd.Env = env
+
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err = cmd.Run(); err != nil {
