@@ -81,6 +81,266 @@ func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
 	assert.Contains(t, df, "RUN echo step\n")
 }
 
+// Test that RenderV2Dockerfile correctly renders chained commands when using from_registry
+// This simulates: Image.from_registry("ubuntu:22.04").add_commands(["apt update && apt install -y netcat"])
+func TestRenderV2Dockerfile_FromRegistryWithChainedCommands(t *testing.T) {
+	cfg := types.AppConfig{
+		ImageService: types.ImageServiceConfig{
+			PythonVersion: "python3.10",
+			Runner: types.RunnerConfig{
+				BaseImageName:     "beta9-runner",
+				BaseImageRegistry: "registry.localhost:5000",
+				PythonStandalone: types.PythonStandaloneConfig{
+					InstallScriptTemplate: "install python standalone",
+				},
+			},
+		},
+	}
+	b := &Builder{config: cfg}
+
+	tests := []struct {
+		name     string
+		opts     *BuildOpts
+		expected []string
+	}{
+		{
+			name: "from_registry with shell commands (ignore_python=true)",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/ubuntu",
+				BaseImageTag:      "22.04",
+				ExistingImageUri:  "ubuntu:22.04",
+				BuildSteps:        []BuildStep{{Type: shellCommandType, Command: "apt update && apt install -y netcat"}},
+				IgnorePython:      true,
+			},
+			expected: []string{
+				"FROM docker.io/library/ubuntu:22.04\n",
+				"RUN apt update && apt install -y netcat\n",
+			},
+		},
+		{
+			name: "from_registry with shell commands (ignore_python=false, default behavior)",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/ubuntu",
+				BaseImageTag:      "22.04",
+				ExistingImageUri:  "ubuntu:22.04",
+				BuildSteps:        []BuildStep{{Type: shellCommandType, Command: "apt update && apt install -y netcat"}},
+				PythonVersion:     "python3",
+				IgnorePython:      false,
+			},
+			expected: []string{
+				"FROM docker.io/library/ubuntu:22.04\n",
+				"RUN apt update && apt install -y netcat\n",
+			},
+		},
+		{
+			name: "from_registry with multiple chained commands",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/python",
+				BaseImageTag:      "3.11-slim",
+				ExistingImageUri:  "python:3.11-slim",
+				BuildSteps: []BuildStep{
+					{Type: shellCommandType, Command: "apt update"},
+					{Type: shellCommandType, Command: "apt install -y curl"},
+				},
+				PythonVersion: "python3",
+				IgnorePython:  false,
+			},
+			expected: []string{
+				"FROM docker.io/library/python:3.11-slim\n",
+				"RUN apt update\n",
+				"RUN apt install -y curl\n",
+			},
+		},
+		{
+			name: "from_registry with mixed build steps (shell and pip)",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/python",
+				BaseImageTag:      "3.11-slim",
+				ExistingImageUri:  "python:3.11-slim",
+				BuildSteps: []BuildStep{
+					{Type: shellCommandType, Command: "apt update"},
+					{Type: pipCommandType, Command: "numpy"},
+					{Type: shellCommandType, Command: "apt clean"},
+				},
+				PythonVersion: "python3",
+				IgnorePython:  true,
+			},
+			expected: []string{
+				"FROM docker.io/library/python:3.11-slim\n",
+				"RUN apt update\n",
+				"RUN python3.10 -m pip install",
+				"numpy",
+				"RUN apt clean\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			df, err := b.RenderV2Dockerfile(tt.opts)
+			assert.NoError(t, err)
+
+			for _, exp := range tt.expected {
+				assert.Contains(t, df, exp, "Dockerfile should contain: %s", exp)
+			}
+		})
+	}
+}
+
+// Test comprehensive chaining scenarios with all Image methods
+func TestRenderV2Dockerfile_ComprehensiveChaining(t *testing.T) {
+	cfg := types.AppConfig{
+		ImageService: types.ImageServiceConfig{
+			PythonVersion: "python3.10",
+			Runner: types.RunnerConfig{
+				BaseImageName:     "beta9-runner",
+				BaseImageRegistry: "registry.localhost:5000",
+				PythonStandalone: types.PythonStandaloneConfig{
+					InstallScriptTemplate: "install python standalone",
+				},
+			},
+		},
+	}
+	b := &Builder{config: cfg}
+
+	tests := []struct {
+		name     string
+		opts     *BuildOpts
+		expected []string
+	}{
+		{
+			name: "from_registry().add_commands().with_envs()",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/ubuntu",
+				BaseImageTag:      "22.04",
+				ExistingImageUri:  "ubuntu:22.04",
+				BuildSteps:        []BuildStep{{Type: shellCommandType, Command: "echo 'test'"}},
+				EnvVars:           []string{"MY_VAR=value", "ANOTHER_VAR=test"},
+				PythonVersion:     "python3",
+				IgnorePython:      false,
+			},
+			expected: []string{
+				"FROM docker.io/library/ubuntu:22.04\n",
+				"ENV MY_VAR=value\n",
+				"ENV ANOTHER_VAR=test\n",
+				"RUN echo 'test'\n",
+			},
+		},
+		{
+			name: "from_registry().add_python_packages().add_commands()",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/python",
+				BaseImageTag:      "3.11-slim",
+				ExistingImageUri:  "python:3.11-slim",
+				PythonPackages:    []string{"numpy", "pandas"},
+				BuildSteps:        []BuildStep{{Type: shellCommandType, Command: "echo 'installed packages'"}},
+				PythonVersion:     "python3",
+				IgnorePython:      false,
+			},
+			expected: []string{
+				"FROM docker.io/library/python:3.11-slim\n",
+				"RUN python3.10 -m pip install",
+				"numpy",
+				"pandas",
+				"RUN echo 'installed packages'\n",
+			},
+		},
+		{
+			name: "from_registry().add_commands().add_python_packages().with_envs()",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/python",
+				BaseImageTag:      "3.11-slim",
+				ExistingImageUri:  "python:3.11-slim",
+				BuildSteps: []BuildStep{
+					{Type: shellCommandType, Command: "apt update"},
+					{Type: pipCommandType, Command: "requests"},
+					{Type: shellCommandType, Command: "apt clean"},
+				},
+				EnvVars:       []string{"API_KEY=secret"},
+				PythonVersion: "python3",
+				IgnorePython:  false,
+			},
+			expected: []string{
+				"FROM docker.io/library/python:3.11-slim\n",
+				"ENV API_KEY=secret\n",
+				"RUN apt update\n",
+				"RUN python3.10 -m pip install",
+				"requests",
+				"RUN apt clean\n",
+			},
+		},
+		{
+			name: "from_registry() with Commands field (not BuildSteps)",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/ubuntu",
+				BaseImageTag:      "22.04",
+				ExistingImageUri:  "ubuntu:22.04",
+				Commands:          []string{"echo one", "echo two"},
+				PythonVersion:     "python3",
+				IgnorePython:      false,
+			},
+			expected: []string{
+				"FROM docker.io/library/ubuntu:22.04\n",
+				"RUN echo one\n",
+				"RUN echo two\n",
+			},
+		},
+		{
+			name: "from_registry() with both Commands and BuildSteps",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/ubuntu",
+				BaseImageTag:      "22.04",
+				ExistingImageUri:  "ubuntu:22.04",
+				Commands:          []string{"echo from commands"},
+				BuildSteps:        []BuildStep{{Type: shellCommandType, Command: "echo from build_steps"}},
+				PythonVersion:     "python3",
+				IgnorePython:      false,
+			},
+			expected: []string{
+				"FROM docker.io/library/ubuntu:22.04\n",
+				"RUN echo from build_steps\n",
+				"RUN echo from commands\n",
+			},
+		},
+		{
+			name: "Base Image() constructor with base_image parameter + add_commands()",
+			opts: &BuildOpts{
+				BaseImageRegistry: "docker.io",
+				BaseImageName:     "library/ubuntu",
+				BaseImageTag:      "22.04",
+				ExistingImageUri:  "ubuntu:22.04",
+				BuildSteps:        []BuildStep{{Type: shellCommandType, Command: "apt update"}},
+				PythonVersion:     "python3",
+				IgnorePython:      false,
+			},
+			expected: []string{
+				"FROM docker.io/library/ubuntu:22.04\n",
+				"RUN apt update\n",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			df, err := b.RenderV2Dockerfile(tt.opts)
+			assert.NoError(t, err)
+
+			for _, exp := range tt.expected {
+				assert.Contains(t, df, exp, "Dockerfile should contain: %s", exp)
+			}
+		})
+	}
+}
+
 // Test that RenderV2Dockerfile correctly renders environment variables and secrets
 func TestRenderV2Dockerfile_WithEnvVarsAndSecrets(t *testing.T) {
 	cfg := types.AppConfig{}
@@ -1246,7 +1506,7 @@ func Test_parseBuildStepsForDockerfile(t *testing.T) {
 
 	expected := []string{
 		"apt update",
-		"uv pip install --system --python python3.9 \"requests\" \"numpy\"", // uv with --system flag
+		"python3.9 -m pip install \"requests\" \"numpy\"",
 		"echo done",
 	}
 
