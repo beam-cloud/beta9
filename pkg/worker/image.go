@@ -909,40 +909,29 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 			return err
 		}
 
-		// Use skopeo copy instead of buildah push for better internal blob upload performance
-		// Skopeo has superior parallelism and chunking for registry operations
-		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
-
-		skopeoArgs := []string{"copy"}
-
-		// Disable TLS verification if needed
+		// Build push arguments with authentication and optimization flags
+		pushArgs := []string{"--root", graphroot, "--runroot", runroot, "--storage-driver=" + storageDriver, "push"}
 		if c.config.ImageService.BuildRegistryInsecure {
-			skopeoArgs = append(skopeoArgs, "--src-tls-verify=false", "--dest-tls-verify=false")
+			pushArgs = append(pushArgs, "--tls-verify=false")
 		}
 
-		// Add destination credentials
+		// Use gzip with fast compression level
+		pushArgs = append(pushArgs, "--compression-format", "gzip", "--compression-level", "1")
+
+		// Add retry logic for network resilience
+		pushArgs = append(pushArgs, "--retry", "3")
+		pushArgs = append(pushArgs, "--retry-delay", "2s")
+
+		// Add authentication for build registry (uses credentials from request)
 		if authArgs := c.getBuildRegistryAuthArgs(buildRegistry, request.BuildRegistryCredentials); len(authArgs) > 0 {
-			// Convert --creds to --dest-creds for skopeo
-			for i, arg := range authArgs {
-				if arg == "--creds" && i+1 < len(authArgs) {
-					skopeoArgs = append(skopeoArgs, "--dest-creds", authArgs[i+1])
-					break
-				}
-			}
+			pushArgs = append(pushArgs, authArgs...)
 		}
+		pushArgs = append(pushArgs, imageTag, "docker://"+imageTag)
 
-		// Source: containers-storage (buildah's storage)
-		// Use default store - storage driver is configured via CONTAINERS_STORAGE_CONF env var
-		srcRef := fmt.Sprintf("containers-storage:%s", imageTag)
-		destRef := fmt.Sprintf("docker://%s", imageTag)
-		skopeoArgs = append(skopeoArgs, srcRef, destRef)
-
-		cmd = exec.CommandContext(ctx, "skopeo", skopeoArgs...)
-
-		env := c.buildahEnv(runroot, tmpdir, storageConf)
-		env = common.AddSkopeoEnvVars(env)
-		cmd.Env = env
-
+		// Push to registry (required for clip indexer to access the image)
+		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
+		cmd = exec.CommandContext(ctx, "buildah", pushArgs...)
+		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err = cmd.Run(); err != nil {
