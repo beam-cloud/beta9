@@ -896,11 +896,10 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		archiveName := fmt.Sprintf("%s.%s.tmp", request.ImageId, c.registry.ImageFileExtension)
 		archivePath := filepath.Join(tmpdir, archiveName)
 
-		// Get build registry and construct tag
 		buildRegistry := c.getBuildRegistry()
 		imageTag := fmt.Sprintf("%s/%s:%s", buildRegistry, c.config.ImageService.BuildRepositoryName, request.ImageId)
 
-		// Build with final tag directly
+		// Build w/ buildah
 		budArgs = append(budArgs, "-f", tempDockerFile, "-t", imageTag, buildCtxPath)
 		cmd := exec.CommandContext(ctx, "buildah", budArgs...)
 		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
@@ -909,8 +908,6 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		if err = cmd.Run(); err != nil {
 			return err
 		}
-
-		log.Warn().Str("image_id", request.ImageId).Msg("image build complete, pushing to registry")
 
 		// Use skopeo copy instead of buildah push for better internal blob upload performance
 		// Skopeo has superior parallelism and chunking for registry operations
