@@ -190,6 +190,16 @@ func (p *skopeoClient) copyArgs(creds string) (out []string) {
 		out = append(out, "--debug")
 	}
 
+	// Performance optimizations for large images
+	// Use Docker registry v2 schema 2 format for better performance
+	out = append(out, "--format=v2s2")
+	// Only copy the current system architecture (skip multi-arch manifests)
+	out = append(out, "--multi-arch=system")
+	// Preserve digests to avoid recomputation
+	out = append(out, "--preserve-digests")
+	// Disable destination compression - faster on fast networks
+	out = append(out, "--dest-compress=false")
+
 	return out
 }
 

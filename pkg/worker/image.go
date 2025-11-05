@@ -914,6 +914,15 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
 
 		skopeoArgs := []string{"copy"}
+		
+		// Performance optimizations for large images
+		// Use Docker registry v2 schema 2 format for better performance
+		skopeoArgs = append(skopeoArgs, "--format=v2s2")
+		// Only copy the current system architecture (skip multi-arch manifests)
+		skopeoArgs = append(skopeoArgs, "--multi-arch=system")
+		// Preserve digests to avoid recomputation
+		skopeoArgs = append(skopeoArgs, "--preserve-digests")
+		// Disable destination compression - faster on fast networks
 		skopeoArgs = append(skopeoArgs, "--dest-compress=false")
 
 		// Disable TLS verification if needed
