@@ -685,7 +685,7 @@ func (s *RunCServer) RunCSandboxUploadFile(ctx context.Context, in *pb.RunCSandb
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	err = os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode))
 	if err != nil {
-		return &pb.RunCSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to write file to %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.RunCSandboxUploadFileResponse{Ok: true}, nil
@@ -708,7 +708,7 @@ func (s *RunCServer) RunCSandboxCreateDirectory(ctx context.Context, in *pb.RunC
 
 	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
 	if err := os.MkdirAll(hostPath, os.FileMode(in.Mode)); err != nil {
-		return &pb.RunCSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to create directory %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.RunCSandboxCreateDirectoryResponse{Ok: true}, nil
@@ -731,7 +731,7 @@ func (s *RunCServer) RunCSandboxDeleteDirectory(ctx context.Context, in *pb.RunC
 
 	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
 	if err := os.RemoveAll(hostPath); err != nil {
-		return &pb.RunCSandboxDeleteDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxDeleteDirectoryResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to delete directory %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.RunCSandboxDeleteDirectoryResponse{Ok: true}, nil
@@ -756,7 +756,7 @@ func (s *RunCServer) RunCSandboxDownloadFile(ctx context.Context, in *pb.RunCSan
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	data, err := os.ReadFile(hostPath)
 	if err != nil {
-		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxDownloadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to read file %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.RunCSandboxDownloadFileResponse{Ok: true, Data: data}, nil
@@ -781,7 +781,7 @@ func (s *RunCServer) RunCSandboxDeleteFile(ctx context.Context, in *pb.RunCSandb
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	err = os.RemoveAll(hostPath)
 	if err != nil {
-		return &pb.RunCSandboxDeleteFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxDeleteFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to delete file %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.RunCSandboxDeleteFileResponse{Ok: true}, nil
@@ -806,7 +806,7 @@ func (s *RunCServer) RunCSandboxStatFile(ctx context.Context, in *pb.RunCSandbox
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	stat, err := os.Stat(hostPath)
 	if err != nil {
-		return &pb.RunCSandboxStatFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxStatFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to stat file %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.RunCSandboxStatFileResponse{Ok: true, FileInfo: &pb.FileInfo{
@@ -840,14 +840,14 @@ func (s *RunCServer) RunCSandboxListFiles(ctx context.Context, in *pb.RunCSandbo
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	files, err := os.ReadDir(hostPath)
 	if err != nil {
-		return &pb.RunCSandboxListFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxListFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to list directory %s: %s", containerPath, err.Error())}, nil
 	}
 
 	responseFiles := make([]*pb.FileInfo, 0)
 	for _, file := range files {
 		stat, err := file.Info()
 		if err != nil {
-			return &pb.RunCSandboxListFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			return &pb.RunCSandboxListFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to get file info for %s in %s: %s", file.Name(), containerPath, err.Error())}, nil
 		}
 
 		responseFiles = append(responseFiles, &pb.FileInfo{
@@ -997,13 +997,13 @@ func (s *RunCServer) RunCSandboxReplaceInFiles(ctx context.Context, in *pb.RunCS
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	stagedFiles, err := stageFilesForReplacement(hostPath, in.Pattern, in.NewString)
 	if err != nil {
-		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to replace in files at %s: %s", containerPath, err.Error())}, nil
 	}
 
 	for _, stagedFile := range stagedFiles {
 		err = os.WriteFile(stagedFile.Path, []byte(stagedFile.Content), 0644)
 		if err != nil {
-			return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			return &pb.RunCSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to write replaced file %s: %s", stagedFile.Path, err.Error())}, nil
 		}
 	}
 
