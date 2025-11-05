@@ -201,7 +201,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Set worker hostname
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.containerServer.port)
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
 		ContainerId: containerId,
 		Address:     hostname,

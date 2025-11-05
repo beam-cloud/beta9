@@ -50,7 +50,7 @@ type Worker struct {
 	runtime                 runtime.Runtime // Primary runtime (default from config)
 	runcRuntime             runtime.Runtime // Always runc for fallback
 	gvisorRuntime           runtime.Runtime // Optional gVisor runtime
-	runcServer              *RunCServer
+	containerServer         *ContainerRuntimeServer
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
 	containerNetworkManager *ContainerNetworkManager
@@ -321,7 +321,7 @@ func NewWorker() (*Worker, error) {
 		checkpointStorage:   checkpointStorage,
 	}
 
-	runcServer, err := NewRunCServer(&RunCServerOpts{
+	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
 		PodAddr:                 podAddr,
 		ContainerInstances:      containerInstances,
 		ImageClient:             imageClient,
@@ -334,7 +334,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	err = runcServer.Start()
+	err = containerServer.Start()
 	if err != nil {
 		cancel()
 		return nil, err
@@ -347,7 +347,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	worker.workerUsageMetrics = workerMetrics
-	worker.runcServer = runcServer
+	worker.containerServer = containerServer
 
 	return worker, nil
 }
