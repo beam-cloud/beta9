@@ -146,47 +146,6 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	// Create container runtimes
-	// Always create runc as fallback
-	runcRuntime, err := runtime.New(runtime.Config{
-		Type:  "runc",
-		Debug: config.DebugMode,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create runc runtime: %v", err)
-	}
-
-	// Create default runtime based on config
-	var defaultRuntime runtime.Runtime
-	var gvisorRuntime runtime.Runtime
-
-	runtimeType := config.Worker.ContainerRuntime
-	if runtimeType == "" {
-		runtimeType = "runc"
-	}
-
-	switch runtimeType {
-	case "runc":
-		defaultRuntime = runcRuntime
-	case "gvisor":
-		gvisorRuntime, err = runtime.New(runtime.Config{
-			Type:          "gvisor",
-			RunscPath:     "runsc",
-			RunscRoot:     "/run/gvisor",
-			RunscPlatform: "", // Use default platform
-			Debug:         config.DebugMode,
-		})
-		if err != nil {
-			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
-			defaultRuntime = runcRuntime
-		} else {
-			defaultRuntime = gvisorRuntime
-		}
-	default:
-		log.Warn().Str("runtime", runtimeType).Msg("unknown runtime type, using runc")
-		defaultRuntime = runcRuntime
-	}
-
 	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
 	if err != nil {
 		return nil, err
@@ -225,6 +184,66 @@ func NewWorker() (*Worker, error) {
 	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
 	if !poolFound {
 		return nil, errors.New("invalid worker pool name")
+	}
+
+	// Create container runtimes based on pool configuration
+	// Always create runc as fallback
+	runcRuntime, err := runtime.New(runtime.Config{
+		Type:  "runc",
+		Debug: config.DebugMode,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create runc runtime: %v", err)
+	}
+
+	// Create default runtime based on pool configuration
+	var defaultRuntime runtime.Runtime
+	var gvisorRuntime runtime.Runtime
+
+	// Get runtime type from pool config, fall back to global config
+	runtimeType := poolConfig.Runtime
+	if runtimeType == "" {
+		runtimeType = config.Worker.ContainerRuntime
+	}
+	if runtimeType == "" {
+		runtimeType = "runc"
+	}
+
+	log.Info().
+		Str("pool", workerPoolName).
+		Str("runtime", runtimeType).
+		Msg("initializing container runtime for worker pool")
+
+	switch runtimeType {
+	case "runc":
+		defaultRuntime = runcRuntime
+	case "gvisor":
+		// Get gVisor configuration from pool config
+		gvisorRoot := poolConfig.RuntimeConfig.GVisorRoot
+		if gvisorRoot == "" {
+			gvisorRoot = "/run/gvisor"
+		}
+
+		gvisorRuntime, err = runtime.New(runtime.Config{
+			Type:          "gvisor",
+			RunscPath:     "runsc",
+			RunscRoot:     gvisorRoot,
+			RunscPlatform: poolConfig.RuntimeConfig.GVisorPlatform,
+			Debug:         config.DebugMode,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
+			defaultRuntime = runcRuntime
+		} else {
+			defaultRuntime = gvisorRuntime
+			log.Info().
+				Str("platform", poolConfig.RuntimeConfig.GVisorPlatform).
+				Str("root", gvisorRoot).
+				Msg("gVisor runtime initialized successfully")
+		}
+	default:
+		log.Warn().Str("runtime", runtimeType).Msg("unknown runtime type, using runc")
+		defaultRuntime = runcRuntime
 	}
 
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)

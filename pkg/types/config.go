@@ -381,7 +381,8 @@ var (
 
 type WorkerPoolConfig struct {
 	GPUType              string                            `key:"gpuType" json:"gpu_type"`
-	Runtime              string                            `key:"runtime" json:"runtime"`
+	Runtime              string                            `key:"runtime" json:"runtime"`                           // Container runtime: "runc" or "gvisor"
+	RuntimeConfig        RuntimeConfig                     `key:"runtimeConfig" json:"runtime_config"`             // Runtime-specific configuration
 	Mode                 PoolMode                          `key:"mode" json:"mode"`
 	Provider             *MachineProvider                  `key:"provider" json:"provider"`
 	JobSpec              WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
@@ -398,6 +399,12 @@ type WorkerPoolConfig struct {
 	StoragePath          string                            `key:"storagePath" json:"storage_path"`
 	StorageMode          string                            `key:"storageMode" json:"storage_mode"`
 	CheckpointPath       string                            `key:"checkpointPath" json:"checkpoint_path"`
+}
+
+type RuntimeConfig struct {
+	// gVisor-specific configuration
+	GVisorPlatform string `key:"gvisorPlatform" json:"gvisor_platform"` // "kvm" or "ptrace"
+	GVisorRoot     string `key:"gvisorRoot" json:"gvisor_root"`         // Root directory for gVisor state (default: "/run/gvisor")
 }
 
 type WorkerPoolJobSpecConfig struct {
