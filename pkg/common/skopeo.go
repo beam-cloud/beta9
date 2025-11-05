@@ -123,13 +123,11 @@ func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string
 
 	args = append(args, p.copyArgs(creds)...)
 	cmd := exec.CommandContext(ctx, p.pullCommand, args...)
-	
-	// Set environment with aggressive parallelism for maximum throughput
-	// These values can be overridden by setting the env vars before starting the service
+
 	env := os.Environ()
-	env = p.addSkopeoPerformanceEnv(env)
+	env = p.addSkopeoEnvVars(env)
 	cmd.Env = env
-	
+
 	cmd.Dir = imageTmpDir
 	cmd.Stdout = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", p.pullCommand)) }}
 	cmd.Stderr = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", p.pullCommand)) }}
@@ -204,14 +202,14 @@ func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	return out
 }
 
-// AddSkopeoPerformanceEnv adds performance-tuning environment variables for skopeo
+// AddSkopeoEnvVars adds performance-tuning environment variables for skopeo
 // These control parallel blob transfers and other performance characteristics
 // Exported so it can be used by other packages (e.g., image.go)
-func AddSkopeoPerformanceEnv(env []string) []string {
+func AddSkopeoEnvVars(env []string) []string {
 	// Check if already set in environment to allow override
 	hasMaxParallelDownloads := false
 	hasMaxParallelUploads := false
-	
+
 	for _, e := range env {
 		if strings.HasPrefix(e, "SKOPEO_MAX_PARALLEL_DOWNLOADS=") {
 			hasMaxParallelDownloads = true
@@ -220,7 +218,7 @@ func AddSkopeoPerformanceEnv(env []string) []string {
 			hasMaxParallelUploads = true
 		}
 	}
-	
+
 	// Set aggressive defaults if not already configured
 	// These values work well for fast networks and multi-core systems
 	if !hasMaxParallelDownloads {
@@ -229,13 +227,12 @@ func AddSkopeoPerformanceEnv(env []string) []string {
 	if !hasMaxParallelUploads {
 		env = append(env, "SKOPEO_MAX_PARALLEL_UPLOADS=16")
 	}
-	
+
 	return env
 }
 
-// addSkopeoPerformanceEnv is a convenience wrapper for the receiver
-func (p *skopeoClient) addSkopeoPerformanceEnv(env []string) []string {
-	return AddSkopeoPerformanceEnv(env)
+func (p *skopeoClient) addSkopeoEnvVars(env []string) []string {
+	return AddSkopeoEnvVars(env)
 }
 
 func (p *skopeoClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {

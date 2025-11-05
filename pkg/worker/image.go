@@ -942,12 +942,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		skopeoArgs = append(skopeoArgs, srcRef, destRef)
 
 		cmd = exec.CommandContext(ctx, "skopeo", skopeoArgs...)
-		
-		// Add aggressive parallelism settings for maximum upload throughput
+
 		env := c.buildahEnv(runroot, tmpdir, storageConf)
-		env = common.AddSkopeoPerformanceEnv(env)
+		env = common.AddSkopeoEnvVars(env)
 		cmd.Env = env
-		
+
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err = cmd.Run(); err != nil {
