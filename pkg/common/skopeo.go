@@ -209,9 +209,10 @@ func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	return out
 }
 
-// addSkopeoPerformanceEnv adds performance-tuning environment variables for skopeo
+// AddSkopeoPerformanceEnv adds performance-tuning environment variables for skopeo
 // These control parallel blob transfers and other performance characteristics
-func (p *skopeoClient) addSkopeoPerformanceEnv(env []string) []string {
+// Exported so it can be used by other packages (e.g., image.go)
+func AddSkopeoPerformanceEnv(env []string) []string {
 	// Check if already set in environment to allow override
 	hasMaxParallelDownloads := false
 	hasMaxParallelUploads := false
@@ -235,6 +236,11 @@ func (p *skopeoClient) addSkopeoPerformanceEnv(env []string) []string {
 	}
 	
 	return env
+}
+
+// addSkopeoPerformanceEnv is a convenience wrapper for the receiver
+func (p *skopeoClient) addSkopeoPerformanceEnv(env []string) []string {
+	return AddSkopeoPerformanceEnv(env)
 }
 
 func (p *skopeoClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {
