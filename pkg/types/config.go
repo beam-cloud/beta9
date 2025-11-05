@@ -172,19 +172,44 @@ type FileServiceConfig struct {
 	Enabled bool `key:"enabled" json:"enabled"`
 }
 
+type ClipVersion uint32
+
+const (
+	ClipVersion1 ClipVersion = 1
+	ClipVersion2 ClipVersion = 2
+)
+
 type ImageServiceConfig struct {
-	LocalCacheEnabled              bool                  `key:"localCacheEnabled" json:"local_cache_enabled"`
-	RegistryStore                  string                `key:"registryStore" json:"registry_store"`
-	RegistryCredentialProviderName string                `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
-	Registries                     ImageRegistriesConfig `key:"registries" json:"registries"`
-	PythonVersion                  string                `key:"pythonVersion" json:"python_version"`
-	EnableTLS                      bool                  `key:"enableTLS" json:"enable_tls"`
-	BuildContainerCpu              int64                 `key:"buildContainerCpu" json:"build_container_cpu"`
-	BuildContainerMemory           int64                 `key:"buildContainerMemory" json:"build_container_memory"`
-	BuildContainerPoolSelector     string                `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
-	Runner                         RunnerConfig          `key:"runner" json:"runner"`
-	ArchiveNanosecondsPerByte      int64                 `key:"archiveNanosecondsPerByte" json:"archive_nanoseconds_per_byte"`
-	ClipVersion                    uint32                `key:"clipVersion" json:"clip_version"`
+	LocalCacheEnabled              bool                           `key:"localCacheEnabled" json:"local_cache_enabled"`
+	RegistryStore                  string                         `key:"registryStore" json:"registry_store"`
+	RegistryCredentialProviderName string                         `key:"registryCredentialProvider" json:"registry_credential_provider_name"`
+	Registries                     ImageRegistriesConfig          `key:"registries" json:"registries"`
+	PythonVersion                  string                         `key:"pythonVersion" json:"python_version"`
+	EnableTLS                      bool                           `key:"enableTLS" json:"enable_tls"`
+	BuildContainerCpu              int64                          `key:"buildContainerCpu" json:"build_container_cpu"`
+	BuildContainerMemory           int64                          `key:"buildContainerMemory" json:"build_container_memory"`
+	BuildContainerPoolSelector     string                         `key:"buildContainerPoolSelector" json:"build_container_pool_selector"`
+	Runner                         RunnerConfig                   `key:"runner" json:"runner"`
+	ArchiveNanosecondsPerByte      int64                          `key:"archiveNanosecondsPerByte" json:"archive_nanoseconds_per_byte"`
+	ClipVersion                    uint32                         `key:"clipVersion" json:"clip_version"`
+	BuildRegistry                  string                         `key:"buildRegistry" json:"build_registry"`
+	BuildRepositoryName            string                         `key:"buildRepositoryName" json:"build_repository_name"`
+	BuildRegistryCredentials       BuildRegistryCredentialsConfig `key:"buildRegistryCredentials" json:"build_registry_credentials"`
+	BuildRegistryInsecure          bool                           `key:"buildRegistryInsecure" json:"build_registry_insecure"`
+}
+
+// BuildRegistryCredentialsConfig stores credentials for generating tokens for the build registry
+// Supports: aws (ECR), gcp (GCR/GAR), basic (username/password), token (API keys)
+type BuildRegistryCredentialsConfig struct {
+	// Type of credentials: "aws", "gcp", "azure", "basic", "token"
+	Type string `key:"type" json:"type"`
+	// Credentials is a map of credential key-value pairs
+	// For AWS: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_SESSION_TOKEN (optional)
+	// For GCP: GCP_ACCESS_TOKEN or GOOGLE_APPLICATION_CREDENTIALS
+	// For Azure: AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID
+	// For basic auth: USERNAME, PASSWORD
+	// For token auth: NGC_API_KEY, GITHUB_TOKEN, DOCKERHUB_TOKEN
+	Credentials map[string]string `key:"credentials" json:"credentials"`
 }
 
 type ImageRegistriesConfig struct {

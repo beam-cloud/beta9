@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -32,7 +33,9 @@ const (
 	dockerHubRegistry string = "docker.io"
 )
 
-var buildEnv []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_COMPILE_BYTECODE=true"}
+var (
+	buildEnv []string = []string{"DEBIAN_FRONTEND=noninteractive", "PIP_ROOT_USER_ACTION=ignore", "UV_NO_CACHE=true", "UV_COMPILE_BYTECODE=true"}
+)
 
 type Builder struct {
 	config        types.AppConfig
@@ -109,14 +112,22 @@ func (b *Builder) startBuildContainer(ctx context.Context, build *Build) error {
 }
 
 func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error {
-	build.log(false, "Setting up build container...\n")
-	buildContainerRunning := false
+	isV2Build := b.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
+
+	// Set appropriate log message based on build version
+	if isV2Build {
+		build.log(false, "Building image...\n")
+	} else {
+		build.log(false, "Setting up build container...\n")
+	}
 
 	containerSpinupTimeout := b.calculateContainerSpinupTimeout(ctx, build.opts)
 	retryTicker := time.NewTicker(100 * time.Millisecond)
 	defer retryTicker.Stop()
 	timeoutTicker := time.NewTicker(containerSpinupTimeout)
 	defer timeoutTicker.Stop()
+
+	buildContainerRunning := false
 
 	for !buildContainerRunning {
 		select {
@@ -126,44 +137,54 @@ func (b *Builder) waitForBuildContainer(ctx context.Context, build *Build) error
 			return ctx.Err()
 
 		case <-retryTicker.C:
-			r, err := build.getContainerStatus()
-			if err != nil {
-				build.log(true, "Error occurred while checking container status: "+err.Error())
-				return err
-			}
-
-			if r.Running {
-				buildContainerRunning = true
-				continue
-			}
-
+			// Check exit code for both v1 and v2 builds
 			exitCode, err := b.containerRepo.GetContainerExitCode(build.containerID)
-			if err == nil && exitCode != 0 {
-				exitCodeMsg := getExitCodeMsg(exitCode)
-				// Wait for any final logs to get sent before returning
-				time.Sleep(200 * time.Millisecond)
-				build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
-				return errors.New(fmt.Sprintf("container exited with error: %s\n", exitCodeMsg))
+			if err == nil {
+				// For v2 builds, exit indicates completion (success or failure)
+				// For v1 builds, non-zero exit indicates premature failure
+				if isV2Build {
+					if exitCode != 0 {
+						exitCodeMsg := getExitCodeMsg(exitCode)
+						time.Sleep(200 * time.Millisecond)
+						build.log(true, fmt.Sprintf("Build failed: %s\n", exitCodeMsg))
+						return errors.New(fmt.Sprintf("build failed: %s", exitCodeMsg))
+					}
+					// Success: buildah build + index creation completed
+					return nil
+				} else if exitCode != 0 {
+					exitCodeMsg := getExitCodeMsg(exitCode)
+					time.Sleep(200 * time.Millisecond)
+					build.log(true, fmt.Sprintf("Container exited with error: %s\n", exitCodeMsg))
+					return errors.New(fmt.Sprintf("container exited with error: %s", exitCodeMsg))
+				}
 			}
+
+			// For v1 builds, check if container is running
+			if !isV2Build {
+				r, err := build.getContainerStatus()
+				if err != nil {
+					build.log(true, "Error occurred while checking container status: "+err.Error())
+					return err
+				}
+
+				if r.Running {
+					buildContainerRunning = true
+					continue
+				}
+			}
+
 		case <-timeoutTicker.C:
 			if err := b.stopBuild(build.containerID); err != nil {
 				log.Error().Str("container_id", build.containerID).Err(err).Msg("failed to stop build")
 			}
 
-			build.log(true, fmt.Sprintf("Timeout: container not running after %s seconds.\n", containerSpinupTimeout))
-			return errors.New(fmt.Sprintf("timeout: container not running after %s seconds", containerSpinupTimeout))
+			timeoutMsg := "Timeout: container not running after %s.\n"
+			if isV2Build {
+				timeoutMsg = "Timeout: build did not complete after %s.\n"
+			}
+			build.log(true, fmt.Sprintf(timeoutMsg, containerSpinupTimeout))
+			return errors.New(fmt.Sprintf(strings.TrimSuffix(timeoutMsg, ".\n"), containerSpinupTimeout))
 		}
-	}
-
-	if !buildContainerRunning {
-		build.log(true, "Unable to connect to build container.\n")
-		return errors.New("container not running")
-	}
-
-	var err error
-	build.imageID, err = getImageID(build.opts)
-	if err != nil {
-		return err
 	}
 
 	return nil
@@ -176,7 +197,13 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 		return err
 	}
 
-	// FIXME: This flow can be improved now that containers are running in attached mode.
+	// Image ID is already calculated in verifyImage with the final Dockerfile
+	// Just use the imageID from opts (passed from verifyImage via BuildImage)
+	build.imageID, err = getImageID(build.opts)
+	if err != nil {
+		return err
+	}
+
 	// Send a stop-build event to the worker if the user cancels the build
 	go b.handleBuildCancellation(ctx, build)
 	defer build.killContainer() // Kill and remove container after the build completes
@@ -189,26 +216,245 @@ func (b *Builder) Build(ctx context.Context, opts *BuildOpts, outputChan chan co
 
 	go build.streamLogs()
 
+	// Wait for the build container lifecycle to complete
 	err = b.waitForBuildContainer(ctx, build)
 	if err != nil {
 		return err
 	}
 
-	if err := build.prepareCommands(); err != nil {
-		return err
+	// V1: Execute commands in container and archive filesystem
+	// V2: Buildah already built the image
+	isV2 := b.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
+	if !isV2 {
+		if err := build.prepareCommands(); err != nil {
+			return err
+		}
+
+		if err := build.executeCommands(); err != nil {
+			return err
+		}
+
+		if err := build.archive(); err != nil {
+			return err
+		}
 	}
 
-	if err := build.executeCommands(); err != nil {
-		return err
-	}
-
-	if err := build.archive(); err != nil {
-		return err
-	}
-
+	// Send final completion message with image ID
 	build.setSuccess(true)
 	build.logWithImageAndPythonVersion(true, "Build completed successfully")
 	return nil
+}
+
+// hasWorkToDo returns true if there are build steps that need a Dockerfile
+// This is exported so it can be called from verifyImage
+func (b *Builder) hasWorkToDo(opts *BuildOpts) bool {
+	return len(opts.Commands) > 0 ||
+		len(opts.BuildSteps) > 0 ||
+		len(opts.PythonPackages) > 0 ||
+		len(opts.EnvVars) > 0 ||
+		len(opts.BuildSecrets) > 0 ||
+		(opts.PythonVersion != "" && !opts.IgnorePython)
+}
+
+// renderEnvVarsAndSecrets adds ENV directives and ARG directives to a Dockerfile
+func renderEnvVarsAndSecrets(sb *strings.Builder, opts *BuildOpts) {
+	// Add environment variables
+	if len(opts.EnvVars) > 0 {
+		for _, envVar := range opts.EnvVars {
+			if envVar != "" {
+				sb.WriteString("ENV ")
+				sb.WriteString(envVar)
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	// Add build secrets as ARG directives
+	// Secrets are mounted at build time using buildah --build-arg flag
+	if len(opts.BuildSecrets) > 0 {
+		for _, secret := range opts.BuildSecrets {
+			if secret != "" {
+				// Extract the secret name (format: NAME=value)
+				parts := strings.SplitN(secret, "=", 2)
+				if len(parts) > 0 {
+					secretName := parts[0]
+					sb.WriteString(fmt.Sprintf("ARG %s\n", secretName))
+				}
+			}
+		}
+	}
+}
+
+// appendToDockerfile appends additional build steps to a custom Dockerfile
+// This is exported so it can be called from verifyImage
+func (b *Builder) appendToDockerfile(opts *BuildOpts) string {
+	var sb strings.Builder
+	sb.WriteString(opts.Dockerfile)
+
+	// Ensure Dockerfile ends with newline before appending
+	if !strings.HasSuffix(opts.Dockerfile, "\n") {
+		sb.WriteString("\n")
+	}
+
+	// Add environment variables and secrets
+	renderEnvVarsAndSecrets(&sb, opts)
+
+	// Determine Python version and environment type
+	pythonVersion := opts.PythonVersion
+	if pythonVersion == types.Python3.String() {
+		pythonVersion = b.config.ImageService.PythonVersion
+	}
+	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
+
+	// Install Python if needed
+	// Match the behavior from RenderV2Dockerfile and setupPythonEnv:
+	// - If ignore_python=true AND no packages AND no pip/mamba BuildSteps -> skip Python entirely
+	// - If ignore_python=true BUT has packages OR pip/mamba BuildSteps -> install Python (packages need it)
+	// - If ignore_python=false -> install Python when version specified
+	shouldInstallPython := pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0 || hasPipOrMambaSteps(opts.BuildSteps))
+
+	if shouldInstallPython {
+		if isMicromamba {
+			sb.WriteString("RUN micromamba config set use_lockfiles False\n")
+		} else {
+			// Install the requested Python version
+			if installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion); err == nil {
+				sb.WriteString("RUN ")
+				sb.WriteString(installCmd)
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	// Install Python packages if specified
+	// Only install if we have packages and we're not in the "ignore Python with no packages" state
+	if len(opts.PythonPackages) > 0 && pythonVersion != "" && (!opts.IgnorePython || len(opts.PythonPackages) > 0) {
+		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
+			sb.WriteString("RUN ")
+			sb.WriteString(pipCmd)
+			sb.WriteString("\n")
+		}
+	}
+
+	// Add build steps
+	if len(opts.BuildSteps) > 0 {
+		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
+		for _, cmd := range steps {
+			if cmd != "" {
+				sb.WriteString("RUN ")
+				sb.WriteString(cmd)
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	// Add explicit shell commands
+	b.renderCommands(&sb, opts)
+
+	return sb.String()
+}
+
+// hasPipOrMambaSteps checks if there are any pip or micromamba commands in BuildSteps
+func hasPipOrMambaSteps(buildSteps []BuildStep) bool {
+	for _, step := range buildSteps {
+		if step.Type == pipCommandType || step.Type == micromambaCommandType {
+			return true
+		}
+	}
+	return false
+}
+
+// RenderV2Dockerfile converts build options into a Dockerfile that can be built by buildah.
+// The logic mirrors v1's runtime Python detection, but uses static analysis since we can't probe at runtime.
+func (b *Builder) RenderV2Dockerfile(opts *BuildOpts) (string, error) {
+	var sb strings.Builder
+	sb.WriteString("FROM ")
+	sb.WriteString(getSourceImage(opts))
+	sb.WriteString("\n")
+
+	// Add environment variables and secrets
+	renderEnvVarsAndSecrets(&sb, opts)
+
+	// Skip Python setup if explicitly ignored, no packages requested, AND no pip/mamba BuildSteps
+	// This matches v1 behavior in setupPythonEnv()
+	if opts.IgnorePython && len(opts.PythonPackages) == 0 && !hasPipOrMambaSteps(opts.BuildSteps) {
+		// Still need to render shell commands from BuildSteps (from add_commands())
+		if len(opts.BuildSteps) > 0 {
+			steps := parseBuildStepsForDockerfile(opts.BuildSteps, "", false)
+			for _, cmd := range steps {
+				if cmd != "" {
+					sb.WriteString("RUN ")
+					sb.WriteString(cmd)
+					sb.WriteString("\n")
+				}
+			}
+		}
+		b.renderCommands(&sb, opts)
+		return sb.String(), nil
+	}
+
+	// Determine Python version and environment type
+	pythonVersion := opts.PythonVersion
+	if pythonVersion == types.Python3.String() {
+		pythonVersion = b.config.ImageService.PythonVersion
+	}
+	isMicromamba := strings.Contains(opts.PythonVersion, "micromamba")
+
+	// Check if this is a beta9 base image (which already has Python installed)
+	// This mimics v1's runtime check: if python exists in the container, skip installation
+	isBeta9BaseImage := opts.BaseImageName == b.config.ImageService.Runner.BaseImageName &&
+		opts.BaseImageRegistry == b.config.ImageService.Runner.BaseImageRegistry
+
+	// Python environment setup
+	if isMicromamba {
+		sb.WriteString("RUN micromamba config set use_lockfiles False\n")
+	} else if pythonVersion != "" && !isBeta9BaseImage {
+		// Only install Python if NOT a beta9 base image
+		// Beta9 images already have Python, similar to how v1 skips if python probe succeeds
+		if installCmd, err := getPythonInstallCommand(b.config.ImageService.Runner.PythonStandalone, pythonVersion); err != nil {
+			return "", err
+		} else {
+			sb.WriteString("RUN ")
+			sb.WriteString(installCmd)
+			sb.WriteString("\n")
+		}
+	}
+
+	// Install Python packages (works with or without prior Python installation)
+	if len(opts.PythonPackages) > 0 && pythonVersion != "" {
+		if pipCmd := generateStandardPipInstallCommand(opts.PythonPackages, pythonVersion, isMicromamba); pipCmd != "" {
+			sb.WriteString("RUN ")
+			sb.WriteString(pipCmd)
+			sb.WriteString("\n")
+		}
+	}
+
+	// Add build steps (coalesced pip/mamba commands)
+	if len(opts.BuildSteps) > 0 {
+		steps := parseBuildStepsForDockerfile(opts.BuildSteps, pythonVersion, isMicromamba)
+		for _, cmd := range steps {
+			if cmd != "" {
+				sb.WriteString("RUN ")
+				sb.WriteString(cmd)
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	// Add explicit shell commands
+	b.renderCommands(&sb, opts)
+	return sb.String(), nil
+}
+
+// renderCommands adds RUN commands for each non-empty command
+func (b *Builder) renderCommands(sb *strings.Builder, opts *BuildOpts) {
+	for _, cmd := range opts.Commands {
+		if cmd != "" {
+			sb.WriteString("RUN ")
+			sb.WriteString(cmd)
+			sb.WriteString("\n")
+		}
+	}
 }
 
 // Check if an image already exists in the registry

@@ -253,10 +253,17 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 		initialConfigPath = filepath.Join(instance.BundlePath, initialSpecBaseName)
 	}
 
-	// Copy initial config file from the base image bundle
-	err = copyFile(initialConfigPath, filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName))
-	if err != nil {
-		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
+	// Ensure initial config exists; for v2 (no unpack), derive from image if missing
+	destInitial := filepath.Join(instance.Overlay.TopLayerPath(), initialSpecBaseName)
+	if _, statErr := os.Stat(initialConfigPath); statErr == nil {
+		if err = copyFile(initialConfigPath, destInitial); err != nil {
+			return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
+		}
+	} else {
+		// Derive initial spec from source image metadata via skopeo inspect
+		if err = s.writeInitialSpecFromImage(ctx, instance, destInitial); err != nil {
+			return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: err.Error()})
+		}
 	}
 
 	if err := s.addRequestEnvToInitialSpec(instance); err != nil {
@@ -333,6 +340,45 @@ func (s *RunCServer) RunCArchive(req *pb.RunCArchiveRequest, stream pb.RunCServi
 
 	close(doneChan)
 	return err
+}
+
+// writeInitialSpecFromImage builds an initial_config.json using the base runc config
+// plus full configuration (env, workdir, user, cmd, entrypoint) from v2 CLIP metadata if available.
+// V1 images always have a config.json so this is only called for v2 images.
+// The base spec is designed to be the fallback when CLIP metadata is not available.
+func (s *RunCServer) writeInitialSpecFromImage(ctx context.Context, instance *ContainerInstance, destPath string) error {
+	// Start from the base config (this is the designed fallback for v1 images)
+	spec := s.baseConfigSpec
+
+	// Try to get CLIP metadata from archive (v2 images only)
+	clipMeta, ok := s.imageClient.GetCLIPImageMetadata(instance.Request.ImageId)
+	if ok {
+		log.Info().Str("image_id", instance.Request.ImageId).Msg("using v2 image metadata from clip archive for initial spec")
+
+		// CLIP metadata has a flat structure with all fields at the top level
+		if len(clipMeta.Env) > 0 {
+			spec.Process.Env = append(spec.Process.Env, clipMeta.Env...)
+		}
+		if clipMeta.WorkingDir != "" {
+			spec.Process.Cwd = clipMeta.WorkingDir
+		}
+		if clipMeta.User != "" {
+			spec.Process.User.Username = clipMeta.User
+		}
+		// Set default args from Cmd if Entrypoint is not set, or combine them
+		if len(clipMeta.Entrypoint) > 0 {
+			spec.Process.Args = append(clipMeta.Entrypoint, clipMeta.Cmd...)
+		} else if len(clipMeta.Cmd) > 0 {
+			spec.Process.Args = clipMeta.Cmd
+		}
+	}
+	// If no CLIP metadata, use base spec as-is (designed for v1 images)
+
+	b, err := json.MarshalIndent(spec, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(destPath, b, 0644)
 }
 
 func (s *RunCServer) addRequestEnvToInitialSpec(instance *ContainerInstance) error {

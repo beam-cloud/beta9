@@ -200,32 +200,34 @@ type BuildOptions struct {
 
 // @go2proto
 type ContainerRequest struct {
-	ContainerId       string          `json:"container_id"`
-	EntryPoint        []string        `json:"entry_point"`
-	Env               []string        `json:"env"`
-	Cpu               int64           `json:"cpu"`
-	Memory            int64           `json:"memory"`
-	Gpu               string          `json:"gpu"`
-	GpuRequest        []string        `json:"gpu_request"`
-	GpuCount          uint32          `json:"gpu_count"`
-	ImageId           string          `json:"image_id"`
-	StubId            string          `json:"stub_id"`
-	WorkspaceId       string          `json:"workspace_id"`
-	Workspace         Workspace       `json:"workspace"`
-	Stub              StubWithRelated `json:"stub"`
-	Timestamp         time.Time       `json:"timestamp"`
-	Mounts            []Mount         `json:"mounts"`
-	RetryCount        int             `json:"retry_count"`
-	PoolSelector      string          `json:"pool_selector"`
-	Preemptable       bool            `json:"preemptable"`
-	CheckpointEnabled bool            `json:"checkpoint_enabled"`
-	BuildOptions      BuildOptions    `json:"build_options"`
-	Ports             []uint32        `json:"ports"`
-	CostPerMs         float64         `json:"cost_per_ms"`
-	AppId             string          `json:"app_id"`
-	Checkpoint        *Checkpoint     `json:"checkpoint"`
-	ConfigPath        string          `json:"config_path"`
-	BlockNetwork      bool            `json:"block_network"`
+	ContainerId              string          `json:"container_id"`
+	EntryPoint               []string        `json:"entry_point"`
+	Env                      []string        `json:"env"`
+	Cpu                      int64           `json:"cpu"`
+	Memory                   int64           `json:"memory"`
+	Gpu                      string          `json:"gpu"`
+	GpuRequest               []string        `json:"gpu_request"`
+	GpuCount                 uint32          `json:"gpu_count"`
+	ImageId                  string          `json:"image_id"`
+	StubId                   string          `json:"stub_id"`
+	WorkspaceId              string          `json:"workspace_id"`
+	Workspace                Workspace       `json:"workspace"`
+	Stub                     StubWithRelated `json:"stub"`
+	Timestamp                time.Time       `json:"timestamp"`
+	Mounts                   []Mount         `json:"mounts"`
+	RetryCount               int             `json:"retry_count"`
+	PoolSelector             string          `json:"pool_selector"`
+	Preemptable              bool            `json:"preemptable"`
+	CheckpointEnabled        bool            `json:"checkpoint_enabled"`
+	BuildOptions             BuildOptions    `json:"build_options"`
+	Ports                    []uint32        `json:"ports"`
+	CostPerMs                float64         `json:"cost_per_ms"`
+	AppId                    string          `json:"app_id"`
+	Checkpoint               *Checkpoint     `json:"checkpoint"`
+	ConfigPath               string          `json:"config_path"`
+	ImageCredentials         string          `json:"image_credentials"`
+	BuildRegistryCredentials string          `json:"build_registry_credentials"`
+	BlockNetwork             bool            `json:"block_network"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -275,30 +277,32 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 	}
 
 	return &pb.ContainerRequest{
-		ContainerId:       c.ContainerId,
-		EntryPoint:        c.EntryPoint,
-		Env:               c.Env,
-		Cpu:               c.Cpu,
-		Memory:            c.Memory,
-		Gpu:               c.Gpu,
-		GpuRequest:        c.GpuRequest,
-		GpuCount:          c.GpuCount,
-		ImageId:           c.ImageId,
-		Mounts:            mounts,
-		StubId:            c.StubId,
-		AppId:             c.AppId,
-		WorkspaceId:       c.WorkspaceId,
-		Workspace:         c.Workspace.ToProto(),
-		Stub:              c.Stub.ToProto(),
-		RetryCount:        int64(c.RetryCount),
-		PoolSelector:      c.PoolSelector,
-		Preemptable:       c.Preemptable,
-		Timestamp:         timestamppb.New(c.Timestamp),
-		BuildOptions:      buildOptions,
-		Ports:             c.Ports,
-		CheckpointEnabled: c.CheckpointEnabled,
-		Checkpoint:        checkpoint,
-		BlockNetwork:      c.BlockNetwork,
+		ContainerId:              c.ContainerId,
+		EntryPoint:               c.EntryPoint,
+		Env:                      c.Env,
+		Cpu:                      c.Cpu,
+		Memory:                   c.Memory,
+		Gpu:                      c.Gpu,
+		GpuRequest:               c.GpuRequest,
+		GpuCount:                 c.GpuCount,
+		ImageId:                  c.ImageId,
+		Mounts:                   mounts,
+		StubId:                   c.StubId,
+		AppId:                    c.AppId,
+		WorkspaceId:              c.WorkspaceId,
+		Workspace:                c.Workspace.ToProto(),
+		Stub:                     c.Stub.ToProto(),
+		RetryCount:               int64(c.RetryCount),
+		PoolSelector:             c.PoolSelector,
+		Preemptable:              c.Preemptable,
+		Timestamp:                timestamppb.New(c.Timestamp),
+		BuildOptions:             buildOptions,
+		ImageCredentials:         c.ImageCredentials,
+		Ports:                    c.Ports,
+		CheckpointEnabled:        c.CheckpointEnabled,
+		Checkpoint:               checkpoint,
+		BuildRegistryCredentials: c.BuildRegistryCredentials,
+		BlockNetwork:             c.BlockNetwork,
 	}
 }
 
@@ -325,29 +329,31 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 	}
 
 	return &ContainerRequest{
-		ContainerId:       in.ContainerId,
-		EntryPoint:        in.EntryPoint,
-		Env:               in.Env,
-		Cpu:               in.Cpu,
-		Memory:            in.Memory,
-		Gpu:               in.Gpu,
-		GpuRequest:        in.GpuRequest,
-		GpuCount:          in.GpuCount,
-		ImageId:           in.ImageId,
-		Mounts:            mounts,
-		WorkspaceId:       in.WorkspaceId,
-		AppId:             in.AppId,
-		Workspace:         *NewWorkspaceFromProto(in.Workspace),
-		Stub:              *NewStubWithRelatedFromProto(in.Stub),
-		StubId:            in.StubId,
-		Timestamp:         in.GetTimestamp().AsTime(),
-		CheckpointEnabled: in.CheckpointEnabled,
-		Preemptable:       in.Preemptable,
-		PoolSelector:      in.PoolSelector,
-		BuildOptions:      bo,
-		Ports:             in.Ports,
-		Checkpoint:        checkpoint,
-		BlockNetwork:      in.BlockNetwork,
+		ContainerId:              in.ContainerId,
+		EntryPoint:               in.EntryPoint,
+		Env:                      in.Env,
+		Cpu:                      in.Cpu,
+		Memory:                   in.Memory,
+		Gpu:                      in.Gpu,
+		GpuRequest:               in.GpuRequest,
+		GpuCount:                 in.GpuCount,
+		ImageId:                  in.ImageId,
+		Mounts:                   mounts,
+		WorkspaceId:              in.WorkspaceId,
+		AppId:                    in.AppId,
+		Workspace:                *NewWorkspaceFromProto(in.Workspace),
+		Stub:                     *NewStubWithRelatedFromProto(in.Stub),
+		StubId:                   in.StubId,
+		Timestamp:                in.GetTimestamp().AsTime(),
+		CheckpointEnabled:        in.CheckpointEnabled,
+		Preemptable:              in.Preemptable,
+		PoolSelector:             in.PoolSelector,
+		BuildOptions:             bo,
+		ImageCredentials:         in.ImageCredentials,
+		Ports:                    in.Ports,
+		Checkpoint:               checkpoint,
+		BuildRegistryCredentials: in.BuildRegistryCredentials,
+		BlockNetwork:             in.BlockNetwork,
 	}
 }
 
