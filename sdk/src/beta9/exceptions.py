@@ -134,6 +134,17 @@ class SandboxProcessError(RuntimeError):
 
 
 class SandboxFileSystemError(RuntimeError):
-    def __init__(self, message: str):
+    def __init__(
+        self,
+        message: str,
+        operation: str,
+        path: str,
+        container_id: str,
+    ):
         self.message = message
-        super().__init__(f"Unable to perform sandbox filesystem operation: {message}")
+        self.operation = operation
+        self.path = path
+        self.container_id = container_id
+        super().__init__(
+            f"Sandbox filesystem error [{operation}] on '{path}' (container: {container_id}): {message}"
+        )

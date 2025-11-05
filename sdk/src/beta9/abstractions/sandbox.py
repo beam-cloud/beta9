@@ -1413,7 +1413,12 @@ class SandboxFileSystem:
             )
 
             if not response.ok:
-                raise SandboxFileSystemError(response.error_msg)
+                raise SandboxFileSystemError(
+                    message=response.error_msg,
+                    operation="upload_file",
+                    path=sandbox_path,
+                    container_id=self.sandbox_instance.container_id,
+                )
 
     def download_file(self, sandbox_path: str, local_path: str):
         """
@@ -1446,7 +1451,12 @@ class SandboxFileSystem:
         )
 
         if not response.ok:
-            raise SandboxFileSystemError(response.error_msg)
+            raise SandboxFileSystemError(
+                message=response.error_msg,
+                operation="download_file",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
 
         with open(local_path, "wb") as f:
             f.write(response.data)
@@ -1484,7 +1494,12 @@ class SandboxFileSystem:
             )
         )
         if not response.ok:
-            raise SandboxFileSystemError(response.error_msg)
+            raise SandboxFileSystemError(
+                message=response.error_msg,
+                operation="stat_file",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
 
         return SandboxFileInfo(
             **{
@@ -1536,7 +1551,12 @@ class SandboxFileSystem:
             )
         )
         if not response.ok:
-            raise SandboxFileSystemError(response.error_msg)
+            raise SandboxFileSystemError(
+                message=response.error_msg,
+                operation="list_files",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
 
         file_infos = []
         for file in response.files:
@@ -1571,7 +1591,12 @@ class SandboxFileSystem:
             )
         )
         if not resp.ok:
-            raise SandboxFileSystemError(resp.error_msg)
+            raise SandboxFileSystemError(
+                message=resp.error_msg,
+                operation="create_directory",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
 
     def delete_directory(self, sandbox_path: str):
         """
@@ -1590,7 +1615,12 @@ class SandboxFileSystem:
             )
         )
         if not resp.ok:
-            raise SandboxFileSystemError(resp.error_msg)
+            raise SandboxFileSystemError(
+                message=resp.error_msg,
+                operation="delete_directory",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
 
     def delete_file(self, sandbox_path: str):
         r"""
@@ -1621,7 +1651,12 @@ class SandboxFileSystem:
         )
 
         if not response.ok:
-            raise SandboxFileSystemError(response.error_msg)
+            raise SandboxFileSystemError(
+                message=response.error_msg,
+                operation="delete_file",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
 
     def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
         r"""
@@ -1658,7 +1693,12 @@ class SandboxFileSystem:
         )
 
         if not response.ok:
-            raise SandboxFileSystemError(response.error_msg)
+            raise SandboxFileSystemError(
+                message=response.error_msg,
+                operation="replace_in_files",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
 
     def find_in_files(self, sandbox_path: str, pattern: str) -> List[SandboxFileSearchResult]:
         r"""
@@ -1717,6 +1757,11 @@ class SandboxFileSystem:
             results.append(SandboxFileSearchResult(path=result.path, matches=matches))
 
         if not response.ok:
-            raise SandboxFileSystemError(response.error_msg)
+            raise SandboxFileSystemError(
+                message=response.error_msg,
+                operation="find_in_files",
+                path=sandbox_path,
+                container_id=self.sandbox_instance.container_id,
+            )
 
         return results
