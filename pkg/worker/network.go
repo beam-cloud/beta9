@@ -233,7 +233,9 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	})
 
 	// Switch back to host namespace before setting up BlockNetwork rules
-	netns.Set(hostNS)
+	if nsErr := netns.Set(hostNS); nsErr != nil {
+		return fmt.Errorf("failed to switch back to host namespace: %w", nsErr)
+	}
 
 	if err != nil {
 		return err
