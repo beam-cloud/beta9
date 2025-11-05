@@ -644,17 +644,15 @@ runroot = "%s"
 	return f.Name(), nil
 }
 
-// buildahEnv returns environment variables for buildah to use fast storage paths
+// buildahEnv returns environment variables for buildah
 func (c *ImageClient) buildahEnv(runroot, tmpdir, storageConf string) []string {
 	env := append(os.Environ(),
 		"TMPDIR="+tmpdir,
 		"XDG_RUNTIME_DIR="+runroot,
 		"CONTAINERS_STORAGE_CONF="+storageConf,
 		"BUILDAH_LAYERS=true",
-		// Performance tuning: use all available CPUs for parallel operations
-		"GOMAXPROCS=0", // Use all available CPUs
-		// Use parallel gzip for faster compression (if available)
-		"PIGZ=-p"+fmt.Sprintf("%d", runtime.NumCPU()), // Parallel gzip with all cores
+		"GOMAXPROCS=0",
+		"PIGZ=-p"+fmt.Sprintf("%d", runtime.NumCPU()),
 	)
 	return env
 }
