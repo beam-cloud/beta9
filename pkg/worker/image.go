@@ -948,7 +948,12 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		skopeoArgs = append(skopeoArgs, srcRef, destRef)
 
 		cmd = exec.CommandContext(ctx, "skopeo", skopeoArgs...)
-		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
+		
+		// Add aggressive parallelism settings for maximum upload throughput
+		env := c.buildahEnv(runroot, tmpdir, storageConf)
+		env = addSkopeoParallelismEnv(env)
+		cmd.Env = env
+		
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err = cmd.Run(); err != nil {
@@ -1195,6 +1200,34 @@ func umociUnpackOptions() layer.UnpackOptions {
 	unpackOptions.KeepDirlinks = true
 	unpackOptions.MapOptions = meta.MapOptions
 	return unpackOptions
+}
+
+// addSkopeoParallelismEnv adds performance-tuning environment variables for skopeo operations
+// These enable aggressive parallelism for multi-core systems and fast networks
+func addSkopeoParallelismEnv(env []string) []string {
+	// Check if already set to allow override
+	hasMaxParallelDownloads := false
+	hasMaxParallelUploads := false
+	
+	for _, e := range env {
+		if strings.HasPrefix(e, "SKOPEO_MAX_PARALLEL_DOWNLOADS=") {
+			hasMaxParallelDownloads = true
+		}
+		if strings.HasPrefix(e, "SKOPEO_MAX_PARALLEL_UPLOADS=") {
+			hasMaxParallelUploads = true
+		}
+	}
+	
+	// Set aggressive defaults optimized for large images on fast networks
+	// 16 parallel operations provides good balance of throughput vs connection overhead
+	if !hasMaxParallelDownloads {
+		env = append(env, "SKOPEO_MAX_PARALLEL_DOWNLOADS=16")
+	}
+	if !hasMaxParallelUploads {
+		env = append(env, "SKOPEO_MAX_PARALLEL_UPLOADS=16")
+	}
+	
+	return env
 }
 
 func (c *ImageClient) getBuildContext(buildPath string, request *types.ContainerRequest) (string, error) {
