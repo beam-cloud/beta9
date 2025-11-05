@@ -914,6 +914,9 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		outputLogger.Info(fmt.Sprintf("Pushing image to registry: %s\n", imageTag))
 
 		skopeoArgs := []string{"copy"}
+		skopeoArgs = append(skopeoArgs, "--format=v2s2")
+		skopeoArgs = append(skopeoArgs, "--multi-arch=system")
+		skopeoArgs = append(skopeoArgs, "--preserve-digests")
 		skopeoArgs = append(skopeoArgs, "--dest-compress=false")
 
 		// Disable TLS verification if needed
@@ -939,7 +942,11 @@ func (c *ImageClient) BuildAndArchiveImage(ctx context.Context, outputLogger *sl
 		skopeoArgs = append(skopeoArgs, srcRef, destRef)
 
 		cmd = exec.CommandContext(ctx, "skopeo", skopeoArgs...)
-		cmd.Env = c.buildahEnv(runroot, tmpdir, storageConf)
+
+		env := c.buildahEnv(runroot, tmpdir, storageConf)
+		env = common.AddSkopeoEnvVars(env)
+		cmd.Env = env
+
 		cmd.Stdout = &common.ExecWriter{Logger: outputLogger}
 		cmd.Stderr = &common.ExecWriter{Logger: outputLogger}
 		if err = cmd.Run(); err != nil {
