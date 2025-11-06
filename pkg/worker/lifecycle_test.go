@@ -40,7 +40,7 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 			skopeoClient: mockSkopeo,
 			v2ImageRefs:  common.NewSafeMap[string](),
 		},
-		runcServer: &RunCServer{
+		containerServer: &ContainerRuntimeServer{
 			baseConfigSpec: getTestBaseSpec(),
 		},
 	}
@@ -116,7 +116,7 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 		imageMountPath:     "/tmp/test-images",
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		imageClient:        imageClient,
-		runcServer: &RunCServer{
+		containerServer: &ContainerRuntimeServer{
 			baseConfigSpec: getTestBaseSpec(),
 		},
 	}
@@ -207,7 +207,7 @@ func TestCachedImageMetadata(t *testing.T) {
 		imageMountPath:     "/tmp/test-images",
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
 		imageClient:        imageClient,
-		runcServer: &RunCServer{
+		containerServer: &ContainerRuntimeServer{
 			baseConfigSpec: getTestBaseSpec(),
 		},
 	}
