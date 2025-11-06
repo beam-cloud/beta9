@@ -85,11 +85,11 @@ class TaskQueueManager:
     def shutdown(self):
         print("Spinning down taskqueue")
 
-        # Send SIGTERM to ALL workers at once (parallel)
+        # Send SIGTERM to ALL workers at once
         for task_process in self.task_processes:
             task_process.terminate()
 
-        # Now wait for all of them (parallel, not sequential)
+        # Now wait for all of them
         for task_process in self.task_processes:
             task_process.join(timeout=5)
 
@@ -177,7 +177,7 @@ class TaskQueueWorker:
         self.worker_startup_event: TEvent = worker_startup_event
         self.workers_ready: Value = workers_ready
         self.should_exit: bool = False
-        
+
     def _signal_handler(self, signum, frame):
         """Handle SIGTERM by breaking out of the processing loop"""
         self.should_exit = True
@@ -298,7 +298,7 @@ class TaskQueueWorker:
     def process_tasks(self, channel: Channel) -> None:
         # Set up signal handler to exit cleanly on SIGTERM
         signal.signal(signal.SIGTERM, self._signal_handler)
-        
+
         self.worker_startup_event.set()
         taskqueue_stub = TaskQueueServiceStub(channel)
         gateway_stub = GatewayServiceStub(channel)

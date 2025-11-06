@@ -47,9 +47,9 @@ type Worker struct {
 	podAddr                 string
 	podHostName             string
 	imageMountPath          string
-	runtime                 runtime.Runtime // Primary runtime (default from config)
-	runcRuntime             runtime.Runtime // Always runc for fallback
-	gvisorRuntime           runtime.Runtime // Optional gVisor runtime
+	runtime                 runtime.Runtime
+	runcRuntime             runtime.Runtime
+	gvisorRuntime           runtime.Runtime
 	containerServer         *ContainerRuntimeServer
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
@@ -93,8 +93,8 @@ type ContainerInstance struct {
 	StopReason            types.StopContainerReason
 	SandboxProcessManager *goproc.GoProcClient
 	ContainerIp           string
-	Runtime               runtime.Runtime     // The runtime used for this container
-	OOMWatcher            *runtime.OOMWatcher // OOM watcher for this container
+	Runtime               runtime.Runtime
+	OOMWatcher            *runtime.OOMWatcher
 }
 
 type ContainerOptions struct {
@@ -187,7 +187,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	// Create container runtimes based on pool configuration
-	// Always create runc as fallback
+	// Always create runc as a fallback
 	runcRuntime, err := runtime.New(runtime.Config{
 		Type:  "runc",
 		Debug: config.DebugMode,
@@ -760,4 +760,3 @@ func (s *Worker) shutdown() error {
 
 	return errs
 }
-
