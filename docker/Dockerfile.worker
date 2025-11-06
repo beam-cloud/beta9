@@ -262,7 +262,8 @@ COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
 COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
-COPY --from=gvisor /usr/local/bin/runsc /usr/local/bin/runsc
+COPY --from=gvisor /usr/local/bin/runsc /usr/local/bin/runsc.real
+COPY ./docker/runsc-wrapper.sh /usr/local/bin/runsc
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 
 # LD_PRELOAD libraries
@@ -294,6 +295,17 @@ RUN echo "timeout 60" >> /etc/criu/default.conf
 # Create gVisor runtime directories
 RUN mkdir -p /run/gvisor
 
+# Make runsc wrapper executable
+RUN chmod +x /usr/local/bin/runsc
+
+# Set up bash aliases for convenience
+RUN echo 'alias runsc-raw="/usr/local/bin/runsc.real"' >> /root/.bashrc && \
+    echo 'alias runsc-list="runsc list"' >> /root/.bashrc && \
+    echo 'alias runsc-ps="runsc list"' >> /root/.bashrc
+
+# Set default gVisor environment variables
+ENV GVISOR_ROOT=/run/gvisor
+ENV GVISOR_PLATFORM=systrap
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,ngx,video
 ENV _BUILDAH_STARTED_IN_USERNS="" \
     BUILDAH_ISOLATION=chroot

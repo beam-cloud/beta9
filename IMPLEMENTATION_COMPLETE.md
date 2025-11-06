@@ -11,13 +11,28 @@ Both requested fixes have been successfully implemented and tested:
 **Root Cause**: The `runsc list` command must use the same `--root` flag that was used when creating containers.
 
 **Solution**:
-- Created `pkg/runtime/list.go` with `List()` methods for both runc and runsc
-- Added comprehensive documentation in `docs/troubleshooting-runsc-list.md`
-- Proper usage: `runsc --root /run/gvisor list`
+- Created `pkg/runtime/list.go` with `List()` methods for both runc and runsc (programmatic)
+- Created wrapper script at `docker/runsc-wrapper.sh` that automatically adds `--root /run/gvisor --platform systrap`
+- Modified Dockerfile to install wrapper as `/usr/local/bin/runsc` (real binary at `/usr/local/bin/runsc.real`)
+- Added bash aliases for convenience (`runsc-list`, `runsc-ps`, `runsc-raw`)
+- Added comprehensive documentation
+
+**Now you can simply run**:
+```bash
+# On worker pod - works automatically!
+runsc list
+runsc state <container-id>
+runsc ps <container-id>
+```
 
 **Files Modified**:
-- `pkg/runtime/list.go` (new)
+- `pkg/runtime/list.go` (new - programmatic access)
+- `docker/runsc-wrapper.sh` (new - wrapper script)
+- `docker/Dockerfile.worker` (modified - install wrapper + aliases)
 - `docs/troubleshooting-runsc-list.md` (new)
+- `docs/runsc-wrapper-usage.md` (new)
+- `docs/runsc-wrapper-test.sh` (new)
+- `RUNSC_WRAPPER_SUMMARY.md` (new)
 
 ---
 
