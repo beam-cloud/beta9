@@ -155,7 +155,7 @@ worker:
       mode: local
       priority: 1
       # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod (e.g., "nvidia")
-      containerRuntime: runc  # Internal OCI runtime: "runc" or "gvisor"
+      containerRuntime: gvisor  # Internal OCI runtime: "runc" or "gvisor"
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor

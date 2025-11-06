@@ -15,7 +15,7 @@ import (
 
 // Runsc implements Runtime using the gVisor runsc runtime
 type Runsc struct {
-	cfg        Config
+	cfg            Config
 	nvproxyEnabled bool // Whether GPU support via nvproxy is enabled
 }
 
@@ -68,7 +68,7 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		// Check if this spec has GPU devices (CDI or direct)
 		// If so, enable nvproxy support
 		r.nvproxyEnabled = r.hasGPUDevices(spec)
-		
+
 		if r.nvproxyEnabled {
 			// For nvproxy, we keep the device specifications
 			// gVisor will intercept GPU calls and proxy them to the host driver
@@ -126,18 +126,17 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
-	// Use simple "runsc run" command - it handles everything internally like runc does
 	args := r.baseArgs()
-	
+
 	// Enable nvproxy if GPU devices are present
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 	}
-	
+
 	args = append(args, "run", "--bundle", bundlePath, containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
-	
+
 	// Stream output directly - don't buffer
 	if opts != nil && opts.OutputWriter != nil {
 		cmd.Stdout = opts.OutputWriter
@@ -219,11 +218,11 @@ func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process
 func (r *Runsc) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *KillOpts) error {
 	args := r.baseArgs()
 	args = append(args, "kill")
-	
+
 	if opts != nil && opts.All {
 		args = append(args, "--all")
 	}
-	
+
 	args = append(args, containerID, fmt.Sprintf("%d", sig))
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
@@ -233,11 +232,11 @@ func (r *Runsc) Kill(ctx context.Context, containerID string, sig syscall.Signal
 func (r *Runsc) Delete(ctx context.Context, containerID string, opts *DeleteOpts) error {
 	args := r.baseArgs()
 	args = append(args, "delete")
-	
+
 	if opts != nil && opts.Force {
 		args = append(args, "--force")
 	}
-	
+
 	args = append(args, containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
@@ -249,10 +248,10 @@ func (r *Runsc) State(ctx context.Context, containerID string) (State, error) {
 	args = append(args, "state", containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
-	
+
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
-	
+
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 			return State{}, ErrContainerNotFound{ContainerID: containerID}

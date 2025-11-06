@@ -806,23 +806,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	go func() {
 		pid := <-monitorPIDChan
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-		
+
 		// Use cgroup OOM watcher for portable OOM detection (works with all runtimes)
 		// Get the actual cgroup path from the container's PID
 		cgroupPath, err := runtime.GetCgroupPathFromPID(pid)
 		if err != nil {
 			log.Warn().Str("container_id", containerId).Err(err).Msg("failed to get cgroup path, OOM detection disabled")
 		} else {
-			log.Debug().Str("container_id", containerId).Str("cgroup_path", cgroupPath).Int("pid", pid).Msg("starting OOM watcher")
 			oomWatcher := runtime.NewOOMWatcher(ctx, cgroupPath)
 			containerInstance.OOMWatcher = oomWatcher
 			s.containerInstances.Set(containerId, containerInstance)
-			
+
 			oomWatcher.Watch(func() {
 				log.Warn().Str("container_id", containerId).Msg("OOM kill detected via cgroup watcher")
 				isOOMKilled.Store(true)
 				outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage)
-				
+
 				// Push OOM event to event repository for monitoring/notifications
 				go s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			})
@@ -864,7 +863,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if exists && instance.Runtime != nil {
 			rt = instance.Runtime
 		}
-		
+
 		err = rt.Delete(s.ctx, containerId, &runtime.DeleteOpts{Force: true})
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
@@ -878,7 +877,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
 	}
-	
+
 	supportsCheckpoint := instance.Runtime.Capabilities().CheckpointRestore && s.IsCRIUAvailable(request.GpuCount)
 
 	// Handle automatic checkpoint creation if applicable
@@ -959,7 +958,7 @@ func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerReq
 
 func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.LinuxResources, error) {
 	var resources ContainerResources
-	
+
 	// Get runtime for this container
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if exists && instance.Runtime != nil && instance.Runtime.Name() == "gvisor" {
