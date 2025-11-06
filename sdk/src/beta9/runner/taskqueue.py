@@ -91,14 +91,21 @@ class TaskQueueManager:
             task_process.join(timeout=5)
 
         # Force kill any remaining processes
+        force_killed = False
         for task_process in self.task_processes:
             if task_process.is_alive():
                 print("Task process did not terminate gracefully, killing...")
                 task_process.kill()  # SIGKILL instead of terminate
                 task_process.join()  # Wait indefinitely for death
+                force_killed = True
 
             if task_process.exitcode != 0:
                 self.exit_code = task_process.exitcode
+        
+        # If we force-killed any workers, bypass Python cleanup to avoid hanging
+        # on resource_tracker trying to clean up shared resources
+        if force_killed:
+            os._exit(self.exit_code)
 
     def _start_worker(self, worker_index: int):
         # Initialize task worker
@@ -400,4 +407,6 @@ def retry_on_errors(errors: List[Type[Exception]], e: BaseException) -> bool:
 if __name__ == "__main__":
     tq = TaskQueueManager()
     tq.run()
+    # shutdown() may call os._exit() if workers were force-killed
+    # If we reach here, do clean exit
     sys.exit(tq.exit_code)
