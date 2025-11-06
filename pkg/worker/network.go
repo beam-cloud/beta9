@@ -539,10 +539,14 @@ func (m *ContainerNetworkManager) setupBlockNetwork(containerId string, request 
 		return err
 	}
 
+	truncatedContainerId := containerId[len(containerId)-5:]
+	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
+	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
+
 	containerIp := containerIpResponse.IpAddress
 
 	// Block IPv4 outbound traffic (but allow reply packets for exposed ports)
-	err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", containerIp, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP")
+	err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", containerIp, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", comment)
 	if err != nil {
 		return err
 	}
@@ -559,7 +563,7 @@ func (m *ContainerNetworkManager) setupBlockNetwork(containerId string, request 
 		ipv6Prefix := ipv6Net.IP.String()
 		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
 
-		err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP")
+		err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", comment)
 		if err != nil {
 			return err
 		}
