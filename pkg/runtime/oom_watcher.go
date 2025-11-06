@@ -14,17 +14,17 @@ import (
 )
 
 const (
-	cgroupV2Root         = "/sys/fs/cgroup"
-	memoryEventsFile     = "memory.events"
+	cgroupV2Root           = "/sys/fs/cgroup"
+	memoryEventsFile       = "memory.events"
 	oomWatcherPollInterval = 500 * time.Millisecond
 )
 
 // OOMWatcher watches for OOM kills via cgroup v2 memory.events
 type OOMWatcher struct {
-	cgroupPath string
+	cgroupPath   string
 	lastOOMCount int64
-	ctx        context.Context
-	cancel     context.CancelFunc
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 // NewOOMWatcher creates a new OOM watcher for the given cgroup path
@@ -69,9 +69,9 @@ func (w *OOMWatcher) Watch(onOOM func()) error {
 						Int64("previous", w.lastOOMCount).
 						Int64("current", currentCount).
 						Msg("OOM kill detected")
-					
+
 					w.lastOOMCount = currentCount
-					
+
 					// Call the callback
 					if onOOM != nil {
 						onOOM()
@@ -95,7 +95,7 @@ func (w *OOMWatcher) Stop() {
 func (w *OOMWatcher) readOOMKillCount() (int64, error) {
 	// Try cgroup v2 path first
 	memEventsPath := filepath.Join(cgroupV2Root, w.cgroupPath, memoryEventsFile)
-	
+
 	file, err := os.Open(memEventsPath)
 	if err != nil {
 		// If cgroup v2 doesn't work, try cgroup v1
@@ -111,7 +111,7 @@ func (w *OOMWatcher) readOOMKillCount() (int64, error) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// For cgroup v2: Look for "oom_kill N" line in memory.events
 		if strings.HasPrefix(line, "oom_kill ") {
 			parts := strings.Fields(line)
@@ -123,7 +123,7 @@ func (w *OOMWatcher) readOOMKillCount() (int64, error) {
 				return count, nil
 			}
 		}
-		
+
 		// For cgroup v1: Look for "oom_kill N" or "under_oom N" in memory.oom_control
 		if strings.HasPrefix(line, "oom_kill ") || strings.HasPrefix(line, "under_oom ") {
 			parts := strings.Fields(line)
@@ -161,7 +161,7 @@ func GetCgroupPathFromPID(pid int) (string, error) {
 		// Format: hierarchy-ID:controller-list:cgroup-path
 		// For cgroup v2: 0::/path/to/cgroup
 		// For cgroup v1: N:subsystem:/path/to/cgroup
-		
+
 		parts := strings.SplitN(line, ":", 3)
 		if len(parts) != 3 {
 			continue
@@ -188,17 +188,4 @@ func GetCgroupPathFromPID(pid int) (string, error) {
 	}
 
 	return "", fmt.Errorf("cgroup path not found for pid %d", pid)
-}
-
-// GetCgroupPath returns the cgroup path for a container
-// DEPRECATED: Use GetCgroupPathFromPID instead
-func GetCgroupPath(containerID string) string {
-	// This is a fallback that may not work correctly
-	return containerID
-}
-
-// GetCgroupPathWithPrefix returns the cgroup path for a container with a prefix
-// DEPRECATED: Use GetCgroupPathFromPID instead
-func GetCgroupPathWithPrefix(prefix, containerID string) string {
-	return filepath.Join(prefix, containerID)
 }
