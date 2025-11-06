@@ -8,8 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -128,90 +126,49 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
-	// Use create + start + wait pattern for proper PID reporting and exit code handling
-	// This matches the OCI runtime spec and how runc works internally
+	// Use simple "runsc run" command - it handles everything internally like runc does
+	args := r.baseArgs()
 	
-	// Step 1: Create the container (creates but doesn't start)
-	pidFile := filepath.Join(bundlePath, fmt.Sprintf("%s.pid", containerID))
-	createArgs := r.baseArgs()
+	// Enable nvproxy if GPU devices are present
 	if r.nvproxyEnabled {
-		createArgs = append(createArgs, "--nvproxy=true")
-	}
-	createArgs = append(createArgs, "create")
-	createArgs = append(createArgs, "--bundle", bundlePath)
-	createArgs = append(createArgs, "--pid-file", pidFile)
-	createArgs = append(createArgs, containerID)
-
-	createCmd := exec.CommandContext(ctx, r.cfg.RunscPath, createArgs...)
-	if opts != nil && opts.OutputWriter != nil {
-		createCmd.Stdout = opts.OutputWriter
-		createCmd.Stderr = opts.OutputWriter
+		args = append(args, "--nvproxy=true")
 	}
 	
-	if err := createCmd.Run(); err != nil {
-		return -1, fmt.Errorf("failed to create container: %w", err)
+	args = append(args, "run", "--bundle", bundlePath, containerID)
+
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	
+	// Stream output directly - don't buffer
+	if opts != nil && opts.OutputWriter != nil {
+		cmd.Stdout = opts.OutputWriter
+		cmd.Stderr = opts.OutputWriter
 	}
 
-	// Read the container PID
-	pidBytes, err := os.ReadFile(pidFile)
-	if err != nil {
-		_ = r.Delete(ctx, containerID, &DeleteOpts{Force: true})
-		return -1, fmt.Errorf("failed to read container PID: %w", err)
+	// Start the container
+	if err := cmd.Start(); err != nil {
+		return -1, fmt.Errorf("failed to start container: %w", err)
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
-	if err != nil {
-		_ = r.Delete(ctx, containerID, &DeleteOpts{Force: true})
-		return -1, fmt.Errorf("failed to parse container PID: %w", err)
-	}
-	_ = os.Remove(pidFile)
 
-	// Notify that container has been created (send actual container PID)
+	// Notify that container has started (runsc process PID, which manages the container)
 	if opts != nil && opts.Started != nil {
 		select {
-		case opts.Started <- pid:
+		case opts.Started <- cmd.Process.Pid:
 		default:
 		}
 	}
 
-	// Step 2: Start the container (begins execution)
-	startArgs := r.baseArgs()
-	startArgs = append(startArgs, "start", containerID)
-
-	startCmd := exec.CommandContext(ctx, r.cfg.RunscPath, startArgs...)
-	if err := startCmd.Run(); err != nil {
-		_ = r.Delete(ctx, containerID, &DeleteOpts{Force: true})
-		return -1, fmt.Errorf("failed to start container: %w", err)
-	}
-
-	// Step 3: Wait for the container to exit
-	waitArgs := r.baseArgs()
-	waitArgs = append(waitArgs, "wait", containerID)
-
-	waitCmd := exec.CommandContext(ctx, r.cfg.RunscPath, waitArgs...)
-	
-	// runsc wait outputs the exit code to stdout
-	var outBuf bytes.Buffer
-	waitCmd.Stdout = &outBuf
-	waitCmd.Stderr = &outBuf
-
-	err = waitCmd.Run()
-	output := strings.TrimSpace(outBuf.String())
-	
-	// Parse exit code from runsc wait output
-	exitCode := 0
-	if output != "" {
-		if parsedCode, parseErr := strconv.Atoi(output); parseErr == nil {
-			exitCode = parsedCode
+	// Wait for container to exit
+	err := cmd.Wait()
+	if err != nil {
+		// Check if it's an exit error with a code
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode(), nil
 		}
+		// Other error
+		return -1, err
 	}
 
-	// If wait command failed but we got an exit code, that's OK (container exited with non-zero)
-	if err != nil && exitCode == 0 {
-		// Couldn't determine exit code, default to 1
-		exitCode = 1
-	}
-
-	return exitCode, nil
+	return 0, nil
 }
 
 func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process, opts *ExecOpts) error {

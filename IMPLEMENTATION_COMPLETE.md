@@ -29,40 +29,39 @@ containers, _ := runtime.List(ctx)
 
 ---
 
-### 2. ✅ Fixed runsc Exit Code Handling and Cleanup
+### 2. ✅ Fixed runsc Container Lifecycle Issues
 
-**Problem**: runsc implementation had inconsistent exit code handling and cleanup compared to runc.
+**Problems Encountered**:
+1. ❌ Complex create+start+wait pattern broke container stop process
+2. ❌ Containers calling `os._exit(0)` didn't shut down properly
+3. ❌ `runsc list` would hang with containers in bad states
 
-**Issues**:
-1. Started channel received wrong PID (runsc wrapper process instead of container)
-2. Exit codes not reliably captured
-3. Poor cleanup on errors
-
-**Solution**: Refactored to use proper OCI pattern: **create → start → wait**
+**Solution**: **Simplified to use `runsc run` (single command)**
 
 **Implementation**:
 ```go
-// 1. Create container (get actual PID)
-runsc create --pid-file /tmp/pid --bundle /bundle container-id
-pid := readPidFile()
-opts.Started <- pid  // ✅ Correct container PID
-
-// 2. Start execution
-runsc start container-id
-
-// 3. Wait for exit
-exitCode := runsc wait container-id  // Returns exit code
+// Simple approach - let runsc handle everything
+runsc run --bundle /bundle container-id
+// Blocks until container exits
+// Returns exit code directly
 ```
 
+**How It Works**:
+1. `runsc run` starts container and blocks
+2. Send runsc process PID to Started channel
+3. Wait for runsc to exit (when container stops)
+4. Parse exit code from process exit status
+
 **Benefits**:
-- ✅ Correct PID tracking (container sandbox PID, not wrapper)
-- ✅ Reliable exit codes (0 = success, non-zero = container exit code, -1 = runtime error)
-- ✅ Clean error handling (failed operations trigger Delete())
-- ✅ Consistent with runc behavior
+- ✅ **Simple**: One command, blocks until done
+- ✅ **Reliable**: Containers exit properly on self-termination
+- ✅ **Clean lifecycle**: No intermediate states
+- ✅ **Context-aware**: Cancelling context stops container
+- ✅ **Consistent with runc**: Same pattern
 
 **Files Modified**:
-- `pkg/runtime/runsc.go` (rewrote Run() method)
-- `docs/runsc-exit-code-fix.md` (documentation)
+- `pkg/runtime/runsc.go` (simplified Run() method)
+- `docs/runsc-simplified-implementation.md` (documentation)
 
 ---
 
