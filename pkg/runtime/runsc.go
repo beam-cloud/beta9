@@ -124,74 +124,45 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
-	args := r.baseArgs()
+	// Always cleanup container state when this function exits
+	defer func() {
+		deleteArgs := r.baseArgs()
+		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
+		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
+	}()
 
+	args := r.baseArgs()
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 	}
-
 	args = append(args, "run", "--bundle", bundlePath, containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // Kill entire process tree
 	
-	// Set process group so we can kill the entire tree
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
-
 	if opts != nil && opts.OutputWriter != nil {
 		cmd.Stdout = opts.OutputWriter
 		cmd.Stderr = opts.OutputWriter
 	}
 
 	if err := cmd.Start(); err != nil {
-		return -1, fmt.Errorf("failed to start container: %w", err)
+		return -1, err
 	}
 
-	// Notify PID
 	if opts != nil && opts.Started != nil {
-		select {
-		case opts.Started <- cmd.Process.Pid:
-		default:
-		}
+		opts.Started <- cmd.Process.Pid
 	}
 
-	// Wait in a goroutine so we can handle cancellation
-	done := make(chan error, 1)
+	// Handle cancellation by killing process group
 	go func() {
-		done <- cmd.Wait()
+		<-ctx.Done()
+		if pgid, _ := syscall.Getpgid(cmd.Process.Pid); pgid > 0 {
+			syscall.Kill(-pgid, syscall.SIGKILL)
+		}
 	}()
 
-	// Wait for either completion or cancellation
-	var err error
-	select {
-	case <-ctx.Done():
-		// Kill the entire process group
-		pgid, _ := syscall.Getpgid(cmd.Process.Pid)
-		if pgid > 0 {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		}
-		// Also kill the process directly
-		_ = cmd.Process.Kill()
-		err = <-done // Wait for it to actually die
-		
-		// Clean up container state
-		deleteArgs := r.baseArgs()
-		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
-		deleteCmd := exec.Command(r.cfg.RunscPath, deleteArgs...)
-		_ = deleteCmd.Run()
-		
-		return -1, ctx.Err()
-		
-	case err = <-done:
-		// Container exited naturally - clean up state
-		deleteArgs := r.baseArgs()
-		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
-		deleteCmd := exec.Command(r.cfg.RunscPath, deleteArgs...)
-		_ = deleteCmd.Run()
-	}
-
-	// Extract exit code
+	// Wait for exit
+	err := cmd.Wait()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
