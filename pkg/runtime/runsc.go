@@ -141,9 +141,10 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 		cmd.Stderr = opts.OutputWriter
 	}
 
-	// Start the container
-	if err := cmd.Start(); err != nil {
-		return -1, fmt.Errorf("failed to start container: %w", err)
+	// Use monitor pattern like runc for proper exit code handling
+	ec, err := r.startCommand(cmd)
+	if err != nil {
+		return -1, err
 	}
 
 	// Notify that container has started (runsc process PID, which manages the container)
@@ -154,18 +155,54 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 		}
 	}
 
-	// Wait for container to exit
-	err := cmd.Wait()
-	if err != nil {
-		// Check if it's an exit error with a code
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode(), nil
-		}
-		// Other error
-		return -1, err
+	// Wait for exit using monitor pattern (like runc)
+	status, err := r.monitorWait(cmd, ec)
+	if err == nil && status != 0 {
+		err = fmt.Errorf("%s did not terminate successfully: exit code %d", cmd.Args[0], status)
+	}
+	return status, err
+}
+
+// startCommand starts a command and returns a channel for monitoring its exit
+// This follows the same pattern as go-runc's Monitor.Start()
+func (r *Runsc) startCommand(cmd *exec.Cmd) (chan exit, error) {
+	if err := cmd.Start(); err != nil {
+		return nil, err
 	}
 
-	return 0, nil
+	ec := make(chan exit, 1)
+	go func() {
+		var status int
+		if err := cmd.Wait(); err != nil {
+			status = 255 // Default error status
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				// Extract actual exit code from syscall.WaitStatus
+				if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+					status = ws.ExitStatus()
+				}
+			}
+		}
+		ec <- exit{
+			pid:    cmd.Process.Pid,
+			status: status,
+		}
+		close(ec)
+	}()
+
+	return ec, nil
+}
+
+// monitorWait waits for a command to exit via the monitor channel
+// This follows the same pattern as go-runc's Monitor.Wait()
+func (r *Runsc) monitorWait(cmd *exec.Cmd, ec chan exit) (int, error) {
+	e := <-ec
+	return e.status, nil
+}
+
+// exit holds exit information from a runsc process
+type exit struct {
+	pid    int
+	status int
 }
 
 func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process, opts *ExecOpts) error {
