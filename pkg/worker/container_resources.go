@@ -6,22 +6,17 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// ContainerResources defines the interface for container resource management
 type ContainerResources interface {
-	// GetCPU returns the CPU configuration for a container
 	GetCPU(request *types.ContainerRequest) *specs.LinuxCPU
-	// GetMemory returns the memory configuration for a container
 	GetMemory(request *types.ContainerRequest) *specs.LinuxMemory
 }
 
-// StandardResources implements ContainerResources with standard calculations
 type StandardResources struct {
 	standardCPUShare     uint64
 	standardCPUPeriod    uint64
 	memoryOverheadFactor float64
 }
 
-// NewStandardResources creates a new standard resources manager
 func NewStandardResources() *StandardResources {
 	return &StandardResources{
 		standardCPUShare:     1024,
@@ -58,7 +53,6 @@ func (r *StandardResources) GetMemory(request *types.ContainerRequest) *specs.Li
 	}
 }
 
-// RuncResources implements ContainerResources for runc
 type RuncResources struct {
 	*StandardResources
 }
@@ -69,7 +63,6 @@ func NewRuncResources() *RuncResources {
 	}
 }
 
-// GvisorResources implements ContainerResources for gvisor
 type GvisorResources struct {
 	*StandardResources
 }
@@ -80,13 +73,10 @@ func NewGvisorResources() *GvisorResources {
 	}
 }
 
-// Gvisor may need different resource calculations
 func (g *GvisorResources) GetCPU(request *types.ContainerRequest) *specs.LinuxCPU {
-	// TODO: Implement gvisor-specific CPU resource calculations if needed
 	return g.StandardResources.GetCPU(request)
 }
 
 func (g *GvisorResources) GetMemory(request *types.ContainerRequest) *specs.LinuxMemory {
-	// TODO: Implement gvisor-specific memory resource calculations if needed
 	return g.StandardResources.GetMemory(request)
 }
