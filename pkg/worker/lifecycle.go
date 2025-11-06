@@ -80,23 +80,38 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	// because `runsc run` blocks and won't exit just from container signals
 	if instance.RuntimePid > 0 {
 		// Kill the runtime process (e.g., the runsc run process)
-		if proc, err := os.FindProcess(instance.RuntimePid); err == nil {
+		proc, err := os.FindProcess(instance.RuntimePid)
+		if err == nil {
 			if err := proc.Signal(signal); err != nil {
-				log.Debug().Str("container_id", containerId).Int("pid", instance.RuntimePid).Err(err).Msg("failed to signal runtime process (may have already exited)")
+				log.Debug().Str("container_id", containerId).Int("pid", instance.RuntimePid).Err(err).Msg("runtime process already exited")
 			} else {
-				log.Debug().Str("container_id", containerId).Int("pid", instance.RuntimePid).Msg("sent signal to runtime process")
+				log.Debug().Str("container_id", containerId).Int("pid", instance.RuntimePid).Msg("sent signal to runtime process, waiting for exit")
+				
+				// Wait for the process to exit (with timeout) before calling delete
+				// This prevents `runsc delete` from hanging while processes are still shutting down
+				done := make(chan error, 1)
+				go func() {
+					_, err := proc.Wait()
+					done <- err
+				}()
+				
+				select {
+				case <-done:
+					log.Debug().Str("container_id", containerId).Int("pid", instance.RuntimePid).Msg("runtime process exited")
+				case <-time.After(10 * time.Second):
+					log.Warn().Str("container_id", containerId).Int("pid", instance.RuntimePid).Msg("timeout waiting for runtime process to exit, continuing cleanup")
+				}
 			}
+		}
+	} else {
+		// No RuntimePid tracked, use standard kill
+		err := rt.Kill(context.Background(), instance.Id, signal, &runtime.KillOpts{All: true})
+		if err != nil {
+			log.Debug().Str("container_id", containerId).Err(err).Msg("error killing container (may already be stopped)")
 		}
 	}
 
-	// Also send kill signal to the container itself (for cleanup)
-	err := rt.Kill(context.Background(), instance.Id, signal, &runtime.KillOpts{All: true})
-	if err != nil {
-		log.Debug().Str("container_id", containerId).Err(err).Msg("error killing container (may already be stopped)")
-	}
-
-	// Force delete to clean up container state, especially important during startup
-	// This ensures runsc processes are fully cleaned up even if kill fails
+	// Now it's safe to delete the container state
 	deleteErr := rt.Delete(context.Background(), instance.Id, &runtime.DeleteOpts{Force: true})
 	if deleteErr != nil {
 		// Exit code 128 typically means container doesn't exist (already cleaned up)
