@@ -179,15 +179,34 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		localCachePath = ""
 	}
 
+	startTime := time.Now()
+
+	// Always fetch the remote archive into the cache directory first
+	downloadPath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
+	_ = os.MkdirAll(filepath.Dir(downloadPath), 0755)
+
+	sourceRegistry, err := c.pullImageFromRegistry(ctx, downloadPath, imageId)
+	if err != nil {
+		return time.Since(startTime), err
+	}
+
+	// Extract metadata and determine the mount archive path
+	mountArchivePath, meta := c.processPulledArchive(downloadPath, imageId)
+
+	// Check if this is a CLIP v2 (OCI) image by examining its metadata
+	isClipV2Image := false
+	if meta != nil && meta.StorageInfo != nil {
+		if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
+			storageType := strings.ToLower(t.Type())
+			isClipV2Image = storageType == "oci" || storageType == string(clipCommon.StorageModeOCI)
+		}
+	}
+
 	// If we have a valid cache client, attempt to cache entirety of the image
 	// in memory (in a nearby region). If a remote cache is available, this supercedes
 	// the local cache - which is basically just downloading the image to disk
-	// Skip full image caching for CLIP v2 images
-	startTime := time.Now()
-
-	isClipV2 := c.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
-
-	if c.cacheClient != nil && !isBuildContainer && !isClipV2 {
+	// Skip full image caching for CLIP v2 images (which are index-only and pull data on-demand)
+	if c.cacheClient != nil && !isBuildContainer && !isClipV2Image {
 		sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
 
 		// Create constant backoff
@@ -244,17 +263,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	elapsed := time.Since(startTime)
-	// Always fetch the remote archive into the cache directory first
-	downloadPath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
-	_ = os.MkdirAll(filepath.Dir(downloadPath), 0755)
-
-	sourceRegistry, err := c.pullImageFromRegistry(ctx, downloadPath, imageId)
-	if err != nil {
-		return elapsed, err
-	}
-
-	// Extract metadata and determine the mount archive path
-	mountArchivePath, meta := c.processPulledArchive(downloadPath, imageId)
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           mountArchivePath,
