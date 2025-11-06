@@ -124,76 +124,84 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
-	// Use OCI lifecycle: create -> start -> wait (via events) -> delete
-	// This is more reliable than `runsc run` which can hang
-	
-	// Step 1: Create the container (doesn't start it yet)
-	createArgs := r.baseArgs()
+	args := r.baseArgs()
+
 	if r.nvproxyEnabled {
-		createArgs = append(createArgs, "--nvproxy=true")
+		args = append(args, "--nvproxy=true")
 	}
-	createArgs = append(createArgs, "create", "--bundle", bundlePath, containerID)
+
+	args = append(args, "run", "--bundle", bundlePath, containerID)
+
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 	
-	createCmd := exec.Command(r.cfg.RunscPath, createArgs...)
-	if err := createCmd.Run(); err != nil {
-		return -1, fmt.Errorf("failed to create container: %w", err)
+	// Set process group so we can kill the entire tree
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
 	}
-	
-	// Ensure we always delete on exit
-	defer func() {
+
+	if opts != nil && opts.OutputWriter != nil {
+		cmd.Stdout = opts.OutputWriter
+		cmd.Stderr = opts.OutputWriter
+	}
+
+	if err := cmd.Start(); err != nil {
+		return -1, fmt.Errorf("failed to start container: %w", err)
+	}
+
+	// Notify PID
+	if opts != nil && opts.Started != nil {
+		select {
+		case opts.Started <- cmd.Process.Pid:
+		default:
+		}
+	}
+
+	// Wait in a goroutine so we can handle cancellation
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	// Wait for either completion or cancellation
+	var err error
+	select {
+	case <-ctx.Done():
+		// Kill the entire process group
+		pgid, _ := syscall.Getpgid(cmd.Process.Pid)
+		if pgid > 0 {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+		// Also kill the process directly
+		_ = cmd.Process.Kill()
+		err = <-done // Wait for it to actually die
+		
+		// Clean up container state
 		deleteArgs := r.baseArgs()
 		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
 		deleteCmd := exec.Command(r.cfg.RunscPath, deleteArgs...)
 		_ = deleteCmd.Run()
-	}()
-	
-	// Step 2: Start the container (begins execution)
-	startArgs := r.baseArgs()
-	startArgs = append(startArgs, "start", containerID)
-	
-	startCmd := exec.Command(r.cfg.RunscPath, startArgs...)
-	if err := startCmd.Run(); err != nil {
-		return -1, fmt.Errorf("failed to start container: %w", err)
+		
+		return -1, ctx.Err()
+		
+	case err = <-done:
+		// Container exited naturally - clean up state
+		deleteArgs := r.baseArgs()
+		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
+		deleteCmd := exec.Command(r.cfg.RunscPath, deleteArgs...)
+		_ = deleteCmd.Run()
 	}
-	
-	// Get container PID and notify
-	if opts != nil && opts.Started != nil {
-		state, err := r.State(ctx, containerID)
-		if err == nil && state.Pid > 0 {
-			select {
-			case opts.Started <- state.Pid:
-			default:
+
+	// Extract exit code
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				return ws.ExitStatus(), nil
 			}
 		}
+		return -1, err
 	}
-	
-	// Step 3: Wait for container to exit by polling state
-	// This is simpler and more reliable than trying to stream events
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	
-	for {
-		select {
-		case <-ctx.Done():
-			// Context cancelled - kill and return
-			_ = r.Kill(context.Background(), containerID, syscall.SIGKILL, &KillOpts{All: true})
-			return -1, ctx.Err()
-			
-		case <-ticker.C:
-			state, err := r.State(context.Background(), containerID)
-			if err != nil || state.Status != "running" {
-				// Container has stopped - return exit code
-				// runsc doesn't provide exit code in state, default to 0 for stopped, 1 for error
-				if err != nil {
-					return 1, nil
-				}
-				if state.Status == "stopped" {
-					return 0, nil
-				}
-				return 1, nil
-			}
-		}
-	}
+
+	return 0, nil
 }
 
 func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process, opts *ExecOpts) error {
