@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -124,6 +125,19 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
+	// Ensure container state is always cleaned up when Run() exits
+	// This is critical for runsc to properly release resources
+	defer func() {
+		// Always delete container state when Run() exits (normal or error)
+		deleteCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		
+		deleteArgs := r.baseArgs()
+		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
+		deleteCmd := exec.CommandContext(deleteCtx, r.cfg.RunscPath, deleteArgs...)
+		_ = deleteCmd.Run() // Best effort - container might already be deleted
+	}()
+	
 	args := r.baseArgs()
 
 	// Enable nvproxy if GPU devices are present
@@ -160,6 +174,8 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	if err == nil && status != 0 {
 		err = fmt.Errorf("%s did not terminate successfully: exit code %d", cmd.Args[0], status)
 	}
+	
+	// Return exits here, defer will call delete
 	return status, err
 }
 
