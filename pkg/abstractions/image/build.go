@@ -20,11 +20,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type RuncClient interface {
-	Exec(containerId string, command string, env []string) (*pb.RunCExecResponse, error)
+type ContainerClient interface {
+	Exec(containerId string, command string, env []string) (*pb.ContainerExecResponse, error)
 	Archive(ctx context.Context, containerId string, imageId string, outputChan chan common.OutputMsg) error
-	Kill(containerId string) (*pb.RunCKillResponse, error)
-	Status(containerId string) (*pb.RunCStatusResponse, error)
+	Kill(containerId string) (*pb.ContainerKillResponse, error)
+	Status(containerId string) (*pb.ContainerStatusResponse, error)
 	StreamLogs(ctx context.Context, containerId string, outputChan chan common.OutputMsg) error
 }
 
@@ -44,18 +44,18 @@ type BuildStep struct {
 }
 
 type Build struct {
-	ctx         context.Context
-	config      types.AppConfig
-	opts        *BuildOpts
-	success     *atomic.Bool
-	containerID string
-	imageID     string
-	outputChan  chan common.OutputMsg
-	authInfo    *auth.AuthInfo
-	runcClient  RuncClient
-	commands    []string
-	micromamba  bool
-	mounts      []types.Mount
+	ctx             context.Context
+	config          types.AppConfig
+	opts            *BuildOpts
+	success         *atomic.Bool
+	containerID     string
+	imageID         string
+	outputChan      chan common.OutputMsg
+	authInfo        *auth.AuthInfo
+	containerClient ContainerClient
+	commands        []string
+	micromamba      bool
+	mounts          []types.Mount
 }
 
 func NewBuild(ctx context.Context, opts *BuildOpts, outputChan chan common.OutputMsg, config types.AppConfig) (*Build, error) {
@@ -128,7 +128,7 @@ func (b *Build) checkForVirtualEnv() bool {
 
 	// Check whether the python version belongs to a virtual environment
 	checkVenvCmd := fmt.Sprintf(`%s -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, b.opts.PythonVersion)
-	if resp, err := b.runcClient.Exec(b.containerID, checkVenvCmd, buildEnv); err == nil && resp.Ok {
+	if resp, err := b.containerClient.Exec(b.containerID, checkVenvCmd, buildEnv); err == nil && resp.Ok {
 		return true
 	}
 
@@ -150,7 +150,7 @@ func (b *Build) setupPythonEnv() error {
 		// The provided python version is python3 (default). If "python3 --version" is successful then there is no need to install
 		// the current default python version.
 		checkPythonVersionCmd := fmt.Sprintf("%s --version", b.opts.PythonVersion)
-		if resp, err := b.runcClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
+		if resp, err := b.containerClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
 			return nil
 		}
 
@@ -168,10 +168,10 @@ func (b *Build) setupPythonEnv() error {
 
 	// Detect if python3.x is installed in the container, if not install it
 	checkPythonVersionCmd := fmt.Sprintf("%s --version", b.opts.PythonVersion)
-	if resp, err := b.runcClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err != nil || !resp.Ok {
+	if resp, err := b.containerClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err != nil || !resp.Ok {
 		// Warn the user if they are overriding an existing python3 environment
 		checkPythonVersionCmd = fmt.Sprintf("%s --version", types.Python3.String())
-		if resp, err := b.runcClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
+		if resp, err := b.containerClient.Exec(b.containerID, checkPythonVersionCmd, buildEnv); err == nil && resp.Ok {
 			b.logWarning(fmt.Sprintf("requested python version (%s) was not detected, but an existing python3 environment was detected. The requested python version will be installed, replacing the existing python environment.\n", b.opts.PythonVersion))
 		}
 
@@ -197,7 +197,7 @@ func (b *Build) executeCommands() error {
 			continue
 		}
 
-		if r, err := b.runcClient.Exec(b.containerID, cmd, buildEnv); err != nil || !r.Ok {
+		if r, err := b.containerClient.Exec(b.containerID, cmd, buildEnv); err != nil || !r.Ok {
 			log.Error().Str("container_id", b.containerID).Str("command", cmd).Err(err).Msg("failed to execute command for container")
 
 			errMsg := ""
@@ -215,7 +215,7 @@ func (b *Build) executeCommands() error {
 }
 
 func (b *Build) archive() error {
-	if err := b.runcClient.Archive(b.ctx, b.containerID, b.imageID, b.outputChan); err != nil {
+	if err := b.containerClient.Archive(b.ctx, b.containerID, b.imageID, b.outputChan); err != nil {
 		b.log(true, err.Error()+"\n")
 		return err
 	}
@@ -245,33 +245,33 @@ func (b *Build) connectToHost(hostname string, tailscale *network.Tailscale) err
 		return err
 	}
 
-	client, err := common.NewRunCClient(hostname, b.authInfo.Token.Key, conn)
+	client, err := common.NewContainerClient(hostname, b.authInfo.Token.Key, conn)
 	if err != nil {
 		b.log(true, "Failed to connect to build container.\n")
 		return err
 	}
 
-	b.runcClient = client
+	b.containerClient = client
 	return nil
 }
 
 func (b *Build) streamLogs() {
-	go b.runcClient.StreamLogs(b.ctx, b.containerID, b.outputChan)
+	go b.containerClient.StreamLogs(b.ctx, b.containerID, b.outputChan)
 }
 
 func (b *Build) killContainer() error {
-	if b.runcClient == nil {
+	if b.containerClient == nil {
 		return nil
 	}
-	_, err := b.runcClient.Kill(b.containerID)
+	_, err := b.containerClient.Kill(b.containerID)
 	return err
 }
 
-func (b *Build) getContainerStatus() (*pb.RunCStatusResponse, error) {
-	if b.runcClient == nil {
+func (b *Build) getContainerStatus() (*pb.ContainerStatusResponse, error) {
+	if b.containerClient == nil {
 		return nil, nil
 	}
-	return b.runcClient.Status(b.containerID)
+	return b.containerClient.Status(b.containerID)
 }
 
 // generateContainerRequest generates a container request for the build container

@@ -19,103 +19,103 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	RunCService_RunCKill_FullMethodName                    = "/runc.RunCService/RunCKill"
-	RunCService_RunCStatus_FullMethodName                  = "/runc.RunCService/RunCStatus"
-	RunCService_RunCExec_FullMethodName                    = "/runc.RunCService/RunCExec"
-	RunCService_RunCStreamLogs_FullMethodName              = "/runc.RunCService/RunCStreamLogs"
-	RunCService_RunCArchive_FullMethodName                 = "/runc.RunCService/RunCArchive"
-	RunCService_RunCCheckpoint_FullMethodName              = "/runc.RunCService/RunCCheckpoint"
-	RunCService_RunCSyncWorkspace_FullMethodName           = "/runc.RunCService/RunCSyncWorkspace"
-	RunCService_RunCSandboxExec_FullMethodName             = "/runc.RunCService/RunCSandboxExec"
-	RunCService_RunCSandboxStatus_FullMethodName           = "/runc.RunCService/RunCSandboxStatus"
-	RunCService_RunCSandboxStdout_FullMethodName           = "/runc.RunCService/RunCSandboxStdout"
-	RunCService_RunCSandboxStderr_FullMethodName           = "/runc.RunCService/RunCSandboxStderr"
-	RunCService_RunCSandboxKill_FullMethodName             = "/runc.RunCService/RunCSandboxKill"
-	RunCService_RunCSandboxListFiles_FullMethodName        = "/runc.RunCService/RunCSandboxListFiles"
-	RunCService_RunCSandboxUploadFile_FullMethodName       = "/runc.RunCService/RunCSandboxUploadFile"
-	RunCService_RunCSandboxDownloadFile_FullMethodName     = "/runc.RunCService/RunCSandboxDownloadFile"
-	RunCService_RunCSandboxStatFile_FullMethodName         = "/runc.RunCService/RunCSandboxStatFile"
-	RunCService_RunCSandboxDeleteFile_FullMethodName       = "/runc.RunCService/RunCSandboxDeleteFile"
-	RunCService_RunCSandboxCreateDirectory_FullMethodName  = "/runc.RunCService/RunCSandboxCreateDirectory"
-	RunCService_RunCSandboxDeleteDirectory_FullMethodName  = "/runc.RunCService/RunCSandboxDeleteDirectory"
-	RunCService_RunCSandboxExposePort_FullMethodName       = "/runc.RunCService/RunCSandboxExposePort"
-	RunCService_RunCSandboxReplaceInFiles_FullMethodName   = "/runc.RunCService/RunCSandboxReplaceInFiles"
-	RunCService_RunCSandboxFindInFiles_FullMethodName      = "/runc.RunCService/RunCSandboxFindInFiles"
-	RunCService_RunCSandboxListExposedPorts_FullMethodName = "/runc.RunCService/RunCSandboxListExposedPorts"
-	RunCService_RunCSandboxListProcesses_FullMethodName    = "/runc.RunCService/RunCSandboxListProcesses"
+	ContainerService_ContainerKill_FullMethodName                    = "/container.ContainerService/ContainerKill"
+	ContainerService_ContainerStatus_FullMethodName                  = "/container.ContainerService/ContainerStatus"
+	ContainerService_ContainerExec_FullMethodName                    = "/container.ContainerService/ContainerExec"
+	ContainerService_ContainerStreamLogs_FullMethodName              = "/container.ContainerService/ContainerStreamLogs"
+	ContainerService_ContainerArchive_FullMethodName                 = "/container.ContainerService/ContainerArchive"
+	ContainerService_ContainerCheckpoint_FullMethodName              = "/container.ContainerService/ContainerCheckpoint"
+	ContainerService_ContainerSyncWorkspace_FullMethodName           = "/container.ContainerService/ContainerSyncWorkspace"
+	ContainerService_ContainerSandboxExec_FullMethodName             = "/container.ContainerService/ContainerSandboxExec"
+	ContainerService_ContainerSandboxStatus_FullMethodName           = "/container.ContainerService/ContainerSandboxStatus"
+	ContainerService_ContainerSandboxStdout_FullMethodName           = "/container.ContainerService/ContainerSandboxStdout"
+	ContainerService_ContainerSandboxStderr_FullMethodName           = "/container.ContainerService/ContainerSandboxStderr"
+	ContainerService_ContainerSandboxKill_FullMethodName             = "/container.ContainerService/ContainerSandboxKill"
+	ContainerService_ContainerSandboxListFiles_FullMethodName        = "/container.ContainerService/ContainerSandboxListFiles"
+	ContainerService_ContainerSandboxUploadFile_FullMethodName       = "/container.ContainerService/ContainerSandboxUploadFile"
+	ContainerService_ContainerSandboxDownloadFile_FullMethodName     = "/container.ContainerService/ContainerSandboxDownloadFile"
+	ContainerService_ContainerSandboxStatFile_FullMethodName         = "/container.ContainerService/ContainerSandboxStatFile"
+	ContainerService_ContainerSandboxDeleteFile_FullMethodName       = "/container.ContainerService/ContainerSandboxDeleteFile"
+	ContainerService_ContainerSandboxCreateDirectory_FullMethodName  = "/container.ContainerService/ContainerSandboxCreateDirectory"
+	ContainerService_ContainerSandboxDeleteDirectory_FullMethodName  = "/container.ContainerService/ContainerSandboxDeleteDirectory"
+	ContainerService_ContainerSandboxExposePort_FullMethodName       = "/container.ContainerService/ContainerSandboxExposePort"
+	ContainerService_ContainerSandboxReplaceInFiles_FullMethodName   = "/container.ContainerService/ContainerSandboxReplaceInFiles"
+	ContainerService_ContainerSandboxFindInFiles_FullMethodName      = "/container.ContainerService/ContainerSandboxFindInFiles"
+	ContainerService_ContainerSandboxListExposedPorts_FullMethodName = "/container.ContainerService/ContainerSandboxListExposedPorts"
+	ContainerService_ContainerSandboxListProcesses_FullMethodName    = "/container.ContainerService/ContainerSandboxListProcesses"
 )
 
-// RunCServiceClient is the client API for RunCService service.
+// ContainerServiceClient is the client API for ContainerService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type RunCServiceClient interface {
-	RunCKill(ctx context.Context, in *RunCKillRequest, opts ...grpc.CallOption) (*RunCKillResponse, error)
-	RunCStatus(ctx context.Context, in *RunCStatusRequest, opts ...grpc.CallOption) (*RunCStatusResponse, error)
-	RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error)
-	RunCStreamLogs(ctx context.Context, in *RunCStreamLogsRequest, opts ...grpc.CallOption) (RunCService_RunCStreamLogsClient, error)
-	RunCArchive(ctx context.Context, in *RunCArchiveRequest, opts ...grpc.CallOption) (RunCService_RunCArchiveClient, error)
-	RunCCheckpoint(ctx context.Context, in *RunCCheckpointRequest, opts ...grpc.CallOption) (*RunCCheckpointResponse, error)
-	RunCSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error)
-	RunCSandboxExec(ctx context.Context, in *RunCSandboxExecRequest, opts ...grpc.CallOption) (*RunCSandboxExecResponse, error)
-	RunCSandboxStatus(ctx context.Context, in *RunCSandboxStatusRequest, opts ...grpc.CallOption) (*RunCSandboxStatusResponse, error)
-	RunCSandboxStdout(ctx context.Context, in *RunCSandboxStdoutRequest, opts ...grpc.CallOption) (*RunCSandboxStdoutResponse, error)
-	RunCSandboxStderr(ctx context.Context, in *RunCSandboxStderrRequest, opts ...grpc.CallOption) (*RunCSandboxStderrResponse, error)
-	RunCSandboxKill(ctx context.Context, in *RunCSandboxKillRequest, opts ...grpc.CallOption) (*RunCSandboxKillResponse, error)
-	RunCSandboxListFiles(ctx context.Context, in *RunCSandboxListFilesRequest, opts ...grpc.CallOption) (*RunCSandboxListFilesResponse, error)
-	RunCSandboxUploadFile(ctx context.Context, in *RunCSandboxUploadFileRequest, opts ...grpc.CallOption) (*RunCSandboxUploadFileResponse, error)
-	RunCSandboxDownloadFile(ctx context.Context, in *RunCSandboxDownloadFileRequest, opts ...grpc.CallOption) (*RunCSandboxDownloadFileResponse, error)
-	RunCSandboxStatFile(ctx context.Context, in *RunCSandboxStatFileRequest, opts ...grpc.CallOption) (*RunCSandboxStatFileResponse, error)
-	RunCSandboxDeleteFile(ctx context.Context, in *RunCSandboxDeleteFileRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteFileResponse, error)
-	RunCSandboxCreateDirectory(ctx context.Context, in *RunCSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxCreateDirectoryResponse, error)
-	RunCSandboxDeleteDirectory(ctx context.Context, in *RunCSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteDirectoryResponse, error)
-	RunCSandboxExposePort(ctx context.Context, in *RunCSandboxExposePortRequest, opts ...grpc.CallOption) (*RunCSandboxExposePortResponse, error)
-	RunCSandboxReplaceInFiles(ctx context.Context, in *RunCSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxReplaceInFilesResponse, error)
-	RunCSandboxFindInFiles(ctx context.Context, in *RunCSandboxFindInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxFindInFilesResponse, error)
-	RunCSandboxListExposedPorts(ctx context.Context, in *RunCSandboxListExposedPortsRequest, opts ...grpc.CallOption) (*RunCSandboxListExposedPortsResponse, error)
-	RunCSandboxListProcesses(ctx context.Context, in *RunCSandboxListProcessesRequest, opts ...grpc.CallOption) (*RunCSandboxListProcessesResponse, error)
+type ContainerServiceClient interface {
+	ContainerKill(ctx context.Context, in *ContainerKillRequest, opts ...grpc.CallOption) (*ContainerKillResponse, error)
+	ContainerStatus(ctx context.Context, in *ContainerStatusRequest, opts ...grpc.CallOption) (*ContainerStatusResponse, error)
+	ContainerExec(ctx context.Context, in *ContainerExecRequest, opts ...grpc.CallOption) (*ContainerExecResponse, error)
+	ContainerStreamLogs(ctx context.Context, in *ContainerStreamLogsRequest, opts ...grpc.CallOption) (ContainerService_ContainerStreamLogsClient, error)
+	ContainerArchive(ctx context.Context, in *ContainerArchiveRequest, opts ...grpc.CallOption) (ContainerService_ContainerArchiveClient, error)
+	ContainerCheckpoint(ctx context.Context, in *ContainerCheckpointRequest, opts ...grpc.CallOption) (*ContainerCheckpointResponse, error)
+	ContainerSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error)
+	ContainerSandboxExec(ctx context.Context, in *ContainerSandboxExecRequest, opts ...grpc.CallOption) (*ContainerSandboxExecResponse, error)
+	ContainerSandboxStatus(ctx context.Context, in *ContainerSandboxStatusRequest, opts ...grpc.CallOption) (*ContainerSandboxStatusResponse, error)
+	ContainerSandboxStdout(ctx context.Context, in *ContainerSandboxStdoutRequest, opts ...grpc.CallOption) (*ContainerSandboxStdoutResponse, error)
+	ContainerSandboxStderr(ctx context.Context, in *ContainerSandboxStderrRequest, opts ...grpc.CallOption) (*ContainerSandboxStderrResponse, error)
+	ContainerSandboxKill(ctx context.Context, in *ContainerSandboxKillRequest, opts ...grpc.CallOption) (*ContainerSandboxKillResponse, error)
+	ContainerSandboxListFiles(ctx context.Context, in *ContainerSandboxListFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxListFilesResponse, error)
+	ContainerSandboxUploadFile(ctx context.Context, in *ContainerSandboxUploadFileRequest, opts ...grpc.CallOption) (*ContainerSandboxUploadFileResponse, error)
+	ContainerSandboxDownloadFile(ctx context.Context, in *ContainerSandboxDownloadFileRequest, opts ...grpc.CallOption) (*ContainerSandboxDownloadFileResponse, error)
+	ContainerSandboxStatFile(ctx context.Context, in *ContainerSandboxStatFileRequest, opts ...grpc.CallOption) (*ContainerSandboxStatFileResponse, error)
+	ContainerSandboxDeleteFile(ctx context.Context, in *ContainerSandboxDeleteFileRequest, opts ...grpc.CallOption) (*ContainerSandboxDeleteFileResponse, error)
+	ContainerSandboxCreateDirectory(ctx context.Context, in *ContainerSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*ContainerSandboxCreateDirectoryResponse, error)
+	ContainerSandboxDeleteDirectory(ctx context.Context, in *ContainerSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*ContainerSandboxDeleteDirectoryResponse, error)
+	ContainerSandboxExposePort(ctx context.Context, in *ContainerSandboxExposePortRequest, opts ...grpc.CallOption) (*ContainerSandboxExposePortResponse, error)
+	ContainerSandboxReplaceInFiles(ctx context.Context, in *ContainerSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxReplaceInFilesResponse, error)
+	ContainerSandboxFindInFiles(ctx context.Context, in *ContainerSandboxFindInFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxFindInFilesResponse, error)
+	ContainerSandboxListExposedPorts(ctx context.Context, in *ContainerSandboxListExposedPortsRequest, opts ...grpc.CallOption) (*ContainerSandboxListExposedPortsResponse, error)
+	ContainerSandboxListProcesses(ctx context.Context, in *ContainerSandboxListProcessesRequest, opts ...grpc.CallOption) (*ContainerSandboxListProcessesResponse, error)
 }
 
-type runCServiceClient struct {
+type containerServiceClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewRunCServiceClient(cc grpc.ClientConnInterface) RunCServiceClient {
-	return &runCServiceClient{cc}
+func NewContainerServiceClient(cc grpc.ClientConnInterface) ContainerServiceClient {
+	return &containerServiceClient{cc}
 }
 
-func (c *runCServiceClient) RunCKill(ctx context.Context, in *RunCKillRequest, opts ...grpc.CallOption) (*RunCKillResponse, error) {
-	out := new(RunCKillResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCKill_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerKill(ctx context.Context, in *ContainerKillRequest, opts ...grpc.CallOption) (*ContainerKillResponse, error) {
+	out := new(ContainerKillResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerKill_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCStatus(ctx context.Context, in *RunCStatusRequest, opts ...grpc.CallOption) (*RunCStatusResponse, error) {
-	out := new(RunCStatusResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCStatus_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerStatus(ctx context.Context, in *ContainerStatusRequest, opts ...grpc.CallOption) (*ContainerStatusResponse, error) {
+	out := new(ContainerStatusResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerStatus_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCExec(ctx context.Context, in *RunCExecRequest, opts ...grpc.CallOption) (*RunCExecResponse, error) {
-	out := new(RunCExecResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCExec_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerExec(ctx context.Context, in *ContainerExecRequest, opts ...grpc.CallOption) (*ContainerExecResponse, error) {
+	out := new(ContainerExecResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerExec_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCStreamLogs(ctx context.Context, in *RunCStreamLogsRequest, opts ...grpc.CallOption) (RunCService_RunCStreamLogsClient, error) {
-	stream, err := c.cc.NewStream(ctx, &RunCService_ServiceDesc.Streams[0], RunCService_RunCStreamLogs_FullMethodName, opts...)
+func (c *containerServiceClient) ContainerStreamLogs(ctx context.Context, in *ContainerStreamLogsRequest, opts ...grpc.CallOption) (ContainerService_ContainerStreamLogsClient, error) {
+	stream, err := c.cc.NewStream(ctx, &ContainerService_ServiceDesc.Streams[0], ContainerService_ContainerStreamLogs_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &runCServiceRunCStreamLogsClient{stream}
+	x := &containerServiceContainerStreamLogsClient{stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -125,29 +125,29 @@ func (c *runCServiceClient) RunCStreamLogs(ctx context.Context, in *RunCStreamLo
 	return x, nil
 }
 
-type RunCService_RunCStreamLogsClient interface {
-	Recv() (*RunCLogEntry, error)
+type ContainerService_ContainerStreamLogsClient interface {
+	Recv() (*ContainerLogEntry, error)
 	grpc.ClientStream
 }
 
-type runCServiceRunCStreamLogsClient struct {
+type containerServiceContainerStreamLogsClient struct {
 	grpc.ClientStream
 }
 
-func (x *runCServiceRunCStreamLogsClient) Recv() (*RunCLogEntry, error) {
-	m := new(RunCLogEntry)
+func (x *containerServiceContainerStreamLogsClient) Recv() (*ContainerLogEntry, error) {
+	m := new(ContainerLogEntry)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-func (c *runCServiceClient) RunCArchive(ctx context.Context, in *RunCArchiveRequest, opts ...grpc.CallOption) (RunCService_RunCArchiveClient, error) {
-	stream, err := c.cc.NewStream(ctx, &RunCService_ServiceDesc.Streams[1], RunCService_RunCArchive_FullMethodName, opts...)
+func (c *containerServiceClient) ContainerArchive(ctx context.Context, in *ContainerArchiveRequest, opts ...grpc.CallOption) (ContainerService_ContainerArchiveClient, error) {
+	stream, err := c.cc.NewStream(ctx, &ContainerService_ServiceDesc.Streams[1], ContainerService_ContainerArchive_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &runCServiceRunCArchiveClient{stream}
+	x := &containerServiceContainerArchiveClient{stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -157,857 +157,857 @@ func (c *runCServiceClient) RunCArchive(ctx context.Context, in *RunCArchiveRequ
 	return x, nil
 }
 
-type RunCService_RunCArchiveClient interface {
-	Recv() (*RunCArchiveResponse, error)
+type ContainerService_ContainerArchiveClient interface {
+	Recv() (*ContainerArchiveResponse, error)
 	grpc.ClientStream
 }
 
-type runCServiceRunCArchiveClient struct {
+type containerServiceContainerArchiveClient struct {
 	grpc.ClientStream
 }
 
-func (x *runCServiceRunCArchiveClient) Recv() (*RunCArchiveResponse, error) {
-	m := new(RunCArchiveResponse)
+func (x *containerServiceContainerArchiveClient) Recv() (*ContainerArchiveResponse, error) {
+	m := new(ContainerArchiveResponse)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
 	return m, nil
 }
 
-func (c *runCServiceClient) RunCCheckpoint(ctx context.Context, in *RunCCheckpointRequest, opts ...grpc.CallOption) (*RunCCheckpointResponse, error) {
-	out := new(RunCCheckpointResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCCheckpoint_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerCheckpoint(ctx context.Context, in *ContainerCheckpointRequest, opts ...grpc.CallOption) (*ContainerCheckpointResponse, error) {
+	out := new(ContainerCheckpointResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerCheckpoint_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error) {
+func (c *containerServiceClient) ContainerSyncWorkspace(ctx context.Context, in *SyncContainerWorkspaceRequest, opts ...grpc.CallOption) (*SyncContainerWorkspaceResponse, error) {
 	out := new(SyncContainerWorkspaceResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSyncWorkspace_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSyncWorkspace_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxExec(ctx context.Context, in *RunCSandboxExecRequest, opts ...grpc.CallOption) (*RunCSandboxExecResponse, error) {
-	out := new(RunCSandboxExecResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxExec_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxExec(ctx context.Context, in *ContainerSandboxExecRequest, opts ...grpc.CallOption) (*ContainerSandboxExecResponse, error) {
+	out := new(ContainerSandboxExecResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxExec_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxStatus(ctx context.Context, in *RunCSandboxStatusRequest, opts ...grpc.CallOption) (*RunCSandboxStatusResponse, error) {
-	out := new(RunCSandboxStatusResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxStatus_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxStatus(ctx context.Context, in *ContainerSandboxStatusRequest, opts ...grpc.CallOption) (*ContainerSandboxStatusResponse, error) {
+	out := new(ContainerSandboxStatusResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxStatus_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxStdout(ctx context.Context, in *RunCSandboxStdoutRequest, opts ...grpc.CallOption) (*RunCSandboxStdoutResponse, error) {
-	out := new(RunCSandboxStdoutResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxStdout_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxStdout(ctx context.Context, in *ContainerSandboxStdoutRequest, opts ...grpc.CallOption) (*ContainerSandboxStdoutResponse, error) {
+	out := new(ContainerSandboxStdoutResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxStdout_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxStderr(ctx context.Context, in *RunCSandboxStderrRequest, opts ...grpc.CallOption) (*RunCSandboxStderrResponse, error) {
-	out := new(RunCSandboxStderrResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxStderr_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxStderr(ctx context.Context, in *ContainerSandboxStderrRequest, opts ...grpc.CallOption) (*ContainerSandboxStderrResponse, error) {
+	out := new(ContainerSandboxStderrResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxStderr_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxKill(ctx context.Context, in *RunCSandboxKillRequest, opts ...grpc.CallOption) (*RunCSandboxKillResponse, error) {
-	out := new(RunCSandboxKillResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxKill_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxKill(ctx context.Context, in *ContainerSandboxKillRequest, opts ...grpc.CallOption) (*ContainerSandboxKillResponse, error) {
+	out := new(ContainerSandboxKillResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxKill_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxListFiles(ctx context.Context, in *RunCSandboxListFilesRequest, opts ...grpc.CallOption) (*RunCSandboxListFilesResponse, error) {
-	out := new(RunCSandboxListFilesResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxListFiles_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxListFiles(ctx context.Context, in *ContainerSandboxListFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxListFilesResponse, error) {
+	out := new(ContainerSandboxListFilesResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxListFiles_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxUploadFile(ctx context.Context, in *RunCSandboxUploadFileRequest, opts ...grpc.CallOption) (*RunCSandboxUploadFileResponse, error) {
-	out := new(RunCSandboxUploadFileResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxUploadFile_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxUploadFile(ctx context.Context, in *ContainerSandboxUploadFileRequest, opts ...grpc.CallOption) (*ContainerSandboxUploadFileResponse, error) {
+	out := new(ContainerSandboxUploadFileResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxUploadFile_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxDownloadFile(ctx context.Context, in *RunCSandboxDownloadFileRequest, opts ...grpc.CallOption) (*RunCSandboxDownloadFileResponse, error) {
-	out := new(RunCSandboxDownloadFileResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxDownloadFile_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxDownloadFile(ctx context.Context, in *ContainerSandboxDownloadFileRequest, opts ...grpc.CallOption) (*ContainerSandboxDownloadFileResponse, error) {
+	out := new(ContainerSandboxDownloadFileResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxDownloadFile_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxStatFile(ctx context.Context, in *RunCSandboxStatFileRequest, opts ...grpc.CallOption) (*RunCSandboxStatFileResponse, error) {
-	out := new(RunCSandboxStatFileResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxStatFile_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxStatFile(ctx context.Context, in *ContainerSandboxStatFileRequest, opts ...grpc.CallOption) (*ContainerSandboxStatFileResponse, error) {
+	out := new(ContainerSandboxStatFileResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxStatFile_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxDeleteFile(ctx context.Context, in *RunCSandboxDeleteFileRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteFileResponse, error) {
-	out := new(RunCSandboxDeleteFileResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxDeleteFile_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxDeleteFile(ctx context.Context, in *ContainerSandboxDeleteFileRequest, opts ...grpc.CallOption) (*ContainerSandboxDeleteFileResponse, error) {
+	out := new(ContainerSandboxDeleteFileResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxDeleteFile_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxCreateDirectory(ctx context.Context, in *RunCSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxCreateDirectoryResponse, error) {
-	out := new(RunCSandboxCreateDirectoryResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxCreateDirectory_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxCreateDirectory(ctx context.Context, in *ContainerSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*ContainerSandboxCreateDirectoryResponse, error) {
+	out := new(ContainerSandboxCreateDirectoryResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxCreateDirectory_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxDeleteDirectory(ctx context.Context, in *RunCSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*RunCSandboxDeleteDirectoryResponse, error) {
-	out := new(RunCSandboxDeleteDirectoryResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxDeleteDirectory_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxDeleteDirectory(ctx context.Context, in *ContainerSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*ContainerSandboxDeleteDirectoryResponse, error) {
+	out := new(ContainerSandboxDeleteDirectoryResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxDeleteDirectory_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxExposePort(ctx context.Context, in *RunCSandboxExposePortRequest, opts ...grpc.CallOption) (*RunCSandboxExposePortResponse, error) {
-	out := new(RunCSandboxExposePortResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxExposePort_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxExposePort(ctx context.Context, in *ContainerSandboxExposePortRequest, opts ...grpc.CallOption) (*ContainerSandboxExposePortResponse, error) {
+	out := new(ContainerSandboxExposePortResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxExposePort_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxReplaceInFiles(ctx context.Context, in *RunCSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxReplaceInFilesResponse, error) {
-	out := new(RunCSandboxReplaceInFilesResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxReplaceInFiles_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxReplaceInFiles(ctx context.Context, in *ContainerSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxReplaceInFilesResponse, error) {
+	out := new(ContainerSandboxReplaceInFilesResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxReplaceInFiles_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxFindInFiles(ctx context.Context, in *RunCSandboxFindInFilesRequest, opts ...grpc.CallOption) (*RunCSandboxFindInFilesResponse, error) {
-	out := new(RunCSandboxFindInFilesResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxFindInFiles_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxFindInFiles(ctx context.Context, in *ContainerSandboxFindInFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxFindInFilesResponse, error) {
+	out := new(ContainerSandboxFindInFilesResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxFindInFiles_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxListExposedPorts(ctx context.Context, in *RunCSandboxListExposedPortsRequest, opts ...grpc.CallOption) (*RunCSandboxListExposedPortsResponse, error) {
-	out := new(RunCSandboxListExposedPortsResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxListExposedPorts_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxListExposedPorts(ctx context.Context, in *ContainerSandboxListExposedPortsRequest, opts ...grpc.CallOption) (*ContainerSandboxListExposedPortsResponse, error) {
+	out := new(ContainerSandboxListExposedPortsResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxListExposedPorts_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *runCServiceClient) RunCSandboxListProcesses(ctx context.Context, in *RunCSandboxListProcessesRequest, opts ...grpc.CallOption) (*RunCSandboxListProcessesResponse, error) {
-	out := new(RunCSandboxListProcessesResponse)
-	err := c.cc.Invoke(ctx, RunCService_RunCSandboxListProcesses_FullMethodName, in, out, opts...)
+func (c *containerServiceClient) ContainerSandboxListProcesses(ctx context.Context, in *ContainerSandboxListProcessesRequest, opts ...grpc.CallOption) (*ContainerSandboxListProcessesResponse, error) {
+	out := new(ContainerSandboxListProcessesResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxListProcesses_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// RunCServiceServer is the server API for RunCService service.
-// All implementations must embed UnimplementedRunCServiceServer
+// ContainerServiceServer is the server API for ContainerService service.
+// All implementations must embed UnimplementedContainerServiceServer
 // for forward compatibility
-type RunCServiceServer interface {
-	RunCKill(context.Context, *RunCKillRequest) (*RunCKillResponse, error)
-	RunCStatus(context.Context, *RunCStatusRequest) (*RunCStatusResponse, error)
-	RunCExec(context.Context, *RunCExecRequest) (*RunCExecResponse, error)
-	RunCStreamLogs(*RunCStreamLogsRequest, RunCService_RunCStreamLogsServer) error
-	RunCArchive(*RunCArchiveRequest, RunCService_RunCArchiveServer) error
-	RunCCheckpoint(context.Context, *RunCCheckpointRequest) (*RunCCheckpointResponse, error)
-	RunCSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error)
-	RunCSandboxExec(context.Context, *RunCSandboxExecRequest) (*RunCSandboxExecResponse, error)
-	RunCSandboxStatus(context.Context, *RunCSandboxStatusRequest) (*RunCSandboxStatusResponse, error)
-	RunCSandboxStdout(context.Context, *RunCSandboxStdoutRequest) (*RunCSandboxStdoutResponse, error)
-	RunCSandboxStderr(context.Context, *RunCSandboxStderrRequest) (*RunCSandboxStderrResponse, error)
-	RunCSandboxKill(context.Context, *RunCSandboxKillRequest) (*RunCSandboxKillResponse, error)
-	RunCSandboxListFiles(context.Context, *RunCSandboxListFilesRequest) (*RunCSandboxListFilesResponse, error)
-	RunCSandboxUploadFile(context.Context, *RunCSandboxUploadFileRequest) (*RunCSandboxUploadFileResponse, error)
-	RunCSandboxDownloadFile(context.Context, *RunCSandboxDownloadFileRequest) (*RunCSandboxDownloadFileResponse, error)
-	RunCSandboxStatFile(context.Context, *RunCSandboxStatFileRequest) (*RunCSandboxStatFileResponse, error)
-	RunCSandboxDeleteFile(context.Context, *RunCSandboxDeleteFileRequest) (*RunCSandboxDeleteFileResponse, error)
-	RunCSandboxCreateDirectory(context.Context, *RunCSandboxCreateDirectoryRequest) (*RunCSandboxCreateDirectoryResponse, error)
-	RunCSandboxDeleteDirectory(context.Context, *RunCSandboxDeleteDirectoryRequest) (*RunCSandboxDeleteDirectoryResponse, error)
-	RunCSandboxExposePort(context.Context, *RunCSandboxExposePortRequest) (*RunCSandboxExposePortResponse, error)
-	RunCSandboxReplaceInFiles(context.Context, *RunCSandboxReplaceInFilesRequest) (*RunCSandboxReplaceInFilesResponse, error)
-	RunCSandboxFindInFiles(context.Context, *RunCSandboxFindInFilesRequest) (*RunCSandboxFindInFilesResponse, error)
-	RunCSandboxListExposedPorts(context.Context, *RunCSandboxListExposedPortsRequest) (*RunCSandboxListExposedPortsResponse, error)
-	RunCSandboxListProcesses(context.Context, *RunCSandboxListProcessesRequest) (*RunCSandboxListProcessesResponse, error)
-	mustEmbedUnimplementedRunCServiceServer()
+type ContainerServiceServer interface {
+	ContainerKill(context.Context, *ContainerKillRequest) (*ContainerKillResponse, error)
+	ContainerStatus(context.Context, *ContainerStatusRequest) (*ContainerStatusResponse, error)
+	ContainerExec(context.Context, *ContainerExecRequest) (*ContainerExecResponse, error)
+	ContainerStreamLogs(*ContainerStreamLogsRequest, ContainerService_ContainerStreamLogsServer) error
+	ContainerArchive(*ContainerArchiveRequest, ContainerService_ContainerArchiveServer) error
+	ContainerCheckpoint(context.Context, *ContainerCheckpointRequest) (*ContainerCheckpointResponse, error)
+	ContainerSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error)
+	ContainerSandboxExec(context.Context, *ContainerSandboxExecRequest) (*ContainerSandboxExecResponse, error)
+	ContainerSandboxStatus(context.Context, *ContainerSandboxStatusRequest) (*ContainerSandboxStatusResponse, error)
+	ContainerSandboxStdout(context.Context, *ContainerSandboxStdoutRequest) (*ContainerSandboxStdoutResponse, error)
+	ContainerSandboxStderr(context.Context, *ContainerSandboxStderrRequest) (*ContainerSandboxStderrResponse, error)
+	ContainerSandboxKill(context.Context, *ContainerSandboxKillRequest) (*ContainerSandboxKillResponse, error)
+	ContainerSandboxListFiles(context.Context, *ContainerSandboxListFilesRequest) (*ContainerSandboxListFilesResponse, error)
+	ContainerSandboxUploadFile(context.Context, *ContainerSandboxUploadFileRequest) (*ContainerSandboxUploadFileResponse, error)
+	ContainerSandboxDownloadFile(context.Context, *ContainerSandboxDownloadFileRequest) (*ContainerSandboxDownloadFileResponse, error)
+	ContainerSandboxStatFile(context.Context, *ContainerSandboxStatFileRequest) (*ContainerSandboxStatFileResponse, error)
+	ContainerSandboxDeleteFile(context.Context, *ContainerSandboxDeleteFileRequest) (*ContainerSandboxDeleteFileResponse, error)
+	ContainerSandboxCreateDirectory(context.Context, *ContainerSandboxCreateDirectoryRequest) (*ContainerSandboxCreateDirectoryResponse, error)
+	ContainerSandboxDeleteDirectory(context.Context, *ContainerSandboxDeleteDirectoryRequest) (*ContainerSandboxDeleteDirectoryResponse, error)
+	ContainerSandboxExposePort(context.Context, *ContainerSandboxExposePortRequest) (*ContainerSandboxExposePortResponse, error)
+	ContainerSandboxReplaceInFiles(context.Context, *ContainerSandboxReplaceInFilesRequest) (*ContainerSandboxReplaceInFilesResponse, error)
+	ContainerSandboxFindInFiles(context.Context, *ContainerSandboxFindInFilesRequest) (*ContainerSandboxFindInFilesResponse, error)
+	ContainerSandboxListExposedPorts(context.Context, *ContainerSandboxListExposedPortsRequest) (*ContainerSandboxListExposedPortsResponse, error)
+	ContainerSandboxListProcesses(context.Context, *ContainerSandboxListProcessesRequest) (*ContainerSandboxListProcessesResponse, error)
+	mustEmbedUnimplementedContainerServiceServer()
 }
 
-// UnimplementedRunCServiceServer must be embedded to have forward compatible implementations.
-type UnimplementedRunCServiceServer struct {
+// UnimplementedContainerServiceServer must be embedded to have forward compatible implementations.
+type UnimplementedContainerServiceServer struct {
 }
 
-func (UnimplementedRunCServiceServer) RunCKill(context.Context, *RunCKillRequest) (*RunCKillResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCKill not implemented")
+func (UnimplementedContainerServiceServer) ContainerKill(context.Context, *ContainerKillRequest) (*ContainerKillResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerKill not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCStatus(context.Context, *RunCStatusRequest) (*RunCStatusResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCStatus not implemented")
+func (UnimplementedContainerServiceServer) ContainerStatus(context.Context, *ContainerStatusRequest) (*ContainerStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerStatus not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCExec(context.Context, *RunCExecRequest) (*RunCExecResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCExec not implemented")
+func (UnimplementedContainerServiceServer) ContainerExec(context.Context, *ContainerExecRequest) (*ContainerExecResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerExec not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCStreamLogs(*RunCStreamLogsRequest, RunCService_RunCStreamLogsServer) error {
-	return status.Errorf(codes.Unimplemented, "method RunCStreamLogs not implemented")
+func (UnimplementedContainerServiceServer) ContainerStreamLogs(*ContainerStreamLogsRequest, ContainerService_ContainerStreamLogsServer) error {
+	return status.Errorf(codes.Unimplemented, "method ContainerStreamLogs not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCArchive(*RunCArchiveRequest, RunCService_RunCArchiveServer) error {
-	return status.Errorf(codes.Unimplemented, "method RunCArchive not implemented")
+func (UnimplementedContainerServiceServer) ContainerArchive(*ContainerArchiveRequest, ContainerService_ContainerArchiveServer) error {
+	return status.Errorf(codes.Unimplemented, "method ContainerArchive not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCCheckpoint(context.Context, *RunCCheckpointRequest) (*RunCCheckpointResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCCheckpoint not implemented")
+func (UnimplementedContainerServiceServer) ContainerCheckpoint(context.Context, *ContainerCheckpointRequest) (*ContainerCheckpointResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerCheckpoint not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSyncWorkspace not implemented")
+func (UnimplementedContainerServiceServer) ContainerSyncWorkspace(context.Context, *SyncContainerWorkspaceRequest) (*SyncContainerWorkspaceResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSyncWorkspace not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxExec(context.Context, *RunCSandboxExecRequest) (*RunCSandboxExecResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxExec not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxExec(context.Context, *ContainerSandboxExecRequest) (*ContainerSandboxExecResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxExec not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxStatus(context.Context, *RunCSandboxStatusRequest) (*RunCSandboxStatusResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxStatus not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxStatus(context.Context, *ContainerSandboxStatusRequest) (*ContainerSandboxStatusResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxStatus not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxStdout(context.Context, *RunCSandboxStdoutRequest) (*RunCSandboxStdoutResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxStdout not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxStdout(context.Context, *ContainerSandboxStdoutRequest) (*ContainerSandboxStdoutResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxStdout not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxStderr(context.Context, *RunCSandboxStderrRequest) (*RunCSandboxStderrResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxStderr not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxStderr(context.Context, *ContainerSandboxStderrRequest) (*ContainerSandboxStderrResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxStderr not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxKill(context.Context, *RunCSandboxKillRequest) (*RunCSandboxKillResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxKill not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxKill(context.Context, *ContainerSandboxKillRequest) (*ContainerSandboxKillResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxKill not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxListFiles(context.Context, *RunCSandboxListFilesRequest) (*RunCSandboxListFilesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxListFiles not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxListFiles(context.Context, *ContainerSandboxListFilesRequest) (*ContainerSandboxListFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxListFiles not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxUploadFile(context.Context, *RunCSandboxUploadFileRequest) (*RunCSandboxUploadFileResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxUploadFile not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxUploadFile(context.Context, *ContainerSandboxUploadFileRequest) (*ContainerSandboxUploadFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxUploadFile not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxDownloadFile(context.Context, *RunCSandboxDownloadFileRequest) (*RunCSandboxDownloadFileResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxDownloadFile not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxDownloadFile(context.Context, *ContainerSandboxDownloadFileRequest) (*ContainerSandboxDownloadFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxDownloadFile not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxStatFile(context.Context, *RunCSandboxStatFileRequest) (*RunCSandboxStatFileResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxStatFile not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxStatFile(context.Context, *ContainerSandboxStatFileRequest) (*ContainerSandboxStatFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxStatFile not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxDeleteFile(context.Context, *RunCSandboxDeleteFileRequest) (*RunCSandboxDeleteFileResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxDeleteFile not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxDeleteFile(context.Context, *ContainerSandboxDeleteFileRequest) (*ContainerSandboxDeleteFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxDeleteFile not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxCreateDirectory(context.Context, *RunCSandboxCreateDirectoryRequest) (*RunCSandboxCreateDirectoryResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxCreateDirectory not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxCreateDirectory(context.Context, *ContainerSandboxCreateDirectoryRequest) (*ContainerSandboxCreateDirectoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxCreateDirectory not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxDeleteDirectory(context.Context, *RunCSandboxDeleteDirectoryRequest) (*RunCSandboxDeleteDirectoryResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxDeleteDirectory not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxDeleteDirectory(context.Context, *ContainerSandboxDeleteDirectoryRequest) (*ContainerSandboxDeleteDirectoryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxDeleteDirectory not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxExposePort(context.Context, *RunCSandboxExposePortRequest) (*RunCSandboxExposePortResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxExposePort not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxExposePort(context.Context, *ContainerSandboxExposePortRequest) (*ContainerSandboxExposePortResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxExposePort not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxReplaceInFiles(context.Context, *RunCSandboxReplaceInFilesRequest) (*RunCSandboxReplaceInFilesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxReplaceInFiles not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxReplaceInFiles(context.Context, *ContainerSandboxReplaceInFilesRequest) (*ContainerSandboxReplaceInFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxReplaceInFiles not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxFindInFiles(context.Context, *RunCSandboxFindInFilesRequest) (*RunCSandboxFindInFilesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxFindInFiles not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxFindInFiles(context.Context, *ContainerSandboxFindInFilesRequest) (*ContainerSandboxFindInFilesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxFindInFiles not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxListExposedPorts(context.Context, *RunCSandboxListExposedPortsRequest) (*RunCSandboxListExposedPortsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxListExposedPorts not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxListExposedPorts(context.Context, *ContainerSandboxListExposedPortsRequest) (*ContainerSandboxListExposedPortsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxListExposedPorts not implemented")
 }
-func (UnimplementedRunCServiceServer) RunCSandboxListProcesses(context.Context, *RunCSandboxListProcessesRequest) (*RunCSandboxListProcessesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RunCSandboxListProcesses not implemented")
+func (UnimplementedContainerServiceServer) ContainerSandboxListProcesses(context.Context, *ContainerSandboxListProcessesRequest) (*ContainerSandboxListProcessesResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxListProcesses not implemented")
 }
-func (UnimplementedRunCServiceServer) mustEmbedUnimplementedRunCServiceServer() {}
+func (UnimplementedContainerServiceServer) mustEmbedUnimplementedContainerServiceServer() {}
 
-// UnsafeRunCServiceServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to RunCServiceServer will
+// UnsafeContainerServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to ContainerServiceServer will
 // result in compilation errors.
-type UnsafeRunCServiceServer interface {
-	mustEmbedUnimplementedRunCServiceServer()
+type UnsafeContainerServiceServer interface {
+	mustEmbedUnimplementedContainerServiceServer()
 }
 
-func RegisterRunCServiceServer(s grpc.ServiceRegistrar, srv RunCServiceServer) {
-	s.RegisterService(&RunCService_ServiceDesc, srv)
+func RegisterContainerServiceServer(s grpc.ServiceRegistrar, srv ContainerServiceServer) {
+	s.RegisterService(&ContainerService_ServiceDesc, srv)
 }
 
-func _RunCService_RunCKill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCKillRequest)
+func _ContainerService_ContainerKill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerKillRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCKill(ctx, in)
+		return srv.(ContainerServiceServer).ContainerKill(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCKill_FullMethodName,
+		FullMethod: ContainerService_ContainerKill_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCKill(ctx, req.(*RunCKillRequest))
+		return srv.(ContainerServiceServer).ContainerKill(ctx, req.(*ContainerKillRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCStatusRequest)
+func _ContainerService_ContainerStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerStatusRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCStatus(ctx, in)
+		return srv.(ContainerServiceServer).ContainerStatus(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCStatus_FullMethodName,
+		FullMethod: ContainerService_ContainerStatus_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCStatus(ctx, req.(*RunCStatusRequest))
+		return srv.(ContainerServiceServer).ContainerStatus(ctx, req.(*ContainerStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCExecRequest)
+func _ContainerService_ContainerExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerExecRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCExec(ctx, in)
+		return srv.(ContainerServiceServer).ContainerExec(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCExec_FullMethodName,
+		FullMethod: ContainerService_ContainerExec_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCExec(ctx, req.(*RunCExecRequest))
+		return srv.(ContainerServiceServer).ContainerExec(ctx, req.(*ContainerExecRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCStreamLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(RunCStreamLogsRequest)
+func _ContainerService_ContainerStreamLogs_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ContainerStreamLogsRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(RunCServiceServer).RunCStreamLogs(m, &runCServiceRunCStreamLogsServer{stream})
+	return srv.(ContainerServiceServer).ContainerStreamLogs(m, &containerServiceContainerStreamLogsServer{stream})
 }
 
-type RunCService_RunCStreamLogsServer interface {
-	Send(*RunCLogEntry) error
+type ContainerService_ContainerStreamLogsServer interface {
+	Send(*ContainerLogEntry) error
 	grpc.ServerStream
 }
 
-type runCServiceRunCStreamLogsServer struct {
+type containerServiceContainerStreamLogsServer struct {
 	grpc.ServerStream
 }
 
-func (x *runCServiceRunCStreamLogsServer) Send(m *RunCLogEntry) error {
+func (x *containerServiceContainerStreamLogsServer) Send(m *ContainerLogEntry) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func _RunCService_RunCArchive_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(RunCArchiveRequest)
+func _ContainerService_ContainerArchive_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ContainerArchiveRequest)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(RunCServiceServer).RunCArchive(m, &runCServiceRunCArchiveServer{stream})
+	return srv.(ContainerServiceServer).ContainerArchive(m, &containerServiceContainerArchiveServer{stream})
 }
 
-type RunCService_RunCArchiveServer interface {
-	Send(*RunCArchiveResponse) error
+type ContainerService_ContainerArchiveServer interface {
+	Send(*ContainerArchiveResponse) error
 	grpc.ServerStream
 }
 
-type runCServiceRunCArchiveServer struct {
+type containerServiceContainerArchiveServer struct {
 	grpc.ServerStream
 }
 
-func (x *runCServiceRunCArchiveServer) Send(m *RunCArchiveResponse) error {
+func (x *containerServiceContainerArchiveServer) Send(m *ContainerArchiveResponse) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func _RunCService_RunCCheckpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCCheckpointRequest)
+func _ContainerService_ContainerCheckpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerCheckpointRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCCheckpoint(ctx, in)
+		return srv.(ContainerServiceServer).ContainerCheckpoint(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCCheckpoint_FullMethodName,
+		FullMethod: ContainerService_ContainerCheckpoint_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCCheckpoint(ctx, req.(*RunCCheckpointRequest))
+		return srv.(ContainerServiceServer).ContainerCheckpoint(ctx, req.(*ContainerCheckpointRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSyncWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _ContainerService_ContainerSyncWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SyncContainerWorkspaceRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSyncWorkspace(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSyncWorkspace(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSyncWorkspace_FullMethodName,
+		FullMethod: ContainerService_ContainerSyncWorkspace_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSyncWorkspace(ctx, req.(*SyncContainerWorkspaceRequest))
+		return srv.(ContainerServiceServer).ContainerSyncWorkspace(ctx, req.(*SyncContainerWorkspaceRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxExecRequest)
+func _ContainerService_ContainerSandboxExec_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxExecRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxExec(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxExec(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxExec_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxExec_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxExec(ctx, req.(*RunCSandboxExecRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxExec(ctx, req.(*ContainerSandboxExecRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxStatusRequest)
+func _ContainerService_ContainerSandboxStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxStatusRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxStatus(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxStatus(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxStatus_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxStatus_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxStatus(ctx, req.(*RunCSandboxStatusRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxStatus(ctx, req.(*ContainerSandboxStatusRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxStdout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxStdoutRequest)
+func _ContainerService_ContainerSandboxStdout_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxStdoutRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxStdout(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxStdout(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxStdout_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxStdout_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxStdout(ctx, req.(*RunCSandboxStdoutRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxStdout(ctx, req.(*ContainerSandboxStdoutRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxStderr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxStderrRequest)
+func _ContainerService_ContainerSandboxStderr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxStderrRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxStderr(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxStderr(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxStderr_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxStderr_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxStderr(ctx, req.(*RunCSandboxStderrRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxStderr(ctx, req.(*ContainerSandboxStderrRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxKill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxKillRequest)
+func _ContainerService_ContainerSandboxKill_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxKillRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxKill(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxKill(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxKill_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxKill_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxKill(ctx, req.(*RunCSandboxKillRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxKill(ctx, req.(*ContainerSandboxKillRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxListFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxListFilesRequest)
+func _ContainerService_ContainerSandboxListFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxListFilesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxListFiles(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxListFiles(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxListFiles_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxListFiles_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxListFiles(ctx, req.(*RunCSandboxListFilesRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxListFiles(ctx, req.(*ContainerSandboxListFilesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxUploadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxUploadFileRequest)
+func _ContainerService_ContainerSandboxUploadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxUploadFileRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxUploadFile(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxUploadFile(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxUploadFile_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxUploadFile_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxUploadFile(ctx, req.(*RunCSandboxUploadFileRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxUploadFile(ctx, req.(*ContainerSandboxUploadFileRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxDownloadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxDownloadFileRequest)
+func _ContainerService_ContainerSandboxDownloadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxDownloadFileRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxDownloadFile(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxDownloadFile(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxDownloadFile_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxDownloadFile_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxDownloadFile(ctx, req.(*RunCSandboxDownloadFileRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxDownloadFile(ctx, req.(*ContainerSandboxDownloadFileRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxStatFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxStatFileRequest)
+func _ContainerService_ContainerSandboxStatFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxStatFileRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxStatFile(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxStatFile(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxStatFile_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxStatFile_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxStatFile(ctx, req.(*RunCSandboxStatFileRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxStatFile(ctx, req.(*ContainerSandboxStatFileRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxDeleteFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxDeleteFileRequest)
+func _ContainerService_ContainerSandboxDeleteFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxDeleteFileRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxDeleteFile(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxDeleteFile(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxDeleteFile_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxDeleteFile_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxDeleteFile(ctx, req.(*RunCSandboxDeleteFileRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxDeleteFile(ctx, req.(*ContainerSandboxDeleteFileRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxCreateDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxCreateDirectoryRequest)
+func _ContainerService_ContainerSandboxCreateDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxCreateDirectoryRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxCreateDirectory(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxCreateDirectory(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxCreateDirectory_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxCreateDirectory_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxCreateDirectory(ctx, req.(*RunCSandboxCreateDirectoryRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxCreateDirectory(ctx, req.(*ContainerSandboxCreateDirectoryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxDeleteDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxDeleteDirectoryRequest)
+func _ContainerService_ContainerSandboxDeleteDirectory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxDeleteDirectoryRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxDeleteDirectory(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxDeleteDirectory(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxDeleteDirectory_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxDeleteDirectory_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxDeleteDirectory(ctx, req.(*RunCSandboxDeleteDirectoryRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxDeleteDirectory(ctx, req.(*ContainerSandboxDeleteDirectoryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxExposePort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxExposePortRequest)
+func _ContainerService_ContainerSandboxExposePort_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxExposePortRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxExposePort(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxExposePort(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxExposePort_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxExposePort_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxExposePort(ctx, req.(*RunCSandboxExposePortRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxExposePort(ctx, req.(*ContainerSandboxExposePortRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxReplaceInFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxReplaceInFilesRequest)
+func _ContainerService_ContainerSandboxReplaceInFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxReplaceInFilesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxReplaceInFiles(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxReplaceInFiles(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxReplaceInFiles_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxReplaceInFiles_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxReplaceInFiles(ctx, req.(*RunCSandboxReplaceInFilesRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxReplaceInFiles(ctx, req.(*ContainerSandboxReplaceInFilesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxFindInFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxFindInFilesRequest)
+func _ContainerService_ContainerSandboxFindInFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxFindInFilesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxFindInFiles(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxFindInFiles(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxFindInFiles_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxFindInFiles_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxFindInFiles(ctx, req.(*RunCSandboxFindInFilesRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxFindInFiles(ctx, req.(*ContainerSandboxFindInFilesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxListExposedPorts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxListExposedPortsRequest)
+func _ContainerService_ContainerSandboxListExposedPorts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxListExposedPortsRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxListExposedPorts(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxListExposedPorts(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxListExposedPorts_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxListExposedPorts_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxListExposedPorts(ctx, req.(*RunCSandboxListExposedPortsRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxListExposedPorts(ctx, req.(*ContainerSandboxListExposedPortsRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _RunCService_RunCSandboxListProcesses_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RunCSandboxListProcessesRequest)
+func _ContainerService_ContainerSandboxListProcesses_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxListProcessesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(RunCServiceServer).RunCSandboxListProcesses(ctx, in)
+		return srv.(ContainerServiceServer).ContainerSandboxListProcesses(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: RunCService_RunCSandboxListProcesses_FullMethodName,
+		FullMethod: ContainerService_ContainerSandboxListProcesses_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RunCServiceServer).RunCSandboxListProcesses(ctx, req.(*RunCSandboxListProcessesRequest))
+		return srv.(ContainerServiceServer).ContainerSandboxListProcesses(ctx, req.(*ContainerSandboxListProcessesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-// RunCService_ServiceDesc is the grpc.ServiceDesc for RunCService service.
+// ContainerService_ServiceDesc is the grpc.ServiceDesc for ContainerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var RunCService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "runc.RunCService",
-	HandlerType: (*RunCServiceServer)(nil),
+var ContainerService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "container.ContainerService",
+	HandlerType: (*ContainerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "RunCKill",
-			Handler:    _RunCService_RunCKill_Handler,
+			MethodName: "ContainerKill",
+			Handler:    _ContainerService_ContainerKill_Handler,
 		},
 		{
-			MethodName: "RunCStatus",
-			Handler:    _RunCService_RunCStatus_Handler,
+			MethodName: "ContainerStatus",
+			Handler:    _ContainerService_ContainerStatus_Handler,
 		},
 		{
-			MethodName: "RunCExec",
-			Handler:    _RunCService_RunCExec_Handler,
+			MethodName: "ContainerExec",
+			Handler:    _ContainerService_ContainerExec_Handler,
 		},
 		{
-			MethodName: "RunCCheckpoint",
-			Handler:    _RunCService_RunCCheckpoint_Handler,
+			MethodName: "ContainerCheckpoint",
+			Handler:    _ContainerService_ContainerCheckpoint_Handler,
 		},
 		{
-			MethodName: "RunCSyncWorkspace",
-			Handler:    _RunCService_RunCSyncWorkspace_Handler,
+			MethodName: "ContainerSyncWorkspace",
+			Handler:    _ContainerService_ContainerSyncWorkspace_Handler,
 		},
 		{
-			MethodName: "RunCSandboxExec",
-			Handler:    _RunCService_RunCSandboxExec_Handler,
+			MethodName: "ContainerSandboxExec",
+			Handler:    _ContainerService_ContainerSandboxExec_Handler,
 		},
 		{
-			MethodName: "RunCSandboxStatus",
-			Handler:    _RunCService_RunCSandboxStatus_Handler,
+			MethodName: "ContainerSandboxStatus",
+			Handler:    _ContainerService_ContainerSandboxStatus_Handler,
 		},
 		{
-			MethodName: "RunCSandboxStdout",
-			Handler:    _RunCService_RunCSandboxStdout_Handler,
+			MethodName: "ContainerSandboxStdout",
+			Handler:    _ContainerService_ContainerSandboxStdout_Handler,
 		},
 		{
-			MethodName: "RunCSandboxStderr",
-			Handler:    _RunCService_RunCSandboxStderr_Handler,
+			MethodName: "ContainerSandboxStderr",
+			Handler:    _ContainerService_ContainerSandboxStderr_Handler,
 		},
 		{
-			MethodName: "RunCSandboxKill",
-			Handler:    _RunCService_RunCSandboxKill_Handler,
+			MethodName: "ContainerSandboxKill",
+			Handler:    _ContainerService_ContainerSandboxKill_Handler,
 		},
 		{
-			MethodName: "RunCSandboxListFiles",
-			Handler:    _RunCService_RunCSandboxListFiles_Handler,
+			MethodName: "ContainerSandboxListFiles",
+			Handler:    _ContainerService_ContainerSandboxListFiles_Handler,
 		},
 		{
-			MethodName: "RunCSandboxUploadFile",
-			Handler:    _RunCService_RunCSandboxUploadFile_Handler,
+			MethodName: "ContainerSandboxUploadFile",
+			Handler:    _ContainerService_ContainerSandboxUploadFile_Handler,
 		},
 		{
-			MethodName: "RunCSandboxDownloadFile",
-			Handler:    _RunCService_RunCSandboxDownloadFile_Handler,
+			MethodName: "ContainerSandboxDownloadFile",
+			Handler:    _ContainerService_ContainerSandboxDownloadFile_Handler,
 		},
 		{
-			MethodName: "RunCSandboxStatFile",
-			Handler:    _RunCService_RunCSandboxStatFile_Handler,
+			MethodName: "ContainerSandboxStatFile",
+			Handler:    _ContainerService_ContainerSandboxStatFile_Handler,
 		},
 		{
-			MethodName: "RunCSandboxDeleteFile",
-			Handler:    _RunCService_RunCSandboxDeleteFile_Handler,
+			MethodName: "ContainerSandboxDeleteFile",
+			Handler:    _ContainerService_ContainerSandboxDeleteFile_Handler,
 		},
 		{
-			MethodName: "RunCSandboxCreateDirectory",
-			Handler:    _RunCService_RunCSandboxCreateDirectory_Handler,
+			MethodName: "ContainerSandboxCreateDirectory",
+			Handler:    _ContainerService_ContainerSandboxCreateDirectory_Handler,
 		},
 		{
-			MethodName: "RunCSandboxDeleteDirectory",
-			Handler:    _RunCService_RunCSandboxDeleteDirectory_Handler,
+			MethodName: "ContainerSandboxDeleteDirectory",
+			Handler:    _ContainerService_ContainerSandboxDeleteDirectory_Handler,
 		},
 		{
-			MethodName: "RunCSandboxExposePort",
-			Handler:    _RunCService_RunCSandboxExposePort_Handler,
+			MethodName: "ContainerSandboxExposePort",
+			Handler:    _ContainerService_ContainerSandboxExposePort_Handler,
 		},
 		{
-			MethodName: "RunCSandboxReplaceInFiles",
-			Handler:    _RunCService_RunCSandboxReplaceInFiles_Handler,
+			MethodName: "ContainerSandboxReplaceInFiles",
+			Handler:    _ContainerService_ContainerSandboxReplaceInFiles_Handler,
 		},
 		{
-			MethodName: "RunCSandboxFindInFiles",
-			Handler:    _RunCService_RunCSandboxFindInFiles_Handler,
+			MethodName: "ContainerSandboxFindInFiles",
+			Handler:    _ContainerService_ContainerSandboxFindInFiles_Handler,
 		},
 		{
-			MethodName: "RunCSandboxListExposedPorts",
-			Handler:    _RunCService_RunCSandboxListExposedPorts_Handler,
+			MethodName: "ContainerSandboxListExposedPorts",
+			Handler:    _ContainerService_ContainerSandboxListExposedPorts_Handler,
 		},
 		{
-			MethodName: "RunCSandboxListProcesses",
-			Handler:    _RunCService_RunCSandboxListProcesses_Handler,
+			MethodName: "ContainerSandboxListProcesses",
+			Handler:    _ContainerService_ContainerSandboxListProcesses_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "RunCStreamLogs",
-			Handler:       _RunCService_RunCStreamLogs_Handler,
+			StreamName:    "ContainerStreamLogs",
+			Handler:       _ContainerService_ContainerStreamLogs_Handler,
 			ServerStreams: true,
 		},
 		{
-			StreamName:    "RunCArchive",
-			Handler:       _RunCService_RunCArchive_Handler,
+			StreamName:    "ContainerArchive",
+			Handler:       _ContainerService_ContainerArchive_Handler,
 			ServerStreams: true,
 		},
 	},
