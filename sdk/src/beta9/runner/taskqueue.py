@@ -413,4 +413,4 @@ if __name__ == "__main__":
     tq.run()
     # shutdown() may call os._exit() if workers were force-killed
     # If we reach here, do clean exit
-    sys.exit(tq.exit_code)
+    sys.exit(tq.exit_code if tq.exit_code != TaskExitCode.SigTerm else 0)
