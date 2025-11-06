@@ -157,8 +157,7 @@ message MountPointConfig {
 }
 
 message NullTime {
-  google.protobuf.Timestamp time = 1;
-  bool valid = 2;
+  NullTime null_time = 1;
 }
 
 message Object {

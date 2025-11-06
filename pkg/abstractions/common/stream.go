@@ -60,7 +60,7 @@ func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, c
 		return err
 	}
 
-	client, err := common.NewRunCClient(hostname, authInfo.Token.Key, conn)
+	client, err := common.NewContainerClient(hostname, authInfo.Token.Key, conn)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func (l *ContainerStream) Stream(ctx context.Context, authInfo *auth.AuthInfo, c
 
 func (l *ContainerStream) handleStreams(
 	ctx context.Context,
-	client *common.RunCClient,
+	client *common.ContainerClient,
 	containerId string,
 	outputChan chan common.OutputMsg,
 	keyEventChan chan common.KeyEvent,
