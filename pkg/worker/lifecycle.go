@@ -547,7 +547,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	var newSpec specs.Spec
-	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
+	// Get the appropriate base config for the runtime
+	baseConfig := runtime.GetBaseConfig(s.runtime.Name())
+	specTemplate := strings.TrimSpace(baseConfig)
 	err := json.Unmarshal([]byte(specTemplate), &newSpec)
 	if err != nil {
 		return nil, err

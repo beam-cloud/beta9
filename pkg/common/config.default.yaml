@@ -154,6 +154,10 @@ worker:
     default:
       mode: local
       priority: 1
+      runtime: runc
+      runtimeConfig:
+        gvisorPlatform: systrap
+        gvisorRoot: /run/gvisor
       jobSpec:
         nodeSelector: {}
       criuEnabled: true
@@ -168,6 +172,10 @@ worker:
     build:
       mode: local
       requiresPoolSelector: true
+      runtime: runc
+      runtimeConfig:
+        gvisorPlatform: systrap
+        gvisorRoot: /run/gvisor
       tmpSizeLimit: 50Gi
       jobSpec:
         nodeSelector: {}

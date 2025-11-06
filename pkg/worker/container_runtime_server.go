@@ -61,7 +61,10 @@ type ContainerRuntimeServerOpts struct {
 // NewContainerRuntimeServer creates a new runtime-agnostic container server
 func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRuntimeServer, error) {
 	var baseConfigSpec specs.Spec
-	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
+	
+	// Get the appropriate base config for the runtime
+	baseConfig := runtime.GetBaseConfig(opts.Runtime.Name())
+	specTemplate := strings.TrimSpace(baseConfig)
 	err := json.Unmarshal([]byte(specTemplate), &baseConfigSpec)
 	if err != nil {
 		return nil, err

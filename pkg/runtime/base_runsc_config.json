@@ -1,0 +1,735 @@
+{
+	"ociVersion": "1.1.0+dev",
+	"process": {
+		"terminal": false,
+		"user": {
+			"uid": 0,
+			"gid": 0
+		},
+		"args": [
+			"tail",
+			"-f",
+			"/dev/null"
+		],
+		"env": [
+			"TERM=xterm",
+			"LAMBDA_TASK_ROOT=/workspace",
+			"MAMBA_ROOT_PREFIX=/micromamba"
+		],
+		"cwd": "/",
+		"capabilities": {
+			"bounding": [
+				"CAP_AUDIT_WRITE",
+				"CAP_KILL",
+				"CAP_NET_RAW",
+				"CAP_CHOWN",
+				"CAP_DAC_OVERRIDE",
+				"CAP_FSETID",
+				"CAP_FOWNER",
+				"CAP_SETGID",
+				"CAP_SETUID",
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT",
+				"CAP_MKNOD"
+			],
+			"effective": [
+				"CAP_AUDIT_WRITE",
+				"CAP_KILL",
+				"CAP_NET_RAW",
+				"CAP_CHOWN",
+				"CAP_DAC_OVERRIDE",
+				"CAP_FSETID",
+				"CAP_FOWNER",
+				"CAP_SETGID",
+				"CAP_SETUID",
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT",
+				"CAP_MKNOD"
+			],
+			"permitted": [
+				"CAP_AUDIT_WRITE",
+				"CAP_KILL",
+				"CAP_NET_RAW",
+				"CAP_CHOWN",
+				"CAP_DAC_OVERRIDE",
+				"CAP_FSETID",
+				"CAP_FOWNER",
+				"CAP_SETGID",
+				"CAP_SETUID",
+				"CAP_SETFCAP",
+				"CAP_SYS_CHROOT",
+				"CAP_MKNOD"
+			],
+			"ambient": []
+		},
+		"rlimits": [],
+		"noNewPrivileges": true
+	},
+	"root": {
+		"path": "rootfs",
+		"readonly": true
+	},
+	"hostname": "runsc",
+	"mounts": [
+		{
+			"destination": "/proc",
+			"type": "proc",
+			"source": "proc",
+			"options": [
+				"rw",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/volumes",
+			"type": "tmpfs",
+			"source": "tmpfs",
+			"options": [
+				"nosuid",
+				"strictatime",
+				"mode=755"
+			]
+		},
+		{
+			"destination": "/dev",
+			"type": "tmpfs",
+			"source": "tmpfs",
+			"options": [
+				"rw",
+				"nosuid",
+				"strictatime",
+				"mode=755",
+				"size=65536k"
+			]
+		},
+		{
+			"destination": "/dev/pts",
+			"type": "devpts",
+			"source": "devpts",
+			"options": [
+				"nosuid",
+				"noexec",
+				"newinstance",
+				"ptmxmode=0666",
+				"mode=0620",
+				"gid=5"
+			]
+		},
+		{
+			"destination": "/dev/shm",
+			"type": "tmpfs",
+			"source": "shm",
+			"options": [
+				"nosuid",
+				"noexec",
+				"nodev",
+				"mode=1777",
+				"size=8589934k"
+			]
+		},
+		{
+			"destination": "/dev/mqueue",
+			"type": "mqueue",
+			"source": "mqueue",
+			"options": [
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/sys",
+			"type": "sysfs",
+			"source": "sysfs",
+			"options": [
+				"rw",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/bin/beta9",
+			"type": "bind",
+			"source": "/usr/local/bin/beta9",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/bin/snapshot",
+			"type": "bind",
+			"source": "/usr/local/bin/snapshot",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/bin/beam",
+			"type": "bind",
+			"source": "/usr/local/bin/beta9",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/bin/uv-b9",
+			"type": "bind",
+			"source": "/usr/local/bin/uv",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/bin/dropbear",
+			"type": "bind",
+			"source": "/usr/local/bin/dropbear",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/etc/dropbear",
+			"type": "tmpfs",
+			"source": "tmpfs",
+			"options": [
+				"nosuid",
+				"nodev",
+				"noexec",
+				"mode=0755",
+				"size=65536k"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.8/dist-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.9/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.9/dist-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.10/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.10/dist-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.11/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.11/dist-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.12/dist-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.12/dist-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.8/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.8/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.9/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.9/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.10/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.10/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.11/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.11/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.12/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/usr/local/lib/python3.12/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.8/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.8/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.9/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.9/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.10/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.10/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.11/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.11/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.12/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/micromamba/envs/beta9/lib/python3.12/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.9/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.9/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.10/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.10/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.11/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.11/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.12/site-packages/beta9",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/opt/conda/lib/python3.12/site-packages/beam",
+			"type": "bind",
+			"source": "/workspace/sdk",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"nodev"
+			]
+		},
+		{
+			"destination": "/run/sshd",
+			"type": "tmpfs",
+			"source": "tmpfs",
+			"options": [
+				"nosuid",
+				"nodev",
+				"noexec",
+				"mode=0755",
+				"size=65536k"
+			]
+		},
+		{
+			"type": "none",
+			"source": "/workspace/etc/hosts",
+			"destination": "/etc/hosts",
+			"options": [
+				"ro",
+				"rbind",
+				"rprivate",
+				"nosuid",
+				"noexec",
+				"nodev"
+			]
+		}
+	],
+	"hooks": {},
+	"linux": {
+		"resources": {
+			"devices": [
+				{
+					"allow": false,
+					"access": "rwm"
+				}
+			]
+		},
+		"namespaces": [
+			{
+				"type": "mount"
+			},
+			{
+				"type": "uts"
+			},
+			{
+				"type": "pid"
+			},
+			{
+				"type": "ipc"
+			},
+			{
+				"type": "cgroup"
+			}
+		]
+	}
+}
