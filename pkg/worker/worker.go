@@ -95,7 +95,6 @@ type ContainerInstance struct {
 	ContainerIp           string
 	Runtime               runtime.Runtime     // The runtime used for this container
 	OOMWatcher            *runtime.OOMWatcher // OOM watcher for this container
-	RuntimePid            int                 // PID of the runtime process (e.g., runsc run)
 }
 
 type ContainerOptions struct {
