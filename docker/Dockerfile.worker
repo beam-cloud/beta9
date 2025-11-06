@@ -154,7 +154,7 @@ fi
 
 # Download kernel image for microVMs
 mkdir -p /var/lib/beta9
-curl -fsSL https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.13/${FIRECRACKER_ARCH}/vmlinux-5.10.223 -o /var/lib/beta9/vmlinux
+curl -fsSL https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/${FIRECRACKER_ARCH}/vmlinux-5.10.223 -o /var/lib/beta9/vmlinux
 chmod 644 /var/lib/beta9/vmlinux
 
 # Verify installation

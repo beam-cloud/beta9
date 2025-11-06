@@ -140,7 +140,7 @@ setup_kernel() {
     fi
     
     log_info "Downloading kernel image for ${FC_ARCH}..."
-    curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.13/${FC_ARCH}/vmlinux-5.10.223" -o "$kernel_path"
+    curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/${FC_ARCH}/vmlinux-5.10.223" -o "$kernel_path"
     chmod 644 "$kernel_path"
     
     log_success "Kernel downloaded to $kernel_path"
