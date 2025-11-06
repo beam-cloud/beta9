@@ -93,18 +93,26 @@ func (w *OOMWatcher) Stop() {
 
 // readOOMKillCount reads the oom_kill counter from memory.events
 func (w *OOMWatcher) readOOMKillCount() (int64, error) {
+	// Try cgroup v2 path first
 	memEventsPath := filepath.Join(cgroupV2Root, w.cgroupPath, memoryEventsFile)
 	
 	file, err := os.Open(memEventsPath)
 	if err != nil {
-		return 0, fmt.Errorf("failed to open memory.events: %w", err)
+		// If cgroup v2 doesn't work, try cgroup v1
+		// For cgroup v1, memory.oom_control is in /sys/fs/cgroup/<cgroupPath>/
+		memOOMControlPath := filepath.Join(cgroupV2Root, w.cgroupPath, "memory.oom_control")
+		file, err = os.Open(memOOMControlPath)
+		if err != nil {
+			return 0, fmt.Errorf("failed to open memory.events or memory.oom_control: %w", err)
+		}
 	}
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := scanner.Text()
-		// Look for "oom_kill N" line
+		
+		// For cgroup v2: Look for "oom_kill N" line in memory.events
 		if strings.HasPrefix(line, "oom_kill ") {
 			parts := strings.Fields(line)
 			if len(parts) >= 2 {
@@ -115,25 +123,82 @@ func (w *OOMWatcher) readOOMKillCount() (int64, error) {
 				return count, nil
 			}
 		}
+		
+		// For cgroup v1: Look for "oom_kill N" or "under_oom N" in memory.oom_control
+		if strings.HasPrefix(line, "oom_kill ") || strings.HasPrefix(line, "under_oom ") {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				count, err := strconv.ParseInt(parts[1], 10, 64)
+				if err != nil {
+					return 0, fmt.Errorf("failed to parse oom count: %w", err)
+				}
+				return count, nil
+			}
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return 0, fmt.Errorf("error reading memory.events: %w", err)
+		return 0, fmt.Errorf("error reading memory file: %w", err)
 	}
 
 	// oom_kill line not found, return 0
 	return 0, nil
 }
 
+// GetCgroupPathFromPID reads the actual cgroup path from a process
+// This works for both cgroup v1 and v2, and for any runtime
+func GetCgroupPathFromPID(pid int) (string, error) {
+	cgroupFile := fmt.Sprintf("/proc/%d/cgroup", pid)
+	file, err := os.Open(cgroupFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to open %s: %w", cgroupFile, err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// Format: hierarchy-ID:controller-list:cgroup-path
+		// For cgroup v2: 0::/path/to/cgroup
+		// For cgroup v1: N:subsystem:/path/to/cgroup
+		
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) != 3 {
+			continue
+		}
+
+		hierarchyID := parts[0]
+		cgroupPath := parts[2]
+
+		// For cgroup v2 (unified hierarchy)
+		if hierarchyID == "0" && cgroupPath != "" {
+			// Remove leading slash as we'll join with cgroupV2Root
+			return strings.TrimPrefix(cgroupPath, "/"), nil
+		}
+
+		// For cgroup v1, look for memory controller
+		if strings.Contains(parts[1], "memory") && cgroupPath != "" {
+			// For cgroup v1, the path is under /sys/fs/cgroup/memory/
+			return filepath.Join("memory", strings.TrimPrefix(cgroupPath, "/")), nil
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("error reading cgroup file: %w", err)
+	}
+
+	return "", fmt.Errorf("cgroup path not found for pid %d", pid)
+}
+
 // GetCgroupPath returns the cgroup path for a container
-// This assumes containers are placed in a deterministic cgroup hierarchy
+// DEPRECATED: Use GetCgroupPathFromPID instead
 func GetCgroupPath(containerID string) string {
-	// By default, runc and runsc place containers under /sys/fs/cgroup/<containerID>
-	// Adjust this based on your actual cgroup hierarchy
+	// This is a fallback that may not work correctly
 	return containerID
 }
 
 // GetCgroupPathWithPrefix returns the cgroup path for a container with a prefix
+// DEPRECATED: Use GetCgroupPathFromPID instead
 func GetCgroupPathWithPrefix(prefix, containerID string) string {
 	return filepath.Join(prefix, containerID)
 }

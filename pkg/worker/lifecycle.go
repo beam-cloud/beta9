@@ -808,16 +808,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
 		
 		// Use cgroup OOM watcher for portable OOM detection (works with all runtimes)
-		cgroupPath := runtime.GetCgroupPath(containerId)
-		oomWatcher := runtime.NewOOMWatcher(ctx, cgroupPath)
-		containerInstance.OOMWatcher = oomWatcher
-		s.containerInstances.Set(containerId, containerInstance)
-		
-		oomWatcher.Watch(func() {
-			log.Warn().Str("container_id", containerId).Msg("OOM kill detected via cgroup watcher")
-			isOOMKilled.Store(true)
-			outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage)
-		})
+		// Get the actual cgroup path from the container's PID
+		cgroupPath, err := runtime.GetCgroupPathFromPID(pid)
+		if err != nil {
+			log.Warn().Str("container_id", containerId).Err(err).Msg("failed to get cgroup path, OOM detection disabled")
+		} else {
+			log.Debug().Str("container_id", containerId).Str("cgroup_path", cgroupPath).Int("pid", pid).Msg("starting OOM watcher")
+			oomWatcher := runtime.NewOOMWatcher(ctx, cgroupPath)
+			containerInstance.OOMWatcher = oomWatcher
+			s.containerInstances.Set(containerId, containerInstance)
+			
+			oomWatcher.Watch(func() {
+				log.Warn().Str("container_id", containerId).Msg("OOM kill detected via cgroup watcher")
+				isOOMKilled.Store(true)
+				outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage)
+			})
+		}
 	}()
 
 	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
