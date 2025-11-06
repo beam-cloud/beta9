@@ -822,6 +822,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				log.Warn().Str("container_id", containerId).Msg("OOM kill detected via cgroup watcher")
 				isOOMKilled.Store(true)
 				outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage)
+				
+				// Push OOM event to event repository for monitoring/notifications
+				go s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			})
 		}
 	}()
