@@ -79,11 +79,9 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		}
 	}
 
-	// Ensure no_new_privs is set
-	if spec.Process != nil {
-		noNewPrivs := true
-		spec.Process.NoNewPrivileges = noNewPrivs
-	}
+	// Don't force no_new_privs - let the spec determine this
+	// gVisor handles privilege escalation via its sandbox
+	// Forcing this can break legitimate use cases
 
 	// Keep Linux namespaces (especially network) for joining existing netns
 	// Keep bind mounts and tmpfs - these work fine with gVisor
