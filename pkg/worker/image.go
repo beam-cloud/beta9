@@ -182,9 +182,12 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	// If we have a valid cache client, attempt to cache entirety of the image
 	// in memory (in a nearby region). If a remote cache is available, this supercedes
 	// the local cache - which is basically just downloading the image to disk
+	// Skip full image caching for CLIP v2 images
 	startTime := time.Now()
 
-	if c.cacheClient != nil && !isBuildContainer {
+	isClipV2 := c.config.ImageService.ClipVersion == uint32(types.ClipVersion2)
+
+	if c.cacheClient != nil && !isBuildContainer && !isClipV2 {
 		sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
 
 		// Create constant backoff
