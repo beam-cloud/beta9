@@ -100,9 +100,8 @@ class TaskQueueManager:
             if task_process.exitcode != 0:
                 self.exit_code = task_process.exitcode
         
-        # Always use os._exit() to bypass resource_tracker cleanup
-        # which can hang on shared multiprocessing resources
-        os._exit(self.exit_code)
+        # Exit normally - workers should have exited their loops
+        # No need for os._exit() now that workers exit cleanly
 
     def _start_worker(self, worker_index: int):
         # Initialize task worker
@@ -177,6 +176,11 @@ class TaskQueueWorker:
         self.parent_pid: int = parent_pid
         self.worker_startup_event: TEvent = worker_startup_event
         self.workers_ready: Value = workers_ready
+        self.should_exit: bool = False
+        
+    def _signal_handler(self, signum, frame):
+        """Handle SIGTERM by breaking out of the processing loop"""
+        self.should_exit = True
 
     def _get_next_task(
         self, taskqueue_stub: TaskQueueServiceStub, stub_id: str, container_id: str
@@ -292,6 +296,9 @@ class TaskQueueWorker:
 
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
+        # Set up signal handler to exit cleanly on SIGTERM
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
         self.worker_startup_event.set()
         taskqueue_stub = TaskQueueServiceStub(channel)
         gateway_stub = GatewayServiceStub(channel)
@@ -307,7 +314,7 @@ class TaskQueueWorker:
             wait_for_checkpoint(workers_ready=self.workers_ready)
 
         with ThreadPoolExecutorOverride() as thread_pool:
-            while True:
+            while not self.should_exit:
                 task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
                 if not task:
                     time.sleep(TASK_POLLING_INTERVAL)
