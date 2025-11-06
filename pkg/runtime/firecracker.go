@@ -34,6 +34,7 @@ type vmState struct {
 	VsockSock     string           // Path to vsock Unix socket proxy
 	BlockPath     string           // Path to rootfs block device
 	TapDevice     string           // TAP device name
+	NetnsPath     string           // Network namespace path (from ContainerNetworkManager)
 	VMDir         string           // VM working directory
 	State         atomic.Value     // Current state: "starting", "running", "stopped"
 	Events        chan Event       // Event channel
@@ -106,20 +107,46 @@ func (f *Firecracker) Prepare(ctx context.Context, spec *specs.Spec) error {
 		return fmt.Errorf("spec is nil")
 	}
 
-	// microVMs have their own kernel and init system
-	// We need to strip out host-specific configurations
+	// Store original spec for later (we need mounts and resources)
+	// but adjust what we can for microVM compatibility
 	if spec.Linux != nil {
-		// Remove namespaces - microVM provides its own isolation
-		spec.Linux.Namespaces = nil
+		// Keep network namespace - we'll use it to connect the TAP device
+		// Remove other namespaces - microVM provides its own isolation
+		var netNS *specs.LinuxNamespace
+		for _, ns := range spec.Linux.Namespaces {
+			if ns.Type == specs.NetworkNamespace {
+				netNS = &ns
+				break
+			}
+		}
+		
+		if netNS != nil {
+			spec.Linux.Namespaces = []specs.LinuxNamespace{*netNS}
+		} else {
+			spec.Linux.Namespaces = nil
+		}
 
-		// Remove cgroups - managed at VM level
+		// Remove cgroups path - we don't use cgroups in VM
 		spec.Linux.CgroupsPath = ""
-		spec.Linux.Resources = nil
+		
+		// Keep resources for sizing the VM (we'll extract CPU/mem limits)
+		// but clear other resource constraints
+		if spec.Linux.Resources != nil {
+			// Extract the limits we need
+			cpu := spec.Linux.Resources.CPU
+			memory := spec.Linux.Resources.Memory
+			
+			// Create new resources with only CPU and memory
+			spec.Linux.Resources = &specs.LinuxResources{
+				CPU:    cpu,
+				Memory: memory,
+			}
+		}
 
 		// Remove seccomp - not applicable in guest
 		spec.Linux.Seccomp = nil
 
-		// Remove devices - these will be mapped differently in microVM
+		// Remove devices - these will be handled by Firecracker
 		spec.Linux.Devices = nil
 
 		// Clear masked and readonly paths - guest handles this
@@ -127,18 +154,8 @@ func (f *Firecracker) Prepare(ctx context.Context, spec *specs.Spec) error {
 		spec.Linux.ReadonlyPaths = nil
 	}
 
-	// Filter mounts - only those that can be baked into rootfs
-	if spec.Mounts != nil {
-		filteredMounts := []specs.Mount{}
-		for _, mount := range spec.Mounts {
-			// Keep essential mounts that will be in the guest rootfs
-			switch mount.Destination {
-			case "/proc", "/sys", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue":
-				filteredMounts = append(filteredMounts, mount)
-			}
-		}
-		spec.Mounts = filteredMounts
-	}
+	// Keep mounts - we'll copy them into the rootfs during preparation
+	// The mounts are needed so we know what to copy into the ext4 image
 
 	return nil
 }
@@ -163,9 +180,9 @@ func (f *Firecracker) Run(ctx context.Context, containerID, bundlePath string, o
 		return -1, fmt.Errorf("failed to parse OCI spec: %w", err)
 	}
 
-	// Prepare rootfs
+	// Prepare rootfs (including mounts from the spec)
 	rootfsPath := filepath.Join(bundlePath, "rootfs")
-	blockPath, err := f.prepareRootfs(ctx, rootfsPath, vmDir)
+	blockPath, err := f.prepareRootfs(ctx, rootfsPath, vmDir, &spec)
 	if err != nil {
 		return -1, fmt.Errorf("failed to prepare rootfs: %w", err)
 	}
@@ -232,8 +249,8 @@ func (f *Firecracker) Run(ctx context.Context, containerID, bundlePath string, o
 
 // startFirecracker launches the Firecracker process
 func (f *Firecracker) startFirecracker(ctx context.Context, vm *vmState, spec *specs.Spec) (int, error) {
-	// Set up networking (TAP device)
-	if err := f.setupNetworking(vm); err != nil {
+	// Set up networking (TAP device in container's network namespace)
+	if err := f.setupNetworking(vm, spec); err != nil {
 		return -1, fmt.Errorf("failed to setup networking: %w", err)
 	}
 
@@ -617,7 +634,11 @@ func (f *Firecracker) cleanupVM(vm *vmState) {
 	// Remove TAP device if exists
 	if vm.TapDevice != "" {
 		// TAP device cleanup - best effort
-		exec.Command("ip", "link", "delete", vm.TapDevice).Run()
+		if vm.NetnsPath != "" {
+			f.deleteTapInNamespace(vm.TapDevice, vm.NetnsPath)
+		} else {
+			f.deleteTap(vm.TapDevice)
+		}
 	}
 
 	// Unmount and remove rootfs

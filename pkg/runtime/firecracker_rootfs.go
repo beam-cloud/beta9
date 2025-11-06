@@ -6,26 +6,56 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // prepareRootfs prepares a block device for the rootfs
 // Phase 1: Simple implementation using ext4 loop device
-func (f *Firecracker) prepareRootfs(ctx context.Context, rootfsPath, vmDir string) (string, error) {
+// It also handles copying mounts from the OCI spec into the rootfs
+func (f *Firecracker) prepareRootfs(ctx context.Context, rootfsPath, vmDir string, spec *specs.Spec) (string, error) {
 	// Check if rootfs directory exists
 	if _, err := os.Stat(rootfsPath); err != nil {
 		return "", fmt.Errorf("rootfs directory not found: %w", err)
 	}
 
-	// Calculate rootfs size
+	// Calculate rootfs size (including mounts)
 	size, err := f.calculateRootfsSize(rootfsPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to calculate rootfs size: %w", err)
 	}
 
-	// Add 20% overhead for filesystem metadata and some working space
-	size = size * 120 / 100
-	if size < 64*1024*1024 {
-		size = 64 * 1024 * 1024 // Minimum 64 MB
+	// Also calculate size of mounts that need to be copied in
+	if spec != nil && spec.Mounts != nil {
+		for _, mount := range spec.Mounts {
+			// Skip virtual filesystems that don't need copying
+			if mount.Type == "proc" || mount.Type == "sysfs" || 
+			   mount.Type == "devpts" || mount.Type == "tmpfs" ||
+			   mount.Type == "cgroup" || mount.Type == "cgroup2" {
+				continue
+			}
+			
+			// For bind mounts, calculate the source size
+			if mount.Type == "bind" || mount.Type == "" {
+				if mount.Source != "" {
+					if info, err := os.Stat(mount.Source); err == nil {
+						if info.IsDir() {
+							if dirSize, err := f.calculateRootfsSize(mount.Source); err == nil {
+								size += dirSize
+							}
+						} else {
+							size += info.Size()
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Add 30% overhead for filesystem metadata, VM init, and working space
+	size = size * 130 / 100
+	if size < 128*1024*1024 {
+		size = 128 * 1024 * 1024 // Minimum 128 MB
 	}
 
 	// Create sparse file for rootfs
@@ -40,8 +70,8 @@ func (f *Firecracker) prepareRootfs(ctx context.Context, rootfsPath, vmDir strin
 		return "", fmt.Errorf("failed to create ext4 filesystem: %w", err)
 	}
 
-	// Mount and copy rootfs
-	if err := f.populateRootfs(ctx, blockPath, rootfsPath); err != nil {
+	// Mount and copy rootfs (including mounts from spec)
+	if err := f.populateRootfs(ctx, blockPath, rootfsPath, spec); err != nil {
 		os.Remove(blockPath)
 		return "", fmt.Errorf("failed to populate rootfs: %w", err)
 	}
@@ -107,7 +137,8 @@ func (f *Firecracker) createExt4Filesystem(ctx context.Context, blockPath string
 }
 
 // populateRootfs mounts the ext4 image and copies the rootfs contents
-func (f *Firecracker) populateRootfs(ctx context.Context, blockPath, rootfsPath string) error {
+// It also copies any bind mounts from the OCI spec into the appropriate locations
+func (f *Firecracker) populateRootfs(ctx context.Context, blockPath, rootfsPath string, spec *specs.Spec) error {
 	// Create temporary mount point
 	mountPoint, err := os.MkdirTemp("", "beta9-rootfs-*")
 	if err != nil {
@@ -133,6 +164,52 @@ func (f *Firecracker) populateRootfs(ctx context.Context, blockPath, rootfsPath 
 		rsyncCmd := exec.CommandContext(ctx, "rsync", "-a", rootfsPath+"/", mountPoint+"/")
 		if err := rsyncCmd.Run(); err != nil {
 			return fmt.Errorf("failed to copy rootfs contents: %w", err)
+		}
+	}
+
+	// Copy bind mounts from OCI spec into the rootfs
+	// This is necessary because microVMs can't use bind mounts like containers
+	if spec != nil && spec.Mounts != nil {
+		for _, mount := range spec.Mounts {
+			// Skip virtual filesystems - these will be handled by the guest init
+			if mount.Type == "proc" || mount.Type == "sysfs" || 
+			   mount.Type == "devpts" || mount.Type == "tmpfs" ||
+			   mount.Type == "cgroup" || mount.Type == "cgroup2" {
+				continue
+			}
+			
+			// Handle bind mounts by copying source to destination
+			if (mount.Type == "bind" || mount.Type == "") && mount.Source != "" {
+				// Create destination directory in rootfs
+				destPath := filepath.Join(mountPoint, mount.Destination)
+				if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+					return fmt.Errorf("failed to create mount destination directory: %w", err)
+				}
+				
+				// Check if source exists
+				if _, err := os.Stat(mount.Source); err != nil {
+					// Source doesn't exist - create empty directory
+					if err := os.MkdirAll(destPath, 0755); err != nil {
+						return fmt.Errorf("failed to create empty mount point: %w", err)
+					}
+					continue
+				}
+				
+				// Copy source to destination
+				// Use cp -a to preserve permissions and attributes
+				cpMountCmd := exec.CommandContext(ctx, "cp", "-a", mount.Source, destPath)
+				if err := cpMountCmd.Run(); err != nil {
+					// If cp fails, try rsync
+					rsyncMountCmd := exec.CommandContext(ctx, "rsync", "-a", mount.Source+"/", destPath+"/")
+					if err := rsyncMountCmd.Run(); err != nil {
+						return fmt.Errorf("failed to copy mount %s to %s: %w", mount.Source, destPath, err)
+					}
+				}
+				
+				if f.cfg.Debug {
+					fmt.Fprintf(os.Stderr, "Copied mount: %s -> %s\n", mount.Source, mount.Destination)
+				}
+			}
 		}
 	}
 
