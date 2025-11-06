@@ -64,7 +64,7 @@ check_prerequisites() {
     
     # Check for required tools
     local missing_tools=()
-    for tool in curl tar go mkfs.ext4 truncate ip; do
+    for tool in curl tar go mkfs.ext4 mksquashfs truncate ip; do
         if ! command -v "$tool" &> /dev/null; then
             missing_tools+=("$tool")
         fi
@@ -72,7 +72,7 @@ check_prerequisites() {
     
     if [ ${#missing_tools[@]} -gt 0 ]; then
         log_error "Missing required tools: ${missing_tools[*]}"
-        log_info "Install with: apt-get install -y curl tar golang e2fsprogs iproute2"
+        log_info "Install with: apt-get install -y curl tar golang e2fsprogs iproute2 squashfs-tools"
         exit 1
     fi
     
@@ -103,7 +103,7 @@ setup_firecracker() {
     fi
     
     # Download Firecracker
-    local fc_version="v1.9.2"
+    local fc_version="v1.13.1"
     local release_url="https://github.com/firecracker-microvm/firecracker/releases"
     
     log_info "Downloading Firecracker ${fc_version} for ${FC_ARCH}..."
@@ -140,7 +140,7 @@ setup_kernel() {
     fi
     
     log_info "Downloading kernel image for ${FC_ARCH}..."
-    curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.9/${FC_ARCH}/vmlinux-5.10.217" -o "$kernel_path"
+    curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.13/${FC_ARCH}/vmlinux-5.10.223" -o "$kernel_path"
     chmod 644 "$kernel_path"
     
     log_success "Kernel downloaded to $kernel_path"

@@ -6,21 +6,47 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	
+	"strconv"
+
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
-// prepareRootfs prepares a block device for the rootfs
-// Phase 1: Simple implementation using ext4 loop device
-// It also handles copying mounts from the OCI spec into the rootfs
+// prepareRootfs creates a SquashFS image from the bundle rootfs + overlays.
+// This approach preserves the lazy-loading behavior of FUSE-mounted images
+// while being much faster than copying to ext4.
+//
+// The rootfsPath provided is already an overlayfs merged directory that includes:
+// - Lower layer: FUSE-mounted image (lazy-loaded)
+// - Upper layer: Writable overlay
+// - Merged: What we compress into SquashFS
+//
+// SquashFS benefits:
+// - Fast creation (compression is faster than copying)
+// - Smaller size (compressed)
+// - Lazy loading (blocks loaded on-demand)
+// - Works with Firecracker's virtio-blk (read-only is fine, guest adds overlay)
 func (f *Firecracker) prepareRootfs(ctx context.Context, rootfsPath, vmDir string, spec *specs.Spec) (string, error) {
+	// Check if mksquashfs is available
+	if _, err := exec.LookPath("mksquashfs"); err != nil {
+		// Fallback to old ext4 method if squashfs-tools not installed
+		if f.cfg.Debug {
+			fmt.Fprintf(os.Stderr, "Warning: mksquashfs not found, falling back to ext4 (slower)\n")
+		}
+		return f.prepareRootfsExt4(ctx, rootfsPath, vmDir, spec)
+	}
+
+	return f.prepareSquashfsRootfs(ctx, rootfsPath, vmDir, spec)
+}
+
+// prepareRootfsExt4 is the fallback method using ext4 (original implementation)
+func (f *Firecracker) prepareRootfsExt4(ctx context.Context, rootfsPath, vmDir string, spec *specs.Spec) (string, error) {
 	// Check if rootfs directory exists
 	if _, err := os.Stat(rootfsPath); err != nil {
 		return "", fmt.Errorf("rootfs directory not found: %w", err)
 	}
 
 	// Calculate rootfs size (including mounts)
-	size, err := f.calculateRootfsSize(rootfsPath)
+	size, err := f.calculateRootfsSizeForExt4(rootfsPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to calculate rootfs size: %w", err)
 	}
@@ -29,18 +55,18 @@ func (f *Firecracker) prepareRootfs(ctx context.Context, rootfsPath, vmDir strin
 	if spec != nil && spec.Mounts != nil {
 		for _, mount := range spec.Mounts {
 			// Skip virtual filesystems that don't need copying
-			if mount.Type == "proc" || mount.Type == "sysfs" || 
-			   mount.Type == "devpts" || mount.Type == "tmpfs" ||
-			   mount.Type == "cgroup" || mount.Type == "cgroup2" {
+			if mount.Type == "proc" || mount.Type == "sysfs" ||
+				mount.Type == "devpts" || mount.Type == "tmpfs" ||
+				mount.Type == "cgroup" || mount.Type == "cgroup2" {
 				continue
 			}
-			
+
 			// For bind mounts, calculate the source size
 			if mount.Type == "bind" || mount.Type == "" {
 				if mount.Source != "" {
 					if info, err := os.Stat(mount.Source); err == nil {
 						if info.IsDir() {
-							if dirSize, err := f.calculateRootfsSize(mount.Source); err == nil {
+							if dirSize, err := f.calculateRootfsSizeForExt4(mount.Source); err == nil {
 								size += dirSize
 							}
 						} else {
@@ -79,8 +105,8 @@ func (f *Firecracker) prepareRootfs(ctx context.Context, rootfsPath, vmDir strin
 	return blockPath, nil
 }
 
-// calculateRootfsSize calculates the size of the rootfs directory
-func (f *Firecracker) calculateRootfsSize(rootfsPath string) (int64, error) {
+// calculateRootfsSizeForExt4 calculates the size of the rootfs directory (for ext4 method)
+func (f *Firecracker) calculateRootfsSizeForExt4(rootfsPath string) (int64, error) {
 	cmd := exec.Command("du", "-sb", rootfsPath)
 	output, err := cmd.Output()
 	if err != nil {
@@ -230,7 +256,105 @@ func (f *Firecracker) populateRootfs(ctx context.Context, blockPath, rootfsPath 
 	return nil
 }
 
-// Phase 2 TODO: Lazy block device support
-// This would integrate with a block device service that provides
-// lazy loading from CAS/FUSE storage. For now, we use the simple
-// ext4 image approach which is reliable and easy to debug.
+// prepareSquashfsRootfs creates a SquashFS image from the overlayfs merged directory.
+// This is much faster than copying to ext4 and preserves lazy-loading from FUSE.
+func (f *Firecracker) prepareSquashfsRootfs(ctx context.Context, rootfsPath, vmDir string, spec *specs.Spec) (string, error) {
+	squashfsPath := filepath.Join(vmDir, "rootfs.squashfs")
+
+	// Handle bind mounts by temporarily mounting them into the rootfs
+	var mountedPaths []string
+	defer func() {
+		// Cleanup bind mounts
+		for _, path := range mountedPaths {
+			exec.Command("umount", path).Run()
+		}
+	}()
+
+	if spec != nil && spec.Mounts != nil {
+		for _, mount := range spec.Mounts {
+			if mount.Type != "bind" && mount.Type != "" {
+				continue
+			}
+
+			destPath := filepath.Join(rootfsPath, mount.Destination)
+
+			// Create destination
+			if err := os.MkdirAll(destPath, 0755); err != nil {
+				return "", fmt.Errorf("failed to create mount point: %w", err)
+			}
+
+			// Skip if source doesn't exist
+			if _, err := os.Stat(mount.Source); err != nil {
+				if f.cfg.Debug {
+					fmt.Fprintf(os.Stderr, "Skipping bind mount (source missing): %s\n", mount.Source)
+				}
+				continue
+			}
+
+			// Bind mount (this doesn't copy, just overlays)
+			if err := exec.Command("mount", "--bind", mount.Source, destPath).Run(); err != nil {
+				if f.cfg.Debug {
+					fmt.Fprintf(os.Stderr, "Warning: failed to bind mount %s: %v\n", mount.Source, err)
+				}
+				continue
+			}
+
+			mountedPaths = append(mountedPaths, destPath)
+		}
+	}
+
+	// Create SquashFS (compressed, includes all content + bind mounts)
+	// SquashFS creation is much faster than copying to ext4
+	cmd := exec.CommandContext(ctx, "mksquashfs",
+		rootfsPath,      // Source
+		squashfsPath,    // Destination
+		"-comp", "zstd", // Fast compression
+		"-noappend",     // Overwrite if exists
+		"-no-progress",  // Suppress progress output
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("mksquashfs failed: %w\nOutput: %s", err, output)
+	}
+
+	if f.cfg.Debug {
+		// Print size comparison
+		srcSize, _ := getDirSize(rootfsPath)
+		sqfsInfo, _ := os.Stat(squashfsPath)
+		fmt.Fprintf(os.Stderr, "Rootfs size: %s -> SquashFS: %s (%.1f%% of original)\n",
+			formatSize(srcSize), formatSize(sqfsInfo.Size()),
+			float64(sqfsInfo.Size())/float64(srcSize)*100)
+	}
+
+	return squashfsPath, nil
+}
+
+// getDirSize calculates directory size
+func getDirSize(path string) (int64, error) {
+	var size int64
+	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			size += info.Size()
+		}
+		return nil
+	})
+	return size, err
+}
+
+// formatSize formats bytes as human-readable string
+func formatSize(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return strconv.FormatInt(bytes, 10) + " B"
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}

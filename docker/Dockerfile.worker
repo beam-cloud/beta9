@@ -117,7 +117,7 @@ EOT
 FROM debian:bookworm AS firecracker
 
 ARG TARGETARCH
-ARG FIRECRACKER_VERSION=v1.9.2
+ARG FIRECRACKER_VERSION=v1.13.1
 
 WORKDIR /tmp
 
@@ -154,7 +154,7 @@ fi
 
 # Download kernel image for microVMs
 mkdir -p /var/lib/beta9
-curl -fsSL https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.9/${FIRECRACKER_ARCH}/vmlinux-5.10.217 -o /var/lib/beta9/vmlinux
+curl -fsSL https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.13/${FIRECRACKER_ARCH}/vmlinux-5.10.223 -o /var/lib/beta9/vmlinux
 chmod 644 /var/lib/beta9/vmlinux
 
 # Verify installation
@@ -219,7 +219,7 @@ RUN apt-get update && \
 RUN curl -L https://beam-runner-python-deps.s3.amazonaws.com/juicefs -o /usr/local/bin/juicefs && chmod +x /usr/local/bin/juicefs
 RUN curl -fsSL https://tailscale.com/install.sh | sh
 RUN apt-get install -y --no-install-recommends nvidia-container-toolkit-base nvidia-container-toolkit
-RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion
+RUN apt-get update && apt-get install -y fuse3 libfuse2 libfuse3-dev libfuse-dev bash-completion squashfs-tools
 
 RUN apt-get install -y libbtrfs-dev libgpgme11-dev
 RUN mkdir -p /etc/containers/registries.conf.d
