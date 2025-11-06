@@ -11,32 +11,62 @@ Both requested fixes have been successfully implemented and tested:
 **Root Cause**: The `runsc list` command must use the same `--root` flag that was used when creating containers.
 
 **Solution**:
-- Created `pkg/runtime/list.go` with `List()` methods for both runc and runsc (programmatic)
-- Created wrapper script at `docker/runsc-wrapper.sh` that automatically adds `--root /run/gvisor --platform systrap`
-- Modified Dockerfile to install wrapper as `/usr/local/bin/runsc` (real binary at `/usr/local/bin/runsc.real`)
-- Added bash aliases for convenience (`runsc-list`, `runsc-ps`, `runsc-raw`)
+- Created `pkg/runtime/list.go` with `List()` methods for both runc and runsc (programmatic access)
 - Added comprehensive documentation
 
-**Now you can simply run**:
+**Usage**:
 ```bash
-# On worker pod - works automatically!
-runsc list
-runsc state <container-id>
-runsc ps <container-id>
+# Manual (must specify --root)
+runsc --root /run/gvisor list
+
+# Programmatic (via Go)
+containers, _ := runtime.List(ctx)
 ```
 
 **Files Modified**:
 - `pkg/runtime/list.go` (new - programmatic access)
-- `docker/runsc-wrapper.sh` (new - wrapper script)
-- `docker/Dockerfile.worker` (modified - install wrapper + aliases)
-- `docs/troubleshooting-runsc-list.md` (new)
-- `docs/runsc-wrapper-usage.md` (new)
-- `docs/runsc-wrapper-test.sh` (new)
-- `RUNSC_WRAPPER_SUMMARY.md` (new)
+- `docs/troubleshooting-runsc-list.md` (documentation)
 
 ---
 
-### 2. ✅ Implemented nvproxy GPU Support for gVisor
+### 2. ✅ Fixed runsc Exit Code Handling and Cleanup
+
+**Problem**: runsc implementation had inconsistent exit code handling and cleanup compared to runc.
+
+**Issues**:
+1. Started channel received wrong PID (runsc wrapper process instead of container)
+2. Exit codes not reliably captured
+3. Poor cleanup on errors
+
+**Solution**: Refactored to use proper OCI pattern: **create → start → wait**
+
+**Implementation**:
+```go
+// 1. Create container (get actual PID)
+runsc create --pid-file /tmp/pid --bundle /bundle container-id
+pid := readPidFile()
+opts.Started <- pid  // ✅ Correct container PID
+
+// 2. Start execution
+runsc start container-id
+
+// 3. Wait for exit
+exitCode := runsc wait container-id  // Returns exit code
+```
+
+**Benefits**:
+- ✅ Correct PID tracking (container sandbox PID, not wrapper)
+- ✅ Reliable exit codes (0 = success, non-zero = container exit code, -1 = runtime error)
+- ✅ Clean error handling (failed operations trigger Delete())
+- ✅ Consistent with runc behavior
+
+**Files Modified**:
+- `pkg/runtime/runsc.go` (rewrote Run() method)
+- `docs/runsc-exit-code-fix.md` (documentation)
+
+---
+
+### 3. ✅ Implemented nvproxy GPU Support for gVisor
 
 **Problem**: gVisor GPU support via nvproxy was not implemented.
 

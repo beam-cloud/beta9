@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -126,46 +128,90 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
-	args := r.baseArgs()
+	// Use create + start + wait pattern for proper PID reporting and exit code handling
+	// This matches the OCI runtime spec and how runc works internally
 	
-	// Enable nvproxy if GPU devices are present
+	// Step 1: Create the container (creates but doesn't start)
+	pidFile := filepath.Join(bundlePath, fmt.Sprintf("%s.pid", containerID))
+	createArgs := r.baseArgs()
 	if r.nvproxyEnabled {
-		args = append(args, "--nvproxy=true")
+		createArgs = append(createArgs, "--nvproxy=true")
+	}
+	createArgs = append(createArgs, "create")
+	createArgs = append(createArgs, "--bundle", bundlePath)
+	createArgs = append(createArgs, "--pid-file", pidFile)
+	createArgs = append(createArgs, containerID)
+
+	createCmd := exec.CommandContext(ctx, r.cfg.RunscPath, createArgs...)
+	if opts != nil && opts.OutputWriter != nil {
+		createCmd.Stdout = opts.OutputWriter
+		createCmd.Stderr = opts.OutputWriter
 	}
 	
-	args = append(args, "run")
-	args = append(args, "--bundle", bundlePath)
-	args = append(args, containerID)
-
-	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
-
-	if opts != nil && opts.OutputWriter != nil {
-		cmd.Stdout = opts.OutputWriter
-		cmd.Stderr = opts.OutputWriter
+	if err := createCmd.Run(); err != nil {
+		return -1, fmt.Errorf("failed to create container: %w", err)
 	}
 
-	if err := cmd.Start(); err != nil {
-		return -1, fmt.Errorf("failed to start container: %w", err)
+	// Read the container PID
+	pidBytes, err := os.ReadFile(pidFile)
+	if err != nil {
+		_ = r.Delete(ctx, containerID, &DeleteOpts{Force: true})
+		return -1, fmt.Errorf("failed to read container PID: %w", err)
 	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		_ = r.Delete(ctx, containerID, &DeleteOpts{Force: true})
+		return -1, fmt.Errorf("failed to parse container PID: %w", err)
+	}
+	_ = os.Remove(pidFile)
 
-	// Notify that container has started
+	// Notify that container has been created (send actual container PID)
 	if opts != nil && opts.Started != nil {
 		select {
-		case opts.Started <- cmd.Process.Pid:
+		case opts.Started <- pid:
 		default:
 		}
 	}
 
-	// Wait for container to exit
-	err := cmd.Wait()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode(), nil
-		}
-		return -1, err
+	// Step 2: Start the container (begins execution)
+	startArgs := r.baseArgs()
+	startArgs = append(startArgs, "start", containerID)
+
+	startCmd := exec.CommandContext(ctx, r.cfg.RunscPath, startArgs...)
+	if err := startCmd.Run(); err != nil {
+		_ = r.Delete(ctx, containerID, &DeleteOpts{Force: true})
+		return -1, fmt.Errorf("failed to start container: %w", err)
 	}
 
-	return 0, nil
+	// Step 3: Wait for the container to exit
+	waitArgs := r.baseArgs()
+	waitArgs = append(waitArgs, "wait", containerID)
+
+	waitCmd := exec.CommandContext(ctx, r.cfg.RunscPath, waitArgs...)
+	
+	// runsc wait outputs the exit code to stdout
+	var outBuf bytes.Buffer
+	waitCmd.Stdout = &outBuf
+	waitCmd.Stderr = &outBuf
+
+	err = waitCmd.Run()
+	output := strings.TrimSpace(outBuf.String())
+	
+	// Parse exit code from runsc wait output
+	exitCode := 0
+	if output != "" {
+		if parsedCode, parseErr := strconv.Atoi(output); parseErr == nil {
+			exitCode = parsedCode
+		}
+	}
+
+	// If wait command failed but we got an exit code, that's OK (container exited with non-zero)
+	if err != nil && exitCode == 0 {
+		// Couldn't determine exit code, default to 1
+		exitCode = 1
+	}
+
+	return exitCode, nil
 }
 
 func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process, opts *ExecOpts) error {
