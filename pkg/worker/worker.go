@@ -50,6 +50,7 @@ type Worker struct {
 	runtime                 runtime.Runtime
 	runcRuntime             runtime.Runtime
 	gvisorRuntime           runtime.Runtime
+	firecrackerRuntime      runtime.Runtime
 	containerServer         *ContainerRuntimeServer
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
@@ -199,6 +200,7 @@ func NewWorker() (*Worker, error) {
 	// Create default runtime based on pool configuration
 	var defaultRuntime runtime.Runtime
 	var gvisorRuntime runtime.Runtime
+	var firecrackerRuntime runtime.Runtime
 
 	// Get runtime type from pool config, fall back to global config
 	runtimeType := poolConfig.ContainerRuntime
@@ -245,6 +247,39 @@ func NewWorker() (*Worker, error) {
 				Str("platform", gvisorPlatform).
 				Str("root", gvisorRoot).
 				Msg("gVisor runtime initialized successfully")
+		}
+	case "firecracker":
+		// Get Firecracker configuration
+		firecrackerBin := "firecracker"
+		firecrackerRoot := "/var/lib/beta9/microvm"
+		kernelImage := "/var/lib/beta9/vmlinux"
+		defaultCPUs := 1
+		defaultMemMiB := 512
+
+		// TODO: Add Firecracker-specific config to pool config if needed
+		// For now, use sensible defaults from the worker image
+
+		firecrackerRuntime, err := runtime.New(runtime.Config{
+			Type:           "firecracker",
+			FirecrackerBin: firecrackerBin,
+			MicroVMRoot:    firecrackerRoot,
+			KernelImage:    kernelImage,
+			DefaultCPUs:    defaultCPUs,
+			DefaultMemMiB:  defaultMemMiB,
+			Debug:          config.DebugMode,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to create firecracker runtime, falling back to runc")
+			defaultRuntime = runcRuntime
+		} else {
+			defaultRuntime = firecrackerRuntime
+			log.Info().
+				Str("bin", firecrackerBin).
+				Str("root", firecrackerRoot).
+				Str("kernel", kernelImage).
+				Int("cpus", defaultCPUs).
+				Int("mem_mib", defaultMemMiB).
+				Msg("Firecracker runtime initialized successfully")
 		}
 	default:
 		log.Warn().Str("runtime", runtimeType).Msg("unknown runtime type, using runc")
@@ -298,6 +333,7 @@ func NewWorker() (*Worker, error) {
 		runtime:                 defaultRuntime,
 		runcRuntime:             runcRuntime,
 		gvisorRuntime:           gvisorRuntime,
+		firecrackerRuntime:      firecrackerRuntime,
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
