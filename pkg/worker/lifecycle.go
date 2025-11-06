@@ -78,11 +78,18 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 	err := rt.Kill(context.Background(), instance.Id, signal, &runtime.KillOpts{All: true})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("error stopping container: %v", err)
-		s.containerNetworkManager.TearDown(containerId)
-		return nil
 	}
 
-	log.Info().Str("container_id", containerId).Msg("container stopped")
+	// Force delete to clean up container state, especially important during startup
+	// This ensures runsc processes are fully cleaned up even if kill fails
+	deleteErr := rt.Delete(context.Background(), instance.Id, &runtime.DeleteOpts{Force: true})
+	if deleteErr != nil {
+		log.Error().Str("container_id", containerId).Msgf("error deleting container: %v", deleteErr)
+	}
+
+	s.containerNetworkManager.TearDown(containerId)
+
+	log.Info().Str("container_id", containerId).Msg("container stopped and deleted")
 	return nil
 }
 
