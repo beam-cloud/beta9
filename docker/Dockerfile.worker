@@ -96,14 +96,15 @@ else
     echo "Unsupported architecture: $TARGETARCH" && exit 1
 fi
 
-# Download runsc and its checksum
-curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc -o /usr/local/bin/runsc
+# Download runsc and its checksum to /tmp
+curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc -o /tmp/runsc
 curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc.sha512 -o /tmp/runsc.sha512
 
-# Verify checksum
-sha512sum -c /tmp/runsc.sha512
+# Verify checksum (cd to /tmp where both files are)
+cd /tmp && sha512sum -c runsc.sha512
 
-# Make runsc executable
+# Move to final location and make executable
+mv /tmp/runsc /usr/local/bin/runsc
 chmod +x /usr/local/bin/runsc
 
 # Verify installation

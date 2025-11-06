@@ -147,6 +147,17 @@ docker buildx build --platform linux/amd64 -f docker/Dockerfile.worker .
 docker buildx build --platform linux/arm64 -f docker/Dockerfile.worker .
 ```
 
+### Checksum File Not Found
+
+**Error**: `sha512sum: runsc: No such file or directory`
+
+**Cause**: The checksum file references a relative path, but `sha512sum` can't find the binary in the current directory.
+
+**Solution**: This has been fixed in the Dockerfile by:
+1. Downloading both files to `/tmp/`
+2. Running `cd /tmp && sha512sum -c runsc.sha512`
+3. Moving the verified binary to `/usr/local/bin/runsc`
+
 ### Checksum Verification Fails
 
 **Error**: `sha512sum: WARNING: X computed checksums did NOT match`
