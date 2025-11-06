@@ -79,6 +79,12 @@ verify-protocol:
 test-pkg:
 	go test -v ./pkg/... -bench=./pkg/..
 
+test-runtime:
+	go test -v ./pkg/runtime/...
+
+test-runtime-integration:
+	go test -v -tags=integration ./pkg/runtime/...
+
 # build-test can be run with "local" to run extra tests when pointing to your local
 # dev setup. It will also exclude custom image tests due to arm64 issues on mac.
 build-test:
@@ -107,4 +113,15 @@ sdk-clean:
 
 sdk-publish:
 	make -C sdk publish
+
+# Build vm-init binary for Firecracker microVMs
+vm-init:
+	@echo "Building beta9-vm-init..."
+	GOOS=linux CGO_ENABLED=0 go build -o bin/beta9-vm-init ./cmd/vm-init
+	@echo "beta9-vm-init built successfully at bin/beta9-vm-init"
+
+vm-init-static:
+	@echo "Building static beta9-vm-init..."
+	GOOS=linux CGO_ENABLED=0 go build -ldflags="-s -w -extldflags=-static" -o bin/beta9-vm-init ./cmd/vm-init
+	@echo "Static beta9-vm-init built successfully at bin/beta9-vm-init"
 

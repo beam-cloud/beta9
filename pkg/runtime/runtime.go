@@ -93,12 +93,21 @@ type Runtime interface {
 
 // Config contains configuration for creating a runtime
 type Config struct {
-	Type          string // "runc" | "gvisor"
+	Type          string // "runc" | "gvisor" | "firecracker"
 	RuncPath      string // Path to runc binary (default: "runc")
 	RunscPath     string // Path to runsc binary (default: "runsc")
 	RunscPlatform string // "kvm" | "ptrace" (optional)
 	RunscRoot     string // Root directory for runsc state (default: "/run/gvisor")
 	Debug         bool   // Enable debug mode
+
+	// Firecracker-specific configuration
+	FirecrackerBin string // Path to firecracker binary
+	JailerBin      string // Path to jailer binary (optional)
+	MicroVMRoot    string // Root directory for microVM state (default: "/var/lib/beta9/microvm")
+	KernelImage    string // Path to kernel image for microVMs
+	InitrdImage    string // Path to initrd image (optional)
+	DefaultCPUs    int    // Default CPU count for microVMs (default: 1)
+	DefaultMemMiB  int    // Default memory in MiB for microVMs (default: 512)
 }
 
 // New creates a new Runtime based on the provided configuration
@@ -108,6 +117,8 @@ func New(cfg Config) (Runtime, error) {
 		return NewRunc(cfg)
 	case "gvisor":
 		return NewRunsc(cfg)
+	case "firecracker":
+		return NewFirecracker(cfg)
 	default:
 		return nil, ErrUnsupportedRuntime{Runtime: cfg.Type}
 	}
