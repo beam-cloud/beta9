@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -77,17 +78,25 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 
 	err := rt.Kill(context.Background(), instance.Id, signal, &runtime.KillOpts{All: true})
 	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("error stopping container: %v", err)
+		log.Warn().Str("container_id", containerId).Err(err).Msg("error killing container (may already be stopped)")
 	}
 
 	// Force delete to clean up container state, especially important during startup
 	// This ensures runsc processes are fully cleaned up even if kill fails
 	deleteErr := rt.Delete(context.Background(), instance.Id, &runtime.DeleteOpts{Force: true})
 	if deleteErr != nil {
-		log.Error().Str("container_id", containerId).Msgf("error deleting container: %v", deleteErr)
+		// Exit code 128 typically means container doesn't exist (already cleaned up)
+		if exitErr, ok := deleteErr.(*exec.ExitError); ok && exitErr.ExitCode() == 128 {
+			log.Debug().Str("container_id", containerId).Msg("container already deleted")
+		} else {
+			log.Warn().Str("container_id", containerId).Err(deleteErr).Msg("error deleting container state")
+		}
 	}
 
-	s.containerNetworkManager.TearDown(containerId)
+	// Network cleanup - always attempt, log but don't fail
+	if err := s.containerNetworkManager.TearDown(containerId); err != nil {
+		log.Warn().Str("container_id", containerId).Err(err).Msg("failed to tear down network (continuing cleanup)")
+	}
 
 	log.Info().Str("container_id", containerId).Msg("container stopped and deleted")
 	return nil
@@ -121,10 +130,9 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		s.containerGPUManager.UnassignGPUDevices(containerId)
 	}
 
-	// Tear down container network components
-	err := s.containerNetworkManager.TearDown(request.ContainerId)
-	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to clean up container network: %v", err)
+	// Tear down container network components - best effort
+	if err := s.containerNetworkManager.TearDown(request.ContainerId); err != nil {
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("failed to clean up container network")
 	}
 
 	s.completedRequests <- request
@@ -168,11 +176,17 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 }
 
 func (s *Worker) deleteContainer(containerId string) {
+	// Always remove from local state first
 	s.containerInstances.Delete(containerId)
 
-	_, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
+	// Best-effort remote state removal with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(ctx, &pb.DeleteContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
+		// This is best-effort; if gateway/redis is down, we still cleaned up locally
+		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state (local cleanup completed)")
 	}
 }
 
