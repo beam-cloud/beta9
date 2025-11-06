@@ -380,10 +380,10 @@ var (
 )
 
 type WorkerPoolConfig struct {
-	GPUType              string                            `key:"gpuType" json:"gpu_type"`
-	Runtime              string                            `key:"runtime" json:"runtime"`                           // Container runtime: "runc" or "gvisor"
-	RuntimeConfig        RuntimeConfig                     `key:"runtimeConfig" json:"runtime_config"`             // Runtime-specific configuration
-	Mode                 PoolMode                          `key:"mode" json:"mode"`
+	GPUType                string                            `key:"gpuType" json:"gpu_type"`
+	ContainerRuntime       string                            `key:"containerRuntime" json:"container_runtime"`                 // Container runtime: "runc" or "gvisor"
+	ContainerRuntimeConfig RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"`    // Runtime-specific configuration
+	Mode                   PoolMode                          `key:"mode" json:"mode"`
 	Provider             *MachineProvider                  `key:"provider" json:"provider"`
 	JobSpec              WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
 	PoolSizing           WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`

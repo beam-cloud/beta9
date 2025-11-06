@@ -107,8 +107,9 @@ cd /tmp && sha512sum -c runsc.sha512
 mv /tmp/runsc /usr/local/bin/runsc
 chmod +x /usr/local/bin/runsc
 
-# Verify installation
+# Verify installation and check available platforms
 /usr/local/bin/runsc --version
+/usr/local/bin/runsc help 2>&1 | grep -i platform || echo "Platform options available"
 EOT
 
 # nvidia-container-toolkit

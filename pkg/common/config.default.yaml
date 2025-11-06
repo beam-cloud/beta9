@@ -154,8 +154,8 @@ worker:
     default:
       mode: local
       priority: 1
-      runtime: runc
-      runtimeConfig:
+      containerRuntime: runc
+      containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
       jobSpec:
@@ -172,8 +172,8 @@ worker:
     build:
       mode: local
       requiresPoolSelector: true
-      runtime: runc
-      runtimeConfig:
+      containerRuntime: runc
+      containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
       tmpSizeLimit: 50Gi
@@ -191,7 +191,10 @@ worker:
     # nvidia:
     #   mode: local
     #   gpuType: any
-    #   runtime: nvidia
+    #   containerRuntime: gvisor
+    #   containerRuntimeConfig:
+    #     gvisorPlatform: systrap
+    #     gvisorRoot: /run/gvisor
     #   jobSpec:
     #     nodeSelector: {}
     #   poolSizing:

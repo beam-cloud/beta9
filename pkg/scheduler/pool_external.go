@@ -394,8 +394,8 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		},
 	}
 
-	if wpc.workerPoolConfig.Runtime != "" {
-		podTemplate.Spec.RuntimeClassName = ptr.To(wpc.workerPoolConfig.Runtime)
+	if wpc.workerPoolConfig.ContainerRuntime != "" {
+		podTemplate.Spec.RuntimeClassName = ptr.To(wpc.workerPoolConfig.ContainerRuntime)
 	}
 
 	ttl := int32(30)

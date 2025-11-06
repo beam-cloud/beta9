@@ -201,7 +201,7 @@ func NewWorker() (*Worker, error) {
 	var gvisorRuntime runtime.Runtime
 
 	// Get runtime type from pool config, fall back to global config
-	runtimeType := poolConfig.Runtime
+	runtimeType := poolConfig.ContainerRuntime
 	if runtimeType == "" {
 		runtimeType = config.Worker.ContainerRuntime
 	}
@@ -219,16 +219,21 @@ func NewWorker() (*Worker, error) {
 		defaultRuntime = runcRuntime
 	case "gvisor":
 		// Get gVisor configuration from pool config
-		gvisorRoot := poolConfig.RuntimeConfig.GVisorRoot
+		gvisorRoot := poolConfig.ContainerRuntimeConfig.GVisorRoot
 		if gvisorRoot == "" {
 			gvisorRoot = "/run/gvisor"
+		}
+
+		gvisorPlatform := poolConfig.ContainerRuntimeConfig.GVisorPlatform
+		if gvisorPlatform == "" {
+			gvisorPlatform = "systrap"
 		}
 
 		gvisorRuntime, err = runtime.New(runtime.Config{
 			Type:          "gvisor",
 			RunscPath:     "runsc",
 			RunscRoot:     gvisorRoot,
-			RunscPlatform: poolConfig.RuntimeConfig.GVisorPlatform,
+			RunscPlatform: gvisorPlatform,
 			Debug:         config.DebugMode,
 		})
 		if err != nil {
@@ -237,7 +242,7 @@ func NewWorker() (*Worker, error) {
 		} else {
 			defaultRuntime = gvisorRuntime
 			log.Info().
-				Str("platform", poolConfig.RuntimeConfig.GVisorPlatform).
+				Str("platform", gvisorPlatform).
 				Str("root", gvisorRoot).
 				Msg("gVisor runtime initialized successfully")
 		}
