@@ -76,9 +76,23 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		rt = s.runtime
 	}
 
+	// For runsc, we need to kill the main runtime process directly
+	// because `runsc run` blocks and won't exit just from container signals
+	if instance.RuntimePid > 0 {
+		// Kill the runtime process (e.g., the runsc run process)
+		if proc, err := os.FindProcess(instance.RuntimePid); err == nil {
+			if err := proc.Signal(signal); err != nil {
+				log.Debug().Str("container_id", containerId).Int("pid", instance.RuntimePid).Err(err).Msg("failed to signal runtime process (may have already exited)")
+			} else {
+				log.Debug().Str("container_id", containerId).Int("pid", instance.RuntimePid).Msg("sent signal to runtime process")
+			}
+		}
+	}
+
+	// Also send kill signal to the container itself (for cleanup)
 	err := rt.Kill(context.Background(), instance.Id, signal, &runtime.KillOpts{All: true})
 	if err != nil {
-		log.Warn().Str("container_id", containerId).Err(err).Msg("error killing container (may already be stopped)")
+		log.Debug().Str("container_id", containerId).Err(err).Msg("error killing container (may already be stopped)")
 	}
 
 	// Force delete to clean up container state, especially important during startup
@@ -818,6 +832,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if !ok {
 			return
 		}
+
+		// Store the runtime process PID so we can kill it during cleanup
+		containerInstance.RuntimePid = pid
+		s.containerInstances.Set(containerId, containerInstance)
 
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
