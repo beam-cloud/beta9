@@ -181,17 +181,71 @@ rt.Delete(ctx, containerID, &runtime.DeleteOpts{Force: true})
 
 ## Testing
 
-### Run Unit Tests
+### Quick Test with Local Harness
+
+We provide a comprehensive test harness that sets up everything needed and runs all tests:
+
+```bash
+# Run all tests (setup + unit + integration + manual)
+sudo ./bin/test_firecracker_local.sh all
+
+# Or run individual test suites
+sudo ./bin/test_firecracker_local.sh setup        # Just setup environment
+sudo ./bin/test_firecracker_local.sh unit         # Unit tests only
+sudo ./bin/test_firecracker_local.sh integration  # Integration tests only
+sudo ./bin/test_firecracker_local.sh manual       # Manual end-to-end test
+
+# Clean up test environment
+sudo ./bin/test_firecracker_local.sh clean
+```
+
+The test harness will:
+- ✅ Check all prerequisites (KVM, root, tools)
+- ✅ Download and install Firecracker
+- ✅ Download kernel image
+- ✅ Build beta9-vm-init
+- ✅ Create test OCI bundles
+- ✅ Run all tests
+- ✅ Clean up automatically
+
+### Manual Testing
+
+#### Run Unit Tests
 
 ```bash
 make test-runtime
 ```
 
-### Run Integration Tests
+#### Run Integration Tests
 
 Requires root privileges and Firecracker installed:
 
 ```bash
+export FIRECRACKER_KERNEL=/var/lib/beta9/vmlinux
+sudo make test-runtime-integration
+```
+
+#### Set Up Local Environment Manually
+
+If you prefer to set up manually:
+
+```bash
+# 1. Install Firecracker
+ARCH="$(uname -m)"
+RELEASE_URL="https://github.com/firecracker-microvm/firecracker/releases"
+LATEST="v1.9.2"
+curl -L ${RELEASE_URL}/download/${LATEST}/firecracker-${LATEST}-${ARCH}.tgz | tar -xz
+sudo mv release-${LATEST}-${ARCH}/firecracker-${LATEST}-${ARCH} /usr/local/bin/firecracker
+
+# 2. Download kernel
+sudo mkdir -p /var/lib/beta9
+sudo curl -fsSL -o /var/lib/beta9/vmlinux \
+  https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.9/${ARCH}/vmlinux-5.10.217
+
+# 3. Build vm-init
+make vm-init-static
+
+# 4. Run tests
 export FIRECRACKER_KERNEL=/var/lib/beta9/vmlinux
 sudo make test-runtime-integration
 ```

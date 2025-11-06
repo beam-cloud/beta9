@@ -112,6 +112,58 @@ chmod +x /usr/local/bin/runsc
 /usr/local/bin/runsc help 2>&1 | grep -i platform || { echo "Platform options unavailable" >&2; exit 1; }
 EOT
 
+# Firecracker
+# ========================
+FROM debian:bookworm AS firecracker
+
+ARG TARGETARCH
+ARG FIRECRACKER_VERSION=v1.9.2
+
+WORKDIR /tmp
+
+RUN apt-get update && apt-get install -y curl tar
+
+RUN <<EOT
+set -eux
+
+# Determine the correct architecture for Firecracker
+if [ "$TARGETARCH" = "amd64" ]; then
+    FIRECRACKER_ARCH="x86_64"
+elif [ "$TARGETARCH" = "arm64" ]; then
+    FIRECRACKER_ARCH="aarch64"
+else
+    echo "Unsupported architecture: $TARGETARCH" && exit 1
+fi
+
+# Download Firecracker release
+RELEASE_URL="https://github.com/firecracker-microvm/firecracker/releases"
+curl -fsSL ${RELEASE_URL}/download/${FIRECRACKER_VERSION}/firecracker-${FIRECRACKER_VERSION}-${FIRECRACKER_ARCH}.tgz -o /tmp/firecracker.tgz
+
+# Extract
+tar -xzf /tmp/firecracker.tgz -C /tmp
+
+# Move binaries to /usr/local/bin
+mv /tmp/release-${FIRECRACKER_VERSION}-${FIRECRACKER_ARCH}/firecracker-${FIRECRACKER_VERSION}-${FIRECRACKER_ARCH} /usr/local/bin/firecracker
+chmod +x /usr/local/bin/firecracker
+
+# Also include jailer if present
+if [ -f /tmp/release-${FIRECRACKER_VERSION}-${FIRECRACKER_ARCH}/jailer-${FIRECRACKER_VERSION}-${FIRECRACKER_ARCH} ]; then
+    mv /tmp/release-${FIRECRACKER_VERSION}-${FIRECRACKER_ARCH}/jailer-${FIRECRACKER_VERSION}-${FIRECRACKER_ARCH} /usr/local/bin/jailer
+    chmod +x /usr/local/bin/jailer
+fi
+
+# Download kernel image for microVMs
+mkdir -p /var/lib/beta9
+curl -fsSL https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.9/${FIRECRACKER_ARCH}/vmlinux-5.10.217 -o /var/lib/beta9/vmlinux
+chmod 644 /var/lib/beta9/vmlinux
+
+# Verify installation
+/usr/local/bin/firecracker --version
+
+# Cleanup
+rm -rf /tmp/*
+EOT
+
 # nvidia-container-toolkit
 # ========================
 FROM golang:1.23-bookworm AS nvidia-container-toolkit
@@ -138,6 +190,9 @@ COPY --exclude=sdk . .
 
 RUN go build -gcflags "all=-N" -o /usr/local/bin/worker-debug ./cmd/worker/main.go
 RUN go build -o /usr/local/bin/worker ./cmd/worker/main.go
+
+# Build vm-init for Firecracker
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -extldflags=-static" -o /usr/local/bin/beta9-vm-init ./cmd/vm-init/main.go
 
 # uv
 # ========================
@@ -263,6 +318,9 @@ COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
 COPY --from=gvisor /usr/local/bin/runsc /usr/local/bin/runsc
+COPY --from=firecracker /usr/local/bin/firecracker /usr/local/bin/firecracker
+COPY --from=firecracker /usr/local/bin/jailer /usr/local/bin/jailer
+COPY --from=firecracker /var/lib/beta9/vmlinux /var/lib/beta9/vmlinux
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 
 # LD_PRELOAD libraries
@@ -277,6 +335,7 @@ fi
 
 COPY --from=worker /usr/local/bin/worker /usr/local/bin/worker
 COPY --from=worker /usr/local/bin/worker-debug /usr/local/bin/worker-debug
+COPY --from=worker /usr/local/bin/beta9-vm-init /usr/local/bin/beta9-vm-init
 COPY ./sdk/src/beta9 /workspace/sdk
 COPY --from=uv /root/.local/bin/uv /usr/local/bin/uv
 COPY --from=dropbear /usr/local/bin/dropbear /usr/local/bin/dropbear
@@ -293,6 +352,9 @@ RUN echo "timeout 60" >> /etc/criu/default.conf
 
 # Create gVisor runtime directories
 RUN mkdir -p /run/gvisor
+
+# Create Firecracker runtime directories
+RUN mkdir -p /var/lib/beta9/microvm
 
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,ngx,video
 ENV _BUILDAH_STARTED_IN_USERNS="" \
