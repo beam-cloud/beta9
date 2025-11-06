@@ -91,21 +91,18 @@ class TaskQueueManager:
             task_process.join(timeout=5)
 
         # Force kill any remaining processes
-        force_killed = False
         for task_process in self.task_processes:
             if task_process.is_alive():
                 print("Task process did not terminate gracefully, killing...")
-                task_process.kill()  # SIGKILL instead of terminate
-                task_process.join()  # Wait indefinitely for death
-                force_killed = True
+                task_process.kill()
+                task_process.join()
 
             if task_process.exitcode != 0:
                 self.exit_code = task_process.exitcode
         
-        # If we force-killed any workers, bypass Python cleanup to avoid hanging
-        # on resource_tracker trying to clean up shared resources
-        if force_killed:
-            os._exit(self.exit_code)
+        # Always use os._exit() to bypass resource_tracker cleanup
+        # which can hang on shared multiprocessing resources
+        os._exit(self.exit_code)
 
     def _start_worker(self, worker_index: int):
         # Initialize task worker
