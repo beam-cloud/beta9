@@ -6,7 +6,7 @@ Python SDK for Beta9.
 
 ### Using the SDK
 
-This example will run the `square` function on beta9. Each invocation of `square` will run in a separate runc space.
+This example will run the `square` function on beta9. Each invocation of `square` will run in a separate container.
 
 ```python
 from beta9 import function

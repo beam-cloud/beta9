@@ -261,7 +261,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		ContentCacheAvailable: c.cacheClient != nil,
 	}
 
-	// Do not persist or rely on an initial spec file for v2; base runc config will be used instead
+	// Do not persist or rely on an initial spec file for v2; base config will be used instead
 	// Default to legacy S3 storage if we cannot detect OCI
 	storageType := ""
 	if meta != nil && meta.StorageInfo != nil {

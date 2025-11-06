@@ -40,7 +40,7 @@ const (
 	functionResultExpirationTimeout  time.Duration = 600 * time.Second
 )
 
-type RunCFunctionService struct {
+type ContainerFunctionService struct {
 	pb.UnimplementedFunctionServiceServer
 	ctx              context.Context
 	taskDispatcher   *task.Dispatcher
@@ -73,7 +73,7 @@ type FunctionServiceOpts struct {
 	UsageMetricsRepo repository.UsageMetricsRepository
 }
 
-func NewRuncFunctionService(ctx context.Context,
+func NewContainerFunctionService(ctx context.Context,
 	opts FunctionServiceOpts,
 ) (FunctionService, error) {
 	keyEventManager, err := common.NewKeyEventManager(opts.RedisClient)
@@ -81,7 +81,7 @@ func NewRuncFunctionService(ctx context.Context,
 		return nil, err
 	}
 
-	fs := &RunCFunctionService{
+	fs := &ContainerFunctionService{
 		ctx:              ctx,
 		config:           opts.Config,
 		backendRepo:      opts.BackendRepo,
@@ -111,7 +111,7 @@ func NewRuncFunctionService(ctx context.Context,
 	return fs, nil
 }
 
-func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
+func (fs *ContainerFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stream pb.FunctionService_FunctionInvokeServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 	ctx := stream.Context()
 
@@ -125,7 +125,7 @@ func (fs *RunCFunctionService) FunctionInvoke(in *pb.FunctionInvokeRequest, stre
 	return fs.stream(ctx, stream, authInfo, task, in.StubId, in.Headless)
 }
 
-func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
+func (fs *ContainerFunctionService) invoke(ctx context.Context, authInfo *auth.AuthInfo, stubId string, payload *types.TaskPayload) (types.TaskInterface, error) {
 	stub, err := fs.backendRepo.GetStubByExternalId(ctx, stubId)
 	if err != nil {
 		return nil, err
@@ -160,14 +160,14 @@ func (fs *RunCFunctionService) invoke(ctx context.Context, authInfo *auth.AuthIn
 	return task, err
 }
 
-func (fs *RunCFunctionService) functionTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
+func (fs *ContainerFunctionService) functionTaskFactory(ctx context.Context, msg types.TaskMessage) (types.TaskInterface, error) {
 	return &FunctionTask{
 		msg: &msg,
 		fs:  fs,
 	}, nil
 }
 
-func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, stubId string, headless bool) error {
+func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, stubId string, headless bool) error {
 	taskId := task.Metadata().TaskId
 	containerId := task.Metadata().ContainerId
 
@@ -228,7 +228,7 @@ func (fs *RunCFunctionService) stream(ctx context.Context, stream pb.FunctionSer
 	return containerStream.Stream(ctx, authInfo, containerId)
 }
 
-func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
+func (fs *ContainerFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	value, err := fs.rdb.Get(ctx, Keys.FunctionArgs(authInfo.Workspace.Name, in.TaskId)).Bytes()
@@ -247,7 +247,7 @@ func (fs *RunCFunctionService) FunctionGetArgs(ctx context.Context, in *pb.Funct
 	}, nil
 }
 
-func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error) {
+func (fs *ContainerFunctionService) FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	err := fs.rdb.Set(ctx, Keys.FunctionResult(authInfo.Workspace.Name, in.TaskId), in.Result, functionResultExpirationTimeout).Err()
@@ -260,7 +260,7 @@ func (fs *RunCFunctionService) FunctionSetResult(ctx context.Context, in *pb.Fun
 	}, nil
 }
 
-func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, stream pb.FunctionService_FunctionMonitorServer) error {
+func (fs *ContainerFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, stream pb.FunctionService_FunctionMonitorServer) error {
 	authInfo, _ := auth.AuthInfoFromContext(stream.Context())
 
 	ctx, cancel := context.WithCancel(stream.Context())
@@ -408,11 +408,11 @@ func (fs *RunCFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, s
 	}
 }
 
-func (fs *RunCFunctionService) genContainerId(taskId, stubType string) string {
+func (fs *ContainerFunctionService) genContainerId(taskId, stubType string) string {
 	return fmt.Sprintf("%s-%s-%s", stubType, taskId, uuid.New().String()[:8])
 }
 
-func (fs *RunCFunctionService) FunctionSchedule(ctx context.Context, req *pb.FunctionScheduleRequest) (*pb.FunctionScheduleResponse, error) {
+func (fs *ContainerFunctionService) FunctionSchedule(ctx context.Context, req *pb.FunctionScheduleRequest) (*pb.FunctionScheduleResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	stub, err := fs.backendRepo.GetStubByExternalId(ctx, req.StubId)
@@ -449,7 +449,7 @@ func (fs *RunCFunctionService) FunctionSchedule(ctx context.Context, req *pb.Fun
 	}, nil
 }
 
-func (fs *RunCFunctionService) listenForScheduledJobs() {
+func (fs *ContainerFunctionService) listenForScheduledJobs() {
 	log.Info().Str("channel", repository.ScheduledJobsChannel).Msg("listening for scheduled jobs")
 	for {
 		select {
