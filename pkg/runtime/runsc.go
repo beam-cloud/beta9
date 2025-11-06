@@ -15,7 +15,8 @@ import (
 
 // Runsc implements Runtime using the gVisor runsc runtime
 type Runsc struct {
-	cfg Config
+	cfg        Config
+	nvproxyEnabled bool // Whether GPU support via nvproxy is enabled
 }
 
 // NewRunsc creates a new runsc (gVisor) runtime
@@ -47,10 +48,10 @@ func (r *Runsc) Name() string {
 func (r *Runsc) Capabilities() Capabilities {
 	return Capabilities{
 		CheckpointRestore: false, // gVisor doesn't support CRIU
-		GPU:               false, // gVisor doesn't support GPU passthrough
+		GPU:               true,  // gVisor supports GPU via nvproxy
 		OOMEvents:         false, // Use cgroup poller instead
 		JoinExistingNetNS: true,  // gVisor can join network namespaces
-		CDI:               false, // gVisor doesn't support CDI
+		CDI:               true,  // gVisor supports CDI with nvproxy
 	}
 }
 
@@ -64,8 +65,18 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	if spec.Linux != nil {
 		spec.Linux.Seccomp = nil
 
-		// Clear devices list - gVisor virtualizes /dev
-		spec.Linux.Devices = nil
+		// Check if this spec has GPU devices (CDI or direct)
+		// If so, enable nvproxy support
+		r.nvproxyEnabled = r.hasGPUDevices(spec)
+		
+		if r.nvproxyEnabled {
+			// For nvproxy, we keep the device specifications
+			// gVisor will intercept GPU calls and proxy them to the host driver
+			// The devices will be available through nvproxy, not direct passthrough
+		} else {
+			// Clear devices list if no GPU - gVisor virtualizes /dev
+			spec.Linux.Devices = nil
+		}
 	}
 
 	// Ensure no_new_privs is set
@@ -80,8 +91,48 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	return nil
 }
 
+// hasGPUDevices checks if the spec contains GPU device configurations
+func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
+	if spec.Linux == nil {
+		return false
+	}
+
+	// Check for NVIDIA GPU devices
+	for _, device := range spec.Linux.Devices {
+		path := device.Path
+		// NVIDIA GPU devices typically start with /dev/nvidia
+		if len(path) >= 11 && path[:11] == "/dev/nvidia" {
+			return true
+		}
+		if len(path) >= 13 && path[:13] == "/dev/nvidiactl" {
+			return true
+		}
+		if len(path) >= 15 && path[:15] == "/dev/nvidia-uvm" {
+			return true
+		}
+	}
+
+	// Check for CDI device annotations
+	if spec.Annotations != nil {
+		for key := range spec.Annotations {
+			// CDI devices are specified via annotations like "cdi.k8s.io/nvidia"
+			if len(key) >= 10 && key[:10] == "cdi.k8s.io" {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
 	args := r.baseArgs()
+	
+	// Enable nvproxy if GPU devices are present
+	if r.nvproxyEnabled {
+		args = append(args, "--nvproxy=true")
+	}
+	
 	args = append(args, "run")
 	args = append(args, "--bundle", bundlePath)
 	args = append(args, containerID)

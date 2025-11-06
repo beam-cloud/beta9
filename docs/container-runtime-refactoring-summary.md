@@ -39,8 +39,11 @@ Created a new runtime abstraction layer with the following components:
   - Direct delegation to go-runc library
 
 - **`runsc.go`**: gVisor implementation
-  - Limited capabilities (CheckpointRestore, GPU, OOMEvents, CDI: `false`)
-  - `Prepare()` method removes incompatible spec elements (Seccomp, Devices)
+  - GPU and CDI support via nvproxy: `true`
+  - CheckpointRestore and OOMEvents: `false`
+  - JoinExistingNetNS: `true`
+  - `Prepare()` method removes incompatible spec elements (Seccomp)
+  - Preserves GPU devices for nvproxy
   - Shells out to `runsc` binary with OCI-compatible commands
 
 #### Portable OOM Detection (`oom_watcher.go`)
