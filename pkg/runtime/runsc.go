@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -125,19 +124,6 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
-	// Ensure container state is always cleaned up when Run() exits
-	// This is critical for runsc to properly release resources
-	defer func() {
-		// Always delete container state when Run() exits (normal or error)
-		deleteCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		
-		deleteArgs := r.baseArgs()
-		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
-		deleteCmd := exec.CommandContext(deleteCtx, r.cfg.RunscPath, deleteArgs...)
-		_ = deleteCmd.Run() // Best effort - container might already be deleted
-	}()
-	
 	args := r.baseArgs()
 
 	// Enable nvproxy if GPU devices are present
@@ -149,19 +135,18 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 
-	// Stream output directly - don't buffer
+	// Set up output streaming
 	if opts != nil && opts.OutputWriter != nil {
 		cmd.Stdout = opts.OutputWriter
 		cmd.Stderr = opts.OutputWriter
 	}
 
-	// Use monitor pattern like runc for proper exit code handling
-	ec, err := r.startCommand(cmd)
-	if err != nil {
-		return -1, err
+	// Start the container
+	if err := cmd.Start(); err != nil {
+		return -1, fmt.Errorf("failed to start container: %w", err)
 	}
 
-	// Notify that container has started (runsc process PID, which manages the container)
+	// Notify PID if requested
 	if opts != nil && opts.Started != nil {
 		select {
 		case opts.Started <- cmd.Process.Pid:
@@ -169,56 +154,26 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 		}
 	}
 
-	// Wait for exit using monitor pattern (like runc)
-	status, err := r.monitorWait(cmd, ec)
-	if err == nil && status != 0 {
-		err = fmt.Errorf("%s did not terminate successfully: exit code %d", cmd.Args[0], status)
-	}
+	// Wait for container to exit - this blocks
+	err := cmd.Wait()
 	
-	// Return exits here, defer will call delete
-	return status, err
-}
-
-// startCommand starts a command and returns a channel for monitoring its exit
-// This follows the same pattern as go-runc's Monitor.Start()
-func (r *Runsc) startCommand(cmd *exec.Cmd) (chan exit, error) {
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	ec := make(chan exit, 1)
-	go func() {
-		var status int
-		if err := cmd.Wait(); err != nil {
-			status = 255 // Default error status
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				// Extract actual exit code from syscall.WaitStatus
-				if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-					status = ws.ExitStatus()
-				}
+	// Clean up container state after run exits
+	deleteArgs := r.baseArgs()
+	deleteArgs = append(deleteArgs, "delete", "--force", containerID)
+	deleteCmd := exec.Command(r.cfg.RunscPath, deleteArgs...)
+	_ = deleteCmd.Run() // Best effort cleanup
+	
+	// Extract exit code
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				return ws.ExitStatus(), nil
 			}
 		}
-		ec <- exit{
-			pid:    cmd.Process.Pid,
-			status: status,
-		}
-		close(ec)
-	}()
+		return -1, err
+	}
 
-	return ec, nil
-}
-
-// monitorWait waits for a command to exit via the monitor channel
-// This follows the same pattern as go-runc's Monitor.Wait()
-func (r *Runsc) monitorWait(cmd *exec.Cmd, ec chan exit) (int, error) {
-	e := <-ec
-	return e.status, nil
-}
-
-// exit holds exit information from a runsc process
-type exit struct {
-	pid    int
-	status int
+	return 0, nil
 }
 
 func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process, opts *ExecOpts) error {
