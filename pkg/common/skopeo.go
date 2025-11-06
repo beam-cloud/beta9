@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -56,11 +57,20 @@ type ImageMetadata struct {
 }
 
 func NewSkopeoClient(config types.AppConfig) SkopeoClient {
+	// If the runner base registry is localhost and buildRegistryInsecure is true,
+	// default to disabling TLS verification for skopeo operations as well.
+	enableTLS := config.ImageService.EnableTLS
+	if (strings.Contains(config.ImageService.Runner.BaseImageRegistry, "localhost") ||
+		strings.HasPrefix(config.ImageService.Runner.BaseImageRegistry, "127.0.0.1")) &&
+		config.ImageService.BuildRegistryInsecure {
+		enableTLS = false
+	}
+
 	return &skopeoClient{
 		pullCommand:    imagePullCommand,
 		commandTimeout: -1,
 		debug:          false,
-		enableTLS:      config.ImageService.EnableTLS,
+		enableTLS:      enableTLS,
 		creds:          "",
 		pDeathSignal:   0,
 	}
@@ -113,7 +123,11 @@ func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string
 
 	args = append(args, p.copyArgs(creds)...)
 	cmd := exec.CommandContext(ctx, p.pullCommand, args...)
-	cmd.Env = os.Environ()
+
+	env := os.Environ()
+	env = p.addSkopeoEnvVars(env)
+	cmd.Env = env
+
 	cmd.Dir = imageTmpDir
 	cmd.Stdout = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Info().Str("operation", fmt.Sprintf("%s copy", p.pullCommand)) }}
 	cmd.Stderr = &ZerologIOWriter{LogFn: func() *zerolog.Event { return log.Error().Str("operation", fmt.Sprintf("%s copy", p.pullCommand)) }}
@@ -138,10 +152,10 @@ func (p *skopeoClient) Copy(ctx context.Context, sourceImage string, dest string
 func (p *skopeoClient) inspectArgs(creds string) (out []string) {
 	if creds != "" {
 		out = append(out, "--creds", creds)
-	} else if creds == "" {
-		out = append(out, "--no-creds")
 	} else if p.creds != "" {
 		out = append(out, "--creds", p.creds)
+	} else {
+		out = append(out, "--no-creds")
 	}
 
 	if p.commandTimeout > 0 {
@@ -162,10 +176,10 @@ func (p *skopeoClient) inspectArgs(creds string) (out []string) {
 func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	if creds != "" {
 		out = append(out, "--src-creds", creds)
-	} else if creds == "" {
-		out = append(out, "--src-no-creds")
 	} else if p.creds != "" {
 		out = append(out, "--src-creds", p.creds)
+	} else {
+		out = append(out, "--src-no-creds")
 	}
 
 	if p.commandTimeout > 0 {
@@ -181,6 +195,39 @@ func (p *skopeoClient) copyArgs(creds string) (out []string) {
 	}
 
 	return out
+}
+
+// AddSkopeoEnvVars adds performance-tuning environment variables for skopeo
+// These control parallel blob transfers and other performance characteristics
+// Exported so it can be used by other packages (e.g., image.go)
+func AddSkopeoEnvVars(env []string) []string {
+	// Check if already set in environment to allow override
+	hasMaxParallelDownloads := false
+	hasMaxParallelUploads := false
+
+	for _, e := range env {
+		if strings.HasPrefix(e, "SKOPEO_MAX_PARALLEL_DOWNLOADS=") {
+			hasMaxParallelDownloads = true
+		}
+		if strings.HasPrefix(e, "SKOPEO_MAX_PARALLEL_UPLOADS=") {
+			hasMaxParallelUploads = true
+		}
+	}
+
+	// Set aggressive defaults if not already configured
+	// These values work well for fast networks and multi-core systems
+	if !hasMaxParallelDownloads {
+		env = append(env, "SKOPEO_MAX_PARALLEL_DOWNLOADS=16")
+	}
+	if !hasMaxParallelUploads {
+		env = append(env, "SKOPEO_MAX_PARALLEL_UPLOADS=16")
+	}
+
+	return env
+}
+
+func (p *skopeoClient) addSkopeoEnvVars(env []string) []string {
+	return AddSkopeoEnvVars(env)
 }
 
 func (p *skopeoClient) startCommand(cmd *exec.Cmd) (chan runc.Exit, error) {

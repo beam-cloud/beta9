@@ -276,37 +276,31 @@ func (b *Build) getContainerStatus() (*pb.RunCStatusResponse, error) {
 
 // generateContainerRequest generates a container request for the build container
 func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
-	baseImageID, err := getImageID(&BuildOpts{
-		BaseImageRegistry: b.opts.BaseImageRegistry,
-		BaseImageName:     b.opts.BaseImageName,
-		BaseImageTag:      b.opts.BaseImageTag,
-		BaseImageDigest:   b.opts.BaseImageDigest,
-		ExistingImageUri:  b.opts.ExistingImageUri,
-		EnvVars:           b.opts.EnvVars,
-		Dockerfile:        b.opts.Dockerfile,
-		BuildCtxObject:    b.opts.BuildCtxObject,
-	})
+	containerImageID, err := b.getContainerImageID()
 	if err != nil {
 		return nil, err
 	}
 
-	sourceImage := getSourceImage(b.opts)
-
-	// Allow config to override default build container settings
-	cpu := defaultBuildContainerCpu
-	memory := defaultBuildContainerMemory
-
-	if b.config.ImageService.BuildContainerCpu > 0 {
-		cpu = b.config.ImageService.BuildContainerCpu
+	cpu := b.config.ImageService.BuildContainerCpu
+	if cpu <= 0 {
+		cpu = defaultBuildContainerCpu
+	}
+	memory := b.config.ImageService.BuildContainerMemory
+	if memory <= 0 {
+		memory = defaultBuildContainerMemory
 	}
 
-	if b.config.ImageService.BuildContainerMemory > 0 {
-		memory = b.config.ImageService.BuildContainerMemory
+	// Only set SourceImage if base image fields are populated
+	// For custom Dockerfiles, the FROM instruction specifies the base image
+	var sourceImagePtr *string
+	if b.opts.BaseImageName != "" && b.opts.BaseImageRegistry != "" {
+		sourceImage := getSourceImage(b.opts)
+		sourceImagePtr = &sourceImage
 	}
 
-	containerRequest := &types.ContainerRequest{
+	req := &types.ContainerRequest{
 		BuildOptions: types.BuildOptions{
-			SourceImage:      &sourceImage,
+			SourceImage:      sourceImagePtr,
 			SourceImageCreds: b.opts.BaseImageCreds,
 			Dockerfile:       &b.opts.Dockerfile,
 			BuildCtxObject:   &b.opts.BuildCtxObject,
@@ -316,7 +310,7 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 		Env:         b.opts.EnvVars,
 		Cpu:         cpu,
 		Memory:      memory,
-		ImageId:     baseImageID,
+		ImageId:     containerImageID,
 		WorkspaceId: b.authInfo.Workspace.ExternalId,
 		Workspace:   *b.authInfo.Workspace,
 		EntryPoint:  []string{"tail", "-f", "/dev/null"},
@@ -324,21 +318,47 @@ func (b *Build) generateContainerRequest() (*types.ContainerRequest, error) {
 	}
 
 	if b.opts.BuildCtxObject != "" {
-		containerRequest.Stub.Object.ExternalId = b.opts.BuildCtxObject
-		containerRequest.Mounts = append(containerRequest.Mounts, types.Mount{
+		req.Stub.Object.ExternalId = b.opts.BuildCtxObject
+		req.Mounts = append(req.Mounts, types.Mount{
 			MountPath: types.WorkerUserCodeVolume,
 			ReadOnly:  false,
 		})
 	}
 
 	if b.opts.Gpu != "" {
-		containerRequest.GpuRequest = []string{b.opts.Gpu}
-		containerRequest.GpuCount = 1
+		req.GpuRequest = []string{b.opts.Gpu}
+		req.GpuCount = 1
 	} else {
-		containerRequest.PoolSelector = b.config.ImageService.BuildContainerPoolSelector
+		req.PoolSelector = b.config.ImageService.BuildContainerPoolSelector
 	}
 
-	return containerRequest, nil
+	return req, nil
+}
+
+// getContainerImageID returns the image ID to use for the build container
+// V2: final image ID (buildah builds complete image)
+// V1: base image ID (container starts with base, then commands are executed inside)
+// For custom Dockerfiles: use the final image ID since we're building from scratch
+func (b *Build) getContainerImageID() (string, error) {
+	isV2 := b.config.ImageService.ClipVersion == 2
+	hasCustomDockerfile := b.opts.Dockerfile != "" && b.opts.BaseImageName == ""
+
+	// For v2 builds OR custom Dockerfiles, use the final image ID
+	if isV2 || hasCustomDockerfile {
+		return b.imageID, nil
+	}
+
+	// For v1 builds with beta9 base images, calculate base image ID without build steps/commands
+	return getImageID(&BuildOpts{
+		BaseImageRegistry: b.opts.BaseImageRegistry,
+		BaseImageName:     b.opts.BaseImageName,
+		BaseImageTag:      b.opts.BaseImageTag,
+		BaseImageDigest:   b.opts.BaseImageDigest,
+		ExistingImageUri:  b.opts.ExistingImageUri,
+		EnvVars:           b.opts.EnvVars,
+		Dockerfile:        b.opts.Dockerfile,
+		BuildCtxObject:    b.opts.BuildCtxObject,
+	})
 }
 
 func genContainerId() string {
@@ -352,6 +372,22 @@ func generatePipInstallCommand(pythonPackages []string, pythonVersion string, vi
 	if !virtualEnv {
 		command += " --system"
 	}
+
+	if len(flagLines) > 0 {
+		command += " " + strings.Join(flagLines, " ")
+	}
+	if len(packages) > 0 {
+		command += " " + strings.Join(packages, " ")
+	}
+
+	return command
+}
+
+// generateStandardPipInstallCommand generates a pip install command for v2 dockerfile builds
+func generateStandardPipInstallCommand(pythonPackages []string, pythonVersion string, virtualEnv bool) string {
+	flagLines, packages := parseFlagLinesAndPackages(pythonPackages)
+
+	command := fmt.Sprintf("%s -m pip install", pythonVersion)
 
 	if len(flagLines) > 0 {
 		command += " " + strings.Join(flagLines, " ")
@@ -401,8 +437,71 @@ func parseFlagLinesAndPackages(pythonPackages []string) ([]string, []string) {
 	return flagLines, packages
 }
 
+// parseBuildStepsForDockerfile generates RUN commands for v2 dockerfile builds using standard pip.
+// This function coalesces pip and mamba commands into single RUN statements where possible.
+func parseBuildStepsForDockerfile(buildSteps []BuildStep, pythonVersion string, virtualEnv bool) []string {
+	commands := []string{}
+	var (
+		mambaStart int = -1
+		mambaGroup []string
+		pipStart   int = -1
+		pipGroup   []string
+	)
+
+	for _, step := range buildSteps {
+		if step.Type == shellCommandType {
+			commands = append(commands, step.Command)
+		}
+
+		flagCmd := containsFlag(step.Command)
+
+		// Flush any pending pip or mamba groups
+		if pipStart != -1 && (step.Type != pipCommandType || flagCmd) {
+			pipStart, pipGroup = flushStandardPipCommand(commands, pipStart, pipGroup, pythonVersion, virtualEnv)
+		}
+
+		if mambaStart != -1 && (step.Type != micromambaCommandType || flagCmd) {
+			mambaStart, mambaGroup = flushMambaCommand(commands, mambaStart, mambaGroup)
+		}
+
+		if step.Type == pipCommandType {
+			if pipStart == -1 {
+				pipStart = len(commands)
+				commands = append(commands, "")
+			}
+			pipGroup = append(pipGroup, step.Command)
+
+			if flagCmd {
+				pipStart, pipGroup = flushStandardPipCommand(commands, pipStart, pipGroup, pythonVersion, virtualEnv)
+			}
+		}
+
+		if step.Type == micromambaCommandType {
+			if mambaStart == -1 {
+				mambaStart = len(commands)
+				commands = append(commands, "")
+			}
+			mambaGroup = append(mambaGroup, step.Command)
+
+			if flagCmd {
+				mambaStart, mambaGroup = flushMambaCommand(commands, mambaStart, mambaGroup)
+			}
+		}
+	}
+
+	if mambaStart != -1 {
+		commands[mambaStart] = generateMicromambaInstallCommand(mambaGroup)
+	}
+
+	if pipStart != -1 {
+		commands[pipStart] = generateStandardPipInstallCommand(pipGroup, pythonVersion, virtualEnv)
+	}
+
+	return commands
+}
+
 // Generate the commands to run in the container. This function will coalesce pip and mamba commands
-// into a single command if they are adjacent to each other.
+// into a single command if they are adjacent to each other. Uses uv-b9 for v1 builds.
 func parseBuildSteps(buildSteps []BuildStep, pythonVersion string, virtualEnv bool) []string {
 	commands := []string{}
 	var (
@@ -471,6 +570,11 @@ func flushMambaCommand(commands []string, mambaStart int, mambaGroup []string) (
 
 func flushPipCommand(commands []string, pipStart int, pipGroup []string, pythonVersion string, virtualEnv bool) (int, []string) {
 	commands[pipStart] = generatePipInstallCommand(pipGroup, pythonVersion, virtualEnv)
+	return -1, nil
+}
+
+func flushStandardPipCommand(commands []string, pipStart int, pipGroup []string, pythonVersion string, virtualEnv bool) (int, []string) {
+	commands[pipStart] = generateStandardPipInstallCommand(pipGroup, pythonVersion, virtualEnv)
 	return -1, nil
 }
 

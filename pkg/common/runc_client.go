@@ -340,8 +340,12 @@ func (c *RunCClient) Archive(ctx context.Context, containerId, imageId string, o
 			}
 
 			if !resp.Done && resp.ErrorMsg == "" {
-				progressBar := generateProgressBar(int(resp.Progress), 100)
-				outputChan <- OutputMsg{Msg: progressBar, Done: false, Archiving: true}
+				if resp.Progress == 0 {
+					outputChan <- OutputMsg{Msg: ".", Done: false, Archiving: true}
+				} else {
+					progressBar := generateProgressBar(int(resp.Progress), 100)
+					outputChan <- OutputMsg{Msg: progressBar, Done: false, Archiving: true}
+				}
 			}
 
 			if resp.Done && resp.Success {
