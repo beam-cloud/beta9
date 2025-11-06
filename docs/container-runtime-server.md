@@ -8,9 +8,9 @@ The `ContainerRuntimeServer` is a unified, runtime-agnostic server implementatio
 
 ### Design Principles
 
-1. **Runtime Agnostic**: The server doesn't know or care which runtime is being used. It delegates all container operations to the runtime associated with each container instance.
+1. **Runtime Agnostic**: The server doesn't know or care which runtime is being used. It delegates all container operations to the worker's configured runtime.
 
-2. **Per-Container Runtime**: Each container stores a reference to its runtime (`runtime.Runtime`), allowing different containers on the same worker to use different runtimes.
+2. **Pool-Level Runtime**: All containers on a worker use the same runtime, determined by the worker pool configuration.
 
 3. **Backward Compatible**: The server implements the existing `RunCService` gRPC interface, ensuring no breaking changes to clients.
 
@@ -29,6 +29,7 @@ type ContainerRuntimeServer struct {
     containerRepoClient     pb.ContainerRepositoryServiceClient
     containerNetworkManager *ContainerNetworkManager
     imageClient             *ImageClient
+    runtime                 runtime.Runtime  // The worker's configured runtime
     port                    int
     podAddr                 string
     createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
@@ -37,18 +38,20 @@ type ContainerRuntimeServer struct {
 }
 ```
 
-### Runtime Resolution
+### Runtime Access
 
-The server uses a helper method to retrieve the runtime for each container:
+The server uses a simple method to access the worker's configured runtime:
 
 ```go
-func (s *ContainerRuntimeServer) getContainerRuntime(containerID string) (runtime.Runtime, error)
+func (s *ContainerRuntimeServer) getRuntime() runtime.Runtime {
+    return s.runtime
+}
 ```
 
-This method:
-1. Looks up the container instance
-2. Returns the runtime associated with that container
-3. Returns an error if the container or runtime is not found
+This runtime is:
+1. Configured once at worker startup from pool config
+2. Used for all containers on that worker
+3. Never changes during worker lifetime
 
 ## Core Operations
 
@@ -187,20 +190,25 @@ if err := server.Start(); err != nil {
 }
 ```
 
-### Container Runtime Selection
+### Runtime Configuration
 
-The runtime for each container is selected at container creation time (in `Worker.RunContainer`):
+The runtime for the worker is determined at startup from the pool configuration:
 
 ```go
-selectedRuntime := s.selectRuntime(request)
+// In Worker.NewWorker()
+defaultRuntime, err := runtime.New(runtime.Config{
+    Type: poolConfig.Runtime,  // "runc" or "gvisor"
+    // ... other config
+})
 
-containerInstance := &ContainerInstance{
-    Runtime:   selectedRuntime,
-    // ... other fields
-}
+// Pass to server
+containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
+    Runtime: defaultRuntime,
+    // ... other opts
+})
 ```
 
-The server then uses this stored runtime for all operations on that container.
+All containers on the worker use this same runtime instance.
 
 ## Best Practices
 
@@ -229,16 +237,6 @@ Error: container not found: <container_id>
 **Cause**: Container instance doesn't exist or was already removed.
 
 **Solution**: Check that the container was successfully created and is still running.
-
-### Runtime Not Initialized
-
-```
-Error: container runtime not initialized for: <container_id>
-```
-
-**Cause**: Container instance exists but has no associated runtime.
-
-**Solution**: This indicates a bug in container creation. Check worker logs during container startup.
 
 ### Capability Not Supported
 

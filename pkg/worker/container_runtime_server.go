@@ -40,6 +40,7 @@ type ContainerRuntimeServer struct {
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	containerNetworkManager *ContainerNetworkManager
 	imageClient             *ImageClient
+	runtime                 runtime.Runtime // The worker's configured runtime (from pool config)
 	port                    int
 	podAddr                 string
 	createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
@@ -49,6 +50,7 @@ type ContainerRuntimeServer struct {
 
 type ContainerRuntimeServerOpts struct {
 	PodAddr                 string
+	Runtime                 runtime.Runtime // The runtime configured for this worker pool
 	ContainerInstances      *common.SafeMap[*ContainerInstance]
 	ImageClient             *ImageClient
 	ContainerRepoClient     pb.ContainerRepositoryServiceClient
@@ -67,6 +69,7 @@ func NewContainerRuntimeServer(opts *ContainerRuntimeServerOpts) (*ContainerRunt
 
 	return &ContainerRuntimeServer{
 		podAddr:                 opts.PodAddr,
+		runtime:                 opts.Runtime,
 		baseConfigSpec:          baseConfigSpec,
 		containerInstances:      opts.ContainerInstances,
 		imageClient:             opts.ImageClient,
@@ -118,34 +121,20 @@ func (s *ContainerRuntimeServer) Stop() error {
 	return nil
 }
 
-// getContainerRuntime retrieves the runtime for a specific container
-func (s *ContainerRuntimeServer) getContainerRuntime(containerID string) (runtime.Runtime, error) {
-	instance, exists := s.containerInstances.Get(containerID)
-	if !exists {
-		return nil, fmt.Errorf("container not found: %s", containerID)
-	}
-
-	if instance.Runtime == nil {
-		return nil, fmt.Errorf("container runtime not initialized for: %s", containerID)
-	}
-
-	return instance.Runtime, nil
+// getRuntime returns the worker's configured runtime
+func (s *ContainerRuntimeServer) getRuntime() runtime.Runtime {
+	return s.runtime
 }
 
-// RunCKill kills and removes a container using its configured runtime
+// RunCKill kills and removes a container using the worker's configured runtime
 func (s *ContainerRuntimeServer) RunCKill(ctx context.Context, in *pb.RunCKillRequest) (*pb.RunCKillResponse, error) {
-	rt, err := s.getContainerRuntime(in.ContainerId)
-	if err != nil {
-		// Container not found or runtime not set, try to clean up anyway
-		log.Warn().Str("container_id", in.ContainerId).Err(err).Msg("container not found, cleanup may be incomplete")
-		return &pb.RunCKillResponse{Ok: false}, nil
-	}
+	rt := s.getRuntime()
 
 	// Send SIGTERM first
 	_ = rt.Kill(ctx, in.ContainerId, syscall.SIGTERM, &runtime.KillOpts{All: true})
 
 	// Force delete
-	err = rt.Delete(ctx, in.ContainerId, &runtime.DeleteOpts{Force: true})
+	err := rt.Delete(ctx, in.ContainerId, &runtime.DeleteOpts{Force: true})
 
 	return &pb.RunCKillResponse{
 		Ok: err == nil,
@@ -178,8 +167,9 @@ func (s *ContainerRuntimeServer) RunCExec(ctx context.Context, in *pb.RunCExecRe
 		process.Env = append(process.Env, instance.Request.BuildOptions.BuildSecrets...)
 	}
 
-	// Use the container's runtime for exec
-	err = instance.Runtime.Exec(ctx, in.ContainerId, *process, &runtime.ExecOpts{
+	// Use the worker's configured runtime for exec
+	rt := s.getRuntime()
+	err = rt.Exec(ctx, in.ContainerId, *process, &runtime.ExecOpts{
 		OutputWriter: instance.OutputWriter,
 	})
 
@@ -190,10 +180,7 @@ func (s *ContainerRuntimeServer) RunCExec(ctx context.Context, in *pb.RunCExecRe
 
 // RunCStatus returns the status of a container
 func (s *ContainerRuntimeServer) RunCStatus(ctx context.Context, in *pb.RunCStatusRequest) (*pb.RunCStatusResponse, error) {
-	rt, err := s.getContainerRuntime(in.ContainerId)
-	if err != nil {
-		return &pb.RunCStatusResponse{Running: false}, nil
-	}
+	rt := s.getRuntime()
 
 	state, err := rt.State(ctx, in.ContainerId)
 	if err != nil {
@@ -253,10 +240,11 @@ func (s *ContainerRuntimeServer) RunCCheckpoint(ctx context.Context, in *pb.RunC
 	}
 
 	// Check if runtime supports checkpointing
-	if instance.Runtime != nil && !instance.Runtime.Capabilities().CheckpointRestore {
+	rt := s.getRuntime()
+	if !rt.Capabilities().CheckpointRestore {
 		return &pb.RunCCheckpointResponse{
 			Ok:       false,
-			ErrorMsg: fmt.Sprintf("Runtime %s does not support checkpoint/restore", instance.Runtime.Name()),
+			ErrorMsg: fmt.Sprintf("Runtime %s does not support checkpoint/restore", rt.Name()),
 		}, nil
 	}
 
@@ -283,8 +271,9 @@ func (s *ContainerRuntimeServer) RunCArchive(req *pb.RunCArchiveRequest, stream 
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
 	}
 
-	// Check container state using its runtime
-	state, err := instance.Runtime.State(ctx, req.ContainerId)
+	// Check container state using the worker's runtime
+	rt := s.getRuntime()
+	state, err := rt.State(ctx, req.ContainerId)
 	if err != nil {
 		return stream.Send(&pb.RunCArchiveResponse{Done: true, Success: false, ErrorMsg: "Container not found"})
 	}
@@ -439,6 +428,8 @@ func (s *ContainerRuntimeServer) RunCSyncWorkspace(ctx context.Context, in *pb.S
 
 // waitForContainer waits for a container to be running
 func (s *ContainerRuntimeServer) waitForContainer(ctx context.Context, containerId string) error {
+	rt := s.getRuntime()
+
 	for {
 		instance, exists := s.containerInstances.Get(containerId)
 		if !exists {
@@ -450,7 +441,7 @@ func (s *ContainerRuntimeServer) waitForContainer(ctx context.Context, container
 			continue
 		}
 
-		state, err := instance.Runtime.State(ctx, containerId)
+		state, err := rt.State(ctx, containerId)
 		if err != nil {
 			time.Sleep(100 * time.Millisecond)
 			continue

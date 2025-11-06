@@ -173,21 +173,20 @@ func (s *Worker) deleteContainer(containerId string) {
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 
-	// Select the runtime for this container
-	selectedRuntime := s.selectRuntime(request)
-	caps := selectedRuntime.Capabilities()
+	// Use the worker's configured runtime from pool config
+	caps := s.runtime.Capabilities()
 
 	// Gate features based on runtime capabilities
 	if request.CheckpointEnabled && !caps.CheckpointRestore {
 		log.Info().Str("container_id", containerId).
-			Str("runtime", selectedRuntime.Name()).
+			Str("runtime", s.runtime.Name()).
 			Msg("disabling checkpoint for runtime without CRIU support")
 		request.CheckpointEnabled = false
 		request.Checkpoint = nil
 	}
 
 	if request.RequiresGPU() && !caps.GPU {
-		return fmt.Errorf("runtime %s does not support GPU; use runc for GPU workloads", selectedRuntime.Name())
+		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
 
 	s.containerInstances.Set(containerId, &ContainerInstance{
@@ -195,7 +194,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		StubId:    request.StubId,
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
-		Runtime:   selectedRuntime,
+		Runtime:   s.runtime,
 	})
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
@@ -682,7 +681,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Only inject GPU devices if runtime supports GPU
-	if request.RequiresGPU() && containerInstance.Runtime.Capabilities().GPU {
+	if request.RequiresGPU() && s.runtime.Capabilities().GPU {
 		// Assign n-number of GPUs to a container
 		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		if err != nil {
@@ -691,7 +690,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 
 		// Only use CDI if runtime supports it
-		if containerInstance.Runtime.Capabilities().CDI {
+		if s.runtime.Capabilities().CDI {
 			cdiCache := cdi.GetDefaultCache()
 
 			var devicesToInject []string
@@ -753,7 +752,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Prepare spec for the selected runtime (may mutate spec for gVisor compatibility)
-	if err := containerInstance.Runtime.Prepare(ctx, spec); err != nil {
+	if err := s.runtime.Prepare(ctx, spec); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
 		return
 	}

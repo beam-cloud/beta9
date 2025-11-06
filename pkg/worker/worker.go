@@ -323,6 +323,7 @@ func NewWorker() (*Worker, error) {
 
 	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
 		PodAddr:                 podAddr,
+		Runtime:                 defaultRuntime,
 		ContainerInstances:      containerInstances,
 		ImageClient:             imageClient,
 		ContainerRepoClient:     containerRepoClient,
@@ -755,28 +756,3 @@ func (s *Worker) shutdown() error {
 	return errs
 }
 
-// selectRuntime selects the appropriate runtime for a container request
-func (s *Worker) selectRuntime(request *types.ContainerRequest) runtime.Runtime {
-	// Policy for runtime selection:
-	// 1. GPU workloads must use runc (gVisor doesn't support GPU)
-	// 2. Checkpoint/restore workloads must use runc (gVisor doesn't support CRIU)
-	// 3. Otherwise use the default runtime from config
-
-	if request.RequiresGPU() {
-		log.Debug().Str("container_id", request.ContainerId).Msg("using runc for GPU workload")
-		return s.runcRuntime
-	}
-
-	if request.CheckpointEnabled || request.Checkpoint != nil {
-		log.Debug().Str("container_id", request.ContainerId).Msg("using runc for checkpoint workload")
-		return s.runcRuntime
-	}
-
-	// Use default runtime
-	selectedRuntime := s.runtime
-	log.Debug().Str("container_id", request.ContainerId).
-		Str("runtime", selectedRuntime.Name()).
-		Msg("selected runtime for container")
-	
-	return selectedRuntime
-}

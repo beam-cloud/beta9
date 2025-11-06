@@ -66,30 +66,35 @@ type Worker struct {
 }
 ```
 
-#### Runtime Selection Logic
+#### Runtime Configuration
+
+The runtime is configured at the worker pool level and all containers on that worker use the same runtime. The runtime is determined by:
+
+1. Pool-specific `runtime` setting (highest priority)
+2. Global worker `containerRuntime` setting
+3. Default: `"runc"`
+
 ```go
-func (s *Worker) selectRuntime(request *types.ContainerRequest) runtime.Runtime {
-    // Policy:
-    // 1. GPU workloads → runc (gVisor doesn't support GPU)
-    // 2. Checkpoint/restore → runc (gVisor doesn't support CRIU)
-    // 3. Otherwise → pool-configured default runtime
-}
+// All containers on this worker use the same runtime
+runtime := s.runtime  // From pool config
 ```
 
 #### Container Instance Updates
 ```go
 type ContainerInstance struct {
-    Runtime    runtime.Runtime      // Runtime used for this container
+    Runtime    runtime.Runtime      // Reference to worker's runtime
     OOMWatcher *runtime.OOMWatcher  // Runtime-agnostic OOM monitoring
     // ... other fields
 }
+
+// Note: All containers store a reference to the same worker.runtime instance
 ```
 
 ### 3. Lifecycle Management (`lifecycle.go`)
 
-#### Runtime Selection at Container Creation
-- `RunContainer()` calls `selectRuntime()` to choose appropriate runtime
-- Stores selected runtime in `ContainerInstance`
+#### Runtime Usage at Container Creation
+- `RunContainer()` uses the worker's configured `s.runtime` for all containers
+- All containers on the worker use the same runtime
 - Checks capabilities before enabling features (checkpoint, GPU)
 
 #### Capability-Based Feature Gating
@@ -321,8 +326,8 @@ RUN mkdir -p /run/gvisor
 |---------|------|--------|-------|
 | **Basic Container Lifecycle** | ✅ | ✅ | Run, exec, kill, delete, state |
 | **Checkpoint/Restore** | ✅ | ❌ | CRIU support required |
-| **GPU Support** | ✅ | ❌ | Device passthrough required |
-| **CDI Injection** | ✅ | ❌ | Tied to GPU support |
+| **GPU Support** | ✅ | ✅ | runc via passthrough, gVisor via nvproxy |
+| **CDI Injection** | ✅ | ✅ | Both support CDI for GPU injection |
 | **Network Namespace Join** | ✅ | ✅ | Both support standard Linux namespaces |
 | **Overlay Filesystem** | ✅ | ✅ | Works via gofer in gVisor |
 | **OOM Detection** | ✅ | ✅ | Portable cgroup v2 implementation |
@@ -390,10 +395,10 @@ RUN mkdir -p /run/gvisor
 
 ## Known Limitations
 
-1. **gVisor GPU Support**: Not available (fundamental limitation)
-2. **gVisor Checkpoint**: Not available (no CRIU support)
-3. **Runtime Switching**: Cannot change runtime for running container
-4. **Platform Support**: gVisor KVM requires KVM kernel module
+1. **gVisor Checkpoint**: Not available (no CRIU support)
+2. **Runtime Switching**: Cannot change runtime for running container
+3. **Platform Support**: gVisor KVM requires KVM kernel module
+4. **Per-Container Runtime**: All containers on a worker use the same runtime
 
 ## Future Enhancements
 
