@@ -399,6 +399,4 @@ def retry_on_errors(errors: List[Type[Exception]], e: BaseException) -> bool:
 if __name__ == "__main__":
     tq = TaskQueueManager()
     tq.run()
-
-    if tq.exit_code != 0 and tq.exit_code != TaskExitCode.SigTerm:
-        sys.exit(tq.exit_code)
+    sys.exit(tq.exit_code)
