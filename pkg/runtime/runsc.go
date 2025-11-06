@@ -132,6 +132,10 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 	}
+	
+	// Add ignore-cgroups to ensure runsc exits when init process exits
+	// Without this, gVisor may wait for cgroup cleanup even after PID 1 exits
+	args = append(args, "--ignore-cgroups")
 
 	args = append(args, "run", "--bundle", bundlePath, containerID)
 
