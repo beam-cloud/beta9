@@ -109,7 +109,7 @@ chmod +x /usr/local/bin/runsc
 
 # Verify installation and check available platforms
 /usr/local/bin/runsc --version
-/usr/local/bin/runsc help 2>&1 | grep -i platform || echo "Platform options available"
+/usr/local/bin/runsc help 2>&1 | grep -i platform || { echo "Platform options unavailable" >&2; exit 1; }
 EOT
 
 # nvidia-container-toolkit
