@@ -357,7 +357,7 @@ type WorkerConfig struct {
 	TmpSizeLimit                 string                        `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLinesPerHour     int                           `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`
 	Failover                     FailoverConfig                `key:"failover" json:"failover"`
-	ContainerRuntime             string                      `key:"containerRuntime" json:"container_runtime"`
+	ContainerRuntime             string                        `key:"containerRuntime" json:"container_runtime"`
 }
 
 type ContainerResourceLimitsConfig struct {
@@ -380,24 +380,32 @@ var (
 )
 
 type WorkerPoolConfig struct {
-	GPUType              string                            `key:"gpuType" json:"gpu_type"`
-	Runtime              string                            `key:"runtime" json:"runtime"`
-	Mode                 PoolMode                          `key:"mode" json:"mode"`
-	Provider             *MachineProvider                  `key:"provider" json:"provider"`
-	JobSpec              WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
-	PoolSizing           WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
-	DefaultMachineCost   float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
-	RequiresPoolSelector bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
-	Priority             int32                             `key:"priority" json:"priority"`
-	Preemptable          bool                              `key:"preemptable" json:"preemptable"`
-	UserData             string                            `key:"userData" json:"user_data"`
-	CRIUEnabled          bool                              `key:"criuEnabled" json:"criu_enabled"`
-	TmpSizeLimit         string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
-	ConfigGroup          string                            `key:"configGroup" json:"config_group"`
-	K3sInstallDir        string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
-	StoragePath          string                            `key:"storagePath" json:"storage_path"`
-	StorageMode          string                            `key:"storageMode" json:"storage_mode"`
-	CheckpointPath       string                            `key:"checkpointPath" json:"checkpoint_path"`
+	GPUType                string                            `key:"gpuType" json:"gpu_type"`
+	Runtime                string                            `key:"runtime" json:"runtime"`                                 // Kubernetes RuntimeClass for pod (e.g., "nvidia")
+	ContainerRuntime       string                            `key:"containerRuntime" json:"container_runtime"`              // Pool-specific container runtime: "runc" or "gvisor"
+	ContainerRuntimeConfig RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"` // Pool-specific container runtime configuration
+	Mode                   PoolMode                          `key:"mode" json:"mode"`
+	Provider               *MachineProvider                  `key:"provider" json:"provider"`
+	JobSpec                WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
+	PoolSizing             WorkerPoolJobSpecPoolSizingConfig `key:"poolSizing" json:"pool_sizing"`
+	DefaultMachineCost     float64                           `key:"defaultMachineCost" json:"default_machine_cost"`
+	RequiresPoolSelector   bool                              `key:"requiresPoolSelector" json:"requires_pool_selector"`
+	Priority               int32                             `key:"priority" json:"priority"`
+	Preemptable            bool                              `key:"preemptable" json:"preemptable"`
+	UserData               string                            `key:"userData" json:"user_data"`
+	CRIUEnabled            bool                              `key:"criuEnabled" json:"criu_enabled"`
+	TmpSizeLimit           string                            `key:"tmpSizeLimit" json:"tmp_size_limit"`
+	ConfigGroup            string                            `key:"configGroup" json:"config_group"`
+	K3sInstallDir          string                            `key:"k3sInstallDir" json:"k3s_install_dir"`
+	StoragePath            string                            `key:"storagePath" json:"storage_path"`
+	StorageMode            string                            `key:"storageMode" json:"storage_mode"`
+	CheckpointPath         string                            `key:"checkpointPath" json:"checkpoint_path"`
+}
+
+type RuntimeConfig struct {
+	// gVisor-specific configuration
+	GVisorPlatform string `key:"gvisorPlatform" json:"gvisor_platform"` // "kvm" or "ptrace"
+	GVisorRoot     string `key:"gvisorRoot" json:"gvisor_root"`         // Root directory for gVisor state (default: "/run/gvisor")
 }
 
 type WorkerPoolJobSpecConfig struct {

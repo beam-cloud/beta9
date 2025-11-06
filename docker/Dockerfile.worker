@@ -73,6 +73,45 @@ make install
 EOT
 
 
+# gVisor (runsc)
+# ========================
+FROM debian:bookworm AS gvisor
+
+ARG TARGETARCH
+ARG GVISOR_VERSION=20250407.0
+
+WORKDIR /tmp
+
+RUN apt-get update && apt-get install -y curl
+
+RUN <<EOT
+set -eux
+
+# Determine the correct architecture for gVisor
+if [ "$TARGETARCH" = "amd64" ]; then
+    GVISOR_ARCH="x86_64"
+elif [ "$TARGETARCH" = "arm64" ]; then
+    GVISOR_ARCH="aarch64"
+else
+    echo "Unsupported architecture: $TARGETARCH" && exit 1
+fi
+
+# Download runsc and its checksum to /tmp
+curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc -o /tmp/runsc
+curl -fsSL https://storage.googleapis.com/gvisor/releases/release/${GVISOR_VERSION}/${GVISOR_ARCH}/runsc.sha512 -o /tmp/runsc.sha512
+
+# Verify checksum (cd to /tmp where both files are)
+cd /tmp && sha512sum -c runsc.sha512
+
+# Move to final location and make executable
+mv /tmp/runsc /usr/local/bin/runsc
+chmod +x /usr/local/bin/runsc
+
+# Verify installation and check available platforms
+/usr/local/bin/runsc --version
+/usr/local/bin/runsc help 2>&1 | grep -i platform || { echo "Platform options unavailable" >&2; exit 1; }
+EOT
+
 # nvidia-container-toolkit
 # ========================
 FROM golang:1.23-bookworm AS nvidia-container-toolkit
@@ -223,6 +262,7 @@ COPY --from=runc /usr/local/sbin/runc /usr/local/sbin/runc
 COPY --from=runc /usr/local/bin/buildah /usr/local/bin/buildah
 COPY --from=runc /usr/local/bin/skopeo /usr/local/bin/skopeo
 COPY --from=runc /workspace/skopeo/default-policy.json /etc/containers/policy.json
+COPY --from=gvisor /usr/local/bin/runsc /usr/local/bin/runsc
 COPY --from=nvidia-container-toolkit /workspace/nvidia-container-runtime* /usr/bin/
 
 # LD_PRELOAD libraries
@@ -250,6 +290,9 @@ RUN touch /etc/criu/default.conf
 RUN echo "verbosity 4" >> /etc/criu/default.conf
 RUN echo "display-stats" >> /etc/criu/default.conf
 RUN echo "timeout 60" >> /etc/criu/default.conf
+
+# Create gVisor runtime directories
+RUN mkdir -p /run/gvisor
 
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,ngx,video
 ENV _BUILDAH_STARTED_IN_USERNS="" \

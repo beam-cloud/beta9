@@ -154,6 +154,11 @@ worker:
     default:
       mode: local
       priority: 1
+      # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod (e.g., "nvidia")
+      containerRuntime: runc  # Pool-specific container runtime: "runc" or "gvisor"
+      containerRuntimeConfig:
+        gvisorPlatform: systrap
+        gvisorRoot: /run/gvisor
       jobSpec:
         nodeSelector: {}
       criuEnabled: true
@@ -168,6 +173,11 @@ worker:
     build:
       mode: local
       requiresPoolSelector: true
+      # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod
+      containerRuntime: runc  # Pool-specific container runtime: "runc" or "gvisor"
+      containerRuntimeConfig:
+        gvisorPlatform: systrap
+        gvisorRoot: /run/gvisor
       tmpSizeLimit: 50Gi
       jobSpec:
         nodeSelector: {}
@@ -183,7 +193,11 @@ worker:
     # nvidia:
     #   mode: local
     #   gpuType: any
-    #   runtime: nvidia
+    #   runtime: nvidia  # Kubernetes RuntimeClass for GPU support
+    #   containerRuntime: gvisor  # Pool-specific container runtime: "runc" or "gvisor"
+    #   containerRuntimeConfig:
+    #     gvisorPlatform: systrap
+    #     gvisorRoot: /run/gvisor
     #   jobSpec:
     #     nodeSelector: {}
     #   poolSizing:
