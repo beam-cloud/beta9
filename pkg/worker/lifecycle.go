@@ -952,15 +952,6 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	return common.NewContainerOverlay(request, rootPath, overlayPath)
 }
 
-// watchOOMEvents is deprecated in favor of the cgroup OOM watcher
-// This method is kept for backward compatibility but is no longer actively used
-func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *atomic.Bool) {
-	// This function is deprecated - OOM detection now happens via cgroup watcher
-	// which is runtime-agnostic and works for both runc and gVisor
-	log.Debug().Str("container_id", request.ContainerId).Msg("watchOOMEvents is deprecated, using cgroup watcher instead")
-	return
-}
-
 func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.LinuxResources, error) {
 	var resources ContainerResources
 
