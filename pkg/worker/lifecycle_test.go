@@ -3,9 +3,11 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"syscall"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
@@ -31,11 +33,24 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 		},
 	}
 
+	// Create a mock runtime
+	mockRuntime := &mockRuntime{
+		name: "runc",
+		capabilities: runtime.Capabilities{
+			CheckpointRestore: true,
+			GPU:               true,
+			OOMEvents:         false,
+			JoinExistingNetNS: true,
+			CDI:               true,
+		},
+	}
+
 	// Create a test worker with mock dependencies
 	worker := &Worker{
 		config:             config,
 		imageMountPath:     "/tmp/test-images",
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		runtime:            mockRuntime,
 		imageClient: &ImageClient{
 			skopeoClient: mockSkopeo,
 			v2ImageRefs:  common.NewSafeMap[string](),
@@ -50,6 +65,11 @@ func TestV2ImageEnvironmentFlow(t *testing.T) {
 	request := &types.ContainerRequest{
 		ContainerId: "test-container-123",
 		ImageId:     "test-image-456",
+		Stub: types.StubWithRelated{
+			Stub: types.Stub{
+				Type: types.StubType("function"),
+			},
+		},
 		BuildOptions: types.BuildOptions{
 			SourceImage:      &sourceImage,
 			SourceImageCreds: "",
@@ -111,10 +131,22 @@ func TestV2ImageEnvironmentFlow_NonBuildContainer(t *testing.T) {
 		v2ImageRefs:  common.NewSafeMap[string](),
 	}
 
+	mockRuntime := &mockRuntime{
+		name: "runc",
+		capabilities: runtime.Capabilities{
+			CheckpointRestore: true,
+			GPU:               true,
+			OOMEvents:         false,
+			JoinExistingNetNS: true,
+			CDI:               true,
+		},
+	}
+
 	worker := &Worker{
 		config:             config,
 		imageMountPath:     "/tmp/test-images",
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		runtime:            mockRuntime,
 		imageClient:        imageClient,
 		containerServer: &ContainerRuntimeServer{
 			baseConfigSpec: getTestBaseSpec(),
@@ -202,10 +234,22 @@ func TestCachedImageMetadata(t *testing.T) {
 		v2ImageRefs:  common.NewSafeMap[string](),
 	}
 
+	mockRuntime := &mockRuntime{
+		name: "runc",
+		capabilities: runtime.Capabilities{
+			CheckpointRestore: true,
+			GPU:               true,
+			OOMEvents:         false,
+			JoinExistingNetNS: true,
+			CDI:               true,
+		},
+	}
+
 	worker := &Worker{
 		config:             config,
 		imageMountPath:     "/tmp/test-images",
 		containerInstances: common.NewSafeMap[*ContainerInstance](),
+		runtime:            mockRuntime,
 		imageClient:        imageClient,
 		containerServer: &ContainerRuntimeServer{
 			baseConfigSpec: getTestBaseSpec(),
@@ -276,4 +320,50 @@ func getTestBaseSpec() specs.Spec {
 			Resources: &specs.LinuxResources{},
 		},
 	}
+}
+
+// Mock runtime for testing
+type mockRuntime struct {
+	name         string
+	capabilities runtime.Capabilities
+}
+
+func (m *mockRuntime) Name() string {
+	return m.name
+}
+
+func (m *mockRuntime) Capabilities() runtime.Capabilities {
+	return m.capabilities
+}
+
+func (m *mockRuntime) Prepare(ctx context.Context, spec *specs.Spec) error {
+	return nil
+}
+
+func (m *mockRuntime) Run(ctx context.Context, containerID, bundlePath string, opts *runtime.RunOpts) (int, error) {
+	return 0, nil
+}
+
+func (m *mockRuntime) Exec(ctx context.Context, containerID string, proc specs.Process, opts *runtime.ExecOpts) error {
+	return nil
+}
+
+func (m *mockRuntime) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *runtime.KillOpts) error {
+	return nil
+}
+
+func (m *mockRuntime) Delete(ctx context.Context, containerID string, opts *runtime.DeleteOpts) error {
+	return nil
+}
+
+func (m *mockRuntime) State(ctx context.Context, containerID string) (runtime.State, error) {
+	return runtime.State{}, nil
+}
+
+func (m *mockRuntime) Events(ctx context.Context, containerID string) (<-chan runtime.Event, error) {
+	return nil, nil
+}
+
+func (m *mockRuntime) Close() error {
+	return nil
 }

@@ -468,7 +468,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Args = request.EntryPoint
 	spec.Process.Terminal = false
 
-	if request.Stub.Type.Kind() == types.StubTypePod {
+	if request.Stub.Type.Kind() == types.StubTypePod && options.InitialSpec != nil {
 		if len(request.EntryPoint) == 0 {
 			log.Info().
 				Str("container_id", request.ContainerId).
