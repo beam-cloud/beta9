@@ -56,7 +56,7 @@ type OutputWriter interface {
 	Write(p []byte) (n int, err error)
 }
 
-// Runtime defines the interface for container runtime implementations
+// Runtime defines the interface for different container/microvm runtime implementations
 type Runtime interface {
 	// Name returns the name of the runtime (e.g., "runc", "gvisor")
 	Name() string

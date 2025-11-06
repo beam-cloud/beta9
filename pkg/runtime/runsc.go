@@ -47,11 +47,11 @@ func (r *Runsc) Name() string {
 
 func (r *Runsc) Capabilities() Capabilities {
 	return Capabilities{
-		CheckpointRestore: false, // gVisor doesn't support CRIU
-		GPU:               true,  // gVisor supports GPU via nvproxy
-		OOMEvents:         false, // Use cgroup poller instead
-		JoinExistingNetNS: true,  // gVisor can join network namespaces
-		CDI:               true,  // gVisor supports CDI with nvproxy
+		CheckpointRestore: false, // NOTE: We don't support CRIU for gvisor yet
+		GPU:               true,
+		OOMEvents:         false,
+		JoinExistingNetNS: true,
+		CDI:               true,
 	}
 }
 
@@ -78,13 +78,6 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 			spec.Linux.Devices = nil
 		}
 	}
-
-	// Don't force no_new_privs - let the spec determine this
-	// gVisor handles privilege escalation via its sandbox
-	// Forcing this can break legitimate use cases
-
-	// Keep Linux namespaces (especially network) for joining existing netns
-	// Keep bind mounts and tmpfs - these work fine with gVisor
 
 	return nil
 }
@@ -124,7 +117,6 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
-	// Always cleanup container state when this function exits
 	defer func() {
 		deleteArgs := r.baseArgs()
 		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
@@ -139,7 +131,7 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // Kill entire process tree
-	
+
 	if opts != nil && opts.OutputWriter != nil {
 		cmd.Stdout = opts.OutputWriter
 		cmd.Stderr = opts.OutputWriter
@@ -169,6 +161,7 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 				return ws.ExitStatus(), nil
 			}
 		}
+
 		return -1, err
 	}
 
@@ -292,7 +285,6 @@ func (r *Runsc) Events(ctx context.Context, containerID string) (<-chan Event, e
 }
 
 func (r *Runsc) Close() error {
-	// No resources to clean up
 	return nil
 }
 
