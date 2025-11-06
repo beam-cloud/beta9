@@ -85,12 +85,15 @@ class TaskQueueManager:
     def shutdown(self):
         print("Spinning down taskqueue")
 
-        # Terminate all worker processes gracefully
+        # Send SIGTERM to ALL workers at once (parallel)
         for task_process in self.task_processes:
             task_process.terminate()
+
+        # Now wait for all of them (parallel, not sequential)
+        for task_process in self.task_processes:
             task_process.join(timeout=5)
 
-        # Force kill any remaining processes
+        # Force kill any stragglers
         for task_process in self.task_processes:
             if task_process.is_alive():
                 print("Task process did not terminate gracefully, killing...")
@@ -99,9 +102,6 @@ class TaskQueueManager:
 
             if task_process.exitcode != 0:
                 self.exit_code = task_process.exitcode
-        
-        # Exit normally - workers should have exited their loops
-        # No need for os._exit() now that workers exit cleanly
 
     def _start_worker(self, worker_index: int):
         # Initialize task worker
