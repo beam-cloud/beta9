@@ -260,8 +260,8 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		podTemplate.Spec.DNSPolicy = corev1.DNSClusterFirstWithHostNet
 	}
 
-	if wpc.workerPoolConfig.ContainerRuntime != "" {
-		podTemplate.Spec.RuntimeClassName = ptr.To(wpc.workerPoolConfig.ContainerRuntime)
+	if wpc.workerPoolConfig.Runtime != "" {
+		podTemplate.Spec.RuntimeClassName = ptr.To(wpc.workerPoolConfig.Runtime)
 	}
 
 	ttl := int32(30)

@@ -154,7 +154,8 @@ worker:
     default:
       mode: local
       priority: 1
-      containerRuntime: runc
+      # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod (e.g., "nvidia")
+      containerRuntime: runc  # Internal OCI runtime: "runc" or "gvisor"
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
@@ -172,7 +173,8 @@ worker:
     build:
       mode: local
       requiresPoolSelector: true
-      containerRuntime: runc
+      # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod
+      containerRuntime: runc  # Internal OCI runtime: "runc" or "gvisor"
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
@@ -191,7 +193,8 @@ worker:
     # nvidia:
     #   mode: local
     #   gpuType: any
-    #   containerRuntime: gvisor
+    #   runtime: nvidia  # Kubernetes RuntimeClass for GPU support
+    #   containerRuntime: gvisor  # Internal OCI runtime
     #   containerRuntimeConfig:
     #     gvisorPlatform: systrap
     #     gvisorRoot: /run/gvisor

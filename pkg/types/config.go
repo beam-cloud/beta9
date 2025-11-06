@@ -381,8 +381,9 @@ var (
 
 type WorkerPoolConfig struct {
 	GPUType                string                            `key:"gpuType" json:"gpu_type"`
-	ContainerRuntime       string                            `key:"containerRuntime" json:"container_runtime"`                 // Container runtime: "runc" or "gvisor"
-	ContainerRuntimeConfig RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"`    // Runtime-specific configuration
+	Runtime                string                            `key:"runtime" json:"runtime"`                                    // Kubernetes RuntimeClass for pod (e.g., "nvidia")
+	ContainerRuntime       string                            `key:"containerRuntime" json:"container_runtime"`                 // Internal container runtime: "runc" or "gvisor"
+	ContainerRuntimeConfig RuntimeConfig                     `key:"containerRuntimeConfig" json:"container_runtime_config"`    // Internal container runtime configuration
 	Mode                   PoolMode                          `key:"mode" json:"mode"`
 	Provider             *MachineProvider                  `key:"provider" json:"provider"`
 	JobSpec              WorkerPoolJobSpecConfig           `key:"jobSpec" json:"job_spec"`
