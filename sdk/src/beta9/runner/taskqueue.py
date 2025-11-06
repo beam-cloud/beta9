@@ -85,16 +85,17 @@ class TaskQueueManager:
     def shutdown(self):
         print("Spinning down taskqueue")
 
-        # Terminate all worker processes
+        # Terminate all worker processes gracefully
         for task_process in self.task_processes:
             task_process.terminate()
             task_process.join(timeout=5)
 
+        # Force kill any remaining processes
         for task_process in self.task_processes:
             if task_process.is_alive():
-                print("Task process did not join within the timeout. Terminating...")
-                task_process.terminate()
-                task_process.join(timeout=0)
+                print("Task process did not terminate gracefully, killing...")
+                task_process.kill()  # SIGKILL instead of terminate
+                task_process.join()  # Wait indefinitely for death
 
             if task_process.exitcode != 0:
                 self.exit_code = task_process.exitcode
