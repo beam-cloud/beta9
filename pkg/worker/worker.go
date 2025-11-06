@@ -14,12 +14,12 @@ import (
 	"time"
 
 	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
-	"github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	pb "github.com/beam-cloud/beta9/proto"
 
 	"github.com/beam-cloud/beta9/pkg/storage"
@@ -47,8 +47,10 @@ type Worker struct {
 	podAddr                 string
 	podHostName             string
 	imageMountPath          string
-	runcHandle              runc.Runc
-	runcServer              *RunCServer
+	runtime                 runtime.Runtime
+	runcRuntime             runtime.Runtime
+	gvisorRuntime           runtime.Runtime
+	containerServer         *ContainerRuntimeServer
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
 	containerNetworkManager *ContainerNetworkManager
@@ -91,6 +93,8 @@ type ContainerInstance struct {
 	StopReason            types.StopContainerReason
 	SandboxProcessManager *goproc.GoProcClient
 	ContainerIp           string
+	Runtime               runtime.Runtime
+	OOMWatcher            *runtime.OOMWatcher
 }
 
 type ContainerOptions struct {
@@ -182,6 +186,71 @@ func NewWorker() (*Worker, error) {
 		return nil, errors.New("invalid worker pool name")
 	}
 
+	// Create container runtimes based on pool configuration
+	// Always create runc as a fallback
+	runcRuntime, err := runtime.New(runtime.Config{
+		Type:  "runc",
+		Debug: config.DebugMode,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create runc runtime: %v", err)
+	}
+
+	// Create default runtime based on pool configuration
+	var defaultRuntime runtime.Runtime
+	var gvisorRuntime runtime.Runtime
+
+	// Get runtime type from pool config, fall back to global config
+	runtimeType := poolConfig.ContainerRuntime
+	if runtimeType == "" {
+		runtimeType = config.Worker.ContainerRuntime
+	}
+	if runtimeType == "" {
+		runtimeType = "runc"
+	}
+
+	log.Info().
+		Str("pool", workerPoolName).
+		Str("runtime", runtimeType).
+		Msg("initializing container runtime for worker pool")
+
+	switch runtimeType {
+	case "runc":
+		defaultRuntime = runcRuntime
+	case "gvisor":
+		// Get gVisor configuration from pool config
+		gvisorRoot := poolConfig.ContainerRuntimeConfig.GVisorRoot
+		if gvisorRoot == "" {
+			gvisorRoot = "/run/gvisor"
+		}
+
+		gvisorPlatform := poolConfig.ContainerRuntimeConfig.GVisorPlatform
+		if gvisorPlatform == "" {
+			gvisorPlatform = "systrap"
+		}
+
+		gvisorRuntime, err = runtime.New(runtime.Config{
+			Type:          "gvisor",
+			RunscPath:     "runsc",
+			RunscRoot:     gvisorRoot,
+			RunscPlatform: gvisorPlatform,
+			Debug:         config.DebugMode,
+		})
+		if err != nil {
+			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
+			defaultRuntime = runcRuntime
+		} else {
+			defaultRuntime = gvisorRuntime
+			log.Info().
+				Str("platform", gvisorPlatform).
+				Str("root", gvisorRoot).
+				Msg("gVisor runtime initialized successfully")
+		}
+	default:
+		log.Warn().Str("runtime", runtimeType).Msg("unknown runtime type, using runc")
+		defaultRuntime = runcRuntime
+	}
+
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
 		return nil, err
@@ -226,7 +295,9 @@ func NewWorker() (*Worker, error) {
 		memoryLimit:             memoryLimit,
 		gpuType:                 gpuType,
 		gpuCount:                uint32(gpuCount),
-		runcHandle:              runc.Runc{Debug: config.DebugMode},
+		runtime:                 defaultRuntime,
+		runcRuntime:             runcRuntime,
+		gvisorRuntime:           gvisorRuntime,
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
@@ -255,8 +326,9 @@ func NewWorker() (*Worker, error) {
 		checkpointStorage:   checkpointStorage,
 	}
 
-	runcServer, err := NewRunCServer(&RunCServerOpts{
+	containerServer, err := NewContainerRuntimeServer(&ContainerRuntimeServerOpts{
 		PodAddr:                 podAddr,
+		Runtime:                 defaultRuntime,
 		ContainerInstances:      containerInstances,
 		ImageClient:             imageClient,
 		ContainerRepoClient:     containerRepoClient,
@@ -268,7 +340,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	err = runcServer.Start()
+	err = containerServer.Start()
 	if err != nil {
 		cancel()
 		return nil, err
@@ -281,7 +353,7 @@ func NewWorker() (*Worker, error) {
 	}
 
 	worker.workerUsageMetrics = workerMetrics
-	worker.runcServer = runcServer
+	worker.containerServer = containerServer
 
 	return worker, nil
 }
@@ -676,6 +748,14 @@ func (s *Worker) shutdown() error {
 	err = os.RemoveAll(s.imageMountPath)
 	if err != nil {
 		errs = errors.Join(errs, err)
+	}
+
+	// Close runtimes
+	if s.runcRuntime != nil {
+		s.runcRuntime.Close()
+	}
+	if s.gvisorRuntime != nil {
+		s.gvisorRuntime.Close()
 	}
 
 	return errs

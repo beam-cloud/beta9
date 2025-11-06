@@ -85,16 +85,20 @@ class TaskQueueManager:
     def shutdown(self):
         print("Spinning down taskqueue")
 
-        # Terminate all worker processes
+        # Send SIGTERM to ALL workers at once
         for task_process in self.task_processes:
             task_process.terminate()
+
+        # Now wait for all of them
+        for task_process in self.task_processes:
             task_process.join(timeout=5)
 
+        # Force kill any stragglers
         for task_process in self.task_processes:
             if task_process.is_alive():
-                print("Task process did not join within the timeout. Terminating...")
-                task_process.terminate()
-                task_process.join(timeout=0)
+                print("Task process did not terminate gracefully, killing...")
+                task_process.kill()
+                task_process.join()
 
             if task_process.exitcode != 0:
                 self.exit_code = task_process.exitcode
@@ -172,6 +176,11 @@ class TaskQueueWorker:
         self.parent_pid: int = parent_pid
         self.worker_startup_event: TEvent = worker_startup_event
         self.workers_ready: Value = workers_ready
+        self.should_exit: bool = False
+
+    def _signal_handler(self, signum, frame):
+        """Handle SIGTERM by breaking out of the processing loop"""
+        self.should_exit = True
 
     def _get_next_task(
         self, taskqueue_stub: TaskQueueServiceStub, stub_id: str, container_id: str
@@ -287,6 +296,9 @@ class TaskQueueWorker:
 
     @with_runner_context
     def process_tasks(self, channel: Channel) -> None:
+        # Set up signal handler to exit cleanly on SIGTERM
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
         self.worker_startup_event.set()
         taskqueue_stub = TaskQueueServiceStub(channel)
         gateway_stub = GatewayServiceStub(channel)
@@ -302,7 +314,7 @@ class TaskQueueWorker:
             wait_for_checkpoint(workers_ready=self.workers_ready)
 
         with ThreadPoolExecutorOverride() as thread_pool:
-            while True:
+            while not self.should_exit:
                 task = self._get_next_task(taskqueue_stub, config.stub_id, config.container_id)
                 if not task:
                     time.sleep(TASK_POLLING_INTERVAL)
@@ -399,6 +411,6 @@ def retry_on_errors(errors: List[Type[Exception]], e: BaseException) -> bool:
 if __name__ == "__main__":
     tq = TaskQueueManager()
     tq.run()
-
-    if tq.exit_code != 0 and tq.exit_code != TaskExitCode.SigTerm:
-        sys.exit(tq.exit_code)
+    # shutdown() may call os._exit() if workers were force-killed
+    # If we reach here, do clean exit
+    sys.exit(tq.exit_code if tq.exit_code != TaskExitCode.SigTerm else 0)
