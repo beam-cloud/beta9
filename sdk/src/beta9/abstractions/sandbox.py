@@ -1726,3 +1726,26 @@ class SandboxFileSystem:
             raise SandboxFileSystemError(response.error_msg)
 
         return results
+
+
+class SandboxDockerManager:
+    """
+    Manager for managing Docker inside a sandbox.
+
+    This class provides a high-level interface for managing Docker inside a sandbox.
+
+    Attributes:
+        sandbox_instance (SandboxInstance): The sandbox instance this manager operates on.
+
+    Example:
+        ```python
+        # Get the docker manager
+        dm = instance.docker
+
+        # Run a docker command
+        dm.run_command("docker ps")
+        ```
+    """
+
+    def __init__(self, sandbox_instance: SandboxInstance) -> "SandboxProcess":
+        self.sandbox_instance: SandboxInstance = sandbox_instance
