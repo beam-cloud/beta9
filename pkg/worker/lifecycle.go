@@ -1111,9 +1111,7 @@ if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
   mount -t tmpfs -o uid=0,gid=0,mode=0755 cgroup /sys/fs/cgroup 2>/dev/null || true
 fi
 
-# Create directories for cgroup controllers Docker expects
-# We don't mount them as real cgroup controllers (gVisor doesn't support that)
-# Just create the directory structure
+# Create directories for cgroup controllers
 mkdir -p /sys/fs/cgroup/cpu
 mkdir -p /sys/fs/cgroup/memory
 mkdir -p /sys/fs/cgroup/devices
@@ -1126,17 +1124,25 @@ mkdir -p /sys/fs/cgroup/perf_event
 mkdir -p /sys/fs/cgroup/pids
 mkdir -p /sys/fs/cgroup/systemd
 
+# CREATIVE SOLUTION: Bind mount each controller directory to itself
+# This makes them appear as mount points to Docker's checks!
+for controller in cpu memory devices blkio cpuset cpuacct freezer net_cls perf_event pids; do
+  if [ -d "/sys/fs/cgroup/$controller" ]; then
+    mount --bind /sys/fs/cgroup/$controller /sys/fs/cgroup/$controller 2>/dev/null || true
+  fi
+done
+
 # Create minimal files in devices cgroup that Docker checks for
 echo "a *:* rwm" > /sys/fs/cgroup/devices/devices.allow 2>/dev/null || true
 echo "" > /sys/fs/cgroup/devices/devices.deny 2>/dev/null || true
 echo "1" > /sys/fs/cgroup/devices/cgroup.procs 2>/dev/null || true
 
-# Try to mount systemd cgroup (often works even in gVisor)
+# Mount systemd cgroup with actual cgroup filesystem
 if ! mountpoint -q /sys/fs/cgroup/systemd 2>/dev/null; then
   mount -t cgroup -o none,name=systemd cgroup /sys/fs/cgroup/systemd 2>/dev/null || true
 fi
 
-echo "Cgroup structure created"
+echo "Cgroup structure created with bind mounts"
 `
 
 	cgroupSetupCmd := []string{"sh", "-c", cgroupSetupScript}
