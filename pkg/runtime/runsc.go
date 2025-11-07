@@ -15,8 +15,9 @@ import (
 
 // Runsc implements Runtime using the gVisor runsc runtime
 type Runsc struct {
-	cfg            Config
-	nvproxyEnabled bool // Whether GPU support via nvproxy is enabled
+	cfg                  Config
+	nvproxyEnabled       bool // Whether GPU support via nvproxy is enabled
+	dockerInDockerMode   bool // Whether Docker-in-Docker support is enabled (requires --net-raw)
 }
 
 // NewRunsc creates a new runsc (gVisor) runtime
@@ -77,6 +78,12 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 			// Clear devices list if no GPU - gVisor virtualizes /dev
 			spec.Linux.Devices = nil
 		}
+	}
+
+	// If Docker-in-Docker mode is enabled, add necessary capabilities
+	// According to gVisor documentation for running Docker inside gVisor
+	if r.dockerInDockerMode {
+		r.addDockerInDockerCapabilities(spec)
 	}
 
 	return nil
@@ -302,5 +309,81 @@ func (r *Runsc) baseArgs() []string {
 		args = append(args, "--platform", r.cfg.RunscPlatform)
 	}
 
+	// Add --net-raw flag if Docker-in-Docker mode is enabled
+	// This is required for Docker to function properly inside gVisor
+	if r.dockerInDockerMode {
+		args = append(args, "--net-raw")
+	}
+
 	return args
+}
+
+// EnableDockerInDocker enables Docker-in-Docker mode for this runtime.
+// This adds the --net-raw flag to runsc and configures the necessary capabilities.
+func (r *Runsc) EnableDockerInDocker() {
+	r.dockerInDockerMode = true
+}
+
+// addDockerInDockerCapabilities adds the capabilities required for running Docker inside gVisor.
+// According to gVisor documentation, Docker requires: audit_write, chown, dac_override, fowner,
+// fsetid, kill, mknod, net_bind_service, net_admin, net_raw, setfcap, setgid, setpcap, setuid,
+// sys_admin, sys_chroot, sys_ptrace
+func (r *Runsc) addDockerInDockerCapabilities(spec *specs.Spec) {
+	if spec.Process == nil {
+		spec.Process = &specs.Process{}
+	}
+
+	if spec.Process.Capabilities == nil {
+		spec.Process.Capabilities = &specs.LinuxCapabilities{}
+	}
+
+	// Capabilities required for Docker-in-Docker according to gVisor documentation
+	dockerCaps := []string{
+		"CAP_AUDIT_WRITE",
+		"CAP_CHOWN",
+		"CAP_DAC_OVERRIDE",
+		"CAP_FOWNER",
+		"CAP_FSETID",
+		"CAP_KILL",
+		"CAP_MKNOD",
+		"CAP_NET_BIND_SERVICE",
+		"CAP_NET_ADMIN",
+		"CAP_NET_RAW",
+		"CAP_SETFCAP",
+		"CAP_SETGID",
+		"CAP_SETPCAP",
+		"CAP_SETUID",
+		"CAP_SYS_ADMIN",
+		"CAP_SYS_CHROOT",
+		"CAP_SYS_PTRACE",
+	}
+
+	// Add capabilities to all capability sets
+	spec.Process.Capabilities.Bounding = mergeCapabilities(spec.Process.Capabilities.Bounding, dockerCaps)
+	spec.Process.Capabilities.Effective = mergeCapabilities(spec.Process.Capabilities.Effective, dockerCaps)
+	spec.Process.Capabilities.Permitted = mergeCapabilities(spec.Process.Capabilities.Permitted, dockerCaps)
+	spec.Process.Capabilities.Inheritable = mergeCapabilities(spec.Process.Capabilities.Inheritable, dockerCaps)
+}
+
+// mergeCapabilities merges two capability lists, avoiding duplicates
+func mergeCapabilities(existing []string, toAdd []string) []string {
+	capSet := make(map[string]bool)
+
+	// Add existing capabilities to the set
+	for _, cap := range existing {
+		capSet[cap] = true
+	}
+
+	// Add new capabilities to the set
+	for _, cap := range toAdd {
+		capSet[cap] = true
+	}
+
+	// Convert set back to slice
+	result := make([]string, 0, len(capSet))
+	for cap := range capSet {
+		result = append(result, cap)
+	}
+
+	return result
 }

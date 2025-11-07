@@ -833,6 +833,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		})
 	}
 
+	// Enable Docker-in-Docker support for sandbox containers when using gVisor runtime
+	// This adds the --net-raw flag and necessary capabilities for running Docker inside gVisor
+	if request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == "gvisor" {
+		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
+			runscRuntime.EnableDockerInDocker()
+			log.Info().Str("container_id", containerId).Msg("enabled docker-in-docker support for sandbox container with gvisor")
+		}
+	}
+
 	// Prepare spec for the selected runtime (may mutate spec for gVisor compatibility)
 	if err := s.runtime.Prepare(ctx, spec); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
