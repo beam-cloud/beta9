@@ -11,40 +11,68 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"github.com/shirou/gopsutil/v4/process"
 )
 
 const (
 	cgroupV2Root           = "/sys/fs/cgroup"
 	memoryEventsFile       = "memory.events"
 	oomWatcherPollInterval = 500 * time.Millisecond
+	// For gVisor memory monitoring, trigger OOM when usage exceeds 95% of limit
+	gvisorOOMThresholdPercent = 95.0
 )
 
-// OOMWatcher watches for OOM kills via cgroup v2 memory.events
-type OOMWatcher struct {
+// OOMWatcher interface for different runtime implementations
+type OOMWatcher interface {
+	Watch(onOOM func()) error
+	Stop()
+}
+
+// CgroupOOMWatcher watches for OOM kills via cgroup v2 memory.events
+// Works for runc and other traditional runtimes
+type CgroupOOMWatcher struct {
 	cgroupPath   string
 	lastOOMCount int64
 	ctx          context.Context
 	cancel       context.CancelFunc
 }
 
-// NewOOMWatcher creates a new OOM watcher for the given cgroup path
-// cgroupPath should be relative to /sys/fs/cgroup (e.g., "beta9/container-123")
-func NewOOMWatcher(ctx context.Context, cgroupPath string) *OOMWatcher {
+// GvisorOOMWatcher watches for OOM by monitoring memory usage vs limits
+// Works for gVisor where cgroup files aren't accessible from host
+type GvisorOOMWatcher struct {
+	pid         int32
+	memoryLimit uint64 // in bytes
+	ctx         context.Context
+	cancel      context.CancelFunc
+}
+
+// NewCgroupOOMWatcher creates a new cgroup-based OOM watcher for runc
+func NewCgroupOOMWatcher(ctx context.Context, cgroupPath string) *CgroupOOMWatcher {
 	watcherCtx, cancel := context.WithCancel(ctx)
-	return &OOMWatcher{
+	return &CgroupOOMWatcher{
 		cgroupPath: cgroupPath,
 		ctx:        watcherCtx,
 		cancel:     cancel,
 	}
 }
 
-// Watch starts watching for OOM events and calls onOOM when detected
-func (w *OOMWatcher) Watch(onOOM func()) error {
+// NewGvisorOOMWatcher creates a new memory-monitoring OOM watcher for gVisor
+func NewGvisorOOMWatcher(ctx context.Context, pid int, memoryLimitBytes uint64) *GvisorOOMWatcher {
+	watcherCtx, cancel := context.WithCancel(ctx)
+	return &GvisorOOMWatcher{
+		pid:         int32(pid),
+		memoryLimit: memoryLimitBytes,
+		ctx:         watcherCtx,
+		cancel:      cancel,
+	}
+}
+
+// Watch starts watching for OOM events via cgroup memory.events
+func (w *CgroupOOMWatcher) Watch(onOOM func()) error {
 	// Read initial OOM count
 	initialCount, err := w.readOOMKillCount()
 	if err != nil {
-		// If we can't read the file, container may not be started yet
-		log.Debug().Str("cgroup", w.cgroupPath).Err(err).Msg("failed to read initial OOM count")
+		log.Warn().Str("cgroup", w.cgroupPath).Err(err).Msg("failed to read initial OOM count")
 		initialCount = 0
 	}
 	w.lastOOMCount = initialCount
@@ -84,15 +112,121 @@ func (w *OOMWatcher) Watch(onOOM func()) error {
 	return nil
 }
 
+// Watch starts monitoring memory usage for gVisor containers
+func (w *GvisorOOMWatcher) Watch(onOOM func()) error {
+	// Validate memory limit
+	if w.memoryLimit == 0 {
+		return fmt.Errorf("memory limit is 0, cannot monitor OOM")
+	}
+
+	thresholdBytes := uint64(float64(w.memoryLimit) * gvisorOOMThresholdPercent / 100.0)
+	log.Info().
+		Int32("pid", w.pid).
+		Uint64("memory_limit_mb", w.memoryLimit/1024/1024).
+		Uint64("threshold_mb", thresholdBytes/1024/1024).
+		Float64("threshold_percent", gvisorOOMThresholdPercent).
+		Msg("starting gVisor OOM watcher with memory monitoring")
+
+	go func() {
+		ticker := time.NewTicker(oomWatcherPollInterval)
+		defer ticker.Stop()
+
+		oomTriggered := false
+
+		for {
+			select {
+			case <-w.ctx.Done():
+				return
+			case <-ticker.C:
+				// Get memory usage for the process and all children
+				memoryUsage, err := w.getMemoryUsage()
+				if err != nil {
+					// Process may have exited
+					continue
+				}
+
+				// Check if we've exceeded the threshold
+				if memoryUsage >= thresholdBytes && !oomTriggered {
+					oomTriggered = true
+					log.Warn().
+						Int32("pid", w.pid).
+						Uint64("memory_usage_mb", memoryUsage/1024/1024).
+						Uint64("memory_limit_mb", w.memoryLimit/1024/1024).
+						Float64("usage_percent", float64(memoryUsage)*100.0/float64(w.memoryLimit)).
+						Msg("memory usage exceeded threshold - OOM likely")
+
+					// Call the callback
+					if onOOM != nil {
+						onOOM()
+					}
+				}
+			}
+		}
+	}()
+
+	return nil
+}
+
 // Stop stops the OOM watcher
-func (w *OOMWatcher) Stop() {
+func (w *CgroupOOMWatcher) Stop() {
 	if w.cancel != nil {
 		w.cancel()
 	}
 }
 
+// Stop stops the OOM watcher
+func (w *GvisorOOMWatcher) Stop() {
+	if w.cancel != nil {
+		w.cancel()
+	}
+}
+
+// getMemoryUsage returns total RSS memory usage for the process and all children
+func (w *GvisorOOMWatcher) getMemoryUsage() (uint64, error) {
+	proc, err := process.NewProcess(w.pid)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get process: %w", err)
+	}
+
+	// Get all child processes
+	processes := w.findChildProcesses(proc)
+	processes = append([]*process.Process{proc}, processes...)
+
+	// Sum up memory usage
+	var totalMemory uint64
+	for _, p := range processes {
+		memInfo, err := p.MemoryInfo()
+		if err != nil {
+			continue
+		}
+		totalMemory += memInfo.RSS
+	}
+
+	return totalMemory, nil
+}
+
+// findChildProcesses recursively finds all child processes
+func (w *GvisorOOMWatcher) findChildProcesses(p *process.Process) []*process.Process {
+	children, err := p.Children()
+	if err != nil {
+		return nil
+	}
+
+	processes := []*process.Process{}
+	processes = append(processes, children...)
+
+	for _, child := range children {
+		grandChildren := w.findChildProcesses(child)
+		if grandChildren != nil {
+			processes = append(processes, grandChildren...)
+		}
+	}
+
+	return processes
+}
+
 // readOOMKillCount reads the oom_kill counter from memory.events
-func (w *OOMWatcher) readOOMKillCount() (int64, error) {
+func (w *CgroupOOMWatcher) readOOMKillCount() (int64, error) {
 	// Try cgroup v2 path first
 	memEventsPath := filepath.Join(cgroupV2Root, w.cgroupPath, memoryEventsFile)
 
