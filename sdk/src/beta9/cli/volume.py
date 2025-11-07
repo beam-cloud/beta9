@@ -138,7 +138,7 @@ def read_with_progress(
     name = "/".join(path.relative_to(Path.cwd()).parts[-(len(path.parts)) :])
 
     if len(name) > max_desc_width:
-        desc = f"...{name[-(max_desc_width - 3):]}"
+        desc = f"...{name[-(max_desc_width - 3) :]}"
     else:
         desc = name.ljust(max_desc_width)
 

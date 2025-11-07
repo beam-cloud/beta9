@@ -1755,42 +1755,40 @@ class SandboxFileSystem:
         return results
 
 
-
-
 class DockerResult:
     """
     Result object for Docker operations that provides access to both output and logs.
-    
+
     Attributes:
         process: The underlying SandboxProcess for streaming logs
         success: Whether the operation succeeded
         output: The primary output (container ID, image ID, etc.)
-        
+
     Example:
         ```python
         # Build with logs
         result = sandbox.docker.build("myapp:v1", context=".")
         for line in result.logs():
             print(line)  # Stream build output
-        
+
         # Or just wait for completion
         result.wait()
         print(f"Build {'succeeded' if result.success else 'failed'}")
-        
+
         # Run container and get ID
         result = sandbox.docker.run("nginx", detach=True)
         result.wait()
         print(f"Container ID: {result.output}")
         ```
     """
-    
+
     def __init__(self, process: "SandboxProcess", extract_output: callable = None):
         self.process = process
         self._extract_output = extract_output
         self._waited = False
         self._output = None
         self._success = None
-    
+
     def wait(self) -> bool:
         """Wait for operation to complete. Returns True if successful."""
         if not self._waited:
@@ -1800,36 +1798,35 @@ class DockerResult:
                 self._output = self._extract_output(self.process)
             self._waited = True
         return self._success
-    
+
     def logs(self):
         """
         Stream logs line by line from both stdout and stderr.
         Docker commands often output to stderr (e.g., build progress).
         """
         import threading
-        from queue import Queue, Empty
-        
+        from queue import Empty, Queue
+
         q = Queue()
-        finished = threading.Event()
-        
+
         def read_stream(stream, prefix=""):
             try:
                 for line in stream:
                     q.put((prefix, line))
-            except Exception as e:
+            except Exception:
                 # Stream closed or error reading
                 pass
-        
+
         # Read both stdout and stderr concurrently
         stdout_thread = threading.Thread(target=read_stream, args=(self.process.stdout, ""))
         stderr_thread = threading.Thread(target=read_stream, args=(self.process.stderr, ""))
-        
+
         stdout_thread.daemon = True
         stderr_thread.daemon = True
-        
+
         stdout_thread.start()
         stderr_thread.start()
-        
+
         # Yield lines as they arrive
         threads_alive = True
         while threads_alive or not q.empty():
@@ -1840,28 +1837,28 @@ class DockerResult:
                 # Check if threads are still alive
                 threads_alive = stdout_thread.is_alive() or stderr_thread.is_alive()
                 continue
-    
+
     @property
     def output(self) -> str:
         """Get the primary output (auto-waits if needed)."""
         if not self._waited:
             self.wait()
         return self._output or ""
-    
+
     @property
     def success(self) -> bool:
         """Check if operation succeeded (auto-waits if needed)."""
         if not self._waited:
             self.wait()
         return self._success
-    
+
     @property
     def stdout(self) -> str:
         """Get all stdout (auto-waits if needed)."""
         if not self._waited:
             self.wait()
         return self.process.stdout.read()
-    
+
     @property
     def stderr(self) -> str:
         """Get all stderr (auto-waits if needed)."""
@@ -1873,33 +1870,33 @@ class DockerResult:
 class SandboxDockerManager:
     """
     Docker manager for sandbox operations with streaming log support.
-    
+
     Most operations return DockerResult objects that provide:
     - Streaming logs via .logs()
     - Automatic waiting via .wait()
     - Access to output via .output property
-    
+
     Example:
         ```python
         sandbox = Sandbox(
             docker_enabled=True,
             image=Image().with_docker()
         ).create()
-        
+
         # Build with streaming logs
         result = sandbox.docker.build("myapp:v1", context=".")
         for line in result.logs():
             print(line)  # See build progress
-        
+
         # Or just wait for completion
         result = sandbox.docker.build("myapp:v1", context=".")
         if result.wait():
             print("Build succeeded!")
-        
+
         # Pull and see logs
         result = sandbox.docker.pull("nginx:latest")
         print(result.stdout)  # Auto-waits and returns output
-        
+
         # Run container
         result = sandbox.docker.run("nginx", name="web", detach=True)
         container_id = result.output  # Auto-waits and returns container ID
@@ -1928,35 +1925,36 @@ class SandboxDockerManager:
                 pass
             time.sleep(backoff)
             backoff = min(backoff * 1.5, 2.0)
-        
+
         from beta9.exceptions import DockerDaemonNotReadyError
+
         raise DockerDaemonNotReadyError(self._daemon_timeout)
-    
+
     def _exec(self, *cmd) -> "SandboxProcess":
         """Execute docker command."""
         self._ensure_ready()
         return self.sandbox_instance.process.exec(*cmd)
-    
+
     def _run(self, *cmd) -> str:
         """Execute docker command and return output (for simple operations)."""
         from beta9.exceptions import DockerCommandError
-        
+
         p = self._exec(*cmd)
         exit_code = p.wait()
-        
+
         if exit_code != 0:
             stderr = p.stderr.read()
             raise DockerCommandError(" ".join(cmd), exit_code, stderr)
-        
+
         return p.stdout.read().strip()
-    
+
     def _result(self, *cmd, extract_output: callable = None) -> DockerResult:
         """Execute docker command and return a DockerResult (for operations with logs)."""
         process = self._exec(*cmd)
         return DockerResult(process, extract_output=extract_output)
-    
+
     # === Container Operations ===
-    
+
     def run(
         self,
         image: str,
@@ -1967,11 +1965,11 @@ class SandboxDockerManager:
         ports: Optional[Dict[str, str]] = None,
         volumes: Optional[Dict[str, str]] = None,
         env: Optional[Dict[str, str]] = None,
-        **kwargs
+        **kwargs,
     ) -> DockerResult:
         """
         Run a Docker container.
-        
+
         Args:
             image: Docker image (e.g. "nginx:latest")
             command: Command to run in container
@@ -1981,21 +1979,21 @@ class SandboxDockerManager:
             ports: Port mappings {"container_port": "host_port"}
             volumes: Volume mappings {"host_path": "container_path"}
             env: Environment variables
-            
+
         Returns:
             DockerResult: Result with container ID in .output property
-            
+
         Example:
             ```python
             # Run detached and get container ID
             result = sandbox.docker.run("nginx:latest", name="web", ports={"80": "8080"}, detach=True)
             container_id = result.output  # Auto-waits
-            
+
             # Run and stream logs
             result = sandbox.docker.run("alpine", command=["echo", "hello"])
             for line in result.logs():
                 print(line)
-            
+
             # Run and check success
             result = sandbox.docker.run("alpine", command=["sh", "-c", "exit 1"])
             if not result.success:
@@ -2018,29 +2016,29 @@ class SandboxDockerManager:
         if env:
             for k, v in env.items():
                 cmd.extend(["-e", f"{k}={v}"])
-        
+
         cmd.append(image)
-        
+
         if command:
             if isinstance(command, str):
                 cmd.append(command)
             else:
                 cmd.extend(command)
-        
+
         # Extract container ID from output if detached
         def extract_container_id(process):
             return process.stdout.read().strip()
-        
+
         return self._result(*cmd, extract_output=extract_container_id if detach else None)
-    
+
     def ps(self, all: bool = False, quiet: bool = False) -> Union[List[str], str]:
         """
         List containers.
-        
+
         Args:
             all: Show all containers (default: running only)
             quiet: Only return container IDs
-            
+
         Returns:
             List[str]: Container IDs if quiet=True
             str: Formatted table if quiet=False
@@ -2050,22 +2048,24 @@ class SandboxDockerManager:
             cmd.append("-a")
         if quiet:
             cmd.append("-q")
-        
+
         output = self._run(*cmd)
         return output.split("\n") if quiet and output else output
-    
+
     def stop(self, container: str) -> bool:
         """Stop a container. Returns True on success, False if container not found or already stopped."""
         from beta9.exceptions import DockerCommandError
+
         try:
             self._run("docker", "stop", container)
             return True
         except DockerCommandError:
             return False
-    
+
     def rm(self, container: str, force: bool = False) -> bool:
         """Remove a container. Returns True on success, False if container not found."""
         from beta9.exceptions import DockerCommandError
+
         try:
             cmd = ["docker", "rm"]
             if force:
@@ -2075,8 +2075,10 @@ class SandboxDockerManager:
             return True
         except DockerCommandError:
             return False
-    
-    def logs(self, container: str, follow: bool = False, tail: Optional[int] = None) -> "SandboxProcess":
+
+    def logs(
+        self, container: str, follow: bool = False, tail: Optional[int] = None
+    ) -> "SandboxProcess":
         """Get container logs."""
         cmd = ["docker", "logs"]
         if follow:
@@ -2085,7 +2087,7 @@ class SandboxDockerManager:
             cmd.extend(["--tail", str(tail)])
         cmd.append(container)
         return self._exec(*cmd)
-    
+
     def exec(self, container: str, command: Union[str, List[str]], **kwargs) -> "SandboxProcess":
         """Execute command in running container."""
         cmd = ["docker", "exec", container]
@@ -2094,27 +2096,27 @@ class SandboxDockerManager:
         else:
             cmd.extend(command)
         return self._exec(*cmd)
-    
+
     # === Image Operations ===
-    
+
     def pull(self, image: str, quiet: bool = False) -> DockerResult:
         """
         Pull an image.
-        
+
         Args:
             image: Image to pull (e.g. "nginx:latest")
             quiet: Suppress verbose output
-            
+
         Returns:
             DockerResult: Result with streaming logs
-            
+
         Example:
             ```python
             # Pull and see progress
             result = sandbox.docker.pull("nginx:latest")
             for line in result.logs():
                 print(line)  # See pull progress
-            
+
             # Or just wait
             result = sandbox.docker.pull("nginx:latest")
             if result.success:
@@ -2126,7 +2128,7 @@ class SandboxDockerManager:
             cmd.append("-q")
         cmd.append(image)
         return self._result(*cmd)
-    
+
     def build(
         self,
         tag: str,
@@ -2138,7 +2140,7 @@ class SandboxDockerManager:
     ) -> DockerResult:
         """
         Build a Docker image.
-        
+
         Args:
             tag: Image tag (e.g. "myapp:v1")
             context: Build context path
@@ -2146,17 +2148,17 @@ class SandboxDockerManager:
             build_args: Build arguments
             no_cache: Don't use cache
             quiet: Suppress output
-            
+
         Returns:
             DockerResult: Result with streaming build logs
-            
+
         Example:
             ```python
             # Build and stream logs
             result = sandbox.docker.build("myapp:v1", context=".")
             for line in result.logs():
                 print(line)  # See build progress
-            
+
             # Or wait for completion
             result = sandbox.docker.build("myapp:v1", context=".")
             if result.success:
@@ -2166,11 +2168,11 @@ class SandboxDockerManager:
             ```
         """
         cmd = ["docker", "build", "-t", tag]
-        
+
         # Use host networking for gVisor (avoids veth permission issues)
         # Safe because "host" = sandbox's network namespace, still isolated
         cmd.extend(["--network", "host"])
-        
+
         if dockerfile:
             cmd.extend(["-f", dockerfile])
         if build_args:
@@ -2182,14 +2184,14 @@ class SandboxDockerManager:
             cmd.append("--quiet")
         cmd.append(context)
         return self._result(*cmd)
-    
+
     def images(self, quiet: bool = False) -> Union[List[str], str]:
         """
         List images.
-        
+
         Args:
             quiet: Only return image IDs
-            
+
         Returns:
             List[str]: Image IDs if quiet=True
             str: Formatted table if quiet=False
@@ -2197,13 +2199,14 @@ class SandboxDockerManager:
         cmd = ["docker", "images"]
         if quiet:
             cmd.append("-q")
-        
+
         output = self._run(*cmd)
         return output.split("\n") if quiet and output else output
-    
+
     def rmi(self, image: str, force: bool = False) -> bool:
         """Remove an image. Returns True on success, False if image not found or in use."""
         from beta9.exceptions import DockerCommandError
+
         try:
             cmd = ["docker", "rmi"]
             if force:
@@ -2213,27 +2216,29 @@ class SandboxDockerManager:
             return True
         except DockerCommandError:
             return False
-    
+
     def push(self, image: str) -> bool:
         """Push an image to registry. Returns True on success, False if not authenticated or network error."""
         from beta9.exceptions import DockerCommandError
+
         try:
             self._run("docker", "push", image)
             return True
         except DockerCommandError:
             return False
-    
+
     def tag(self, source: str, target: str) -> bool:
         """Tag an image. Returns True on success, False if source image not found."""
         from beta9.exceptions import DockerCommandError
+
         try:
             self._run("docker", "tag", source, target)
             return True
         except DockerCommandError:
             return False
-    
+
     # === Docker Compose ===
-    
+
     def compose_up(
         self,
         file: str = "docker-compose.yml",
@@ -2247,10 +2252,11 @@ class SandboxDockerManager:
         if build:
             cmd.append("--build")
         return self._exec(*cmd)
-    
+
     def compose_down(self, file: str = "docker-compose.yml", volumes: bool = False) -> bool:
         """Stop and remove compose services. Returns True on success, False if compose file not found."""
         from beta9.exceptions import DockerCommandError
+
         try:
             cmd = ["docker-compose", "-f", file, "down"]
             if volumes:
@@ -2259,23 +2265,26 @@ class SandboxDockerManager:
             return True
         except DockerCommandError:
             return False
-    
-    def compose_logs(self, file: str = "docker-compose.yml", follow: bool = False) -> "SandboxProcess":
+
+    def compose_logs(
+        self, file: str = "docker-compose.yml", follow: bool = False
+    ) -> "SandboxProcess":
         """View compose service logs."""
         cmd = ["docker-compose", "-f", file, "logs"]
         if follow:
             cmd.append("-f")
         return self._exec(*cmd)
-    
+
     def compose_ps(self, file: str = "docker-compose.yml") -> str:
         """List compose services."""
         return self._run("docker-compose", "-f", file, "ps")
-    
+
     # === Networks ===
-    
+
     def network_create(self, name: str, driver: Optional[str] = None) -> bool:
         """Create a network. Returns True on success, False if network already exists."""
         from beta9.exceptions import DockerCommandError
+
         try:
             cmd = ["docker", "network", "create"]
             if driver:
@@ -2285,16 +2294,17 @@ class SandboxDockerManager:
             return True
         except DockerCommandError:
             return False
-    
+
     def network_rm(self, name: str) -> bool:
         """Remove a network. Returns True on success, False if network not found or in use."""
         from beta9.exceptions import DockerCommandError
+
         try:
             self._run("docker", "network", "rm", name)
             return True
         except DockerCommandError:
             return False
-    
+
     def network_ls(self, quiet: bool = False) -> Union[List[str], str]:
         """List networks."""
         cmd = ["docker", "network", "ls"]
@@ -2302,21 +2312,23 @@ class SandboxDockerManager:
             cmd.append("-q")
         output = self._run(*cmd)
         return output.split("\n") if quiet and output else output
-    
+
     # === Volumes ===
-    
+
     def volume_create(self, name: str) -> bool:
         """Create a volume. Returns True on success, False if volume already exists."""
         from beta9.exceptions import DockerCommandError
+
         try:
             self._run("docker", "volume", "create", name)
             return True
         except DockerCommandError:
             return False
-    
+
     def volume_rm(self, name: str, force: bool = False) -> bool:
         """Remove a volume. Returns True on success, False if volume not found or in use."""
         from beta9.exceptions import DockerCommandError
+
         try:
             cmd = ["docker", "volume", "rm"]
             if force:
@@ -2326,7 +2338,7 @@ class SandboxDockerManager:
             return True
         except DockerCommandError:
             return False
-    
+
     def volume_ls(self, quiet: bool = False) -> Union[List[str], str]:
         """List volumes."""
         cmd = ["docker", "volume", "ls"]
@@ -2334,4 +2346,3 @@ class SandboxDockerManager:
             cmd.append("-q")
         output = self._run(*cmd)
         return output.split("\n") if quiet and output else output
-
