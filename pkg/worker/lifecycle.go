@@ -969,8 +969,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	case types.StopContainerReasonAdmin:
 		exitCode = int(types.ContainerExitCodeAdmin)
 	default:
+		// Check for OOM kill and ensure exit code is 137 for both runc and gVisor
 		if isOOMKilled.Load() {
-			exitCode = int(types.ContainerExitCodeOomKill)
+			exitCode = int(types.ContainerExitCodeOomKill) // 137
+			log.Info().Str("container_id", containerId).Int("exit_code", exitCode).Msg("overriding exit code to 137 for OOM kill")
 		} else if exitCode == int(types.ContainerExitCodeOomKill) || exitCode == -1 {
 			// Exit code will match OOM kill exit code, but container was not OOM killed so override it
 			exitCode = 0
