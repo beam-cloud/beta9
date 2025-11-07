@@ -838,7 +838,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 	}
 
-	// Prepare spec for the selected runtime (may mutate spec for gVisor compatibility)
+	// Prepare spec for the selected runtime
 	if err := s.runtime.Prepare(ctx, spec); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
 		return
