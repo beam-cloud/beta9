@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -31,7 +32,7 @@ func NewRunsc(cfg Config) (*Runsc, error) {
 	// Check if runsc is available
 	if _, err := exec.LookPath(cfg.RunscPath); err != nil {
 		return nil, ErrRuntimeNotAvailable{
-			Runtime: "gvisor",
+			Runtime: types.ContainerRuntimeGvisor.String(),
 			Reason:  "runsc binary not found in PATH",
 		}
 	}
@@ -42,7 +43,7 @@ func NewRunsc(cfg Config) (*Runsc, error) {
 }
 
 func (r *Runsc) Name() string {
-	return "gvisor"
+	return types.ContainerRuntimeGvisor.String()
 }
 
 func (r *Runsc) Capabilities() Capabilities {
@@ -117,13 +118,15 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
+	dockerEnabled := opts != nil && opts.DockerEnabled
+
 	defer func() {
-		deleteArgs := r.baseArgs()
+		deleteArgs := r.baseArgs(dockerEnabled)
 		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
 		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
 	}()
 
-	args := r.baseArgs()
+	args := r.baseArgs(dockerEnabled)
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 	}
@@ -186,7 +189,7 @@ func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process
 	}
 	procFile.Close()
 
-	args := r.baseArgs()
+	args := r.baseArgs(false)
 	args = append(args, "exec")
 	args = append(args, "--process", procFile.Name())
 	args = append(args, containerID)
@@ -214,7 +217,7 @@ func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process
 }
 
 func (r *Runsc) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *KillOpts) error {
-	args := r.baseArgs()
+	args := r.baseArgs(false)
 	args = append(args, "kill")
 
 	if opts != nil && opts.All {
@@ -228,7 +231,7 @@ func (r *Runsc) Kill(ctx context.Context, containerID string, sig syscall.Signal
 }
 
 func (r *Runsc) Delete(ctx context.Context, containerID string, opts *DeleteOpts) error {
-	args := r.baseArgs()
+	args := r.baseArgs(false)
 	args = append(args, "delete")
 
 	if opts != nil && opts.Force {
@@ -242,7 +245,7 @@ func (r *Runsc) Delete(ctx context.Context, containerID string, opts *DeleteOpts
 }
 
 func (r *Runsc) State(ctx context.Context, containerID string) (State, error) {
-	args := r.baseArgs()
+	args := r.baseArgs(false)
 	args = append(args, "state", containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
@@ -289,7 +292,7 @@ func (r *Runsc) Close() error {
 }
 
 // baseArgs returns the common arguments for all runsc commands
-func (r *Runsc) baseArgs() []string {
+func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 	args := []string{
 		"--root", r.cfg.RunscRoot,
 	}
@@ -302,5 +305,75 @@ func (r *Runsc) baseArgs() []string {
 		args = append(args, "--platform", r.cfg.RunscPlatform)
 	}
 
+	// Add --net-raw flag if Docker-in-Docker is enabled
+	// This is required for Docker to function properly inside gVisor
+	if dockerEnabled {
+		args = append(args, "--net-raw")
+	}
+
 	return args
+}
+
+// AddDockerInDockerCapabilities adds the capabilities required for running Docker inside gVisor.
+// According to gVisor documentation, Docker requires: audit_write, chown, dac_override, fowner,
+// fsetid, kill, mknod, net_bind_service, net_admin, net_raw, setfcap, setgid, setpcap, setuid,
+// sys_admin, sys_chroot, sys_ptrace
+func (r *Runsc) AddDockerInDockerCapabilities(spec *specs.Spec) {
+	if spec.Process == nil {
+		spec.Process = &specs.Process{}
+	}
+
+	if spec.Process.Capabilities == nil {
+		spec.Process.Capabilities = &specs.LinuxCapabilities{}
+	}
+
+	// Capabilities required for Docker-in-Docker according to gVisor documentation
+	dockerCaps := []string{
+		"CAP_AUDIT_WRITE",
+		"CAP_CHOWN",
+		"CAP_DAC_OVERRIDE",
+		"CAP_FOWNER",
+		"CAP_FSETID",
+		"CAP_KILL",
+		"CAP_MKNOD",
+		"CAP_NET_BIND_SERVICE",
+		"CAP_NET_ADMIN",
+		"CAP_NET_RAW",
+		"CAP_SETFCAP",
+		"CAP_SETGID",
+		"CAP_SETPCAP",
+		"CAP_SETUID",
+		"CAP_SYS_ADMIN",
+		"CAP_SYS_CHROOT",
+		"CAP_SYS_PTRACE",
+	}
+
+	// Add capabilities to all capability sets
+	spec.Process.Capabilities.Bounding = mergeCapabilities(spec.Process.Capabilities.Bounding, dockerCaps)
+	spec.Process.Capabilities.Effective = mergeCapabilities(spec.Process.Capabilities.Effective, dockerCaps)
+	spec.Process.Capabilities.Permitted = mergeCapabilities(spec.Process.Capabilities.Permitted, dockerCaps)
+	spec.Process.Capabilities.Inheritable = mergeCapabilities(spec.Process.Capabilities.Inheritable, dockerCaps)
+}
+
+// mergeCapabilities merges two capability lists, avoiding duplicates
+func mergeCapabilities(existing []string, toAdd []string) []string {
+	capSet := make(map[string]bool)
+
+	// Add existing capabilities to the set
+	for _, cap := range existing {
+		capSet[cap] = true
+	}
+
+	// Add new capabilities to the set
+	for _, cap := range toAdd {
+		capSet[cap] = true
+	}
+
+	// Convert set back to slice
+	result := make([]string, 0, len(capSet))
+	for cap := range capSet {
+		result = append(result, cap)
+	}
+
+	return result
 }

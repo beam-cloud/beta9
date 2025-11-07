@@ -50,6 +50,7 @@ type WorkerPoolController interface {
 	State() (*types.WorkerPoolState, error)
 	RequiresPoolSelector() bool
 	Mode() types.PoolMode
+	ContainerRuntime() string
 }
 
 type WorkerPoolConfig struct {

@@ -796,3 +796,61 @@ class Image(BaseAbstraction):
         """
         self.gpu = gpu
         return self
+
+    def with_docker(self) -> "Image":
+        """
+        Install Docker and Docker Compose in the image to enable Docker functionality in a container.
+
+        This just adds commands to install Docker CE and Docker Compose during the image
+        build process. When used with a Sandbox that has docker_enabled=True,
+        the Docker daemon will be automatically started inside the sandbox, allowing you to run
+        Docker and Docker Compose commands.
+
+        Installed components:
+        - Docker Engine (docker)
+        - Docker CLI (docker)
+        - Docker Compose plugin (docker compose)
+        - Docker Compose standalone (docker-compose)
+        - Docker Buildx plugin (docker buildx)
+
+        NOTE: This feature only works with gVisor as the container runtime for
+        enhanced security isolation.
+
+        Returns:
+            Image: The Image object.
+
+        Example:
+            ```python
+            from beta9 import Image, Sandbox
+
+            image = Image(python_version="python3.11").with_docker()
+
+            sandbox = Sandbox(image=image, docker_enabled=True)
+            instance = sandbox.create()
+
+            # Docker is now available!
+            response = instance.process.run_code("import subprocess; subprocess.run(['docker', 'run', 'hello-world'])")
+            print(response.result)
+
+            # Docker Compose is also available (both styles work)
+            instance.process.run_code("import subprocess; subprocess.run(['docker', 'compose', 'version'])")
+            instance.process.run_code("import subprocess; subprocess.run(['docker-compose', 'version'])")
+            ```
+        """
+
+        # Add Docker and Docker Compose installation commands
+        # These commands install Docker CE and Compose from the official Docker repository
+        docker_install_commands = [
+            "apt-get update && apt-get install -y ca-certificates curl gnupg lsb-release",
+            "mkdir -p /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
+            'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null',
+            "apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
+            "ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose",
+            "docker --version && docker compose version && docker-compose version",
+            "apt-get clean && rm -rf /var/lib/apt/lists/*",
+        ]
+
+        for command in docker_install_commands:
+            self.build_steps.append(BuildStep(command=command, type="shell"))
+
+        return self

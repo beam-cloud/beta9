@@ -117,6 +117,7 @@ class RunnerAbstraction(BaseAbstraction):
         inputs: Optional[Schema] = None,
         outputs: Optional[Schema] = None,
         tcp: bool = False,
+        docker_enabled: bool = False,
     ) -> None:
         super().__init__()
 
@@ -160,6 +161,7 @@ class RunnerAbstraction(BaseAbstraction):
             ttl=task_policy.ttl,
         )
         self.checkpoint_enabled = checkpoint_enabled
+        self.docker_enabled = docker_enabled
         self.extra: dict = {}
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
@@ -517,6 +519,7 @@ class RunnerAbstraction(BaseAbstraction):
                 else None,
                 inputs=inputs,
                 outputs=outputs,
+                docker_enabled=self.docker_enabled,
                 tcp=self.tcp,
             )
 

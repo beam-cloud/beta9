@@ -85,6 +85,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
 			Ports:             ports,
+			DockerEnabled:     i.StubConfig.DockerEnabled,
 		}
 
 		ttl := time.Duration(i.StubConfig.KeepWarmSeconds) * time.Second

@@ -161,17 +161,14 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 }
 
 func (s *Worker) deleteContainer(containerId string) {
-	// Always remove from local state first
 	s.containerInstances.Delete(containerId)
 
-	// Best-effort remote state removal with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	_, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(ctx, &pb.DeleteContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
-		// This is best-effort; if gateway/redis is down, we still cleaned up locally
-		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state (local cleanup completed)")
+		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state")
 	}
 }
 
@@ -179,7 +176,6 @@ func (s *Worker) deleteContainer(containerId string) {
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 
-	// Use the worker's configured runtime from pool config
 	caps := s.runtime.Capabilities()
 
 	// Gate features based on runtime capabilities
@@ -187,6 +183,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		log.Info().Str("container_id", containerId).
 			Str("runtime", s.runtime.Name()).
 			Msg("disabling checkpoint for runtime without CRIU support")
+
 		request.CheckpointEnabled = false
 		request.Checkpoint = nil
 	}
@@ -833,7 +830,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		})
 	}
 
-	// Prepare spec for the selected runtime (may mutate spec for gVisor compatibility)
+	// Add Docker capabilities if enabled for sandbox containers with gVisor
+	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
+		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
+			runscRuntime.AddDockerInDockerCapabilities(spec)
+			log.Info().Str("container_id", containerId).Msg("added docker capabilities for sandbox container")
+		}
+	}
+
+	// Prepare spec for the selected runtime
 	if err := s.runtime.Prepare(ctx, spec); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
 		return
@@ -880,6 +885,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
+
+		// Start Docker daemon if enabled for this sandbox
+		if request.DockerEnabled {
+			go s.startDockerDaemon(ctx, containerId, containerInstance)
+		}
 	}()
 
 	isOOMKilled := atomic.Bool{}
@@ -1001,8 +1011,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	bundlePath := filepath.Dir(request.ConfigPath)
 	exitCode, err := instance.Runtime.Run(ctx, request.ContainerId, bundlePath, &runtime.RunOpts{
-		OutputWriter: outputWriter,
-		Started:      startedChan,
+		OutputWriter:  outputWriter,
+		Started:       startedChan,
+		DockerEnabled: request.DockerEnabled,
 	})
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
@@ -1032,7 +1043,7 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 
 	// Get runtime for this container
 	instance, exists := s.containerInstances.Get(request.ContainerId)
-	if exists && instance.Runtime != nil && instance.Runtime.Name() == "gvisor" {
+	if exists && instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
 		resources = NewGvisorResources()
 	} else {
 		resources = NewRuncResources()
@@ -1042,4 +1053,59 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 		CPU:    resources.GetCPU(request),
 		Memory: resources.GetMemory(request),
 	}, nil
+}
+
+const (
+	dockerDaemonStartupDelay   = 3 * time.Second
+	dockerDaemonStartupTimeout = 30 * time.Second
+)
+
+// startDockerDaemon starts the Docker daemon inside a sandbox container
+func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, instance *ContainerInstance) {
+	time.Sleep(dockerDaemonStartupDelay)
+
+	if instance.SandboxProcessManager == nil {
+		log.Error().Str("container_id", containerId).Msg("sandbox process manager not available, cannot start docker daemon")
+		return
+	}
+
+	log.Info().Str("container_id", containerId).Msg("starting docker daemon in sandbox")
+
+	// Start dockerd in background with host socket
+	// The daemon runs on unix:///var/run/docker.sock inside the sandbox
+	cmd := []string{"dockerd", "--host=unix:///var/run/docker.sock"}
+	env := []string{}
+	cwd := "/"
+
+	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
+		return
+	}
+
+	log.Info().
+		Str("container_id", containerId).
+		Int("pid", pid).
+		Msg("docker daemon started successfully - docker commands are now available")
+
+	// Wait for Docker to be ready (check that socket exists and daemon responds)
+	maxRetries := dockerDaemonStartupTimeout / time.Second
+	for i := 0; i < int(maxRetries); i++ {
+		time.Sleep(time.Second)
+
+		// Try running a simple docker command to verify daemon is ready
+		checkCmd := []string{"docker", "ps"}
+		checkPid, err := instance.SandboxProcessManager.Exec(checkCmd, "/", []string{}, false)
+		if err == nil {
+			time.Sleep(time.Millisecond * 100)
+
+			exitCode, err := instance.SandboxProcessManager.Status(checkPid)
+			if err == nil && exitCode == 0 {
+				log.Info().Str("container_id", containerId).Msg("docker daemon is ready and accepting commands")
+				return
+			}
+		}
+	}
+
+	log.Warn().Str("container_id", containerId).Msg("docker daemon started but may not be fully ready")
 }

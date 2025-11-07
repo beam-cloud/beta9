@@ -100,6 +100,10 @@ func (wpc *LocalKubernetesWorkerPoolController) Name() string {
 	return wpc.name
 }
 
+func (wpc *LocalKubernetesWorkerPoolController) ContainerRuntime() string {
+	return wpc.workerPoolConfig.ContainerRuntime
+}
+
 func (wpc *LocalKubernetesWorkerPoolController) RequiresPoolSelector() bool {
 	return wpc.workerPoolConfig.RequiresPoolSelector
 }
@@ -288,6 +292,7 @@ func (wpc *LocalKubernetesWorkerPoolController) createWorkerJob(workerId string,
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPoolConfig.Priority,
+		Runtime:       wpc.workerPoolConfig.ContainerRuntime,
 		BuildVersion:  wpc.config.Worker.ImageTag,
 		Preemptable:   wpc.workerPoolConfig.Preemptable,
 	}

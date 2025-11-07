@@ -10,7 +10,7 @@ import (
 
 // ListContainers lists all containers managed by the runtime
 func (r *Runsc) List(ctx context.Context) ([]State, error) {
-	args := r.baseArgs()
+	args := r.baseArgs(false)
 	args = append(args, "list", "--format=json")
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)

@@ -54,6 +54,7 @@ type Worker struct {
 	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
 	Priority             int32        `json:"priority" redis:"priority"`
 	Preemptable          bool         `json:"preemptable" redis:"preemptable"`
+	Runtime              string       `json:"runtime" redis:"runtime"`
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
 	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
 }
@@ -227,6 +228,7 @@ type ContainerRequest struct {
 	ConfigPath               string          `json:"config_path"`
 	ImageCredentials         string          `json:"image_credentials"`
 	BuildRegistryCredentials string          `json:"build_registry_credentials"`
+	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker (gVisor only)
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -301,6 +303,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		CheckpointEnabled:        c.CheckpointEnabled,
 		Checkpoint:               checkpoint,
 		BuildRegistryCredentials: c.BuildRegistryCredentials,
+		DockerEnabled:            c.DockerEnabled,
 	}
 }
 
@@ -351,6 +354,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Ports:                    in.Ports,
 		Checkpoint:               checkpoint,
 		BuildRegistryCredentials: in.BuildRegistryCredentials,
+		DockerEnabled:            in.DockerEnabled,
 	}
 }
 
