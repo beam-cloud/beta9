@@ -1095,14 +1095,11 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	time.Sleep(100 * time.Millisecond)
 
 	// Start dockerd in background
-	// The error "Devices cgroup isn't mounted" is expected in gVisor
-	// We need to tell dockerd to use cgroupfs driver and set a cgroup parent
-	// This is the standard workaround for Docker-in-Docker in nested containers
+	// Device cgroup restrictions are removed at the OCI spec level (in runsc.Prepare)
+	// to avoid "Devices cgroup isn't mounted" errors in gVisor
 	cmd := []string{
 		"dockerd",
-		"--exec-opt", "native.cgroupdriver=cgroupfs",
-		"--cgroup-parent=/",
-		"--iptables=false", // gVisor handles networking
+		"--iptables=false", // gVisor handles networking, don't try to configure iptables
 	}
 	env := []string{}
 	cwd := "/"
