@@ -1095,12 +1095,10 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	time.Sleep(100 * time.Millisecond)
 
 	// Start dockerd in background
-	// Use minimal flags that work with gVisor
-	// According to gVisor docs, Docker should work with basic configuration
-	cmd := []string{
-		"dockerd",
-		"--iptables=false", // gVisor handles networking, don't use iptables
-	}
+	// Following gVisor documentation: just run dockerd with no flags
+	// The container already has necessary capabilities from AddDockerInDockerCapabilities
+	// and runsc is started with --net-raw flag
+	cmd := []string{"dockerd"}
 	env := []string{}
 	cwd := "/"
 
@@ -1121,22 +1119,17 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	// Quick check if daemon crashed immediately
 	earlyExitCode, err := instance.SandboxProcessManager.Status(pid)
 	if err == nil && earlyExitCode >= 0 {
+		// Daemon crashed - get the error output
+		stdout, _ := instance.SandboxProcessManager.Stdout(pid)
+		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+
 		log.Error().
 			Str("container_id", containerId).
 			Int("pid", pid).
 			Int("exit_code", earlyExitCode).
-			Msg("dockerd crashed immediately after starting - check stderr logs for details")
-
-		// Try to get stderr output
-		stderrCmd := []string{"cat", fmt.Sprintf("/proc/%d/fd/2", pid)}
-		stderrPid, err := instance.SandboxProcessManager.Exec(stderrCmd, "/", []string{}, false)
-		if err == nil {
-			time.Sleep(100 * time.Millisecond)
-			exitCode, _ := instance.SandboxProcessManager.Status(stderrPid)
-			if exitCode == 0 {
-				log.Info().Str("container_id", containerId).Msg("check sandbox process logs for dockerd stderr")
-			}
-		}
+			Str("stdout", stdout).
+			Str("stderr", stderr).
+			Msg("dockerd crashed immediately after starting - see stdout/stderr above")
 		return
 	}
 
@@ -1146,11 +1139,17 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		// Check if dockerd process is still running
 		daemonExitCode, err := instance.SandboxProcessManager.Status(pid)
 		if err == nil && daemonExitCode >= 0 {
+			// Daemon crashed - get the error output
+			stdout, _ := instance.SandboxProcessManager.Stdout(pid)
+			stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+
 			log.Error().
 				Str("container_id", containerId).
 				Int("pid", pid).
 				Int("exit_code", daemonExitCode).
-				Msg("dockerd process exited unexpectedly - check that image has Docker installed with .with_docker()")
+				Str("stdout", stdout).
+				Str("stderr", stderr).
+				Msg("dockerd process exited unexpectedly - see stdout/stderr above")
 			return
 		}
 
