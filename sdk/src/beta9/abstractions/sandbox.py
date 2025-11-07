@@ -1806,15 +1806,14 @@ class SandboxDockerManager:
                 if p.wait() == 0:
                     self._daemon_ready = True
                     return
-            except:
+            except Exception:
+                # Ignore errors during daemon check - we'll retry
                 pass
             time.sleep(backoff)
             backoff = min(backoff * 1.5, 2.0)
         
-        raise Exception(
-            f"Docker daemon not ready after {self._daemon_timeout}s. "
-            "Use Image().with_docker() when creating the sandbox."
-        )
+        from beta9.exceptions import DockerDaemonNotReadyError
+        raise DockerDaemonNotReadyError(self._daemon_timeout)
     
     def _exec(self, *cmd) -> "SandboxProcess":
         """Execute docker command."""
@@ -1823,8 +1822,15 @@ class SandboxDockerManager:
     
     def _run(self, *cmd) -> str:
         """Execute docker command and return output."""
+        from beta9.exceptions import DockerCommandError
+        
         p = self._exec(*cmd)
-        p.wait()
+        exit_code = p.wait()
+        
+        if exit_code != 0:
+            stderr = p.stderr.read()
+            raise DockerCommandError(" ".join(cmd), exit_code, stderr)
+        
         return p.stdout.read().strip()
     
     # === Container Operations ===
@@ -1920,15 +1926,17 @@ class SandboxDockerManager:
         return output.split("\n") if quiet and output else output
     
     def stop(self, container: str) -> bool:
-        """Stop a container."""
+        """Stop a container. Returns True on success, False if container not found or already stopped."""
+        from beta9.exceptions import DockerCommandError
         try:
             self._run("docker", "stop", container)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def rm(self, container: str, force: bool = False) -> bool:
-        """Remove a container."""
+        """Remove a container. Returns True on success, False if container not found."""
+        from beta9.exceptions import DockerCommandError
         try:
             cmd = ["docker", "rm"]
             if force:
@@ -1936,7 +1944,7 @@ class SandboxDockerManager:
             cmd.append(container)
             self._run(*cmd)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def logs(self, container: str, follow: bool = False, tail: Optional[int] = None) -> "SandboxProcess":
@@ -1961,7 +1969,8 @@ class SandboxDockerManager:
     # === Image Operations ===
     
     def pull(self, image: str, quiet: bool = False) -> bool:
-        """Pull an image."""
+        """Pull an image. Returns True on success, False if image not found or network error."""
+        from beta9.exceptions import DockerCommandError
         try:
             cmd = ["docker", "pull"]
             if quiet:
@@ -1969,7 +1978,7 @@ class SandboxDockerManager:
             cmd.append(image)
             self._run(*cmd)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def build(
@@ -2027,7 +2036,8 @@ class SandboxDockerManager:
         return output.split("\n") if quiet and output else output
     
     def rmi(self, image: str, force: bool = False) -> bool:
-        """Remove an image."""
+        """Remove an image. Returns True on success, False if image not found or in use."""
+        from beta9.exceptions import DockerCommandError
         try:
             cmd = ["docker", "rmi"]
             if force:
@@ -2035,23 +2045,25 @@ class SandboxDockerManager:
             cmd.append(image)
             self._run(*cmd)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def push(self, image: str) -> bool:
-        """Push an image to registry."""
+        """Push an image to registry. Returns True on success, False if not authenticated or network error."""
+        from beta9.exceptions import DockerCommandError
         try:
             self._run("docker", "push", image)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def tag(self, source: str, target: str) -> bool:
-        """Tag an image."""
+        """Tag an image. Returns True on success, False if source image not found."""
+        from beta9.exceptions import DockerCommandError
         try:
             self._run("docker", "tag", source, target)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     # === Docker Compose ===
@@ -2071,14 +2083,15 @@ class SandboxDockerManager:
         return self._exec(*cmd)
     
     def compose_down(self, file: str = "docker-compose.yml", volumes: bool = False) -> bool:
-        """Stop and remove compose services."""
+        """Stop and remove compose services. Returns True on success, False if compose file not found."""
+        from beta9.exceptions import DockerCommandError
         try:
             cmd = ["docker-compose", "-f", file, "down"]
             if volumes:
                 cmd.append("-v")
             self._run(*cmd)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def compose_logs(self, file: str = "docker-compose.yml", follow: bool = False) -> "SandboxProcess":
@@ -2095,7 +2108,8 @@ class SandboxDockerManager:
     # === Networks ===
     
     def network_create(self, name: str, driver: Optional[str] = None) -> bool:
-        """Create a network."""
+        """Create a network. Returns True on success, False if network already exists."""
+        from beta9.exceptions import DockerCommandError
         try:
             cmd = ["docker", "network", "create"]
             if driver:
@@ -2103,15 +2117,16 @@ class SandboxDockerManager:
             cmd.append(name)
             self._run(*cmd)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def network_rm(self, name: str) -> bool:
-        """Remove a network."""
+        """Remove a network. Returns True on success, False if network not found or in use."""
+        from beta9.exceptions import DockerCommandError
         try:
             self._run("docker", "network", "rm", name)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def network_ls(self, quiet: bool = False) -> Union[List[str], str]:
@@ -2125,15 +2140,17 @@ class SandboxDockerManager:
     # === Volumes ===
     
     def volume_create(self, name: str) -> bool:
-        """Create a volume."""
+        """Create a volume. Returns True on success, False if volume already exists."""
+        from beta9.exceptions import DockerCommandError
         try:
             self._run("docker", "volume", "create", name)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def volume_rm(self, name: str, force: bool = False) -> bool:
-        """Remove a volume."""
+        """Remove a volume. Returns True on success, False if volume not found or in use."""
+        from beta9.exceptions import DockerCommandError
         try:
             cmd = ["docker", "volume", "rm"]
             if force:
@@ -2141,7 +2158,7 @@ class SandboxDockerManager:
             cmd.append(name)
             self._run(*cmd)
             return True
-        except:
+        except DockerCommandError:
             return False
     
     def volume_ls(self, quiet: bool = False) -> Union[List[str], str]:

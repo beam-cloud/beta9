@@ -137,3 +137,32 @@ class SandboxFileSystemError(RuntimeError):
     def __init__(self, message: str):
         self.message = message
         super().__init__(f"Unable to perform sandbox filesystem operation: {message}")
+
+
+class DockerException(RuntimeError):
+    """Base exception for Docker-related errors."""
+    pass
+
+
+class DockerDaemonNotReadyError(DockerException):
+    """Raised when Docker daemon is not ready within timeout."""
+    def __init__(self, timeout: int):
+        self.timeout = timeout
+        super().__init__(
+            f"Docker daemon not ready after {timeout}s. "
+            "Ensure you used Image().with_docker() when creating the sandbox."
+        )
+
+
+class DockerCommandError(DockerException):
+    """Raised when a Docker command fails."""
+    def __init__(self, command: str, exit_code: int, stderr: str = ""):
+        self.command = command
+        self.exit_code = exit_code
+        self.stderr = stderr
+        error_msg = f"Docker command failed: {command}"
+        if exit_code:
+            error_msg += f" (exit code {exit_code})"
+        if stderr:
+            error_msg += f"\n{stderr}"
+        super().__init__(error_msg)
