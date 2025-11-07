@@ -1055,10 +1055,14 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 	}, nil
 }
 
-// startDockerDaemon starts the Docker daemon inside a sandbox container using the process manager
+const (
+	dockerDaemonStartupDelay   = 3 * time.Second
+	dockerDaemonStartupTimeout = 30 * time.Second
+)
+
+// startDockerDaemon starts the Docker daemon inside a sandbox container
 func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, instance *ContainerInstance) {
-	// Wait a bit for the sandbox to be fully initialized
-	time.Sleep(3 * time.Second)
+	time.Sleep(dockerDaemonStartupDelay)
 
 	if instance.SandboxProcessManager == nil {
 		log.Error().Str("container_id", containerId).Msg("sandbox process manager not available, cannot start docker daemon")
@@ -1085,16 +1089,16 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		Msg("docker daemon started successfully - docker commands are now available")
 
 	// Wait for Docker to be ready (check that socket exists and daemon responds)
-	maxRetries := 30
-	for i := 0; i < maxRetries; i++ {
-		time.Sleep(1 * time.Second)
+	maxRetries := dockerDaemonStartupTimeout / time.Second
+	for i := 0; i < int(maxRetries); i++ {
+		time.Sleep(time.Second)
 
 		// Try running a simple docker command to verify daemon is ready
 		checkCmd := []string{"docker", "ps"}
 		checkPid, err := instance.SandboxProcessManager.Exec(checkCmd, "/", []string{}, false)
 		if err == nil {
-			// Check if the command succeeded
-			time.Sleep(100 * time.Millisecond) // Give it a moment to complete
+			time.Sleep(time.Millisecond * 100)
+
 			exitCode, err := instance.SandboxProcessManager.Status(checkPid)
 			if err == nil && exitCode == 0 {
 				log.Info().Str("container_id", containerId).Msg("docker daemon is ready and accepting commands")
