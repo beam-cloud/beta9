@@ -833,26 +833,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		})
 	}
 
-	// Enable Docker-in-Docker support for sandbox containers when using gVisor runtime
-	// This adds the --net-raw flag and necessary capabilities for running Docker inside gVisor
-	dockerEnabled := false
-	if request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == "gvisor" {
-		// Parse docker_enabled from stub config Extra field
-		stubConfig, err := request.Stub.UnmarshalConfig()
-		if err == nil && stubConfig.Extra != nil {
-			var extraConfig map[string]interface{}
-			if err := json.Unmarshal(stubConfig.Extra, &extraConfig); err == nil {
-				if enabled, ok := extraConfig["docker_enabled"].(bool); ok && enabled {
-					dockerEnabled = true
-				}
-			}
-		}
-
-		if dockerEnabled {
-			if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
-				runscRuntime.EnableDockerInDocker()
-				log.Info().Str("container_id", containerId).Msg("enabled docker-in-docker support for sandbox container with gvisor")
-			}
+	// Add Docker-in-Docker capabilities if enabled for sandbox containers with gVisor
+	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == "gvisor" {
+		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
+			runscRuntime.AddDockerInDockerCapabilities(spec)
+			log.Info().Str("container_id", containerId).Msg("added docker-in-docker capabilities for sandbox container with gvisor")
 		}
 	}
 
@@ -905,7 +890,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		checkpointPIDChan <- pid
 
 		// Start Docker daemon if enabled for this sandbox
-		if dockerEnabled {
+		if request.DockerEnabled {
 			go s.startDockerDaemon(ctx, containerId, containerInstance)
 		}
 	}()
@@ -1029,8 +1014,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 	bundlePath := filepath.Dir(request.ConfigPath)
 	exitCode, err := instance.Runtime.Run(ctx, request.ContainerId, bundlePath, &runtime.RunOpts{
-		OutputWriter: outputWriter,
-		Started:      startedChan,
+		OutputWriter:  outputWriter,
+		Started:       startedChan,
+		DockerEnabled: request.DockerEnabled,
 	})
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)

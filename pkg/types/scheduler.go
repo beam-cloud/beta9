@@ -227,6 +227,7 @@ type ContainerRequest struct {
 	ConfigPath               string          `json:"config_path"`
 	ImageCredentials         string          `json:"image_credentials"`
 	BuildRegistryCredentials string          `json:"build_registry_credentials"`
+	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker (gVisor only)
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {

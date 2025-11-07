@@ -15,9 +15,8 @@ import (
 
 // Runsc implements Runtime using the gVisor runsc runtime
 type Runsc struct {
-	cfg                  Config
-	nvproxyEnabled       bool // Whether GPU support via nvproxy is enabled
-	dockerInDockerMode   bool // Whether Docker-in-Docker support is enabled (requires --net-raw)
+	cfg            Config
+	nvproxyEnabled bool // Whether GPU support via nvproxy is enabled
 }
 
 // NewRunsc creates a new runsc (gVisor) runtime
@@ -80,12 +79,6 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		}
 	}
 
-	// If Docker-in-Docker mode is enabled, add necessary capabilities
-	// According to gVisor documentation for running Docker inside gVisor
-	if r.dockerInDockerMode {
-		r.addDockerInDockerCapabilities(spec)
-	}
-
 	return nil
 }
 
@@ -124,13 +117,15 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 }
 
 func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *RunOpts) (int, error) {
+	dockerEnabled := opts != nil && opts.DockerEnabled
+
 	defer func() {
-		deleteArgs := r.baseArgs()
+		deleteArgs := r.baseArgs(dockerEnabled)
 		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
 		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
 	}()
 
-	args := r.baseArgs()
+	args := r.baseArgs(dockerEnabled)
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 	}
@@ -193,7 +188,7 @@ func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process
 	}
 	procFile.Close()
 
-	args := r.baseArgs()
+	args := r.baseArgs(false)
 	args = append(args, "exec")
 	args = append(args, "--process", procFile.Name())
 	args = append(args, containerID)
@@ -221,7 +216,7 @@ func (r *Runsc) Exec(ctx context.Context, containerID string, proc specs.Process
 }
 
 func (r *Runsc) Kill(ctx context.Context, containerID string, sig syscall.Signal, opts *KillOpts) error {
-	args := r.baseArgs()
+	args := r.baseArgs(false)
 	args = append(args, "kill")
 
 	if opts != nil && opts.All {
@@ -235,7 +230,7 @@ func (r *Runsc) Kill(ctx context.Context, containerID string, sig syscall.Signal
 }
 
 func (r *Runsc) Delete(ctx context.Context, containerID string, opts *DeleteOpts) error {
-	args := r.baseArgs()
+	args := r.baseArgs(false)
 	args = append(args, "delete")
 
 	if opts != nil && opts.Force {
@@ -249,7 +244,7 @@ func (r *Runsc) Delete(ctx context.Context, containerID string, opts *DeleteOpts
 }
 
 func (r *Runsc) State(ctx context.Context, containerID string) (State, error) {
-	args := r.baseArgs()
+	args := r.baseArgs(false)
 	args = append(args, "state", containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
@@ -296,7 +291,7 @@ func (r *Runsc) Close() error {
 }
 
 // baseArgs returns the common arguments for all runsc commands
-func (r *Runsc) baseArgs() []string {
+func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 	args := []string{
 		"--root", r.cfg.RunscRoot,
 	}
@@ -309,26 +304,20 @@ func (r *Runsc) baseArgs() []string {
 		args = append(args, "--platform", r.cfg.RunscPlatform)
 	}
 
-	// Add --net-raw flag if Docker-in-Docker mode is enabled
+	// Add --net-raw flag if Docker-in-Docker is enabled
 	// This is required for Docker to function properly inside gVisor
-	if r.dockerInDockerMode {
+	if dockerEnabled {
 		args = append(args, "--net-raw")
 	}
 
 	return args
 }
 
-// EnableDockerInDocker enables Docker-in-Docker mode for this runtime.
-// This adds the --net-raw flag to runsc and configures the necessary capabilities.
-func (r *Runsc) EnableDockerInDocker() {
-	r.dockerInDockerMode = true
-}
-
-// addDockerInDockerCapabilities adds the capabilities required for running Docker inside gVisor.
+// AddDockerInDockerCapabilities adds the capabilities required for running Docker inside gVisor.
 // According to gVisor documentation, Docker requires: audit_write, chown, dac_override, fowner,
 // fsetid, kill, mknod, net_bind_service, net_admin, net_raw, setfcap, setgid, setpcap, setuid,
 // sys_admin, sys_chroot, sys_ptrace
-func (r *Runsc) addDockerInDockerCapabilities(spec *specs.Spec) {
+func (r *Runsc) AddDockerInDockerCapabilities(spec *specs.Spec) {
 	if spec.Process == nil {
 		spec.Process = &specs.Process{}
 	}
