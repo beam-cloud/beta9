@@ -2384,10 +2384,14 @@ class SandboxDockerManager:
         if build:
             cmd.append("--build")
 
-        # Disable BuildKit experimental features (Bake) for gVisor compatibility
+        # Disable BuildKit and set default platform for gVisor compatibility
+        # DOCKER_BUILDKIT=0: Use legacy builder
+        # COMPOSE_DOCKER_CLI_BUILD=0: Don't delegate to docker CLI
+        # DOCKER_DEFAULT_PLATFORM: Set explicit platform to avoid parsing errors
         env = {
             "DOCKER_BUILDKIT": "0",
             "COMPOSE_DOCKER_CLI_BUILD": "0",
+            "DOCKER_DEFAULT_PLATFORM": "linux/amd64",
         }
         
         if cwd:
@@ -2514,10 +2518,11 @@ class SandboxDockerManager:
         if pull:
             cmd.append("--pull")
         
-        # Disable BuildKit and Bake for gVisor compatibility
+        # Disable BuildKit and set default platform for gVisor compatibility
         env = {
             "DOCKER_BUILDKIT": "0",
             "COMPOSE_DOCKER_CLI_BUILD": "0",
+            "DOCKER_DEFAULT_PLATFORM": "linux/amd64",
         }
         
         if cwd:

@@ -41,34 +41,14 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Create minimal daemon config for gVisor compatibility
-	// We disable bridge networking and bake (BuildKit experimental features)
-	daemonConfig := `{
-		"bake": false,
-		"builder": {
-			"gc": {
-				"enabled": false
-			}
-		}
-	}`
-	
-	// Write daemon config
-	daemonConfigCmd := []string{"sh", "-c", "mkdir -p /etc/docker && cat > /etc/docker/daemon.json << 'EOF'\n" + daemonConfig + "\nEOF"}
-	if pid, err := instance.SandboxProcessManager.Exec(daemonConfigCmd, "/", []string{}, false); err == nil {
-		time.Sleep(100 * time.Millisecond)
-		instance.SandboxProcessManager.Status(pid)
-	}
-
 	// Start dockerd as a background daemon
 	// For gVisor, we disable bridge networking because gVisor doesn't support veth interfaces
-	// This is safe because "host" refers to the sandbox's network, not the actual host
 	cmd := []string{
 		"dockerd",
 		"--bridge=none",
 		"--iptables=false",
 		"--ip6tables=false",
 		"--ip-forward=false",
-		"--config-file=/etc/docker/daemon.json",
 	}
 
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
