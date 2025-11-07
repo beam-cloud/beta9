@@ -54,7 +54,7 @@ from ..type import GpuType, GpuTypeAlias
 
 
 class Sandbox(Pod):
-    f"""
+    """
     A sandboxed container for running Python code or arbitrary processes.
     You can use this to create isolated environments where you can execute code,
     manage files, and run processes.
@@ -84,7 +84,7 @@ class Sandbox(Pod):
         secrets (List[str]):
             The secrets to pass to the Sandbox container.
         env (Optional[Dict[str, str]]):
-            A dictionary of environment variables to be injected into each Sandbox container. Default is {{}}.
+            A dictionary of environment variables to be injected into each Sandbox container. Default is {}.
         sync_local_dir (bool):
             Whether to sync the local directory to the sandbox filesystem on creation. Default is False.
         block_network (bool):
