@@ -561,20 +561,63 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 }
 
 func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest, instance *ContainerInstance, env, cmd []string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
-	if err != nil {
-		log.Error().Str("container_id", in.ContainerId).Msgf("failed to execute sandbox process: %v", err)
-		return &pb.ContainerSandboxExecResponse{
-			Ok:       false,
-			Pid:      -1,
-			ErrorMsg: err.Error(),
-		}, nil
-	}
+	// Wait for goproc to be ready with exponential backoff
+	// This is critical when docker_enabled=True as docker daemon initialization runs in parallel
+	const (
+		goprocReadyTimeout      = 10 * time.Second
+		goprocInitialBackoff    = 100 * time.Millisecond
+		goprocMaxBackoff        = 2 * time.Second
+		goprocBackoffMultiplier = 1.5
+	)
 
-	return &pb.ContainerSandboxExecResponse{
-		Ok:  true,
-		Pid: int32(pid),
-	}, nil
+	start := time.Now()
+	backoff := goprocInitialBackoff
+	var lastErr error
+
+	for {
+		pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
+		if err == nil {
+			// Success!
+			return &pb.ContainerSandboxExecResponse{
+				Ok:  true,
+				Pid: int32(pid),
+			}, nil
+		}
+
+		lastErr = err
+
+		// Check if we've exceeded the timeout
+		if time.Since(start) >= goprocReadyTimeout {
+			log.Error().
+				Str("container_id", in.ContainerId).
+				Dur("timeout", goprocReadyTimeout).
+				Err(lastErr).
+				Msg("goproc not ready within timeout - failing sandbox exec")
+			return &pb.ContainerSandboxExecResponse{
+				Ok:       false,
+				Pid:      -1,
+				ErrorMsg: fmt.Sprintf("Process manager not ready after %v: %v", goprocReadyTimeout, lastErr),
+			}, nil
+		}
+
+		// Check if context was cancelled
+		select {
+		case <-ctx.Done():
+			return &pb.ContainerSandboxExecResponse{
+				Ok:       false,
+				Pid:      -1,
+				ErrorMsg: "Request cancelled",
+			}, nil
+		default:
+		}
+
+		// Wait with exponential backoff before retrying
+		time.Sleep(backoff)
+		backoff = time.Duration(float64(backoff) * goprocBackoffMultiplier)
+		if backoff > goprocMaxBackoff {
+			backoff = goprocMaxBackoff
+		}
+	}
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in *pb.ContainerSandboxStatusRequest) (*pb.ContainerSandboxStatusResponse, error) {

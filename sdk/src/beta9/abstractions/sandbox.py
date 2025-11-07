@@ -670,8 +670,6 @@ class SandboxProcessManager:
     def __init__(self, sandbox_instance: SandboxInstance) -> "SandboxProcess":
         self.sandbox_instance: SandboxInstance = sandbox_instance
         self.processes: Dict[int, SandboxProcess] = {}
-        self._goproc_ready = False
-        self._creation_time = time.time()
 
     def run_code(
         self,
@@ -767,11 +765,11 @@ class SandboxProcessManager:
     ) -> "SandboxProcess":
         """
         Internal method to execute commands in the sandbox.
-        
-        Implements retry logic with exponential backoff to handle the case where
-        goproc (the process manager in the sandbox) is not yet ready. This is
-        especially important when docker_enabled=True, as the Docker daemon
-        initialization may be running in parallel.
+
+        The gRPC service now handles retrying until goproc is ready with
+        exponential backoff (up to 10 seconds). This ensures that even if
+        docker_enabled=True and the daemon is still starting, this call
+        will block gracefully until the process manager is available.
 
         Parameters:
             *args: The command and its arguments.
@@ -782,78 +780,32 @@ class SandboxProcessManager:
             SandboxProcess: The created process object.
 
         Raises:
-            SandboxProcessError: If process creation fails after retries.
+            SandboxProcessError: If process creation fails.
         """
         command = list(args) if not isinstance(args[0], list) else args[0]
         shell_command = " ".join(shlex.quote(arg) for arg in command)
 
-        # Retry configuration (matching Go implementation)
-        goproc_ready_timeout = 10.0  # seconds
-        initial_backoff = 0.1  # 100ms
-        max_backoff = 2.0  # 2s
-        backoff_multiplier = 1.5
-        
-        # Only apply retry logic if goproc readiness is uncertain
-        # After first success or after timeout window, skip retries
-        should_retry = not self._goproc_ready and (time.time() - self._creation_time) < goproc_ready_timeout
-        
-        start_time = time.time()
-        backoff = initial_backoff
-        last_error = None
-        
-        while True:
-            try:
-                response = self.sandbox_instance.stub.sandbox_exec(
-                    PodSandboxExecRequest(
-                        container_id=self.sandbox_instance.container_id,
-                        command=shell_command,
-                        cwd=cwd,
-                        env=env,
-                    )
-                )
-                
-                if response.ok and response.pid > 0:
-                    # Success! Mark goproc as ready for future calls
-                    self._goproc_ready = True
-                    
-                    process = SandboxProcess(
-                        self.sandbox_instance,
-                        pid=response.pid,
-                        cwd=cwd,
-                        args=command,
-                        env=env,
-                    )
-                    self.processes[response.pid] = process
-                    return process
-                
-                # If we get a response but it's not ok, store the error
-                last_error = response.error_msg
-                
-                # If we shouldn't retry, raise immediately
-                if not should_retry:
-                    raise SandboxProcessError(last_error or "Failed to execute process")
-                
-            except Exception as e:
-                # Store the exception for potential re-raise
-                last_error = str(e)
-                
-                # If we shouldn't retry, re-raise immediately
-                if not should_retry:
-                    if isinstance(e, SandboxProcessError):
-                        raise
-                    raise SandboxProcessError(last_error)
-            
-            # Check if we've exceeded the timeout
-            if time.time() - start_time >= goproc_ready_timeout:
-                raise SandboxProcessError(
-                    f"Process execution failed after {goproc_ready_timeout}s timeout. "
-                    f"The sandbox process manager may not be ready yet. "
-                    f"Last error: {last_error}"
-                )
-            
-            # Wait with exponential backoff before retrying
-            time.sleep(backoff)
-            backoff = min(backoff * backoff_multiplier, max_backoff)
+        response = self.sandbox_instance.stub.sandbox_exec(
+            PodSandboxExecRequest(
+                container_id=self.sandbox_instance.container_id,
+                command=shell_command,
+                cwd=cwd,
+                env=env,
+            )
+        )
+        if not response.ok or response.pid <= 0:
+            raise SandboxProcessError(response.error_msg)
+
+        if response.pid > 0:
+            process = SandboxProcess(
+                self.sandbox_instance,
+                pid=response.pid,
+                cwd=cwd,
+                args=command,
+                env=env,
+            )
+            self.processes[response.pid] = process
+            return process
 
     def list_processes(self) -> Dict[int, "SandboxProcess"]:
         """
