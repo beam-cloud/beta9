@@ -903,11 +903,13 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if err != nil {
 			log.Warn().Str("container_id", containerId).Err(err).Msg("failed to get cgroup path, OOM detection disabled")
 		} else {
+			log.Info().Str("container_id", containerId).Str("cgroup_path", cgroupPath).Msg("starting OOM watcher")
+			
 			oomWatcher := runtime.NewOOMWatcher(ctx, cgroupPath)
 			containerInstance.OOMWatcher = oomWatcher
 			s.containerInstances.Set(containerId, containerInstance)
 
-			oomWatcher.Watch(func() {
+			err := oomWatcher.Watch(func() {
 				log.Warn().Str("container_id", containerId).Msg("OOM kill detected via cgroup watcher")
 				isOOMKilled.Store(true)
 				outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage)
@@ -915,6 +917,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				// Push OOM event to event repository for monitoring/notifications
 				go s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			})
+			
+			if err != nil {
+				log.Warn().Str("container_id", containerId).Err(err).Msg("OOM watcher failed to start")
+			}
 		}
 	}()
 

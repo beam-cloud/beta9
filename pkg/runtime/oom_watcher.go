@@ -43,15 +43,30 @@ func (w *OOMWatcher) Watch(onOOM func()) error {
 	// Read initial OOM count
 	initialCount, err := w.readOOMKillCount()
 	if err != nil {
-		// If we can't read the file, container may not be started yet
-		log.Debug().Str("cgroup", w.cgroupPath).Err(err).Msg("failed to read initial OOM count")
+		// If we can't read the file, log more details for debugging
+		log.Warn().Str("cgroup", w.cgroupPath).Err(err).Msg("failed to read initial OOM count - OOM detection may not work")
+		
+		// Check if the file exists
+		memEventsPath := filepath.Join(cgroupV2Root, w.cgroupPath, memoryEventsFile)
+		if _, statErr := os.Stat(memEventsPath); os.IsNotExist(statErr) {
+			log.Warn().
+				Str("cgroup", w.cgroupPath).
+				Str("path", memEventsPath).
+				Msg("memory.events file does not exist - this is expected for gVisor, OOM detection will not work")
+		}
+		
 		initialCount = 0
+	} else {
+		log.Debug().Str("cgroup", w.cgroupPath).Int64("initial_count", initialCount).Msg("OOM watcher initialized successfully")
 	}
 	w.lastOOMCount = initialCount
 
 	go func() {
 		ticker := time.NewTicker(oomWatcherPollInterval)
 		defer ticker.Stop()
+
+		failedReads := 0
+		maxFailedReads := 10 // Stop logging after 10 failed reads
 
 		for {
 			select {
@@ -60,9 +75,22 @@ func (w *OOMWatcher) Watch(onOOM func()) error {
 			case <-ticker.C:
 				currentCount, err := w.readOOMKillCount()
 				if err != nil {
+					failedReads++
+					// Only log first few failures to avoid spam
+					if failedReads <= maxFailedReads {
+						log.Debug().Str("cgroup", w.cgroupPath).Err(err).Msg("failed to read OOM count")
+					} else if failedReads == maxFailedReads+1 {
+						log.Warn().Str("cgroup", w.cgroupPath).Msg("OOM watcher continuing to fail, suppressing further logs")
+					}
 					// Container may have been deleted
 					continue
 				}
+
+				// Reset fail counter on success
+				if failedReads > maxFailedReads {
+					log.Info().Str("cgroup", w.cgroupPath).Msg("OOM watcher recovered")
+				}
+				failedReads = 0
 
 				if currentCount > w.lastOOMCount {
 					log.Info().Str("cgroup", w.cgroupPath).
