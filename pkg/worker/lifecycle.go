@@ -1141,7 +1141,10 @@ echo "Devices cgroup mounted successfully"
 	env := []string{}
 	cwd := "/"
 
-	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
+	// IMPORTANT: Start dockerd in background mode (last parameter = true)
+	// This prevents dockerd from blocking goproc, which would cause the container to hang
+	// when dockerd exits, rather than letting it run as a background daemon
+	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, true)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
 		return
