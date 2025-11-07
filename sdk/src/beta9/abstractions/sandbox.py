@@ -2384,13 +2384,9 @@ class SandboxDockerManager:
         if build:
             cmd.append("--build")
 
-        # Set environment for BuildKit (required for gVisor)
-        # COMPOSE_DOCKER_CLI_BUILD=1 makes docker-compose use docker CLI for builds
-        # This ensures docker login credentials are respected
-        # The host-network-builder is set as default via `docker buildx use` at daemon startup
+        # Use legacy builder (DOCKER_BUILDKIT=0) which works better with gVisor
         env = {
-            "DOCKER_BUILDKIT": "1",
-            "COMPOSE_DOCKER_CLI_BUILD": "1",
+            "DOCKER_BUILDKIT": "0",
         }
         
         if cwd:
@@ -2510,6 +2506,7 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
+        # Disable BuildKit and use legacy builder (simpler, works with gVisor)
         cmd = ["docker-compose", "-f", file, "build"]
         
         if no_cache:
@@ -2517,12 +2514,9 @@ class SandboxDockerManager:
         if pull:
             cmd.append("--pull")
         
-        # Set environment for BuildKit (required for gVisor)
-        # COMPOSE_DOCKER_CLI_BUILD=1 ensures credentials from docker login are used
-        # The host-network-builder is set as default via `docker buildx use` at daemon startup
+        # Use legacy builder which is simpler and works better with our setup
         env = {
-            "DOCKER_BUILDKIT": "1",
-            "COMPOSE_DOCKER_CLI_BUILD": "1",
+            "DOCKER_BUILDKIT": "0",
         }
         
         if cwd:

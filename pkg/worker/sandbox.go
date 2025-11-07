@@ -41,23 +41,9 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Create daemon config to enable BuildKit
-	daemonConfig := `{
-		"features": {
-			"buildkit": true
-		}
-	}`
-	
-	// Write daemon config
-	daemonConfigCmd := []string{"sh", "-c", "mkdir -p /etc/docker && cat > /etc/docker/daemon.json << 'EOF'\n" + daemonConfig + "\nEOF"}
-	if pid, err := instance.SandboxProcessManager.Exec(daemonConfigCmd, "/", []string{}, false); err == nil {
-		time.Sleep(100 * time.Millisecond)
-		instance.SandboxProcessManager.Status(pid)
-	}
-
 	// Start dockerd as a background daemon
 	// For gVisor, we disable bridge networking because gVisor doesn't support veth interfaces
-	// Builds use --network=host via BuildKit config (required for gVisor)
+	// We use the legacy builder (DOCKER_BUILDKIT=0) which works well with gVisor
 	// This is safe because "host" refers to the sandbox's network, not the actual host
 	cmd := []string{
 		"dockerd",
@@ -65,7 +51,6 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		"--iptables=false",
 		"--ip6tables=false",
 		"--ip-forward=false",
-		"--config-file=/etc/docker/daemon.json",
 	}
 
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
@@ -181,86 +166,9 @@ func (s *Worker) waitForDockerDaemon(ctx context.Context, containerId string, in
 			// Check if daemon is ready
 			if s.isDockerDaemonReady(containerId, instance) {
 				log.Info().Str("container_id", containerId).Msg("docker daemon is ready")
-				
-				// Create buildx builder with host networking for gVisor compatibility
-				// This ensures docker-compose builds use host network by default
-				s.setupBuildxBuilder(ctx, containerId, instance)
-				
 				return
 			}
 		}
-	}
-}
-
-// setupBuildxBuilder creates a buildx builder with host networking configured
-func (s *Worker) setupBuildxBuilder(ctx context.Context, containerId string, instance *ContainerInstance) {
-	log.Info().Str("container_id", containerId).Msg("setting up buildx builder with host networking")
-	
-	// Create buildx builder using docker-container driver
-	// The network=host driver-opt makes the builder container use host networking
-	// We also pass buildkitd flags to configure the OCI worker to use host network for builds
-	createBuilderCmd := []string{
-		"docker", "buildx", "create",
-		"--name", "host-network-builder",
-		"--driver", "docker-container",
-		"--driver-opt", "network=host",
-		"--buildkitd-flags", "--oci-worker-net=host",
-		"--bootstrap",
-	}
-	
-	if pid, err := instance.SandboxProcessManager.Exec(createBuilderCmd, "/", []string{}, false); err == nil {
-		// Wait for builder to be created and bootstrapped
-		start := time.Now()
-		maxWait := 20 * time.Second
-		
-		for time.Since(start) < maxWait {
-			exitCode, _ := instance.SandboxProcessManager.Status(pid)
-			if exitCode >= 0 {
-				stdout, _ := instance.SandboxProcessManager.Stdout(pid)
-				stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-				
-				if exitCode == 0 {
-					log.Info().
-						Str("container_id", containerId).
-						Str("stdout", stdout).
-						Msg("buildx builder created and bootstrapped with host networking")
-					
-					// Set as default builder
-					useBuilderCmd := []string{"docker", "buildx", "use", "host-network-builder"}
-					if upid, uerr := instance.SandboxProcessManager.Exec(useBuilderCmd, "/", []string{}, false); uerr == nil {
-						time.Sleep(500 * time.Millisecond)
-						instance.SandboxProcessManager.Status(upid)
-						log.Info().Str("container_id", containerId).Msg("set host-network-builder as default")
-					}
-					
-					// Verify builder exists
-					inspectCmd := []string{"docker", "buildx", "inspect", "host-network-builder"}
-					if ipid, ierr := instance.SandboxProcessManager.Exec(inspectCmd, "/", []string{}, false); ierr == nil {
-						time.Sleep(500 * time.Millisecond)
-						iexitCode, _ := instance.SandboxProcessManager.Status(ipid)
-						istdout, _ := instance.SandboxProcessManager.Stdout(ipid)
-						if iexitCode == 0 {
-							log.Info().
-								Str("container_id", containerId).
-								Str("inspect_output", istdout).
-								Msg("verified buildx builder exists")
-						}
-					}
-				} else {
-					log.Error().
-						Str("container_id", containerId).
-						Str("stdout", stdout).
-						Str("stderr", stderr).
-						Int("exit_code", exitCode).
-						Msg("buildx builder creation failed")
-				}
-				return
-			}
-			time.Sleep(500 * time.Millisecond)
-		}
-		log.Warn().Str("container_id", containerId).Msg("buildx builder creation timeout")
-	} else {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to execute buildx create command")
 	}
 }
 
