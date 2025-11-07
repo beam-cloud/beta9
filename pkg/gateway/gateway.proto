@@ -445,6 +445,7 @@ message GetOrCreateStubRequest {
   Schema inputs = 35;
   Schema outputs = 36;
   bool tcp = 37;
+  bool docker_enabled = 38;
 }
 
 message GetOrCreateStubResponse {

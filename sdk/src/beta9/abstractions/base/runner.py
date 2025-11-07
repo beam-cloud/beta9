@@ -161,13 +161,10 @@ class RunnerAbstraction(BaseAbstraction):
             ttl=task_policy.ttl,
         )
         self.checkpoint_enabled = checkpoint_enabled
+        self.docker_enabled = docker_enabled
         self.extra: dict = {}
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
-
-        # Pass docker_enabled to backend via extra field
-        if docker_enabled:
-            self.extra["docker_enabled"] = True
 
         if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
             self.gpu_count = 1
@@ -522,6 +519,7 @@ class RunnerAbstraction(BaseAbstraction):
                 else None,
                 inputs=inputs,
                 outputs=outputs,
+                docker_enabled=self.docker_enabled,
                 tcp=self.tcp,
             )
 

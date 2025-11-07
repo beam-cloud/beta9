@@ -2435,6 +2435,7 @@ type GetOrCreateStubRequest struct {
 	Inputs             *Schema        `protobuf:"bytes,35,opt,name=inputs,proto3" json:"inputs,omitempty"`
 	Outputs            *Schema        `protobuf:"bytes,36,opt,name=outputs,proto3" json:"outputs,omitempty"`
 	Tcp                bool           `protobuf:"varint,37,opt,name=tcp,proto3" json:"tcp,omitempty"`
+	DockerEnabled      bool           `protobuf:"varint,38,opt,name=docker_enabled,json=dockerEnabled,proto3" json:"docker_enabled,omitempty"`
 }
 
 func (x *GetOrCreateStubRequest) Reset() {
@@ -2717,6 +2718,13 @@ func (x *GetOrCreateStubRequest) GetOutputs() *Schema {
 func (x *GetOrCreateStubRequest) GetTcp() bool {
 	if x != nil {
 		return x.Tcp
+	}
+	return false
+}
+
+func (x *GetOrCreateStubRequest) GetDockerEnabled() bool {
+	if x != nil {
+		return x.DockerEnabled
 	}
 	return false
 }
