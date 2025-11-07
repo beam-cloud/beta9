@@ -89,8 +89,28 @@ class Sandbox(Pod):
             Whether to sync the local directory to the sandbox filesystem on creation. Default is False.
         docker_enabled (bool):
             Enable Docker-in-Docker support inside the sandbox. When enabled with gVisor runtime,
-            grants elevated capabilities required to run Docker. Only works with gVisor runtime.
-            Default is False. SECURITY NOTE: This grants significant capabilities within your sandbox.
+            grants elevated capabilities required to run Docker and automatically starts the Docker daemon.
+            
+            IMPORTANT: You must install Docker in your image first using `Image().with_docker()`.
+            
+            Only works with gVisor runtime. Default is False.
+            
+            SECURITY NOTE: This grants significant capabilities within your sandbox.
+            
+            Example:
+                ```python
+                from beta9 import Image, Sandbox
+                
+                # Install Docker in the image
+                image = Image(python_version="python3.11").with_docker()
+                
+                # Enable Docker in the sandbox
+                sandbox = Sandbox(image=image, docker_enabled=True)
+                instance = sandbox.create()
+                
+                # Docker daemon will be automatically started
+                instance.docker.run("hello-world")
+                ```
 
     Example:
         ```python

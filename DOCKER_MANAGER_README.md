@@ -14,19 +14,29 @@ The Docker daemon takes a few seconds to start when a sandbox is created. The Do
 
 To use Docker within a sandbox, you must:
 
-1. Enable Docker support by setting `docker_enabled=True` when creating the Sandbox
-2. Ensure the sandbox has sufficient resources (CPU and memory) for your Docker workloads
+1. **Install Docker in your image** using `Image().with_docker()` - This installs Docker CE and Docker Compose
+2. **Enable Docker support** by setting `docker_enabled=True` when creating the Sandbox - This starts the Docker daemon automatically
+3. **Use gVisor runtime** - Docker-in-Docker only works with gVisor (the default runtime)
+4. Ensure the sandbox has sufficient resources (CPU and memory) for your Docker workloads
 
 ## Basic Usage
 
 ```python
-from beta9 import Sandbox
+from beta9 import Image, Sandbox
+
+# IMPORTANT: Install Docker in your image first!
+image = Image(python_version="python3.11").with_docker()
 
 # Create a sandbox with Docker enabled
-sandbox = Sandbox(docker_enabled=True, cpu=2.0, memory="4Gi")
+sandbox = Sandbox(
+    image=image,
+    docker_enabled=True,
+    cpu=2.0,
+    memory="4Gi"
+)
 instance = sandbox.create()
 
-# Use Docker operations
+# Docker daemon is automatically started and ready to use
 instance.docker.pull("nginx:latest")
 instance.docker.run("nginx:latest", detach=True, ports={"80": "8080"})
 instance.docker.ps()
@@ -46,8 +56,16 @@ By default, the Docker manager automatically waits for the Docker daemon to be r
 3. Once ready, all subsequent commands execute immediately
 
 ```python
-# No special code needed - just use Docker commands directly!
+from beta9 import Image, Sandbox
+
+# Install Docker in the image
+image = Image(python_version="python3.11").with_docker()
+
+# Create sandbox with Docker enabled
+sandbox = Sandbox(image=image, docker_enabled=True)
 instance = sandbox.create()
+
+# No special code needed - just use Docker commands directly!
 instance.docker.pull("nginx:latest")  # Automatically waits for daemon
 ```
 

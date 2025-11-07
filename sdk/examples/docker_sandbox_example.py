@@ -10,8 +10,12 @@ from beta9 import Sandbox, Image
 
 def example_basic_docker_usage():
     """Basic example of using Docker in a sandbox."""
+    # IMPORTANT: Install Docker in your image first!
+    image = Image(python_version="python3.11").with_docker()
+    
     # Create a sandbox with Docker enabled
     sandbox = Sandbox(
+        image=image,
         docker_enabled=True,
         cpu=2.0,
         memory="4Gi",
@@ -84,7 +88,11 @@ def example_basic_docker_usage():
 
 def example_docker_build():
     """Example of building a Docker image in a sandbox."""
+    # Install Docker in the image
+    image = Image(python_version="python3.11").with_docker()
+    
     sandbox = Sandbox(
+        image=image,
         docker_enabled=True,
         cpu=2.0,
         memory="4Gi",
@@ -181,7 +189,11 @@ if __name__ == '__main__':
 
 def example_docker_compose():
     """Example of using docker-compose in a sandbox."""
+    # Install Docker in the image
+    image = Image(python_version="python3.11").with_docker()
+    
     sandbox = Sandbox(
+        image=image,
         docker_enabled=True,
         cpu=2.0,
         memory="4Gi",
@@ -268,7 +280,11 @@ services:
 
 def example_docker_network_and_volumes():
     """Example of managing Docker networks and volumes."""
+    # Install Docker in the image
+    image = Image(python_version="python3.11").with_docker()
+    
     sandbox = Sandbox(
+        image=image,
         docker_enabled=True,
         cpu=2.0,
         memory="4Gi",
@@ -329,7 +345,11 @@ def example_docker_network_and_volumes():
 
 def example_docker_daemon_waiting():
     """Example of controlling Docker daemon waiting behavior."""
+    # Install Docker in the image
+    image = Image(python_version="python3.11").with_docker()
+    
     sandbox = Sandbox(
+        image=image,
         docker_enabled=True,
         cpu=2.0,
         memory="4Gi",

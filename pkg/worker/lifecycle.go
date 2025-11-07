@@ -1069,11 +1069,46 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	log.Info().Str("container_id", containerId).Msg("starting docker daemon in sandbox")
+	log.Info().Str("container_id", containerId).Msg("preparing to start docker daemon in sandbox")
 
-	// Start dockerd in background with host socket
-	// The daemon runs on unix:///var/run/docker.sock inside the sandbox
-	cmd := []string{"dockerd", "--host=unix:///var/run/docker.sock"}
+	// Check if dockerd is installed
+	checkDockerCmd := []string{"which", "dockerd"}
+	checkPid, err := instance.SandboxProcessManager.Exec(checkDockerCmd, "/", []string{}, false)
+	if err == nil {
+		time.Sleep(100 * time.Millisecond)
+		exitCode, _ := instance.SandboxProcessManager.Status(checkPid)
+		if exitCode != 0 {
+			log.Error().
+				Str("container_id", containerId).
+				Msg("dockerd not found - please install Docker in your image using Image().with_docker() or ensure docker-ce is installed")
+			return
+		}
+	}
+
+	// Ensure /var/run directory exists and has correct permissions
+	mkdirCmd := []string{"mkdir", "-p", "/var/run"}
+	_, err = instance.SandboxProcessManager.Exec(mkdirCmd, "/", []string{}, false)
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to create /var/run directory")
+		return
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// Start dockerd in background with gVisor-compatible settings
+	// Key flags:
+	// --host=unix:///var/run/docker.sock - listen on standard Docker socket
+	// --storage-driver=vfs - VFS storage driver works reliably in gVisor (overlay2 may have issues)
+	// --iptables=false - disable iptables management (gVisor handles networking)
+	// --ip-forward=false - disable IP forwarding (not needed in gVisor)
+	// --bridge=none - use host network, no bridge setup needed
+	cmd := []string{
+		"dockerd",
+		"--host=unix:///var/run/docker.sock",
+		"--storage-driver=vfs",
+		"--iptables=false",
+		"--ip-forward=false",
+		"--bridge=none",
+	}
 	env := []string{}
 	cwd := "/"
 
@@ -1086,26 +1121,48 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	log.Info().
 		Str("container_id", containerId).
 		Int("pid", pid).
-		Msg("docker daemon started successfully - docker commands are now available")
+		Msg("docker daemon process started - waiting for daemon to be ready")
 
 	// Wait for Docker to be ready (check that socket exists and daemon responds)
-	maxRetries := dockerDaemonStartupTimeout / time.Second
-	for i := 0; i < int(maxRetries); i++ {
+	maxRetries := int(dockerDaemonStartupTimeout / time.Second)
+	for i := 0; i < maxRetries; i++ {
 		time.Sleep(time.Second)
 
-		// Try running a simple docker command to verify daemon is ready
-		checkCmd := []string{"docker", "ps"}
-		checkPid, err := instance.SandboxProcessManager.Exec(checkCmd, "/", []string{}, false)
+		// First check if socket file exists
+		socketCheckCmd := []string{"test", "-S", "/var/run/docker.sock"}
+		socketCheckPid, err := instance.SandboxProcessManager.Exec(socketCheckCmd, "/", []string{}, false)
 		if err == nil {
 			time.Sleep(time.Millisecond * 100)
+			socketExitCode, _ := instance.SandboxProcessManager.Status(socketCheckPid)
+			if socketExitCode == 0 {
+				// Socket exists, now try running docker command
+				checkCmd := []string{"docker", "info"}
+				checkPid, err := instance.SandboxProcessManager.Exec(checkCmd, "/", []string{}, false)
+				if err == nil {
+					time.Sleep(time.Millisecond * 500)
 
-			exitCode, err := instance.SandboxProcessManager.Status(checkPid)
-			if err == nil && exitCode == 0 {
-				log.Info().Str("container_id", containerId).Msg("docker daemon is ready and accepting commands")
-				return
+					exitCode, err := instance.SandboxProcessManager.Status(checkPid)
+					if err == nil && exitCode == 0 {
+						log.Info().
+							Str("container_id", containerId).
+							Int("retry_count", i+1).
+							Msg("docker daemon is ready and accepting commands")
+						return
+					}
+				}
 			}
+		}
+
+		if i < maxRetries-1 {
+			log.Debug().
+				Str("container_id", containerId).
+				Int("attempt", i+1).
+				Int("max_retries", maxRetries).
+				Msg("waiting for docker daemon to be ready...")
 		}
 	}
 
-	log.Warn().Str("container_id", containerId).Msg("docker daemon started but may not be fully ready")
+	log.Warn().
+		Str("container_id", containerId).
+		Msg("docker daemon started but may not be fully ready - check that Docker is installed in your image with .with_docker()")
 }
