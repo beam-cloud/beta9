@@ -831,7 +831,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Add Docker capabilities if enabled for sandbox containers with gVisor
-	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == "gvisor" {
+	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
 		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
 			runscRuntime.AddDockerInDockerCapabilities(spec)
 			log.Info().Str("container_id", containerId).Msg("added docker capabilities for sandbox container")
@@ -1043,7 +1043,7 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 
 	// Get runtime for this container
 	instance, exists := s.containerInstances.Get(request.ContainerId)
-	if exists && instance.Runtime != nil && instance.Runtime.Name() == "gvisor" {
+	if exists && instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
 		resources = NewGvisorResources()
 	} else {
 		resources = NewRuncResources()

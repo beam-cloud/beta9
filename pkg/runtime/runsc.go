@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -31,7 +32,7 @@ func NewRunsc(cfg Config) (*Runsc, error) {
 	// Check if runsc is available
 	if _, err := exec.LookPath(cfg.RunscPath); err != nil {
 		return nil, ErrRuntimeNotAvailable{
-			Runtime: "gvisor",
+			Runtime: types.ContainerRuntimeGvisor.String(),
 			Reason:  "runsc binary not found in PATH",
 		}
 	}
@@ -42,7 +43,7 @@ func NewRunsc(cfg Config) (*Runsc, error) {
 }
 
 func (r *Runsc) Name() string {
-	return "gvisor"
+	return types.ContainerRuntimeGvisor.String()
 }
 
 func (r *Runsc) Capabilities() Capabilities {

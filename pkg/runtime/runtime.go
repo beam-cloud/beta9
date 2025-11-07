@@ -4,6 +4,7 @@ import (
 	"context"
 	"syscall"
 
+	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -105,9 +106,9 @@ type Config struct {
 // New creates a new Runtime based on the provided configuration
 func New(cfg Config) (Runtime, error) {
 	switch cfg.Type {
-	case "runc", "":
+	case types.ContainerRuntimeRunc.String(), "":
 		return NewRunc(cfg)
-	case "gvisor":
+	case types.ContainerRuntimeGvisor.String():
 		return NewRunsc(cfg)
 	default:
 		return nil, ErrUnsupportedRuntime{Runtime: cfg.Type}

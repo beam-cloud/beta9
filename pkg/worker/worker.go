@@ -215,9 +215,9 @@ func NewWorker() (*Worker, error) {
 		Msg("initializing container runtime for worker pool")
 
 	switch runtimeType {
-	case "runc":
+	case types.ContainerRuntimeRunc.String():
 		defaultRuntime = runcRuntime
-	case "gvisor":
+	case types.ContainerRuntimeGvisor.String():
 		// Get gVisor configuration from pool config
 		gvisorRoot := poolConfig.ContainerRuntimeConfig.GVisorRoot
 		if gvisorRoot == "" {
@@ -230,7 +230,7 @@ func NewWorker() (*Worker, error) {
 		}
 
 		gvisorRuntime, err = runtime.New(runtime.Config{
-			Type:          "gvisor",
+			Type:          types.ContainerRuntimeGvisor.String(),
 			RunscPath:     "runsc",
 			RunscRoot:     gvisorRoot,
 			RunscPlatform: gvisorPlatform,

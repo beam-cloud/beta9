@@ -558,7 +558,7 @@ func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerReque
 			continue
 		}
 
-		if request.DockerEnabled && worker.Runtime != "gvisor" {
+		if request.DockerEnabled && worker.Runtime != types.ContainerRuntimeGvisor.String() {
 			continue
 		}
 
