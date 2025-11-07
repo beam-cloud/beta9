@@ -426,6 +426,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPoolConfig.Priority,
+		Runtime:       wpc.workerPoolConfig.ContainerRuntime,
 		BuildVersion:  wpc.config.Worker.ImageTag,
 		Preemptable:   wpc.workerPoolConfig.Preemptable,
 	}, nil

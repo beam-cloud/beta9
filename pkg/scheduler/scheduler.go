@@ -563,6 +563,15 @@ func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerReque
 			continue
 		}
 
+		// If Docker-in-Docker is enabled, only allow workers with gVisor runtime
+		if request.DockerEnabled && worker.Runtime != "gvisor" {
+			log.Debug().
+				Str("worker_id", worker.Id).
+				Str("runtime", worker.Runtime).
+				Msg("skipping worker - docker_enabled requires gvisor runtime")
+			continue
+		}
+
 		filteredWorkers = append(filteredWorkers, worker)
 	}
 
