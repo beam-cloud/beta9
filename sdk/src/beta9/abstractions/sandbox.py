@@ -1947,6 +1947,7 @@ class SandboxDockerManager:
             # Simple build
             process = instance.docker.build("my-app:v1")
             process.wait()
+            print(process.stdout.read())  # Build output
 
             # Build with custom Dockerfile and build args
             process = instance.docker.build(
@@ -1974,6 +1975,10 @@ class SandboxDockerManager:
 
         if quiet:
             cmd.append("--quiet")
+        else:
+            # Use plain progress output (not fancy TTY progress bars)
+            # This ensures output is captured in logs
+            cmd.append("--progress=plain")
 
         cmd.append(context)
 
@@ -2388,6 +2393,7 @@ class SandboxDockerManager:
             # Pull an image
             process = instance.docker.pull("nginx:latest")
             process.wait()
+            print(process.stdout.read())  # Progress output
 
             # Pull quietly
             process = instance.docker.pull("postgres:15", quiet=True)
@@ -2400,6 +2406,10 @@ class SandboxDockerManager:
 
         if quiet:
             cmd.append("-q")
+        else:
+            # Use plain progress output (not fancy TTY progress bars)
+            # This ensures output is captured in logs
+            cmd.append("--progress=plain")
 
         cmd.append(image)
 
