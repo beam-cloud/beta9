@@ -899,7 +899,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		// Setup OOM watcher based on runtime type
 		var oomWatcher runtime.OOMWatcher
-		
+
 		if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
 			// For gVisor, use memory usage monitoring since cgroup files aren't accessible
 			var memoryLimit uint64
@@ -909,7 +909,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				// Fallback to request memory if spec doesn't have it
 				memoryLimit = uint64(request.Memory * 1024 * 1024)
 			}
-			
+
 			oomWatcher = runtime.NewGvisorOOMWatcher(ctx, pid, memoryLimit)
 		} else {
 			// For runc and other runtimes, use cgroup-based OOM detection
@@ -920,7 +920,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				oomWatcher = runtime.NewCgroupOOMWatcher(ctx, cgroupPath)
 			}
 		}
-		
+
 		if oomWatcher != nil {
 			containerInstance.OOMWatcher = oomWatcher
 			s.containerInstances.Set(containerId, containerInstance)
@@ -933,7 +933,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				// Push OOM event to event repository for monitoring/notifications
 				go s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
 			})
-			
+
 			if err != nil {
 				log.Warn().Str("container_id", containerId).Err(err).Msg("OOM watcher failed to start")
 			}
@@ -1117,9 +1117,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	time.Sleep(100 * time.Millisecond)
 
 	// Setup cgroup devices for Docker in gVisor
-	// This follows the official gVisor documentation for Docker-in-Docker:
-	// https://gvisor.dev/docs/user_guide/tutorials/docker/
-	log.Info().Str("container_id", containerId).Msg("setting up cgroup devices for docker (gVisor official method)")
+	log.Info().Str("container_id", containerId).Msg("setting up cgroup devices for docker")
 
 	cgroupSetupScript := `
 set -e
@@ -1163,9 +1161,6 @@ echo "Devices cgroup mounted successfully"
 	env := []string{}
 	cwd := "/"
 
-	// IMPORTANT: Start dockerd in background mode (last parameter = true)
-	// This prevents dockerd from blocking goproc, which would cause the container to hang
-	// when dockerd exits, rather than letting it run as a background daemon
 	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, true)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
