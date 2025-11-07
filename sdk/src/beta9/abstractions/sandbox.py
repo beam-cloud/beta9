@@ -1802,9 +1802,44 @@ class DockerResult:
         return self._success
     
     def logs(self):
-        """Stream logs line by line."""
-        for line in self.process.stdout:
-            yield line
+        """
+        Stream logs line by line from both stdout and stderr.
+        Docker commands often output to stderr (e.g., build progress).
+        """
+        import threading
+        from queue import Queue, Empty
+        
+        q = Queue()
+        finished = threading.Event()
+        
+        def read_stream(stream, prefix=""):
+            try:
+                for line in stream:
+                    q.put((prefix, line))
+            except Exception as e:
+                # Stream closed or error reading
+                pass
+        
+        # Read both stdout and stderr concurrently
+        stdout_thread = threading.Thread(target=read_stream, args=(self.process.stdout, ""))
+        stderr_thread = threading.Thread(target=read_stream, args=(self.process.stderr, ""))
+        
+        stdout_thread.daemon = True
+        stderr_thread.daemon = True
+        
+        stdout_thread.start()
+        stderr_thread.start()
+        
+        # Yield lines as they arrive
+        threads_alive = True
+        while threads_alive or not q.empty():
+            try:
+                prefix, line = q.get(timeout=0.1)
+                yield line
+            except Empty:
+                # Check if threads are still alive
+                threads_alive = stdout_thread.is_alive() or stderr_thread.is_alive()
+                continue
     
     @property
     def output(self) -> str:

@@ -9,6 +9,8 @@ The Docker manager now returns DockerResult objects that provide:
 """
 
 from beta9 import Image, Sandbox
+import tempfile
+import os
 
 
 def example_docker_basics():
@@ -61,21 +63,23 @@ def example_docker_build():
         docker_enabled=True,
     ).create()
     
-    # Create a simple Dockerfile
-    sandbox.files.write(
-        "/app/Dockerfile",
-        """FROM python:3.11-slim
+    # Create a Dockerfile locally and upload it
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dockerfile_path = os.path.join(tmpdir, "Dockerfile")
+        with open(dockerfile_path, "w") as f:
+            f.write("""FROM python:3.11-slim
 WORKDIR /app
-RUN echo "Installing dependencies..." && pip install flask
-COPY . /app
+RUN echo "Installing dependencies..." && pip install --no-cache-dir flask
 CMD ["python", "-c", "print('Hello from Docker!')"]
-"""
-    )
+""")
+        
+        # Upload Dockerfile to sandbox
+        sandbox.fs.upload_file(dockerfile_path, "/workspace/Dockerfile")
     
     # Build the image with streaming logs
     print("Building image (streaming logs):")
     print("=" * 50)
-    result = sandbox.docker.build(tag="myapp:v1", context="/app")
+    result = sandbox.docker.build(tag="myapp:v1", context="/workspace")
     for line in result.logs():
         print(f"  {line.strip()}")
     print("=" * 50)
@@ -100,10 +104,11 @@ def example_docker_compose():
         docker_enabled=True,
     ).create()
     
-    # Create docker-compose.yml
-    sandbox.files.write(
-        "/app/docker-compose.yml",
-        """version: '3'
+    # Create docker-compose.yml locally and upload
+    with tempfile.TemporaryDirectory() as tmpdir:
+        compose_path = os.path.join(tmpdir, "docker-compose.yml")
+        with open(compose_path, "w") as f:
+            f.write("""version: '3'
 services:
   web:
     image: nginx:alpine
@@ -111,8 +116,8 @@ services:
       - "8080:80"
   redis:
     image: redis:alpine
-"""
-    )
+""")
+        sandbox.fs.upload_file(compose_path, "/workspace/docker-compose.yml")
     
     # Pull images first
     print("Pulling images...")
@@ -123,19 +128,19 @@ services:
     
     # Start services
     print("\nStarting compose services...")
-    result = sandbox.docker.compose_up("/app/docker-compose.yml")
+    result = sandbox.docker.compose_up("/workspace/docker-compose.yml")
     for line in result.logs():
         if "Started" in line or "Creating" in line:
             print(f"  {line.strip()}")
     
     # List services
     print("\nRunning services:")
-    services = sandbox.docker.compose_ps("/app/docker-compose.yml")
+    services = sandbox.docker.compose_ps("/workspace/docker-compose.yml")
     print(services)
     
     # Stop services
     print("\nStopping services...")
-    sandbox.docker.compose_down("/app/docker-compose.yml", volumes=True)
+    sandbox.docker.compose_down("/workspace/docker-compose.yml", volumes=True)
     
     sandbox.terminate()
     print("✓ Compose example complete")
@@ -181,29 +186,30 @@ def example_streaming_vs_blocking():
         docker_enabled=True,
     ).create()
     
-    # Create Dockerfile
-    sandbox.files.write(
-        "/app/Dockerfile",
-        """FROM alpine
+    # Create Dockerfile locally and upload
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dockerfile_path = os.path.join(tmpdir, "Dockerfile")
+        with open(dockerfile_path, "w") as f:
+            f.write("""FROM alpine
 RUN echo "Step 1: Setting up..."
 RUN sleep 1 && echo "Step 2: Installing packages..."
 RUN sleep 1 && echo "Step 3: Configuring..."
 RUN sleep 1 && echo "Step 4: Done!"
-"""
-    )
+""")
+        sandbox.fs.upload_file(dockerfile_path, "/workspace/Dockerfile")
     
     print("Method 1: Streaming logs (see progress in real-time)")
     print("=" * 50)
-    result = sandbox.docker.build(tag="streaming:v1", context="/app")
+    result = sandbox.docker.build(tag="streaming:v1", context="/workspace")
     for line in result.logs():
-        if "Step" in line:
+        if "Step" in line or "RUN" in line or "#" in line:
             print(f"  {line.strip()}")
     print("=" * 50)
-    print(f"✓ Build complete\n")
+    print(f"✓ Build {'succeeded' if result.success else 'failed'}\n")
     
     print("Method 2: Blocking wait (no output until done)")
     print("=" * 50)
-    result = sandbox.docker.build(tag="blocking:v1", context="/app")
+    result = sandbox.docker.build(tag="blocking:v1", context="/workspace")
     result.wait()  # Blocks until complete
     print("✓ Build complete (waited for completion)")
     print(f"Success: {result.success}")

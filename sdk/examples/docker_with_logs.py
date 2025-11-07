@@ -3,6 +3,8 @@ Example demonstrating Docker operations with log streaming.
 """
 
 from beta9 import Image, Sandbox
+import tempfile
+import os
 
 
 def example_build_with_logs():
@@ -14,24 +16,26 @@ def example_build_with_logs():
         docker_enabled=True,
     ).create()
     
-    # Create a Dockerfile
-    sandbox.files.write(
-        "/app/Dockerfile",
-        """FROM python:3.11-slim
+    # Create a Dockerfile locally and upload it
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dockerfile_path = os.path.join(tmpdir, "Dockerfile")
+        with open(dockerfile_path, "w") as f:
+            f.write("""FROM python:3.11-slim
 RUN echo "Installing dependencies..."
-RUN pip install flask
+RUN pip install --no-cache-dir flask
 RUN echo "Build complete!"
 CMD ["python", "-c", "print('Hello from Docker!')"]
-"""
-    )
+""")
+        sandbox.fs.upload_file(dockerfile_path, "/workspace/Dockerfile")
     
     print("Building image with streaming logs:")
     print("=" * 50)
     
     # Build and stream logs in real-time
-    result = sandbox.docker.build(tag="myapp:v1", context="/app")
+    result = sandbox.docker.build(tag="myapp:v1", context="/workspace")
     for line in result.logs():
-        print(f"  {line.strip()}")
+        if line.strip():  # Skip empty lines
+            print(f"  {line.strip()}")
     
     print("=" * 50)
     print(f"Build {'succeeded' if result.success else 'failed'}!")
@@ -138,22 +142,24 @@ def example_build_failure_handling():
         docker_enabled=True,
     ).create()
     
-    # Create a Dockerfile that will fail
-    sandbox.files.write(
-        "/app/Dockerfile",
-        """FROM python:3.11-slim
+    # Create a Dockerfile that will fail locally and upload
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dockerfile_path = os.path.join(tmpdir, "Dockerfile")
+        with open(dockerfile_path, "w") as f:
+            f.write("""FROM python:3.11-slim
 RUN pip install nonexistent-package-12345
-"""
-    )
+""")
+        sandbox.fs.upload_file(dockerfile_path, "/workspace/Dockerfile")
     
     print("Attempting build that will fail:")
     print("=" * 50)
     
-    result = sandbox.docker.build(tag="myapp:bad", context="/app")
+    result = sandbox.docker.build(tag="myapp:bad", context="/workspace")
     
     # Stream logs even on failure
     for line in result.logs():
-        print(f"  {line.strip()}")
+        if line.strip():  # Skip empty lines
+            print(f"  {line.strip()}")
     
     print("=" * 50)
     
@@ -179,18 +185,19 @@ def example_multiple_operations():
     result.wait()
     print(f"   ✓ Pull {'succeeded' if result.success else 'failed'}")
     
-    # Create Dockerfile
-    sandbox.files.write(
-        "/app/Dockerfile",
-        """FROM python:3.11-slim
-RUN pip install requests
+    # Create Dockerfile locally and upload
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dockerfile_path = os.path.join(tmpdir, "Dockerfile")
+        with open(dockerfile_path, "w") as f:
+            f.write("""FROM python:3.11-slim
+RUN pip install --no-cache-dir requests
 CMD ["python", "-c", "import requests; print('Requests version:', requests.__version__)"]
-"""
-    )
+""")
+        sandbox.fs.upload_file(dockerfile_path, "/workspace/Dockerfile")
     
     # Build image
     print("\n2. Building custom image...")
-    result = sandbox.docker.build(tag="myapp:latest", context="/app")
+    result = sandbox.docker.build(tag="myapp:latest", context="/workspace")
     result.wait()
     print(f"   ✓ Build {'succeeded' if result.success else 'failed'}")
     
