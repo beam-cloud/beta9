@@ -119,7 +119,7 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 			log.Info().
 				Str("container_id", containerId).
 				Dur("wait_time", time.Since(start)).
-				Msg("goproc is ready")
+				Msg("process manager is ready")
 			return true
 		}
 
@@ -134,7 +134,7 @@ func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, 
 
 	log.Error().
 		Str("container_id", containerId).
-		Msg("goproc did not become ready within timeout")
+		Msg("process manager did not become ready within timeout")
 
 	return false
 }
