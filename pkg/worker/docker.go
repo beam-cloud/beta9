@@ -47,9 +47,10 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	}
 
 	// Start dockerd as a background daemon
+	// Note: We keep bridge enabled (default) for networking during builds
+	// We disable iptables since gVisor doesn't support them
 	cmd := []string{
 		"dockerd",
-		"--bridge=none",
 		"--iptables=false",
 		"--ip6tables=false",
 	}
