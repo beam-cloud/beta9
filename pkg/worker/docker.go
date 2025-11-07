@@ -27,7 +27,6 @@ const (
 )
 
 // startDockerDaemon starts the Docker daemon inside a sandbox container
-// Assumes goproc is already ready (waited for during container initialization)
 func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, instance *ContainerInstance) {
 	if instance.SandboxProcessManager == nil {
 		log.Error().Str("container_id", containerId).Msg("sandbox process manager not available")

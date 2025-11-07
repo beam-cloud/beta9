@@ -813,6 +813,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
+		instance.GoprocReady = false
 		s.containerInstances.Set(containerId, instance)
 
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
@@ -828,10 +829,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				"nodev",
 			},
 		})
-
-		// Wait for goproc to be ready before proceeding
-		// This happens ONCE at container startup, not on every exec call
-		containerInstance.GoprocReady = false
 	}
 
 	// Add Docker capabilities if enabled for sandbox containers with gVisor
@@ -890,28 +887,25 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 
-		// For sandboxes, wait for goproc to be ready before allowing exec calls
-		if request.Stub.Type.Kind() != types.StubTypeSandbox {
-			return
-		}
+		// For sandboxes, wait for process manager to be ready before allowing exec calls
+		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+			instance, exists := s.containerInstances.Get(containerId)
+			if exists && instance.SandboxProcessManager != nil {
 
-		instance, exists := s.containerInstances.Get(containerId)
-		if !exists || instance.SandboxProcessManager == nil {
-			return
-		}
+				// Wait for process manager to be ready - this blocks until ready or timeout
+				if s.waitForGoprocReady(ctx, containerId, instance) {
+					instance.GoprocReady = true
+					s.containerInstances.Set(containerId, instance)
 
-		// Wait for goproc to be ready - this blocks until ready or timeout
-		if !s.waitForGoprocReady(ctx, containerId, instance) {
-			log.Error().Str("container_id", containerId).Msg("failed to initialize goproc - sandbox may not be functional")
-			return
-		}
+					// Now that process manager is ready, start Docker daemon if enabled
+					if request.DockerEnabled {
+						go s.startDockerDaemon(ctx, containerId, instance)
+					}
 
-		instance.GoprocReady = true
-		s.containerInstances.Set(containerId, instance)
-
-		// Now that goproc is ready, start Docker daemon if enabled
-		if request.DockerEnabled {
-			go s.startDockerDaemon(ctx, containerId, instance)
+				} else {
+					log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
+				}
+			}
 		}
 	}()
 
@@ -1060,4 +1054,3 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 		Memory: resources.GetMemory(request),
 	}, nil
 }
-
