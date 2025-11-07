@@ -571,6 +571,8 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 		}, nil
 	}
 
+	log.Debug().Str("container_id", in.ContainerId).Int("pid", pid).Strs("cmd", cmd).Msg("sandbox process started")
+
 	return &pb.ContainerSandboxExecResponse{
 		Ok:  true,
 		Pid: int32(pid),
@@ -617,11 +619,14 @@ func (s *ContainerRuntimeServer) ContainerSandboxStdout(ctx context.Context, in 
 
 	stdout, err := instance.SandboxProcessManager.Stdout(int(in.Pid))
 	if err != nil {
+		log.Error().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Err(err).Msg("failed to get stdout")
 		return &pb.ContainerSandboxStdoutResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
 	}
+
+	log.Debug().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Int("stdout_len", len(stdout)).Msg("read stdout")
 
 	return &pb.ContainerSandboxStdoutResponse{
 		Ok:     true,
@@ -640,11 +645,14 @@ func (s *ContainerRuntimeServer) ContainerSandboxStderr(ctx context.Context, in 
 
 	stderr, err := instance.SandboxProcessManager.Stderr(int(in.Pid))
 	if err != nil {
+		log.Error().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Err(err).Msg("failed to get stderr")
 		return &pb.ContainerSandboxStderrResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
 		}, nil
 	}
+
+	log.Debug().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Int("stderr_len", len(stderr)).Msg("read stderr")
 
 	return &pb.ContainerSandboxStderrResponse{
 		Ok:     true,

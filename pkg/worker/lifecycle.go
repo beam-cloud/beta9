@@ -1196,6 +1196,7 @@ echo "Devices cgroup mounted successfully"
 		socketCheckCmd := []string{"test", "-S", "/var/run/docker.sock"}
 		socketCheckPid, err := instance.SandboxProcessManager.Exec(socketCheckCmd, "/", []string{}, false)
 		if err != nil {
+			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to execute socket check")
 			time.Sleep(time.Second)
 			continue
 		}
