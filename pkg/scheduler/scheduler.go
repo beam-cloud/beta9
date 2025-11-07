@@ -469,7 +469,7 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 
 func filterControllersByFlags(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
 	filteredControllers := []WorkerPoolController{}
-	
+
 	for _, controller := range controllers {
 		if !request.Preemptable && controller.IsPreemptable() {
 			continue
@@ -480,12 +480,7 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 			continue
 		}
 
-		// If Docker-in-Docker is enabled, only allow pools with gVisor runtime
 		if request.DockerEnabled && controller.ContainerRuntime() != "gvisor" {
-			log.Debug().
-				Str("pool", controller.Name()).
-				Str("runtime", controller.ContainerRuntime()).
-				Msg("skipping pool - docker_enabled requires gvisor runtime")
 			continue
 		}
 
@@ -563,12 +558,7 @@ func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerReque
 			continue
 		}
 
-		// If Docker-in-Docker is enabled, only allow workers with gVisor runtime
 		if request.DockerEnabled && worker.Runtime != "gvisor" {
-			log.Debug().
-				Str("worker_id", worker.Id).
-				Str("runtime", worker.Runtime).
-				Msg("skipping worker - docker_enabled requires gvisor runtime")
 			continue
 		}
 

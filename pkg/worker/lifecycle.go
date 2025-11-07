@@ -834,7 +834,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == "gvisor" {
 		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
 			runscRuntime.AddDockerInDockerCapabilities(spec)
-			log.Info().Str("container_id", containerId).Msg("added docker-in-docker capabilities for sandbox container with gvisor")
+			log.Info().Str("container_id", containerId).Msg("added docker capabilities for sandbox container")
 		}
 	}
 
