@@ -1743,8 +1743,13 @@ class SandboxDockerManager:
     the sandbox environment. It uses sandbox.process.exec under the hood to execute
     Docker commands.
 
+    The manager automatically waits for the Docker daemon to be ready before executing
+    commands, as the daemon may take a few seconds to start when the sandbox is created.
+
     Attributes:
         sandbox_instance (SandboxInstance): The sandbox instance this manager operates on.
+        auto_wait_for_daemon (bool): Whether to automatically wait for Docker daemon readiness.
+        daemon_timeout (int): Maximum seconds to wait for Docker daemon to be ready.
 
     Example:
         ```python
@@ -1752,7 +1757,7 @@ class SandboxDockerManager:
         sandbox = Sandbox(docker_enabled=True)
         instance = sandbox.create()
 
-        # Build a Docker image
+        # Build a Docker image (automatically waits for Docker daemon)
         instance.docker.build("my-app", dockerfile="./Dockerfile")
 
         # Run a container
@@ -1766,8 +1771,133 @@ class SandboxDockerManager:
         ```
     """
 
-    def __init__(self, sandbox_instance: SandboxInstance):
+    def __init__(
+        self,
+        sandbox_instance: SandboxInstance,
+        auto_wait_for_daemon: bool = True,
+        daemon_timeout: int = 30,
+    ):
         self.sandbox_instance: SandboxInstance = sandbox_instance
+        self.auto_wait_for_daemon = auto_wait_for_daemon
+        self.daemon_timeout = daemon_timeout
+        self._docker_ready = False
+        self._docker_ready_checked = False
+
+    def _wait_for_docker_daemon(self, timeout: int = 30) -> bool:
+        """
+        Wait for the Docker daemon to be ready.
+
+        The Docker daemon may take a few seconds to start when the sandbox is created.
+        This method polls the daemon until it responds or the timeout is reached.
+
+        Parameters:
+            timeout (int): Maximum seconds to wait for the daemon. Default is 30.
+
+        Returns:
+            bool: True if the daemon is ready, False if timeout was reached.
+
+        Raises:
+            SandboxProcessError: If there's an error checking daemon status.
+        """
+        start_time = time.time()
+        terminal.detail(f"Waiting for Docker daemon to be ready (timeout: {timeout}s)...")
+
+        while time.time() - start_time < timeout:
+            try:
+                # Try to ping the Docker daemon
+                process = self.sandbox_instance.process.exec("docker", "info")
+                exit_code = process.wait()
+
+                if exit_code == 0:
+                    elapsed = time.time() - start_time
+                    terminal.detail(f"Docker daemon is ready (took {elapsed:.1f}s)")
+                    self._docker_ready = True
+                    self._docker_ready_checked = True
+                    return True
+
+            except Exception as e:
+                # Ignore errors and continue polling
+                pass
+
+            # Wait a bit before retrying
+            time.sleep(0.5)
+
+        # Timeout reached
+        terminal.warn(
+            f"Docker daemon did not become ready within {timeout}s. "
+            "Docker commands may fail. You can try waiting longer or check the daemon status manually."
+        )
+        self._docker_ready_checked = True
+        return False
+
+    def _ensure_docker_ready(self):
+        """
+        Ensure the Docker daemon is ready before executing commands.
+
+        This method is called automatically before each Docker command if
+        auto_wait_for_daemon is True. It only waits once per sandbox instance.
+        """
+        if not self.auto_wait_for_daemon:
+            return
+
+        if self._docker_ready_checked:
+            return
+
+        self._wait_for_docker_daemon(timeout=self.daemon_timeout)
+
+    def is_daemon_ready(self) -> bool:
+        """
+        Check if the Docker daemon is ready without waiting.
+
+        Returns:
+            bool: True if the daemon is ready, False otherwise.
+
+        Example:
+            ```python
+            if instance.docker.is_daemon_ready():
+                print("Docker is ready!")
+            else:
+                print("Docker daemon is not ready yet")
+            ```
+        """
+        if self._docker_ready:
+            return True
+
+        try:
+            process = self.sandbox_instance.process.exec("docker", "info")
+            exit_code = process.wait()
+            self._docker_ready = exit_code == 0
+            self._docker_ready_checked = True
+            return self._docker_ready
+        except Exception:
+            return False
+
+    def wait_for_daemon(self, timeout: Optional[int] = None) -> bool:
+        """
+        Manually wait for the Docker daemon to be ready.
+
+        Use this method if you disabled auto_wait_for_daemon or want to wait again
+        with a different timeout.
+
+        Parameters:
+            timeout (Optional[int]): Maximum seconds to wait. Uses daemon_timeout if not specified.
+
+        Returns:
+            bool: True if the daemon is ready, False if timeout was reached.
+
+        Example:
+            ```python
+            # Manually wait for Docker daemon
+            if instance.docker.wait_for_daemon(timeout=60):
+                print("Docker is ready!")
+            else:
+                print("Docker daemon did not start in time")
+            ```
+        """
+        if timeout is None:
+            timeout = self.daemon_timeout
+
+        return self._wait_for_docker_daemon(timeout=timeout)
 
     def build(
         self,
@@ -1808,6 +1938,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "build", "-t", tag]
 
         if dockerfile:
@@ -1881,6 +2013,8 @@ class SandboxDockerManager:
             )
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "run"]
 
         if detach:
@@ -1953,6 +2087,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "ps"]
 
         if all:
@@ -1989,6 +2125,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "stop"]
 
         if timeout is not None:
@@ -2015,6 +2153,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "start", container]
         return self.sandbox_instance.process.exec(*cmd)
 
@@ -2036,6 +2176,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "restart"]
 
         if timeout is not None:
@@ -2073,6 +2215,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "rm"]
 
         if force:
@@ -2121,6 +2265,8 @@ class SandboxDockerManager:
                 print(line)
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "logs"]
 
         if follow:
@@ -2177,6 +2323,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "exec"]
 
         if detach:
@@ -2226,6 +2374,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "pull"]
 
         if quiet:
@@ -2264,6 +2414,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "images"]
 
         if all:
@@ -2300,6 +2452,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "rmi"]
 
         if force:
@@ -2343,6 +2497,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker-compose", "-f", file, "up"]
 
         if detach:
@@ -2384,6 +2540,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker-compose", "-f", file, "down"]
 
         if volumes:
@@ -2426,6 +2584,8 @@ class SandboxDockerManager:
                 print(line)
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker-compose", "-f", file, "logs"]
 
         if follow:
@@ -2462,6 +2622,8 @@ class SandboxDockerManager:
             print(process.stdout.read())
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker-compose", "-f", file, "ps"]
 
         if quiet:
@@ -2495,6 +2657,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "network", "create"]
 
         if driver:
@@ -2521,6 +2685,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "network", "rm", name]
         return self.sandbox_instance.process.exec(*cmd)
 
@@ -2542,6 +2708,8 @@ class SandboxDockerManager:
             print(process.stdout.read())
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "network", "ls"]
 
         if quiet:
@@ -2566,6 +2734,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "volume", "create", name]
         return self.sandbox_instance.process.exec(*cmd)
 
@@ -2587,6 +2757,8 @@ class SandboxDockerManager:
             process.wait()
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "volume", "rm"]
 
         if force:
@@ -2614,6 +2786,8 @@ class SandboxDockerManager:
             print(process.stdout.read())
             ```
         """
+        self._ensure_docker_ready()
+        
         cmd = ["docker", "volume", "ls"]
 
         if quiet:

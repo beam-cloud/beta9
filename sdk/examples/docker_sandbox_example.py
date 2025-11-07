@@ -21,8 +21,12 @@ def example_basic_docker_usage():
     instance = sandbox.create()
     
     try:
+        # Note: The Docker manager automatically waits for the Docker daemon to be ready
+        # before executing commands. This usually takes a few seconds after sandbox creation.
+        
         # Pull a Docker image
         print("Pulling nginx image...")
+        print("(Docker manager will wait for daemon to be ready if needed...)")
         process = instance.docker.pull("nginx:latest")
         process.wait()
         print("Image pulled successfully!")
@@ -323,6 +327,48 @@ def example_docker_network_and_volumes():
         instance.terminate()
 
 
+def example_docker_daemon_waiting():
+    """Example of controlling Docker daemon waiting behavior."""
+    sandbox = Sandbox(
+        docker_enabled=True,
+        cpu=2.0,
+        memory="4Gi",
+    )
+    
+    instance = sandbox.create()
+    
+    try:
+        # Example 1: Default behavior (auto-wait enabled)
+        print("Using default behavior (auto-wait for daemon)...")
+        print("The first Docker command will automatically wait for the daemon.")
+        process = instance.docker.ps()
+        process.wait()
+        print("✓ Docker daemon was ready!")
+        
+        # Example 2: Manually check daemon readiness
+        print("\nManually checking daemon readiness...")
+        if instance.docker.is_daemon_ready():
+            print("✓ Daemon is ready!")
+        else:
+            print("✗ Daemon is not ready yet")
+        
+        # Example 3: Manually wait with custom timeout
+        print("\nManually waiting for daemon with 60s timeout...")
+        if instance.docker.wait_for_daemon(timeout=60):
+            print("✓ Daemon became ready within timeout!")
+        else:
+            print("✗ Daemon did not become ready within timeout")
+        
+        # Example 4: Access the configuration
+        print(f"\nDocker manager configuration:")
+        print(f"  - auto_wait_for_daemon: {instance.docker.auto_wait_for_daemon}")
+        print(f"  - daemon_timeout: {instance.docker.daemon_timeout}s")
+        print(f"  - daemon ready: {instance.docker._docker_ready}")
+        
+    finally:
+        instance.terminate()
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Beta9 Sandbox Docker Manager Examples")
@@ -345,6 +391,10 @@ if __name__ == "__main__":
     # Example 4: Networks and Volumes
     # print("\n\n### Example 4: Networks and Volumes ###\n")
     # example_docker_network_and_volumes()
+    
+    # Example 5: Docker Daemon Waiting
+    # print("\n\n### Example 5: Docker Daemon Waiting ###\n")
+    # example_docker_daemon_waiting()
     
     print("\n\nTo run these examples, uncomment them in the __main__ block.")
     print("Make sure you have a Beta9 workspace configured!")

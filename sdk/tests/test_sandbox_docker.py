@@ -9,8 +9,17 @@ class TestSandboxDockerManager(TestCase):
         """Set up a mock sandbox instance for testing."""
         self.mock_sandbox_instance = MagicMock(spec=SandboxInstance)
         self.mock_sandbox_instance.process = MagicMock()
-        self.mock_sandbox_instance.process.exec = MagicMock(return_value=MagicMock())
-        self.docker_manager = SandboxDockerManager(self.mock_sandbox_instance)
+        
+        # Mock the exec method to return a process with wait() that returns 0
+        mock_process = MagicMock()
+        mock_process.wait = MagicMock(return_value=0)
+        self.mock_sandbox_instance.process.exec = MagicMock(return_value=mock_process)
+        
+        # Create Docker manager with auto_wait disabled for faster tests
+        self.docker_manager = SandboxDockerManager(
+            self.mock_sandbox_instance,
+            auto_wait_for_daemon=False
+        )
 
     def test_docker_manager_init(self):
         """Test Docker manager initialization."""
@@ -278,6 +287,101 @@ class TestSandboxDockerManager(TestCase):
         self.assertIn("-q", call_args)
 
 
+class TestDockerDaemonWaiting(TestCase):
+    def setUp(self):
+        """Set up mock sandbox instance for daemon waiting tests."""
+        self.mock_sandbox_instance = MagicMock(spec=SandboxInstance)
+        self.mock_sandbox_instance.process = MagicMock()
+
+    def test_wait_for_daemon_success(self):
+        """Test successful daemon wait."""
+        # Mock docker info to succeed immediately
+        mock_process = MagicMock()
+        mock_process.wait = MagicMock(return_value=0)
+        self.mock_sandbox_instance.process.exec = MagicMock(return_value=mock_process)
+        
+        docker_manager = SandboxDockerManager(
+            self.mock_sandbox_instance,
+            auto_wait_for_daemon=False,
+            daemon_timeout=5
+        )
+        
+        result = docker_manager.wait_for_daemon(timeout=5)
+        self.assertTrue(result)
+        self.assertTrue(docker_manager._docker_ready)
+
+    def test_wait_for_daemon_timeout(self):
+        """Test daemon wait timeout."""
+        # Mock docker info to always fail
+        mock_process = MagicMock()
+        mock_process.wait = MagicMock(return_value=1)
+        self.mock_sandbox_instance.process.exec = MagicMock(return_value=mock_process)
+        
+        docker_manager = SandboxDockerManager(
+            self.mock_sandbox_instance,
+            auto_wait_for_daemon=False,
+            daemon_timeout=1
+        )
+        
+        result = docker_manager.wait_for_daemon(timeout=1)
+        self.assertFalse(result)
+        self.assertTrue(docker_manager._docker_ready_checked)
+
+    def test_is_daemon_ready(self):
+        """Test is_daemon_ready check."""
+        # Mock docker info to succeed
+        mock_process = MagicMock()
+        mock_process.wait = MagicMock(return_value=0)
+        self.mock_sandbox_instance.process.exec = MagicMock(return_value=mock_process)
+        
+        docker_manager = SandboxDockerManager(
+            self.mock_sandbox_instance,
+            auto_wait_for_daemon=False
+        )
+        
+        result = docker_manager.is_daemon_ready()
+        self.assertTrue(result)
+        self.assertTrue(docker_manager._docker_ready)
+
+    def test_auto_wait_for_daemon(self):
+        """Test automatic daemon waiting on first command."""
+        # Mock docker info to succeed
+        mock_process = MagicMock()
+        mock_process.wait = MagicMock(return_value=0)
+        self.mock_sandbox_instance.process.exec = MagicMock(return_value=mock_process)
+        
+        docker_manager = SandboxDockerManager(
+            self.mock_sandbox_instance,
+            auto_wait_for_daemon=True,
+            daemon_timeout=5
+        )
+        
+        # First command should trigger daemon wait
+        self.assertFalse(docker_manager._docker_ready_checked)
+        docker_manager.ps()
+        
+        # Should have checked daemon readiness
+        self.assertTrue(docker_manager._docker_ready_checked)
+        
+        # docker info should have been called at least once for the wait
+        self.mock_sandbox_instance.process.exec.assert_any_call("docker", "info")
+
+    def test_no_auto_wait_when_disabled(self):
+        """Test that auto-wait doesn't happen when disabled."""
+        mock_process = MagicMock()
+        mock_process.wait = MagicMock(return_value=0)
+        self.mock_sandbox_instance.process.exec = MagicMock(return_value=mock_process)
+        
+        docker_manager = SandboxDockerManager(
+            self.mock_sandbox_instance,
+            auto_wait_for_daemon=False
+        )
+        
+        # Should not check daemon when disabled
+        docker_manager.ps()
+        self.assertFalse(docker_manager._docker_ready_checked)
+
+
 class TestSandboxWithDocker(TestCase):
     def test_sandbox_docker_enabled_parameter(self):
         """Test that Sandbox accepts docker_enabled parameter."""
@@ -300,3 +404,7 @@ class TestSandboxWithDocker(TestCase):
         # Check that the docker manager is initialized
         self.assertIsInstance(instance.docker, SandboxDockerManager)
         self.assertEqual(instance.docker.sandbox_instance, instance)
+        
+        # Check that auto_wait is enabled by default
+        self.assertTrue(instance.docker.auto_wait_for_daemon)
+        self.assertEqual(instance.docker.daemon_timeout, 30)

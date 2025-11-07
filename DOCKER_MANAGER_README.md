@@ -6,6 +6,10 @@ This document describes the Docker manager functionality for Beta9 Sandboxes, wh
 
 The Docker manager provides a high-level Python interface for executing Docker commands within a Beta9 Sandbox. It uses `sandbox.process.exec` under the hood to run Docker CLI commands, offering a clean and intuitive API for Docker operations.
 
+### Automatic Docker Daemon Waiting
+
+The Docker daemon takes a few seconds to start when a sandbox is created. The Docker manager **automatically waits** for the daemon to be ready before executing commands, ensuring your Docker operations succeed without manual waiting or error handling.
+
 ## Prerequisites
 
 To use Docker within a sandbox, you must:
@@ -31,9 +35,79 @@ instance.docker.ps()
 instance.terminate()
 ```
 
+## Docker Daemon Management
+
+### Automatic Waiting (Default Behavior)
+
+By default, the Docker manager automatically waits for the Docker daemon to be ready before executing any command. The first time you run a Docker command, the manager will:
+
+1. Poll the Docker daemon with `docker info`
+2. Wait up to 30 seconds (configurable) for the daemon to respond
+3. Once ready, all subsequent commands execute immediately
+
+```python
+# No special code needed - just use Docker commands directly!
+instance = sandbox.create()
+instance.docker.pull("nginx:latest")  # Automatically waits for daemon
+```
+
+### Manual Daemon Control
+
+If you need more control over daemon readiness:
+
+```python
+# Check if daemon is ready (non-blocking)
+if instance.docker.is_daemon_ready():
+    print("Ready to use Docker!")
+
+# Manually wait with custom timeout
+if instance.docker.wait_for_daemon(timeout=60):
+    print("Daemon ready!")
+else:
+    print("Daemon failed to start in time")
+
+# Disable auto-wait (for advanced use cases)
+# Note: You'll need to manually check readiness
+instance.docker.auto_wait_for_daemon = False
+```
+
+### Configuration
+
+You can configure daemon waiting behavior when the Docker manager is created:
+
+- `auto_wait_for_daemon` (bool, default=True): Enable automatic waiting
+- `daemon_timeout` (int, default=30): Maximum seconds to wait for daemon
+
 ## API Reference
 
 The `SandboxDockerManager` is accessible via `instance.docker` and provides the following methods:
+
+### Daemon Management
+
+#### `is_daemon_ready()`
+Check if the Docker daemon is ready without waiting.
+
+**Returns:** bool - True if daemon is ready
+
+**Example:**
+```python
+if instance.docker.is_daemon_ready():
+    print("Docker is ready!")
+```
+
+#### `wait_for_daemon(timeout=None)`
+Manually wait for the Docker daemon to be ready.
+
+**Parameters:**
+- `timeout` (int, optional): Maximum seconds to wait
+
+**Returns:** bool - True if daemon became ready
+
+**Example:**
+```python
+if instance.docker.wait_for_daemon(timeout=60):
+    print("Docker is ready!")
+```
 
 ### Container Management
 
@@ -274,15 +348,17 @@ See `sdk/examples/docker_sandbox_example.py` for complete working examples inclu
 
 ## Important Notes
 
-1. **Resource Requirements**: Docker-in-Docker operations require more resources. Allocate sufficient CPU and memory to your sandbox.
+1. **Automatic Daemon Waiting**: The Docker manager automatically waits for the Docker daemon to be ready (up to 30 seconds by default) before executing your first Docker command. No manual waiting required!
 
-2. **Security**: The `docker_enabled=True` flag grants elevated capabilities to run Docker within the sandbox. Only enable this for trusted workloads.
+2. **Resource Requirements**: Docker-in-Docker operations require more resources. Allocate sufficient CPU and memory to your sandbox.
 
-3. **Process Management**: All Docker commands return a `SandboxProcess` object. Remember to call `.wait()` to wait for command completion.
+3. **Security**: The `docker_enabled=True` flag grants elevated capabilities to run Docker within the sandbox. Only enable this for trusted workloads.
 
-4. **Output Handling**: Use `process.stdout.read()` and `process.stderr.read()` to access command output.
+4. **Process Management**: All Docker commands return a `SandboxProcess` object. Remember to call `.wait()` to wait for command completion.
 
-5. **Cleanup**: Always terminate your sandbox when done to free up resources:
+5. **Output Handling**: Use `process.stdout.read()` and `process.stderr.read()` to access command output.
+
+6. **Cleanup**: Always terminate your sandbox when done to free up resources:
    ```python
    instance.terminate()
    ```
