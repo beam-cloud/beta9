@@ -1,17 +1,18 @@
 """
-Example demonstrating the simplified Docker manager in sandboxes.
+Example demonstrating the Docker manager in sandboxes with streaming logs.
 
-The new Docker manager provides a cleaner API where:
-- Query commands return data directly (strings/lists)
-- Action commands return bool or raise exceptions
-- Container operations are intuitive and Pythonic
+The Docker manager now returns DockerResult objects that provide:
+- Streaming logs via .logs()
+- Success checking via .success property
+- Output access via .output property
+- Automatic waiting when accessing properties
 """
 
 from beta9 import Image, Sandbox
 
 
 def example_docker_basics():
-    """Basic Docker operations with the simplified API."""
+    """Basic Docker operations with the new API."""
     sandbox = Sandbox(
         cpu=2,
         memory="4Gi",
@@ -19,33 +20,28 @@ def example_docker_basics():
         docker_enabled=True,
     ).create()
 
-    # Pull an image
+    # Pull an image - stream the progress
     print("Pulling nginx...")
-    sandbox.docker.pull("nginx:alpine")
+    result = sandbox.docker.pull("nginx:alpine")
+    for line in result.logs():
+        if "Pull" in line or "Download" in line:
+            print(f"  {line.strip()}")
+    print(f"✓ Pull {'succeeded' if result.success else 'failed'}")
     
-    # Run a detached container - returns container ID
-    print("Starting nginx container...")
-    container_id = sandbox.docker.run(
+    # Run a detached container - get container ID
+    print("\nStarting nginx container...")
+    result = sandbox.docker.run(
         "nginx:alpine",
         name="web-server",
         ports={"80": "8080"},
         detach=True,
     )
-    print(f"Container ID: {container_id}")
+    container_id = result.output  # Auto-waits and returns ID
+    print(f"Container ID: {container_id[:12]}...")
     
-    # List containers - returns formatted output
+    # List containers
     print("\nRunning containers:")
     print(sandbox.docker.ps())
-    
-    # Get container IDs only - returns list
-    container_ids = sandbox.docker.ps(quiet=True)
-    print(f"\nContainer IDs: {container_ids}")
-    
-    # View logs
-    print("\nContainer logs:")
-    logs = sandbox.docker.logs("web-server", tail=10)
-    logs.wait()
-    print(logs.stdout.read())
     
     # Stop and remove
     print("\nCleaning up...")
@@ -57,7 +53,7 @@ def example_docker_basics():
 
 
 def example_docker_build():
-    """Build and run a custom image."""
+    """Build and run a custom image with streaming logs."""
     sandbox = Sandbox(
         cpu=2,
         memory="4Gi",
@@ -69,30 +65,27 @@ def example_docker_build():
     sandbox.files.write(
         "/app/Dockerfile",
         """FROM python:3.11-slim
-RUN pip install flask
+WORKDIR /app
+RUN echo "Installing dependencies..." && pip install flask
+COPY . /app
 CMD ["python", "-c", "print('Hello from Docker!')"]
 """
     )
     
-    # Build the image
-    print("Building image...")
-    build_process = sandbox.docker.build(
-        tag="myapp:v1",
-        context="/app",
-    )
-    build_process.wait()
-    print("Build output:")
-    print(build_process.stdout.read())
+    # Build the image with streaming logs
+    print("Building image (streaming logs):")
+    print("=" * 50)
+    result = sandbox.docker.build(tag="myapp:v1", context="/app")
+    for line in result.logs():
+        print(f"  {line.strip()}")
+    print("=" * 50)
+    print(f"✓ Build {'succeeded' if result.success else 'failed'}")
     
-    # Run the built image
-    print("\nRunning built image...")
-    run_process = sandbox.docker.run("myapp:v1")
-    run_process.wait()
-    print(run_process.stdout.read())
-    
-    # List images - returns formatted output
-    print("\nAvailable images:")
-    print(sandbox.docker.images())
+    if result.success:
+        # Run the built image
+        print("\nRunning built image:")
+        run_result = sandbox.docker.run("myapp:v1")
+        print(f"Output: {run_result.stdout.strip()}")
     
     sandbox.terminate()
     print("✓ Build example complete")
@@ -121,19 +114,24 @@ services:
 """
     )
     
+    # Pull images first
+    print("Pulling images...")
+    for image in ["nginx:alpine", "redis:alpine"]:
+        result = sandbox.docker.pull(image, quiet=True)
+        result.wait()
+        print(f"  ✓ {image}")
+    
     # Start services
-    print("Starting compose services...")
-    sandbox.docker.compose_up("/app/docker-compose.yml")
+    print("\nStarting compose services...")
+    result = sandbox.docker.compose_up("/app/docker-compose.yml")
+    for line in result.logs():
+        if "Started" in line or "Creating" in line:
+            print(f"  {line.strip()}")
     
     # List services
     print("\nRunning services:")
-    print(sandbox.docker.compose_ps("/app/docker-compose.yml"))
-    
-    # View logs
-    print("\nService logs:")
-    logs = sandbox.docker.compose_logs("/app/docker-compose.yml")
-    logs.wait()
-    print(logs.stdout.read())
+    services = sandbox.docker.compose_ps("/app/docker-compose.yml")
+    print(services)
     
     # Stop services
     print("\nStopping services...")
@@ -143,8 +141,10 @@ services:
     print("✓ Compose example complete")
 
 
-def example_docker_advanced():
-    """Advanced Docker operations."""
+def example_error_handling():
+    """Handle Docker errors gracefully."""
+    from beta9.exceptions import DockerCommandError
+    
     sandbox = Sandbox(
         cpu=2,
         memory="4Gi",
@@ -152,43 +152,64 @@ def example_docker_advanced():
         docker_enabled=True,
     ).create()
     
-    # Create custom network
-    print("Creating network...")
-    sandbox.docker.network_create("mynet", driver="bridge")
+    # Try to pull a non-existent image
+    print("Attempting to pull non-existent image...")
+    result = sandbox.docker.pull("nonexistent:image12345")
     
-    # Create volume
-    print("Creating volume...")
-    sandbox.docker.volume_create("mydata")
+    # Check result
+    if not result.success:
+        print(f"✓ Pull failed as expected")
+        print(f"Error: {result.stderr[:100]}...")
     
-    # Run container with network and volume
-    print("Running container with network and volume...")
-    container_id = sandbox.docker.run(
-        "alpine",
-        command=["sh", "-c", "echo 'data' > /data/file.txt && cat /data/file.txt"],
-        network="mynet",
-        volumes={"mydata": "/data"},
-        name="worker",
-    )
+    # Try to run a container that exits with error
+    print("\nRunning container that will fail...")
+    result = sandbox.docker.run("alpine", command=["sh", "-c", "exit 1"])
     
-    # Wait and show output
-    container_id_process = sandbox.sandbox_instance.process.get(int(container_id.split()[0])) if not isinstance(container_id, str) else None
-    
-    # List networks
-    print("\nNetworks:")
-    print(sandbox.docker.network_ls())
-    
-    # List volumes  
-    print("\nVolumes:")
-    print(sandbox.docker.volume_ls())
-    
-    # Cleanup
-    print("\nCleaning up...")
-    sandbox.docker.rm("worker", force=True)
-    sandbox.docker.volume_rm("mydata")
-    sandbox.docker.network_rm("mynet")
+    if not result.success:
+        print("✓ Container failed as expected")
     
     sandbox.terminate()
-    print("✓ Advanced example complete")
+    print("✓ Error handling example complete")
+
+
+def example_streaming_vs_blocking():
+    """Compare streaming logs vs blocking wait."""
+    sandbox = Sandbox(
+        cpu=2,
+        memory="4Gi",
+        image=Image.from_registry("ubuntu:22.04").with_docker(),
+        docker_enabled=True,
+    ).create()
+    
+    # Create Dockerfile
+    sandbox.files.write(
+        "/app/Dockerfile",
+        """FROM alpine
+RUN echo "Step 1: Setting up..."
+RUN sleep 1 && echo "Step 2: Installing packages..."
+RUN sleep 1 && echo "Step 3: Configuring..."
+RUN sleep 1 && echo "Step 4: Done!"
+"""
+    )
+    
+    print("Method 1: Streaming logs (see progress in real-time)")
+    print("=" * 50)
+    result = sandbox.docker.build(tag="streaming:v1", context="/app")
+    for line in result.logs():
+        if "Step" in line:
+            print(f"  {line.strip()}")
+    print("=" * 50)
+    print(f"✓ Build complete\n")
+    
+    print("Method 2: Blocking wait (no output until done)")
+    print("=" * 50)
+    result = sandbox.docker.build(tag="blocking:v1", context="/app")
+    result.wait()  # Blocks until complete
+    print("✓ Build complete (waited for completion)")
+    print(f"Success: {result.success}")
+    
+    sandbox.terminate()
+    print("\n✓ Comparison complete")
 
 
 if __name__ == "__main__":
@@ -206,9 +227,13 @@ if __name__ == "__main__":
     print("-" * 50)
     example_docker_compose()
     
-    print("\n4. Advanced Operations")
+    print("\n4. Error Handling")
     print("-" * 50)
-    example_docker_advanced()
+    example_error_handling()
+    
+    print("\n5. Streaming vs Blocking")
+    print("-" * 50)
+    example_streaming_vs_blocking()
     
     print("\n" + "=" * 50)
     print("All examples completed successfully! ✓")

@@ -1757,14 +1757,92 @@ class SandboxFileSystem:
 
 
 
+class DockerResult:
+    """
+    Result object for Docker operations that provides access to both output and logs.
+    
+    Attributes:
+        process: The underlying SandboxProcess for streaming logs
+        success: Whether the operation succeeded
+        output: The primary output (container ID, image ID, etc.)
+        
+    Example:
+        ```python
+        # Build with logs
+        result = sandbox.docker.build("myapp:v1", context=".")
+        for line in result.logs():
+            print(line)  # Stream build output
+        
+        # Or just wait for completion
+        result.wait()
+        print(f"Build {'succeeded' if result.success else 'failed'}")
+        
+        # Run container and get ID
+        result = sandbox.docker.run("nginx", detach=True)
+        result.wait()
+        print(f"Container ID: {result.output}")
+        ```
+    """
+    
+    def __init__(self, process: "SandboxProcess", extract_output: callable = None):
+        self.process = process
+        self._extract_output = extract_output
+        self._waited = False
+        self._output = None
+        self._success = None
+    
+    def wait(self) -> bool:
+        """Wait for operation to complete. Returns True if successful."""
+        if not self._waited:
+            exit_code = self.process.wait()
+            self._success = exit_code == 0
+            if self._success and self._extract_output:
+                self._output = self._extract_output(self.process)
+            self._waited = True
+        return self._success
+    
+    def logs(self):
+        """Stream logs line by line."""
+        for line in self.process.stdout:
+            yield line
+    
+    @property
+    def output(self) -> str:
+        """Get the primary output (auto-waits if needed)."""
+        if not self._waited:
+            self.wait()
+        return self._output or ""
+    
+    @property
+    def success(self) -> bool:
+        """Check if operation succeeded (auto-waits if needed)."""
+        if not self._waited:
+            self.wait()
+        return self._success
+    
+    @property
+    def stdout(self) -> str:
+        """Get all stdout (auto-waits if needed)."""
+        if not self._waited:
+            self.wait()
+        return self.process.stdout.read()
+    
+    @property
+    def stderr(self) -> str:
+        """Get all stderr (auto-waits if needed)."""
+        if not self._waited:
+            self.wait()
+        return self.process.stderr.read()
+
+
 class SandboxDockerManager:
     """
-    Simplified Docker manager for sandbox operations.
+    Docker manager for sandbox operations with streaming log support.
     
-    Provides a clean interface where:
-    - Query methods (ps, images, etc.) return parsed data
-    - Action methods (pull, push, etc.) return success or raise exceptions
-    - Container operations return container IDs when detached
+    Most operations return DockerResult objects that provide:
+    - Streaming logs via .logs()
+    - Automatic waiting via .wait()
+    - Access to output via .output property
     
     Example:
         ```python
@@ -1773,19 +1851,23 @@ class SandboxDockerManager:
             image=Image().with_docker()
         ).create()
         
-        # Pull and run
-        sandbox.docker.pull("nginx:latest")
-        container_id = sandbox.docker.run("nginx:latest", 
-                                         name="web", 
-                                         ports={"80": "8080"}, 
-                                         detach=True)
+        # Build with streaming logs
+        result = sandbox.docker.build("myapp:v1", context=".")
+        for line in result.logs():
+            print(line)  # See build progress
         
-        # Query
-        containers = sandbox.docker.ps()  # Returns list
-        images = sandbox.docker.images()   # Returns list
+        # Or just wait for completion
+        result = sandbox.docker.build("myapp:v1", context=".")
+        if result.wait():
+            print("Build succeeded!")
         
-        # Build
-        sandbox.docker.build("myapp:latest", context=".")
+        # Pull and see logs
+        result = sandbox.docker.pull("nginx:latest")
+        print(result.stdout)  # Auto-waits and returns output
+        
+        # Run container
+        result = sandbox.docker.run("nginx", name="web", detach=True)
+        container_id = result.output  # Auto-waits and returns container ID
         ```
     """
 
@@ -1821,7 +1903,7 @@ class SandboxDockerManager:
         return self.sandbox_instance.process.exec(*cmd)
     
     def _run(self, *cmd) -> str:
-        """Execute docker command and return output."""
+        """Execute docker command and return output (for simple operations)."""
         from beta9.exceptions import DockerCommandError
         
         p = self._exec(*cmd)
@@ -1832,6 +1914,11 @@ class SandboxDockerManager:
             raise DockerCommandError(" ".join(cmd), exit_code, stderr)
         
         return p.stdout.read().strip()
+    
+    def _result(self, *cmd, extract_output: callable = None) -> DockerResult:
+        """Execute docker command and return a DockerResult (for operations with logs)."""
+        process = self._exec(*cmd)
+        return DockerResult(process, extract_output=extract_output)
     
     # === Container Operations ===
     
@@ -1846,7 +1933,7 @@ class SandboxDockerManager:
         volumes: Optional[Dict[str, str]] = None,
         env: Optional[Dict[str, str]] = None,
         **kwargs
-    ) -> Union[str, "SandboxProcess"]:
+    ) -> DockerResult:
         """
         Run a Docker container.
         
@@ -1854,25 +1941,30 @@ class SandboxDockerManager:
             image: Docker image (e.g. "nginx:latest")
             command: Command to run in container
             name: Container name
-            detach: Run in background (returns container ID)
+            detach: Run in background
             remove: Auto-remove when stopped
             ports: Port mappings {"container_port": "host_port"}
             volumes: Volume mappings {"host_path": "container_path"}
             env: Environment variables
             
         Returns:
-            str: Container ID if detached
-            SandboxProcess: Process object if not detached
+            DockerResult: Result with container ID in .output property
             
         Example:
             ```python
-            # Run detached
-            cid = sandbox.docker.run("nginx:latest", name="web", ports={"80": "8080"}, detach=True)
+            # Run detached and get container ID
+            result = sandbox.docker.run("nginx:latest", name="web", ports={"80": "8080"}, detach=True)
+            container_id = result.output  # Auto-waits
             
-            # Run and wait
-            process = sandbox.docker.run("alpine", command="echo hello")
-            process.wait()
-            print(process.stdout.read())
+            # Run and stream logs
+            result = sandbox.docker.run("alpine", command=["echo", "hello"])
+            for line in result.logs():
+                print(line)
+            
+            # Run and check success
+            result = sandbox.docker.run("alpine", command=["sh", "-c", "exit 1"])
+            if not result.success:
+                print("Container failed")
             ```
         """
         cmd = ["docker", "run"]
@@ -1900,9 +1992,11 @@ class SandboxDockerManager:
             else:
                 cmd.extend(command)
         
-        if detach:
-            return self._run(*cmd)
-        return self._exec(*cmd)
+        # Extract container ID from output if detached
+        def extract_container_id(process):
+            return process.stdout.read().strip()
+        
+        return self._result(*cmd, extract_output=extract_container_id if detach else None)
     
     def ps(self, all: bool = False, quiet: bool = False) -> Union[List[str], str]:
         """
@@ -1968,18 +2062,35 @@ class SandboxDockerManager:
     
     # === Image Operations ===
     
-    def pull(self, image: str, quiet: bool = False) -> bool:
-        """Pull an image. Returns True on success, False if image not found or network error."""
-        from beta9.exceptions import DockerCommandError
-        try:
-            cmd = ["docker", "pull"]
-            if quiet:
-                cmd.append("-q")
-            cmd.append(image)
-            self._run(*cmd)
-            return True
-        except DockerCommandError:
-            return False
+    def pull(self, image: str, quiet: bool = False) -> DockerResult:
+        """
+        Pull an image.
+        
+        Args:
+            image: Image to pull (e.g. "nginx:latest")
+            quiet: Suppress verbose output
+            
+        Returns:
+            DockerResult: Result with streaming logs
+            
+        Example:
+            ```python
+            # Pull and see progress
+            result = sandbox.docker.pull("nginx:latest")
+            for line in result.logs():
+                print(line)  # See pull progress
+            
+            # Or just wait
+            result = sandbox.docker.pull("nginx:latest")
+            if result.success:
+                print("Pull succeeded!")
+            ```
+        """
+        cmd = ["docker", "pull"]
+        if quiet:
+            cmd.append("-q")
+        cmd.append(image)
+        return self._result(*cmd)
     
     def build(
         self,
@@ -1989,7 +2100,7 @@ class SandboxDockerManager:
         build_args: Optional[Dict[str, str]] = None,
         no_cache: bool = False,
         quiet: bool = False,
-    ) -> "SandboxProcess":
+    ) -> DockerResult:
         """
         Build a Docker image.
         
@@ -2002,7 +2113,22 @@ class SandboxDockerManager:
             quiet: Suppress output
             
         Returns:
-            SandboxProcess: Build process
+            DockerResult: Result with streaming build logs
+            
+        Example:
+            ```python
+            # Build and stream logs
+            result = sandbox.docker.build("myapp:v1", context=".")
+            for line in result.logs():
+                print(line)  # See build progress
+            
+            # Or wait for completion
+            result = sandbox.docker.build("myapp:v1", context=".")
+            if result.success:
+                print("Build succeeded!")
+            else:
+                print(f"Build failed: {result.stderr}")
+            ```
         """
         cmd = ["docker", "build", "-t", tag]
         if dockerfile:
@@ -2015,7 +2141,7 @@ class SandboxDockerManager:
         if quiet:
             cmd.append("--quiet")
         cmd.append(context)
-        return self._exec(*cmd)
+        return self._result(*cmd)
     
     def images(self, quiet: bool = False) -> Union[List[str], str]:
         """
