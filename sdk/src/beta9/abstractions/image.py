@@ -799,11 +799,19 @@ class Image(BaseAbstraction):
 
     def with_docker(self) -> "Image":
         """
-        Install Docker in the image to enable Docker-in-Docker functionality.
+        Install Docker and Docker Compose in the image to enable Docker-in-Docker functionality.
 
-        This method adds commands to install Docker CE during the image build process.
-        When used with a Sandbox and gVisor runtime, the Docker daemon will be
-        automatically started inside the sandbox, allowing you to run Docker commands.
+        This method adds commands to install Docker CE and Docker Compose during the image
+        build process. When used with a Sandbox that has docker_enabled=True and gVisor runtime,
+        the Docker daemon will be automatically started inside the sandbox, allowing you to run
+        Docker and Docker Compose commands.
+
+        Installed components:
+        - Docker Engine (docker)
+        - Docker CLI (docker)
+        - Docker Compose plugin (docker compose)
+        - Docker Compose standalone (docker-compose)
+        - Docker Buildx plugin (docker buildx)
 
         Note: This feature only works with gVisor as the container runtime for
         enhanced security isolation.
@@ -817,16 +825,20 @@ class Image(BaseAbstraction):
 
             image = Image(python_version="python3.11").with_docker()
 
-            sandbox = Sandbox(image=image)
+            sandbox = Sandbox(image=image, docker_enabled=True)
             instance = sandbox.create()
 
             # Docker is now available!
-            response = instance.process.run("docker run hello-world")
-            print(response.stdout)
+            response = instance.process.run_code("import subprocess; subprocess.run(['docker', 'run', 'hello-world'])")
+            print(response.result)
+
+            # Docker Compose is also available (both styles work)
+            instance.process.run_code("import subprocess; subprocess.run(['docker', 'compose', 'version'])")
+            instance.process.run_code("import subprocess; subprocess.run(['docker-compose', 'version'])")
             ```
         """
-        # Add Docker installation commands
-        # These commands install Docker CE from the official Docker repository
+        # Add Docker and Docker Compose installation commands
+        # These commands install Docker CE and Compose from the official Docker repository
         docker_install_commands = [
             # Install prerequisites
             "apt-get update && apt-get install -y ca-certificates curl gnupg lsb-release",
@@ -834,8 +846,12 @@ class Image(BaseAbstraction):
             "mkdir -p /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
             # Set up the Docker repository
             'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null',
-            # Install Docker Engine
+            # Install Docker Engine, CLI, Containerd, Buildx, and Compose plugin
             "apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
+            # Create symlink for standalone docker-compose command (backward compatibility)
+            "ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose",
+            # Verify installations
+            "docker --version && docker compose version && docker-compose version",
             # Clean up to reduce image size
             "apt-get clean && rm -rf /var/lib/apt/lists/*",
         ]
