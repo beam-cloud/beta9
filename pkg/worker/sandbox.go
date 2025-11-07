@@ -41,6 +41,28 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
+	// Create daemon config to enable host network for BuildKit
+	// This ensures docker-compose builds use host network (required for gVisor)
+	daemonConfig := `{
+		"builder": {
+			"gc": {
+				"enabled": true,
+				"defaultKeepStorage": "10GB"
+			}
+		},
+		"features": {
+			"buildkit": true
+		}
+	}`
+	
+	// Write daemon config
+	configPath := "/etc/docker/daemon.json"
+	configCmd := []string{"sh", "-c", fmt.Sprintf("mkdir -p /etc/docker && echo '%s' > %s", daemonConfig, configPath)}
+	if pid, err := instance.SandboxProcessManager.Exec(configCmd, "/", []string{}, false); err == nil {
+		time.Sleep(100 * time.Millisecond)
+		instance.SandboxProcessManager.Status(pid)
+	}
+
 	// Start dockerd as a background daemon
 	// For gVisor, we disable bridge networking because gVisor doesn't support veth interfaces
 	// Builds must use --network=host (SDK handles this automatically)

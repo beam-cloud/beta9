@@ -2384,9 +2384,17 @@ class SandboxDockerManager:
         if build:
             cmd.append("--build")
 
+        # Set environment for BuildKit (required for gVisor)
+        # COMPOSE_DOCKER_CLI_BUILD=1 makes docker-compose use docker CLI for builds
+        # This ensures docker login credentials are respected
+        env = {
+            "DOCKER_BUILDKIT": "1",
+            "COMPOSE_DOCKER_CLI_BUILD": "1",
+        }
+        
         if cwd:
-            return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
-        return self._exec(*cmd)
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
+        return self.sandbox_instance.process.exec(*cmd, env=env)
 
     def compose_down(
         self,
@@ -2502,14 +2510,22 @@ class SandboxDockerManager:
             self._auto_login()
 
         cmd = ["docker-compose", "-f", file, "build"]
+        
         if no_cache:
             cmd.append("--no-cache")
         if pull:
             cmd.append("--pull")
-
+        
+        # Set environment for BuildKit (required for gVisor)
+        # COMPOSE_DOCKER_CLI_BUILD=1 ensures credentials from docker login are used
+        env = {
+            "DOCKER_BUILDKIT": "1",
+            "COMPOSE_DOCKER_CLI_BUILD": "1",
+        }
+        
         if cwd:
-            return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
-        return self._exec(*cmd)
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
+        return self.sandbox_instance.process.exec(*cmd, env=env)
 
     # === Networks ===
 
