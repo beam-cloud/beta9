@@ -137,6 +137,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         authorized: bool = False,
         tcp: bool = False,
         block_network: bool = False,
+        allow_list: Optional[List[str]] = None,
     ) -> None:
         super().__init__(
             cpu=cpu,

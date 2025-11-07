@@ -228,6 +228,7 @@ type ContainerRequest struct {
 	ImageCredentials         string          `json:"image_credentials"`
 	BuildRegistryCredentials string          `json:"build_registry_credentials"`
 	BlockNetwork             bool            `json:"block_network"`
+	AllowList                []string        `json:"allow_list"`
 }
 
 func (c *ContainerRequest) RequiresGPU() bool {
@@ -303,6 +304,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		Checkpoint:               checkpoint,
 		BuildRegistryCredentials: c.BuildRegistryCredentials,
 		BlockNetwork:             c.BlockNetwork,
+		AllowList:                c.AllowList,
 	}
 }
 
@@ -354,6 +356,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Checkpoint:               checkpoint,
 		BuildRegistryCredentials: in.BuildRegistryCredentials,
 		BlockNetwork:             in.BlockNetwork,
+		AllowList:                in.AllowList,
 	}
 }
 

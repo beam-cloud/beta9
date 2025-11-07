@@ -54,7 +54,7 @@ from ..type import GpuType, GpuTypeAlias
 
 
 class Sandbox(Pod):
-    """
+    f"""
     A sandboxed container for running Python code or arbitrary processes.
     You can use this to create isolated environments where you can execute code,
     manage files, and run processes.
@@ -91,6 +91,9 @@ class Sandbox(Pod):
             Whether to block all outbound network access from the sandbox. When enabled, the sandbox cannot
             make outbound connections to external services, but inbound connections to exposed ports are still
             allowed. Default is False.
+        allow_list (Optional[List[str]]):
+            Allows outbound network access from the sandbox to specified ips. Blocks all other outbound network access.
+            TODO: Review allow_list docstring
 
     Example:
         ```python
@@ -131,6 +134,7 @@ class Sandbox(Pod):
         env: Optional[Dict[str, str]] = {},
         sync_local_dir: bool = False,
         block_network: bool = False,
+        allow_list: Optional[List[str]],
     ):
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
@@ -148,6 +152,7 @@ class Sandbox(Pod):
             secrets=secrets,
             env=env,
             block_network=block_network,
+            allow_list=allow_list,
         )
 
     def debug(self):
