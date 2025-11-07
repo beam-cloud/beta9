@@ -9,18 +9,30 @@ import (
 )
 
 const (
-	dockerDaemonStartupTimeout = 30 * time.Second
+	// Timing strategy for Docker daemon startup:
+	// 1. Wait up to 10s for goproc to be ready (usually takes 100-500ms)
+	// 2. Setup cgroups (fast, ~100ms)
+	// 3. Start dockerd in background
+	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
+	goprocReadyTimeout            = 10 * time.Second
+	dockerDaemonStartupTimeout    = 30 * time.Second
 	dockerDaemonReadyPollInterval = 1 * time.Second
 )
 
 // startDockerDaemon starts the Docker daemon inside a gVisor sandbox container
 // This function handles:
-// 1. Setting up cgroups (required for gVisor Docker-in-Docker)
-// 2. Starting dockerd in background mode
-// 3. Waiting for daemon to be ready
+// 1. Waiting for goproc to be ready
+// 2. Setting up cgroups (required for gVisor Docker-in-Docker)
+// 3. Starting dockerd in background mode
+// 4. Waiting for daemon to be ready
 func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, instance *ContainerInstance) {
 	if instance.SandboxProcessManager == nil {
 		log.Error().Str("container_id", containerId).Msg("sandbox process manager not available")
+		return
+	}
+
+	// Wait for goproc to be ready before executing commands
+	if !s.waitForGoproc(ctx, containerId, instance) {
 		return
 	}
 
@@ -76,6 +88,55 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	}
 
 	return nil
+}
+
+// waitForGoproc waits for the goproc process manager to be ready to accept commands
+// Uses exponential backoff: 100ms -> 150ms -> 225ms -> ... up to 2s max
+// This is necessary because goproc starts asynchronously after container creation
+func (s *Worker) waitForGoproc(ctx context.Context, containerId string, instance *ContainerInstance) bool {
+	start := time.Now()
+	backoff := 100 * time.Millisecond
+	maxBackoff := 2 * time.Second
+
+	for time.Since(start) < goprocReadyTimeout {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+		}
+
+		// Try a simple echo command to check if goproc is ready
+		pid, err := instance.SandboxProcessManager.Exec(
+			[]string{"echo", "ready"},
+			"/",
+			[]string{},
+			false,
+		)
+
+		if err == nil {
+			// Successfully executed - goproc is ready
+			// Wait briefly for echo to complete, then verify it succeeded
+			time.Sleep(100 * time.Millisecond)
+			instance.SandboxProcessManager.Status(pid)
+			log.Info().
+				Str("container_id", containerId).
+				Dur("wait_time", time.Since(start)).
+				Msg("goproc is ready")
+			return true
+		}
+
+		// Not ready yet - wait with exponential backoff
+		time.Sleep(backoff)
+		backoff = time.Duration(float64(backoff) * 1.5)
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+
+	log.Error().
+		Str("container_id", containerId).
+		Msg("goproc did not become ready within timeout")
+	return false
 }
 
 // waitForDockerDaemon waits for the Docker daemon to be ready to accept commands
