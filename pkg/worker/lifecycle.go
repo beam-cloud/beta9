@@ -835,6 +835,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
 			runscRuntime.AddDockerInDockerCapabilities(spec)
 			log.Info().Str("container_id", containerId).Msg("added docker capabilities for sandbox container")
+
+			// Add cgroup mounts for Docker-in-Docker
+			// Docker requires access to cgroup filesystem to manage container resources
+			// We mount /sys/fs/cgroup from the host into the container
+			// This allows Docker to use cgroup controllers for resource management of nested containers
+			spec.Mounts = append(spec.Mounts, specs.Mount{
+				Type:        "bind",
+				Source:      "/sys/fs/cgroup",
+				Destination: "/sys/fs/cgroup",
+				Options:     []string{"rbind", "rw"},
+			})
+			log.Info().Str("container_id", containerId).Msg("added cgroup bind mount for docker-in-docker")
 		}
 	}
 

@@ -78,14 +78,6 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 			// Clear devices list if no GPU - gVisor virtualizes /dev
 			spec.Linux.Devices = nil
 		}
-
-		// For Docker-in-Docker: remove device cgroup restrictions
-		// gVisor doesn't expose the devices cgroup controller, which causes
-		// "Devices cgroup isn't mounted" errors when dockerd starts
-		if spec.Linux.Resources != nil && spec.Linux.Resources.Devices != nil {
-			// Clear device cgroup rules - gVisor handles device access through its own mechanisms
-			spec.Linux.Resources.Devices = nil
-		}
 	}
 
 	return nil
