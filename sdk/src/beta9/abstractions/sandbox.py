@@ -2384,9 +2384,10 @@ class SandboxDockerManager:
         if build:
             cmd.append("--build")
 
-        # Use legacy builder (DOCKER_BUILDKIT=0) which works better with gVisor
+        # Disable BuildKit experimental features (Bake) for gVisor compatibility
         env = {
             "DOCKER_BUILDKIT": "0",
+            "COMPOSE_DOCKER_CLI_BUILD": "0",
         }
         
         if cwd:
@@ -2506,7 +2507,6 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Disable BuildKit and use legacy builder (simpler, works with gVisor)
         cmd = ["docker-compose", "-f", file, "build"]
         
         if no_cache:
@@ -2514,9 +2514,10 @@ class SandboxDockerManager:
         if pull:
             cmd.append("--pull")
         
-        # Use legacy builder which is simpler and works better with our setup
+        # Disable BuildKit and Bake for gVisor compatibility
         env = {
             "DOCKER_BUILDKIT": "0",
+            "COMPOSE_DOCKER_CLI_BUILD": "0",
         }
         
         if cwd:
