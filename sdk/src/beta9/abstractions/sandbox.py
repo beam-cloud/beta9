@@ -319,13 +319,14 @@ class SandboxInstance(BaseAbstraction):
     A sandbox instance that provides access to the sandbox internals.
 
     This class represents an active sandboxed container and provides methods for
-    process management, file system operations, preview URLs, and lifecycle
-    management.
+    process management, file system operations, Docker management, preview URLs,
+    and lifecycle management.
 
     Attributes:
         container_id (str): The unique ID of the created sandbox container.
         fs (SandboxFileSystem): File system interface for the sandbox.
         process (SandboxProcessManager): Process management interface for the sandbox.
+        docker (SandboxDockerManager): Docker management interface for the sandbox.
 
     Example:
         ```python
@@ -337,6 +338,11 @@ class SandboxInstance(BaseAbstraction):
 
         # Run processes
         result = instance.process.run_code("import os; print(os.getcwd())")
+
+        # Use Docker (requires docker_enabled=True)
+        sandbox_with_docker = Sandbox(docker_enabled=True)
+        instance = sandbox_with_docker.create()
+        instance.docker.run("nginx:latest", detach=True, ports={"80": "8080"})
 
         # Expose a port
         url = instance.expose_port(8000)
@@ -359,6 +365,7 @@ class SandboxInstance(BaseAbstraction):
         self.stub = PodServiceStub(self.channel)
         self.fs = SandboxFileSystem(self)
         self.process = SandboxProcessManager(self)
+        self.docker = SandboxDockerManager(self)
         self.terminated = False
         atexit.register(self._cleanup)
 
@@ -1730,22 +1737,886 @@ class SandboxFileSystem:
 
 class SandboxDockerManager:
     """
-    Manager for managing Docker inside a sandbox.
+    Manager for Docker operations inside a sandbox.
 
-    This class provides a high-level interface for managing Docker inside a sandbox.
+    This class provides a high-level interface for running Docker commands within
+    the sandbox environment. It uses sandbox.process.exec under the hood to execute
+    Docker commands.
 
     Attributes:
         sandbox_instance (SandboxInstance): The sandbox instance this manager operates on.
 
     Example:
         ```python
-        # Get the docker manager
-        dm = instance.docker
+        # Create a sandbox with Docker enabled
+        sandbox = Sandbox(docker_enabled=True)
+        instance = sandbox.create()
 
-        # Run a docker command
-        dm.run_command("docker ps")
+        # Build a Docker image
+        instance.docker.build("my-app", dockerfile="./Dockerfile")
+
+        # Run a container
+        result = instance.docker.run("nginx:latest", ports={"80": "8080"})
+
+        # List running containers
+        containers = instance.docker.ps()
+
+        # Use docker-compose
+        instance.docker.compose_up("./docker-compose.yml")
         ```
     """
 
-    def __init__(self, sandbox_instance: SandboxInstance) -> "SandboxProcess":
+    def __init__(self, sandbox_instance: SandboxInstance):
         self.sandbox_instance: SandboxInstance = sandbox_instance
+
+    def build(
+        self,
+        tag: str,
+        context: str = ".",
+        dockerfile: Optional[str] = None,
+        build_args: Optional[Dict[str, str]] = None,
+        no_cache: bool = False,
+        quiet: bool = False,
+    ) -> "SandboxProcess":
+        """
+        Build a Docker image from a Dockerfile.
+
+        Parameters:
+            tag (str): The tag to assign to the built image (e.g., "my-app:latest").
+            context (str): The build context path. Default is ".".
+            dockerfile (Optional[str]): Path to the Dockerfile. If not specified, Docker looks for "Dockerfile" in the context.
+            build_args (Optional[Dict[str, str]]): Build-time variables to pass to the build.
+            no_cache (bool): Do not use cache when building the image. Default is False.
+            quiet (bool): Suppress build output. Default is False.
+
+        Returns:
+            SandboxProcess: A process object representing the build operation.
+
+        Example:
+            ```python
+            # Simple build
+            process = instance.docker.build("my-app:v1")
+            process.wait()
+
+            # Build with custom Dockerfile and build args
+            process = instance.docker.build(
+                tag="my-app:v2",
+                context="./app",
+                dockerfile="./app/Dockerfile.prod",
+                build_args={"VERSION": "2.0", "ENV": "production"}
+            )
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "build", "-t", tag]
+
+        if dockerfile:
+            cmd.extend(["-f", dockerfile])
+
+        if build_args:
+            for key, value in build_args.items():
+                cmd.extend(["--build-arg", f"{key}={value}"])
+
+        if no_cache:
+            cmd.append("--no-cache")
+
+        if quiet:
+            cmd.append("--quiet")
+
+        cmd.append(context)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def run(
+        self,
+        image: str,
+        command: Optional[Union[str, List[str]]] = None,
+        detach: bool = False,
+        remove: bool = False,
+        name: Optional[str] = None,
+        ports: Optional[Dict[str, str]] = None,
+        volumes: Optional[Dict[str, str]] = None,
+        env: Optional[Dict[str, str]] = None,
+        network: Optional[str] = None,
+        extra_args: Optional[List[str]] = None,
+    ) -> "SandboxProcess":
+        """
+        Run a Docker container from an image.
+
+        Parameters:
+            image (str): The Docker image to run (e.g., "nginx:latest").
+            command (Optional[Union[str, List[str]]]): Command to run in the container.
+            detach (bool): Run container in background. Default is False.
+            remove (bool): Automatically remove the container when it exits. Default is False.
+            name (Optional[str]): Assign a name to the container.
+            ports (Optional[Dict[str, str]]): Port mappings in the format {"container_port": "host_port"}.
+            volumes (Optional[Dict[str, str]]): Volume mappings in the format {"host_path": "container_path"}.
+            env (Optional[Dict[str, str]]): Environment variables to set in the container.
+            network (Optional[str]): Network to connect the container to.
+            extra_args (Optional[List[str]]): Additional arguments to pass to docker run.
+
+        Returns:
+            SandboxProcess: A process object representing the container.
+
+        Example:
+            ```python
+            # Run a simple container
+            process = instance.docker.run("hello-world")
+            process.wait()
+
+            # Run nginx with port mapping
+            process = instance.docker.run(
+                "nginx:latest",
+                detach=True,
+                ports={"80": "8080"},
+                name="my-nginx"
+            )
+
+            # Run with volumes and environment variables
+            process = instance.docker.run(
+                "postgres:15",
+                detach=True,
+                env={"POSTGRES_PASSWORD": "mysecret"},
+                volumes={"/data": "/var/lib/postgresql/data"}
+            )
+            ```
+        """
+        cmd = ["docker", "run"]
+
+        if detach:
+            cmd.append("-d")
+
+        if remove:
+            cmd.append("--rm")
+
+        if name:
+            cmd.extend(["--name", name])
+
+        if ports:
+            for container_port, host_port in ports.items():
+                cmd.extend(["-p", f"{host_port}:{container_port}"])
+
+        if volumes:
+            for host_path, container_path in volumes.items():
+                cmd.extend(["-v", f"{host_path}:{container_path}"])
+
+        if env:
+            for key, value in env.items():
+                cmd.extend(["-e", f"{key}={value}"])
+
+        if network:
+            cmd.extend(["--network", network])
+
+        if extra_args:
+            cmd.extend(extra_args)
+
+        cmd.append(image)
+
+        if command:
+            if isinstance(command, str):
+                cmd.append(command)
+            else:
+                cmd.extend(command)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def ps(
+        self,
+        all: bool = False,
+        quiet: bool = False,
+        filters: Optional[Dict[str, str]] = None,
+    ) -> "SandboxProcess":
+        """
+        List Docker containers.
+
+        Parameters:
+            all (bool): Show all containers (default shows just running). Default is False.
+            quiet (bool): Only display container IDs. Default is False.
+            filters (Optional[Dict[str, str]]): Filter output based on conditions (e.g., {"status": "running"}).
+
+        Returns:
+            SandboxProcess: A process object with the container list.
+
+        Example:
+            ```python
+            # List running containers
+            process = instance.docker.ps()
+            process.wait()
+            print(process.stdout.read())
+
+            # List all containers including stopped ones
+            process = instance.docker.ps(all=True)
+            process.wait()
+
+            # List only container IDs
+            process = instance.docker.ps(quiet=True)
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "ps"]
+
+        if all:
+            cmd.append("-a")
+
+        if quiet:
+            cmd.append("-q")
+
+        if filters:
+            for key, value in filters.items():
+                cmd.extend(["--filter", f"{key}={value}"])
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def stop(self, container: str, timeout: Optional[int] = None) -> "SandboxProcess":
+        """
+        Stop a running Docker container.
+
+        Parameters:
+            container (str): The container name or ID to stop.
+            timeout (Optional[int]): Seconds to wait before killing the container.
+
+        Returns:
+            SandboxProcess: A process object representing the stop operation.
+
+        Example:
+            ```python
+            # Stop a container
+            process = instance.docker.stop("my-nginx")
+            process.wait()
+
+            # Stop with custom timeout
+            process = instance.docker.stop("my-app", timeout=30)
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "stop"]
+
+        if timeout is not None:
+            cmd.extend(["-t", str(timeout)])
+
+        cmd.append(container)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def start(self, container: str) -> "SandboxProcess":
+        """
+        Start a stopped Docker container.
+
+        Parameters:
+            container (str): The container name or ID to start.
+
+        Returns:
+            SandboxProcess: A process object representing the start operation.
+
+        Example:
+            ```python
+            # Start a container
+            process = instance.docker.start("my-nginx")
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "start", container]
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def restart(self, container: str, timeout: Optional[int] = None) -> "SandboxProcess":
+        """
+        Restart a Docker container.
+
+        Parameters:
+            container (str): The container name or ID to restart.
+            timeout (Optional[int]): Seconds to wait before killing the container.
+
+        Returns:
+            SandboxProcess: A process object representing the restart operation.
+
+        Example:
+            ```python
+            # Restart a container
+            process = instance.docker.restart("my-nginx")
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "restart"]
+
+        if timeout is not None:
+            cmd.extend(["-t", str(timeout)])
+
+        cmd.append(container)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def rm(
+        self,
+        container: str,
+        force: bool = False,
+        volumes: bool = False,
+    ) -> "SandboxProcess":
+        """
+        Remove a Docker container.
+
+        Parameters:
+            container (str): The container name or ID to remove.
+            force (bool): Force the removal of a running container. Default is False.
+            volumes (bool): Remove anonymous volumes associated with the container. Default is False.
+
+        Returns:
+            SandboxProcess: A process object representing the removal operation.
+
+        Example:
+            ```python
+            # Remove a stopped container
+            process = instance.docker.rm("my-nginx")
+            process.wait()
+
+            # Force remove a running container
+            process = instance.docker.rm("my-app", force=True)
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "rm"]
+
+        if force:
+            cmd.append("-f")
+
+        if volumes:
+            cmd.append("-v")
+
+        cmd.append(container)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def logs(
+        self,
+        container: str,
+        follow: bool = False,
+        tail: Optional[int] = None,
+        timestamps: bool = False,
+    ) -> "SandboxProcess":
+        """
+        Fetch logs from a Docker container.
+
+        Parameters:
+            container (str): The container name or ID.
+            follow (bool): Follow log output. Default is False.
+            tail (Optional[int]): Number of lines to show from the end of the logs.
+            timestamps (bool): Show timestamps. Default is False.
+
+        Returns:
+            SandboxProcess: A process object with the container logs.
+
+        Example:
+            ```python
+            # Get all logs
+            process = instance.docker.logs("my-nginx")
+            process.wait()
+            print(process.stdout.read())
+
+            # Get last 100 lines
+            process = instance.docker.logs("my-app", tail=100)
+            process.wait()
+
+            # Follow logs in real-time
+            process = instance.docker.logs("my-app", follow=True)
+            for line in process.stdout:
+                print(line)
+            ```
+        """
+        cmd = ["docker", "logs"]
+
+        if follow:
+            cmd.append("-f")
+
+        if tail is not None:
+            cmd.extend(["--tail", str(tail)])
+
+        if timestamps:
+            cmd.append("-t")
+
+        cmd.append(container)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def exec(
+        self,
+        container: str,
+        command: Union[str, List[str]],
+        detach: bool = False,
+        interactive: bool = False,
+        tty: bool = False,
+        env: Optional[Dict[str, str]] = None,
+        workdir: Optional[str] = None,
+    ) -> "SandboxProcess":
+        """
+        Execute a command in a running Docker container.
+
+        Parameters:
+            container (str): The container name or ID.
+            command (Union[str, List[str]]): The command to execute.
+            detach (bool): Detached mode: run command in the background. Default is False.
+            interactive (bool): Keep STDIN open. Default is False.
+            tty (bool): Allocate a pseudo-TTY. Default is False.
+            env (Optional[Dict[str, str]]): Set environment variables.
+            workdir (Optional[str]): Working directory inside the container.
+
+        Returns:
+            SandboxProcess: A process object representing the command execution.
+
+        Example:
+            ```python
+            # Execute a simple command
+            process = instance.docker.exec("my-nginx", "ls -la")
+            process.wait()
+            print(process.stdout.read())
+
+            # Execute with environment variables
+            process = instance.docker.exec(
+                "my-app",
+                ["python", "script.py"],
+                env={"ENV": "production"}
+            )
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "exec"]
+
+        if detach:
+            cmd.append("-d")
+
+        if interactive:
+            cmd.append("-i")
+
+        if tty:
+            cmd.append("-t")
+
+        if env:
+            for key, value in env.items():
+                cmd.extend(["-e", f"{key}={value}"])
+
+        if workdir:
+            cmd.extend(["-w", workdir])
+
+        cmd.append(container)
+
+        if isinstance(command, str):
+            cmd.append(command)
+        else:
+            cmd.extend(command)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def pull(self, image: str, quiet: bool = False) -> "SandboxProcess":
+        """
+        Pull a Docker image from a registry.
+
+        Parameters:
+            image (str): The image to pull (e.g., "nginx:latest").
+            quiet (bool): Suppress verbose output. Default is False.
+
+        Returns:
+            SandboxProcess: A process object representing the pull operation.
+
+        Example:
+            ```python
+            # Pull an image
+            process = instance.docker.pull("nginx:latest")
+            process.wait()
+
+            # Pull quietly
+            process = instance.docker.pull("postgres:15", quiet=True)
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "pull"]
+
+        if quiet:
+            cmd.append("-q")
+
+        cmd.append(image)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def images(
+        self,
+        all: bool = False,
+        quiet: bool = False,
+        filters: Optional[Dict[str, str]] = None,
+    ) -> "SandboxProcess":
+        """
+        List Docker images.
+
+        Parameters:
+            all (bool): Show all images (default hides intermediate images). Default is False.
+            quiet (bool): Only show image IDs. Default is False.
+            filters (Optional[Dict[str, str]]): Filter output based on conditions.
+
+        Returns:
+            SandboxProcess: A process object with the image list.
+
+        Example:
+            ```python
+            # List all images
+            process = instance.docker.images()
+            process.wait()
+            print(process.stdout.read())
+
+            # List only image IDs
+            process = instance.docker.images(quiet=True)
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "images"]
+
+        if all:
+            cmd.append("-a")
+
+        if quiet:
+            cmd.append("-q")
+
+        if filters:
+            for key, value in filters.items():
+                cmd.extend(["--filter", f"{key}={value}"])
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def rmi(self, image: str, force: bool = False) -> "SandboxProcess":
+        """
+        Remove a Docker image.
+
+        Parameters:
+            image (str): The image name or ID to remove.
+            force (bool): Force removal of the image. Default is False.
+
+        Returns:
+            SandboxProcess: A process object representing the removal operation.
+
+        Example:
+            ```python
+            # Remove an image
+            process = instance.docker.rmi("my-app:v1")
+            process.wait()
+
+            # Force remove
+            process = instance.docker.rmi("my-app:old", force=True)
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "rmi"]
+
+        if force:
+            cmd.append("-f")
+
+        cmd.append(image)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def compose_up(
+        self,
+        file: str = "docker-compose.yml",
+        detach: bool = True,
+        build: bool = False,
+        extra_args: Optional[List[str]] = None,
+    ) -> "SandboxProcess":
+        """
+        Start services defined in a docker-compose file.
+
+        Parameters:
+            file (str): Path to the docker-compose file. Default is "docker-compose.yml".
+            detach (bool): Run containers in the background. Default is True.
+            build (bool): Build images before starting containers. Default is False.
+            extra_args (Optional[List[str]]): Additional arguments to pass to docker-compose up.
+
+        Returns:
+            SandboxProcess: A process object representing the compose up operation.
+
+        Example:
+            ```python
+            # Start services
+            process = instance.docker.compose_up()
+            process.wait()
+
+            # Start with build
+            process = instance.docker.compose_up(build=True)
+            process.wait()
+
+            # Use custom compose file
+            process = instance.docker.compose_up(file="docker-compose.prod.yml")
+            process.wait()
+            ```
+        """
+        cmd = ["docker-compose", "-f", file, "up"]
+
+        if detach:
+            cmd.append("-d")
+
+        if build:
+            cmd.append("--build")
+
+        if extra_args:
+            cmd.extend(extra_args)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def compose_down(
+        self,
+        file: str = "docker-compose.yml",
+        volumes: bool = False,
+        remove_orphans: bool = False,
+    ) -> "SandboxProcess":
+        """
+        Stop and remove containers defined in a docker-compose file.
+
+        Parameters:
+            file (str): Path to the docker-compose file. Default is "docker-compose.yml".
+            volumes (bool): Remove named volumes declared in the `volumes` section. Default is False.
+            remove_orphans (bool): Remove containers for services not defined in the compose file. Default is False.
+
+        Returns:
+            SandboxProcess: A process object representing the compose down operation.
+
+        Example:
+            ```python
+            # Stop services
+            process = instance.docker.compose_down()
+            process.wait()
+
+            # Stop and remove volumes
+            process = instance.docker.compose_down(volumes=True)
+            process.wait()
+            ```
+        """
+        cmd = ["docker-compose", "-f", file, "down"]
+
+        if volumes:
+            cmd.append("-v")
+
+        if remove_orphans:
+            cmd.append("--remove-orphans")
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def compose_logs(
+        self,
+        file: str = "docker-compose.yml",
+        follow: bool = False,
+        tail: Optional[int] = None,
+        service: Optional[str] = None,
+    ) -> "SandboxProcess":
+        """
+        View logs from services in a docker-compose file.
+
+        Parameters:
+            file (str): Path to the docker-compose file. Default is "docker-compose.yml".
+            follow (bool): Follow log output. Default is False.
+            tail (Optional[int]): Number of lines to show from the end of the logs.
+            service (Optional[str]): Show logs for a specific service only.
+
+        Returns:
+            SandboxProcess: A process object with the compose logs.
+
+        Example:
+            ```python
+            # Get all logs
+            process = instance.docker.compose_logs()
+            process.wait()
+            print(process.stdout.read())
+
+            # Follow logs for a specific service
+            process = instance.docker.compose_logs(service="web", follow=True)
+            for line in process.stdout:
+                print(line)
+            ```
+        """
+        cmd = ["docker-compose", "-f", file, "logs"]
+
+        if follow:
+            cmd.append("-f")
+
+        if tail is not None:
+            cmd.extend(["--tail", str(tail)])
+
+        if service:
+            cmd.append(service)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def compose_ps(
+        self,
+        file: str = "docker-compose.yml",
+        quiet: bool = False,
+    ) -> "SandboxProcess":
+        """
+        List containers for services in a docker-compose file.
+
+        Parameters:
+            file (str): Path to the docker-compose file. Default is "docker-compose.yml".
+            quiet (bool): Only display container IDs. Default is False.
+
+        Returns:
+            SandboxProcess: A process object with the container list.
+
+        Example:
+            ```python
+            # List compose containers
+            process = instance.docker.compose_ps()
+            process.wait()
+            print(process.stdout.read())
+            ```
+        """
+        cmd = ["docker-compose", "-f", file, "ps"]
+
+        if quiet:
+            cmd.append("-q")
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def network_create(
+        self,
+        name: str,
+        driver: Optional[str] = None,
+    ) -> "SandboxProcess":
+        """
+        Create a Docker network.
+
+        Parameters:
+            name (str): The name of the network to create.
+            driver (Optional[str]): Driver to manage the network (e.g., "bridge", "overlay").
+
+        Returns:
+            SandboxProcess: A process object representing the network creation.
+
+        Example:
+            ```python
+            # Create a network
+            process = instance.docker.network_create("my-network")
+            process.wait()
+
+            # Create with custom driver
+            process = instance.docker.network_create("my-network", driver="bridge")
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "network", "create"]
+
+        if driver:
+            cmd.extend(["--driver", driver])
+
+        cmd.append(name)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def network_rm(self, name: str) -> "SandboxProcess":
+        """
+        Remove a Docker network.
+
+        Parameters:
+            name (str): The name of the network to remove.
+
+        Returns:
+            SandboxProcess: A process object representing the network removal.
+
+        Example:
+            ```python
+            # Remove a network
+            process = instance.docker.network_rm("my-network")
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "network", "rm", name]
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def network_ls(self, quiet: bool = False) -> "SandboxProcess":
+        """
+        List Docker networks.
+
+        Parameters:
+            quiet (bool): Only display network IDs. Default is False.
+
+        Returns:
+            SandboxProcess: A process object with the network list.
+
+        Example:
+            ```python
+            # List networks
+            process = instance.docker.network_ls()
+            process.wait()
+            print(process.stdout.read())
+            ```
+        """
+        cmd = ["docker", "network", "ls"]
+
+        if quiet:
+            cmd.append("-q")
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def volume_create(self, name: str) -> "SandboxProcess":
+        """
+        Create a Docker volume.
+
+        Parameters:
+            name (str): The name of the volume to create.
+
+        Returns:
+            SandboxProcess: A process object representing the volume creation.
+
+        Example:
+            ```python
+            # Create a volume
+            process = instance.docker.volume_create("my-volume")
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "volume", "create", name]
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def volume_rm(self, name: str, force: bool = False) -> "SandboxProcess":
+        """
+        Remove a Docker volume.
+
+        Parameters:
+            name (str): The name of the volume to remove.
+            force (bool): Force the removal of the volume. Default is False.
+
+        Returns:
+            SandboxProcess: A process object representing the volume removal.
+
+        Example:
+            ```python
+            # Remove a volume
+            process = instance.docker.volume_rm("my-volume")
+            process.wait()
+            ```
+        """
+        cmd = ["docker", "volume", "rm"]
+
+        if force:
+            cmd.append("-f")
+
+        cmd.append(name)
+
+        return self.sandbox_instance.process.exec(*cmd)
+
+    def volume_ls(self, quiet: bool = False) -> "SandboxProcess":
+        """
+        List Docker volumes.
+
+        Parameters:
+            quiet (bool): Only display volume names. Default is False.
+
+        Returns:
+            SandboxProcess: A process object with the volume list.
+
+        Example:
+            ```python
+            # List volumes
+            process = instance.docker.volume_ls()
+            process.wait()
+            print(process.stdout.read())
+            ```
+        """
+        cmd = ["docker", "volume", "ls"]
+
+        if quiet:
+            cmd.append("-q")
+
+        return self.sandbox_instance.process.exec(*cmd)
