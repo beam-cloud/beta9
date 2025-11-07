@@ -932,7 +932,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 				// Push OOM event to event repository for monitoring/notifications
 				go s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
-				
+
 				// For gVisor, we need to manually stop the container since the kernel won't do it
 				// For runc, the kernel OOM killer handles this automatically
 				if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
@@ -1111,6 +1111,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	checkPid, err := instance.SandboxProcessManager.Exec(checkDockerCmd, "/", []string{}, false)
 	if err == nil {
 		time.Sleep(100 * time.Millisecond)
+
 		exitCode, _ := instance.SandboxProcessManager.Status(checkPid)
 		if exitCode != 0 {
 			log.Error().
@@ -1127,10 +1128,6 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to create /var/run directory")
 		return
 	}
-	time.Sleep(100 * time.Millisecond)
-
-	// Setup cgroup devices for Docker in gVisor
-	log.Info().Str("container_id", containerId).Msg("setting up cgroup devices for docker")
 
 	cgroupSetupScript := `
 set -e
@@ -1156,21 +1153,22 @@ echo "Devices cgroup mounted successfully"
 		log.Error().Str("container_id", containerId).Err(err).Msg("cgroup setup command failed to execute")
 		return
 	}
+
 	time.Sleep(500 * time.Millisecond)
+
 	cgroupExitCode, _ := instance.SandboxProcessManager.Status(cgroupPid)
 	if cgroupExitCode != 0 {
 		log.Error().Str("container_id", containerId).Int("exit_code", cgroupExitCode).Msg("cgroup setup failed")
 		return
 	}
-	log.Info().Str("container_id", containerId).Msg("devices cgroup mounted successfully")
 
-	// Start dockerd with flags from official gVisor documentation
 	cmd := []string{
 		"dockerd",
 		"--bridge=none",
 		"--iptables=false",
 		"--ip6tables=false",
 	}
+
 	env := []string{}
 	cwd := "/"
 
@@ -1185,13 +1183,9 @@ echo "Devices cgroup mounted successfully"
 		Int("pid", pid).
 		Msg("docker daemon process started - waiting for daemon to be ready")
 
-	// Give the daemon a moment to initialize
-	time.Sleep(2 * time.Second)
-
-	// Quick check if daemon crashed immediately
+	// Check if daemon crashed immediately
 	earlyExitCode, err := instance.SandboxProcessManager.Status(pid)
 	if err == nil && earlyExitCode >= 0 {
-		// Daemon crashed - get the error output
 		stdout, _ := instance.SandboxProcessManager.Stdout(pid)
 		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
 
@@ -1202,6 +1196,7 @@ echo "Devices cgroup mounted successfully"
 			Str("stdout", stdout).
 			Str("stderr", stderr).
 			Msg("dockerd crashed immediately after starting - see stdout/stderr above")
+
 		return
 	}
 

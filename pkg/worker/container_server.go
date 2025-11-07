@@ -617,7 +617,6 @@ func (s *ContainerRuntimeServer) ContainerSandboxStdout(ctx context.Context, in 
 
 	stdout, err := instance.SandboxProcessManager.Stdout(int(in.Pid))
 	if err != nil {
-		log.Error().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Err(err).Msg("failed to get stdout")
 		return &pb.ContainerSandboxStdoutResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
@@ -641,7 +640,6 @@ func (s *ContainerRuntimeServer) ContainerSandboxStderr(ctx context.Context, in 
 
 	stderr, err := instance.SandboxProcessManager.Stderr(int(in.Pid))
 	if err != nil {
-		log.Error().Str("container_id", in.ContainerId).Int32("pid", in.Pid).Err(err).Msg("failed to get stderr")
 		return &pb.ContainerSandboxStderrResponse{
 			Ok:       false,
 			ErrorMsg: err.Error(),
