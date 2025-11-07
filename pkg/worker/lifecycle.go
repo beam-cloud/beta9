@@ -897,20 +897,36 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		pid := <-monitorPIDChan
 		go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
 
-		// Use cgroup OOM watcher for portable OOM detection (works with all runtimes)
-		// Get the actual cgroup path from the container's PID
-		cgroupPath, err := runtime.GetCgroupPathFromPID(pid)
-		if err != nil {
-			log.Warn().Str("container_id", containerId).Err(err).Msg("failed to get cgroup path, OOM detection disabled")
-		} else {
-			log.Info().Str("container_id", containerId).Str("cgroup_path", cgroupPath).Msg("starting OOM watcher")
+		// Setup OOM watcher based on runtime type
+		var oomWatcher runtime.OOMWatcher
+		
+		if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
+			// For gVisor, use memory usage monitoring since cgroup files aren't accessible
+			var memoryLimit uint64
+			if spec.Linux.Resources != nil && spec.Linux.Resources.Memory != nil && spec.Linux.Resources.Memory.Limit != nil {
+				memoryLimit = uint64(*spec.Linux.Resources.Memory.Limit)
+			} else {
+				// Fallback to request memory if spec doesn't have it
+				memoryLimit = uint64(request.Memory * 1024 * 1024)
+			}
 			
-			oomWatcher := runtime.NewOOMWatcher(ctx, cgroupPath)
+			oomWatcher = runtime.NewGvisorOOMWatcher(ctx, pid, memoryLimit)
+		} else {
+			// For runc and other runtimes, use cgroup-based OOM detection
+			cgroupPath, err := runtime.GetCgroupPathFromPID(pid)
+			if err != nil {
+				log.Warn().Str("container_id", containerId).Err(err).Msg("failed to get cgroup path, OOM detection disabled")
+			} else {
+				oomWatcher = runtime.NewCgroupOOMWatcher(ctx, cgroupPath)
+			}
+		}
+		
+		if oomWatcher != nil {
 			containerInstance.OOMWatcher = oomWatcher
 			s.containerInstances.Set(containerId, containerInstance)
 
 			err := oomWatcher.Watch(func() {
-				log.Warn().Str("container_id", containerId).Msg("OOM kill detected via cgroup watcher")
+				log.Warn().Str("container_id", containerId).Msg("OOM kill detected")
 				isOOMKilled.Store(true)
 				outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage)
 
@@ -1205,7 +1221,6 @@ echo "Devices cgroup mounted successfully"
 		socketCheckCmd := []string{"test", "-S", "/var/run/docker.sock"}
 		socketCheckPid, err := instance.SandboxProcessManager.Exec(socketCheckCmd, "/", []string{}, false)
 		if err != nil {
-			log.Debug().Str("container_id", containerId).Err(err).Msg("failed to execute socket check")
 			time.Sleep(time.Second)
 			continue
 		}

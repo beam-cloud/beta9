@@ -1975,10 +1975,6 @@ class SandboxDockerManager:
 
         if quiet:
             cmd.append("--quiet")
-        else:
-            # Use plain progress output (not fancy TTY progress bars)
-            # This ensures output is captured in logs
-            cmd.append("--progress=plain")
 
         cmd.append(context)
 
@@ -2406,10 +2402,6 @@ class SandboxDockerManager:
 
         if quiet:
             cmd.append("-q")
-        else:
-            # Use plain progress output (not fancy TTY progress bars)
-            # This ensures output is captured in logs
-            cmd.append("--progress=plain")
 
         cmd.append(image)
 
