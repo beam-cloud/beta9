@@ -90,10 +90,10 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	return nil
 }
 
-// waitForGoprocReady waits for the goproc process manager to be ready to accept commands
+// waitForProcessManager waits for the goproc process manager to be ready to accept commands
 // Uses exponential backoff to efficiently wait for goproc startup
 // This should be called ONCE during container initialization, not on every exec
-func (s *Worker) waitForGoprocReady(ctx context.Context, containerId string, instance *ContainerInstance) bool {
+func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, instance *ContainerInstance) bool {
 	start := time.Now()
 	backoff := goprocInitialBackoff
 
@@ -125,6 +125,7 @@ func (s *Worker) waitForGoprocReady(ctx context.Context, containerId string, ins
 
 		// Not ready yet - wait with exponential backoff
 		time.Sleep(backoff)
+
 		backoff = time.Duration(float64(backoff) * goprocBackoffMultiplier)
 		if backoff > goprocMaxBackoff {
 			backoff = goprocMaxBackoff
@@ -134,6 +135,7 @@ func (s *Worker) waitForGoprocReady(ctx context.Context, containerId string, ins
 	log.Error().
 		Str("container_id", containerId).
 		Msg("goproc did not become ready within timeout")
+
 	return false
 }
 

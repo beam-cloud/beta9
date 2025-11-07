@@ -813,7 +813,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		instance.GoprocReady = false
+		instance.SandboxProcessManagerReady = false
 		s.containerInstances.Set(containerId, instance)
 
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
@@ -893,8 +893,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			if exists && instance.SandboxProcessManager != nil {
 
 				// Wait for process manager to be ready - this blocks until ready or timeout
-				if s.waitForGoprocReady(ctx, containerId, instance) {
-					instance.GoprocReady = true
+				if s.waitForProcessManager(ctx, containerId, instance) {
+					instance.SandboxProcessManagerReady = true
 					s.containerInstances.Set(containerId, instance)
 
 					// Now that process manager is ready, start Docker daemon if enabled
