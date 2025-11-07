@@ -1094,20 +1094,12 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	// Start dockerd in background with gVisor-compatible settings
-	// Key flags:
-	// --host=unix:///var/run/docker.sock - listen on standard Docker socket
-	// --storage-driver=vfs - VFS storage driver works reliably in gVisor (overlay2 may have issues)
-	// --iptables=false - disable iptables management (gVisor handles networking)
-	// --ip-forward=false - disable IP forwarding (not needed in gVisor)
-	// --bridge=none - use host network, no bridge setup needed
+	// Start dockerd in background
+	// Use minimal flags that work with gVisor
+	// According to gVisor docs, Docker should work with basic configuration
 	cmd := []string{
 		"dockerd",
-		"--host=unix:///var/run/docker.sock",
-		"--storage-driver=vfs",
-		"--iptables=false",
-		"--ip-forward=false",
-		"--bridge=none",
+		"--iptables=false", // gVisor handles networking, don't use iptables
 	}
 	env := []string{}
 	cwd := "/"
@@ -1123,43 +1115,123 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		Int("pid", pid).
 		Msg("docker daemon process started - waiting for daemon to be ready")
 
+	// Give the daemon a moment to initialize
+	time.Sleep(2 * time.Second)
+
+	// Quick check if daemon crashed immediately
+	earlyExitCode, err := instance.SandboxProcessManager.Status(pid)
+	if err == nil && earlyExitCode >= 0 {
+		log.Error().
+			Str("container_id", containerId).
+			Int("pid", pid).
+			Int("exit_code", earlyExitCode).
+			Msg("dockerd crashed immediately after starting - check stderr logs for details")
+
+		// Try to get stderr output
+		stderrCmd := []string{"cat", fmt.Sprintf("/proc/%d/fd/2", pid)}
+		stderrPid, err := instance.SandboxProcessManager.Exec(stderrCmd, "/", []string{}, false)
+		if err == nil {
+			time.Sleep(100 * time.Millisecond)
+			exitCode, _ := instance.SandboxProcessManager.Status(stderrPid)
+			if exitCode == 0 {
+				log.Info().Str("container_id", containerId).Msg("check sandbox process logs for dockerd stderr")
+			}
+		}
+		return
+	}
+
 	// Wait for Docker to be ready (check that socket exists and daemon responds)
 	maxRetries := int(dockerDaemonStartupTimeout / time.Second)
 	for i := 0; i < maxRetries; i++ {
-		time.Sleep(time.Second)
-
-		// First check if socket file exists
-		socketCheckCmd := []string{"test", "-S", "/var/run/docker.sock"}
-		socketCheckPid, err := instance.SandboxProcessManager.Exec(socketCheckCmd, "/", []string{}, false)
-		if err == nil {
-			time.Sleep(time.Millisecond * 100)
-			socketExitCode, _ := instance.SandboxProcessManager.Status(socketCheckPid)
-			if socketExitCode == 0 {
-				// Socket exists, now try running docker command
-				checkCmd := []string{"docker", "info"}
-				checkPid, err := instance.SandboxProcessManager.Exec(checkCmd, "/", []string{}, false)
-				if err == nil {
-					time.Sleep(time.Millisecond * 500)
-
-					exitCode, err := instance.SandboxProcessManager.Status(checkPid)
-					if err == nil && exitCode == 0 {
-						log.Info().
-							Str("container_id", containerId).
-							Int("retry_count", i+1).
-							Msg("docker daemon is ready and accepting commands")
-						return
-					}
-				}
-			}
+		// Check if dockerd process is still running
+		daemonExitCode, err := instance.SandboxProcessManager.Status(pid)
+		if err == nil && daemonExitCode >= 0 {
+			log.Error().
+				Str("container_id", containerId).
+				Int("pid", pid).
+				Int("exit_code", daemonExitCode).
+				Msg("dockerd process exited unexpectedly - check that image has Docker installed with .with_docker()")
+			return
 		}
 
-		if i < maxRetries-1 {
+		// Check if socket file exists
+		socketCheckCmd := []string{"test", "-S", "/var/run/docker.sock"}
+		socketCheckPid, err := instance.SandboxProcessManager.Exec(socketCheckCmd, "/", []string{}, false)
+		if err != nil {
+			time.Sleep(time.Second)
+			continue
+		}
+
+		// Wait for socket check to complete
+		socketExitCode := -1
+		socketCheckStart := time.Now()
+		for time.Since(socketCheckStart) < 2*time.Second {
+			code, err := instance.SandboxProcessManager.Status(socketCheckPid)
+			if err == nil && code >= 0 {
+				socketExitCode = code
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		if socketExitCode != 0 {
 			log.Debug().
 				Str("container_id", containerId).
 				Int("attempt", i+1).
-				Int("max_retries", maxRetries).
-				Msg("waiting for docker daemon to be ready...")
+				Msg("socket not yet available, waiting...")
+			time.Sleep(time.Second)
+			continue
 		}
+
+		// Socket exists, try docker info with timeout
+		log.Debug().
+			Str("container_id", containerId).
+			Int("attempt", i+1).
+			Msg("socket exists, checking daemon with 'docker info'...")
+
+		checkCmd := []string{"docker", "info"}
+		checkPid, err := instance.SandboxProcessManager.Exec(checkCmd, "/", []string{}, false)
+		if err != nil {
+			log.Warn().
+				Str("container_id", containerId).
+				Err(err).
+				Msg("failed to execute docker info")
+			time.Sleep(time.Second)
+			continue
+		}
+
+		// Wait up to 3 seconds for docker info to complete
+		infoExitCode := -1
+		infoStart := time.Now()
+		for time.Since(infoStart) < 3*time.Second {
+			code, err := instance.SandboxProcessManager.Status(checkPid)
+			if err == nil && code >= 0 {
+				infoExitCode = code
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		if infoExitCode < 0 {
+			// Docker info timed out, daemon probably not ready yet
+			log.Debug().
+				Str("container_id", containerId).
+				Int("attempt", i+1).
+				Msg("docker info timed out after 3s, daemon not ready yet")
+			time.Sleep(time.Second)
+			continue
+		}
+
+		if infoExitCode == 0 {
+			log.Info().
+				Str("container_id", containerId).
+				Int("retry_count", i+1).
+				Msg("docker daemon is ready and accepting commands")
+			return
+		}
+
+		// Not ready yet, wait before next attempt
+		time.Sleep(time.Second)
 	}
 
 	log.Warn().
