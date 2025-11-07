@@ -90,24 +90,24 @@ class Sandbox(Pod):
         docker_enabled (bool):
             Enable Docker-in-Docker support inside the sandbox. When enabled with gVisor runtime,
             grants elevated capabilities required to run Docker and automatically starts the Docker daemon.
-            
+
             IMPORTANT: You must install Docker in your image first using `Image().with_docker()`.
-            
+
             Only works with gVisor runtime. Default is False.
-            
+
             SECURITY NOTE: This grants significant capabilities within your sandbox.
-            
+
             Example:
                 ```python
                 from beta9 import Image, Sandbox
-                
+
                 # Install Docker in the image
                 image = Image(python_version="python3.11").with_docker()
-                
+
                 # Enable Docker in the sandbox
                 sandbox = Sandbox(image=image, docker_enabled=True)
                 instance = sandbox.create()
-                
+
                 # Docker daemon will be automatically started
                 instance.docker.run("hello-world")
                 ```
@@ -1820,8 +1820,6 @@ class SandboxDockerManager:
             SandboxProcessError: If there's an error checking daemon status.
         """
         start_time = time.time()
-        terminal.detail(f"Waiting for Docker daemon to be ready (timeout: {timeout}s)...")
-
         while time.time() - start_time < timeout:
             try:
                 # Try to ping the Docker daemon
@@ -1829,13 +1827,11 @@ class SandboxDockerManager:
                 exit_code = process.wait()
 
                 if exit_code == 0:
-                    elapsed = time.time() - start_time
-                    terminal.detail(f"Docker daemon is ready (took {elapsed:.1f}s)")
                     self._docker_ready = True
                     self._docker_ready_checked = True
                     return True
 
-            except Exception as e:
+            except BaseException:
                 # Ignore errors and continue polling
                 pass
 
@@ -1960,7 +1956,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "build", "-t", tag]
 
         if dockerfile:
@@ -2035,7 +2031,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "run"]
 
         if detach:
@@ -2109,7 +2105,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "ps"]
 
         if all:
@@ -2147,7 +2143,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "stop"]
 
         if timeout is not None:
@@ -2175,7 +2171,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "start", container]
         return self.sandbox_instance.process.exec(*cmd)
 
@@ -2198,7 +2194,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "restart"]
 
         if timeout is not None:
@@ -2237,7 +2233,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "rm"]
 
         if force:
@@ -2287,7 +2283,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "logs"]
 
         if follow:
@@ -2345,7 +2341,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "exec"]
 
         if detach:
@@ -2373,13 +2369,12 @@ class SandboxDockerManager:
 
         return self.sandbox_instance.process.exec(*cmd)
 
-    def pull(self, image: str, quiet: bool = False) -> "SandboxProcess":
+    def pull(self, image: str) -> "SandboxProcess":
         """
         Pull a Docker image from a registry.
 
         Parameters:
             image (str): The image to pull (e.g., "nginx:latest").
-            quiet (bool): Suppress verbose output. Default is False.
 
         Returns:
             SandboxProcess: A process object representing the pull operation.
@@ -2391,17 +2386,11 @@ class SandboxDockerManager:
             process.wait()
             print(process.stdout.read())  # Progress output
 
-            # Pull quietly
-            process = instance.docker.pull("postgres:15", quiet=True)
-            process.wait()
             ```
         """
         self._ensure_docker_ready()
-        
-        cmd = ["docker", "pull"]
 
-        if quiet:
-            cmd.append("-q")
+        cmd = ["docker", "pull"]
 
         cmd.append(image)
 
@@ -2437,7 +2426,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "images"]
 
         if all:
@@ -2475,7 +2464,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "rmi"]
 
         if force:
@@ -2520,7 +2509,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker-compose", "-f", file, "up"]
 
         if detach:
@@ -2563,7 +2552,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker-compose", "-f", file, "down"]
 
         if volumes:
@@ -2607,7 +2596,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker-compose", "-f", file, "logs"]
 
         if follow:
@@ -2645,7 +2634,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker-compose", "-f", file, "ps"]
 
         if quiet:
@@ -2680,7 +2669,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "network", "create"]
 
         if driver:
@@ -2708,7 +2697,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "network", "rm", name]
         return self.sandbox_instance.process.exec(*cmd)
 
@@ -2731,7 +2720,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "network", "ls"]
 
         if quiet:
@@ -2757,7 +2746,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "volume", "create", name]
         return self.sandbox_instance.process.exec(*cmd)
 
@@ -2780,7 +2769,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "volume", "rm"]
 
         if force:
@@ -2809,7 +2798,7 @@ class SandboxDockerManager:
             ```
         """
         self._ensure_docker_ready()
-        
+
         cmd = ["docker", "volume", "ls"]
 
         if quiet:
