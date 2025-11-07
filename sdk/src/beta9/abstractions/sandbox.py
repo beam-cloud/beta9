@@ -87,6 +87,10 @@ class Sandbox(Pod):
             A dictionary of environment variables to be injected into each Sandbox container. Default is {}.
         sync_local_dir (bool):
             Whether to sync the local directory to the sandbox filesystem on creation. Default is False.
+        docker_enabled (bool):
+            Enable Docker-in-Docker support inside the sandbox. When enabled with gVisor runtime,
+            grants elevated capabilities required to run Docker. Only works with gVisor runtime.
+            Default is False. SECURITY NOTE: This grants significant capabilities within your sandbox.
 
     Example:
         ```python
@@ -126,6 +130,7 @@ class Sandbox(Pod):
         secrets: Optional[List[str]] = None,
         env: Optional[Dict[str, str]] = {},
         sync_local_dir: bool = False,
+        docker_enabled: bool = False,
     ):
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
@@ -142,6 +147,7 @@ class Sandbox(Pod):
             volumes=volumes,
             secrets=secrets,
             env=env,
+            docker_enabled=docker_enabled,
         )
 
     def debug(self):
