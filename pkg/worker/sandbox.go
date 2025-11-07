@@ -194,15 +194,53 @@ func (s *Worker) waitForDockerDaemon(ctx context.Context, containerId string, in
 
 // setupBuildxBuilder creates a buildx builder with host networking configured
 func (s *Worker) setupBuildxBuilder(ctx context.Context, containerId string, instance *ContainerInstance) {
-	// Create buildx builder with host network driver
-	createBuilderCmd := []string{"docker", "buildx", "create", "--name", "host-network-builder", "--driver", "docker-container", "--driver-opt", "network=host", "--use"}
+	// Create buildx builder using docker-container driver
+	// The network=host driver-opt makes the builder container use host networking
+	// We also pass buildkitd flags to configure the OCI worker to use host network for builds
+	createBuilderCmd := []string{
+		"docker", "buildx", "create",
+		"--name", "host-network-builder",
+		"--driver", "docker-container",
+		"--driver-opt", "network=host",
+		"--buildkitd-flags", "'--oci-worker-net=host'",
+		"--use",
+	}
+	
 	if pid, err := instance.SandboxProcessManager.Exec(createBuilderCmd, "/", []string{}, false); err == nil {
-		// Wait for command to complete
-		time.Sleep(500 * time.Millisecond)
-		exitCode, _ := instance.SandboxProcessManager.Status(pid)
-		if exitCode == 0 {
-			log.Info().Str("container_id", containerId).Msg("buildx builder with host networking created")
+		// Wait for builder to be created
+		start := time.Now()
+		maxWait := 10 * time.Second
+		
+		for time.Since(start) < maxWait {
+			exitCode, _ := instance.SandboxProcessManager.Status(pid)
+			if exitCode >= 0 {
+				if exitCode == 0 {
+					log.Info().Str("container_id", containerId).Msg("buildx builder created with host networking")
+					
+					// Bootstrap the builder
+					bootstrapCmd := []string{"docker", "buildx", "inspect", "--bootstrap"}
+					if bpid, berr := instance.SandboxProcessManager.Exec(bootstrapCmd, "/", []string{}, false); berr == nil {
+						time.Sleep(2 * time.Second)
+						bexitCode, _ := instance.SandboxProcessManager.Status(bpid)
+						if bexitCode == 0 {
+							log.Info().Str("container_id", containerId).Msg("buildx builder bootstrapped successfully")
+						}
+					}
+				} else {
+					stdout, _ := instance.SandboxProcessManager.Stdout(pid)
+					stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+					log.Warn().
+						Str("container_id", containerId).
+						Str("stdout", stdout).
+						Str("stderr", stderr).
+						Int("exit_code", exitCode).
+						Msg("buildx builder creation failed")
+				}
+				return
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
+		log.Warn().Str("container_id", containerId).Msg("buildx builder creation timeout")
 	}
 }
 
