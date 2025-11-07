@@ -164,6 +164,10 @@ class RunnerAbstraction(BaseAbstraction):
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
 
+        # Pass docker_enabled from image to backend via extra field
+        if self.image and hasattr(self.image, 'docker_enabled') and self.image.docker_enabled:
+            self.extra["docker_enabled"] = True
+
         if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
             self.gpu_count = 1
 

@@ -835,10 +835,24 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Enable Docker-in-Docker support for sandbox containers when using gVisor runtime
 	// This adds the --net-raw flag and necessary capabilities for running Docker inside gVisor
+	dockerEnabled := false
 	if request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == "gvisor" {
-		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
-			runscRuntime.EnableDockerInDocker()
-			log.Info().Str("container_id", containerId).Msg("enabled docker-in-docker support for sandbox container with gvisor")
+		// Parse docker_enabled from stub config Extra field
+		stubConfig, err := request.Stub.UnmarshalConfig()
+		if err == nil && stubConfig.Extra != nil {
+			var extraConfig map[string]interface{}
+			if err := json.Unmarshal(stubConfig.Extra, &extraConfig); err == nil {
+				if enabled, ok := extraConfig["docker_enabled"].(bool); ok && enabled {
+					dockerEnabled = true
+				}
+			}
+		}
+
+		if dockerEnabled {
+			if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
+				runscRuntime.EnableDockerInDocker()
+				log.Info().Str("container_id", containerId).Msg("enabled docker-in-docker support for sandbox container with gvisor")
+			}
 		}
 	}
 
@@ -889,6 +903,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
+
+		// Start Docker daemon if enabled for this sandbox
+		if dockerEnabled {
+			go s.startDockerDaemon(ctx, containerId, containerInstance)
+		}
 	}()
 
 	isOOMKilled := atomic.Bool{}
@@ -1051,4 +1070,55 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 		CPU:    resources.GetCPU(request),
 		Memory: resources.GetMemory(request),
 	}, nil
+}
+
+// startDockerDaemon starts the Docker daemon inside a sandbox container using the process manager
+func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, instance *ContainerInstance) {
+	// Wait a bit for the sandbox to be fully initialized
+	time.Sleep(3 * time.Second)
+
+	if instance.SandboxProcessManager == nil {
+		log.Error().Str("container_id", containerId).Msg("sandbox process manager not available, cannot start docker daemon")
+		return
+	}
+
+	log.Info().Str("container_id", containerId).Msg("starting docker daemon in sandbox")
+
+	// Start dockerd in background with host socket
+	// The daemon runs on unix:///var/run/docker.sock inside the sandbox
+	cmd := []string{"dockerd", "--host=unix:///var/run/docker.sock"}
+	env := []string{}
+	cwd := "/"
+
+	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
+		return
+	}
+
+	log.Info().
+		Str("container_id", containerId).
+		Int("pid", pid).
+		Msg("docker daemon started successfully - docker commands are now available")
+
+	// Wait for Docker to be ready (check that socket exists and daemon responds)
+	maxRetries := 30
+	for i := 0; i < maxRetries; i++ {
+		time.Sleep(1 * time.Second)
+
+		// Try running a simple docker command to verify daemon is ready
+		checkCmd := []string{"docker", "ps"}
+		checkPid, err := instance.SandboxProcessManager.Exec(checkCmd, "/", []string{}, false)
+		if err == nil {
+			// Check if the command succeeded
+			time.Sleep(100 * time.Millisecond) // Give it a moment to complete
+			exitCode, err := instance.SandboxProcessManager.Status(checkPid)
+			if err == nil && exitCode == 0 {
+				log.Info().Str("container_id", containerId).Msg("docker daemon is ready and accepting commands")
+				return
+			}
+		}
+	}
+
+	log.Warn().Str("container_id", containerId).Msg("docker daemon started but may not be fully ready")
 }

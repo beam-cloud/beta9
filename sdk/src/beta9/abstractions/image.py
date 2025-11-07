@@ -334,6 +334,7 @@ class Image(BaseAbstraction):
         self.override_python_version = False
         self.image_id = image_id or ""
         self.include_files_patterns = []
+        self.docker_enabled = False  # Track if Docker-in-Docker is enabled
 
         self.with_envs(env_vars or [])
 
@@ -795,4 +796,55 @@ class Image(BaseAbstraction):
             Image: The Image object.
         """
         self.gpu = gpu
+        return self
+
+    def with_docker(self) -> "Image":
+        """
+        Install Docker in the image to enable Docker-in-Docker functionality.
+
+        This method adds commands to install Docker CE during the image build process.
+        When used with a Sandbox and gVisor runtime, the Docker daemon will be
+        automatically started inside the sandbox, allowing you to run Docker commands.
+
+        Note: This feature only works with gVisor as the container runtime for
+        enhanced security isolation.
+
+        Returns:
+            Image: The Image object.
+
+        Example:
+            ```python
+            from beta9 import Image, Sandbox
+
+            image = Image(python_version="python3.11").with_docker()
+
+            sandbox = Sandbox(image=image)
+            instance = sandbox.create()
+
+            # Docker is now available!
+            response = instance.process.run("docker run hello-world")
+            print(response.stdout)
+            ```
+        """
+        # Add Docker installation commands
+        # These commands install Docker CE from the official Docker repository
+        docker_install_commands = [
+            # Install prerequisites
+            "apt-get update && apt-get install -y ca-certificates curl gnupg lsb-release",
+            # Add Docker's official GPG key
+            "mkdir -p /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
+            # Set up the Docker repository
+            'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null',
+            # Install Docker Engine
+            "apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
+            # Clean up to reduce image size
+            "apt-get clean && rm -rf /var/lib/apt/lists/*",
+        ]
+
+        for command in docker_install_commands:
+            self.build_steps.append(BuildStep(command=command, type="shell"))
+
+        # Mark that Docker is enabled for this image
+        self.docker_enabled = True
+
         return self
