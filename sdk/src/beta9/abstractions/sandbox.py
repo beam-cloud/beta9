@@ -2387,6 +2387,7 @@ class SandboxDockerManager:
         # Set environment for BuildKit (required for gVisor)
         # COMPOSE_DOCKER_CLI_BUILD=1 makes docker-compose use docker CLI for builds
         # This ensures docker login credentials are respected
+        # BuildKit network mode is configured at daemon level (buildkitd.toml)
         env = {
             "DOCKER_BUILDKIT": "1",
             "COMPOSE_DOCKER_CLI_BUILD": "1",
@@ -2518,6 +2519,7 @@ class SandboxDockerManager:
         
         # Set environment for BuildKit (required for gVisor)
         # COMPOSE_DOCKER_CLI_BUILD=1 ensures credentials from docker login are used
+        # BuildKit network mode is configured at daemon level (buildkitd.toml)
         env = {
             "DOCKER_BUILDKIT": "1",
             "COMPOSE_DOCKER_CLI_BUILD": "1",

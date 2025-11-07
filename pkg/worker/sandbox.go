@@ -41,31 +41,38 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Create daemon config to enable host network for BuildKit
-	// This ensures docker-compose builds use host network (required for gVisor)
+	// Create BuildKit config to use host network (required for gVisor)
+	// This ensures docker-compose builds use host network by default
+	buildkitConfig := `debug = false
+
+[worker.oci]
+  # Use host network for all builds (required for gVisor since bridge networking is disabled)
+  networkMode = "host"`
+	
+	// Write BuildKit config
+	buildkitConfigCmd := []string{"sh", "-c", "mkdir -p /etc/buildkit && cat > /etc/buildkit/buildkitd.toml << 'EOF'\n" + buildkitConfig + "\nEOF"}
+	if pid, err := instance.SandboxProcessManager.Exec(buildkitConfigCmd, "/", []string{}, false); err == nil {
+		time.Sleep(100 * time.Millisecond)
+		instance.SandboxProcessManager.Status(pid)
+	}
+
+	// Create daemon config to enable BuildKit
 	daemonConfig := `{
-		"builder": {
-			"gc": {
-				"enabled": true,
-				"defaultKeepStorage": "10GB"
-			}
-		},
 		"features": {
 			"buildkit": true
 		}
 	}`
 	
 	// Write daemon config
-	configPath := "/etc/docker/daemon.json"
-	configCmd := []string{"sh", "-c", fmt.Sprintf("mkdir -p /etc/docker && echo '%s' > %s", daemonConfig, configPath)}
-	if pid, err := instance.SandboxProcessManager.Exec(configCmd, "/", []string{}, false); err == nil {
+	daemonConfigCmd := []string{"sh", "-c", "mkdir -p /etc/docker && cat > /etc/docker/daemon.json << 'EOF'\n" + daemonConfig + "\nEOF"}
+	if pid, err := instance.SandboxProcessManager.Exec(daemonConfigCmd, "/", []string{}, false); err == nil {
 		time.Sleep(100 * time.Millisecond)
 		instance.SandboxProcessManager.Status(pid)
 	}
 
 	// Start dockerd as a background daemon
 	// For gVisor, we disable bridge networking because gVisor doesn't support veth interfaces
-	// Builds must use --network=host (SDK handles this automatically)
+	// Builds use --network=host via BuildKit config (required for gVisor)
 	// This is safe because "host" refers to the sandbox's network, not the actual host
 	cmd := []string{
 		"dockerd",
@@ -73,6 +80,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		"--iptables=false",
 		"--ip6tables=false",
 		"--ip-forward=false",
+		"--config-file=/etc/docker/daemon.json",
 	}
 
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
