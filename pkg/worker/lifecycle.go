@@ -1095,10 +1095,15 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	time.Sleep(100 * time.Millisecond)
 
 	// Start dockerd in background
-	// Following gVisor documentation: just run dockerd with no flags
-	// The container already has necessary capabilities from AddDockerInDockerCapabilities
-	// and runsc is started with --net-raw flag
-	cmd := []string{"dockerd"}
+	// The error "Devices cgroup isn't mounted" is expected in gVisor
+	// We need to tell dockerd to use cgroupfs driver and set a cgroup parent
+	// This is the standard workaround for Docker-in-Docker in nested containers
+	cmd := []string{
+		"dockerd",
+		"--exec-opt", "native.cgroupdriver=cgroupfs",
+		"--cgroup-parent=/",
+		"--iptables=false", // gVisor handles networking
+	}
 	env := []string{}
 	cwd := "/"
 
