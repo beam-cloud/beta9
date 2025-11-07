@@ -14,9 +14,16 @@ const (
 	// 2. Setup cgroups (fast, ~100ms)
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
-	goprocReadyTimeout            = 10 * time.Second
-	dockerDaemonStartupTimeout    = 30 * time.Second
-	dockerDaemonReadyPollInterval = 1 * time.Second
+	goprocReadyTimeout              = 10 * time.Second
+	goprocInitialBackoff            = 100 * time.Millisecond
+	goprocMaxBackoff                = 2 * time.Second
+	goprocBackoffMultiplier         = 1.5
+	goprocCommandCompletionWait     = 100 * time.Millisecond
+	cgroupSetupCompletionWait       = 500 * time.Millisecond
+	dockerDaemonStartupTimeout      = 30 * time.Second
+	dockerDaemonReadyPollInterval   = 1 * time.Second
+	dockerInfoCommandTimeout        = 2 * time.Second
+	dockerInfoCommandCheckInterval  = 100 * time.Millisecond
 )
 
 // startDockerDaemon starts the Docker daemon inside a gVisor sandbox container
@@ -80,7 +87,7 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	}
 
 	// Wait for cgroup setup to complete
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(cgroupSetupCompletionWait)
 
 	exitCode, _ := instance.SandboxProcessManager.Status(pid)
 	if exitCode != 0 {
@@ -91,12 +98,10 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 }
 
 // waitForGoproc waits for the goproc process manager to be ready to accept commands
-// Uses exponential backoff: 100ms -> 150ms -> 225ms -> ... up to 2s max
-// This is necessary because goproc starts asynchronously after container creation
+// Uses exponential backoff to efficiently wait for goproc startup
 func (s *Worker) waitForGoproc(ctx context.Context, containerId string, instance *ContainerInstance) bool {
 	start := time.Now()
-	backoff := 100 * time.Millisecond
-	maxBackoff := 2 * time.Second
+	backoff := goprocInitialBackoff
 
 	for time.Since(start) < goprocReadyTimeout {
 		select {
@@ -115,8 +120,7 @@ func (s *Worker) waitForGoproc(ctx context.Context, containerId string, instance
 
 		if err == nil {
 			// Successfully executed - goproc is ready
-			// Wait briefly for echo to complete, then verify it succeeded
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(goprocCommandCompletionWait)
 			instance.SandboxProcessManager.Status(pid)
 			log.Info().
 				Str("container_id", containerId).
@@ -127,9 +131,9 @@ func (s *Worker) waitForGoproc(ctx context.Context, containerId string, instance
 
 		// Not ready yet - wait with exponential backoff
 		time.Sleep(backoff)
-		backoff = time.Duration(float64(backoff) * 1.5)
-		if backoff > maxBackoff {
-			backoff = maxBackoff
+		backoff = time.Duration(float64(backoff) * goprocBackoffMultiplier)
+		if backoff > goprocMaxBackoff {
+			backoff = goprocMaxBackoff
 		}
 	}
 
@@ -159,55 +163,61 @@ func (s *Worker) waitForDockerDaemon(ctx context.Context, containerId string, in
 
 		case <-ticker.C:
 			// Check if dockerd crashed
-			if exitCode, err := instance.SandboxProcessManager.Status(daemonPid); err == nil && exitCode >= 0 {
-				stdout, _ := instance.SandboxProcessManager.Stdout(daemonPid)
-				stderr, _ := instance.SandboxProcessManager.Stderr(daemonPid)
-				log.Error().
-					Str("container_id", containerId).
-					Int("exit_code", exitCode).
-					Str("stdout", stdout).
-					Str("stderr", stderr).
-					Msg("docker daemon crashed")
+			if s.dockerDaemonCrashed(containerId, instance, daemonPid) {
 				return
 			}
 
-			// Check if daemon is ready with docker info
-			checkPid, err := instance.SandboxProcessManager.Exec(
-				[]string{"docker", "info"},
-				"/",
-				[]string{},
-				false,
-			)
-			if err != nil {
-				continue
+			// Check if daemon is ready
+			if s.isDockerDaemonReady(containerId, instance) {
+				log.Info().Str("container_id", containerId).Msg("docker daemon is ready")
+				return
 			}
-
-			// Wait up to 2 seconds for docker info to complete
-			checkTimeout := time.After(2 * time.Second)
-			checkTicker := time.NewTicker(100 * time.Millisecond)
-			defer checkTicker.Stop()
-
-			for {
-				select {
-				case <-checkTimeout:
-					// docker info timed out, daemon not ready
-					goto nextAttempt
-
-				case <-checkTicker.C:
-					exitCode, err := instance.SandboxProcessManager.Status(checkPid)
-					if err == nil && exitCode == 0 {
-						log.Info().Str("container_id", containerId).Msg("docker daemon is ready")
-						return
-					} else if err == nil && exitCode > 0 {
-						// docker info failed, daemon not ready
-						goto nextAttempt
-					}
-					// exitCode < 0 means still running, keep waiting
-				}
-			}
-
-		nextAttempt:
-			// Continue to next ticker iteration
 		}
 	}
+}
+
+// dockerDaemonCrashed checks if dockerd process has exited
+func (s *Worker) dockerDaemonCrashed(containerId string, instance *ContainerInstance, daemonPid int) bool {
+	exitCode, err := instance.SandboxProcessManager.Status(daemonPid)
+	if err == nil && exitCode >= 0 {
+		stdout, _ := instance.SandboxProcessManager.Stdout(daemonPid)
+		stderr, _ := instance.SandboxProcessManager.Stderr(daemonPid)
+		log.Error().
+			Str("container_id", containerId).
+			Int("exit_code", exitCode).
+			Str("stdout", stdout).
+			Str("stderr", stderr).
+			Msg("docker daemon crashed")
+		return true
+	}
+	return false
+}
+
+// isDockerDaemonReady checks if docker daemon responds to 'docker info'
+func (s *Worker) isDockerDaemonReady(containerId string, instance *ContainerInstance) bool {
+	checkPid, err := instance.SandboxProcessManager.Exec(
+		[]string{"docker", "info"},
+		"/",
+		[]string{},
+		false,
+	)
+	if err != nil {
+		return false
+	}
+
+	// Wait for docker info to complete with timeout
+	deadline := time.Now().Add(dockerInfoCommandTimeout)
+	for time.Now().Before(deadline) {
+		exitCode, err := instance.SandboxProcessManager.Status(checkPid)
+		if err == nil && exitCode == 0 {
+			return true
+		} else if err == nil && exitCode > 0 {
+			return false
+		}
+		// Still running, wait a bit
+		time.Sleep(dockerInfoCommandCheckInterval)
+	}
+
+	// Timed out
+	return false
 }
