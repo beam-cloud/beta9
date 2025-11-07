@@ -766,11 +766,6 @@ class SandboxProcessManager:
         """
         Internal method to execute commands in the sandbox.
 
-        The gRPC service now handles retrying until goproc is ready with
-        exponential backoff (up to 10 seconds). This ensures that even if
-        docker_enabled=True and the daemon is still starting, this call
-        will block gracefully until the process manager is available.
-
         Parameters:
             *args: The command and its arguments.
             cwd (Optional[str]): Working directory.
@@ -1952,16 +1947,16 @@ class SandboxDockerManager:
             proc = self.sandbox_instance.process.exec("printenv", "DOCKER_USERNAME")
             proc.wait()
             username = proc.stdout.read().strip()
-            
+
             if username:
                 proc = self.sandbox_instance.process.exec("printenv", "DOCKER_PASSWORD")
                 proc.wait()
                 password = proc.stdout.read().strip()
-                
+
                 if password:
                     # Perform docker login
                     self.login(username=username, password=password)
-        except Exception:
+        except BaseException:
             # If auto-login fails, don't block - user can manually call login()
             pass
 
@@ -2319,7 +2314,7 @@ class SandboxDockerManager:
                 proc = self.sandbox_instance.process.exec("printenv", "DOCKER_USERNAME")
                 proc.wait()
                 username = proc.stdout.read().strip()
-            
+
             if not password:
                 proc = self.sandbox_instance.process.exec("printenv", "DOCKER_PASSWORD")
                 proc.wait()
@@ -2331,14 +2326,16 @@ class SandboxDockerManager:
             # Use docker login with password-stdin for security
             # Pass password via stdin using process env to avoid shell escaping issues
             registry_arg = f" {shlex.quote(registry)}" if registry else ""
-            login_cmd = f"docker login --username {shlex.quote(username)} --password-stdin{registry_arg}"
-            
+            login_cmd = (
+                f"docker login --username {shlex.quote(username)} --password-stdin{registry_arg}"
+            )
+
             # Use printf instead of echo to handle special characters in password
             cmd = ["sh", "-c", f"printf '%s' {shlex.quote(password)} | {login_cmd}"]
-            
+
             p = self._exec(*cmd)
             exit_code = p.wait()
-            
+
             if exit_code == 0:
                 self._authenticated = True
                 return True
@@ -2386,7 +2383,7 @@ class SandboxDockerManager:
             cmd.append("-d")
         if build:
             cmd.append("--build")
-        
+
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
         return self._exec(*cmd)
@@ -2414,11 +2411,11 @@ class SandboxDockerManager:
             cmd = ["docker-compose", "-f", file, "down"]
             if volumes:
                 cmd.append("-v")
-            
+
             if cwd:
                 p = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
                 return p.wait() == 0
-            
+
             self._run(*cmd)
             return True
         except DockerCommandError:
@@ -2444,7 +2441,7 @@ class SandboxDockerManager:
         cmd = ["docker-compose", "-f", file, "logs"]
         if follow:
             cmd.append("-f")
-        
+
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
         return self._exec(*cmd)
@@ -2461,12 +2458,12 @@ class SandboxDockerManager:
             str: List of compose services
         """
         cmd = ["docker-compose", "-f", file, "ps"]
-        
+
         if cwd:
             p = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
             p.wait()
             return p.stdout.read()
-        
+
         return self._run(*cmd)
 
     def compose_build(
@@ -2509,7 +2506,7 @@ class SandboxDockerManager:
             cmd.append("--no-cache")
         if pull:
             cmd.append("--pull")
-        
+
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
         return self._exec(*cmd)
