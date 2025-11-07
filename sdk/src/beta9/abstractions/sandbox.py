@@ -2166,6 +2166,10 @@ class SandboxDockerManager:
             ```
         """
         cmd = ["docker", "build", "-t", tag]
+        
+        # Use host networking for builds in gVisor to avoid veth permission issues
+        cmd.extend(["--network", "host"])
+        
         if dockerfile:
             cmd.extend(["-f", dockerfile])
         if build_args:

@@ -47,12 +47,16 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	}
 
 	// Start dockerd as a background daemon
-	// Note: We keep bridge enabled (default) for networking during builds
-	// We disable iptables since gVisor doesn't support them
+	// Configure for gVisor environment:
+	// - Use host networking to avoid veth/bridge permission issues
+	// - Disable iptables (gVisor doesn't support)
+	// - Set default network mode to host for build containers
 	cmd := []string{
 		"dockerd",
+		"--bridge=none",
 		"--iptables=false",
 		"--ip6tables=false",
+		"--default-network-opt=host",
 	}
 
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
