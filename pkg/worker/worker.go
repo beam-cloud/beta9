@@ -92,6 +92,7 @@ type ContainerInstance struct {
 	Request               *types.ContainerRequest
 	StopReason            types.StopContainerReason
 	SandboxProcessManager *goproc.GoProcClient
+	GoprocReady           bool // Indicates if goproc is ready to accept commands (set once at startup)
 	ContainerIp           string
 	Runtime               runtime.Runtime
 	OOMWatcher            runtime.OOMWatcher

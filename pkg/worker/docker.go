@@ -27,14 +27,10 @@ const (
 )
 
 // startDockerDaemon starts the Docker daemon inside a sandbox container
+// Assumes goproc is already ready (waited for during container initialization)
 func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, instance *ContainerInstance) {
 	if instance.SandboxProcessManager == nil {
 		log.Error().Str("container_id", containerId).Msg("sandbox process manager not available")
-		return
-	}
-
-	// Wait for goproc to be ready before executing commands
-	if !s.waitForGoproc(ctx, containerId, instance) {
 		return
 	}
 
@@ -95,9 +91,10 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	return nil
 }
 
-// waitForGoproc waits for the goproc process manager to be ready to accept commands
+// waitForGoprocReady waits for the goproc process manager to be ready to accept commands
 // Uses exponential backoff to efficiently wait for goproc startup
-func (s *Worker) waitForGoproc(ctx context.Context, containerId string, instance *ContainerInstance) bool {
+// This should be called ONCE during container initialization, not on every exec
+func (s *Worker) waitForGoprocReady(ctx context.Context, containerId string, instance *ContainerInstance) bool {
 	start := time.Now()
 	backoff := goprocInitialBackoff
 
