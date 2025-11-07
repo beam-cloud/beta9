@@ -1094,80 +1094,49 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	// Setup minimal cgroup filesystem structure for Docker
-	// Based on docker:dind setup, but adapted for gVisor which doesn't have real cgroup controllers
-	// We create the directory structure Docker expects without trying to mount real cgroup controllers
-	log.Info().Str("container_id", containerId).Msg("setting up minimal cgroup structure for docker")
+	// Setup cgroup devices for Docker in gVisor
+	// This follows the official gVisor documentation for Docker-in-Docker:
+	// https://gvisor.dev/docs/user_guide/tutorials/docker/
+	log.Info().Str("container_id", containerId).Msg("setting up cgroup devices for docker (gVisor official method)")
 
 	cgroupSetupScript := `
 set -e
 
-# Create cgroup root
-mkdir -p /sys/fs/cgroup
+# Official gVisor Docker-in-Docker setup
+# From: https://gvisor.dev/docs/user_guide/tutorials/docker/
 
-# Check if /sys/fs/cgroup is already a mount point
-if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
-  # Mount tmpfs at cgroup root
-  mount -t tmpfs -o uid=0,gid=0,mode=0755 cgroup /sys/fs/cgroup 2>/dev/null || true
-fi
+# Mount tmpfs at cgroup root
+mount -t tmpfs cgroups /sys/fs/cgroup
 
-# Create directories for cgroup controllers
-mkdir -p /sys/fs/cgroup/cpu
-mkdir -p /sys/fs/cgroup/memory
-mkdir -p /sys/fs/cgroup/devices
-mkdir -p /sys/fs/cgroup/blkio
-mkdir -p /sys/fs/cgroup/cpuset
-mkdir -p /sys/fs/cgroup/cpuacct
-mkdir -p /sys/fs/cgroup/freezer
-mkdir -p /sys/fs/cgroup/net_cls
-mkdir -p /sys/fs/cgroup/perf_event
-mkdir -p /sys/fs/cgroup/pids
-mkdir -p /sys/fs/cgroup/systemd
+# Create devices cgroup directory
+mkdir /sys/fs/cgroup/devices
 
-# CREATIVE SOLUTION: Bind mount each controller directory to itself
-# This makes them appear as mount points to Docker's checks!
-for controller in cpu memory devices blkio cpuset cpuacct freezer net_cls perf_event pids; do
-  if [ -d "/sys/fs/cgroup/$controller" ]; then
-    mount --bind /sys/fs/cgroup/$controller /sys/fs/cgroup/$controller 2>/dev/null || true
-  fi
-done
+# Mount devices cgroup with cgroup filesystem
+mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 
-# Create minimal files in devices cgroup that Docker checks for
-echo "a *:* rwm" > /sys/fs/cgroup/devices/devices.allow 2>/dev/null || true
-echo "" > /sys/fs/cgroup/devices/devices.deny 2>/dev/null || true
-echo "1" > /sys/fs/cgroup/devices/cgroup.procs 2>/dev/null || true
-
-# Mount systemd cgroup with actual cgroup filesystem
-if ! mountpoint -q /sys/fs/cgroup/systemd 2>/dev/null; then
-  mount -t cgroup -o none,name=systemd cgroup /sys/fs/cgroup/systemd 2>/dev/null || true
-fi
-
-echo "Cgroup structure created with bind mounts"
+echo "Devices cgroup mounted successfully"
 `
 
 	cgroupSetupCmd := []string{"sh", "-c", cgroupSetupScript}
 	cgroupPid, err := instance.SandboxProcessManager.Exec(cgroupSetupCmd, "/", []string{}, false)
 	if err != nil {
-		log.Warn().Str("container_id", containerId).Err(err).Msg("cgroup setup command failed to execute")
-	} else {
-		time.Sleep(500 * time.Millisecond)
-		cgroupExitCode, _ := instance.SandboxProcessManager.Status(cgroupPid)
-		if cgroupExitCode == 0 {
-			log.Info().Str("container_id", containerId).Msg("cgroup structure setup completed")
-		} else {
-			log.Warn().Str("container_id", containerId).Int("exit_code", cgroupExitCode).Msg("cgroup setup had warnings (may be expected in gVisor)")
-		}
+		log.Error().Str("container_id", containerId).Err(err).Msg("cgroup setup command failed to execute")
+		return
 	}
+	time.Sleep(500 * time.Millisecond)
+	cgroupExitCode, _ := instance.SandboxProcessManager.Status(cgroupPid)
+	if cgroupExitCode != 0 {
+		log.Error().Str("container_id", containerId).Int("exit_code", cgroupExitCode).Msg("cgroup setup failed")
+		return
+	}
+	log.Info().Str("container_id", containerId).Msg("devices cgroup mounted successfully")
 
-	// Start dockerd with minimal flags
-	// The cgroup structure we created should satisfy Docker's checks
+	// Start dockerd with flags from official gVisor documentation
 	cmd := []string{
 		"dockerd",
-		"--iptables=false",       // Don't try to configure iptables (gVisor handles networking)
-		"--ip-forward=false",     // Don't enable IP forwarding
-		"--userland-proxy=false", // Disable userland proxy (requires userland-proxy-path otherwise)
-		"--bridge=none",          // Don't create docker0 bridge
-		"--storage-driver=vfs",   // Use simple VFS storage driver
+		"--bridge=none",
+		"--iptables=false",
+		"--ip6tables=false",
 	}
 	env := []string{}
 	cwd := "/"
