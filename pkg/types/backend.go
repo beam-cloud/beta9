@@ -460,7 +460,7 @@ type StubConfigV1 struct {
 	Inputs             *Schema         `json:"inputs"`
 	Outputs            *Schema         `json:"outputs"`
 	TCP                bool            `json:"tcp"`
-	DockerEnabled      bool            `json:"docker_enabled"` // Enable Docker-in-Docker for sandboxes (gVisor only)
+	DockerEnabled      bool            `json:"docker_enabled"`
 }
 
 type StubConfigLimitedValues struct {

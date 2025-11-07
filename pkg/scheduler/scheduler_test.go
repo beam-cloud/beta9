@@ -101,7 +101,7 @@ func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) ContainerRuntime() string {
-	return "runc" // Default to runc for tests
+	return "runc"
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
@@ -171,7 +171,7 @@ func (wpc *ExternalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) ContainerRuntime() string {
-	return "runc" // Default to runc for tests
+	return "runc"
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
