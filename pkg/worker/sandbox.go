@@ -41,21 +41,6 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Create BuildKit config to use host network (required for gVisor)
-	// This ensures docker-compose builds use host network by default
-	buildkitConfig := `debug = false
-
-[worker.oci]
-  # Use host network for all builds (required for gVisor since bridge networking is disabled)
-  networkMode = "host"`
-	
-	// Write BuildKit config
-	buildkitConfigCmd := []string{"sh", "-c", "mkdir -p /etc/buildkit && cat > /etc/buildkit/buildkitd.toml << 'EOF'\n" + buildkitConfig + "\nEOF"}
-	if pid, err := instance.SandboxProcessManager.Exec(buildkitConfigCmd, "/", []string{}, false); err == nil {
-		time.Sleep(100 * time.Millisecond)
-		instance.SandboxProcessManager.Status(pid)
-	}
-
 	// Create daemon config to enable BuildKit
 	daemonConfig := `{
 		"features": {
@@ -196,8 +181,27 @@ func (s *Worker) waitForDockerDaemon(ctx context.Context, containerId string, in
 			// Check if daemon is ready
 			if s.isDockerDaemonReady(containerId, instance) {
 				log.Info().Str("container_id", containerId).Msg("docker daemon is ready")
+				
+				// Create buildx builder with host networking for gVisor compatibility
+				// This ensures docker-compose builds use host network by default
+				s.setupBuildxBuilder(ctx, containerId, instance)
+				
 				return
 			}
+		}
+	}
+}
+
+// setupBuildxBuilder creates a buildx builder with host networking configured
+func (s *Worker) setupBuildxBuilder(ctx context.Context, containerId string, instance *ContainerInstance) {
+	// Create buildx builder with host network driver
+	createBuilderCmd := []string{"docker", "buildx", "create", "--name", "host-network-builder", "--driver", "docker-container", "--driver-opt", "network=host", "--use"}
+	if pid, err := instance.SandboxProcessManager.Exec(createBuilderCmd, "/", []string{}, false); err == nil {
+		// Wait for command to complete
+		time.Sleep(500 * time.Millisecond)
+		exitCode, _ := instance.SandboxProcessManager.Status(pid)
+		if exitCode == 0 {
+			log.Info().Str("container_id", containerId).Msg("buildx builder with host networking created")
 		}
 	}
 }
