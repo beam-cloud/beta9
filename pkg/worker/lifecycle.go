@@ -161,17 +161,14 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 }
 
 func (s *Worker) deleteContainer(containerId string) {
-	// Always remove from local state first
 	s.containerInstances.Delete(containerId)
 
-	// Best-effort remote state removal with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	_, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(ctx, &pb.DeleteContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
-		// This is best-effort; if gateway/redis is down, we still cleaned up locally
-		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state (local cleanup completed)")
+		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state")
 	}
 }
 
@@ -179,7 +176,6 @@ func (s *Worker) deleteContainer(containerId string) {
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 
-	// Use the worker's configured runtime from pool config
 	caps := s.runtime.Capabilities()
 
 	// Gate features based on runtime capabilities
@@ -187,6 +183,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		log.Info().Str("container_id", containerId).
 			Str("runtime", s.runtime.Name()).
 			Msg("disabling checkpoint for runtime without CRIU support")
+
 		request.CheckpointEnabled = false
 		request.Checkpoint = nil
 	}

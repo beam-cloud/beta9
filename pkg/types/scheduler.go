@@ -302,6 +302,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		CheckpointEnabled:        c.CheckpointEnabled,
 		Checkpoint:               checkpoint,
 		BuildRegistryCredentials: c.BuildRegistryCredentials,
+		DockerEnabled:            c.DockerEnabled,
 	}
 }
 
@@ -352,6 +353,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Ports:                    in.Ports,
 		Checkpoint:               checkpoint,
 		BuildRegistryCredentials: in.BuildRegistryCredentials,
+		DockerEnabled:            in.DockerEnabled,
 	}
 }
 

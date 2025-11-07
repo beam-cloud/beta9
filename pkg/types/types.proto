@@ -90,6 +90,7 @@ message ContainerRequest {
   string config_path = 25;
   string image_credentials = 26;
   string build_registry_credentials = 27;
+  bool docker_enabled = 28;
 }
 
 message ContainerState {
