@@ -94,7 +94,7 @@ type ContainerInstance struct {
 	SandboxProcessManager *goproc.GoProcClient
 	ContainerIp           string
 	Runtime               runtime.Runtime
-	OOMWatcher            *runtime.OOMWatcher
+	OOMWatcher            runtime.OOMWatcher
 }
 
 type ContainerOptions struct {

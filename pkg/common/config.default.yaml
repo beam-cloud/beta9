@@ -1,5 +1,5 @@
 clusterName: beta9
-debugMode: true
+debugMode: false
 prettyLogs: true
 database:
   postgres:
@@ -160,7 +160,7 @@ worker:
       mode: local
       priority: 1
       # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod (e.g., "nvidia")
-      containerRuntime: runc  # Pool-specific container runtime: "runc" or "gvisor"
+      containerRuntime: gvisor  # Pool-specific container runtime: "runc" or "gvisor"
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor

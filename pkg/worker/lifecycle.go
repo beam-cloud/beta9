@@ -895,27 +895,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	isOOMKilled := atomic.Bool{}
 	go func() {
 		pid := <-monitorPIDChan
-		go s.collectAndSendContainerMetrics(ctx, request, spec, pid) // Capture resource usage (cpu/mem/gpu)
-
-		// Use cgroup OOM watcher for portable OOM detection (works with all runtimes)
-		// Get the actual cgroup path from the container's PID
-		cgroupPath, err := runtime.GetCgroupPathFromPID(pid)
-		if err != nil {
-			log.Warn().Str("container_id", containerId).Err(err).Msg("failed to get cgroup path, OOM detection disabled")
-		} else {
-			oomWatcher := runtime.NewOOMWatcher(ctx, cgroupPath)
-			containerInstance.OOMWatcher = oomWatcher
-			s.containerInstances.Set(containerId, containerInstance)
-
-			oomWatcher.Watch(func() {
-				log.Warn().Str("container_id", containerId).Msg("OOM kill detected via cgroup watcher")
-				isOOMKilled.Store(true)
-				outputLogger.Info(types.WorkerContainerExitCodeOomKillMessage)
-
-				// Push OOM event to event repository for monitoring/notifications
-				go s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
-			})
-		}
+		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
+		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
 	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
@@ -936,8 +917,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	case types.StopContainerReasonAdmin:
 		exitCode = int(types.ContainerExitCodeAdmin)
 	default:
+		// Check for OOM kill and ensure exit code is 137 for both runc and gVisor
 		if isOOMKilled.Load() {
-			exitCode = int(types.ContainerExitCodeOomKill)
+			exitCode = int(types.ContainerExitCodeOomKill) // 137
+			log.Info().Str("container_id", containerId).Int("exit_code", exitCode).Msg("overriding exit code to 137 for OOM kill")
 		} else if exitCode == int(types.ContainerExitCodeOomKill) || exitCode == -1 {
 			// Exit code will match OOM kill exit code, but container was not OOM killed so override it
 			exitCode = 0
@@ -1055,57 +1038,3 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 	}, nil
 }
 
-const (
-	dockerDaemonStartupDelay   = 3 * time.Second
-	dockerDaemonStartupTimeout = 30 * time.Second
-)
-
-// startDockerDaemon starts the Docker daemon inside a sandbox container
-func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, instance *ContainerInstance) {
-	time.Sleep(dockerDaemonStartupDelay)
-
-	if instance.SandboxProcessManager == nil {
-		log.Error().Str("container_id", containerId).Msg("sandbox process manager not available, cannot start docker daemon")
-		return
-	}
-
-	log.Info().Str("container_id", containerId).Msg("starting docker daemon in sandbox")
-
-	// Start dockerd in background with host socket
-	// The daemon runs on unix:///var/run/docker.sock inside the sandbox
-	cmd := []string{"dockerd", "--host=unix:///var/run/docker.sock"}
-	env := []string{}
-	cwd := "/"
-
-	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
-	if err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
-		return
-	}
-
-	log.Info().
-		Str("container_id", containerId).
-		Int("pid", pid).
-		Msg("docker daemon started successfully - docker commands are now available")
-
-	// Wait for Docker to be ready (check that socket exists and daemon responds)
-	maxRetries := dockerDaemonStartupTimeout / time.Second
-	for i := 0; i < int(maxRetries); i++ {
-		time.Sleep(time.Second)
-
-		// Try running a simple docker command to verify daemon is ready
-		checkCmd := []string{"docker", "ps"}
-		checkPid, err := instance.SandboxProcessManager.Exec(checkCmd, "/", []string{}, false)
-		if err == nil {
-			time.Sleep(time.Millisecond * 100)
-
-			exitCode, err := instance.SandboxProcessManager.Status(checkPid)
-			if err == nil && exitCode == 0 {
-				log.Info().Str("container_id", containerId).Msg("docker daemon is ready and accepting commands")
-				return
-			}
-		}
-	}
-
-	log.Warn().Str("container_id", containerId).Msg("docker daemon started but may not be fully ready")
-}
