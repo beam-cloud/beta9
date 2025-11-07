@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -469,6 +470,21 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 
 func filterControllersByFlags(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
 	filteredControllers := []WorkerPoolController{}
+	
+	// Parse docker_enabled from request stub config
+	dockerEnabled := false
+	if request.Stub.Config != "" {
+		stubConfig, err := request.Stub.UnmarshalConfig()
+		if err == nil && stubConfig.Extra != nil {
+			var extraConfig map[string]interface{}
+			if err := json.Unmarshal(stubConfig.Extra, &extraConfig); err == nil {
+				if enabled, ok := extraConfig["docker_enabled"].(bool); ok && enabled {
+					dockerEnabled = true
+				}
+			}
+		}
+	}
+	
 	for _, controller := range controllers {
 		if !request.Preemptable && controller.IsPreemptable() {
 			continue
@@ -476,6 +492,15 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 
 		if (request.PoolSelector != "" && controller.Name() != request.PoolSelector) ||
 			(request.PoolSelector == "" && controller.RequiresPoolSelector()) {
+			continue
+		}
+
+		// If docker is enabled, only allow pools with gVisor runtime
+		if dockerEnabled && controller.ContainerRuntime() != "gvisor" {
+			log.Debug().
+				Str("pool", controller.Name()).
+				Str("runtime", controller.ContainerRuntime()).
+				Msg("skipping pool - docker_enabled requires gvisor runtime")
 			continue
 		}
 

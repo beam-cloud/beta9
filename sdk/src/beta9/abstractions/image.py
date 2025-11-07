@@ -334,7 +334,6 @@ class Image(BaseAbstraction):
         self.override_python_version = False
         self.image_id = image_id or ""
         self.include_files_patterns = []
-        self.docker_enabled = False  # Track if Docker-in-Docker is enabled
 
         self.with_envs(env_vars or [])
 
@@ -843,8 +842,5 @@ class Image(BaseAbstraction):
 
         for command in docker_install_commands:
             self.build_steps.append(BuildStep(command=command, type="shell"))
-
-        # Mark that Docker is enabled for this image
-        self.docker_enabled = True
 
         return self

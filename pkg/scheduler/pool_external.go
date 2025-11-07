@@ -141,6 +141,10 @@ func (wpc *ExternalWorkerPoolController) Name() string {
 	return wpc.name
 }
 
+func (wpc *ExternalWorkerPoolController) ContainerRuntime() string {
+	return wpc.workerPoolConfig.ContainerRuntime
+}
+
 func (wpc *ExternalWorkerPoolController) RequiresPoolSelector() bool {
 	return wpc.workerPoolConfig.RequiresPoolSelector
 }

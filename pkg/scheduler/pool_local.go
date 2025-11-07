@@ -100,6 +100,10 @@ func (wpc *LocalKubernetesWorkerPoolController) Name() string {
 	return wpc.name
 }
 
+func (wpc *LocalKubernetesWorkerPoolController) ContainerRuntime() string {
+	return wpc.workerPoolConfig.ContainerRuntime
+}
+
 func (wpc *LocalKubernetesWorkerPoolController) RequiresPoolSelector() bool {
 	return wpc.workerPoolConfig.RequiresPoolSelector
 }

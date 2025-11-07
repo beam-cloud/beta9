@@ -100,6 +100,10 @@ func (wpc *LocalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
 	return false
 }
 
+func (wpc *LocalWorkerPoolControllerForTest) ContainerRuntime() string {
+	return "runc" // Default to runc for tests
+}
+
 func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
 }
@@ -164,6 +168,10 @@ func (wpc *ExternalWorkerPoolControllerForTest) Mode() types.PoolMode {
 
 func (wpc *ExternalWorkerPoolControllerForTest) RequiresPoolSelector() bool {
 	return false
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) ContainerRuntime() string {
+	return "runc" // Default to runc for tests
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
