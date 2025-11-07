@@ -680,11 +680,14 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	truncatedContainerId := containerId[len(containerId)-5:]
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
+	if err != nil {
+		return err
+	}
+
 	namespace := containerId
 
-	hostVeth, err := netlink.LinkByName(vethHost)
+	hostVeth, err := netlink.LinkByName(info.VethHost)
 	if err == nil {
 		// Remove the veth from the bridge
 		if err := netlink.LinkSetNoMaster(hostVeth); err != nil {
@@ -697,32 +700,13 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		}
 	}
 
-	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
-		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
-	}))
-	if err != nil {
-		return err
-	}
-
-	containerIp := containerIpResponse.IpAddress
-
-	// Calculate the corresponding IPv6 address
-	ip := net.ParseIP(containerIp)
-	ipv4LastOctet := int(ip.To4()[3])
-	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-	ipv6Prefix := ipv6Net.IP.String()
-
-	// Allocate an IPv6 address using the last octet of the IPv4 address
-	ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
-
 	// Remove iptables and ip6tables rules
-	if err := m.removeIPTablesRules(containerIp, m.ipt); err != nil {
+	if err := m.removeIPTablesRules(info.ContainerIp, m.ipt); err != nil {
 		return err
 	}
 
-	if m.ipt6 != nil {
-		if err := m.removeIPTablesRules(ipv6Address, m.ipt6); err != nil {
+	if m.ipt6 != nil && info.ContainerIpv6 != "" {
+		if err := m.removeIPTablesRules(info.ContainerIpv6, m.ipt6); err != nil {
 			return err
 		}
 	}
@@ -784,42 +768,21 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
-		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
-	}))
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
 	if err != nil {
 		return err
 	}
 
-	containerIp := containerIpResponse.IpAddress
-
-	// Extract the last octet from the IPv4 address (192.168.1.2 -> 2)
-	ip := net.ParseIP(containerIp)
-	if ip == nil {
-		return fmt.Errorf("invalid IPv4 address: %s", containerIp)
-	}
-
-	// Recreate the corresponding IPv6 address using the last octet
-	ipv4LastOctet := int(ip.To4()[3])
-	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-	ipv6Prefix := ipv6Net.IP.String()
-	containerIp_IPv6 := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
-
-	truncatedContainerId := containerId[len(containerId)-5:]
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
-	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
-
 	// Insert NAT PREROUTING rule at the top of the chain
 	// IPv4
-	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort), "-m", "comment", "--comment", comment)
+	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", info.ContainerIp, containerPort), "-m", "comment", "--comment", info.Comment)
 	if err != nil {
 		return err
 	}
 
 	// IPv6
-	if m.ipt6 != nil {
-		err = m.ipt6.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort), "-m", "comment", "--comment", comment)
+	if m.ipt6 != nil && info.ContainerIpv6 != "" {
+		err = m.ipt6.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", info.ContainerIpv6, containerPort), "-m", "comment", "--comment", info.Comment)
 		if err != nil {
 			return err
 		}
@@ -827,14 +790,14 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 
 	// Add FORWARD rule for the DNAT'd traffic
 	// IPv4
-	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
+	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", info.ContainerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
 	if err != nil {
 		return err
 	}
 
 	// IPv6
-	if m.ipt6 != nil {
-		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
+	if m.ipt6 != nil && info.ContainerIpv6 != "" {
+		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", info.ContainerIpv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
 		if err != nil {
 			return err
 		}
