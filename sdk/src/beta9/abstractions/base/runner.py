@@ -168,6 +168,14 @@ class RunnerAbstraction(BaseAbstraction):
         self.block_network = block_network
         self.allow_list = allow_list
 
+        # Validate that block_network and allow_list are not both specified
+        if self.block_network and self.allow_list:
+            raise ValueError(
+                "Cannot specify both 'block_network=True' and 'allow_list'. "
+                "Use 'allow_list' with CIDR notation to allow specific ranges (blocks all others), "
+                "or use 'block_network=True' to block all outbound traffic."
+            )
+
         if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
             self.gpu_count = 1
 

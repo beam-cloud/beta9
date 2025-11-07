@@ -151,6 +151,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             entrypoint=entrypoint,
             ports=ports,
             block_network=block_network,
+            allow_list=allow_list,
             name=name,
             authorized=authorized,
             keep_warm_seconds=keep_warm_seconds,

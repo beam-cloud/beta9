@@ -90,10 +90,13 @@ class Sandbox(Pod):
         block_network (bool):
             Whether to block all outbound network access from the sandbox. When enabled, the sandbox cannot
             make outbound connections to external services, but inbound connections to exposed ports are still
-            allowed. Default is False.
+            allowed. Default is False. Cannot be used together with allow_list.
         allow_list (Optional[List[str]]):
-            Allows outbound network access from the sandbox to specified ips. Blocks all other outbound network access.
-            TODO: Review allow_list docstring
+            List of CIDR ranges that the sandbox is allowed to connect to. All other outbound network access
+            will be blocked. Must use CIDR notation (e.g., "8.8.8.8/32" for a single IP, "10.0.0.0/8" for
+            a range). Supports both IPv4 and IPv6. Examples: ["8.8.8.8/32"], ["10.0.0.0/8", "2001:db8::/32"].
+            Cannot be used together with block_network. Default is None (no restrictions unless block_network
+            is enabled).
 
     Example:
         ```python
@@ -134,7 +137,7 @@ class Sandbox(Pod):
         env: Optional[Dict[str, str]] = {},
         sync_local_dir: bool = False,
         block_network: bool = False,
-        allow_list: Optional[List[str]],
+        allow_list: Optional[List[str]] = None,
     ):
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
