@@ -891,22 +891,27 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		checkpointPIDChan <- pid
 
 		// For sandboxes, wait for goproc to be ready before allowing exec calls
-		if request.Stub.Type.Kind() == types.StubTypeSandbox {
-			instance, exists := s.containerInstances.Get(containerId)
-			if exists && instance.SandboxProcessManager != nil {
-				// Wait for goproc to be ready - this blocks until ready or timeout
-				if s.waitForGoprocReady(ctx, containerId, instance) {
-					instance.GoprocReady = true
-					s.containerInstances.Set(containerId, instance)
-					
-					// Now that goproc is ready, start Docker daemon if enabled
-					if request.DockerEnabled {
-						go s.startDockerDaemon(ctx, containerId, instance)
-					}
-				} else {
-					log.Error().Str("container_id", containerId).Msg("failed to initialize goproc - sandbox may not be functional")
-				}
-			}
+		if request.Stub.Type.Kind() != types.StubTypeSandbox {
+			return
+		}
+
+		instance, exists := s.containerInstances.Get(containerId)
+		if !exists || instance.SandboxProcessManager == nil {
+			return
+		}
+
+		// Wait for goproc to be ready - this blocks until ready or timeout
+		if !s.waitForGoprocReady(ctx, containerId, instance) {
+			log.Error().Str("container_id", containerId).Msg("failed to initialize goproc - sandbox may not be functional")
+			return
+		}
+
+		instance.GoprocReady = true
+		s.containerInstances.Set(containerId, instance)
+
+		// Now that goproc is ready, start Docker daemon if enabled
+		if request.DockerEnabled {
+			go s.startDockerDaemon(ctx, containerId, instance)
 		}
 	}()
 
