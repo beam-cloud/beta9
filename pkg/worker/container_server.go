@@ -561,11 +561,50 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 }
 
 func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest, instance *ContainerInstance, env, cmd []string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	// Check if goproc is ready (should have been initialized at container startup)
-	if !instance.GoprocReady {
-		log.Warn().Str("container_id", in.ContainerId).Msg("goproc not ready yet - exec may fail")
+	// Wait for goproc to be ready (polls the flag set by startup initialization)
+	// This handles the race where exec is called before the async startup completes
+	const (
+		goprocReadyPollTimeout  = 10 * time.Second
+		goprocReadyPollInterval = 100 * time.Millisecond
+	)
+
+	start := time.Now()
+	for !instance.GoprocReady {
+		if time.Since(start) >= goprocReadyPollTimeout {
+			return &pb.ContainerSandboxExecResponse{
+				Ok:       false,
+				Pid:      -1,
+				ErrorMsg: "Process manager not ready within timeout",
+			}, nil
+		}
+
+		// Check if context was cancelled
+		select {
+		case <-ctx.Done():
+			return &pb.ContainerSandboxExecResponse{
+				Ok:       false,
+				Pid:      -1,
+				ErrorMsg: "Request cancelled while waiting for process manager",
+			}, nil
+		default:
+		}
+
+		// Wait before checking again
+		time.Sleep(goprocReadyPollInterval)
+
+		// Refresh instance to get latest GoprocReady state
+		freshInstance, exists := s.containerInstances.Get(in.ContainerId)
+		if !exists {
+			return &pb.ContainerSandboxExecResponse{
+				Ok:       false,
+				Pid:      -1,
+				ErrorMsg: "Container not found",
+			}, nil
+		}
+		instance = freshInstance
 	}
 
+	// Goproc is ready, execute the command
 	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
 	if err != nil {
 		log.Error().Str("container_id", in.ContainerId).Msgf("failed to execute sandbox process: %v", err)
