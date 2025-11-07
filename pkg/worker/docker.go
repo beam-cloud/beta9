@@ -14,24 +14,19 @@ const (
 	// 2. Setup cgroups (fast, ~100ms)
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
-	goprocReadyTimeout              = 10 * time.Second
-	goprocInitialBackoff            = 100 * time.Millisecond
-	goprocMaxBackoff                = 2 * time.Second
-	goprocBackoffMultiplier         = 1.5
-	goprocCommandCompletionWait     = 100 * time.Millisecond
-	cgroupSetupCompletionWait       = 500 * time.Millisecond
-	dockerDaemonStartupTimeout      = 30 * time.Second
-	dockerDaemonReadyPollInterval   = 1 * time.Second
-	dockerInfoCommandTimeout        = 2 * time.Second
-	dockerInfoCommandCheckInterval  = 100 * time.Millisecond
+	goprocReadyTimeout             = 10 * time.Second
+	goprocInitialBackoff           = 100 * time.Millisecond
+	goprocMaxBackoff               = 2 * time.Second
+	goprocBackoffMultiplier        = 1.5
+	goprocCommandCompletionWait    = 100 * time.Millisecond
+	cgroupSetupCompletionWait      = 500 * time.Millisecond
+	dockerDaemonStartupTimeout     = 30 * time.Second
+	dockerDaemonReadyPollInterval  = 1 * time.Second
+	dockerInfoCommandTimeout       = 2 * time.Second
+	dockerInfoCommandCheckInterval = 100 * time.Millisecond
 )
 
-// startDockerDaemon starts the Docker daemon inside a gVisor sandbox container
-// This function handles:
-// 1. Waiting for goproc to be ready
-// 2. Setting up cgroups (required for gVisor Docker-in-Docker)
-// 3. Starting dockerd in background mode
-// 4. Waiting for daemon to be ready
+// startDockerDaemon starts the Docker daemon inside a sandbox container
 func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, instance *ContainerInstance) {
 	if instance.SandboxProcessManager == nil {
 		log.Error().Str("container_id", containerId).Msg("sandbox process manager not available")
@@ -45,8 +40,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 
 	log.Info().Str("container_id", containerId).Msg("starting docker daemon in sandbox")
 
-	// Setup cgroups for Docker-in-Docker (gVisor requirement)
-	// Reference: https://gvisor.dev/docs/user_guide/tutorials/docker/
+	// Setup cgroups for Docker-in-Docker
 	if err := s.setupDockerCgroups(ctx, containerId, instance); err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup cgroups")
 		return
@@ -214,6 +208,7 @@ func (s *Worker) isDockerDaemonReady(containerId string, instance *ContainerInst
 		} else if err == nil && exitCode > 0 {
 			return false
 		}
+
 		// Still running, wait a bit
 		time.Sleep(dockerInfoCommandCheckInterval)
 	}
