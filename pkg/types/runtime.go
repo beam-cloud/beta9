@@ -3,9 +3,8 @@ package types
 type ContainerRuntime string
 
 const (
-	ContainerRuntimeRunc        ContainerRuntime = "runc"
-	ContainerRuntimeGvisor      ContainerRuntime = "gvisor"
-	ContainerRuntimeFirecracker ContainerRuntime = "firecracker"
+	ContainerRuntimeRunc   ContainerRuntime = "runc"
+	ContainerRuntimeGvisor ContainerRuntime = "gvisor"
 )
 
 func (r ContainerRuntime) String() string {

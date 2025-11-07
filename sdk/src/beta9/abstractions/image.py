@@ -799,10 +799,10 @@ class Image(BaseAbstraction):
 
     def with_docker(self) -> "Image":
         """
-        Install Docker and Docker Compose in the image to enable Docker-in-Docker functionality.
+        Install Docker and Docker Compose in the image to enable Docker functionality in a container.
 
-        This method adds commands to install Docker CE and Docker Compose during the image
-        build process. When used with a Sandbox that has docker_enabled=True and gVisor runtime,
+        This just adds commands to install Docker CE and Docker Compose during the image
+        build process. When used with a Sandbox that has docker_enabled=True,
         the Docker daemon will be automatically started inside the sandbox, allowing you to run
         Docker and Docker Compose commands.
 
@@ -813,7 +813,7 @@ class Image(BaseAbstraction):
         - Docker Compose standalone (docker-compose)
         - Docker Buildx plugin (docker buildx)
 
-        Note: This feature only works with gVisor as the container runtime for
+        NOTE: This feature only works with gVisor as the container runtime for
         enhanced security isolation.
 
         Returns:
@@ -837,22 +837,16 @@ class Image(BaseAbstraction):
             instance.process.run_code("import subprocess; subprocess.run(['docker-compose', 'version'])")
             ```
         """
+
         # Add Docker and Docker Compose installation commands
         # These commands install Docker CE and Compose from the official Docker repository
         docker_install_commands = [
-            # Install prerequisites
             "apt-get update && apt-get install -y ca-certificates curl gnupg lsb-release",
-            # Add Docker's official GPG key
             "mkdir -p /etc/apt/keyrings && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg",
-            # Set up the Docker repository
             'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null',
-            # Install Docker Engine, CLI, Containerd, Buildx, and Compose plugin
             "apt-get update && apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin",
-            # Create symlink for standalone docker-compose command (backward compatibility)
             "ln -sf /usr/libexec/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose",
-            # Verify installations
             "docker --version && docker compose version && docker-compose version",
-            # Clean up to reduce image size
             "apt-get clean && rm -rf /var/lib/apt/lists/*",
         ]
 
