@@ -932,6 +932,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 				// Push OOM event to event repository for monitoring/notifications
 				go s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
+				
+				// For gVisor, we need to manually stop the container since the kernel won't do it
+				// For runc, the kernel OOM killer handles this automatically
+				if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
+					log.Info().Str("container_id", containerId).Msg("stopping container due to OOM (gVisor)")
+					go func() {
+						if err := s.stopContainer(containerId, true); err != nil {
+							log.Error().Str("container_id", containerId).Err(err).Msg("failed to stop OOM container")
+						}
+					}()
+				}
 			})
 
 			if err != nil {
