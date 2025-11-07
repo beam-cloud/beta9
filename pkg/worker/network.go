@@ -536,46 +536,26 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 }
 
 func (m *ContainerNetworkManager) setupBlockNetwork(containerId string, request *types.ContainerRequest) error {
-	// Get container IP
-	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
-		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
-	}))
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
 	if err != nil {
 		return err
 	}
 
-	truncatedContainerId := containerId[len(containerId)-5:]
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
-	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
-
-	containerIp := containerIpResponse.IpAddress
-
 	// Block IPv4 outbound traffic (but allow reply packets for exposed ports)
-	err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", containerIp, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", comment)
+	err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", info.ContainerIp, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", info.Comment)
 	if err != nil {
 		return err
 	}
 
 	// Block IPv6 outbound traffic if enabled (but allow reply packets for exposed ports)
 	if m.ipt6 != nil {
-		// Calculate the corresponding IPv6 address using the last octet of the IPv4 address
-		ip := net.ParseIP(containerIp)
-		if ip == nil {
-			return fmt.Errorf("invalid IPv4 address: %s", containerIp)
-		}
-		ipv4LastOctet := int(ip.To4()[3])
-		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-		ipv6Prefix := ipv6Net.IP.String()
-		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
-
-		err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", comment)
+		err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", info.ContainerIpv6, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", info.Comment)
 		if err != nil {
 			return err
 		}
 	}
 
-	log.Info().Str("container_id", containerId).Str("ip_address", containerIp).Msg("outbound network access blocked for container")
+	log.Info().Str("container_id", containerId).Str("ip_address", info.ContainerIp).Msg("outbound network access blocked for container")
 	return nil
 }
 
@@ -586,34 +566,9 @@ func (m *ContainerNetworkManager) setupAllowList(containerId string, request *ty
 		return err
 	}
 
-	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
-		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
-	}))
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
 	if err != nil {
 		return err
-	}
-
-	truncatedContainerId := containerId[len(containerId)-5:]
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
-	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
-
-	containerIp := containerIpResponse.IpAddress
-
-	// Parse container IPv6 address once if IPv6 is enabled
-	var containerIpv6 string
-	if m.ipt6 != nil {
-		ip := net.ParseIP(containerIp)
-		if ip == nil {
-			return fmt.Errorf("invalid container IPv4 address: %s", containerIp)
-		}
-		ipv4LastOctet := int(ip.To4()[3])
-		_, ipv6Net, err := net.ParseCIDR(containerSubnetIPv6)
-		if err != nil {
-			return fmt.Errorf("failed to parse IPv6 subnet: %w", err)
-		}
-		ipv6Prefix := ipv6Net.IP.String()
-		containerIpv6 = fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
 	}
 
 	// Validate and normalize allowlist entries, then add iptables rules
@@ -624,21 +579,19 @@ func (m *ContainerNetworkManager) setupAllowList(containerId string, request *ty
 		}
 
 		if isIPv6 {
-			// IPv6 entry - only add if IPv6 is enabled
 			if m.ipt6 != nil {
-				err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", containerIpv6, "-d", normalizedCIDR, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT", "-m", "comment", "--comment", comment)
+				err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", info.ContainerIpv6, "-d", normalizedCIDR, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
 				if err != nil {
 					return fmt.Errorf("failed to add IPv6 allowlist rule for %s: %w", normalizedCIDR, err)
 				}
-				log.Info().Str("container_id", containerId).Str("container_ipv6", containerIpv6).Str("allowed_destination", normalizedCIDR).Msg("outbound IPv6 network access allowed")
+				log.Info().Str("container_id", containerId).Str("container_ipv6", info.ContainerIpv6).Str("allowed_destination", normalizedCIDR).Msg("outbound IPv6 network access allowed")
 			}
 		} else {
-			// IPv4 entry
-			err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", containerIp, "-d", normalizedCIDR, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT", "-m", "comment", "--comment", comment)
+			err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", info.ContainerIp, "-d", normalizedCIDR, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
 			if err != nil {
 				return fmt.Errorf("failed to add IPv4 allowlist rule for %s: %w", normalizedCIDR, err)
 			}
-			log.Info().Str("container_id", containerId).Str("container_ip", containerIp).Str("allowed_destination", normalizedCIDR).Msg("outbound IPv4 network access allowed")
+			log.Info().Str("container_id", containerId).Str("container_ip", info.ContainerIp).Str("allowed_destination", normalizedCIDR).Msg("outbound IPv4 network access allowed")
 		}
 	}
 	return nil
