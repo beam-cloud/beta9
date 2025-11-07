@@ -835,18 +835,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
 			runscRuntime.AddDockerInDockerCapabilities(spec)
 			log.Info().Str("container_id", containerId).Msg("added docker capabilities for sandbox container")
-
-			// Add cgroup mounts for Docker-in-Docker
-			// Docker requires access to cgroup filesystem to manage container resources
-			// We mount /sys/fs/cgroup from the host into the container
-			// This allows Docker to use cgroup controllers for resource management of nested containers
-			spec.Mounts = append(spec.Mounts, specs.Mount{
-				Type:        "bind",
-				Source:      "/sys/fs/cgroup",
-				Destination: "/sys/fs/cgroup",
-				Options:     []string{"rbind", "rw"},
-			})
-			log.Info().Str("container_id", containerId).Msg("added cgroup bind mount for docker-in-docker")
 		}
 	}
 
@@ -1106,14 +1094,93 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	// Start dockerd in background
-	// Device cgroup restrictions are removed at the OCI spec level (in runsc.Prepare)
-	// to avoid "Devices cgroup isn't mounted" errors in gVisor
-	cmd := []string{
-		"dockerd",
-		"--iptables=false", // gVisor handles networking, don't try to configure iptables
+	// Create minimal cgroup hierarchy for Docker
+	// gVisor doesn't expose the device cgroup controller, so we create a minimal
+	// cgroup structure without it. Docker will use this for CPU/memory management.
+	log.Info().Str("container_id", containerId).Msg("setting up cgroup filesystem for docker")
+
+	cgroupSetupScript := `
+set -e
+# Create cgroup mount point if it doesn't exist
+mkdir -p /sys/fs/cgroup
+
+# Check if already mounted
+if ! mountpoint -q /sys/fs/cgroup 2>/dev/null; then
+  # Mount tmpfs for cgroup
+  mount -t tmpfs -o uid=0,gid=0,mode=0755 cgroup /sys/fs/cgroup || true
+fi
+
+# Create systemd cgroup hierarchy (Docker expects this)
+mkdir -p /sys/fs/cgroup/systemd
+if ! mountpoint -q /sys/fs/cgroup/systemd 2>/dev/null; then
+  mount -t cgroup -o none,name=systemd cgroup /sys/fs/cgroup/systemd || true
+fi
+
+# Create unified cgroup hierarchy
+mkdir -p /sys/fs/cgroup/unified
+if ! mountpoint -q /sys/fs/cgroup/unified 2>/dev/null; then
+  mount -t cgroup2 none /sys/fs/cgroup/unified || true
+fi
+
+echo "Cgroup setup complete"
+`
+
+	cgroupSetupCmd := []string{"sh", "-c", cgroupSetupScript}
+	cgroupPid, err := instance.SandboxProcessManager.Exec(cgroupSetupCmd, "/", []string{}, false)
+	if err != nil {
+		log.Warn().Str("container_id", containerId).Err(err).Msg("cgroup setup command failed to execute")
+	} else {
+		time.Sleep(300 * time.Millisecond)
+		cgroupExitCode, _ := instance.SandboxProcessManager.Status(cgroupPid)
+		if cgroupExitCode == 0 {
+			log.Info().Str("container_id", containerId).Msg("cgroup filesystem setup completed successfully")
+		} else {
+			log.Warn().Str("container_id", containerId).Int("exit_code", cgroupExitCode).Msg("cgroup setup had non-zero exit code")
+		}
 	}
-	env := []string{}
+
+	// Create Docker daemon configuration to work without device cgroups
+	// gVisor doesn't expose the device cgroup controller, so we configure Docker to skip it
+	log.Info().Str("container_id", containerId).Msg("creating docker daemon configuration")
+
+	daemonConfig := `{
+  "storage-driver": "vfs",
+  "iptables": false,
+  "ip-forward": false,
+  "bridge": "none",
+  "exec-opts": ["native.cgroupdriver=cgroupfs"],
+  "cgroup-parent": "/docker",
+  "default-cgroupns-mode": "host",
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}`
+
+	// Write daemon.json configuration file
+	createDaemonJsonCmd := []string{
+		"sh", "-c",
+		"mkdir -p /etc/docker && cat > /etc/docker/daemon.json <<'DAEMONJSON'\n" + daemonConfig + "\nDAEMONJSON\n",
+	}
+	daemonJsonPid, err := instance.SandboxProcessManager.Exec(createDaemonJsonCmd, "/", []string{}, false)
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to create daemon.json")
+		return
+	}
+	time.Sleep(200 * time.Millisecond)
+	daemonJsonExitCode, _ := instance.SandboxProcessManager.Status(daemonJsonPid)
+	if daemonJsonExitCode != 0 {
+		log.Error().Str("container_id", containerId).Int("exit_code", daemonJsonExitCode).Msg("failed to create daemon.json")
+		return
+	}
+
+	// Start dockerd in background with minimal flags
+	// Configuration is loaded from /etc/docker/daemon.json
+	cmd := []string{"dockerd"}
+	env := []string{
+		"DOCKER_RAMDISK=true", // Skip device cgroup checks
+	}
 	cwd := "/"
 
 	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
