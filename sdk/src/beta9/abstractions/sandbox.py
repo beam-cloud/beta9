@@ -2385,6 +2385,9 @@ class SandboxDockerManager:
             script = f"""{cd_cmd}
 set -e
 
+# Get project name (directory name) for image naming
+project_name=$(basename "$(pwd)")
+
 # Build each service with host networking using docker-compose config
 docker-compose -f {shlex.quote(file)} config --services | while read service; do
     # Check if service has a build section
@@ -2393,8 +2396,11 @@ docker-compose -f {shlex.quote(file)} config --services | while read service; do
     if [ -n "$has_build" ]; then
         echo "Building $service with host networking..."
         
-        # Get image name
+        # Get image name (or generate one if not specified)
         image=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^    image:" | awk '{{print $2}}' | head -1)
+        if [ -z "$image" ]; then
+            image="${{project_name}}-${{service}}:latest"
+        fi
         
         # Get build context
         context=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^      context:" | awk '{{print $2}}' | head -1)
