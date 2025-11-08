@@ -2388,10 +2388,14 @@ class SandboxDockerManager:
         # DOCKER_BUILDKIT=0: Use legacy builder
         # COMPOSE_DOCKER_CLI_BUILD=0: Don't delegate to docker CLI
         # DOCKER_DEFAULT_PLATFORM: Set explicit platform to avoid parsing errors
+        # BUILDX_NO_DEFAULT_ATTESTATIONS=1: Disable buildx attestations that can cause platform parsing issues
+        # DOCKER_CLI_HINTS=false: Disable CLI hints to avoid buildx suggestions
         env = {
             "DOCKER_BUILDKIT": "0",
             "COMPOSE_DOCKER_CLI_BUILD": "0",
             "DOCKER_DEFAULT_PLATFORM": "linux/amd64",
+            "BUILDX_NO_DEFAULT_ATTESTATIONS": "1",
+            "DOCKER_CLI_HINTS": "false",
         }
         
         if cwd:
@@ -2519,10 +2523,17 @@ class SandboxDockerManager:
             cmd.append("--pull")
         
         # Disable BuildKit and set default platform for gVisor compatibility
+        # DOCKER_BUILDKIT=0: Use legacy builder
+        # COMPOSE_DOCKER_CLI_BUILD=0: Don't delegate to docker CLI
+        # DOCKER_DEFAULT_PLATFORM: Set explicit platform to avoid parsing errors
+        # BUILDX_NO_DEFAULT_ATTESTATIONS=1: Disable buildx attestations that can cause platform parsing issues
+        # DOCKER_CLI_HINTS=false: Disable CLI hints to avoid buildx suggestions
         env = {
             "DOCKER_BUILDKIT": "0",
             "COMPOSE_DOCKER_CLI_BUILD": "0",
             "DOCKER_DEFAULT_PLATFORM": "linux/amd64",
+            "BUILDX_NO_DEFAULT_ATTESTATIONS": "1",
+            "DOCKER_CLI_HINTS": "false",
         }
         
         if cwd:
