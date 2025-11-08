@@ -88,15 +88,15 @@ if echo "$@" | grep -qE "(up|run|start|create)"; then
         python3 -c "
 import yaml
 with open('$compose_file', 'r') as f:
-    config = yaml.safe_load(f) or {}
+    config = yaml.safe_load(f)
 if 'services' in config:
     for svc in config['services'].values():
         if 'network_mode' not in svc:
             svc['network_mode'] = 'host'
-        svc.pop('networks', None)
-config['networks'] = {'default': {'external': True, 'name': 'host'}}
+if 'networks' in config:
+    del config['networks']
 with open('/tmp/compose-host-$$.yml', 'w') as f:
-    yaml.safe_dump(config, f, sort_keys=False)
+    yaml.dump(config, f)
 "
         /usr/bin/docker-compose.real "${args[@]}"
         rm -f "/tmp/compose-host-$$.yml"
@@ -253,6 +253,7 @@ func (s *Worker) waitForDockerDaemon(ctx context.Context, containerId string, in
 
 			// Check if daemon is ready
 			if s.isDockerDaemonReady(containerId, instance) {
+				go s.ensureBuildxHostNetwork(containerId, instance)
 				log.Info().Str("container_id", containerId).Msg("docker daemon is ready")
 				return
 			}
@@ -275,6 +276,55 @@ func (s *Worker) dockerDaemonCrashed(containerId string, instance *ContainerInst
 		return true
 	}
 	return false
+}
+
+// ensureBuildxHostNetwork configures docker buildx to use host networking for builds.
+func (s *Worker) ensureBuildxHostNetwork(containerId string, instance *ContainerInstance) {
+	if instance == nil || instance.SandboxProcessManager == nil || instance.BuildxConfigured {
+		return
+	}
+
+	script := `
+for i in 1 2 3; do
+	if ! command -v docker >/dev/null 2>&1; then
+		break
+	fi
+	if docker buildx inspect gvisor-host-builder >/dev/null 2>&1; then
+		docker buildx use gvisor-host-builder >/dev/null 2>&1 && exit 0
+	else
+		docker buildx create --name gvisor-host-builder --driver docker-container --driver-opt network=host --use --bootstrap >/dev/null 2>&1 && exit 0
+	fi
+	sleep "$i"
+done
+exit 1
+`
+
+	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
+	if err != nil {
+		log.Warn().Str("container_id", containerId).Err(err).Msg("failed to configure docker buildx host network")
+		return
+	}
+
+	time.Sleep(300 * time.Millisecond)
+
+	exitCode, statusErr := instance.SandboxProcessManager.Status(pid)
+	if statusErr != nil {
+		log.Warn().Str("container_id", containerId).Err(statusErr).Msg("buildx configuration status check failed")
+		return
+	}
+
+	if exitCode == 0 {
+		instance.BuildxConfigured = true
+		log.Info().Str("container_id", containerId).Msg("configured docker buildx to use host network")
+		return
+	}
+
+	stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+	log.Warn().
+		Str("container_id", containerId).
+		Int("exit_code", exitCode).
+		Str("stderr", stderr).
+		Msg("docker buildx host network setup failed")
 }
 
 // isDockerDaemonReady checks if docker daemon responds to 'docker info'

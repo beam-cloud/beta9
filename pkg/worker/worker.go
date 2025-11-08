@@ -93,6 +93,7 @@ type ContainerInstance struct {
 	StopReason                 types.StopContainerReason
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
+	BuildxConfigured           bool
 	ContainerIp                string
 	Runtime                    runtime.Runtime
 	OOMWatcher                 runtime.OOMWatcher
