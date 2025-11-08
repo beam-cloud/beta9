@@ -88,15 +88,15 @@ if echo "$@" | grep -qE "(up|run|start|create)"; then
         python3 -c "
 import yaml
 with open('$compose_file', 'r') as f:
-    config = yaml.safe_load(f)
+    config = yaml.safe_load(f) or {}
 if 'services' in config:
     for svc in config['services'].values():
         if 'network_mode' not in svc:
             svc['network_mode'] = 'host'
-if 'networks' in config:
-    del config['networks']
+        svc.pop('networks', None)
+config['networks'] = {'default': {'external': True, 'name': 'host'}}
 with open('/tmp/compose-host-$$.yml', 'w') as f:
-    yaml.dump(config, f)
+    yaml.safe_dump(config, f, sort_keys=False)
 "
         /usr/bin/docker-compose.real "${args[@]}"
         rm -f "/tmp/compose-host-$$.yml"
