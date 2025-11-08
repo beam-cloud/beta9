@@ -56,7 +56,7 @@ else
     exec /usr/bin/docker.real "$@"
 fi
 `
-	
+
 	// Create docker-compose wrapper that injects network_mode: host
 	composeWrapperScript := `#!/bin/sh
 # Wrapper for docker-compose to inject host networking for gVisor
@@ -133,15 +133,13 @@ fi
 		instance.SandboxProcessManager.Status(pid)
 	}
 
-	// Start dockerd
+	// Start dockerd with BuildKit forced to host networking to avoid missing bridge errors
 	cmd := []string{
-		"dockerd",
-		"--bridge=none",
-		"--iptables=false",
-		"--ip6tables=false",
-		"--ip-forward=false",
+		"sh",
+		"-ec",
+		"export BUILDKITD_FLAGS=--oci-worker-net=host; exec dockerd --bridge=none --iptables=false --ip6tables=false --ip-forward=false",
 	}
-	
+
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
 
 	if err != nil {
