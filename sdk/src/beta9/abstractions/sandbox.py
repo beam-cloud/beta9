@@ -2378,77 +2378,12 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Build images individually with docker build --network=host, then run compose up with host networking
-        if build:
-            cd_cmd = f"cd {shlex.quote(cwd or '.')}" if cwd else ""
-            script = f"""{cd_cmd}
-set -e
-
-# Get project name (directory name) for image naming
-project_name=$(basename "$(pwd)")
-
-# Build each service with host networking using docker-compose config
-docker-compose -f {shlex.quote(file)} config --services | while read service; do
-    # Check if service has a build section
-    has_build=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^    build:" || echo "")
-    
-    if [ -n "$has_build" ]; then
-        echo "Building $service with host networking..."
-        
-        # Get image name (or generate one if not specified)
-        image=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^    image:" | awk '{{print $2}}' | head -1)
-        if [ -z "$image" ]; then
-            image="${{project_name}}-${{service}}:latest"
-        fi
-        
-        # Get build context
-        context=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^      context:" | awk '{{print $2}}' | head -1)
-        context=${{context:-.}}
-        
-        # Get dockerfile
-        dockerfile=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^      dockerfile:" | awk '{{print $2}}' | head -1)
-        dockerfile=${{dockerfile:-Dockerfile}}
-        
-        # Build with host network
-        docker build --network=host -t "$image" -f "$context/$dockerfile" "$context"
-    fi
-done
-
-# Create a modified compose file with host networking for gVisor compatibility
-modified_compose="/tmp/docker-compose-host-$$.yml"
-python3 -c "
-import yaml
-import sys
-
-# Read the original compose file
-with open({shlex.quote(file)!r}, 'r') as f:
-    config = yaml.safe_load(f)
-
-# Add network_mode: host to each service
-if 'services' in config:
-    for service_name, service_config in config['services'].items():
-        if 'network_mode' not in service_config:
-            service_config['network_mode'] = 'host'
-
-# Remove networks section if it exists (not needed with host networking)
-if 'networks' in config:
-    del config['networks']
-
-# Write modified config
-with open('$modified_compose', 'w') as f:
-    yaml.dump(config, f, default_flow_style=False)
-"
-
-# Start all services using the modified compose file with host networking
-docker-compose -f "$modified_compose" up --no-build {"-d" if detach else ""}
-rm -f "$modified_compose"
-"""
-            return self.sandbox_instance.process.exec("sh", "-c", script, cwd=cwd if cwd else None)
-        
-        # No build needed, just start services
+        # Wrappers on worker side handle --network=host automatically
         cmd = ["docker-compose", "-f", file, "up"]
         if detach:
             cmd.append("-d")
+        if build:
+            cmd.append("--build")
         
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
@@ -2567,28 +2502,17 @@ rm -f "$modified_compose"
         if not self._authenticated:
             self._auto_login()
 
-        # Build with docker build --network=host instead of docker-compose build
-        script = f"""
-set -e
-cd {shlex.quote(cwd or ".")}
-
-# Get all services
-services=$(docker-compose -f {shlex.quote(file)} config --services 2>/dev/null)
-
-echo "$services" | while read -r service; do
-    echo "Building $service..."
-    # Get build configuration
-    context=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "context:" | awk '{{print $2}}' || echo ".")
-    dockerfile=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "dockerfile:" | awk '{{print $2}}' || echo "Dockerfile")
-    image=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "image:" | awk '{{print $2}}')
-    
-    if [ -n "$image" ]; then
-        docker build --network=host -t "$image" -f "$dockerfile" "$context" {"--no-cache" if no_cache else ""} {"--pull" if pull else ""}
-    fi
-done
-"""
+        # Wrapper on worker side handles --network=host automatically
+        cmd = ["docker-compose", "-f", file, "build"]
         
-        return self.sandbox_instance.process.exec("sh", "-c", script)
+        if no_cache:
+            cmd.append("--no-cache")
+        if pull:
+            cmd.append("--pull")
+        
+        if cwd:
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+        return self.sandbox_instance.process.exec(*cmd)
 
     # === Networks ===
 
