@@ -2380,36 +2380,39 @@ class SandboxDockerManager:
 
         # Build images individually with docker build --network=host, then run compose up
         if build:
-            # Use shell script to build with explicit network mode
-            script = f"""
+            # Simpler approach: use yq or python to parse YAML
+            cd_cmd = f"cd {shlex.quote(cwd or '.')}" if cwd else ""
+            script = f"""{cd_cmd}
 set -e
-# Get services that need building
-services=$(docker-compose -f {shlex.quote(file)} config --services 2>/dev/null || echo "")
 
-if [ -n "$services" ]; then
-    echo "$services" | while read -r service; do
+# Build each service with host networking using docker-compose config
+docker-compose -f {shlex.quote(file)} config --services | while read service; do
+    # Check if service has a build section
+    has_build=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^    build:" || echo "")
+    
+    if [ -n "$has_build" ]; then
         echo "Building $service with host networking..."
-        # Try to build with docker-compose, falling back to direct docker build
-        docker-compose -f {shlex.quote(file)} build "$service" 2>&1 | grep -q "network bridge not found" && {{
-            # Extract build config for this service
-            context=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "context:" | awk '{{print $2}}' || echo ".")
-            dockerfile=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "dockerfile:" | awk '{{print $2}}' || echo "Dockerfile")  
-            image=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "image:" | awk '{{print $2}}')
-            
-            if [ -n "$image" ]; then
-                echo "Retrying $service build with docker build --network=host..."
-                docker build --network=host -t "$image" -f "$dockerfile" "$context"
-            fi
-        }} || docker-compose -f {shlex.quote(file)} build "$service"
-    done
-fi
+        
+        # Get image name
+        image=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^    image:" | awk '{{print $2}}' | head -1)
+        
+        # Get build context
+        context=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^      context:" | awk '{{print $2}}' | head -1)
+        context=${{context:-.}}
+        
+        # Get dockerfile
+        dockerfile=$(docker-compose -f {shlex.quote(file)} config | grep -A 20 "^  $service:" | grep "^      dockerfile:" | awk '{{print $2}}' | head -1)
+        dockerfile=${{dockerfile:-Dockerfile}}
+        
+        # Build with host network
+        docker build --network=host -t "$image" -f "$context/$dockerfile" "$context"
+    fi
+done
 
-# Now start services without building
+# Start all services
 docker-compose -f {shlex.quote(file)} up --no-build {"-d" if detach else ""}
 """
-            if cwd:
-                return self.sandbox_instance.process.exec("sh", "-c", script, cwd=cwd)
-            return self.sandbox_instance.process.exec("sh", "-c", script)
+            return self.sandbox_instance.process.exec("sh", "-c", script, cwd=cwd if cwd else None)
         
         # No build needed, just start services
         cmd = ["docker-compose", "-f", file, "up"]
