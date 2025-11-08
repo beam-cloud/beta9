@@ -2378,9 +2378,8 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Build images individually with docker build --network=host, then run compose up
+        # Build images individually with docker build --network=host, then run compose up with host networking
         if build:
-            # Simpler approach: use yq or python to parse YAML
             cd_cmd = f"cd {shlex.quote(cwd or '.')}" if cwd else ""
             script = f"""{cd_cmd}
 set -e
@@ -2415,8 +2414,34 @@ docker-compose -f {shlex.quote(file)} config --services | while read service; do
     fi
 done
 
-# Start all services
-docker-compose -f {shlex.quote(file)} up --no-build {"-d" if detach else ""}
+# Create a modified compose file with host networking for gVisor compatibility
+modified_compose="/tmp/docker-compose-host-$$.yml"
+python3 -c "
+import yaml
+import sys
+
+# Read the original compose file
+with open({shlex.quote(file)!r}, 'r') as f:
+    config = yaml.safe_load(f)
+
+# Add network_mode: host to each service
+if 'services' in config:
+    for service_name, service_config in config['services'].items():
+        if 'network_mode' not in service_config:
+            service_config['network_mode'] = 'host'
+
+# Remove networks section if it exists (not needed with host networking)
+if 'networks' in config:
+    del config['networks']
+
+# Write modified config
+with open('$modified_compose', 'w') as f:
+    yaml.dump(config, f, default_flow_style=False)
+"
+
+# Start all services using the modified compose file with host networking
+docker-compose -f "$modified_compose" up --no-build {"-d" if detach else ""}
+rm -f "$modified_compose"
 """
             return self.sandbox_instance.process.exec("sh", "-c", script, cwd=cwd if cwd else None)
         
