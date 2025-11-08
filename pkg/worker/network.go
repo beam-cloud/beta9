@@ -39,6 +39,9 @@ const (
 	containerGatewayAddressIPv6  string = "fd00:abcd::1"
 	containerBridgeAddressIPv6   string = "fd00:abcd::1"
 
+	// Security chain for untrusted tenant isolation
+	b9ForwardChain string = "B9-FORWARD"
+
 	containerNetworkCleanupInterval time.Duration = time.Minute * 1
 )
 
@@ -125,6 +128,151 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 	go m.cleanupOrphanedNamespaces()
 
 	return m, nil
+}
+
+// enableBridgeNetfilter ensures that bridge traffic goes through iptables rules.
+// This is critical for security - without this, bridged traffic can bypass firewall rules.
+func (m *ContainerNetworkManager) enableBridgeNetfilter() error {
+	sysctls := map[string]string{
+		"/proc/sys/net/bridge/bridge-nf-call-iptables":  "1",
+		"/proc/sys/net/bridge/bridge-nf-call-ip6tables": "1",
+	}
+
+	for path, value := range sysctls {
+		// Check if the file exists (bridge module might not be loaded yet)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			// Try to load the br_netfilter module
+			cmd := exec.Command("modprobe", "br_netfilter")
+			if err := cmd.Run(); err != nil {
+				log.Warn().Err(err).Str("sysctl", path).Msg("failed to load br_netfilter module, continuing anyway")
+				continue
+			}
+			// Wait a bit for the module to initialize
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		if err := os.WriteFile(path, []byte(value+"\n"), 0644); err != nil {
+			log.Warn().Err(err).Str("sysctl", path).Msg("failed to set bridge netfilter sysctl, continuing anyway")
+		}
+	}
+
+	return nil
+}
+
+// setupSecurityChain creates and configures the B9-FORWARD chain for untrusted tenant isolation.
+// This chain enforces:
+// 1. No container-to-container communication (strong tenant isolation)
+// 2. No access to metadata services or private infrastructure ranges
+// 3. Only outbound traffic via the default interface
+func (m *ContainerNetworkManager) setupSecurityChain(ipt *iptables.IPTables, bridgeName string, isIPv6 bool) error {
+	// Create or clear the B9-FORWARD chain
+	if err := ipt.ClearChain("filter", b9ForwardChain); err != nil {
+		// Chain doesn't exist, create it
+		if err := ipt.NewChain("filter", b9ForwardChain); err != nil {
+			return fmt.Errorf("failed to create %s chain: %w", b9ForwardChain, err)
+		}
+	}
+
+	// Hook bridge traffic into our security chain
+	// Insert at position 1 to ensure our rules are evaluated first
+	if err := ipt.InsertUnique("filter", "FORWARD", 1, "-i", bridgeName, "-j", b9ForwardChain); err != nil {
+		return fmt.Errorf("failed to hook incoming bridge traffic: %w", err)
+	}
+
+	if err := ipt.InsertUnique("filter", "FORWARD", 1, "-o", bridgeName, "-j", b9ForwardChain); err != nil {
+		return fmt.Errorf("failed to hook outgoing bridge traffic: %w", err)
+	}
+
+	// Rule 1: Allow established/related connections (stateful firewall)
+	if err := ipt.AppendUnique("filter", b9ForwardChain,
+		"-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
+		return fmt.Errorf("failed to add established connection rule: %w", err)
+	}
+
+	// Rule 2: Drop container-to-container traffic (strong tenant isolation)
+	// This prevents lateral movement between sandboxes
+	if err := ipt.AppendUnique("filter", b9ForwardChain,
+		"-i", bridgeName, "-o", bridgeName, "-j", "DROP"); err != nil {
+		return fmt.Errorf("failed to add container isolation rule: %w", err)
+	}
+
+	// Rule 3: Anti-spoofing - drop packets from bridge with source outside containerSubnet
+	subnet := containerSubnet
+	if isIPv6 {
+		subnet = containerSubnetIPv6
+	}
+	if err := ipt.AppendUnique("filter", b9ForwardChain,
+		"-i", bridgeName, "!", "-s", subnet, "-j", "DROP"); err != nil {
+		return fmt.Errorf("failed to add anti-spoofing rule: %w", err)
+	}
+
+	// Rules 4-7: Block access to infrastructure and metadata services
+	// These rules prevent containers from accessing sensitive internal resources
+	if !isIPv6 {
+		// Block AWS/GCP/Azure metadata service
+		if err := ipt.AppendUnique("filter", b9ForwardChain,
+			"-s", containerSubnet, "-d", "169.254.169.254/32", "-j", "DROP"); err != nil {
+			return fmt.Errorf("failed to add metadata blocking rule: %w", err)
+		}
+
+		// Block localhost
+		if err := ipt.AppendUnique("filter", b9ForwardChain,
+			"-s", containerSubnet, "-d", "127.0.0.0/8", "-j", "DROP"); err != nil {
+			return fmt.Errorf("failed to add localhost blocking rule: %w", err)
+		}
+
+		// Block private class A (10.0.0.0/8)
+		if err := ipt.AppendUnique("filter", b9ForwardChain,
+			"-s", containerSubnet, "-d", "10.0.0.0/8", "-j", "DROP"); err != nil {
+			return fmt.Errorf("failed to add private network blocking rule (10.0.0.0/8): %w", err)
+		}
+
+		// Block private class B (172.16.0.0/12)
+		if err := ipt.AppendUnique("filter", b9ForwardChain,
+			"-s", containerSubnet, "-d", "172.16.0.0/12", "-j", "DROP"); err != nil {
+			return fmt.Errorf("failed to add private network blocking rule (172.16.0.0/12): %w", err)
+		}
+
+		// Block private class C (192.168.0.0/16) except our own subnet
+		// This blocks other 192.168.x.x ranges while allowing our 192.168.1.0/24
+		if err := ipt.AppendUnique("filter", b9ForwardChain,
+			"-s", containerSubnet, "-d", "192.168.0.0/16", "!", "-d", containerSubnet, "-j", "DROP"); err != nil {
+			return fmt.Errorf("failed to add private network blocking rule (192.168.0.0/16): %w", err)
+		}
+
+		// Block link-local addresses (besides metadata which is already blocked)
+		if err := ipt.AppendUnique("filter", b9ForwardChain,
+			"-s", containerSubnet, "-d", "169.254.0.0/16", "-j", "DROP"); err != nil {
+			return fmt.Errorf("failed to add link-local blocking rule: %w", err)
+		}
+	} else {
+		// IPv6: Block link-local addresses
+		if err := ipt.AppendUnique("filter", b9ForwardChain,
+			"-s", containerSubnetIPv6, "-d", "fe80::/10", "-j", "DROP"); err != nil {
+			return fmt.Errorf("failed to add IPv6 link-local blocking rule: %w", err)
+		}
+
+		// IPv6: Block ULA (Unique Local Addresses) that aren't ours
+		if err := ipt.AppendUnique("filter", b9ForwardChain,
+			"-s", containerSubnetIPv6, "-d", "fc00::/7", "!", "-d", containerSubnetIPv6, "-j", "DROP"); err != nil {
+			return fmt.Errorf("failed to add IPv6 ULA blocking rule: %w", err)
+		}
+	}
+
+	// Rule 8: Allow outbound traffic via the default interface
+	// This is the only way containers can reach the internet
+	nodeIface := m.defaultLink.Attrs().Name
+	if err := ipt.AppendUnique("filter", b9ForwardChain,
+		"-i", bridgeName, "-o", nodeIface, "-j", "ACCEPT"); err != nil {
+		return fmt.Errorf("failed to add outbound traffic rule: %w", err)
+	}
+
+	// Rule 9: Default deny - drop everything else
+	if err := ipt.AppendUnique("filter", b9ForwardChain, "-j", "DROP"); err != nil {
+		return fmt.Errorf("failed to add default deny rule: %w", err)
+	}
+
+	return nil
 }
 
 // detectIptablesMode detects which iptables version is use on the host based on where the KUBE-FORWARD chain has been setup
@@ -311,7 +459,13 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 		}
 	}
 
-	// Allow containers to communicate with each other and the internet
+	// Enable bridge netfilter to ensure bridge traffic goes through iptables
+	// This is critical for security rules to take effect
+	if err := m.enableBridgeNetfilter(); err != nil {
+		log.Warn().Err(err).Msg("failed to enable bridge netfilter, security may be compromised")
+	}
+
+	// Allow containers to communicate with the internet via NAT
 	// (NAT outgoing traffic from the containers)
 
 	// IPv4
@@ -326,13 +480,17 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 		}
 	}
 
-	// Allow forwarding of traffic from the bridge to the external network and back
-	if err := m.ipt.InsertUnique("filter", "FORWARD", 1, "-i", bridgeName, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT"); err != nil {
-		return nil, err
+	// Setup security chain for untrusted tenant isolation (IPv4)
+	// This replaces the simple FORWARD rules with a comprehensive security policy
+	if err := m.setupSecurityChain(m.ipt, bridgeName, false); err != nil {
+		return nil, fmt.Errorf("failed to setup IPv4 security chain: %w", err)
 	}
 
-	if err := m.ipt.InsertUnique("filter", "FORWARD", 1, "-i", m.defaultLink.Attrs().Name, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
-		return nil, err
+	// Setup security chain for IPv6 if supported
+	if m.ipt6 != nil {
+		if err := m.setupSecurityChain(m.ipt6, bridgeName, true); err != nil {
+			return nil, fmt.Errorf("failed to setup IPv6 security chain: %w", err)
+		}
 	}
 
 	return bridge, err
@@ -668,6 +826,14 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 	tables := []string{"nat", "filter"}
 	for _, table := range tables {
 		chains := []string{"PREROUTING", "FORWARD"}
+		
+		// Also clean up B9-FORWARD chain if it exists
+		if table == "filter" {
+			exists, _ := ipt.ChainExists("filter", b9ForwardChain)
+			if exists {
+				chains = append(chains, b9ForwardChain)
+			}
+		}
 
 		for _, chain := range chains {
 			// List rules in the chain
@@ -740,16 +906,36 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 		}
 	}
 
-	// Add FORWARD rule for the DNAT'd traffic
-	// IPv4
-	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
+	// Add FORWARD rule for the DNAT'd traffic via the B9-FORWARD chain
+	// This ensures only legitimate external traffic (from the node interface) can reach exposed ports
+	// Tenants cannot pivot through this DNAT to hit each other
+	nodeIface := m.defaultLink.Attrs().Name
+
+	// IPv4 - Allow traffic from node interface to exposed container port
+	err = m.ipt.InsertUnique("filter", b9ForwardChain, 1,
+		"-p", "tcp",
+		"-i", nodeIface,
+		"-o", containerBridgeLinkName,
+		"-d", containerIp,
+		"--dport", fmt.Sprintf("%d", containerPort),
+		"-m", "conntrack", "--ctstate", "NEW,ESTABLISHED",
+		"-j", "ACCEPT",
+		"-m", "comment", "--comment", comment)
 	if err != nil {
 		return err
 	}
 
-	// IPv6
+	// IPv6 - Allow traffic from node interface to exposed container port
 	if m.ipt6 != nil {
-		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
+		err = m.ipt6.InsertUnique("filter", b9ForwardChain, 1,
+			"-p", "tcp",
+			"-i", nodeIface,
+			"-o", containerBridgeLinkName,
+			"-d", containerIp_IPv6,
+			"--dport", fmt.Sprintf("%d", containerPort),
+			"-m", "conntrack", "--ctstate", "NEW,ESTABLISHED",
+			"-j", "ACCEPT",
+			"-m", "comment", "--comment", comment)
 		if err != nil {
 			return err
 		}
