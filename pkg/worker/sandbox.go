@@ -61,6 +61,10 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 
 	// Wait for daemon to be ready
 	s.waitForDockerDaemon(ctx, containerId, instance, pid)
+
+	// Remove buildx builders to prevent docker-compose from using Bake
+	// This fixes the "failed to parse platform" error with docker-compose in gVisor
+	s.disableBuildx(ctx, containerId, instance)
 }
 
 // setupDockerCgroups configures cgroups required for Docker-in-Docker in gVisor
@@ -185,6 +189,51 @@ func (s *Worker) dockerDaemonCrashed(containerId string, instance *ContainerInst
 		return true
 	}
 	return false
+}
+
+// disableBuildx removes buildx builders to prevent docker-compose from trying to use Bake
+// which causes platform parsing errors in gVisor sandboxes
+func (s *Worker) disableBuildx(ctx context.Context, containerId string, instance *ContainerInstance) {
+	log.Info().Str("container_id", containerId).Msg("disabling buildx builders")
+
+	// Remove all buildx builders
+	// This prevents docker-compose from detecting buildx and trying to use Bake
+	commands := []string{
+		// List and remove all builders
+		"docker buildx ls --format '{{.Name}}' | grep -v 'default' | xargs -r -n1 docker buildx rm || true",
+		// Remove the default builder to force use of legacy builder
+		"docker buildx rm default || true",
+	}
+
+	for _, cmdStr := range commands {
+		pid, err := instance.SandboxProcessManager.Exec(
+			[]string{"sh", "-c", cmdStr},
+			"/",
+			[]string{},
+			false,
+		)
+		if err != nil {
+			log.Warn().Str("container_id", containerId).Err(err).Msg("failed to execute buildx removal command")
+			continue
+		}
+
+		// Wait a bit for command to complete
+		time.Sleep(500 * time.Millisecond)
+
+		exitCode, _ := instance.SandboxProcessManager.Status(pid)
+		if exitCode != 0 {
+			stdout, _ := instance.SandboxProcessManager.Stdout(pid)
+			stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+			log.Debug().
+				Str("container_id", containerId).
+				Int("exit_code", exitCode).
+				Str("stdout", stdout).
+				Str("stderr", stderr).
+				Msg("buildx removal command completed with non-zero exit")
+		}
+	}
+
+	log.Info().Str("container_id", containerId).Msg("buildx builders disabled")
 }
 
 // isDockerDaemonReady checks if docker daemon responds to 'docker info'
