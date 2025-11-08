@@ -41,34 +41,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Configure BuildKit to use host networking for all builds (required for gVisor)
-	// This affects the embedded BuildKit used by docker build and docker-compose
-	buildkitConfig := `
-[worker.oci]
-  enabled = true
-  # Use host networking for all build steps (required for gVisor)
-  networkMode = "host"
-`
-	
-	buildkitConfigCmd := []string{"sh", "-c", "mkdir -p /etc/buildkit && cat > /etc/buildkit/buildkitd.toml << 'EOF'\n" + buildkitConfig + "\nEOF"}
-	if pid, err := instance.SandboxProcessManager.Exec(buildkitConfigCmd, "/", []string{}, false); err == nil {
-		time.Sleep(50 * time.Millisecond)
-		instance.SandboxProcessManager.Status(pid)
-	}
-
-	// Enable BuildKit with config
-	daemonConfig := `{
-		"features": {
-			"buildkit": true
-		}
-	}`
-	daemonConfigCmd := []string{"sh", "-c", "mkdir -p /etc/docker && cat > /etc/docker/daemon.json << 'EOF'\n" + daemonConfig + "\nEOF"}
-	if pid, err := instance.SandboxProcessManager.Exec(daemonConfigCmd, "/", []string{}, false); err == nil {
-		time.Sleep(50 * time.Millisecond)
-		instance.SandboxProcessManager.Status(pid)
-	}
-
-	// Start dockerd with BuildKit config
+	// Start dockerd - keep it simple
 	cmd := []string{
 		"dockerd",
 		"--bridge=none",
@@ -77,12 +50,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		"--ip-forward=false",
 	}
 	
-	// Set BuildKit config file via environment
-	env := []string{
-		"BUILDKIT_CONFIG=/etc/buildkit/buildkitd.toml",
-	}
-	
-	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", env, true)
+	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
 
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")

@@ -2378,21 +2378,47 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
+        # Build images individually with docker build --network=host, then run compose up
+        if build:
+            # Use shell script to build with explicit network mode
+            script = f"""
+set -e
+# Get services that need building
+services=$(docker-compose -f {shlex.quote(file)} config --services 2>/dev/null || echo "")
+
+if [ -n "$services" ]; then
+    echo "$services" | while read -r service; do
+        echo "Building $service with host networking..."
+        # Try to build with docker-compose, falling back to direct docker build
+        docker-compose -f {shlex.quote(file)} build "$service" 2>&1 | grep -q "network bridge not found" && {{
+            # Extract build config for this service
+            context=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "context:" | awk '{{print $2}}' || echo ".")
+            dockerfile=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "dockerfile:" | awk '{{print $2}}' || echo "Dockerfile")  
+            image=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "image:" | awk '{{print $2}}')
+            
+            if [ -n "$image" ]; then
+                echo "Retrying $service build with docker build --network=host..."
+                docker build --network=host -t "$image" -f "$dockerfile" "$context"
+            fi
+        }} || docker-compose -f {shlex.quote(file)} build "$service"
+    done
+fi
+
+# Now start services without building
+docker-compose -f {shlex.quote(file)} up --no-build {"-d" if detach else ""}
+"""
+            if cwd:
+                return self.sandbox_instance.process.exec("sh", "-c", script, cwd=cwd)
+            return self.sandbox_instance.process.exec("sh", "-c", script)
+        
+        # No build needed, just start services
         cmd = ["docker-compose", "-f", file, "up"]
         if detach:
             cmd.append("-d")
-        if build:
-            cmd.append("--build")
-
-        # Docker wrapper script automatically adds --network=host to builds
-        env = {
-            "DOCKER_BUILDKIT": "1",
-            "COMPOSE_DOCKER_CLI_BUILD": "1",
-        }
         
         if cwd:
-            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
-        return self.sandbox_instance.process.exec(*cmd, env=env)
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+        return self.sandbox_instance.process.exec(*cmd)
 
     def compose_down(
         self,
@@ -2507,22 +2533,28 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        cmd = ["docker-compose", "-f", file, "build"]
+        # Build with docker build --network=host instead of docker-compose build
+        script = f"""
+set -e
+cd {shlex.quote(cwd or ".")}
+
+# Get all services
+services=$(docker-compose -f {shlex.quote(file)} config --services 2>/dev/null)
+
+echo "$services" | while read -r service; do
+    echo "Building $service..."
+    # Get build configuration
+    context=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "context:" | awk '{{print $2}}' || echo ".")
+    dockerfile=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "dockerfile:" | awk '{{print $2}}' || echo "Dockerfile")
+    image=$(docker-compose -f {shlex.quote(file)} config 2>/dev/null | awk "/^  $service:/,/^  [a-z]/" | grep "image:" | awk '{{print $2}}')
+    
+    if [ -n "$image" ]; then
+        docker build --network=host -t "$image" -f "$dockerfile" "$context" {"--no-cache" if no_cache else ""} {"--pull" if pull else ""}
+    fi
+done
+"""
         
-        if no_cache:
-            cmd.append("--no-cache")
-        if pull:
-            cmd.append("--pull")
-        
-        # Docker wrapper script automatically adds --network=host to builds
-        env = {
-            "DOCKER_BUILDKIT": "1",
-            "COMPOSE_DOCKER_CLI_BUILD": "1",
-        }
-        
-        if cwd:
-            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
-        return self.sandbox_instance.process.exec(*cmd, env=env)
+        return self.sandbox_instance.process.exec("sh", "-c", script)
 
     # === Networks ===
 
