@@ -133,7 +133,7 @@ fi
 		instance.SandboxProcessManager.Status(pid)
 	}
 
-	// Start dockerd
+	// Start dockerd with legacy builder (BuildKit has networking issues with gVisor)
 	cmd := []string{
 		"dockerd",
 		"--bridge=none",
@@ -142,7 +142,12 @@ fi
 		"--ip-forward=false",
 	}
 	
-	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
+	// Disable BuildKit - legacy builder works better with gVisor + host networking
+	env := []string{
+		"DOCKER_BUILDKIT=0",
+	}
+	
+	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", env, true)
 
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
