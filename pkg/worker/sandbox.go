@@ -41,53 +41,34 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Create a docker wrapper that automatically adds --network=host to build commands
-	// This ensures all builds (including docker-compose) use host networking for gVisor
-	dockerWrapperScript := `#!/bin/sh
-# Wrapper for docker command to add --network=host to builds in gVisor
-if [ "$1" = "build" ] || [ "$1" = "buildx" ]; then
-    # Check if --network is already specified
-    has_network=false
-    for arg in "$@"; do
-        if echo "$arg" | grep -q "^--network"; then
-            has_network=true
-            break
-        fi
-    done
-    
-    # Add --network=host if not already specified
-    if [ "$has_network" = "false" ]; then
-        /usr/bin/docker.real "$1" --network=host "${@:2}"
-    else
-        /usr/bin/docker.real "$@"
-    fi
-else
-    /usr/bin/docker.real "$@"
-fi
+	// Configure BuildKit to use host networking for all builds (required for gVisor)
+	// This affects the embedded BuildKit used by docker build and docker-compose
+	buildkitConfig := `
+[worker.oci]
+  enabled = true
+  # Use host networking for all build steps (required for gVisor)
+  networkMode = "host"
 `
 	
-	// Install the wrapper
-	wrapperCmd := []string{"sh", "-c", `
-mv /usr/bin/docker /usr/bin/docker.real 2>/dev/null || true
-cat > /usr/bin/docker << 'WRAPPER_EOF'
-` + dockerWrapperScript + `
-WRAPPER_EOF
-chmod +x /usr/bin/docker
-`}
-	if pid, err := instance.SandboxProcessManager.Exec(wrapperCmd, "/", []string{}, false); err == nil {
-		time.Sleep(100 * time.Millisecond)
+	buildkitConfigCmd := []string{"sh", "-c", "mkdir -p /etc/buildkit && cat > /etc/buildkit/buildkitd.toml << 'EOF'\n" + buildkitConfig + "\nEOF"}
+	if pid, err := instance.SandboxProcessManager.Exec(buildkitConfigCmd, "/", []string{}, false); err == nil {
+		time.Sleep(50 * time.Millisecond)
 		instance.SandboxProcessManager.Status(pid)
 	}
 
-	// Enable BuildKit
-	daemonConfig := `{"features": {"buildkit": true}}`
-	daemonConfigCmd := []string{"sh", "-c", "mkdir -p /etc/docker && echo '" + daemonConfig + "' > /etc/docker/daemon.json"}
+	// Enable BuildKit with config
+	daemonConfig := `{
+		"features": {
+			"buildkit": true
+		}
+	}`
+	daemonConfigCmd := []string{"sh", "-c", "mkdir -p /etc/docker && cat > /etc/docker/daemon.json << 'EOF'\n" + daemonConfig + "\nEOF"}
 	if pid, err := instance.SandboxProcessManager.Exec(daemonConfigCmd, "/", []string{}, false); err == nil {
 		time.Sleep(50 * time.Millisecond)
 		instance.SandboxProcessManager.Status(pid)
 	}
 
-	// Start dockerd
+	// Start dockerd with BuildKit config
 	cmd := []string{
 		"dockerd",
 		"--bridge=none",
@@ -95,8 +76,14 @@ chmod +x /usr/bin/docker
 		"--ip6tables=false",
 		"--ip-forward=false",
 	}
+	
+	// Set BuildKit config file via environment
+	env := []string{
+		"BUILDKIT_CONFIG=/etc/buildkit/buildkitd.toml",
+	}
+	
+	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", env, true)
 
-	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
 		return
