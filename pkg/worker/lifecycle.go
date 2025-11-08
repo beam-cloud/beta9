@@ -648,6 +648,18 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 		"PYTHONUNBUFFERED=1",
 	}
 
+	// Add Docker-specific environment variables for gVisor compatibility
+	// These prevent buildx/bake from interfering with docker-compose commands
+	if request.DockerEnabled {
+		env = append(env, []string{
+			"DOCKER_BUILDKIT=0",                    // Use legacy builder instead of BuildKit
+			"COMPOSE_DOCKER_CLI_BUILD=0",           // Don't delegate to docker CLI
+			"DOCKER_DEFAULT_PLATFORM=linux/amd64",  // Set explicit platform to avoid parsing errors
+			"BUILDX_NO_DEFAULT_ATTESTATIONS=1",     // Disable buildx attestations
+			"DOCKER_CLI_HINTS=false",               // Disable CLI hints to avoid buildx suggestions
+		}...)
+	}
+
 	// Add env vars from request
 	env = append(request.Env, env...)
 
