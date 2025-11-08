@@ -2384,14 +2384,10 @@ class SandboxDockerManager:
         if build:
             cmd.append("--build")
 
-        # Disable BuildKit and set default platform for gVisor compatibility
-        # DOCKER_BUILDKIT=0: Use legacy builder
-        # COMPOSE_DOCKER_CLI_BUILD=0: Don't delegate to docker CLI
-        # DOCKER_DEFAULT_PLATFORM: Set explicit platform to avoid parsing errors
+        # Docker wrapper script automatically adds --network=host to builds
         env = {
-            "DOCKER_BUILDKIT": "0",
-            "COMPOSE_DOCKER_CLI_BUILD": "0",
-            "DOCKER_DEFAULT_PLATFORM": "linux/amd64",
+            "DOCKER_BUILDKIT": "1",
+            "COMPOSE_DOCKER_CLI_BUILD": "1",
         }
         
         if cwd:
@@ -2518,11 +2514,10 @@ class SandboxDockerManager:
         if pull:
             cmd.append("--pull")
         
-        # Disable BuildKit and set default platform for gVisor compatibility
+        # Docker wrapper script automatically adds --network=host to builds
         env = {
-            "DOCKER_BUILDKIT": "0",
-            "COMPOSE_DOCKER_CLI_BUILD": "0",
-            "DOCKER_DEFAULT_PLATFORM": "linux/amd64",
+            "DOCKER_BUILDKIT": "1",
+            "COMPOSE_DOCKER_CLI_BUILD": "1",
         }
         
         if cwd:

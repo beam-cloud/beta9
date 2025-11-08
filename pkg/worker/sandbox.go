@@ -41,8 +41,53 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Start dockerd as a background daemon
-	// For gVisor, we disable bridge networking because gVisor doesn't support veth interfaces
+	// Create a docker wrapper that automatically adds --network=host to build commands
+	// This ensures all builds (including docker-compose) use host networking for gVisor
+	dockerWrapperScript := `#!/bin/sh
+# Wrapper for docker command to add --network=host to builds in gVisor
+if [ "$1" = "build" ] || [ "$1" = "buildx" ]; then
+    # Check if --network is already specified
+    has_network=false
+    for arg in "$@"; do
+        if echo "$arg" | grep -q "^--network"; then
+            has_network=true
+            break
+        fi
+    done
+    
+    # Add --network=host if not already specified
+    if [ "$has_network" = "false" ]; then
+        /usr/bin/docker.real "$1" --network=host "${@:2}"
+    else
+        /usr/bin/docker.real "$@"
+    fi
+else
+    /usr/bin/docker.real "$@"
+fi
+`
+	
+	// Install the wrapper
+	wrapperCmd := []string{"sh", "-c", `
+mv /usr/bin/docker /usr/bin/docker.real 2>/dev/null || true
+cat > /usr/bin/docker << 'WRAPPER_EOF'
+` + dockerWrapperScript + `
+WRAPPER_EOF
+chmod +x /usr/bin/docker
+`}
+	if pid, err := instance.SandboxProcessManager.Exec(wrapperCmd, "/", []string{}, false); err == nil {
+		time.Sleep(100 * time.Millisecond)
+		instance.SandboxProcessManager.Status(pid)
+	}
+
+	// Enable BuildKit
+	daemonConfig := `{"features": {"buildkit": true}}`
+	daemonConfigCmd := []string{"sh", "-c", "mkdir -p /etc/docker && echo '" + daemonConfig + "' > /etc/docker/daemon.json"}
+	if pid, err := instance.SandboxProcessManager.Exec(daemonConfigCmd, "/", []string{}, false); err == nil {
+		time.Sleep(50 * time.Millisecond)
+		instance.SandboxProcessManager.Status(pid)
+	}
+
+	// Start dockerd
 	cmd := []string{
 		"dockerd",
 		"--bridge=none",
