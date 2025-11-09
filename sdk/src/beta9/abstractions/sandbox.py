@@ -1992,7 +1992,6 @@ class SandboxDockerManager:
         name: Optional[str] = None,
         detach: bool = False,
         remove: bool = False,
-        ports: Optional[Dict[str, str]] = None,
         volumes: Optional[Dict[str, str]] = None,
         env: Optional[Dict[str, str]] = None,
         **kwargs,
@@ -2005,36 +2004,44 @@ class SandboxDockerManager:
 
         Args:
             image: Docker image (e.g. "nginx:latest")
-            command: Command to run in container
+            command: Command to run INSIDE the container (e.g. ["sh", "-c", "echo hello"])
+                     This is NOT for docker flags - use the named parameters instead.
             name: Container name
             detach: Run in background
             remove: Auto-remove when stopped
-            ports: Port mappings (ignored - use host networking)
-            volumes: Volume mappings {"host_path": "container_path"}
-            env: Environment variables
+            volumes: Volume mappings {"host_path": "container_path"} or {"host_path": "container_path:ro"}
+            env: Environment variables {"KEY": "value"}
 
         Returns:
             DockerResult: Result with container ID in .output property
 
         Example:
             ```python
-            # Run detached - ports are accessible on host directly
-            result = sandbox.docker.run("nginx:latest", name="web", detach=True)
-            # Access nginx at http://localhost:80 (container's default port)
-            container_id = result.output  # Auto-waits
+            # Run nginx with volume mount
+            result = sandbox.docker.run(
+                "nginx:latest",
+                volumes={"/tmp/html": "/usr/share/nginx/html:ro"},
+                detach=True
+            )
+            # Access nginx at http://localhost:80
+
+            # Run with environment variables
+            result = sandbox.docker.run(
+                "alpine",
+                command=["printenv", "MY_VAR"],
+                env={"MY_VAR": "hello"}
+            )
 
             # Run and stream logs
             result = sandbox.docker.run("alpine", command=["echo", "hello"])
             for line in result.logs():
                 print(line)
-
-            # Run and check success
-            result = sandbox.docker.run("alpine", command=["sh", "-c", "exit 1"])
-            if not result.success:
-                print("Container failed")
             ```
         """
         cmd = ["docker", "run"]
+        
+        # Force host networking for gVisor compatibility
+        cmd.extend(["--network", "host"])
         
         if detach:
             cmd.append("-d")
@@ -2042,9 +2049,6 @@ class SandboxDockerManager:
             cmd.append("--rm")
         if name:
             cmd.extend(["--name", name])
-        if ports:
-            for cp, hp in ports.items():
-                cmd.extend(["-p", f"{hp}:{cp}"])
         if volumes:
             for hp, cp in volumes.items():
                 cmd.extend(["-v", f"{hp}:{cp}"])
