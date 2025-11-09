@@ -50,11 +50,13 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 	// Start dockerd with gVisor-compatible flags
 	// Per https://gvisor.dev/docs/tutorials/docker-in-gvisor/:
 	// --iptables=false --ip6tables=false are REQUIRED for gVisor
-	// This means inner containers need --network=host for port exposure
+	// --bridge=none disables default bridge network (gVisor doesn't support veth interfaces)
+	// This means inner containers MUST use --network=host
 	cmd := []string{
 		"dockerd",
 		"--iptables=false",
 		"--ip6tables=false",
+		"--bridge=none",
 	}
 	
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
