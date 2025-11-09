@@ -743,29 +743,28 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 	}
 
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	
+
 	// Debug logging to understand the path resolution
 	log.Info().
 		Str("container_path", containerPath).
 		Str("host_path", hostPath).
 		Str("container_id", in.ContainerId).
-		Str("runtime", instance.Spec.Runtime).
 		Int("data_size", len(in.Data)).
 		Msg("ContainerSandboxUploadFile")
-	
+
 	// Ensure the parent directory exists on the host
 	hostDir := filepath.Dir(hostPath)
 	if err := os.MkdirAll(hostDir, 0755); err != nil {
 		log.Error().Err(err).Str("host_dir", hostDir).Msg("Failed to create parent directory")
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to create directory: %v", err)}, nil
 	}
-	
+
 	err = os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode))
 	if err != nil {
 		log.Error().Err(err).Str("host_path", hostPath).Msg("Failed to write file")
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	
+
 	log.Info().Str("host_path", hostPath).Msg("File written successfully to host")
 
 	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
