@@ -33,11 +33,6 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Wait for goproc to be ready before executing commands
-	if !s.waitForGoproc(ctx, containerId, instance) {
-		return
-	}
-
 	log.Info().Str("container_id", containerId).Msg("starting docker daemon in sandbox")
 
 	// Setup cgroups for Docker-in-Docker
@@ -46,10 +41,8 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Start dockerd as a background daemon
-	// For gVisor, we disable bridge networking because gVisor doesn't support veth interfaces
-	// Builds must use --network=host (SDK handles this automatically)
-	// This is safe because "host" refers to the sandbox's network, not the actual host
+	// Start dockerd with minimal configuration for gVisor
+	// Bridge networking is disabled because gVisor doesn't support veth interfaces
 	cmd := []string{
 		"dockerd",
 		"--bridge=none",
@@ -57,8 +50,9 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		"--ip6tables=false",
 		"--ip-forward=false",
 	}
-
+	
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
+
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
 		return
@@ -95,9 +89,10 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	return nil
 }
 
-// waitForGoproc waits for the goproc process manager to be ready to accept commands
+// waitForProcessManager waits for the goproc process manager to be ready to accept commands
 // Uses exponential backoff to efficiently wait for goproc startup
-func (s *Worker) waitForGoproc(ctx context.Context, containerId string, instance *ContainerInstance) bool {
+// This should be called ONCE during container initialization, not on every exec
+func (s *Worker) waitForProcessManager(ctx context.Context, containerId string, instance *ContainerInstance) bool {
 	start := time.Now()
 	backoff := goprocInitialBackoff
 
@@ -123,12 +118,13 @@ func (s *Worker) waitForGoproc(ctx context.Context, containerId string, instance
 			log.Info().
 				Str("container_id", containerId).
 				Dur("wait_time", time.Since(start)).
-				Msg("goproc is ready")
+				Msg("process manager is ready")
 			return true
 		}
 
 		// Not ready yet - wait with exponential backoff
 		time.Sleep(backoff)
+
 		backoff = time.Duration(float64(backoff) * goprocBackoffMultiplier)
 		if backoff > goprocMaxBackoff {
 			backoff = goprocMaxBackoff
@@ -137,7 +133,8 @@ func (s *Worker) waitForGoproc(ctx context.Context, containerId string, instance
 
 	log.Error().
 		Str("container_id", containerId).
-		Msg("goproc did not become ready within timeout")
+		Msg("process manager did not become ready within timeout")
+
 	return false
 }
 

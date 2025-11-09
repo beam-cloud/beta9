@@ -561,20 +561,32 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 }
 
 func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest, instance *ContainerInstance, env, cmd []string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
-	if err != nil {
-		log.Error().Str("container_id", in.ContainerId).Msgf("failed to execute sandbox process: %v", err)
-		return &pb.ContainerSandboxExecResponse{
-			Ok:       false,
-			Pid:      -1,
-			ErrorMsg: err.Error(),
-		}, nil
+	// Wait for process manager to be ready (polls the flag set by startup initialization)
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for !instance.SandboxProcessManagerReady {
+		select {
+		case <-timeout:
+			return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Process manager not ready within timeout"}, nil
+		case <-ctx.Done():
+			return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Request cancelled"}, nil
+		case <-ticker.C:
+			// Refresh instance to get latest SandboxProcessManagerReady state
+			if fresh, exists := s.containerInstances.Get(in.ContainerId); exists {
+				instance = fresh
+			}
+		}
 	}
 
-	return &pb.ContainerSandboxExecResponse{
-		Ok:  true,
-		Pid: int32(pid),
-	}, nil
+	// Process manager is ready, execute the command
+	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
+	if err != nil {
+		return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: err.Error()}, nil
+	}
+
+	return &pb.ContainerSandboxExecResponse{Ok: true, Pid: int32(pid)}, nil
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in *pb.ContainerSandboxStatusRequest) (*pb.ContainerSandboxStatusResponse, error) {

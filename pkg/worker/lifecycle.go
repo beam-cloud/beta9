@@ -813,6 +813,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
+		instance.SandboxProcessManagerReady = false
 		s.containerInstances.Set(containerId, instance)
 
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
@@ -886,9 +887,25 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 
-		// Start Docker daemon if enabled for this sandbox
-		if request.DockerEnabled {
-			go s.startDockerDaemon(ctx, containerId, containerInstance)
+		// For sandboxes, wait for process manager to be ready before allowing exec calls
+		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+			instance, exists := s.containerInstances.Get(containerId)
+			if exists && instance.SandboxProcessManager != nil {
+
+				// Wait for process manager to be ready - this blocks until ready or timeout
+				if s.waitForProcessManager(ctx, containerId, instance) {
+					instance.SandboxProcessManagerReady = true
+					s.containerInstances.Set(containerId, instance)
+
+					// Now that process manager is ready, start Docker daemon if enabled
+					if request.DockerEnabled {
+						go s.startDockerDaemon(ctx, containerId, instance)
+					}
+
+				} else {
+					log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
+				}
+			}
 		}
 	}()
 
@@ -1037,4 +1054,3 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 		Memory: resources.GetMemory(request),
 	}, nil
 }
-

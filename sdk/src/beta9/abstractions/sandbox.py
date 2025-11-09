@@ -1907,11 +1907,16 @@ class SandboxDockerManager:
         self.sandbox_instance = sandbox_instance
         self._daemon_timeout = daemon_timeout
         self._daemon_ready = False
+        self._daemon_check_attempted = False
+        self._authenticated = False
 
     def _ensure_ready(self):
-        """Ensure Docker daemon is ready."""
+        """Ensure Docker daemon is ready. Only blocks when actually needed for docker commands."""
         if self._daemon_ready:
             return
+
+        # Mark that we've attempted a check to avoid interfering with non-docker operations
+        self._daemon_check_attempted = True
 
         start, backoff = time.time(), 0.5
         while time.time() - start < self._daemon_timeout:
@@ -1919,6 +1924,8 @@ class SandboxDockerManager:
                 p = self.sandbox_instance.process.exec("docker", "info")
                 if p.wait() == 0:
                     self._daemon_ready = True
+                    # Attempt authentication if credentials are in env
+                    self._auto_login()
                     return
             except Exception:
                 # Ignore errors during daemon check - we'll retry
@@ -1929,6 +1936,29 @@ class SandboxDockerManager:
         from beta9.exceptions import DockerDaemonNotReadyError
 
         raise DockerDaemonNotReadyError(self._daemon_timeout)
+
+    def _auto_login(self):
+        """Automatically login to Docker if credentials are available in environment."""
+        if self._authenticated:
+            return
+
+        try:
+            # Check if DOCKER_USERNAME and DOCKER_PASSWORD are set
+            proc = self.sandbox_instance.process.exec("printenv", "DOCKER_USERNAME")
+            proc.wait()
+            username = proc.stdout.read().strip()
+
+            if username:
+                proc = self.sandbox_instance.process.exec("printenv", "DOCKER_PASSWORD")
+                proc.wait()
+                password = proc.stdout.read().strip()
+
+                if password:
+                    # Perform docker login
+                    self.login(username=username, password=password)
+        except BaseException:
+            # If auto-login fails, don't block - user can manually call login()
+            pass
 
     def _exec(self, *cmd) -> "SandboxProcess":
         """Execute docker command."""
@@ -2123,6 +2153,10 @@ class SandboxDockerManager:
                 print("Pull succeeded!")
             ```
         """
+        # Ensure authentication before pull operations
+        if not self._authenticated:
+            self._auto_login()
+
         cmd = ["docker", "pull"]
         if quiet:
             cmd.append("-q")
@@ -2167,21 +2201,29 @@ class SandboxDockerManager:
                 print(f"Build failed: {result.stderr}")
             ```
         """
+        # Ensure authentication before build operations
+        if not self._authenticated:
+            self._auto_login()
+
         cmd = ["docker", "build", "-t", tag]
 
-        # Use host networking for gVisor (avoids veth permission issues)
+        # Use host networking for gVisor
         # Safe because "host" = sandbox's network namespace, still isolated
         cmd.extend(["--network", "host"])
 
         if dockerfile:
             cmd.extend(["-f", dockerfile])
+
         if build_args:
             for k, v in build_args.items():
                 cmd.extend(["--build-arg", f"{k}={v}"])
+
         if no_cache:
             cmd.append("--no-cache")
+
         if quiet:
             cmd.append("--quiet")
+
         cmd.append(context)
         return self._result(*cmd)
 
@@ -2237,6 +2279,74 @@ class SandboxDockerManager:
         except DockerCommandError:
             return False
 
+    # === Authentication ===
+
+    def login(
+        self,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        registry: Optional[str] = None,
+    ) -> bool:
+        """
+        Login to a Docker registry.
+
+        Args:
+            username: Docker registry username. If not provided, reads from DOCKER_USERNAME env var.
+            password: Docker registry password. If not provided, reads from DOCKER_PASSWORD env var.
+            registry: Docker registry URL. If not provided, defaults to Docker Hub.
+
+        Returns:
+            bool: True if login succeeded, False otherwise.
+
+        Example:
+            ```python
+            # Login with explicit credentials
+            sandbox.docker.login(username="myuser", password="mypass")
+
+            # Login using environment variables (DOCKER_USERNAME, DOCKER_PASSWORD)
+            sandbox.docker.login()
+
+            # Login to a private registry
+            sandbox.docker.login(username="myuser", password="mypass", registry="registry.example.com")
+            ```
+        """
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            # Get credentials from env if not provided
+            if not username:
+                proc = self.sandbox_instance.process.exec("printenv", "DOCKER_USERNAME")
+                proc.wait()
+                username = proc.stdout.read().strip()
+
+            if not password:
+                proc = self.sandbox_instance.process.exec("printenv", "DOCKER_PASSWORD")
+                proc.wait()
+                password = proc.stdout.read().strip()
+
+            if not username or not password:
+                return False
+
+            # Use docker login with password-stdin for security
+            # Pass password via stdin using process env to avoid shell escaping issues
+            registry_arg = f" {shlex.quote(registry)}" if registry else ""
+            login_cmd = (
+                f"docker login --username {shlex.quote(username)} --password-stdin{registry_arg}"
+            )
+
+            # Use printf instead of echo to handle special characters in password
+            cmd = ["sh", "-c", f"printf '%s' {shlex.quote(password)} | {login_cmd}"]
+
+            p = self._exec(*cmd)
+            exit_code = p.wait()
+
+            if exit_code == 0:
+                self._authenticated = True
+                return True
+            return False
+        except (DockerCommandError, Exception):
+            return False
+
     # === Docker Compose ===
 
     def compose_up(
@@ -2244,40 +2354,171 @@ class SandboxDockerManager:
         file: str = "docker-compose.yml",
         detach: bool = True,
         build: bool = False,
+        cwd: Optional[str] = None,
     ) -> "SandboxProcess":
-        """Start services from docker-compose file."""
+        """
+        Start services from docker-compose file.
+
+        Args:
+            file: Path to docker-compose file (default: "docker-compose.yml")
+            detach: Run in background (default: True)
+            build: Build images before starting (default: False)
+            cwd: Working directory to run compose from (default: None, uses sandbox's current directory)
+
+        Returns:
+            SandboxProcess: Process object for the compose command
+
+        Example:
+            ```python
+            # Start services from a compose file
+            process = sandbox.docker.compose_up()
+            process.wait()
+
+            # Start with build and custom path
+            process = sandbox.docker.compose_up(file="./myapp/docker-compose.yml", build=True, cwd="/workspace/myapp")
+            ```
+        """
+        # Ensure authentication before compose operations
+        if not self._authenticated:
+            self._auto_login()
+
         cmd = ["docker-compose", "-f", file, "up"]
         if detach:
             cmd.append("-d")
         if build:
             cmd.append("--build")
-        return self._exec(*cmd)
 
-    def compose_down(self, file: str = "docker-compose.yml", volumes: bool = False) -> bool:
-        """Stop and remove compose services. Returns True on success, False if compose file not found."""
+        env = {}
+        if cwd:
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
+
+        return self.sandbox_instance.process.exec(*cmd, env=env)
+
+    def compose_down(
+        self,
+        file: str = "docker-compose.yml",
+        volumes: bool = False,
+        cwd: Optional[str] = None,
+    ) -> bool:
+        """
+        Stop and remove compose services.
+
+        Args:
+            file: Path to docker-compose file (default: "docker-compose.yml")
+            volumes: Also remove volumes (default: False)
+            cwd: Working directory to run compose from (default: None)
+
+        Returns:
+            bool: True on success, False if compose file not found.
+        """
         from beta9.exceptions import DockerCommandError
 
         try:
             cmd = ["docker-compose", "-f", file, "down"]
             if volumes:
                 cmd.append("-v")
+
+            if cwd:
+                p = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+                return p.wait() == 0
+
             self._run(*cmd)
             return True
         except DockerCommandError:
             return False
 
     def compose_logs(
-        self, file: str = "docker-compose.yml", follow: bool = False
+        self,
+        file: str = "docker-compose.yml",
+        follow: bool = False,
+        cwd: Optional[str] = None,
     ) -> "SandboxProcess":
-        """View compose service logs."""
+        """
+        View compose service logs.
+
+        Args:
+            file: Path to docker-compose file (default: "docker-compose.yml")
+            follow: Follow log output (default: False)
+            cwd: Working directory to run compose from (default: None)
+
+        Returns:
+            SandboxProcess: Process object for streaming logs
+        """
         cmd = ["docker-compose", "-f", file, "logs"]
         if follow:
             cmd.append("-f")
+
+        if cwd:
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
         return self._exec(*cmd)
 
-    def compose_ps(self, file: str = "docker-compose.yml") -> str:
-        """List compose services."""
-        return self._run("docker-compose", "-f", file, "ps")
+    def compose_ps(self, file: str = "docker-compose.yml", cwd: Optional[str] = None) -> str:
+        """
+        List compose services.
+
+        Args:
+            file: Path to docker-compose file (default: "docker-compose.yml")
+            cwd: Working directory to run compose from (default: None)
+
+        Returns:
+            str: List of compose services
+        """
+        cmd = ["docker-compose", "-f", file, "ps"]
+
+        if cwd:
+            p = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+            p.wait()
+            return p.stdout.read()
+
+        return self._run(*cmd)
+
+    def compose_build(
+        self,
+        file: str = "docker-compose.yml",
+        no_cache: bool = False,
+        pull: bool = False,
+        cwd: Optional[str] = None,
+    ) -> "SandboxProcess":
+        """
+        Build or rebuild services from docker-compose file.
+
+        Args:
+            file: Path to docker-compose file (default: "docker-compose.yml")
+            no_cache: Don't use cache when building (default: False)
+            pull: Always pull newer versions of images (default: False)
+            cwd: Working directory to run compose from (default: None)
+
+        Returns:
+            SandboxProcess: Process object for the compose build command
+
+        Example:
+            ```python
+            # Build services
+            process = sandbox.docker.compose_build()
+            process.wait()
+
+            # Build without cache
+            process = sandbox.docker.compose_build(no_cache=True, cwd=\"/workspace/myapp\")
+            for line in process.logs:
+                print(line)
+            ```
+        """
+        # Ensure authentication before compose build operations
+        if not self._authenticated:
+            self._auto_login()
+
+        cmd = ["docker-compose", "-f", file, "build"]
+
+        if no_cache:
+            cmd.append("--no-cache")
+        if pull:
+            cmd.append("--pull")
+
+        env = {}
+
+        if cwd:
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
+        return self.sandbox_instance.process.exec(*cmd, env=env)
 
     # === Networks ===
 

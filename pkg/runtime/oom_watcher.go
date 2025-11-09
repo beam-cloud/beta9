@@ -114,7 +114,6 @@ func (w *CgroupOOMWatcher) Watch(onOOM func()) error {
 
 // Watch starts monitoring memory usage for gVisor containers
 func (w *GvisorOOMWatcher) Watch(onOOM func()) error {
-	// Validate memory limit
 	if w.memoryLimit == 0 {
 		return fmt.Errorf("memory limit is 0, cannot monitor OOM")
 	}
@@ -125,7 +124,7 @@ func (w *GvisorOOMWatcher) Watch(onOOM func()) error {
 		Uint64("memory_limit_mb", w.memoryLimit/1024/1024).
 		Uint64("threshold_mb", thresholdBytes/1024/1024).
 		Float64("threshold_percent", gvisorOOMThresholdPercent).
-		Msg("starting gVisor OOM watcher with memory monitoring")
+		Msg("starting OOM watcher")
 
 	go func() {
 		ticker := time.NewTicker(oomWatcherPollInterval)
