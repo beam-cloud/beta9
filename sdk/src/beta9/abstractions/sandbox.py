@@ -1992,7 +1992,6 @@ class SandboxDockerManager:
         name: Optional[str] = None,
         detach: bool = False,
         remove: bool = False,
-        ports: Optional[Dict[str, str]] = None,
         volumes: Optional[Dict[str, str]] = None,
         env: Optional[Dict[str, str]] = None,
         **kwargs,
@@ -2000,46 +1999,56 @@ class SandboxDockerManager:
         """
         Run a Docker container.
 
+        Note: Automatically uses --network host for gVisor compatibility.
+        Container ports are directly accessible on the host network.
+
         Args:
             image: Docker image (e.g. "nginx:latest")
-            command: Command to run in container
+            command: Command to run INSIDE the container (e.g. ["sh", "-c", "echo hello"])
+                     This is NOT for docker flags - use the named parameters instead.
             name: Container name
             detach: Run in background
             remove: Auto-remove when stopped
-            ports: Port mappings {"container_port": "host_port"}
-            volumes: Volume mappings {"host_path": "container_path"}
-            env: Environment variables
+            volumes: Volume mappings {"host_path": "container_path"} or {"host_path": "container_path:ro"}
+            env: Environment variables {"KEY": "value"}
 
         Returns:
             DockerResult: Result with container ID in .output property
 
         Example:
             ```python
-            # Run detached and get container ID
-            result = sandbox.docker.run("nginx:latest", name="web", ports={"80": "8080"}, detach=True)
-            container_id = result.output  # Auto-waits
+            # Run nginx with volume mount
+            result = sandbox.docker.run(
+                "nginx:latest",
+                volumes={"/tmp/html": "/usr/share/nginx/html:ro"},
+                detach=True
+            )
+            # Access nginx at http://localhost:80
+
+            # Run with environment variables
+            result = sandbox.docker.run(
+                "alpine",
+                command=["printenv", "MY_VAR"],
+                env={"MY_VAR": "hello"}
+            )
 
             # Run and stream logs
             result = sandbox.docker.run("alpine", command=["echo", "hello"])
             for line in result.logs():
                 print(line)
-
-            # Run and check success
-            result = sandbox.docker.run("alpine", command=["sh", "-c", "exit 1"])
-            if not result.success:
-                print("Container failed")
             ```
         """
         cmd = ["docker", "run"]
+        
+        # Force host networking for gVisor compatibility
+        cmd.extend(["--network", "host"])
+        
         if detach:
             cmd.append("-d")
         if remove:
             cmd.append("--rm")
         if name:
             cmd.extend(["--name", name])
-        if ports:
-            for cp, hp in ports.items():
-                cmd.extend(["-p", f"{hp}:{cp}"])
         if volumes:
             for hp, cp in volumes.items():
                 cmd.extend(["-v", f"{hp}:{cp}"])
@@ -2359,6 +2368,9 @@ class SandboxDockerManager:
         """
         Start services from docker-compose file.
 
+        Note: Automatically configures host networking for gVisor compatibility.
+        All services will use the host network - ports are directly accessible.
+
         Args:
             file: Path to docker-compose file (default: "docker-compose.yml")
             detach: Run in background (default: True)
@@ -2382,7 +2394,18 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        cmd = ["docker-compose", "-f", file, "up"]
+        # Create override file to force gVisor network compatibility
+        override_path = "/tmp/.docker-compose-gvisor-override.yml"
+        override_content = """# Auto-generated for gVisor compatibility
+# Bridge networking is not supported in Docker-in-gVisor
+networks:
+  default:
+    name: host
+    external: true
+"""
+        self.sandbox_instance.process.exec("sh", "-c", f"echo '{override_content}' > {override_path}").wait()
+        
+        cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
         if detach:
             cmd.append("-d")
         if build:

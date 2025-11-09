@@ -41,16 +41,24 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Start dockerd with minimal configuration for gVisor
-	// Bridge networking is disabled because gVisor doesn't support veth interfaces
+	// Enable IPv4 forwarding (required for Docker networking)
+	if err := s.enableIPv4Forwarding(ctx, containerId, instance); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to enable IPv4 forwarding")
+		return
+	}
+
+	// Start dockerd with gVisor-compatible flags
+	// Per https://gvisor.dev/docs/tutorials/docker-in-gvisor/:
+	// --iptables=false --ip6tables=false are REQUIRED for gVisor
+	// --bridge=none disables default bridge network (gVisor doesn't support veth interfaces)
+	// This means inner containers MUST use --network=host
 	cmd := []string{
 		"dockerd",
-		"--bridge=none",
 		"--iptables=false",
 		"--ip6tables=false",
-		"--ip-forward=false",
+		"--bridge=none",
 	}
-	
+
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
 
 	if err != nil {
@@ -84,6 +92,26 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	exitCode, _ := instance.SandboxProcessManager.Status(pid)
 	if exitCode != 0 {
 		return fmt.Errorf("cgroup setup failed with exit code %d", exitCode)
+	}
+
+	return nil
+}
+
+// enableIPv4Forwarding enables IPv4 forwarding which is required for Docker networking in gVisor sandboxes
+func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, instance *ContainerInstance) error {
+	script := `echo 1 > /proc/sys/net/ipv4/ip_forward`
+
+	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
+	if err != nil {
+		return err
+	}
+
+	time.Sleep(cgroupSetupCompletionWait)
+
+	exitCode, _ := instance.SandboxProcessManager.Status(pid)
+	if exitCode != 0 {
+		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+		return fmt.Errorf("IPv4 forwarding failed with exit code %d: %s", exitCode, stderr)
 	}
 
 	return nil
