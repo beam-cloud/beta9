@@ -97,26 +97,39 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 // Based on: https://github.com/google/gvisor/blob/master/images/basic/docker/start-dockerd.sh
 func (s *Worker) setupDockerNetworking(ctx context.Context, containerId string, instance *ContainerInstance) error {
 	// This implements the gVisor networking setup which:
-	// 1. Enables IPv4 forwarding
-	// 2. Sets up iptables NAT rules for Docker bridge networks to work
+	// 1. Enables IPv4 forwarding (critical)
+	// 2. Sets up iptables NAT rules for Docker bridge networks to work (best-effort)
 	script := `
 set -e
 
-# Get the default network interface and its IP address
-dev=$(ip route show default | sed 's/.*\sdev\s\(\S*\)\s.*$/\1/')
-addr=$(ip addr show dev "$dev" | grep -w inet | sed 's/^\s*inet\s\(\S*\)\/.*$/\1/')
-
-# Enable IPv4 forwarding
+# Enable IPv4 forwarding (critical for Docker networking)
 echo 1 > /proc/sys/net/ipv4/ip_forward
 
-# Set up NAT rules to allow Docker bridge networks to access external network
-iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p tcp
-iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p udp
+# Try to set up NAT rules if ip command is available (best-effort)
+if command -v ip >/dev/null 2>&1; then
+    # Get the default network interface and its IP address
+    dev=$(ip route show default 2>/dev/null | sed 's/.*\sdev\s\(\S*\)\s.*$/\1/' | head -n1)
+    if [ -n "$dev" ]; then
+        addr=$(ip addr show dev "$dev" 2>/dev/null | grep -w inet | sed 's/^\s*inet\s\(\S*\)\/.*$/\1/' | head -n1)
+        if [ -n "$addr" ]; then
+            # Set up NAT rules to allow Docker bridge networks to access external network
+            iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p tcp 2>/dev/null || true
+            iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p udp 2>/dev/null || true
+            echo "NAT rules configured for device $dev with IP $addr"
+        else
+            echo "Warning: Could not determine IP address for $dev, skipping NAT setup"
+        fi
+    else
+        echo "Warning: Could not determine default network device, skipping NAT setup"
+    fi
+else
+    echo "Warning: 'ip' command not available, skipping NAT setup"
+fi
 
-echo "Docker networking configured successfully"
+echo "Docker networking setup complete"
 `
 
-	pid, err := instance.SandboxProcessManager.Exec([]string{"bash", "-c", script}, "/", []string{}, false)
+	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
 	if err != nil {
 		return fmt.Errorf("failed to execute networking setup script: %w", err)
 	}
@@ -125,13 +138,14 @@ echo "Docker networking configured successfully"
 	time.Sleep(cgroupSetupCompletionWait)
 
 	exitCode, _ := instance.SandboxProcessManager.Status(pid)
+	stdout, _ := instance.SandboxProcessManager.Stdout(pid)
+	stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+	
 	if exitCode != 0 {
-		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-		stdout, _ := instance.SandboxProcessManager.Stdout(pid)
 		return fmt.Errorf("networking setup failed with exit code %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
 	}
 
-	log.Info().Str("container_id", containerId).Msg("docker networking configured")
+	log.Info().Str("container_id", containerId).Str("output", stdout).Msg("docker networking configured")
 	return nil
 }
 
