@@ -2395,29 +2395,38 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Read and parse the compose file to get service names and networks
-        compose_file_path = file if file.startswith('/') else f"{cwd or '.'}/{file}"
+        # Read and parse the compose file to get service names
+        compose_file_path = file if file.startswith("/") else f"{cwd or '.'}/{file}"
         
-        # Download compose file content to parse it
+        # Download compose file from sandbox to parse it locally
+        service_names = []
         try:
-            result = self.sandbox_instance.process.exec(
-                "cat", compose_file_path
-            )
-            result.wait()
-            compose_content = result.stdout()
-            compose_data = yaml.safe_load(compose_content)
+            import tempfile
+            import os
             
-            # Extract service names and network names
-            service_names = []
-            network_names = []
-            if compose_data and 'services' in compose_data:
-                service_names = list(compose_data['services'].keys())
-            if compose_data and 'networks' in compose_data:
-                network_names = list(compose_data['networks'].keys())
+            # Create a temporary file to download the compose file
+            with tempfile.NamedTemporaryFile(mode='w+', suffix='.yml', delete=False) as tmp_file:
+                local_compose_path = tmp_file.name
+            
+            try:
+                # Download the compose file from sandbox
+                self.sandbox_instance.fs.download_file(compose_file_path, local_compose_path)
+                
+                # Read and parse the downloaded file
+                with open(local_compose_path, 'r') as f:
+                    compose_content = f.read()
+                    compose_data = yaml.safe_load(compose_content)
+                    
+                    # Extract service names
+                    if compose_data and "services" in compose_data:
+                        service_names = list(compose_data["services"].keys())
+            finally:
+                # Clean up the temporary file
+                if os.path.exists(local_compose_path):
+                    os.unlink(local_compose_path)
         except Exception:
-            # If we can't parse the file, fall back to a simpler approach
+            # If we can't parse the file, fall back to empty service names
             service_names = []
-            network_names = []
 
         # Create override file to force gVisor network compatibility
         # Use network_mode: host for each service to avoid network alias issues
