@@ -1434,9 +1434,12 @@ class SandboxFileSystem:
             fs.upload_file("config.json", "/app/config/config.json")
             ```
         """
-
+        print(f"DEBUG: upload_file called with local_path={local_path}, sandbox_path={sandbox_path}")
+        print(f"DEBUG: container_id={self.sandbox_instance.container_id}")
+        
         with open(local_path, "rb") as f:
             content = f.read()
+            print(f"DEBUG: Read {len(content)} bytes from {local_path}")
 
             response = self.sandbox_instance.stub.sandbox_upload_file(
                 PodSandboxUploadFileRequest(
@@ -1446,9 +1449,12 @@ class SandboxFileSystem:
                     mode=644,
                 )
             )
-
+            
+            print(f"DEBUG: upload response.ok={response.ok}")
             if not response.ok:
+                print(f"DEBUG: upload failed with error: {response.error_msg}")
                 raise SandboxFileSystemError(response.error_msg)
+            print(f"DEBUG: upload successful")
 
     def download_file(self, sandbox_path: str, local_path: str):
         """
@@ -2445,15 +2451,25 @@ class SandboxDockerManager:
             override_content = "services:\n  default:\n    network_mode: host\n"
 
         # Write the override file locally and upload to sandbox
-
+        import tempfile
+        import os
+        
         # Create a temporary file with the override content
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp_file:
             tmp_file.write(override_content)
+            tmp_file.flush()  # Ensure content is written to disk
             local_override_path = tmp_file.name
 
         try:
             # Upload the override file to the sandbox
             self.sandbox_instance.fs.upload_file(local_override_path, override_path)
+        except Exception as e:
+            # If upload fails, log error and fall back to shell command
+            print(f"Warning: upload_file failed with error: {e}, falling back to shell command")
+            escaped_content = override_content.replace("'", "'\\''")
+            self.sandbox_instance.process.exec(
+                "sh", "-c", f"echo '{escaped_content}' > {override_path}"
+            ).wait()
         finally:
             # Clean up the temporary file
             if os.path.exists(local_override_path):
