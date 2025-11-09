@@ -2,6 +2,7 @@ import atexit
 import io
 import shlex
 import time
+import yaml
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -2394,17 +2395,50 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
+        # Read and parse the compose file to get service names
+        compose_file_path = file if file.startswith('/') else f"{cwd or '.'}/{file}"
+        
+        # Download compose file content to parse it
+        try:
+            result = self.sandbox_instance.process.exec(
+                "cat", compose_file_path
+            )
+            result.wait()
+            compose_content = result.stdout()
+            compose_data = yaml.safe_load(compose_content)
+            
+            # Extract service names
+            service_names = []
+            if compose_data and 'services' in compose_data:
+                service_names = list(compose_data['services'].keys())
+        except Exception:
+            # If we can't parse the file, fall back to a simpler approach
+            service_names = []
+
         # Create override file to force gVisor network compatibility
+        # Use network_mode: host for each service to avoid network alias issues
         override_path = "/tmp/.docker-compose-gvisor-override.yml"
-        override_content = """# Auto-generated for gVisor compatibility
+        
+        if service_names:
+            # Generate override for each service with network_mode: host
+            override_content = "# Auto-generated for gVisor compatibility\n"
+            override_content += "# Bridge networking is not supported in Docker-in-gVisor\n"
+            override_content += "services:\n"
+            for service_name in service_names:
+                override_content += f"  {service_name}:\n"
+                override_content += f"    network_mode: host\n"
+        else:
+            # Fallback: use x-default-network-mode extension
+            override_content = """# Auto-generated for gVisor compatibility
 # Bridge networking is not supported in Docker-in-gVisor
-networks:
-  default:
-    name: host
-    external: true
+x-network-mode: &network-mode
+  network_mode: host
 """
+        
+        # Escape single quotes in the content for shell command
+        escaped_content = override_content.replace("'", "'\\''")
         self.sandbox_instance.process.exec(
-            "sh", "-c", f"echo '{override_content}' > {override_path}"
+            "sh", "-c", f"echo '{escaped_content}' > {override_path}"
         ).wait()
 
         cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
