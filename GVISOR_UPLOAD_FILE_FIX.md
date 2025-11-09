@@ -26,7 +26,10 @@ By default, gVisor uses `--overlay2=all:memory` which creates a **sandbox-intern
 
 ## Solution
 
-Add the `--overlay2=root:self` flag to runsc invocation. This tells gVisor to use a **self-backed overlay** for the root filesystem, where the upper layer is stored on the host filesystem instead of in sandbox-internal tmpfs.
+Add the `--overlay2=none` flag to runsc invocation. This **disables the rootfs overlay optimization** entirely, ensuring that files written to the host filesystem are immediately visible inside the container.
+
+From [gVisor's official documentation](https://gvisor.dev/docs/user_guide/filesystem/):
+> Self-backed rootfs overlay (`--overlay2=root:self`) is enabled by default in runsc for performance. **If you need to propagate rootfs changes to the host filesystem, then disable it with `--overlay2=none`.**
 
 ### Implementation
 
@@ -40,10 +43,11 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
     
     // ... other args ...
     
-    // Disable rootfs overlay to allow files written to host overlay to be visible inside container
-    // By default, gVisor uses a sandbox-internal tmpfs overlay which prevents host filesystem changes
-    // from being visible. Setting this to "root:self" makes the root filesystem use a host-backed overlay.
-    args = append(args, "--overlay2=root:self")
+    // Disable rootfs overlay to propagate host filesystem changes to the container
+    // By default, runsc uses --overlay2=root:self which keeps changes in a sandbox-internal layer.
+    // Setting --overlay2=none disables this optimization so files written to the host overlay
+    // are immediately visible inside the container.
+    args = append(args, "--overlay2=none")
     
     // ... rest of args ...
 }
@@ -69,18 +73,16 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 └─────────────────────────────────────┘
 ```
 
-### After (`--overlay2=root:self`)
+### After (`--overlay2=none`)
 ```
 ┌─────────────────────────────────────┐
 │  Sandbox                            │
 │  ┌─────────────────────────────┐   │
-│  │ self-backed upper layer     │   │  ← Backed by host filestore
-│  └─────────────────────────────┘   │
-│  ┌─────────────────────────────┐   │
-│  │ lower layer (via gofer)     │   │  ← Read-only image layer
+│  │ Direct filesystem access    │   │  ← No overlay layer
+│  │ (via gofer)                 │   │
 │  └─────────────────────────────┘   │
 └─────────────────────────────────────┘
-         ↕ gofer RPC + mmap filestore
+         ↕ gofer RPC
 ┌─────────────────────────────────────┐
 │  Host                               │
 │  /tmp/sandbox-.../layer-0/merged/   │  ← Files written here ARE visible inside
@@ -98,10 +100,10 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 ## Trade-offs
 
 ### Performance
-According to gVisor's own benchmarks, the default `--overlay2=all:memory` mode provides **2x better performance** for filesystem-heavy workloads. With `--overlay2=root:self`:
-- **Slightly slower** filesystem operations (still much faster than without overlay)
-- File data stored on disk instead of memory
-- Acceptable trade-off for correctness
+The default `--overlay2=root:self` mode provides significant performance benefits for filesystem-heavy workloads by keeping changes in memory. With `--overlay2=none`:
+- **Slower** filesystem operations (all operations go through gofer)
+- No in-memory caching of filesystem changes
+- **Required trade-off** for filesystem consistency with host
 
 ### Memory
 - **Pro**: Files don't consume sandbox memory, won't hit container memory limits

@@ -4,17 +4,20 @@
 Docker Compose couldn't find override files in gVisor sandboxes, even though `fs.upload_file()` succeeded.
 
 ## Root Cause
-gVisor's default `--overlay2=all:memory` mode uses a **sandbox-internal tmpfs** for the root filesystem's upper layer. Files written to the host overlay path weren't visible inside the container.
+gVisor's default `--overlay2=root:self` mode uses a **sandbox-internal overlay layer** that keeps filesystem changes isolated from the host. Files written to the host overlay path aren't visible inside the container.
 
 ## The Fix
 **One line change** in `pkg/runtime/runsc.go`:
 
 ```go
 // Add this flag to runsc invocation
-args = append(args, "--overlay2=root:self")
+args = append(args, "--overlay2=none")
 ```
 
-This changes gVisor to use a **self-backed overlay** where the upper layer is stored on the host filesystem, making uploaded files visible inside the container.
+From [gVisor's official docs](https://gvisor.dev/docs/user_guide/filesystem/):
+> **If you need to propagate rootfs changes to the host filesystem, then disable it with `--overlay2=none`.**
+
+This disables the rootfs overlay optimization entirely, making uploaded files visible inside the container.
 
 ## What This Fixes
 
@@ -67,7 +70,7 @@ Build and deploy the updated worker. The fix will allow:
 3. Existing functionality to continue working (runc unaffected)
 
 ## Why This Is Minimal
-- **One flag**: `--overlay2=root:self`
+- **One flag**: `--overlay2=none`
 - **No code restructuring**: Uses existing overlay infrastructure
 - **No SDK changes needed**: The original approach (write to host) now works
 - **Backwards compatible**: Doesn't affect runc runtime

@@ -305,10 +305,12 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 		args = append(args, "--platform", r.cfg.RunscPlatform)
 	}
 
-	// Use self-backed overlay for ALL filesystems (not just root)
-	// This ensures files written to the host overlay are immediately visible inside the container.
-	// "all:self" means all filesystems use host-backed overlay instead of sandbox-internal tmpfs.
-	args = append(args, "--overlay2=all:self")
+	// Disable rootfs overlay to propagate host filesystem changes to the container
+	// By default, runsc uses --overlay2=root:self which keeps changes in a sandbox-internal layer.
+	// Setting --overlay2=none disables this optimization so files written to the host overlay
+	// are immediately visible inside the container. This is required for fs.upload_file() to work.
+	// See: https://gvisor.dev/docs/user_guide/filesystem/
+	args = append(args, "--overlay2=none")
 
 	// Add --net-raw flag if Docker-in-Docker is enabled
 	// This is required for Docker to function properly inside gVisor
