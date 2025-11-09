@@ -41,15 +41,16 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Setup networking for Docker-in-gVisor
-	// Per https://gvisor.dev/docs/tutorials/docker-in-gvisor/
-	if err := s.setupDockerNetworking(ctx, containerId, instance); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup docker networking")
+	// Enable IPv4 forwarding (required for Docker networking)
+	if err := s.enableIPv4Forwarding(ctx, containerId, instance); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to enable IPv4 forwarding")
 		return
 	}
 
 	// Start dockerd with gVisor-compatible flags
-	// Must use --iptables=false --ip6tables=false per gVisor guidance
+	// Per https://gvisor.dev/docs/tutorials/docker-in-gvisor/:
+	// --iptables=false --ip6tables=false are REQUIRED for gVisor
+	// This means inner containers need --network=host for port exposure
 	cmd := []string{
 		"dockerd",
 		"--iptables=false",
@@ -94,101 +95,14 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	return nil
 }
 
-// setupDockerNetworking configures networking for Docker-in-gVisor
-// Follows the official gVisor guidance: https://gvisor.dev/docs/tutorials/docker-in-gvisor/
-// This is based on: https://github.com/google/gvisor/blob/master/images/basic/docker/start-dockerd.sh
-//
-// This function automatically installs required networking tools (iproute2, iptables) if not present
-// Supports: Ubuntu, Debian, Alpine, RHEL, CentOS, Fedora
-func (s *Worker) setupDockerNetworking(ctx context.Context, containerId string, instance *ContainerInstance) error {
-	// The gVisor approach:
-	// 1. Enable IP forwarding
-	// 2. Setup SNAT rules using iptables-legacy (critical for bridge networking to work)
-	// 3. Start dockerd with --iptables=false --ip6tables=false
-	
-	// Ensure required tools are installed
-	// Try to auto-install if not present (works for most common base images)
-	installScript := `
-# Check and install required networking tools
-install_tools() {
-    # Check if tools already exist
-    if command -v ip >/dev/null 2>&1 && command -v iptables-legacy >/dev/null 2>&1; then
-        echo "Networking tools already installed"
-        return 0
-    fi
-    
-    echo "Installing required networking tools..."
-    
-    # Try different package managers
-    if command -v apt-get >/dev/null 2>&1; then
-        # Debian/Ubuntu
-        apt-get update -qq && apt-get install -y -qq iproute2 iptables >/dev/null 2>&1
-    elif command -v apk >/dev/null 2>&1; then
-        # Alpine
-        apk add --no-cache iproute2 iptables >/dev/null 2>&1
-    elif command -v yum >/dev/null 2>&1; then
-        # RHEL/CentOS
-        yum install -y -q iproute iptables >/dev/null 2>&1
-    elif command -v dnf >/dev/null 2>&1; then
-        # Fedora
-        dnf install -y -q iproute iptables >/dev/null 2>&1
-    else
-        echo "ERROR: No supported package manager found (apt, apk, yum, dnf)"
-        echo "Please install 'iproute2' and 'iptables' packages in your Docker image"
-        return 1
-    fi
-    
-    # Verify installation
-    if ! command -v ip >/dev/null 2>&1; then
-        echo "ERROR: Failed to install 'ip' command"
-        return 1
-    fi
-    if ! command -v iptables-legacy >/dev/null 2>&1; then
-        echo "ERROR: Failed to install 'iptables-legacy' command"
-        return 1
-    fi
-    
-    echo "Networking tools installed successfully"
-    return 0
-}
-
-install_tools
-`
-	
-	installPid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", installScript}, "/", []string{}, false)
-	if err == nil {
-		time.Sleep(cgroupSetupCompletionWait * 3) // Give more time for package installation
-		installExitCode, _ := instance.SandboxProcessManager.Status(installPid)
-		if installExitCode != 0 {
-			stderr, _ := instance.SandboxProcessManager.Stderr(installPid)
-			stdout, _ := instance.SandboxProcessManager.Stdout(installPid)
-			return fmt.Errorf("failed to install networking tools:\nstdout: %s\nstderr: %s", stdout, stderr)
-		}
-		stdout, _ := instance.SandboxProcessManager.Stdout(installPid)
-		log.Info().Str("container_id", containerId).Str("output", stdout).Msg("networking tools ready")
-	}
-	
-	script := `
-set -e
-
-# Get default network interface and its IP address
-dev=$(ip route show default | sed 's/.*\sdev\s\(\S*\)\s.*$/\1/')
-addr=$(ip addr show dev "$dev" | grep -w inet | sed 's/^\s*inet\s\(\S*\)\/.*$/\1/')
-
-# Enable IPv4 forwarding
-echo 1 > /proc/sys/net/ipv4/ip_forward
-
-# Setup SNAT for Docker bridge networking
-# This allows containers on Docker's bridge network to access the external network
-iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p tcp
-iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p udp
-
-echo "Docker networking configured for $dev ($addr)"
-`
+// enableIPv4Forwarding enables IPv4 forwarding which is required for Docker networking in gVisor
+func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, instance *ContainerInstance) error {
+	// Simple sysctl write - no external commands needed
+	script := `echo 1 > /proc/sys/net/ipv4/ip_forward`
 
 	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
 	if err != nil {
-		return fmt.Errorf("failed to execute networking setup: %w", err)
+		return fmt.Errorf("failed to enable IPv4 forwarding: %w", err)
 	}
 
 	time.Sleep(cgroupSetupCompletionWait)
@@ -196,12 +110,10 @@ echo "Docker networking configured for $dev ($addr)"
 	exitCode, _ := instance.SandboxProcessManager.Status(pid)
 	if exitCode != 0 {
 		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-		stdout, _ := instance.SandboxProcessManager.Stdout(pid)
-		return fmt.Errorf("networking setup failed (exit %d)\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+		return fmt.Errorf("IPv4 forwarding failed with exit code %d: %s", exitCode, stderr)
 	}
 
-	stdout, _ := instance.SandboxProcessManager.Stdout(pid)
-	log.Info().Str("container_id", containerId).Str("output", stdout).Msg("docker networking configured")
+	log.Info().Str("container_id", containerId).Msg("IPv4 forwarding enabled")
 	return nil
 }
 
