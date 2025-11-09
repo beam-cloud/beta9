@@ -2437,8 +2437,14 @@ class SandboxDockerManager:
 
         # Create override file to force gVisor network compatibility
         # Use network_mode: host for each service to avoid network alias issues
-        override_path = "/tmp/.docker-compose-gvisor-override.yml"
-
+        # Put override in same directory as compose file to avoid namespace issues
+        import os as os_module
+        if compose_file_path.startswith("/"):
+            override_dir = os_module.path.dirname(compose_file_path)
+        else:
+            override_dir = os_module.path.dirname(compose_file_path) or "."
+        override_path = f"{override_dir}/.docker-compose-gvisor-override.yml"
+        
         if service_names:
             # Generate override for each service with network_mode: host
             # Docker Compose will automatically handle port mapping incompatibility
@@ -2462,22 +2468,14 @@ class SandboxDockerManager:
 
         try:
             # Upload the override file to the sandbox
+            print(f"DEBUG: Uploading override to: {override_path}")
             self.sandbox_instance.fs.upload_file(local_override_path, override_path)
             
-            # Debug: List /tmp to see what's actually there
-            print("DEBUG: Listing /tmp directory after upload:")
-            try:
-                files = self.sandbox_instance.fs.list_files("/tmp")
-                for f in files:
-                    print(f"  - {f.name} (is_dir={f.is_dir}, size={f.size})")
-            except Exception as list_err:
-                print(f"DEBUG: Could not list /tmp: {list_err}")
-            
             # Debug: Try to stat the exact file we uploaded
-            print(f"DEBUG: Trying to stat {override_path}")
+            print(f"DEBUG: Verifying file exists at {override_path}")
             try:
                 file_info = self.sandbox_instance.fs.stat_file(override_path)
-                print(f"DEBUG: File exists! size={file_info.size}")
+                print(f"DEBUG: File verified! size={file_info.size}")
             except Exception as stat_err:
                 print(f"DEBUG: Could not stat {override_path}: {stat_err}")
                 
