@@ -305,10 +305,10 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 		args = append(args, "--platform", r.cfg.RunscPlatform)
 	}
 
-	// Disable rootfs overlay to allow files written to host overlay to be visible inside container
-	// By default, gVisor uses a sandbox-internal tmpfs overlay which prevents host filesystem changes
-	// from being visible. Setting this to "root:self" makes the root filesystem use a host-backed overlay.
-	args = append(args, "--overlay2=root:self")
+	// Use self-backed overlay for ALL filesystems (not just root)
+	// This ensures files written to the host overlay are immediately visible inside the container.
+	// "all:self" means all filesystems use host-backed overlay instead of sandbox-internal tmpfs.
+	args = append(args, "--overlay2=all:self")
 
 	// Add --net-raw flag if Docker-in-Docker is enabled
 	// This is required for Docker to function properly inside gVisor
