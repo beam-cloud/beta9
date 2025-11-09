@@ -41,14 +41,26 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Start dockerd with minimal configuration for gVisor
-	// Bridge networking is disabled because gVisor doesn't support veth interfaces
+	// Enable IPv4 forwarding for Docker networking
+	if err := s.enableIPv4Forwarding(ctx, containerId, instance); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to enable IPv4 forwarding")
+		return
+	}
+
+	// Create Docker daemon configuration for gVisor compatibility
+	if err := s.createDockerDaemonConfig(ctx, containerId, instance); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to create docker daemon config")
+		return
+	}
+
+	// Start dockerd with configuration for gVisor
+	// Key settings:
+	// - Bridge networking disabled (gVisor doesn't support veth interfaces)
+	// - iptables disabled (not supported in gVisor sandbox)
+	// - Host network mode as default (configured via daemon.json)
 	cmd := []string{
 		"dockerd",
-		"--bridge=none",
-		"--iptables=false",
-		"--ip6tables=false",
-		"--ip-forward=false",
+		"--config-file=/etc/docker/daemon.json",
 	}
 	
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
@@ -86,6 +98,76 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 		return fmt.Errorf("cgroup setup failed with exit code %d", exitCode)
 	}
 
+	return nil
+}
+
+// enableIPv4Forwarding enables IPv4 forwarding which is required for Docker networking
+func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, instance *ContainerInstance) error {
+	script := `
+set -e
+# Enable IPv4 forwarding at the kernel level
+echo 1 > /proc/sys/net/ipv4/ip_forward
+`
+
+	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
+	if err != nil {
+		return fmt.Errorf("failed to execute IPv4 forwarding script: %w", err)
+	}
+
+	// Wait for command to complete
+	time.Sleep(cgroupSetupCompletionWait)
+
+	exitCode, _ := instance.SandboxProcessManager.Status(pid)
+	if exitCode != 0 {
+		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+		return fmt.Errorf("IPv4 forwarding setup failed with exit code %d: %s", exitCode, stderr)
+	}
+
+	log.Info().Str("container_id", containerId).Msg("IPv4 forwarding enabled")
+	return nil
+}
+
+// createDockerDaemonConfig creates a daemon.json configuration file optimized for gVisor
+func (s *Worker) createDockerDaemonConfig(ctx context.Context, containerId string, instance *ContainerInstance) error {
+	// Docker daemon configuration optimized for gVisor:
+	// - bridge: "none" - Disables default bridge network (gVisor doesn't support veth)
+	// - iptables: false - Disables iptables management (not supported in gVisor)
+	// - ip6tables: false - Disables ip6tables management
+	// - ip-forward: false - Docker won't manage forwarding (we enable it manually)
+	// - userland-proxy: false - Disables userland proxy (reduces overhead)
+	// - storage-driver: "vfs" - Most compatible storage driver for gVisor
+	daemonConfig := `{
+  "bridge": "none",
+  "iptables": false,
+  "ip6tables": false,
+  "ip-forward": false,
+  "userland-proxy": false,
+  "storage-driver": "vfs"
+}`
+
+	script := fmt.Sprintf(`
+set -e
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json << 'EOF'
+%s
+EOF
+`, daemonConfig)
+
+	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
+	if err != nil {
+		return fmt.Errorf("failed to create daemon config: %w", err)
+	}
+
+	// Wait for file creation to complete
+	time.Sleep(cgroupSetupCompletionWait)
+
+	exitCode, _ := instance.SandboxProcessManager.Status(pid)
+	if exitCode != 0 {
+		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+		return fmt.Errorf("daemon config creation failed with exit code %d: %s", exitCode, stderr)
+	}
+
+	log.Info().Str("container_id", containerId).Msg("docker daemon config created")
 	return nil
 }
 
