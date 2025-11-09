@@ -2382,50 +2382,13 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Create override file to force host networking for both runtime and build
-        # (gVisor doesn't support bridge networks)
-        # This script reads the compose file, extracts service names, and creates an override
-        # that sets network_mode: host and build.network: host for each service
-        override_path = "/tmp/.compose-gvisor-override.yml"
-        create_override_script = f"""
-cat > {override_path} << 'OVERRIDE_EOF'
-# Auto-generated override for gVisor compatibility
-# Forces host networking for all services (bridge networks not supported)
-
-# Use host network as default
-networks:
-  default:
-    name: host
-    external: true
-
-# Extract service names and add host networking to each
-services:
-OVERRIDE_EOF
-
-# Parse service names from compose file and add overrides
-if [ -f "{file}" ]; then
-  grep -E '^  [a-zA-Z0-9_-]+:' "{file}" | sed 's/://g' | sed 's/^  //' | while read service; do
-    cat >> {override_path} << SERVICE_EOF
-  $service:
-    network_mode: host
-    build:
-      network: host
-SERVICE_EOF
-  done
-fi
-"""
-        
-        self.sandbox_instance.process.exec("sh", "-c", create_override_script).wait()
-        
-        cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
+        cmd = ["docker-compose", "-f", file, "up"]
         if detach:
             cmd.append("-d")
         if build:
             cmd.append("--build")
 
-        # Disable BuildKit to use legacy builder (more compatible with gVisor)
-        env = {"DOCKER_BUILDKIT": "0", "COMPOSE_DOCKER_CLI_BUILD": "0"}
-        
+        env = {}
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
 
