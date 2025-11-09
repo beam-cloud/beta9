@@ -2437,59 +2437,23 @@ class SandboxDockerManager:
 
         # Create override file to force gVisor network compatibility
         # Use network_mode: host for each service to avoid network alias issues
-        # Put override in same directory as compose file to avoid namespace issues
-        import os as os_module
-        if compose_file_path.startswith("/"):
-            override_dir = os_module.path.dirname(compose_file_path)
-        else:
-            override_dir = os_module.path.dirname(compose_file_path) or "."
-        override_path = f"{override_dir}/.docker-compose-gvisor-override.yml"
+        override_path = "/tmp/.docker-compose-gvisor-override.yml"
         
         if service_names:
             # Generate override for each service with network_mode: host
             # Docker Compose will automatically handle port mapping incompatibility
-            override_content = "services:\n"
+            override_content = "services:\\n"
             for service_name in service_names:
-                override_content += f"  {service_name}:\n"
-                override_content += "    network_mode: host\n"
+                override_content += f"  {service_name}:\\n"
+                override_content += f"    network_mode: host\\n"
         else:
             # Fallback: simple host networking
-            override_content = "services:\n  default:\n    network_mode: host\n"
-
-        # Write the override file locally and upload to sandbox
-        import tempfile
-        import os
+            override_content = "services:\\n  default:\\n    network_mode: host\\n"
         
-        # Create a temporary file with the override content
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp_file:
-            tmp_file.write(override_content)
-            tmp_file.flush()  # Ensure content is written to disk
-            local_override_path = tmp_file.name
-
-        try:
-            # Upload the override file to the sandbox
-            print(f"DEBUG: Uploading override to: {override_path}")
-            self.sandbox_instance.fs.upload_file(local_override_path, override_path)
-            
-            # Debug: Try to stat the exact file we uploaded
-            print(f"DEBUG: Verifying file exists at {override_path}")
-            try:
-                file_info = self.sandbox_instance.fs.stat_file(override_path)
-                print(f"DEBUG: File verified! size={file_info.size}")
-            except Exception as stat_err:
-                print(f"DEBUG: Could not stat {override_path}: {stat_err}")
-                
-        except Exception as e:
-            # If upload fails, log error and fall back to shell command
-            print(f"Warning: upload_file failed with error: {e}, falling back to shell command")
-            escaped_content = override_content.replace("'", "'\\''")
-            self.sandbox_instance.process.exec(
-                "sh", "-c", f"echo '{escaped_content}' > {override_path}"
-            ).wait()
-        finally:
-            # Clean up the temporary file
-            if os.path.exists(local_override_path):
-                os.unlink(local_override_path)
+        # Write override file using printf for proper newline handling
+        self.sandbox_instance.process.exec(
+            "sh", "-c", f"printf '{override_content}' > {override_path}"
+        ).wait()
 
         cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
 
