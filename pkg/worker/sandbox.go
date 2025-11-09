@@ -58,7 +58,7 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		"--ip6tables=false",
 		"--bridge=none",
 	}
-	
+
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
 
 	if err != nil {
@@ -97,9 +97,8 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	return nil
 }
 
-// enableIPv4Forwarding enables IPv4 forwarding which is required for Docker networking in gVisor
+// enableIPv4Forwarding enables IPv4 forwarding which is required for Docker networking in gVisor sandboxes
 func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, instance *ContainerInstance) error {
-	// Simple sysctl write - no external commands needed
 	script := `echo 1 > /proc/sys/net/ipv4/ip_forward`
 
 	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
@@ -115,7 +114,6 @@ func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, i
 		return fmt.Errorf("IPv4 forwarding failed with exit code %d: %s", exitCode, stderr)
 	}
 
-	log.Info().Str("container_id", containerId).Msg("IPv4 forwarding enabled")
 	return nil
 }
 
