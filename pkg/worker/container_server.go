@@ -742,38 +742,108 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
+	// For gVisor with rootfs overlay, files written to the host overlay path are not visible
+	// inside the sandbox because the sandbox uses an internal tmpfs overlay.
+	// We need to write files through the sandbox process manager so they go through gVisor's VFS.
+	if instance.Spec.Runtime == "runsc" {
+		return s.uploadFileThroughSandbox(ctx, in, instance, containerPath)
+	}
+
+	// For runc, we can write directly to the host overlay path
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	
-	// Debug: Log the paths being used
-	log.Info().
-		Str("container_path", containerPath).
-		Str("host_path", hostPath).
-		Str("container_id", in.ContainerId).
-		Str("runtime", instance.Spec.Runtime).
-		Msg("ContainerSandboxUploadFile")
 	
 	// Ensure the parent directory exists on the host
 	hostDir := filepath.Dir(hostPath)
 	if err := os.MkdirAll(hostDir, 0755); err != nil {
-		log.Error().Err(err).Str("host_dir", hostDir).Msg("Failed to create parent directory")
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to create directory: %v", err)}, nil
 	}
 	
 	err = os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode))
 	if err != nil {
-		log.Error().Err(err).Str("host_path", hostPath).Msg("Failed to write file")
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-	
-	// Verify file was written
-	if _, err := os.Stat(hostPath); err != nil {
-		log.Error().Err(err).Str("host_path", hostPath).Msg("File write succeeded but stat failed")
-		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("File verification failed: %v", err)}, nil
-	}
-	
-	log.Info().Str("host_path", hostPath).Int("size", len(in.Data)).Msg("File written successfully")
 
 	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
+}
+
+// uploadFileThroughSandbox writes a file inside the container using the sandbox process manager.
+// This is necessary for gVisor with rootfs overlay, where files written to the host overlay path
+// are not visible inside the sandbox due to the sandbox-internal tmpfs overlay.
+func (s *ContainerRuntimeServer) uploadFileThroughSandbox(ctx context.Context, in *pb.ContainerSandboxUploadFileRequest, instance *ContainerInstance, containerPath string) (*pb.ContainerSandboxUploadFileResponse, error) {
+	// Wait for process manager to be ready
+	timeout := time.After(10 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for !instance.SandboxProcessManagerReady {
+		select {
+		case <-timeout:
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "Process manager not ready within timeout"}, nil
+		case <-ctx.Done():
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "Request cancelled"}, nil
+		case <-ticker.C:
+			if fresh, exists := s.containerInstances.Get(in.ContainerId); exists {
+				instance = fresh
+			}
+		}
+	}
+
+	// Create parent directory if needed
+	parentDir := filepath.Dir(containerPath)
+	if parentDir != "/" && parentDir != "." {
+		pid, err := instance.SandboxProcessManager.RunCommand([]string{"mkdir", "-p", parentDir}, instance.Spec.Process.Env, "", nil)
+		if err != nil {
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to create directory: %v", err)}, nil
+		}
+		
+		// Wait for mkdir to complete
+		if err := s.waitForProcess(instance, pid, 5*time.Second); err != nil {
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("mkdir failed: %v", err)}, nil
+		}
+	}
+
+	// Write file using cat with stdin
+	pid, err := instance.SandboxProcessManager.RunCommand([]string{"sh", "-c", fmt.Sprintf("cat > '%s'", containerPath)}, instance.Spec.Process.Env, "", in.Data)
+	if err != nil {
+		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to write file: %v", err)}, nil
+	}
+
+	// Wait for cat to complete
+	if err := s.waitForProcess(instance, pid, 5*time.Second); err != nil {
+		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("cat failed: %v", err)}, nil
+	}
+
+	// Set file permissions
+	pid, err = instance.SandboxProcessManager.RunCommand([]string{"chmod", fmt.Sprintf("%o", in.Mode), containerPath}, instance.Spec.Process.Env, "", nil)
+	if err != nil {
+		// Don't fail if chmod fails, just log it
+		log.Warn().Err(err).Str("container_path", containerPath).Msg("Failed to chmod file")
+	} else {
+		s.waitForProcess(instance, pid, 5*time.Second)
+	}
+
+	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
+}
+
+// waitForProcess waits for a process to complete and returns an error if it fails
+func (s *ContainerRuntimeServer) waitForProcess(instance *ContainerInstance, pid int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		process, err := instance.SandboxProcessManager.GetProcess(pid)
+		if err != nil {
+			return fmt.Errorf("failed to get process: %v", err)
+		}
+		
+		if !process.Running {
+			if process.ExitCode != 0 {
+				return fmt.Errorf("process exited with code %d", process.ExitCode)
+			}
+			return nil
+		}
+		
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fmt.Errorf("process timeout")
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Context, in *pb.ContainerSandboxCreateDirectoryRequest) (*pb.ContainerSandboxCreateDirectoryResponse, error) {
