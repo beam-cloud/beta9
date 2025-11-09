@@ -2000,13 +2000,16 @@ class SandboxDockerManager:
         """
         Run a Docker container.
 
+        Note: Automatically uses --network host for gVisor compatibility.
+        Container ports are directly accessible on the host network.
+
         Args:
             image: Docker image (e.g. "nginx:latest")
             command: Command to run in container
             name: Container name
             detach: Run in background
             remove: Auto-remove when stopped
-            ports: Port mappings {"container_port": "host_port"}
+            ports: Port mappings (ignored - use host networking)
             volumes: Volume mappings {"host_path": "container_path"}
             env: Environment variables
 
@@ -2015,8 +2018,9 @@ class SandboxDockerManager:
 
         Example:
             ```python
-            # Run detached and get container ID
-            result = sandbox.docker.run("nginx:latest", name="web", ports={"80": "8080"}, detach=True)
+            # Run detached - ports are accessible on host directly
+            result = sandbox.docker.run("nginx:latest", name="web", detach=True)
+            # Access nginx at http://localhost:80 (container's default port)
             container_id = result.output  # Auto-waits
 
             # Run and stream logs
@@ -2042,9 +2046,10 @@ class SandboxDockerManager:
             cmd.append("--rm")
         if name:
             cmd.extend(["--name", name])
-        if ports:
-            for cp, hp in ports.items():
-                cmd.extend(["-p", f"{hp}:{cp}"])
+        # Skip port mappings with --network host (ports are directly accessible on host)
+        # if ports:
+        #     for cp, hp in ports.items():
+        #         cmd.extend(["-p", f"{hp}:{cp}"])
         if volumes:
             for hp, cp in volumes.items():
                 cmd.extend(["-v", f"{hp}:{cp}"])
@@ -2363,6 +2368,9 @@ class SandboxDockerManager:
     ) -> "SandboxProcess":
         """
         Start services from docker-compose file.
+
+        Note: Automatically configures host networking for gVisor compatibility.
+        All services will use the host network - ports are directly accessible.
 
         Args:
             file: Path to docker-compose file (default: "docker-compose.yml")
