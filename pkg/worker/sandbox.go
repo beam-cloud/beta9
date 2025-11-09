@@ -103,7 +103,7 @@ func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, i
 
 	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
 	if err != nil {
-		return fmt.Errorf("failed to enable IPv4 forwarding: %w", err)
+		return err
 	}
 
 	time.Sleep(cgroupSetupCompletionWait)

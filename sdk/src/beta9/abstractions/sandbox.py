@@ -2394,7 +2394,7 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Create override file to force host networking for gVisor compatibility
+        # Create override file to force gVisor network compatibility
         override_path = "/tmp/.docker-compose-gvisor-override.yml"
         override_content = """# Auto-generated for gVisor compatibility
 # Bridge networking is not supported in Docker-in-gVisor
