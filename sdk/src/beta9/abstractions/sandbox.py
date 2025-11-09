@@ -2425,15 +2425,14 @@ class SandboxDockerManager:
         
         if service_names:
             # Generate override for each service with network_mode: host
-            # When using host networking, port mappings must be removed
+            # Docker Compose will automatically handle port mapping incompatibility
             override_content = "services:\n"
             for service_name in service_names:
                 override_content += f"  {service_name}:\n"
                 override_content += f"    network_mode: host\n"
-                override_content += f"    ports: []\n"
         else:
             # Fallback: simple host networking
-            override_content = "x-network-mode: &network-mode\n  network_mode: host\n"
+            override_content = "services:\n  default:\n    network_mode: host\n"
         
         # Write the override file using cat with heredoc for better handling
         self.sandbox_instance.process.exec(
