@@ -525,12 +525,13 @@ func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath stri
 		}
 	}
 
-	// For overlay filesystems, we need to write to the upper directory, not the merged directory
-	// The overlay will then reflect the change in the merged directory which the container sees
+	// For overlay filesystems, write to the merged directory (not upper directly)
+	// The overlay filesystem driver automatically stores changes in the upper layer
+	// and makes them visible in both merged (what container sees) and upper
 	if instance.Overlay != nil {
-		upperPath := instance.Overlay.TopLayerUpperPath()
-		if upperPath != "" {
-			return filepath.Join(upperPath, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
+		mergedPath := instance.Overlay.TopLayerPath()
+		if mergedPath != "" {
+			return filepath.Join(mergedPath, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
 		}
 	}
 
