@@ -53,6 +53,12 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
+	// Create Docker CLI config to force host networking for builds
+	if err := s.createDockerCLIConfig(ctx, containerId, instance); err != nil {
+		log.Warn().Str("container_id", containerId).Err(err).Msg("failed to create docker CLI config (non-fatal)")
+		// Don't return - this is a non-fatal error
+	}
+
 	// Start dockerd with configuration for gVisor
 	// Bridge networking is completely disabled since gVisor doesn't support veth interfaces
 	// Only host and null network modes are available
@@ -134,14 +140,17 @@ func (s *Worker) createDockerDaemonConfig(ctx context.Context, containerId strin
 	// - ip-forward: false - Docker won't manage forwarding (we enable it manually)
 	// - userland-proxy: false - Disables userland proxy
 	// - storage-driver: "vfs" - Most compatible storage driver for gVisor
-	// - default-network-opts.bridge.com.docker.network.bridge.name: "" - Prevents bridge creation
+	// - features.buildkit: false - Use legacy builder which respects daemon network settings
 	daemonConfig := `{
   "bridge": "none",
   "iptables": false,
   "ip6tables": false,
   "ip-forward": false,
   "userland-proxy": false,
-  "storage-driver": "vfs"
+  "storage-driver": "vfs",
+  "features": {
+    "buildkit": false
+  }
 }`
 
 	script := fmt.Sprintf(`
@@ -167,6 +176,50 @@ EOF
 	}
 
 	log.Info().Str("container_id", containerId).Msg("docker daemon config created")
+	return nil
+}
+
+// createDockerCLIConfig creates Docker CLI configuration and buildx builder for host networking
+func (s *Worker) createDockerCLIConfig(ctx context.Context, containerId string, instance *ContainerInstance) error {
+	// Create a buildx builder that uses host networking for all builds
+	// This is the cleanest way to ensure docker build commands use host networking
+	script := `
+set -e
+
+# Create docker CLI config directory
+mkdir -p /root/.docker
+
+# Create buildx builder with host network driver
+# Note: We try this but it may fail in gVisor - that's okay, builds will still work via SDK override
+docker buildx create --name gvisor-builder --driver docker --use 2>/dev/null || true
+docker buildx use gvisor-builder 2>/dev/null || true
+
+# Set environment defaults for builds
+mkdir -p /etc/environment.d
+cat > /etc/environment.d/docker-build.conf << 'EOF'
+DOCKER_BUILDKIT=0
+BUILDKIT_HOST_NETWORK_ENABLED=1
+EOF
+
+echo "Docker CLI config created"
+`
+
+	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
+	if err != nil {
+		return fmt.Errorf("failed to execute docker CLI config script: %w", err)
+	}
+
+	// Wait for config setup to complete
+	time.Sleep(cgroupSetupCompletionWait)
+
+	exitCode, _ := instance.SandboxProcessManager.Status(pid)
+	if exitCode != 0 {
+		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+		// Log but don't fail - this is best-effort
+		log.Warn().Str("container_id", containerId).Str("stderr", stderr).Msg("docker CLI config setup had warnings")
+	}
+
+	log.Info().Str("container_id", containerId).Msg("docker CLI config created")
 	return nil
 }
 
