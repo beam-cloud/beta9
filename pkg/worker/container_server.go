@@ -525,7 +525,16 @@ func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath stri
 		}
 	}
 
-	// If no mount matches, use the overlay root path
+	// For overlay filesystems, we need to write to the upper directory, not the merged directory
+	// The overlay will then reflect the change in the merged directory which the container sees
+	if instance.Overlay != nil {
+		upperPath := instance.Overlay.TopLayerUpperPath()
+		if upperPath != "" {
+			return filepath.Join(upperPath, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
+		}
+	}
+
+	// Fallback: use the root path (this shouldn't happen with overlay but keep for safety)
 	return filepath.Join(instance.Spec.Root.Path, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
 }
 
