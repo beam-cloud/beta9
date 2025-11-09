@@ -2421,18 +2421,30 @@ class SandboxDockerManager:
         
         if service_names:
             # Generate override for each service with network_mode: host
+            # Also remove networks from each service and disable default network creation
             override_content = "# Auto-generated for gVisor compatibility\n"
             override_content += "# Bridge networking is not supported in Docker-in-gVisor\n"
             override_content += "services:\n"
             for service_name in service_names:
                 override_content += f"  {service_name}:\n"
                 override_content += f"    network_mode: host\n"
+                override_content += f"    networks: []\n"
+            # Disable default network creation
+            override_content += "\nnetworks:\n"
+            override_content += "  default:\n"
+            override_content += "    external: true\n"
+            override_content += "    name: host\n"
         else:
             # Fallback: use x-default-network-mode extension
             override_content = """# Auto-generated for gVisor compatibility
 # Bridge networking is not supported in Docker-in-gVisor
 x-network-mode: &network-mode
   network_mode: host
+
+networks:
+  default:
+    external: true
+    name: host
 """
         
         # Escape single quotes in the content for shell command
