@@ -41,18 +41,23 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Setup networking for Docker in gVisor (based on gVisor's official example)
-	if err := s.setupDockerNetworking(ctx, containerId, instance); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup docker networking")
+	// Enable IPv4 forwarding (required for Docker networking)
+	if err := s.enableIPv4Forwarding(ctx, containerId, instance); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to enable IPv4 forwarding")
 		return
 	}
 
-	// Start dockerd with gVisor-compatible configuration
+	// Create Docker daemon configuration
+	if err := s.createDockerDaemonConfig(ctx, containerId, instance); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to create docker daemon config")
+		return
+	}
+
+	// Start dockerd
+	// Key: iptables disabled so dockerd doesn't fight with gVisor's limited iptables support
 	cmd := []string{
 		"dockerd",
-		"--iptables=false",
-		"--ip6tables=false",
-		"-D",
+		"--config-file=/etc/docker/daemon.json",
 	}
 	
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
@@ -93,46 +98,61 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	return nil
 }
 
-// setupDockerNetworking configures networking for Docker in gVisor
-// Based on: https://github.com/google/gvisor/blob/master/images/basic/docker/start-dockerd.sh
-func (s *Worker) setupDockerNetworking(ctx context.Context, containerId string, instance *ContainerInstance) error {
-	// This implements the gVisor networking setup which:
-	// 1. Enables IPv4 forwarding
-	// 2. Sets up iptables NAT rules for Docker bridge networks to work
-	script := `
-set -e
-
-# Get the default network interface and its IP address
-dev=$(ip route show default | sed 's/.*\sdev\s\(\S*\)\s.*$/\1/')
-addr=$(ip addr show dev "$dev" | grep -w inet | sed 's/^\s*inet\s\(\S*\)\/.*$/\1/')
-
-# Enable IPv4 forwarding
-echo 1 > /proc/sys/net/ipv4/ip_forward
-
-# Set up NAT rules to allow Docker bridge networks to access external network
-iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p tcp
-iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p udp
-
-echo "Docker networking configured for $dev ($addr)"
-`
+// enableIPv4Forwarding enables IPv4 forwarding which is required for Docker networking
+func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, instance *ContainerInstance) error {
+	script := `echo 1 > /proc/sys/net/ipv4/ip_forward`
 
 	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
 	if err != nil {
-		return fmt.Errorf("failed to execute networking setup script: %w", err)
+		return fmt.Errorf("failed to enable IPv4 forwarding: %w", err)
 	}
 
-	// Wait for networking setup to complete
 	time.Sleep(cgroupSetupCompletionWait)
 
 	exitCode, _ := instance.SandboxProcessManager.Status(pid)
 	if exitCode != 0 {
 		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-		stdout, _ := instance.SandboxProcessManager.Stdout(pid)
-		return fmt.Errorf("networking setup failed with exit code %d\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
+		return fmt.Errorf("IPv4 forwarding failed with exit code %d: %s", exitCode, stderr)
 	}
 
-	stdout, _ := instance.SandboxProcessManager.Stdout(pid)
-	log.Info().Str("container_id", containerId).Str("output", stdout).Msg("docker networking configured")
+	log.Info().Str("container_id", containerId).Msg("IPv4 forwarding enabled")
+	return nil
+}
+
+// createDockerDaemonConfig creates daemon.json with gVisor-compatible settings
+func (s *Worker) createDockerDaemonConfig(ctx context.Context, containerId string, instance *ContainerInstance) error {
+	// Per gVisor docker-in-docker guidance:
+	// - iptables: false - gVisor has limited iptables support, let dockerd not manage it
+	// - ip6tables: false - disable IPv6 tables
+	// - userland-proxy: false - use kernel forwarding instead
+	daemonConfig := `{
+  "iptables": false,
+  "ip6tables": false,
+  "userland-proxy": false
+}`
+
+	script := fmt.Sprintf(`
+set -e
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json << 'EOF'
+%s
+EOF
+`, daemonConfig)
+
+	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
+	if err != nil {
+		return fmt.Errorf("failed to create daemon config: %w", err)
+	}
+
+	time.Sleep(cgroupSetupCompletionWait)
+
+	exitCode, _ := instance.SandboxProcessManager.Status(pid)
+	if exitCode != 0 {
+		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
+		return fmt.Errorf("daemon config creation failed with exit code %d: %s", exitCode, stderr)
+	}
+
+	log.Info().Str("container_id", containerId).Msg("docker daemon config created")
 	return nil
 }
 

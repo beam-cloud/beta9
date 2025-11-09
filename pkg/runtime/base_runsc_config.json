@@ -223,30 +223,6 @@
 			]
 		},
 		{
-			"destination": "/sbin/ip",
-			"type": "bind",
-			"source": "/sbin/ip",
-			"options": [
-				"ro",
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev"
-			]
-		},
-		{
-			"destination": "/sbin/iptables-legacy",
-			"type": "bind",
-			"source": "/sbin/iptables-legacy",
-			"options": [
-				"ro",
-				"rbind",
-				"rprivate",
-				"nosuid",
-				"nodev"
-			]
-		},
-		{
 			"destination": "/usr/local/lib/python3.8/dist-packages/beam",
 			"type": "bind",
 			"source": "/workspace/sdk",
