@@ -2395,7 +2395,7 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Read and parse the compose file to get service names
+        # Read and parse the compose file to get service names and networks
         compose_file_path = file if file.startswith('/') else f"{cwd or '.'}/{file}"
         
         # Download compose file content to parse it
@@ -2407,13 +2407,17 @@ class SandboxDockerManager:
             compose_content = result.stdout()
             compose_data = yaml.safe_load(compose_content)
             
-            # Extract service names
+            # Extract service names and network names
             service_names = []
+            network_names = []
             if compose_data and 'services' in compose_data:
                 service_names = list(compose_data['services'].keys())
+            if compose_data and 'networks' in compose_data:
+                network_names = list(compose_data['networks'].keys())
         except Exception:
             # If we can't parse the file, fall back to a simpler approach
             service_names = []
+            network_names = []
 
         # Create override file to force gVisor network compatibility
         # Use network_mode: host for each service to avoid network alias issues
@@ -2421,25 +2425,19 @@ class SandboxDockerManager:
         
         if service_names:
             # Generate override for each service with network_mode: host
-            # Setting network_mode: host bypasses Docker Compose networking entirely
-            override_content = "# Auto-generated for gVisor compatibility\n"
-            override_content += "# Bridge networking is not supported in Docker-in-gVisor\n"
-            override_content += "services:\n"
+            # When using host networking, port mappings must be removed
+            override_content = "services:\n"
             for service_name in service_names:
                 override_content += f"  {service_name}:\n"
                 override_content += f"    network_mode: host\n"
+                override_content += f"    ports: []\n"
         else:
             # Fallback: simple host networking
-            override_content = """# Auto-generated for gVisor compatibility
-# Bridge networking is not supported in Docker-in-gVisor
-x-network-mode: &network-mode
-  network_mode: host
-"""
+            override_content = "x-network-mode: &network-mode\n  network_mode: host\n"
         
-        # Escape single quotes in the content for shell command
-        escaped_content = override_content.replace("'", "'\\''")
+        # Write the override file using cat with heredoc for better handling
         self.sandbox_instance.process.exec(
-            "sh", "-c", f"echo '{escaped_content}' > {override_path}"
+            "sh", "-c", f"cat > {override_path} << 'EOFYAML'\n{override_content}EOFYAML"
         ).wait()
 
         cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
@@ -2448,7 +2446,7 @@ x-network-mode: &network-mode
         if build:
             cmd.append("--build")
 
-        env = {}
+        env = {"DOCKER_BUILDKIT": "0", "COMPOSE_DOCKER_CLI_BUILD": "0"}
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
 
