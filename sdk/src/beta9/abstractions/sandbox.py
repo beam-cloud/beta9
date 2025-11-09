@@ -2443,10 +2443,29 @@ class SandboxDockerManager:
             # Fallback: simple host networking
             override_content = "services:\n  default:\n    network_mode: host\n"
         
-        # Write the override file using cat with heredoc for better handling
-        self.sandbox_instance.process.exec(
-            "sh", "-c", f"cat > {override_path} << 'EOFYAML'\n{override_content}EOFYAML"
-        ).wait()
+        # Write the override file locally and upload to sandbox
+        try:
+            import tempfile
+            import os
+            
+            # Create a temporary file with the override content
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as tmp_file:
+                tmp_file.write(override_content)
+                local_override_path = tmp_file.name
+            
+            try:
+                # Upload the override file to the sandbox
+                self.sandbox_instance.fs.upload_file(local_override_path, override_path)
+            finally:
+                # Clean up the temporary file
+                if os.path.exists(local_override_path):
+                    os.unlink(local_override_path)
+        except Exception as e:
+            # If upload fails, fall back to shell command
+            escaped_content = override_content.replace("'", "'\\''")
+            self.sandbox_instance.process.exec(
+                "sh", "-c", f"echo '{escaped_content}' > {override_path}"
+            ).wait()
 
         cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
         if detach:
