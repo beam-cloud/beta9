@@ -68,7 +68,7 @@ func (co *ContainerOverlay) AddEmptyLayer() error {
 
 	// Create required directories in the upper layer
 	// This ensures they exist in the container filesystem regardless of the base image
-	for _, dir := range []string{"workspace", "volumes"} {
+	for _, dir := range []string{"workspace", "volumes", "tmp"} {
 		requiredDir := filepath.Join(upperDir, dir)
 		if err := os.MkdirAll(requiredDir, 0755); err != nil {
 			log.Warn().Err(err).Str("path", requiredDir).Msg("failed to create required directory in upper layer")
