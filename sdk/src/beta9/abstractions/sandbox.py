@@ -2446,7 +2446,7 @@ class SandboxDockerManager:
         if build:
             cmd.append("--build")
 
-        env = {"DOCKER_BUILDKIT": "0", "COMPOSE_DOCKER_CLI_BUILD": "0"}
+        env = {}
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
 
