@@ -47,34 +47,18 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Setup network stubs to prevent bridge configuration errors
-	if err := s.setupNetworkStubs(ctx, containerId, instance); err != nil {
-		log.Warn().Str("container_id", containerId).Err(err).Msg("failed to setup network stubs (non-fatal)")
-		// Don't return - this is a non-fatal error
-	}
-
 	// Create Docker daemon configuration for gVisor compatibility
 	if err := s.createDockerDaemonConfig(ctx, containerId, instance); err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to create docker daemon config")
 		return
 	}
 
-	// Create docker-compose wrapper to force host networking
-	if err := s.createDockerComposeWrapper(ctx, containerId, instance); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to create docker-compose wrapper")
-		return
-	}
-
 	// Start dockerd with configuration for gVisor
-	// Key settings:
-	// - Bridge networking disabled (gVisor doesn't support veth interfaces)
-	// - iptables disabled (not supported in gVisor sandbox)
-	// - Host network mode enforced via wrapper scripts
-	// - Additional flags to prevent bridge network driver issues
+	// Bridge networking is completely disabled since gVisor doesn't support veth interfaces
+	// Only host and null network modes are available
 	cmd := []string{
 		"dockerd",
 		"--config-file=/etc/docker/daemon.json",
-		"--default-address-pool=base=0.0.0.0/0,size=0",
 	}
 	
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
@@ -141,65 +125,6 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 	return nil
 }
 
-// setupNetworkStubs creates a background process to handle bridge network creation attempts
-// Since gVisor doesn't support bridge interfaces, this intercepts Docker's network creation
-// and makes it use host networking instead
-func (s *Worker) setupNetworkStubs(ctx context.Context, containerId string, instance *ContainerInstance) error {
-	// Create a script that monitors for Docker network creation attempts and handles them gracefully
-	// This uses inotify to watch for bridge creation attempts and creates stub configurations
-	script := `
-set -e
-
-# Create directory for bridge network stubs if it doesn't exist
-mkdir -p /proc/sys/net/ipv4/conf
-
-# Create a background process that handles bridge network creation
-# Docker will try to create bridges like br-xxx but they won't work in gVisor
-# We'll create a script that intercepts docker network commands
-
-# Create a docker network stub that always succeeds for host network
-# This prevents errors when docker-compose tries to create networks
-mkdir -p /usr/local/libexec/docker
-cat > /usr/local/libexec/docker/network-stub.sh << 'STUBEOF'
-#!/bin/sh
-# Stub for Docker network operations in gVisor
-# Always return success but log the operation
-echo "Network operation intercepted (gVisor compatibility mode): $@" >> /var/log/docker-network-stub.log
-exit 0
-STUBEOF
-
-chmod +x /usr/local/libexec/docker/network-stub.sh
-
-# Create a more permissive route_localnet default
-# This prevents the "Cannot read IPv4 local routing setup" error
-# by ensuring the directory structure exists
-for conf_dir in /proc/sys/net/ipv4/conf/default /proc/sys/net/ipv4/conf/all; do
-    if [ -d "$conf_dir" ] && [ ! -f "$conf_dir/route_localnet" ]; then
-        echo 1 > "$conf_dir/route_localnet" 2>/dev/null || true
-    fi
-done
-
-echo "Network stubs configured"
-`
-
-	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
-	if err != nil {
-		return fmt.Errorf("failed to execute network stubs script: %w", err)
-	}
-
-	// Wait for command to complete
-	time.Sleep(cgroupSetupCompletionWait)
-
-	exitCode, _ := instance.SandboxProcessManager.Status(pid)
-	if exitCode != 0 {
-		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-		return fmt.Errorf("network stubs setup failed with exit code %d: %s", exitCode, stderr)
-	}
-
-	log.Info().Str("container_id", containerId).Msg("network stubs configured")
-	return nil
-}
-
 // createDockerDaemonConfig creates a daemon.json configuration file optimized for gVisor
 func (s *Worker) createDockerDaemonConfig(ctx context.Context, containerId string, instance *ContainerInstance) error {
 	// Docker daemon configuration optimized for gVisor:
@@ -207,17 +132,16 @@ func (s *Worker) createDockerDaemonConfig(ctx context.Context, containerId strin
 	// - iptables: false - Disables iptables management (not supported in gVisor)
 	// - ip6tables: false - Disables ip6tables management
 	// - ip-forward: false - Docker won't manage forwarding (we enable it manually)
-	// - userland-proxy: false - Disables userland proxy (reduces overhead)
+	// - userland-proxy: false - Disables userland proxy
 	// - storage-driver: "vfs" - Most compatible storage driver for gVisor
-	// - bip: "" - Prevents bridge IP configuration
+	// - default-network-opts.bridge.com.docker.network.bridge.name: "" - Prevents bridge creation
 	daemonConfig := `{
   "bridge": "none",
   "iptables": false,
   "ip6tables": false,
   "ip-forward": false,
   "userland-proxy": false,
-  "storage-driver": "vfs",
-  "bip": ""
+  "storage-driver": "vfs"
 }`
 
 	script := fmt.Sprintf(`
@@ -243,175 +167,6 @@ EOF
 	}
 
 	log.Info().Str("container_id", containerId).Msg("docker daemon config created")
-	return nil
-}
-
-// createDockerComposeWrapper creates a wrapper script for docker-compose that forces host networking
-func (s *Worker) createDockerComposeWrapper(ctx context.Context, containerId string, instance *ContainerInstance) error {
-	// Create a wrapper script that intercepts docker-compose commands and forces host networking
-	// This ensures users cannot accidentally create bridge networks that won't work in gVisor
-	wrapperScript := `#!/bin/sh
-# Docker Compose wrapper for gVisor compatibility
-# This script forces host networking mode for all services and disables custom networks
-
-# Store the original docker-compose binary location
-REAL_COMPOSE="/usr/local/bin/docker-compose.real"
-
-# Check if we need to move the real binary
-if [ -f "/usr/local/bin/docker-compose" ] && [ ! -f "$REAL_COMPOSE" ]; then
-    mv /usr/local/bin/docker-compose "$REAL_COMPOSE" 2>/dev/null || true
-fi
-
-# If the real binary exists, use it; otherwise try to find docker-compose in PATH
-if [ -f "$REAL_COMPOSE" ]; then
-    COMPOSE_CMD="$REAL_COMPOSE"
-else
-    # Try to find docker-compose elsewhere in PATH
-    COMPOSE_CMD=$(which docker-compose 2>/dev/null | grep -v "/usr/local/bin/docker-compose" | head -n1)
-    if [ -z "$COMPOSE_CMD" ]; then
-        # Fallback: try common locations
-        for loc in /usr/bin/docker-compose /bin/docker-compose; do
-            if [ -f "$loc" ]; then
-                COMPOSE_CMD="$loc"
-                break
-            fi
-        done
-    fi
-fi
-
-# If we still can't find docker-compose, try docker compose plugin
-if [ -z "$COMPOSE_CMD" ] || [ ! -f "$COMPOSE_CMD" ]; then
-    COMPOSE_CMD="docker compose"
-fi
-
-# Check if we need to modify the compose file for network compatibility
-COMPOSE_FILE="docker-compose.yml"
-COMPOSE_FILE_OVERRIDE=""
-
-# Find the compose file
-for file in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
-    if [ -f "$file" ]; then
-        COMPOSE_FILE="$file"
-        break
-    fi
-done
-
-# For commands that create/start containers, check network configuration
-case "$1" in
-    up|run|start|create|build)
-        if [ -f "$COMPOSE_FILE" ]; then
-            # Check if the compose file properly configures networking for gVisor
-            HAS_NETWORK_MODE=$(grep -c "network_mode:" "$COMPOSE_FILE" 2>/dev/null || echo "0")
-            HAS_NETWORKS=$(grep -c "^networks:" "$COMPOSE_FILE" 2>/dev/null || echo "0")
-            
-            # If networks are defined without network_mode, warn and create override
-            if [ "$HAS_NETWORKS" -gt "0" ] && [ "$HAS_NETWORK_MODE" -eq "0" ]; then
-                echo "⚠️  WARNING: docker-compose.yml defines custom networks without network_mode" >&2
-                echo "⚠️  Bridge networking is NOT supported in gVisor sandbox" >&2
-                echo "⚠️  " >&2
-                echo "⚠️  Please add 'network_mode: host' to each service in your docker-compose.yml:" >&2
-                echo "⚠️  " >&2
-                echo "⚠️    services:" >&2
-                echo "⚠️      myservice:" >&2
-                echo "⚠️        image: myimage" >&2
-                echo "⚠️        network_mode: host  # Add this line" >&2
-                echo "⚠️  " >&2
-                echo "⚠️  Alternatively, disable networks section and add network_mode to services." >&2
-                echo "" >&2
-                
-                # Try to create an override that at least attempts to use host networking
-                COMPOSE_FILE_OVERRIDE="/tmp/.docker-compose.gvisor-override.$$.yml"
-                cat > "$COMPOSE_FILE_OVERRIDE" << 'OVERRIDEEOF'
-# Auto-generated gVisor compatibility override
-# Bridge networking is not supported in gVisor
-# This attempts to disable custom network creation
-
-networks:
-  default:
-    name: host
-    external: true
-
-OVERRIDEEOF
-
-                # Add the override file to the compose command
-                set -- "$@" -f "$COMPOSE_FILE_OVERRIDE"
-                
-                # Clean up override file after docker-compose exits
-                trap "rm -f '$COMPOSE_FILE_OVERRIDE'" EXIT INT TERM
-            elif [ "$HAS_NETWORK_MODE" -eq "0" ] && [ "$HAS_NETWORKS" -eq "0" ]; then
-                # No networks defined and no network_mode - compose will try to create default network
-                echo "⚠️  WARNING: No network_mode specified in docker-compose.yml" >&2
-                echo "⚠️  Docker Compose will attempt to create a bridge network (not supported in gVisor)" >&2
-                echo "⚠️  " >&2
-                echo "⚠️  Add 'network_mode: host' to each service to avoid errors:" >&2
-                echo "⚠️  " >&2
-                echo "⚠️    services:" >&2
-                echo "⚠️      myservice:" >&2
-                echo "⚠️        network_mode: host" >&2
-                echo "" >&2
-            fi
-        fi
-        ;;
-esac
-
-# Execute the real docker-compose with all arguments
-exec $COMPOSE_CMD "$@"
-`
-
-	script := fmt.Sprintf(`
-set -e
-
-# Save the real docker-compose binary if it exists
-if [ -f /usr/local/bin/docker-compose ]; then
-    mv /usr/local/bin/docker-compose /usr/local/bin/docker-compose.real 2>/dev/null || true
-fi
-
-# Create the wrapper script
-cat > /usr/local/bin/docker-compose << 'EOF'
-%s
-EOF
-
-# Make it executable
-chmod +x /usr/local/bin/docker-compose
-
-# Also create a helper message script
-cat > /usr/local/bin/docker-compose-help << 'HELPEOF'
-#!/bin/sh
-echo "Docker Compose in gVisor Sandbox"
-echo "================================"
-echo ""
-echo "⚠️  IMPORTANT: Bridge networking is not supported in gVisor."
-echo ""
-echo "You must add 'network_mode: host' to all services in docker-compose.yml:"
-echo ""
-echo "services:"
-echo "  myservice:"
-echo "    image: myimage"
-echo "    network_mode: host"
-echo ""
-echo "For more information, see Docker Compose documentation."
-HELPEOF
-
-chmod +x /usr/local/bin/docker-compose-help
-
-echo "Docker Compose wrapper installed successfully"
-`, wrapperScript)
-
-	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
-	if err != nil {
-		return fmt.Errorf("failed to create docker-compose wrapper: %w", err)
-	}
-
-	// Wait for wrapper creation to complete
-	time.Sleep(cgroupSetupCompletionWait)
-
-	exitCode, _ := instance.SandboxProcessManager.Status(pid)
-	if exitCode != 0 {
-		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-		return fmt.Errorf("docker-compose wrapper creation failed with exit code %d: %s", exitCode, stderr)
-	}
-
-	log.Info().Str("container_id", containerId).Msg("docker-compose wrapper created")
 	return nil
 }
 
