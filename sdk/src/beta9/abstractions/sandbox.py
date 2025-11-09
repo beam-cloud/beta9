@@ -2378,16 +2378,18 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Wrappers on worker side handle --network=host automatically
         cmd = ["docker-compose", "-f", file, "up"]
         if detach:
             cmd.append("-d")
         if build:
             cmd.append("--build")
         
+        # Disable BuildKit for gVisor compatibility (legacy builder works better)
+        env = {"DOCKER_BUILDKIT": "0"}
+        
         if cwd:
-            return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
-        return self.sandbox_instance.process.exec(*cmd)
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
+        return self.sandbox_instance.process.exec(*cmd, env=env)
 
     def compose_down(
         self,
@@ -2502,7 +2504,6 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Wrapper on worker side handles --network=host automatically
         cmd = ["docker-compose", "-f", file, "build"]
         
         if no_cache:
@@ -2510,9 +2511,12 @@ class SandboxDockerManager:
         if pull:
             cmd.append("--pull")
         
+        # Disable BuildKit for gVisor compatibility
+        env = {"DOCKER_BUILDKIT": "0"}
+        
         if cwd:
-            return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
-        return self.sandbox_instance.process.exec(*cmd)
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
+        return self.sandbox_instance.process.exec(*cmd, env=env)
 
     # === Networks ===
 

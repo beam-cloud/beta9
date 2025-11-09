@@ -41,38 +41,8 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Create docker wrapper that adds --network=host to builds (required for gVisor)
-	dockerWrapperScript := `#!/bin/sh
-if [ "$1" = "build" ]; then
-    # Check if --network is already specified
-    for arg in "$@"; do
-        case "$arg" in
-            --network=*|--network) exec /usr/bin/docker.real "$@" ;;
-        esac
-    done
-    # Add --network=host for gVisor compatibility
-    exec /usr/bin/docker.real build --network=host "${@:2}"
-else
-    exec /usr/bin/docker.real "$@"
-fi
-`
-	
-	// Install docker wrapper
-	wrapperCmd := []string{"sh", "-c", `
-if [ -f /usr/bin/docker ] && [ ! -f /usr/bin/docker.real ]; then
-    mv /usr/bin/docker /usr/bin/docker.real
-    cat > /usr/bin/docker << 'EOF'
-` + dockerWrapperScript + `
-EOF
-    chmod +x /usr/bin/docker
-fi
-`}
-	if pid, err := instance.SandboxProcessManager.Exec(wrapperCmd, "/", []string{}, false); err == nil {
-		time.Sleep(100 * time.Millisecond)
-		instance.SandboxProcessManager.Status(pid)
-	}
-
-	// Start dockerd with legacy builder (BuildKit has networking issues with gVisor)
+	// Start dockerd with minimal configuration for gVisor
+	// Bridge networking is disabled because gVisor doesn't support veth interfaces
 	cmd := []string{
 		"dockerd",
 		"--bridge=none",
@@ -81,12 +51,7 @@ fi
 		"--ip-forward=false",
 	}
 	
-	// Disable BuildKit - legacy builder works better with gVisor + host networking
-	env := []string{
-		"DOCKER_BUILDKIT=0",
-	}
-	
-	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", env, true)
+	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
 
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to start docker daemon")
