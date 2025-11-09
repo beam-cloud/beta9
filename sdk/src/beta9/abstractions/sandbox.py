@@ -2,9 +2,10 @@ import atexit
 import io
 import shlex
 import time
-import yaml
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
+
+import yaml
 
 from .. import terminal
 from ..abstractions.base import unset_channel
@@ -2397,26 +2398,26 @@ class SandboxDockerManager:
 
         # Read and parse the compose file to get service names
         compose_file_path = file if file.startswith("/") else f"{cwd or '.'}/{file}"
-        
+
         # Download compose file from sandbox to parse it locally
         service_names = []
         try:
-            import tempfile
             import os
-            
+            import tempfile
+
             # Create a temporary file to download the compose file
-            with tempfile.NamedTemporaryFile(mode='w+', suffix='.yml', delete=False) as tmp_file:
+            with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
                 local_compose_path = tmp_file.name
-            
+
             try:
                 # Download the compose file from sandbox
                 self.sandbox_instance.fs.download_file(compose_file_path, local_compose_path)
-                
+
                 # Read and parse the downloaded file
-                with open(local_compose_path, 'r') as f:
+                with open(local_compose_path, "r") as f:
                     compose_content = f.read()
                     compose_data = yaml.safe_load(compose_content)
-                    
+
                     # Extract service names
                     if compose_data and "services" in compose_data:
                         service_names = list(compose_data["services"].keys())
@@ -2431,49 +2432,43 @@ class SandboxDockerManager:
         # Create override file to force gVisor network compatibility
         # Use network_mode: host for each service to avoid network alias issues
         override_path = "/tmp/.docker-compose-gvisor-override.yml"
-        
+
         if service_names:
             # Generate override for each service with network_mode: host
             # Docker Compose will automatically handle port mapping incompatibility
             override_content = "services:\n"
             for service_name in service_names:
                 override_content += f"  {service_name}:\n"
-                override_content += f"    network_mode: host\n"
+                override_content += "    network_mode: host\n"
         else:
             # Fallback: simple host networking
             override_content = "services:\n  default:\n    network_mode: host\n"
-        
+
         # Write the override file locally and upload to sandbox
+
+        # Create a temporary file with the override content
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp_file:
+            tmp_file.write(override_content)
+            local_override_path = tmp_file.name
+
         try:
-            import tempfile
-            import os
-            
-            # Create a temporary file with the override content
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.yml', delete=False) as tmp_file:
-                tmp_file.write(override_content)
-                local_override_path = tmp_file.name
-            
-            try:
-                # Upload the override file to the sandbox
-                self.sandbox_instance.fs.upload_file(local_override_path, override_path)
-            finally:
-                # Clean up the temporary file
-                if os.path.exists(local_override_path):
-                    os.unlink(local_override_path)
-        except Exception as e:
-            # If upload fails, fall back to shell command
-            escaped_content = override_content.replace("'", "'\\''")
-            self.sandbox_instance.process.exec(
-                "sh", "-c", f"echo '{escaped_content}' > {override_path}"
-            ).wait()
+            # Upload the override file to the sandbox
+            self.sandbox_instance.fs.upload_file(local_override_path, override_path)
+        finally:
+            # Clean up the temporary file
+            if os.path.exists(local_override_path):
+                os.unlink(local_override_path)
 
         cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
+
         if detach:
             cmd.append("-d")
+
         if build:
             cmd.append("--build")
 
         env = {}
+
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
 
