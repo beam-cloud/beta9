@@ -98,32 +98,74 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 // Follows the official gVisor guidance: https://gvisor.dev/docs/tutorials/docker-in-gvisor/
 // This is based on: https://github.com/google/gvisor/blob/master/images/basic/docker/start-dockerd.sh
 //
-// REQUIREMENTS: The sandbox image must have the following packages installed:
-//   - iproute2 (provides 'ip' command)
-//   - iptables (provides 'iptables-legacy' command)
-//
-// For Ubuntu/Debian: apt-get install -y iproute2 iptables
-// For Alpine: apk add --no-cache iproute2 iptables
+// This function automatically installs required networking tools (iproute2, iptables) if not present
+// Supports: Ubuntu, Debian, Alpine, RHEL, CentOS, Fedora
 func (s *Worker) setupDockerNetworking(ctx context.Context, containerId string, instance *ContainerInstance) error {
 	// The gVisor approach:
 	// 1. Enable IP forwarding
 	// 2. Setup SNAT rules using iptables-legacy (critical for bridge networking to work)
 	// 3. Start dockerd with --iptables=false --ip6tables=false
 	
-	// Check if required tools are available
-	checkScript := `
-command -v ip >/dev/null 2>&1 || { echo "ERROR: 'ip' command not found. Install iproute2 package."; exit 1; }
-command -v iptables-legacy >/dev/null 2>&1 || { echo "ERROR: 'iptables-legacy' not found. Install iptables package."; exit 1; }
+	// Ensure required tools are installed
+	// Try to auto-install if not present (works for most common base images)
+	installScript := `
+# Check and install required networking tools
+install_tools() {
+    # Check if tools already exist
+    if command -v ip >/dev/null 2>&1 && command -v iptables-legacy >/dev/null 2>&1; then
+        echo "Networking tools already installed"
+        return 0
+    fi
+    
+    echo "Installing required networking tools..."
+    
+    # Try different package managers
+    if command -v apt-get >/dev/null 2>&1; then
+        # Debian/Ubuntu
+        apt-get update -qq && apt-get install -y -qq iproute2 iptables >/dev/null 2>&1
+    elif command -v apk >/dev/null 2>&1; then
+        # Alpine
+        apk add --no-cache iproute2 iptables >/dev/null 2>&1
+    elif command -v yum >/dev/null 2>&1; then
+        # RHEL/CentOS
+        yum install -y -q iproute iptables >/dev/null 2>&1
+    elif command -v dnf >/dev/null 2>&1; then
+        # Fedora
+        dnf install -y -q iproute iptables >/dev/null 2>&1
+    else
+        echo "ERROR: No supported package manager found (apt, apk, yum, dnf)"
+        echo "Please install 'iproute2' and 'iptables' packages in your Docker image"
+        return 1
+    fi
+    
+    # Verify installation
+    if ! command -v ip >/dev/null 2>&1; then
+        echo "ERROR: Failed to install 'ip' command"
+        return 1
+    fi
+    if ! command -v iptables-legacy >/dev/null 2>&1; then
+        echo "ERROR: Failed to install 'iptables-legacy' command"
+        return 1
+    fi
+    
+    echo "Networking tools installed successfully"
+    return 0
+}
+
+install_tools
 `
 	
-	checkPid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", checkScript}, "/", []string{}, false)
+	installPid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", installScript}, "/", []string{}, false)
 	if err == nil {
-		time.Sleep(cgroupSetupCompletionWait)
-		checkExitCode, _ := instance.SandboxProcessManager.Status(checkPid)
-		if checkExitCode != 0 {
-			stderr, _ := instance.SandboxProcessManager.Stderr(checkPid)
-			return fmt.Errorf("required networking tools not available: %s", stderr)
+		time.Sleep(cgroupSetupCompletionWait * 3) // Give more time for package installation
+		installExitCode, _ := instance.SandboxProcessManager.Status(installPid)
+		if installExitCode != 0 {
+			stderr, _ := instance.SandboxProcessManager.Stderr(installPid)
+			stdout, _ := instance.SandboxProcessManager.Stdout(installPid)
+			return fmt.Errorf("failed to install networking tools:\nstdout: %s\nstderr: %s", stdout, stderr)
 		}
+		stdout, _ := instance.SandboxProcessManager.Stdout(installPid)
+		log.Info().Str("container_id", containerId).Str("output", stdout).Msg("networking tools ready")
 	}
 	
 	script := `
