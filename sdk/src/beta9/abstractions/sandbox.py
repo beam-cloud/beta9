@@ -2442,18 +2442,53 @@ class SandboxDockerManager:
         if service_names:
             # Generate override for each service with network_mode: host
             # Docker Compose will automatically handle port mapping incompatibility
-            override_content = "services:\\n"
+            override_content = "services:\n"
             for service_name in service_names:
-                override_content += f"  {service_name}:\\n"
-                override_content += f"    network_mode: host\\n"
+                override_content += f"  {service_name}:\n"
+                override_content += f"    network_mode: host\n"
         else:
             # Fallback: simple host networking
-            override_content = "services:\\n  default:\\n    network_mode: host\\n"
+            override_content = "services:\n  default:\n    network_mode: host\n"
         
-        # Write override file using printf for proper newline handling
-        self.sandbox_instance.process.exec(
-            "sh", "-c", f"printf '{override_content}' > {override_path}"
-        ).wait()
+        # Write the override file using upload_file
+        import tempfile
+        import os
+        
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp_file:
+            tmp_file.write(override_content)
+            tmp_file.flush()
+            local_override_path = tmp_file.name
+
+        try:
+            self.sandbox_instance.fs.upload_file(local_override_path, override_path)
+            
+            # CRITICAL DEBUG: Verify with BOTH fs API and shell command
+            print(f"DEBUG: Uploaded to {override_path}")
+            
+            # Check with fs.stat_file
+            try:
+                stat_info = self.sandbox_instance.fs.stat_file(override_path)
+                print(f"DEBUG: fs.stat_file sees file: size={stat_info.size}")
+            except Exception as e:
+                print(f"DEBUG: fs.stat_file FAILED: {e}")
+            
+            # Check with shell ls command  
+            p = self.sandbox_instance.process.exec("ls", "-la", override_path)
+            p.wait()
+            print(f"DEBUG: ls exit_code={p.exit_code}")
+            print(f"DEBUG: ls stdout={p.stdout()}")
+            print(f"DEBUG: ls stderr={p.stderr()}")
+            
+            # Check with shell cat command
+            p = self.sandbox_instance.process.exec("cat", override_path)
+            p.wait()
+            print(f"DEBUG: cat exit_code={p.exit_code}")
+            print(f"DEBUG: cat stdout={p.stdout()}")
+            print(f"DEBUG: cat stderr={p.stderr()}")
+            
+        finally:
+            if os.path.exists(local_override_path):
+                os.unlink(local_override_path)
 
         cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
 
