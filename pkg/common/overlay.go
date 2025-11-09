@@ -66,15 +66,6 @@ func (co *ContainerOverlay) AddEmptyLayer() error {
 		return err
 	}
 
-	// Create required directories in the upper layer
-	// This ensures they exist in the container filesystem regardless of the base image
-	for _, dir := range []string{"workspace", "volumes", "tmp"} {
-		requiredDir := filepath.Join(upperDir, dir)
-		if err := os.MkdirAll(requiredDir, 0755); err != nil {
-			log.Warn().Err(err).Str("path", requiredDir).Msg("failed to create required directory in upper layer")
-		}
-	}
-
 	mergedDir := filepath.Join(layerDir, "merged")
 	err = os.MkdirAll(mergedDir, 0755)
 	if err != nil {
@@ -92,6 +83,15 @@ func (co *ContainerOverlay) AddEmptyLayer() error {
 	err = co.mount(&layer)
 	if err != nil {
 		return err
+	}
+
+	// Create required directories in the upper layer AFTER mounting
+	// This ensures they exist in the container filesystem regardless of the base image
+	for _, dir := range []string{"workspace", "volumes", "tmp"} {
+		requiredDir := filepath.Join(mergedDir, dir)
+		if err := os.MkdirAll(requiredDir, 0755); err != nil {
+			log.Warn().Err(err).Str("path", requiredDir).Msg("failed to create required directory in merged layer")
+		}
 	}
 
 	co.layers = append(co.layers, layer)
