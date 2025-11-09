@@ -2207,19 +2207,23 @@ class SandboxDockerManager:
 
         cmd = ["docker", "build", "-t", tag]
 
-        # Use host networking for gVisor (avoids veth permission issues)
+        # Use host networking for gVisor
         # Safe because "host" = sandbox's network namespace, still isolated
         cmd.extend(["--network", "host"])
 
         if dockerfile:
             cmd.extend(["-f", dockerfile])
+
         if build_args:
             for k, v in build_args.items():
                 cmd.extend(["--build-arg", f"{k}={v}"])
+
         if no_cache:
             cmd.append("--no-cache")
+
         if quiet:
             cmd.append("--quiet")
+
         cmd.append(context)
         return self._result(*cmd)
 
@@ -2383,12 +2387,11 @@ class SandboxDockerManager:
             cmd.append("-d")
         if build:
             cmd.append("--build")
-        
-        # Disable BuildKit for gVisor compatibility (legacy builder works better)
-        env = {"DOCKER_BUILDKIT": "0"}
-        
+
+        env = {}
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
+
         return self.sandbox_instance.process.exec(*cmd, env=env)
 
     def compose_down(
@@ -2505,15 +2508,14 @@ class SandboxDockerManager:
             self._auto_login()
 
         cmd = ["docker-compose", "-f", file, "build"]
-        
+
         if no_cache:
             cmd.append("--no-cache")
         if pull:
             cmd.append("--pull")
-        
-        # Disable BuildKit for gVisor compatibility
-        env = {"DOCKER_BUILDKIT": "0"}
-        
+
+        env = {}
+
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
         return self.sandbox_instance.process.exec(*cmd, env=env)
