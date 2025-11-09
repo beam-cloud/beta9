@@ -2036,20 +2036,15 @@ class SandboxDockerManager:
         """
         cmd = ["docker", "run"]
         
-        # Force host networking for gVisor compatibility
-        # Bridge networking is not supported in Docker-in-gVisor
-        cmd.extend(["--network", "host"])
-        
         if detach:
             cmd.append("-d")
         if remove:
             cmd.append("--rm")
         if name:
             cmd.extend(["--name", name])
-        # Skip port mappings with --network host (ports are directly accessible on host)
-        # if ports:
-        #     for cp, hp in ports.items():
-        #         cmd.extend(["-p", f"{hp}:{cp}"])
+        if ports:
+            for cp, hp in ports.items():
+                cmd.extend(["-p", f"{hp}:{cp}"])
         if volumes:
             for hp, cp in volumes.items():
                 cmd.extend(["-v", f"{hp}:{cp}"])
