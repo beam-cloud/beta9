@@ -2039,10 +2039,10 @@ class SandboxDockerManager:
             ```
         """
         cmd = ["docker", "run"]
-        
+
         # Force host networking for gVisor compatibility
         cmd.extend(["--network", "host"])
-        
+
         if detach:
             cmd.append("-d")
         if remove:
@@ -2403,8 +2403,10 @@ networks:
     name: host
     external: true
 """
-        self.sandbox_instance.process.exec("sh", "-c", f"echo '{override_content}' > {override_path}").wait()
-        
+        self.sandbox_instance.process.exec(
+            "sh", "-c", f"echo '{override_content}' > {override_path}"
+        ).wait()
+
         cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
         if detach:
             cmd.append("-d")
@@ -2541,41 +2543,8 @@ networks:
 
         if cwd:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
+
         return self.sandbox_instance.process.exec(*cmd, env=env)
-
-    # === Networks ===
-
-    def network_create(self, name: str, driver: Optional[str] = None) -> bool:
-        """Create a network. Returns True on success, False if network already exists."""
-        from beta9.exceptions import DockerCommandError
-
-        try:
-            cmd = ["docker", "network", "create"]
-            if driver:
-                cmd.extend(["--driver", driver])
-            cmd.append(name)
-            self._run(*cmd)
-            return True
-        except DockerCommandError:
-            return False
-
-    def network_rm(self, name: str) -> bool:
-        """Remove a network. Returns True on success, False if network not found or in use."""
-        from beta9.exceptions import DockerCommandError
-
-        try:
-            self._run("docker", "network", "rm", name)
-            return True
-        except DockerCommandError:
-            return False
-
-    def network_ls(self, quiet: bool = False) -> Union[List[str], str]:
-        """List networks."""
-        cmd = ["docker", "network", "ls"]
-        if quiet:
-            cmd.append("-q")
-        output = self._run(*cmd)
-        return output.split("\n") if quiet and output else output
 
     # === Volumes ===
 
