@@ -742,61 +742,38 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	// Wait for process manager to be ready
-	timeout := time.After(10 * time.Second)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for !instance.SandboxProcessManagerReady {
-		select {
-		case <-timeout:
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "Process manager not ready within timeout"}, nil
-		case <-ctx.Done():
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "Request cancelled"}, nil
-		case <-ticker.C:
-			if fresh, exists := s.containerInstances.Get(in.ContainerId); exists {
-				instance = fresh
-			}
-		}
+	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	
+	// Debug: Log the paths being used
+	log.Info().
+		Str("container_path", containerPath).
+		Str("host_path", hostPath).
+		Str("container_id", in.ContainerId).
+		Str("runtime", instance.Spec.Runtime).
+		Msg("ContainerSandboxUploadFile")
+	
+	// Ensure the parent directory exists on the host
+	hostDir := filepath.Dir(hostPath)
+	if err := os.MkdirAll(hostDir, 0755); err != nil {
+		log.Error().Err(err).Str("host_dir", hostDir).Msg("Failed to create parent directory")
+		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to create directory: %v", err)}, nil
 	}
-
-	// Write file inside the container using the process manager
-	// This ensures the file is visible to processes running via SandboxExec
-	pid, err := instance.SandboxProcessManager.RunCommand([]string{"sh", "-c", fmt.Sprintf("cat > %s", shellEscape(containerPath))}, instance.Spec.Process.Env, "", in.Data)
+	
+	err = os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode))
 	if err != nil {
-		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to write file: %v", err)}, nil
+		log.Error().Err(err).Str("host_path", hostPath).Msg("Failed to write file")
+		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-
-	// Wait for the write command to complete
-	for {
-		process, err := instance.SandboxProcessManager.GetProcess(pid)
-		if err != nil {
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to get process: %v", err)}, nil
-		}
-		
-		if !process.Running {
-			if process.ExitCode != 0 {
-				return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Write command failed with exit code %d", process.ExitCode)}, nil
-			}
-			break
-		}
-		
-		time.Sleep(10 * time.Millisecond)
+	
+	// Verify file was written
+	if _, err := os.Stat(hostPath); err != nil {
+		log.Error().Err(err).Str("host_path", hostPath).Msg("File write succeeded but stat failed")
+		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("File verification failed: %v", err)}, nil
 	}
-
-	// Also set the file mode
-	pid, err = instance.SandboxProcessManager.RunCommand([]string{"chmod", fmt.Sprintf("%o", in.Mode), containerPath}, instance.Spec.Process.Env, "", nil)
-	if err != nil {
-		// Don't fail if chmod fails, just log it
-		log.Warn().Err(err).Msg("Failed to chmod file")
-	}
+	
+	log.Info().Str("host_path", hostPath).Int("size", len(in.Data)).Msg("File written successfully")
 
 	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
-}
-
-// shellEscape escapes a string for safe use in shell commands
-func shellEscape(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Context, in *pb.ContainerSandboxCreateDirectoryRequest) (*pb.ContainerSandboxCreateDirectoryResponse, error) {
