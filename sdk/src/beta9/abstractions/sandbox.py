@@ -1434,12 +1434,8 @@ class SandboxFileSystem:
             fs.upload_file("config.json", "/app/config/config.json")
             ```
         """
-        print(f"DEBUG: upload_file called with local_path={local_path}, sandbox_path={sandbox_path}")
-        print(f"DEBUG: container_id={self.sandbox_instance.container_id}")
-        
         with open(local_path, "rb") as f:
             content = f.read()
-            print(f"DEBUG: Read {len(content)} bytes from {local_path}")
 
             response = self.sandbox_instance.stub.sandbox_upload_file(
                 PodSandboxUploadFileRequest(
@@ -1449,12 +1445,9 @@ class SandboxFileSystem:
                     mode=644,
                 )
             )
-            
-            print(f"DEBUG: upload response.ok={response.ok}")
+
             if not response.ok:
-                print(f"DEBUG: upload failed with error: {response.error_msg}")
                 raise SandboxFileSystemError(response.error_msg)
-            print(f"DEBUG: upload successful")
 
     def download_file(self, sandbox_path: str, local_path: str):
         """
@@ -2461,31 +2454,6 @@ class SandboxDockerManager:
 
         try:
             self.sandbox_instance.fs.upload_file(local_override_path, override_path)
-            
-            # CRITICAL DEBUG: Verify with BOTH fs API and shell command
-            print(f"DEBUG: Uploaded to {override_path}")
-            
-            # Check with fs.stat_file
-            try:
-                stat_info = self.sandbox_instance.fs.stat_file(override_path)
-                print(f"DEBUG: fs.stat_file sees file: size={stat_info.size}")
-            except Exception as e:
-                print(f"DEBUG: fs.stat_file FAILED: {e}")
-            
-            # Check with shell ls command  
-            p = self.sandbox_instance.process.exec("ls", "-la", override_path)
-            p.wait()
-            print(f"DEBUG: ls exit_code={p.exit_code}")
-            print(f"DEBUG: ls stdout={p.stdout()}")
-            print(f"DEBUG: ls stderr={p.stderr()}")
-            
-            # Check with shell cat command
-            p = self.sandbox_instance.process.exec("cat", override_path)
-            p.wait()
-            print(f"DEBUG: cat exit_code={p.exit_code}")
-            print(f"DEBUG: cat stdout={p.stdout()}")
-            print(f"DEBUG: cat stderr={p.stderr()}")
-            
         finally:
             if os.path.exists(local_override_path):
                 os.unlink(local_override_path)
