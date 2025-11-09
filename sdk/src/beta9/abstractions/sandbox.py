@@ -2463,6 +2463,24 @@ class SandboxDockerManager:
         try:
             # Upload the override file to the sandbox
             self.sandbox_instance.fs.upload_file(local_override_path, override_path)
+            
+            # Debug: List /tmp to see what's actually there
+            print("DEBUG: Listing /tmp directory after upload:")
+            try:
+                files = self.sandbox_instance.fs.list_files("/tmp")
+                for f in files:
+                    print(f"  - {f.name} (is_dir={f.is_dir}, size={f.size})")
+            except Exception as list_err:
+                print(f"DEBUG: Could not list /tmp: {list_err}")
+            
+            # Debug: Try to stat the exact file we uploaded
+            print(f"DEBUG: Trying to stat {override_path}")
+            try:
+                file_info = self.sandbox_instance.fs.stat_file(override_path)
+                print(f"DEBUG: File exists! size={file_info.size}")
+            except Exception as stat_err:
+                print(f"DEBUG: Could not stat {override_path}: {stat_err}")
+                
         except Exception as e:
             # If upload fails, log error and fall back to shell command
             print(f"Warning: upload_file failed with error: {e}, falling back to shell command")
