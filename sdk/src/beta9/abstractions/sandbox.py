@@ -2031,6 +2031,11 @@ class SandboxDockerManager:
             ```
         """
         cmd = ["docker", "run"]
+        
+        # Force host networking for gVisor compatibility
+        # Bridge networking is not supported in Docker-in-gVisor
+        cmd.extend(["--network", "host"])
+        
         if detach:
             cmd.append("-d")
         if remove:
@@ -2382,7 +2387,18 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        cmd = ["docker-compose", "-f", file, "up"]
+        # Create override file to force host networking for gVisor compatibility
+        override_path = "/tmp/.docker-compose-gvisor-override.yml"
+        override_content = """# Auto-generated for gVisor compatibility
+# Bridge networking is not supported in Docker-in-gVisor
+networks:
+  default:
+    name: host
+    external: true
+"""
+        self.sandbox_instance.process.exec("sh", "-c", f"echo '{override_content}' > {override_path}").wait()
+        
+        cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
         if detach:
             cmd.append("-d")
         if build:
