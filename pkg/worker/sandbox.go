@@ -41,23 +41,19 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Enable IPv4 forwarding (required for Docker networking)
-	if err := s.enableIPv4Forwarding(ctx, containerId, instance); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to enable IPv4 forwarding")
+	// Setup networking for Docker-in-gVisor
+	// Per https://gvisor.dev/docs/tutorials/docker-in-gvisor/
+	if err := s.setupDockerNetworking(ctx, containerId, instance); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to setup docker networking")
 		return
 	}
 
-	// Create Docker daemon configuration
-	if err := s.createDockerDaemonConfig(ctx, containerId, instance); err != nil {
-		log.Error().Str("container_id", containerId).Err(err).Msg("failed to create docker daemon config")
-		return
-	}
-
-	// Start dockerd
-	// Key: iptables disabled so dockerd doesn't fight with gVisor's limited iptables support
+	// Start dockerd with gVisor-compatible flags
+	// Must use --iptables=false --ip6tables=false per gVisor guidance
 	cmd := []string{
 		"dockerd",
-		"--config-file=/etc/docker/daemon.json",
+		"--iptables=false",
+		"--ip6tables=false",
 	}
 	
 	pid, err := instance.SandboxProcessManager.Exec(cmd, "/", []string{}, true)
@@ -98,50 +94,59 @@ mount -t cgroup -o devices devices /sys/fs/cgroup/devices
 	return nil
 }
 
-// enableIPv4Forwarding enables IPv4 forwarding which is required for Docker networking
-func (s *Worker) enableIPv4Forwarding(ctx context.Context, containerId string, instance *ContainerInstance) error {
-	script := `echo 1 > /proc/sys/net/ipv4/ip_forward`
-
-	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
-	if err != nil {
-		return fmt.Errorf("failed to enable IPv4 forwarding: %w", err)
+// setupDockerNetworking configures networking for Docker-in-gVisor
+// Follows the official gVisor guidance: https://gvisor.dev/docs/tutorials/docker-in-gvisor/
+// This is based on: https://github.com/google/gvisor/blob/master/images/basic/docker/start-dockerd.sh
+//
+// REQUIREMENTS: The sandbox image must have the following packages installed:
+//   - iproute2 (provides 'ip' command)
+//   - iptables (provides 'iptables-legacy' command)
+//
+// For Ubuntu/Debian: apt-get install -y iproute2 iptables
+// For Alpine: apk add --no-cache iproute2 iptables
+func (s *Worker) setupDockerNetworking(ctx context.Context, containerId string, instance *ContainerInstance) error {
+	// The gVisor approach:
+	// 1. Enable IP forwarding
+	// 2. Setup SNAT rules using iptables-legacy (critical for bridge networking to work)
+	// 3. Start dockerd with --iptables=false --ip6tables=false
+	
+	// Check if required tools are available
+	checkScript := `
+command -v ip >/dev/null 2>&1 || { echo "ERROR: 'ip' command not found. Install iproute2 package."; exit 1; }
+command -v iptables-legacy >/dev/null 2>&1 || { echo "ERROR: 'iptables-legacy' not found. Install iptables package."; exit 1; }
+`
+	
+	checkPid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", checkScript}, "/", []string{}, false)
+	if err == nil {
+		time.Sleep(cgroupSetupCompletionWait)
+		checkExitCode, _ := instance.SandboxProcessManager.Status(checkPid)
+		if checkExitCode != 0 {
+			stderr, _ := instance.SandboxProcessManager.Stderr(checkPid)
+			return fmt.Errorf("required networking tools not available: %s", stderr)
+		}
 	}
-
-	time.Sleep(cgroupSetupCompletionWait)
-
-	exitCode, _ := instance.SandboxProcessManager.Status(pid)
-	if exitCode != 0 {
-		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-		return fmt.Errorf("IPv4 forwarding failed with exit code %d: %s", exitCode, stderr)
-	}
-
-	log.Info().Str("container_id", containerId).Msg("IPv4 forwarding enabled")
-	return nil
-}
-
-// createDockerDaemonConfig creates daemon.json with gVisor-compatible settings
-func (s *Worker) createDockerDaemonConfig(ctx context.Context, containerId string, instance *ContainerInstance) error {
-	// Per gVisor docker-in-docker guidance:
-	// - iptables: false - gVisor has limited iptables support, let dockerd not manage it
-	// - ip6tables: false - disable IPv6 tables
-	// - userland-proxy: false - use kernel forwarding instead
-	daemonConfig := `{
-  "iptables": false,
-  "ip6tables": false,
-  "userland-proxy": false
-}`
-
-	script := fmt.Sprintf(`
+	
+	script := `
 set -e
-mkdir -p /etc/docker
-cat > /etc/docker/daemon.json << 'EOF'
-%s
-EOF
-`, daemonConfig)
+
+# Get default network interface and its IP address
+dev=$(ip route show default | sed 's/.*\sdev\s\(\S*\)\s.*$/\1/')
+addr=$(ip addr show dev "$dev" | grep -w inet | sed 's/^\s*inet\s\(\S*\)\/.*$/\1/')
+
+# Enable IPv4 forwarding
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+# Setup SNAT for Docker bridge networking
+# This allows containers on Docker's bridge network to access the external network
+iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p tcp
+iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p udp
+
+echo "Docker networking configured for $dev ($addr)"
+`
 
 	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
 	if err != nil {
-		return fmt.Errorf("failed to create daemon config: %w", err)
+		return fmt.Errorf("failed to execute networking setup: %w", err)
 	}
 
 	time.Sleep(cgroupSetupCompletionWait)
@@ -149,10 +154,12 @@ EOF
 	exitCode, _ := instance.SandboxProcessManager.Status(pid)
 	if exitCode != 0 {
 		stderr, _ := instance.SandboxProcessManager.Stderr(pid)
-		return fmt.Errorf("daemon config creation failed with exit code %d: %s", exitCode, stderr)
+		stdout, _ := instance.SandboxProcessManager.Stdout(pid)
+		return fmt.Errorf("networking setup failed (exit %d)\nstdout: %s\nstderr: %s", exitCode, stdout, stderr)
 	}
 
-	log.Info().Str("container_id", containerId).Msg("docker daemon config created")
+	stdout, _ := instance.SandboxProcessManager.Stdout(pid)
+	log.Info().Str("container_id", containerId).Str("output", stdout).Msg("docker networking configured")
 	return nil
 }
 
