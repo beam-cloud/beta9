@@ -2382,7 +2382,12 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        cmd = ["docker-compose", "-f", file, "up"]
+        # Create override file to force host networking (gVisor doesn't support bridge networks)
+        override_content = "networks:\n  default:\n    name: host\n    external: true\n"
+        override_path = "/tmp/.compose-gvisor-override.yml"
+        self.sandbox_instance.process.exec("sh", "-c", f"echo '{override_content}' > {override_path}").wait()
+        
+        cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
         if detach:
             cmd.append("-d")
         if build:
