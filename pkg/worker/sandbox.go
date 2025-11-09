@@ -41,95 +41,34 @@ func (s *Worker) startDockerDaemon(ctx context.Context, containerId string, inst
 		return
 	}
 
-	// Create docker wrapper that adds --network=host to builds
+	// Create docker wrapper that adds --network=host to builds (required for gVisor)
 	dockerWrapperScript := `#!/bin/sh
 if [ "$1" = "build" ]; then
     # Check if --network is already specified
     for arg in "$@"; do
-        if echo "$arg" | grep -q "^--network"; then
-            exec /usr/bin/docker.real "$@"
-        fi
+        case "$arg" in
+            --network=*|--network) exec /usr/bin/docker.real "$@" ;;
+        esac
     done
-    # Add --network=host
-    exec /usr/bin/docker.real "$1" --network=host "${@:2}"
+    # Add --network=host for gVisor compatibility
+    exec /usr/bin/docker.real build --network=host "${@:2}"
 else
     exec /usr/bin/docker.real "$@"
 fi
 `
 	
-	// Create docker-compose wrapper that injects network_mode: host
-	composeWrapperScript := `#!/bin/sh
-# Wrapper for docker-compose to inject host networking for gVisor
-
-# If it's a config command, just pass through
-if echo "$@" | grep -q "config"; then
-    exec /usr/bin/docker-compose.real "$@"
-fi
-
-# For up/run commands, create a modified compose file with host networking
-if echo "$@" | grep -qE "(up|run|start|create)"; then
-    # Find the -f flag and compose file
-    compose_file="docker-compose.yml"
-    args=()
-    i=0
-    for arg in "$@"; do
-        if [ "$arg" = "-f" ]; then
-            shift
-            compose_file="$1"
-            args+=("-f" "/tmp/compose-host-$$.yml")
-        else
-            args+=("$arg")
-        fi
-        shift
-    done
-    
-    # Create modified compose file with host networking
-    if [ -f "$compose_file" ]; then
-        python3 -c "
-import yaml
-with open('$compose_file', 'r') as f:
-    config = yaml.safe_load(f)
-if 'services' in config:
-    for svc in config['services'].values():
-        if 'network_mode' not in svc:
-            svc['network_mode'] = 'host'
-if 'networks' in config:
-    del config['networks']
-with open('/tmp/compose-host-$$.yml', 'w') as f:
-    yaml.dump(config, f)
-"
-        /usr/bin/docker-compose.real "${args[@]}"
-        rm -f "/tmp/compose-host-$$.yml"
-    else
-        exec /usr/bin/docker-compose.real "$@"
-    fi
-else
-    exec /usr/bin/docker-compose.real "$@"
-fi
-`
-
-	// Install wrappers
+	// Install docker wrapper
 	wrapperCmd := []string{"sh", "-c", `
-# Docker wrapper
 if [ -f /usr/bin/docker ] && [ ! -f /usr/bin/docker.real ]; then
     mv /usr/bin/docker /usr/bin/docker.real
-    cat > /usr/bin/docker << 'DOCKER_WRAPPER_EOF'
+    cat > /usr/bin/docker << 'EOF'
 ` + dockerWrapperScript + `
-DOCKER_WRAPPER_EOF
+EOF
     chmod +x /usr/bin/docker
-fi
-
-# Docker-compose wrapper
-if [ -f /usr/bin/docker-compose ] && [ ! -f /usr/bin/docker-compose.real ]; then
-    mv /usr/bin/docker-compose /usr/bin/docker-compose.real
-    cat > /usr/bin/docker-compose << 'COMPOSE_WRAPPER_EOF'
-` + composeWrapperScript + `
-COMPOSE_WRAPPER_EOF
-    chmod +x /usr/bin/docker-compose
 fi
 `}
 	if pid, err := instance.SandboxProcessManager.Exec(wrapperCmd, "/", []string{}, false); err == nil {
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 		instance.SandboxProcessManager.Status(pid)
 	}
 
