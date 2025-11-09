@@ -100,7 +100,7 @@ func (s *Worker) setupDockerNetworking(ctx context.Context, containerId string, 
 	// 1. Enables IPv4 forwarding
 	// 2. Sets up iptables NAT rules for Docker bridge networks to work
 	script := `
-set -e -o pipefail
+set -e
 
 # Get the default network interface and its IP address
 dev=$(ip route show default | sed 's/.*\sdev\s\(\S*\)\s.*$/\1/')
@@ -116,7 +116,7 @@ iptables-legacy -t nat -A POSTROUTING -o "$dev" -j SNAT --to-source "$addr" -p u
 echo "Docker networking configured successfully"
 `
 
-	pid, err := instance.SandboxProcessManager.Exec([]string{"sh", "-c", script}, "/", []string{}, false)
+	pid, err := instance.SandboxProcessManager.Exec([]string{"bash", "-c", script}, "/", []string{}, false)
 	if err != nil {
 		return fmt.Errorf("failed to execute networking setup script: %w", err)
 	}
