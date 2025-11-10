@@ -121,7 +121,7 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	}
 
 	// Clean up upload directory
-	os.RemoveAll(filepath.Join("/tmp/container-uploads", containerId))
+	os.RemoveAll(filepath.Join(types.WorkerContainerUploadsHostPath, containerId))
 
 	s.completedRequests <- request
 	s.containerLock.Unlock()
@@ -614,12 +614,12 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Mounts = append(spec.Mounts, resolvMount)
 
 	// External mount for gVisor file uploads (external mounts bypass directory caching)
-	uploadsPath := filepath.Join("/tmp/container-uploads", request.ContainerId)
+	uploadsPath := filepath.Join(types.WorkerContainerUploadsHostPath, request.ContainerId)
 	if err := os.MkdirAll(uploadsPath, 0755); err == nil {
 		spec.Mounts = append(spec.Mounts, specs.Mount{
 			Type:        "none",
 			Source:      uploadsPath,
-			Destination: "/tmp/.beta9",
+			Destination: types.WorkerContainerUploadsMountPath,
 			Options:     []string{"rbind", "rw"},
 		})
 	}

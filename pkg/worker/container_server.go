@@ -750,15 +750,16 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 
 		// Write to external bind mount
 		tempFile := fmt.Sprintf("upload_%d", time.Now().UnixNano())
-		tempHostPath := filepath.Join("/tmp/container-uploads", in.ContainerId, tempFile)
+		tempHostPath := filepath.Join(types.WorkerContainerUploadsHostPath, in.ContainerId, tempFile)
 		if err := os.WriteFile(tempHostPath, in.Data, os.FileMode(in.Mode)); err != nil {
 			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
 
 		// Move to target location inside container
 		quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
-		cmd := fmt.Sprintf("mkdir -p %s && mv /tmp/.beta9/%s %s && chmod %o %s",
-			quote(filepath.Dir(containerPath)), tempFile, quote(containerPath), in.Mode, quote(containerPath))
+		tempContainerPath := filepath.Join(types.WorkerContainerUploadsMountPath, tempFile)
+		cmd := fmt.Sprintf("mkdir -p %s && mv %s %s && chmod %o %s",
+			quote(filepath.Dir(containerPath)), quote(tempContainerPath), quote(containerPath), in.Mode, quote(containerPath))
 
 		if resp, err := s.ContainerExec(ctx, &pb.ContainerExecRequest{
 			ContainerId: in.ContainerId,
