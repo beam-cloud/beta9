@@ -2457,6 +2457,11 @@ class SandboxDockerManager:
             for service_name in service_names:
                 override_content += f"  {service_name}:\n"
                 override_content += "    network_mode: host\n"
+                # Map all service names to localhost for inter-service communication
+                if len(service_names) > 1:
+                    override_content += "    extra_hosts:\n"
+                    for other_service in service_names:
+                        override_content += f"      - \"{other_service}:127.0.0.1\"\n"
                 if service_name in services_with_build:
                     override_content += "    build:\n"
                     override_content += "      network: host\n"
