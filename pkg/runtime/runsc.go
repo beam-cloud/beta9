@@ -305,7 +305,7 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 		args = append(args, "--platform", r.cfg.RunscPlatform)
 	}
 
-	// gVisor flags for rootfs propagation and external modification detection
+	// flags for rootfs propagation and external modification detection
 	args = append(args, "--overlay2=none", "--file-access=shared")
 
 	// Add --net-raw flag if Docker-in-Docker is enabled
