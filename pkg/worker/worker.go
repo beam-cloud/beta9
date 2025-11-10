@@ -190,7 +190,7 @@ func NewWorker() (*Worker, error) {
 	// Create container runtimes based on pool configuration
 	// Always create runc as a fallback
 	runcRuntime, err := runtime.New(runtime.Config{
-		Type:  "runc",
+		Type:  types.ContainerRuntimeRunc.String(),
 		Debug: config.DebugMode,
 	})
 	if err != nil {
@@ -207,7 +207,7 @@ func NewWorker() (*Worker, error) {
 		runtimeType = config.Worker.ContainerRuntime
 	}
 	if runtimeType == "" {
-		runtimeType = "runc"
+		runtimeType = types.ContainerRuntimeRunc.String()
 	}
 
 	log.Info().

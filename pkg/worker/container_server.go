@@ -754,7 +754,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 
 	// For gVisor: write to external mount, then mv inside container to avoid caching issues
 	// External mounts are always shared (no caching) per gVisor docs
-	if instance.Runtime != nil && instance.Runtime.Name() == "runsc" {
+	if instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
 		if err := s.waitForContainer(ctx, in.ContainerId); err != nil {
 			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
