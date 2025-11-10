@@ -90,14 +90,7 @@ class Sandbox(Pod):
         sync_local_dir (bool):
             Whether to sync the local directory to the sandbox filesystem on creation. Default is False.
         docker_enabled (bool):
-            Enable Docker-in-Docker support inside the sandbox. When enabled with gVisor runtime,
-            grants elevated capabilities required to run Docker and automatically starts the Docker daemon.
-
-            IMPORTANT: You must install Docker in your image first using `Image().with_docker()`.
-
-            Only works with gVisor runtime. Default is False.
-
-            SECURITY NOTE: This grants significant capabilities within your sandbox.
+            Enable Docker-in-Docker support inside the sandbox.
 
             Example:
                 ```python
@@ -1868,17 +1861,26 @@ class DockerResult:
         return self.process.stderr.read()
 
 
-class ComposeStack:
+class DockerComposeStack:
     """Represents a running Docker Compose stack."""
-    
-    def __init__(self, docker_manager: "SandboxDockerManager", file: str, cwd: Optional[str], override_path: str, service_names: List[str]):
+
+    def __init__(
+        self,
+        docker_manager: "SandboxDockerManager",
+        file: str,
+        cwd: Optional[str],
+        override_path: str,
+        service_names: List[str],
+    ):
         self.docker = docker_manager
         self.file = file
         self.cwd = cwd
         self.override_path = override_path
         self.services = service_names
-    
-    def logs(self, service: Optional[str] = None, follow: bool = False, tail: Optional[int] = None) -> str:
+
+    def logs(
+        self, service: Optional[str] = None, follow: bool = False, tail: Optional[int] = None
+    ) -> str:
         """Get logs from compose stack or specific service."""
         cmd = ["docker-compose", "-f", self.file, "-f", self.override_path, "logs"]
         if follow:
@@ -1889,17 +1891,17 @@ class ComposeStack:
             cmd.append(service)
         result = self.docker._run(*cmd, cwd=self.cwd)
         return result.stdout
-    
+
     def stop(self) -> None:
         """Stop the compose stack."""
         self.docker.compose_down(file=self.file, cwd=self.cwd)
-    
+
     def ps(self) -> str:
         """List services in the stack."""
         return self.docker.compose_ps(file=self.file, cwd=self.cwd)
-    
+
     def __repr__(self) -> str:
-        return f"ComposeStack(services={self.services})"
+        return f"DockerComposeStack(services={self.services})"
 
 
 class SandboxDockerManager:
@@ -2034,9 +2036,6 @@ class SandboxDockerManager:
         """
         Run a Docker container.
 
-        Note: Automatically uses --network host for gVisor compatibility.
-        Container ports are directly accessible on the host network.
-
         Args:
             image: Docker image (e.g. "nginx:latest")
             command: Command to run INSIDE the container (e.g. ["sh", "-c", "echo hello"])
@@ -2074,19 +2073,21 @@ class SandboxDockerManager:
             ```
         """
         cmd = ["docker", "run"]
-
-        # Force host networking for gVisor compatibility
         cmd.extend(["--network", "host"])
 
         if detach:
             cmd.append("-d")
+
         if remove:
             cmd.append("--rm")
+
         if name:
             cmd.extend(["--name", name])
+
         if volumes:
             for hp, cp in volumes.items():
                 cmd.extend(["-v", f"{hp}:{cp}"])
+
         if env:
             for k, v in env.items():
                 cmd.extend(["-e", f"{k}={v}"])
@@ -2150,20 +2151,18 @@ class SandboxDockerManager:
         except DockerCommandError:
             return False
 
-    def logs(
-        self, container: str, follow: bool = False, tail: Optional[int] = None
-    ) -> str:
+    def logs(self, container: str, follow: bool = False, tail: Optional[int] = None) -> str:
         """
         Get container logs.
-        
+
         Args:
             container: Container name or ID
             follow: Stream logs (default: False)
             tail: Number of lines to show from the end (default: all)
-            
+
         Returns:
             str: Container logs
-            
+
         Example:
             ```python
             logs = sandbox.docker.logs("my-container")
@@ -2409,30 +2408,30 @@ class SandboxDockerManager:
             return False
 
     # === Docker Compose ===
-    
+
     def _create_compose_override(self, file: str, cwd: Optional[str] = None) -> str:
         """
         Create gVisor-compatible compose override file.
-        
+
         Args:
             file: Path to docker-compose file
             cwd: Working directory
-            
+
         Returns:
             str: Path to override file in sandbox
         """
         compose_file_path = file if file.startswith("/") else f"{cwd or '.'}/{file}"
-        
+
         # Download and parse compose file
         service_names = []
         services_with_build = set()
         try:
             import os
             import tempfile
-            
+
             with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
                 local_compose_path = tmp_file.name
-            
+
             try:
                 self.sandbox_instance.fs.download_file(compose_file_path, local_compose_path)
                 with open(local_compose_path, "r") as f:
@@ -2447,9 +2446,9 @@ class SandboxDockerManager:
                     os.unlink(local_compose_path)
         except Exception:
             pass
-        
+
         # Generate override
-        override_path = "/tmp/.docker-compose-gvisor-override.yml"
+        override_path = "/tmp/.docker-compose-override.yml"
         if service_names:
             override_content = "services:\n"
             for service_name in service_names:
@@ -2459,22 +2458,25 @@ class SandboxDockerManager:
                     override_content += "    build:\n"
                     override_content += "      network: host\n"
         else:
-            override_content = "services:\n  default:\n    network_mode: host\n    build:\n      network: host\n"
-        
+            override_content = (
+                "services:\n  default:\n    network_mode: host\n    build:\n      network: host\n"
+            )
+
         # Upload override
         import os
         import tempfile
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp_file:
             tmp_file.write(override_content)
             tmp_file.flush()
             local_override_path = tmp_file.name
-        
+
         try:
             self.sandbox_instance.fs.upload_file(local_override_path, override_path)
         finally:
             if os.path.exists(local_override_path):
                 os.unlink(local_override_path)
-        
+
         return override_path
 
     def compose_up(
@@ -2483,7 +2485,7 @@ class SandboxDockerManager:
         detach: bool = True,
         build: bool = False,
         cwd: Optional[str] = None,
-    ) -> "ComposeStack":
+    ) -> "DockerComposeStack":
         """
         Start services from docker-compose file.
 
@@ -2497,17 +2499,17 @@ class SandboxDockerManager:
             cwd: Working directory to run compose from (default: None, uses sandbox's current directory)
 
         Returns:
-            ComposeStack: Object representing the running stack
+            DockerComposeStack: Object representing the running stack
 
         Example:
             ```python
             # Start services
             stack = sandbox.docker.compose_up()
-            
+
             # Get logs
             logs = stack.logs("web")
             print(logs)
-            
+
             # Stop stack
             stack.stop()
             ```
@@ -2515,15 +2517,15 @@ class SandboxDockerManager:
         if not self._authenticated:
             self._auto_login()
 
-        # Create gVisor-compatible override and get service names
         override_path = self._create_compose_override(file, cwd)
-        
-        # Parse service names for the ComposeStack object
+
+        # Parse service names for the DockerComposeStack object
         compose_file_path = file if file.startswith("/") else f"{cwd or '.'}/{file}"
         service_names = []
         try:
             import os
             import tempfile
+
             with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
                 local_compose_path = tmp_file.name
             try:
@@ -2545,7 +2547,7 @@ class SandboxDockerManager:
             cmd.append("--build")
 
         self._run(*cmd, cwd=cwd)
-        return ComposeStack(self, file, cwd, override_path, service_names)
+        return DockerComposeStack(self, file, cwd, override_path, service_names)
 
     def compose_down(
         self,
@@ -2639,6 +2641,7 @@ class SandboxDockerManager:
                 print(line)
             ```
         """
+
         # Ensure authentication before compose build operations
         if not self._authenticated:
             self._auto_login()
