@@ -524,14 +524,7 @@ func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath stri
 		}
 	}
 
-	// Use overlay merged path (overlayfs handles upper/lower automatically)
-	if instance.Overlay != nil {
-		if mergedPath := instance.Overlay.TopLayerPath(); mergedPath != "" {
-			return filepath.Join(mergedPath, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
-		}
-	}
-
-	// Fallback to root path
+	// Use root path (already set to overlay merged path in lifecycle.go)
 	return filepath.Join(instance.Spec.Root.Path, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
 }
 
