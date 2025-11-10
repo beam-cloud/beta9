@@ -2431,24 +2431,26 @@ class SandboxDockerManager:
         # Create override file to force gVisor network compatibility
         # Use network_mode: host for each service to avoid network alias issues
         override_path = "/tmp/.docker-compose-gvisor-override.yml"
-        
+
         if service_names:
             # Generate override for each service with network_mode: host and build.network: host
             # Docker Compose will automatically handle port mapping incompatibility
             override_content = "services:\n"
             for service_name in service_names:
                 override_content += f"  {service_name}:\n"
-                override_content += f"    network_mode: host\n"
-                override_content += f"    build:\n"
-                override_content += f"      network: host\n"
+                override_content += "    network_mode: host\n"
+                override_content += "    build:\n"
+                override_content += "      network: host\n"
         else:
             # Fallback: simple host networking
-            override_content = "services:\n  default:\n    network_mode: host\n    build:\n      network: host\n"
-        
+            override_content = (
+                "services:\n  default:\n    network_mode: host\n    build:\n      network: host\n"
+            )
+
         # Write the override file using upload_file
-        import tempfile
         import os
-        
+        import tempfile
+
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp_file:
             tmp_file.write(override_content)
             tmp_file.flush()
