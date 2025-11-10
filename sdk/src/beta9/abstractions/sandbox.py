@@ -1997,23 +1997,25 @@ class SandboxDockerManager:
             # If auto-login fails, don't block - user can manually call login()
             pass
 
-    def _exec(self, *cmd) -> "SandboxProcess":
+    def _exec(self, *cmd, cwd: Optional[str] = None) -> "SandboxProcess":
         """Execute docker command."""
         self._ensure_ready()
-        return self.sandbox_instance.process.exec(*cmd)
+        return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
 
-    def _run(self, *cmd) -> str:
+    def _run(self, *cmd, cwd: Optional[str] = None):
         """Execute docker command and return output (for simple operations)."""
         from beta9.exceptions import DockerCommandError
+        from types import SimpleNamespace
 
-        p = self._exec(*cmd)
+        p = self._exec(*cmd, cwd=cwd)
         exit_code = p.wait()
 
         if exit_code != 0:
             stderr = p.stderr.read()
             raise DockerCommandError(" ".join(cmd), exit_code, stderr)
 
-        return p.stdout.read().strip()
+        stdout = p.stdout.read().strip()
+        return SimpleNamespace(stdout=stdout)
 
     def _result(self, *cmd, extract_output: callable = None) -> DockerResult:
         """Execute docker command and return a DockerResult (for operations with logs)."""
@@ -2546,13 +2548,8 @@ class SandboxDockerManager:
         if build:
             cmd.append("--build")
 
-        if cwd:
-            result = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
-            result.wait()
-        else:
-            self._run(*cmd)
-
-        return DockerComposeStack(self, file, cwd, override_path, service_names)
+        self._run(*cmd, cwd=cwd)
+        return ComposeStack(self, file, cwd, override_path, service_names)
 
     def compose_down(
         self,
@@ -2578,11 +2575,7 @@ class SandboxDockerManager:
             cmd = ["docker-compose", "-f", file, "-f", override_path, "down"]
             if volumes:
                 cmd.append("-v")
-            if cwd:
-                result = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
-                result.wait()
-            else:
-                self._run(*cmd)
+            self._run(*cmd, cwd=cwd)
             return True
         except DockerCommandError:
             return False
@@ -2616,13 +2609,8 @@ class SandboxDockerManager:
         """List compose services."""
         override_path = self._create_compose_override(file, cwd)
         cmd = ["docker-compose", "-f", file, "-f", override_path, "ps"]
-        if cwd:
-            result = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
-            result.wait()
-            return result.stdout.read()
-        else:
-            result = self._run(*cmd)
-            return result.stdout
+        result = self._run(*cmd, cwd=cwd)
+        return result.stdout
 
     def compose_build(
         self,
