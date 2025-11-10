@@ -2546,8 +2546,12 @@ class SandboxDockerManager:
         if build:
             cmd.append("--build")
 
-        self._run(*cmd, cwd=cwd)
-        return DockerComposeStack(self, file, cwd, override_path, service_names)
+        if cwd:
+            result = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+            result.wait()
+        else:
+            self._run(*cmd)
+        return ComposeStack(self, file, cwd, override_path, service_names)
 
     def compose_down(
         self,
@@ -2573,7 +2577,11 @@ class SandboxDockerManager:
             cmd = ["docker-compose", "-f", file, "-f", override_path, "down"]
             if volumes:
                 cmd.append("-v")
-            self._run(*cmd, cwd=cwd)
+            if cwd:
+                result = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+                result.wait()
+            else:
+                self._run(*cmd)
             return True
         except DockerCommandError:
             return False
@@ -2607,8 +2615,13 @@ class SandboxDockerManager:
         """List compose services."""
         override_path = self._create_compose_override(file, cwd)
         cmd = ["docker-compose", "-f", file, "-f", override_path, "ps"]
-        result = self._run(*cmd, cwd=cwd)
-        return result.stdout
+        if cwd:
+            result = self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+            result.wait()
+            return result.stdout.read()
+        else:
+            result = self._run(*cmd)
+            return result.stdout
 
     def compose_build(
         self,
