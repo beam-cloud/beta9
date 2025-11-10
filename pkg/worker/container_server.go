@@ -773,31 +773,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to create directory: %v", err)}, nil
 	}
 
-	// Write file and sync to ensure it's committed to disk
 	err = os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode))
 	if err != nil {
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
-	}
-
-	// Open and sync the file to ensure it's fully written
-	if f, err := os.OpenFile(hostPath, os.O_RDWR, 0); err == nil {
-		_ = f.Sync()
-		f.Close()
-	}
-
-	// For gVisor, update parent directory mtime to trigger gofer cache invalidation
-	// This helps gVisor detect the new file when listing the directory
-	if instance.Runtime != nil && instance.Runtime.Name() == "runsc" {
-		now := time.Now()
-		if err := os.Chtimes(hostDir, now, now); err != nil {
-			log.Warn().Err(err).Str("dir", hostDir).Msg("Failed to update directory mtime")
-		}
-		
-		// Also sync the parent directory
-		if dir, err := os.Open(hostDir); err == nil {
-			_ = dir.Sync()
-			dir.Close()
-		}
 	}
 
 	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil

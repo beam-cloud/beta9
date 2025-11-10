@@ -306,12 +306,12 @@ func (r *Runsc) baseArgs(dockerEnabled bool) []string {
 	}
 
 	// Configure gVisor to make host filesystem changes visible inside the container
-	// 1. --overlay2=none: Disables sandbox-internal overlay, forces all changes to go to host
-	// 2. --file-access=shared: Makes gVisor check for external modifications (like docker cp)
-	// 3. --directfs=true: Enables direct filesystem access (default but explicitly set)
-	// All are needed for fs.upload_file() to work properly.
+	// 1. --overlay2=none: Disables sandbox-internal overlay, propagates changes to host filesystem
+	// 2. --file-access=shared: Forces gVisor to check for external modifications (disables directory caching)
+	//    This is required for fs.upload_file() to work - without it, gVisor caches directory listings
+	//    and misses files written by the host.
 	// See: https://gvisor.dev/docs/user_guide/filesystem/
-	args = append(args, "--overlay2=none", "--file-access=shared", "--directfs=true")
+	args = append(args, "--overlay2=none", "--file-access=shared")
 
 	// Add --net-raw flag if Docker-in-Docker is enabled
 	// This is required for Docker to function properly inside gVisor
