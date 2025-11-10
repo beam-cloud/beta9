@@ -515,9 +515,8 @@ func (s *ContainerRuntimeServer) waitForContainer(ctx context.Context, container
 	return nil
 }
 
-// getHostPathFromContainerPath maps a container path to its corresponding host path
 func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath string, instance *ContainerInstance) string {
-	// Check if the path matches any of the container's mounts
+	// Check mounts first
 	for _, mount := range instance.Spec.Mounts {
 		if containerPath == mount.Destination || strings.HasPrefix(containerPath, mount.Destination+"/") {
 			relativePath := strings.TrimPrefix(containerPath, mount.Destination)
@@ -525,7 +524,7 @@ func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath stri
 		}
 	}
 
-	// If no mount matches, use the overlay root path
+	// Use root path (already set to overlay merged path in lifecycle.go)
 	return filepath.Join(instance.Spec.Root.Path, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
 }
 
@@ -742,9 +741,44 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
+	// For gVisor: write to external mount, then mv inside container to avoid caching issues
+	// External mounts are always shared (no caching) per gVisor docs
+	if instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
+		if err := s.waitForContainer(ctx, in.ContainerId); err != nil {
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+
+		// Write to external bind mount
+		tempFile := fmt.Sprintf("upload_%d", time.Now().UnixNano())
+		tempHostPath := filepath.Join(types.WorkerContainerUploadsHostPath, in.ContainerId, tempFile)
+		if err := os.WriteFile(tempHostPath, in.Data, os.FileMode(in.Mode)); err != nil {
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
+
+		// Move to target location inside container
+		quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+		tempContainerPath := filepath.Join(types.WorkerContainerUploadsMountPath, tempFile)
+		cmd := fmt.Sprintf("mkdir -p %s && mv %s %s && chmod %o %s",
+			quote(filepath.Dir(containerPath)), quote(tempContainerPath), quote(containerPath), in.Mode, quote(containerPath))
+
+		if resp, err := s.ContainerExec(ctx, &pb.ContainerExecRequest{
+			ContainerId: in.ContainerId,
+			Cmd:         cmd,
+			Env:         instance.Spec.Process.Env,
+		}); err != nil || !resp.Ok {
+			os.Remove(tempHostPath)
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "mv failed"}, nil
+		}
+
+		return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
+	}
+
+	// For runc: direct write to overlay
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-	err = os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode))
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
+		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+	if err := os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode)); err != nil {
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 

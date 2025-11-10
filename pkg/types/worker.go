@@ -15,6 +15,8 @@ const (
 	WorkerUserCodeVolume                     string        = "/mnt/code"
 	WorkerUserOutputVolume                   string        = "/outputs"
 	WorkerContainerVolumePath                string        = "/volumes"
+	WorkerContainerUploadsHostPath           string        = "/tmp/container-uploads"
+	WorkerContainerUploadsMountPath          string        = "/tmp/.beta9"
 	WorkerDurationEmissionInterval           time.Duration = 30 * time.Second
 	WorkerKeepAliveInterval                  time.Duration = 15 * time.Second
 	WorkerShellPort                          int32         = 2222
