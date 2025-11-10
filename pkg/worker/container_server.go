@@ -515,9 +515,8 @@ func (s *ContainerRuntimeServer) waitForContainer(ctx context.Context, container
 	return nil
 }
 
-// getHostPathFromContainerPath maps a container path to its corresponding host path
 func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath string, instance *ContainerInstance) string {
-	// Check if the path matches any of the container's mounts
+	// Check mounts first
 	for _, mount := range instance.Spec.Mounts {
 		if containerPath == mount.Destination || strings.HasPrefix(containerPath, mount.Destination+"/") {
 			relativePath := strings.TrimPrefix(containerPath, mount.Destination)
@@ -525,17 +524,14 @@ func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath stri
 		}
 	}
 
-	// For overlay filesystems, write to the merged directory (not upper directly)
-	// The overlay filesystem driver automatically stores changes in the upper layer
-	// and makes them visible in both merged (what container sees) and upper
+	// Use overlay merged path (overlayfs handles upper/lower automatically)
 	if instance.Overlay != nil {
-		mergedPath := instance.Overlay.TopLayerPath()
-		if mergedPath != "" {
+		if mergedPath := instance.Overlay.TopLayerPath(); mergedPath != "" {
 			return filepath.Join(mergedPath, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
 		}
 	}
 
-	// Fallback: use the root path (this shouldn't happen with overlay but keep for safety)
+	// Fallback to root path
 	return filepath.Join(instance.Spec.Root.Path, strings.TrimPrefix(filepath.Clean(containerPath), "/"))
 }
 
