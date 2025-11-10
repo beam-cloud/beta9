@@ -2004,8 +2004,9 @@ class SandboxDockerManager:
 
     def _run(self, *cmd, cwd: Optional[str] = None):
         """Execute docker command and return output (for simple operations)."""
-        from beta9.exceptions import DockerCommandError
         from types import SimpleNamespace
+
+        from beta9.exceptions import DockerCommandError
 
         p = self._exec(*cmd, cwd=cwd)
         exit_code = p.wait()
@@ -2549,7 +2550,7 @@ class SandboxDockerManager:
             cmd.append("--build")
 
         self._run(*cmd, cwd=cwd)
-        return ComposeStack(self, file, cwd, override_path, service_names)
+        return DockerComposeStack(self, file, cwd, override_path, service_names)
 
     def compose_down(
         self,
