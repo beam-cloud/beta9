@@ -446,7 +446,8 @@ message GetOrCreateStubRequest {
   Schema outputs = 36;
   bool tcp = 37;
   bool block_network = 38;
-  bool docker_enabled = 39;
+  repeated string allow_list = 39;
+  bool docker_enabled = 40;
 }
 
 message GetOrCreateStubResponse {

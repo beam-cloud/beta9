@@ -100,7 +100,8 @@ class ContainerRequest(betterproto.Message):
     image_credentials: str = betterproto.string_field(26)
     build_registry_credentials: str = betterproto.string_field(27)
     block_network: bool = betterproto.bool_field(28)
-    docker_enabled: bool = betterproto.bool_field(29)
+    allow_list: List[str] = betterproto.string_field(29)
+    docker_enabled: bool = betterproto.bool_field(30)
 
 
 @dataclass(eq=False, repr=False)

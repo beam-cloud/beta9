@@ -1484,6 +1484,12 @@
         "blockNetwork": {
           "type": "boolean"
         },
+        "allowList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "dockerEnabled": {
           "type": "boolean"
         }

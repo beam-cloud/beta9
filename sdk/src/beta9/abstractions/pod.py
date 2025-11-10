@@ -137,6 +137,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         authorized: bool = False,
         tcp: bool = False,
         block_network: bool = False,
+        allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
     ) -> None:
         super().__init__(
@@ -151,6 +152,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             entrypoint=entrypoint,
             ports=ports,
             block_network=block_network,
+            allow_list=allow_list,
             name=name,
             authorized=authorized,
             keep_warm_seconds=keep_warm_seconds,

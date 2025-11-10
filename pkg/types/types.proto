@@ -91,7 +91,8 @@ message ContainerRequest {
   string image_credentials = 26;
   string build_registry_credentials = 27;
   bool block_network = 28;
-  bool docker_enabled = 29;
+  repeated string allow_list = 29;
+  bool docker_enabled = 30;
 }
 
 message ContainerState {

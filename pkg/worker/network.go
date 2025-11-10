@@ -241,8 +241,14 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 		return err
 	}
 
-	// Block network in host namespace (must be done in host namespace to affect forwarding)
-	if request.BlockNetwork {
+	// Setup network restrictions in host namespace (must be done in host namespace to affect forwarding)
+	if len(request.AllowList) > 0 {
+		// Use allowlist (which internally blocks all other traffic)
+		if err := m.setupAllowList(containerId, request, request.AllowList); err != nil {
+			return err
+		}
+	} else if request.BlockNetwork {
+		// Block all network if no allowlist is specified
 		if err := m.setupBlockNetwork(containerId, request); err != nil {
 			return err
 		}
@@ -530,46 +536,64 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 }
 
 func (m *ContainerNetworkManager) setupBlockNetwork(containerId string, request *types.ContainerRequest) error {
-	// Get container IP
-	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
-		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
-	}))
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
 	if err != nil {
 		return err
 	}
 
-	truncatedContainerId := containerId[len(containerId)-5:]
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
-	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
-
-	containerIp := containerIpResponse.IpAddress
-
 	// Block IPv4 outbound traffic (but allow reply packets for exposed ports)
-	err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", containerIp, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", comment)
+	err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", info.ContainerIp, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", info.Comment)
 	if err != nil {
 		return err
 	}
 
 	// Block IPv6 outbound traffic if enabled (but allow reply packets for exposed ports)
 	if m.ipt6 != nil {
-		// Calculate the corresponding IPv6 address using the last octet of the IPv4 address
-		ip := net.ParseIP(containerIp)
-		if ip == nil {
-			return fmt.Errorf("invalid IPv4 address: %s", containerIp)
-		}
-		ipv4LastOctet := int(ip.To4()[3])
-		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-		ipv6Prefix := ipv6Net.IP.String()
-		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
-
-		err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", comment)
+		err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", info.ContainerIpv6, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", info.Comment)
 		if err != nil {
 			return err
 		}
 	}
 
-	log.Info().Str("container_id", containerId).Str("ip_address", containerIp).Msg("outbound network access blocked for container")
+	log.Info().Str("container_id", containerId).Str("ip_address", info.ContainerIp).Msg("outbound network access blocked for container")
+	return nil
+}
+
+func (m *ContainerNetworkManager) setupAllowList(containerId string, request *types.ContainerRequest, allowList []string) error {
+	// First block all network traffic
+	err := m.setupBlockNetwork(containerId, request)
+	if err != nil {
+		return err
+	}
+
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
+	if err != nil {
+		return err
+	}
+
+	// Validate and normalize allowlist entries, then add iptables rules
+	for _, entry := range allowList {
+		normalizedCIDR, isIPv6, err := validateCIDR(entry)
+		if err != nil {
+			return fmt.Errorf("invalid allowlist entry %q: %w", entry, err)
+		}
+
+		if isIPv6 {
+			if m.ipt6 != nil {
+				err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", info.ContainerIpv6, "-d", normalizedCIDR, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
+				if err != nil {
+					return fmt.Errorf("failed to add IPv6 allowlist rule for %s: %w", normalizedCIDR, err)
+				}
+				log.Info().Str("container_id", containerId).Str("container_ipv6", info.ContainerIpv6).Str("allowed_destination", normalizedCIDR).Msg("outbound IPv6 network access allowed")
+			}
+		} else {
+			err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", info.ContainerIp, "-d", normalizedCIDR, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
+			if err != nil {
+				return fmt.Errorf("failed to add IPv4 allowlist rule for %s: %w", normalizedCIDR, err)
+			}
+			log.Info().Str("container_id", containerId).Str("container_ip", info.ContainerIp).Str("allowed_destination", normalizedCIDR).Msg("outbound IPv4 network access allowed")
+		}
+	}
 	return nil
 }
 
@@ -656,11 +680,14 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	truncatedContainerId := containerId[len(containerId)-5:]
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
+	if err != nil {
+		return err
+	}
+
 	namespace := containerId
 
-	hostVeth, err := netlink.LinkByName(vethHost)
+	hostVeth, err := netlink.LinkByName(info.VethHost)
 	if err == nil {
 		// Remove the veth from the bridge
 		if err := netlink.LinkSetNoMaster(hostVeth); err != nil {
@@ -673,32 +700,13 @@ func (m *ContainerNetworkManager) TearDown(containerId string) error {
 		}
 	}
 
-	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
-		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
-	}))
-	if err != nil {
-		return err
-	}
-
-	containerIp := containerIpResponse.IpAddress
-
-	// Calculate the corresponding IPv6 address
-	ip := net.ParseIP(containerIp)
-	ipv4LastOctet := int(ip.To4()[3])
-	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-	ipv6Prefix := ipv6Net.IP.String()
-
-	// Allocate an IPv6 address using the last octet of the IPv4 address
-	ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
-
 	// Remove iptables and ip6tables rules
-	if err := m.removeIPTablesRules(containerIp, m.ipt); err != nil {
+	if err := m.removeIPTablesRules(info.ContainerIp, m.ipt); err != nil {
 		return err
 	}
 
-	if m.ipt6 != nil {
-		if err := m.removeIPTablesRules(ipv6Address, m.ipt6); err != nil {
+	if m.ipt6 != nil && info.ContainerIpv6 != "" {
+		if err := m.removeIPTablesRules(info.ContainerIpv6, m.ipt6); err != nil {
 			return err
 		}
 	}
@@ -760,42 +768,21 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
-		NetworkPrefix: m.networkPrefix,
-		ContainerId:   containerId,
-	}))
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
 	if err != nil {
 		return err
 	}
 
-	containerIp := containerIpResponse.IpAddress
-
-	// Extract the last octet from the IPv4 address (192.168.1.2 -> 2)
-	ip := net.ParseIP(containerIp)
-	if ip == nil {
-		return fmt.Errorf("invalid IPv4 address: %s", containerIp)
-	}
-
-	// Recreate the corresponding IPv6 address using the last octet
-	ipv4LastOctet := int(ip.To4()[3])
-	_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-	ipv6Prefix := ipv6Net.IP.String()
-	containerIp_IPv6 := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
-
-	truncatedContainerId := containerId[len(containerId)-5:]
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
-	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
-
 	// Insert NAT PREROUTING rule at the top of the chain
 	// IPv4
-	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", containerIp, containerPort), "-m", "comment", "--comment", comment)
+	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", info.ContainerIp, containerPort), "-m", "comment", "--comment", info.Comment)
 	if err != nil {
 		return err
 	}
 
 	// IPv6
-	if m.ipt6 != nil {
-		err = m.ipt6.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", containerIp_IPv6, containerPort), "-m", "comment", "--comment", comment)
+	if m.ipt6 != nil && info.ContainerIpv6 != "" {
+		err = m.ipt6.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("[%s]:%d", info.ContainerIpv6, containerPort), "-m", "comment", "--comment", info.Comment)
 		if err != nil {
 			return err
 		}
@@ -803,14 +790,14 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 
 	// Add FORWARD rule for the DNAT'd traffic
 	// IPv4
-	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
+	err = m.ipt.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", info.ContainerIp, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
 	if err != nil {
 		return err
 	}
 
 	// IPv6
-	if m.ipt6 != nil {
-		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", containerIp_IPv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", comment)
+	if m.ipt6 != nil && info.ContainerIpv6 != "" {
+		err = m.ipt6.AppendUnique("filter", "FORWARD", "-p", "tcp", "-d", info.ContainerIpv6, "--dport", fmt.Sprintf("%d", containerPort), "-j", "ACCEPT", "-m", "comment", "--comment", info.Comment)
 		if err != nil {
 			return err
 		}

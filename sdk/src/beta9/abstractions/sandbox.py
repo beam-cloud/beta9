@@ -92,7 +92,13 @@ class Sandbox(Pod):
         block_network (bool):
             Whether to block all outbound network access from the sandbox. When enabled, the sandbox cannot
             make outbound connections to external services, but inbound connections to exposed ports are still
-            allowed. Default is False.
+            allowed. Default is False. Cannot be used together with allow_list.
+        allow_list (Optional[List[str]]):
+            List of CIDR ranges that the sandbox is allowed to connect to. All other outbound network access
+            will be blocked. Must use CIDR notation (e.g., "8.8.8.8/32" for a single IP, "10.0.0.0/8" for
+            a range). Supports both IPv4 and IPv6. Examples: ["8.8.8.8/32"], ["10.0.0.0/8", "2001:db8::/32"].
+            Cannot be used together with block_network. Default is None (no restrictions unless block_network
+            is enabled).
         docker_enabled (bool):
             Enable Docker-in-Docker support inside the sandbox.
 
@@ -150,6 +156,7 @@ class Sandbox(Pod):
         env: Optional[Dict[str, str]] = {},
         sync_local_dir: bool = False,
         block_network: bool = False,
+        allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
     ):
         self.debug_buffer = io.StringIO()
@@ -168,6 +175,7 @@ class Sandbox(Pod):
             secrets=secrets,
             env=env,
             block_network=block_network,
+            allow_list=allow_list,
             docker_enabled=docker_enabled,
         )
 
@@ -244,12 +252,7 @@ class Sandbox(Pod):
         )
 
         if not create_response.ok:
-            return SandboxInstance(
-                container_id="",
-                ok=False,
-                error_msg=create_response.error_msg,
-                stub_id="",
-            )
+            raise SandboxConnectionError(create_response.error_msg)
 
         self.stub_id = create_response.stub_id
 
@@ -310,12 +313,7 @@ class Sandbox(Pod):
         )
 
         if not create_response.ok:
-            return SandboxInstance(
-                stub_id=self.stub_id,
-                container_id="",
-                ok=False,
-                error_msg=create_response.error_msg,
-            )
+            raise SandboxConnectionError(create_response.error_msg)
 
         terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
 

@@ -118,6 +118,7 @@ class RunnerAbstraction(BaseAbstraction):
         outputs: Optional[Schema] = None,
         tcp: bool = False,
         block_network: bool = False,
+        allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
     ) -> None:
         super().__init__()
@@ -167,6 +168,15 @@ class RunnerAbstraction(BaseAbstraction):
         self.entrypoint: Optional[List[str]] = entrypoint
         self.tcp = tcp
         self.block_network = block_network
+        self.allow_list = allow_list
+
+        # Validate that block_network and allow_list are not both specified
+        if self.block_network and self.allow_list is not None:
+            raise ValueError(
+                "Cannot specify both 'block_network=True' and 'allow_list'. "
+                "Use 'allow_list' with CIDR notation to allow specific ranges (blocks all others), "
+                "or use 'block_network=True' to block all outbound traffic."
+            )
 
         if (self.gpu != "" or len(self.gpu) > 0) and self.gpu_count == 0:
             self.gpu_count = 1
@@ -524,6 +534,7 @@ class RunnerAbstraction(BaseAbstraction):
                 docker_enabled=self.docker_enabled,
                 tcp=self.tcp,
                 block_network=self.block_network,
+                allow_list=self.allow_list,
             )
 
             if _is_stub_created_for_workspace():
