@@ -231,12 +231,7 @@ class Sandbox(Pod):
         )
 
         if not create_response.ok:
-            return SandboxInstance(
-                container_id="",
-                ok=False,
-                error_msg=create_response.error_msg,
-                stub_id="",
-            )
+            raise SandboxConnectionError(create_response.error_msg)
 
         self.stub_id = create_response.stub_id
 
@@ -297,12 +292,7 @@ class Sandbox(Pod):
         )
 
         if not create_response.ok:
-            return SandboxInstance(
-                stub_id=self.stub_id,
-                container_id="",
-                ok=False,
-                error_msg=create_response.error_msg,
-            )
+            raise SandboxConnectionError(create_response.error_msg)
 
         terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
 
