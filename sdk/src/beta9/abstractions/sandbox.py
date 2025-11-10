@@ -2551,7 +2551,8 @@ class SandboxDockerManager:
             result.wait()
         else:
             self._run(*cmd)
-        return ComposeStack(self, file, cwd, override_path, service_names)
+
+        return DockerComposeStack(self, file, cwd, override_path, service_names)
 
     def compose_down(
         self,
