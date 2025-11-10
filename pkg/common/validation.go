@@ -5,6 +5,11 @@ import (
 	"net"
 )
 
+const (
+	// MaxAllowListEntries is the maximum number of CIDR entries allowed in an allowlist
+	MaxAllowListEntries = 10
+)
+
 // ValidateCIDR validates CIDR notation and returns:
 // - normalized CIDR string
 // - boolean indicating if it's IPv6
@@ -21,6 +26,10 @@ func ValidateCIDR(entry string) (string, bool, error) {
 
 // ValidateAllowList validates a list of CIDR entries and returns an error if any are invalid
 func ValidateAllowList(allowList []string) error {
+	if len(allowList) > MaxAllowListEntries {
+		return fmt.Errorf("allowlist exceeds maximum of %d entries (got %d)", MaxAllowListEntries, len(allowList))
+	}
+
 	for _, entry := range allowList {
 		_, _, err := ValidateCIDR(entry)
 		if err != nil {
