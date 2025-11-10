@@ -137,6 +137,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
         authorized: bool = False,
         tcp: bool = False,
         block_network: bool = False,
+        docker_enabled: bool = False,
     ) -> None:
         super().__init__(
             cpu=cpu,
@@ -155,6 +156,7 @@ class Pod(RunnerAbstraction, DeployableMixin):
             keep_warm_seconds=keep_warm_seconds,
             app=app,
             tcp=tcp,
+            docker_enabled=docker_enabled,
         )
         self.parent = self
         self.func = None

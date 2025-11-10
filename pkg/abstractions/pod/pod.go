@@ -335,6 +335,7 @@ func (s *GenericPodService) run(ctx context.Context, authInfo *auth.AuthInfo, st
 		CheckpointEnabled: checkpointEnabled,
 		Checkpoint:        checkpoint,
 		BlockNetwork:      stubConfig.BlockNetwork,
+		DockerEnabled:     stubConfig.DockerEnabled,
 	})
 	if err != nil {
 		return "", err

@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func setupTestBuild(t *testing.T, opts *BuildOpts) (*Build, *mocks.RuncClient, chan common.OutputMsg) {
-	mockRuncClient := mocks.NewRuncClient(t)
+func setupTestBuild(t *testing.T, opts *BuildOpts) (*Build, *mocks.ContainerClient, chan common.OutputMsg) {
+	mockContainerClient := mocks.NewContainerClient(t)
 	outputChan := make(chan common.OutputMsg, 10) // Buffered channel
 
 	if opts == nil {
@@ -45,7 +45,7 @@ func setupTestBuild(t *testing.T, opts *BuildOpts) (*Build, *mocks.RuncClient, c
 
 	build, err := NewBuild(context.Background(), opts, outputChan, config)
 	assert.NoError(t, err)
-	build.runcClient = mockRuncClient // Inject the mock client
+	build.containerClient = mockContainerClient // Inject the mock client
 
 	// Set up auth info if not already present
 	if build.authInfo == nil {
@@ -59,7 +59,7 @@ func setupTestBuild(t *testing.T, opts *BuildOpts) (*Build, *mocks.RuncClient, c
 	// Mock image ID generation (simplified)
 	build.imageID = "test-image-id"
 
-	return build, mockRuncClient, outputChan
+	return build, mockContainerClient, outputChan
 }
 func TestRenderV2Dockerfile_FromStepsAndCommands(t *testing.T) {
 	cfg := types.AppConfig{}
@@ -1235,29 +1235,32 @@ func TestV1_V2_PythonInstallationParity(t *testing.T) {
 	}
 }
 
-func TestBuild_SkipsRuncFlow_WhenClipV2(t *testing.T) {
+func TestBuild_SkipsContainerFlow_WhenClipV2(t *testing.T) {
 	opts := &BuildOpts{
 		BaseImageRegistry: "docker.io",
 		BaseImageName:     "library/ubuntu",
 		BaseImageTag:      "latest",
 		Commands:          []string{"echo hello"},
 	}
-	build, mockRunc, _ := setupTestBuild(t, opts)
+	build, mockContainer, _ := setupTestBuild(t, opts)
+
 	// Enable v2 in config
 	build.config.ImageService.ClipVersion = 2
+
 	// Create a minimal builder bound to this config
 	b := &Builder{config: build.config}
 
-	// No expectations should be set on runc Exec/Archive for v2 path
+	// No expectations should be set on container Exec/Archive for v2 path
 	// Do not invoke Build here as it requires scheduler/worker; just ensure render path works
 	df, derr := b.RenderV2Dockerfile(build.opts)
 	assert.NoError(t, derr)
 	assert.True(t, strings.HasPrefix(df, "FROM "))
+
 	// We can't easily run the full Build without scheduler and worker; just ensure it doesn't try to call Exec/Archive here.
-	// Since Build starts external processes, limit our assertion to "no unwanted runc calls"
-	mockRunc.AssertNotCalled(t, "Exec")
-	mockRunc.AssertNotCalled(t, "Archive")
-	// err may be non-nil due to environment; we only validate the behavior regarding runc usage for v2
+	// Since Build starts external processes, limit our assertion to "no unwanted container calls"
+	mockContainer.AssertNotCalled(t, "Exec")
+	mockContainer.AssertNotCalled(t, "Archive")
+	// err may be non-nil due to environment; we only validate the behavior regarding container usage for v2
 }
 
 func TestBuild_prepareSteps_PythonExists(t *testing.T) {
@@ -1269,12 +1272,12 @@ func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 		PythonPackages:    []string{"requests", "numpy"},
 		BuildSteps:        []BuildStep{{Command: "echo hello", Type: shellCommandType}},
 	}
-	build, mockRuncClient, _ := setupTestBuild(t, opts)
+	build, mockContainerClient, _ := setupTestBuild(t, opts)
 
 	// Mock python version check - python exists (setupDefaultPythonInstall)
-	mockRuncClient.On("Exec", build.containerID, "python3.10 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+	mockContainerClient.On("Exec", build.containerID, "python3.10 --version", buildEnv).Return(&pb.ContainerExecResponse{Ok: true}, nil)
 	// Mock virtual environment check - python exists but NOT in venv
-	mockRuncClient.On("Exec", build.containerID, `python3.10 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(&pb.RunCExecResponse{Ok: false}, nil)
+	mockContainerClient.On("Exec", build.containerID, `python3.10 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(&pb.ContainerExecResponse{Ok: false}, nil)
 
 	err := build.prepareCommands()
 	assert.NoError(t, err)
@@ -1286,7 +1289,7 @@ func TestBuild_prepareSteps_PythonExists(t *testing.T) {
 	}
 	assert.Equal(t, expectedCommands, build.commands)
 	assert.NotEmpty(t, build.imageID)
-	mockRuncClient.AssertExpectations(t)
+	mockContainerClient.AssertExpectations(t)
 }
 
 func TestBuild_prepareSteps_PythonExistsInVenv(t *testing.T) {
@@ -1298,12 +1301,13 @@ func TestBuild_prepareSteps_PythonExistsInVenv(t *testing.T) {
 		PythonPackages:    []string{"requests", "numpy"},
 		BuildSteps:        []BuildStep{{Command: "echo hello", Type: shellCommandType}},
 	}
-	build, mockRuncClient, _ := setupTestBuild(t, opts)
+	build, mockContainerClient, _ := setupTestBuild(t, opts)
 
 	// Mock python version check - python exists (setupDefaultPythonInstall)
-	mockRuncClient.On("Exec", build.containerID, "python3.10 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+	mockContainerClient.On("Exec", build.containerID, "python3.10 --version", buildEnv).Return(&pb.ContainerExecResponse{Ok: true}, nil)
+
 	// Mock virtual environment check - python exists and IS in venv
-	mockRuncClient.On("Exec", build.containerID, `python3.10 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+	mockContainerClient.On("Exec", build.containerID, `python3.10 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(&pb.ContainerExecResponse{Ok: true}, nil)
 
 	err := build.prepareCommands()
 	assert.NoError(t, err)
@@ -1314,7 +1318,7 @@ func TestBuild_prepareSteps_PythonExistsInVenv(t *testing.T) {
 	assert.Equal(t, "uv-b9 pip install \"requests\" \"numpy\"", build.commands[1])
 	assert.Equal(t, "echo hello", build.commands[2])
 	assert.NotEmpty(t, build.imageID)
-	mockRuncClient.AssertExpectations(t)
+	mockContainerClient.AssertExpectations(t)
 }
 
 func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
@@ -1325,14 +1329,14 @@ func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
 		PythonVersion:     "python3.11",
 		PythonPackages:    []string{"pandas"},
 	}
-	build, mockRuncClient, outputChan := setupTestBuild(t, opts)
+	build, mockContainerClient, outputChan := setupTestBuild(t, opts)
 
 	// Mock python version check - specific version doesn't exist (setupDefaultPythonInstall)
-	mockRuncClient.On("Exec", build.containerID, "python3.11 --version", buildEnv).Return(nil, errors.New("not found"))
+	mockContainerClient.On("Exec", build.containerID, "python3.11 --version", buildEnv).Return(nil, errors.New("not found"))
 	// Mock general python3 check - it exists (so we show a warning)
-	mockRuncClient.On("Exec", build.containerID, "python3 --version", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil)
+	mockContainerClient.On("Exec", build.containerID, "python3 --version", buildEnv).Return(&pb.ContainerExecResponse{Ok: true}, nil)
 	// Mock virtual environment check - after python install, check if it's in venv (it won't be)
-	mockRuncClient.On("Exec", build.containerID, `python3.11 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(&pb.RunCExecResponse{Ok: false}, nil)
+	mockContainerClient.On("Exec", build.containerID, `python3.11 -c "import sys; exit(0 if sys.prefix != sys.base_prefix else 1)"`, buildEnv).Return(&pb.ContainerExecResponse{Ok: false}, nil)
 
 	err := build.prepareCommands()
 	assert.NoError(t, err)
@@ -1362,7 +1366,7 @@ func TestBuild_prepareSteps_PythonNeedsInstall(t *testing.T) {
 		t.Fatal("Expected installing message not received")
 	}
 
-	mockRuncClient.AssertExpectations(t)
+	mockContainerClient.AssertExpectations(t)
 }
 
 func TestBuild_prepareSteps_IgnorePython(t *testing.T) {
@@ -1375,7 +1379,7 @@ func TestBuild_prepareSteps_IgnorePython(t *testing.T) {
 		Commands:          []string{"apt update"},
 		PythonPackages:    []string{},
 	}
-	build, mockRuncClient, _ := setupTestBuild(t, opts)
+	build, mockContainerClient, _ := setupTestBuild(t, opts)
 
 	err := build.prepareCommands()
 	assert.NoError(t, err)
@@ -1383,7 +1387,7 @@ func TestBuild_prepareSteps_IgnorePython(t *testing.T) {
 	assert.Equal(t, []string{"apt update"}, build.commands)
 	assert.Equal(t, []string{}, build.opts.PythonPackages, "PythonPackages should be cleared if IgnorePython is true and python is not found")
 	assert.NotEmpty(t, build.imageID)
-	mockRuncClient.AssertExpectations(t)
+	mockContainerClient.AssertExpectations(t)
 }
 
 func TestBuild_prepareSteps_Micromamba(t *testing.T) {
@@ -1400,7 +1404,7 @@ func TestBuild_prepareSteps_Micromamba(t *testing.T) {
 			{Type: pipCommandType, Command: "beautifulsoup4"},
 		},
 	}
-	build, mockRuncClient, _ := setupTestBuild(t, opts)
+	build, mockContainerClient, _ := setupTestBuild(t, opts)
 
 	err := build.prepareCommands()
 	assert.NoError(t, err)
@@ -1415,29 +1419,29 @@ func TestBuild_prepareSteps_Micromamba(t *testing.T) {
 
 	assert.Equal(t, expectedCommands, build.commands)
 	assert.NotEmpty(t, build.imageID)
-	mockRuncClient.AssertExpectations(t)
+	mockContainerClient.AssertExpectations(t)
 }
 
 func TestBuild_executeSteps_Success(t *testing.T) {
-	build, mockRuncClient, _ := setupTestBuild(t, nil)
+	build, mockContainerClient, _ := setupTestBuild(t, nil)
 	build.commands = []string{"cmd1", "cmd2"}
 
-	mockRuncClient.On("Exec", build.containerID, "cmd1", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil).Once()
-	mockRuncClient.On("Exec", build.containerID, "cmd2", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil).Once()
+	mockContainerClient.On("Exec", build.containerID, "cmd1", buildEnv).Return(&pb.ContainerExecResponse{Ok: true}, nil).Once()
+	mockContainerClient.On("Exec", build.containerID, "cmd2", buildEnv).Return(&pb.ContainerExecResponse{Ok: true}, nil).Once()
 
 	err := build.executeCommands()
 	assert.NoError(t, err)
-	mockRuncClient.AssertExpectations(t)
+	mockContainerClient.AssertExpectations(t)
 }
 
 func TestBuild_executeSteps_Failure(t *testing.T) {
-	build, mockRuncClient, outputChan := setupTestBuild(t, nil)
+	build, mockContainerClient, outputChan := setupTestBuild(t, nil)
 	build.commands = []string{"cmd1", "cmd2-fails", "cmd3"}
 
-	mockRuncClient.On("Exec", build.containerID, "cmd1", buildEnv).Return(&pb.RunCExecResponse{Ok: true}, nil).Once()
+	mockContainerClient.On("Exec", build.containerID, "cmd1", buildEnv).Return(&pb.ContainerExecResponse{Ok: true}, nil).Once()
 	// Mock failure on the second command
 	execErr := errors.New("command failed")
-	mockRuncClient.On("Exec", build.containerID, "cmd2-fails", buildEnv).Return(nil, execErr).Once()
+	mockContainerClient.On("Exec", build.containerID, "cmd2-fails", buildEnv).Return(nil, execErr).Once()
 	// cmd3 should not be called
 
 	err := build.executeCommands()
@@ -1454,28 +1458,28 @@ func TestBuild_executeSteps_Failure(t *testing.T) {
 		t.Fatal("Expected error message not received")
 	}
 
-	mockRuncClient.AssertExpectations(t)
+	mockContainerClient.AssertExpectations(t)
 	// Ensure cmd3 was not called
-	mockRuncClient.AssertNotCalled(t, "Exec", build.containerID, "cmd3", buildEnv)
+	mockContainerClient.AssertNotCalled(t, "Exec", build.containerID, "cmd3", buildEnv)
 }
 
 func TestBuild_archive_Success(t *testing.T) {
-	build, mockRuncClient, outputChan := setupTestBuild(t, nil)
+	build, mockContainerClient, outputChan := setupTestBuild(t, nil)
 	build.imageID = "final-image-id" // Ensure imageId is set
 
-	mockRuncClient.On("Archive", build.ctx, build.containerID, build.imageID, outputChan).Return(nil).Once()
+	mockContainerClient.On("Archive", build.ctx, build.containerID, build.imageID, outputChan).Return(nil).Once()
 
 	err := build.archive()
 	assert.NoError(t, err)
-	mockRuncClient.AssertExpectations(t)
+	mockContainerClient.AssertExpectations(t)
 }
 
 func TestBuild_archive_Failure(t *testing.T) {
-	build, mockRuncClient, outputChan := setupTestBuild(t, nil)
+	build, mockContainerClient, outputChan := setupTestBuild(t, nil)
 	build.imageID = "final-image-id"
 	archiveErr := errors.New("archiving failed")
 
-	mockRuncClient.On("Archive", build.ctx, build.containerID, build.imageID, outputChan).Return(archiveErr).Once()
+	mockContainerClient.On("Archive", build.ctx, build.containerID, build.imageID, outputChan).Return(archiveErr).Once()
 
 	err := build.archive()
 	assert.Error(t, err)
@@ -1491,7 +1495,7 @@ func TestBuild_archive_Failure(t *testing.T) {
 		t.Fatal("Expected error message not received")
 	}
 
-	mockRuncClient.AssertExpectations(t)
+	mockContainerClient.AssertExpectations(t)
 }
 
 // Test parseBuildStepsForDockerfile (v2) uses uv for faster installation

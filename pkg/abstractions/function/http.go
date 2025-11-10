@@ -14,11 +14,11 @@ import (
 
 type functionGroup struct {
 	routerGroup *echo.Group
-	fs          *RunCFunctionService
+	fs          *ContainerFunctionService
 	cache       *expirable.LRU[string, string]
 }
 
-func registerFunctionRoutes(g *echo.Group, fs *RunCFunctionService) *functionGroup {
+func registerFunctionRoutes(g *echo.Group, fs *ContainerFunctionService) *functionGroup {
 	group := &functionGroup{routerGroup: g, fs: fs, cache: abstractions.NewDeploymentStubCache()}
 
 	g.POST("/id/:stubId", auth.WithAuth(group.FunctionInvoke))
