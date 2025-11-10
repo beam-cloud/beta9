@@ -2400,6 +2400,7 @@ class SandboxDockerManager:
 
         # Download compose file from sandbox to parse it locally
         service_names = []
+        services_with_build = set()
         try:
             import os
             import tempfile
@@ -2417,9 +2418,12 @@ class SandboxDockerManager:
                     compose_content = f.read()
                     compose_data = yaml.safe_load(compose_content)
 
-                    # Extract service names
+                    # Extract service names and track which have build sections
                     if compose_data and "services" in compose_data:
                         service_names = list(compose_data["services"].keys())
+                        for svc_name, svc_config in compose_data["services"].items():
+                            if isinstance(svc_config, dict) and "build" in svc_config:
+                                services_with_build.add(svc_name)
             finally:
                 # Clean up the temporary file
                 if os.path.exists(local_compose_path):
@@ -2433,14 +2437,16 @@ class SandboxDockerManager:
         override_path = "/tmp/.docker-compose-gvisor-override.yml"
 
         if service_names:
-            # Generate override for each service with network_mode: host and build.network: host
-            # Docker Compose will automatically handle port mapping incompatibility
+            # Generate override for each service with network_mode: host
+            # Only add build.network: host for services that have a build section
             override_content = "services:\n"
             for service_name in service_names:
                 override_content += f"  {service_name}:\n"
                 override_content += "    network_mode: host\n"
-                override_content += "    build:\n"
-                override_content += "      network: host\n"
+                # Only override build network for services that actually build
+                if service_name in services_with_build:
+                    override_content += "    build:\n"
+                    override_content += "      network: host\n"
         else:
             # Fallback: simple host networking
             override_content = (
