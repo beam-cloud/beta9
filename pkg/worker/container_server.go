@@ -752,101 +752,47 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	runtimeName := "runc"
-	if instance.Runtime != nil {
-		runtimeName = instance.Runtime.Name()
-	}
-
-	// For gVisor (runsc), use the external bind mount workaround
+	// For gVisor: write to external mount, then mv inside container to avoid caching issues
 	// External mounts are always shared (no caching) per gVisor docs
-	if runtimeName == "runsc" {
-		// Write to the external bind mount first
-		tempFileName := fmt.Sprintf("upload_%d_%s", time.Now().UnixNano(), filepath.Base(containerPath))
-		tempContainerPath := filepath.Join("/tmp/.beta9", tempFileName)
-		tempHostPath := filepath.Join("/tmp", "container-uploads", in.ContainerId, tempFileName)
-
-		if err := os.WriteFile(tempHostPath, in.Data, os.FileMode(in.Mode)); err != nil {
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to write temp file: %v", err)}, nil
-		}
-
-		// Wait for container to be ready
+	if instance.Runtime != nil && instance.Runtime.Name() == "runsc" {
 		if err := s.waitForContainer(ctx, in.ContainerId); err != nil {
-			os.Remove(tempHostPath) // Clean up temp file
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Container not ready: %v", err)}, nil
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
 
-		// Move the file to the target location using mv inside the container
-		// This ensures the file is visible through gVisor's VFS
-		targetDir := filepath.Dir(containerPath)
-		mvCmd := fmt.Sprintf("mkdir -p %s && mv %s %s && chmod %o %s", 
-			shellQuote(targetDir),
-			shellQuote(tempContainerPath),
-			shellQuote(containerPath),
-			in.Mode,
-			shellQuote(containerPath))
+		// Write to external bind mount
+		tempFile := fmt.Sprintf("upload_%d", time.Now().UnixNano())
+		tempHostPath := filepath.Join("/tmp/container-uploads", in.ContainerId, tempFile)
+		if err := os.WriteFile(tempHostPath, in.Data, os.FileMode(in.Mode)); err != nil {
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		}
 
-		execReq := &pb.ContainerExecRequest{
+		// Move to target location inside container
+		quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'" }
+		cmd := fmt.Sprintf("mkdir -p %s && mv /tmp/.beta9/%s %s && chmod %o %s",
+			quote(filepath.Dir(containerPath)), tempFile, quote(containerPath), in.Mode, quote(containerPath))
+
+		if resp, err := s.ContainerExec(ctx, &pb.ContainerExecRequest{
 			ContainerId: in.ContainerId,
-			Cmd:         mvCmd,
+			Cmd:         cmd,
 			Env:         instance.Spec.Process.Env,
+		}); err != nil || !resp.Ok {
+			os.Remove(tempHostPath)
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "mv failed"}, nil
 		}
-
-		execResp, err := s.ContainerExec(ctx, execReq)
-		if err != nil || !execResp.Ok {
-			os.Remove(tempHostPath) // Clean up temp file
-			errMsg := "Failed to move file to target location"
-			if err != nil {
-				errMsg = fmt.Sprintf("%s: %v", errMsg, err)
-			}
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: errMsg}, nil
-		}
-
-		// Verify the file is now at the target location by checking the host overlay
-		finalHostPath := s.getHostPathFromContainerPath(containerPath, instance)
-		if _, err := os.Stat(finalHostPath); err != nil {
-			log.Warn().
-				Str("container_path", containerPath).
-				Str("host_path", finalHostPath).
-				Err(err).
-				Msg("File moved in container but not visible on host overlay yet")
-			// Don't fail - the file is in the container, it may just take a moment to sync
-		}
-
-		log.Info().
-			Str("container_path", containerPath).
-			Str("temp_path", tempContainerPath).
-			Str("container_id", in.ContainerId).
-			Str("runtime", runtimeName).
-			Msg("ContainerSandboxUploadFile (gVisor with external mount)")
 
 		return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
 	}
 
-	// For runc, write directly to the overlay (original behavior)
+	// For runc: direct write to overlay
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
-
-	log.Info().
-		Str("container_path", containerPath).
-		Str("host_path", hostPath).
-		Str("container_id", in.ContainerId).
-		Str("runtime", runtimeName).
-		Msg("ContainerSandboxUploadFile")
-
-	hostDir := filepath.Dir(hostPath)
-	if err := os.MkdirAll(hostDir, 0755); err != nil {
-		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to create directory: %v", err)}, nil
+	if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
+		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
-
-	err = os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode))
-	if err != nil {
+	if err := os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode)); err != nil {
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
 	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Context, in *pb.ContainerSandboxCreateDirectoryRequest) (*pb.ContainerSandboxCreateDirectoryResponse, error) {
