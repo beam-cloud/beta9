@@ -752,27 +752,78 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	// Determine host path to write to
-	var hostPath string
-	
-	// Special handling for /tmp/.beta9 - this is a dedicated bind mount for file uploads
-	// External mounts in gVisor are always shared (no caching), ensuring immediate visibility
-	if strings.HasPrefix(containerPath, "/tmp/.beta9/") || containerPath == "/tmp/.beta9" {
-		// Map to the upload-specific host directory
-		relPath := strings.TrimPrefix(containerPath, "/tmp/.beta9")
-		if relPath == "" {
-			relPath = "/"
-		}
-		hostPath = filepath.Join("/tmp", "container-uploads", in.ContainerId, relPath)
-	} else {
-		// Use standard overlay path mapping
-		hostPath = s.getHostPathFromContainerPath(containerPath, instance)
-	}
-
 	runtimeName := "runc"
 	if instance.Runtime != nil {
 		runtimeName = instance.Runtime.Name()
 	}
+
+	// For gVisor (runsc), use the external bind mount workaround
+	// External mounts are always shared (no caching) per gVisor docs
+	if runtimeName == "runsc" {
+		// Write to the external bind mount first
+		tempFileName := fmt.Sprintf("upload_%d_%s", time.Now().UnixNano(), filepath.Base(containerPath))
+		tempContainerPath := filepath.Join("/tmp/.beta9", tempFileName)
+		tempHostPath := filepath.Join("/tmp", "container-uploads", in.ContainerId, tempFileName)
+
+		if err := os.WriteFile(tempHostPath, in.Data, os.FileMode(in.Mode)); err != nil {
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to write temp file: %v", err)}, nil
+		}
+
+		// Wait for container to be ready
+		if err := s.waitForContainer(ctx, in.ContainerId); err != nil {
+			os.Remove(tempHostPath) // Clean up temp file
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Container not ready: %v", err)}, nil
+		}
+
+		// Move the file to the target location using mv inside the container
+		// This ensures the file is visible through gVisor's VFS
+		targetDir := filepath.Dir(containerPath)
+		mvCmd := fmt.Sprintf("mkdir -p %s && mv %s %s && chmod %o %s", 
+			shellQuote(targetDir),
+			shellQuote(tempContainerPath),
+			shellQuote(containerPath),
+			in.Mode,
+			shellQuote(containerPath))
+
+		execReq := &pb.ContainerExecRequest{
+			ContainerId: in.ContainerId,
+			Cmd:         mvCmd,
+			Env:         instance.Spec.Process.Env,
+		}
+
+		execResp, err := s.ContainerExec(ctx, execReq)
+		if err != nil || !execResp.Ok {
+			os.Remove(tempHostPath) // Clean up temp file
+			errMsg := "Failed to move file to target location"
+			if err != nil {
+				errMsg = fmt.Sprintf("%s: %v", errMsg, err)
+			}
+			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: errMsg}, nil
+		}
+
+		// Verify the file is now at the target location by checking the host overlay
+		finalHostPath := s.getHostPathFromContainerPath(containerPath, instance)
+		if _, err := os.Stat(finalHostPath); err != nil {
+			log.Warn().
+				Str("container_path", containerPath).
+				Str("host_path", finalHostPath).
+				Err(err).
+				Msg("File moved in container but not visible on host overlay yet")
+			// Don't fail - the file is in the container, it may just take a moment to sync
+		}
+
+		log.Info().
+			Str("container_path", containerPath).
+			Str("temp_path", tempContainerPath).
+			Str("container_id", in.ContainerId).
+			Str("runtime", runtimeName).
+			Msg("ContainerSandboxUploadFile (gVisor with external mount)")
+
+		return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
+	}
+
+	// For runc, write directly to the overlay (original behavior)
+	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 
 	log.Info().
 		Str("container_path", containerPath).
@@ -792,6 +843,10 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 	}
 
 	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Context, in *pb.ContainerSandboxCreateDirectoryRequest) (*pb.ContainerSandboxCreateDirectoryResponse, error) {
