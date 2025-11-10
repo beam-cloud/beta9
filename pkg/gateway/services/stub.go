@@ -160,6 +160,7 @@ func (gws *GatewayService) GetOrCreateStub(ctx context.Context, in *pb.GetOrCrea
 		TCP:                in.Tcp,
 		BlockNetwork:       in.BlockNetwork,
 		AllowList:          in.AllowList,
+		DockerEnabled:      in.DockerEnabled,
 	}
 
 	// Ensure GPU count is at least 1 if a GPU is required

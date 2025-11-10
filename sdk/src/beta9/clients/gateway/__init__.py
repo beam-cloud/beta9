@@ -345,6 +345,7 @@ class GetOrCreateStubRequest(betterproto.Message):
     tcp: bool = betterproto.bool_field(37)
     block_network: bool = betterproto.bool_field(38)
     allow_list: List[str] = betterproto.string_field(39)
+    docker_enabled: bool = betterproto.bool_field(40)
 
 
 @dataclass(eq=False, repr=False)

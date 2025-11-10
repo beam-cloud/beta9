@@ -141,6 +141,10 @@ func (wpc *ExternalWorkerPoolController) Name() string {
 	return wpc.name
 }
 
+func (wpc *ExternalWorkerPoolController) ContainerRuntime() string {
+	return wpc.workerPoolConfig.ContainerRuntime
+}
+
 func (wpc *ExternalWorkerPoolController) RequiresPoolSelector() bool {
 	return wpc.workerPoolConfig.RequiresPoolSelector
 }
@@ -422,6 +426,7 @@ func (wpc *ExternalWorkerPoolController) createWorkerJob(workerId, machineId str
 		Gpu:           workerGpuType,
 		Status:        types.WorkerStatusPending,
 		Priority:      wpc.workerPoolConfig.Priority,
+		Runtime:       wpc.workerPoolConfig.ContainerRuntime,
 		BuildVersion:  wpc.config.Worker.ImageTag,
 		Preemptable:   wpc.workerPoolConfig.Preemptable,
 	}, nil

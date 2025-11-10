@@ -92,6 +92,7 @@ message ContainerRequest {
   string build_registry_credentials = 27;
   bool block_network = 28;
   repeated string allow_list = 29;
+  bool docker_enabled = 30;
 }
 
 message ContainerState {
@@ -226,8 +227,9 @@ message Worker {
   bool requires_pool_selector = 13;
   int32 priority = 14;
   bool preemptable = 15;
-  string build_version = 16;
-  repeated Container active_containers = 17;
+  string runtime = 16;
+  string build_version = 17;
+  repeated Container active_containers = 18;
 }
 
 message WorkerPoolState {

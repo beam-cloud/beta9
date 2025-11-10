@@ -462,6 +462,7 @@ type StubConfigV1 struct {
 	TCP                bool            `json:"tcp"`
 	BlockNetwork       bool            `json:"block_network"`
 	AllowList          []string        `json:"allow_list"`
+	DockerEnabled      bool            `json:"docker_enabled"`
 }
 
 type StubConfigLimitedValues struct {

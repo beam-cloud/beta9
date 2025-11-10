@@ -469,6 +469,7 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 
 func filterControllersByFlags(controllers []WorkerPoolController, request *types.ContainerRequest) []WorkerPoolController {
 	filteredControllers := []WorkerPoolController{}
+
 	for _, controller := range controllers {
 		if !request.Preemptable && controller.IsPreemptable() {
 			continue
@@ -476,6 +477,10 @@ func filterControllersByFlags(controllers []WorkerPoolController, request *types
 
 		if (request.PoolSelector != "" && controller.Name() != request.PoolSelector) ||
 			(request.PoolSelector == "" && controller.RequiresPoolSelector()) {
+			continue
+		}
+
+		if request.DockerEnabled && controller.ContainerRuntime() != "gvisor" {
 			continue
 		}
 
@@ -550,6 +555,10 @@ func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerReque
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
 		if !request.Preemptable && worker.Preemptable {
+			continue
+		}
+
+		if request.DockerEnabled && worker.Runtime != types.ContainerRuntimeGvisor.String() {
 			continue
 		}
 

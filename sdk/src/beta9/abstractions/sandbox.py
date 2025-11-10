@@ -5,6 +5,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
+import yaml
+
 from .. import terminal
 from ..abstractions.base import unset_channel
 from ..abstractions.base.runner import (
@@ -97,6 +99,23 @@ class Sandbox(Pod):
             a range). Supports both IPv4 and IPv6. Examples: ["8.8.8.8/32"], ["10.0.0.0/8", "2001:db8::/32"].
             Cannot be used together with block_network. Default is None (no restrictions unless block_network
             is enabled).
+        docker_enabled (bool):
+            Enable Docker-in-Docker support inside the sandbox.
+
+            Example:
+                ```python
+                from beta9 import Image, Sandbox
+
+                # Install Docker in the image
+                image = Image(python_version="python3.11").with_docker()
+
+                # Enable Docker in the sandbox
+                sandbox = Sandbox(image=image, docker_enabled=True)
+                instance = sandbox.create()
+
+                # Docker daemon will be automatically started
+                instance.docker.run("hello-world")
+                ```
 
     Example:
         ```python
@@ -138,6 +157,7 @@ class Sandbox(Pod):
         sync_local_dir: bool = False,
         block_network: bool = False,
         allow_list: Optional[List[str]] = None,
+        docker_enabled: bool = False,
     ):
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
@@ -156,6 +176,7 @@ class Sandbox(Pod):
             env=env,
             block_network=block_network,
             allow_list=allow_list,
+            docker_enabled=docker_enabled,
         )
 
     def debug(self):
@@ -317,13 +338,14 @@ class SandboxInstance(BaseAbstraction):
     A sandbox instance that provides access to the sandbox internals.
 
     This class represents an active sandboxed container and provides methods for
-    process management, file system operations, preview URLs, and lifecycle
-    management.
+    process management, file system operations, Docker management, preview URLs,
+    and lifecycle management.
 
     Attributes:
         container_id (str): The unique ID of the created sandbox container.
         fs (SandboxFileSystem): File system interface for the sandbox.
         process (SandboxProcessManager): Process management interface for the sandbox.
+        docker (SandboxDockerManager): Docker management interface for the sandbox.
 
     Example:
         ```python
@@ -335,6 +357,11 @@ class SandboxInstance(BaseAbstraction):
 
         # Run processes
         result = instance.process.run_code("import os; print(os.getcwd())")
+
+        # Use Docker (requires docker_enabled=True)
+        sandbox_with_docker = Sandbox(docker_enabled=True)
+        instance = sandbox_with_docker.create()
+        instance.docker.run("nginx:latest", detach=True, ports={"80": "8080"})
 
         # Expose a port
         url = instance.expose_port(8000)
@@ -357,6 +384,7 @@ class SandboxInstance(BaseAbstraction):
         self.stub = PodServiceStub(self.channel)
         self.fs = SandboxFileSystem(self)
         self.process = SandboxProcessManager(self)
+        self.docker = SandboxDockerManager(self)
         self.terminated = False
         atexit.register(self._cleanup)
 
@@ -1403,7 +1431,6 @@ class SandboxFileSystem:
             fs.upload_file("config.json", "/app/config/config.json")
             ```
         """
-
         with open(local_path, "rb") as f:
             content = f.read()
 
@@ -1724,3 +1751,957 @@ class SandboxFileSystem:
             raise SandboxFileSystemError(response.error_msg)
 
         return results
+
+
+class DockerResult:
+    """
+    Result object for Docker operations that provides access to both output and logs.
+
+    Attributes:
+        process: The underlying SandboxProcess for streaming logs
+        success: Whether the operation succeeded
+        output: The primary output (container ID, image ID, etc.)
+
+    Example:
+        ```python
+        # Build with logs
+        result = sandbox.docker.build("myapp:v1", context=".")
+        for line in result.logs():
+            print(line)  # Stream build output
+
+        # Or just wait for completion
+        result.wait()
+        print(f"Build {'succeeded' if result.success else 'failed'}")
+
+        # Run container and get ID
+        result = sandbox.docker.run("nginx", detach=True)
+        result.wait()
+        print(f"Container ID: {result.output}")
+        ```
+    """
+
+    def __init__(self, process: "SandboxProcess", extract_output: callable = None):
+        self.process = process
+        self._extract_output = extract_output
+        self._waited = False
+        self._output = None
+        self._success = None
+
+    def wait(self) -> bool:
+        """Wait for operation to complete. Returns True if successful."""
+        if not self._waited:
+            exit_code = self.process.wait()
+            self._success = exit_code == 0
+            if self._success and self._extract_output:
+                self._output = self._extract_output(self.process)
+            self._waited = True
+        return self._success
+
+    def logs(self):
+        """
+        Stream logs line by line from both stdout and stderr.
+        Docker commands often output to stderr (e.g., build progress).
+        """
+        import threading
+        from queue import Empty, Queue
+
+        q = Queue()
+
+        def read_stream(stream, prefix=""):
+            try:
+                for line in stream:
+                    q.put((prefix, line))
+            except Exception:
+                # Stream closed or error reading
+                pass
+
+        # Read both stdout and stderr concurrently
+        stdout_thread = threading.Thread(target=read_stream, args=(self.process.stdout, ""))
+        stderr_thread = threading.Thread(target=read_stream, args=(self.process.stderr, ""))
+
+        stdout_thread.daemon = True
+        stderr_thread.daemon = True
+
+        stdout_thread.start()
+        stderr_thread.start()
+
+        # Yield lines as they arrive
+        threads_alive = True
+        while threads_alive or not q.empty():
+            try:
+                prefix, line = q.get(timeout=0.1)
+                yield line
+            except Empty:
+                # Check if threads are still alive
+                threads_alive = stdout_thread.is_alive() or stderr_thread.is_alive()
+                continue
+
+    @property
+    def output(self) -> str:
+        """Get the primary output (auto-waits if needed)."""
+        if not self._waited:
+            self.wait()
+        return self._output or ""
+
+    @property
+    def success(self) -> bool:
+        """Check if operation succeeded (auto-waits if needed)."""
+        if not self._waited:
+            self.wait()
+        return self._success
+
+    @property
+    def stdout(self) -> str:
+        """Get all stdout (auto-waits if needed)."""
+        if not self._waited:
+            self.wait()
+        return self.process.stdout.read()
+
+    @property
+    def stderr(self) -> str:
+        """Get all stderr (auto-waits if needed)."""
+        if not self._waited:
+            self.wait()
+        return self.process.stderr.read()
+
+
+class DockerComposeStack:
+    """Represents a running Docker Compose stack."""
+
+    def __init__(
+        self,
+        docker_manager: "SandboxDockerManager",
+        file: str,
+        cwd: Optional[str],
+        override_path: str,
+        service_names: List[str],
+    ):
+        self.docker = docker_manager
+        self.file = file
+        self.cwd = cwd
+        self.override_path = override_path
+        self.services = service_names
+
+    def logs(
+        self, service: Optional[str] = None, follow: bool = False, tail: Optional[int] = None
+    ) -> str:
+        """Get logs from compose stack or specific service."""
+        cmd = ["docker-compose", "-f", self.file, "-f", self.override_path, "logs"]
+        if follow:
+            cmd.append("-f")
+        if tail is not None:
+            cmd.extend(["--tail", str(tail)])
+        if service:
+            cmd.append(service)
+        result = self.docker._run(*cmd, cwd=self.cwd)
+        return result.stdout
+
+    def stop(self) -> None:
+        """Stop the compose stack."""
+        self.docker.compose_down(file=self.file, cwd=self.cwd)
+
+    def ps(self) -> str:
+        """List services in the stack."""
+        return self.docker.compose_ps(file=self.file, cwd=self.cwd)
+
+    def __repr__(self) -> str:
+        return f"DockerComposeStack(services={self.services})"
+
+
+class SandboxDockerManager:
+    """
+    Docker manager for sandbox operations with streaming log support.
+
+    Most operations return DockerResult objects that provide:
+    - Streaming logs via .logs()
+    - Automatic waiting via .wait()
+    - Access to output via .output property
+
+    Example:
+        ```python
+        sandbox = Sandbox(
+            docker_enabled=True,
+            image=Image().with_docker()
+        ).create()
+
+        # Build with streaming logs
+        result = sandbox.docker.build("myapp:v1", context=".")
+        for line in result.logs():
+            print(line)  # See build progress
+
+        # Or just wait for completion
+        result = sandbox.docker.build("myapp:v1", context=".")
+        if result.wait():
+            print("Build succeeded!")
+
+        # Pull and see logs
+        result = sandbox.docker.pull("nginx:latest")
+        print(result.stdout)  # Auto-waits and returns output
+
+        # Run container
+        result = sandbox.docker.run("nginx", name="web", detach=True)
+        container_id = result.output  # Auto-waits and returns container ID
+        ```
+    """
+
+    def __init__(self, sandbox_instance: SandboxInstance, daemon_timeout: int = 30):
+        self.sandbox_instance = sandbox_instance
+        self._daemon_timeout = daemon_timeout
+        self._daemon_ready = False
+        self._daemon_check_attempted = False
+        self._authenticated = False
+
+    def _ensure_ready(self):
+        """Ensure Docker daemon is ready. Only blocks when actually needed for docker commands."""
+        if self._daemon_ready:
+            return
+
+        # Mark that we've attempted a check to avoid interfering with non-docker operations
+        self._daemon_check_attempted = True
+
+        start, backoff = time.time(), 0.5
+        while time.time() - start < self._daemon_timeout:
+            try:
+                p = self.sandbox_instance.process.exec("docker", "info")
+                if p.wait() == 0:
+                    self._daemon_ready = True
+                    # Attempt authentication if credentials are in env
+                    self._auto_login()
+                    return
+            except Exception:
+                # Ignore errors during daemon check - we'll retry
+                pass
+            time.sleep(backoff)
+            backoff = min(backoff * 1.5, 2.0)
+
+        from beta9.exceptions import DockerDaemonNotReadyError
+
+        raise DockerDaemonNotReadyError(self._daemon_timeout)
+
+    def _auto_login(self):
+        """Automatically login to Docker if credentials are available in environment."""
+        if self._authenticated:
+            return
+
+        try:
+            # Check if DOCKER_USERNAME and DOCKER_PASSWORD are set
+            proc = self.sandbox_instance.process.exec("printenv", "DOCKER_USERNAME")
+            proc.wait()
+            username = proc.stdout.read().strip()
+
+            if username:
+                proc = self.sandbox_instance.process.exec("printenv", "DOCKER_PASSWORD")
+                proc.wait()
+                password = proc.stdout.read().strip()
+
+                if password:
+                    # Perform docker login
+                    self.login(username=username, password=password)
+        except BaseException:
+            # If auto-login fails, don't block - user can manually call login()
+            pass
+
+    def _exec(self, *cmd, cwd: Optional[str] = None) -> "SandboxProcess":
+        """Execute docker command."""
+        self._ensure_ready()
+        return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+
+    def _run(self, *cmd, cwd: Optional[str] = None):
+        """Execute docker command and return output (for simple operations)."""
+        from types import SimpleNamespace
+
+        from beta9.exceptions import DockerCommandError
+
+        p = self._exec(*cmd, cwd=cwd)
+        exit_code = p.wait()
+
+        if exit_code != 0:
+            stderr = p.stderr.read()
+            raise DockerCommandError(" ".join(cmd), exit_code, stderr)
+
+        stdout = p.stdout.read().strip()
+        return SimpleNamespace(stdout=stdout)
+
+    def _result(self, *cmd, extract_output: callable = None) -> DockerResult:
+        """Execute docker command and return a DockerResult (for operations with logs)."""
+        process = self._exec(*cmd)
+        return DockerResult(process, extract_output=extract_output)
+
+    # === Container Operations ===
+
+    def run(
+        self,
+        image: str,
+        command: Optional[Union[str, List[str]]] = None,
+        name: Optional[str] = None,
+        detach: bool = False,
+        remove: bool = False,
+        volumes: Optional[Dict[str, str]] = None,
+        env: Optional[Dict[str, str]] = None,
+        **kwargs,
+    ) -> DockerResult:
+        """
+        Run a Docker container.
+
+        Args:
+            image: Docker image (e.g. "nginx:latest")
+            command: Command to run INSIDE the container (e.g. ["sh", "-c", "echo hello"])
+                     This is NOT for docker flags - use the named parameters instead.
+            name: Container name
+            detach: Run in background
+            remove: Auto-remove when stopped
+            volumes: Volume mappings {"host_path": "container_path"} or {"host_path": "container_path:ro"}
+            env: Environment variables {"KEY": "value"}
+
+        Returns:
+            DockerResult: Result with container ID in .output property
+
+        Example:
+            ```python
+            # Run nginx with volume mount
+            result = sandbox.docker.run(
+                "nginx:latest",
+                volumes={"/tmp/html": "/usr/share/nginx/html:ro"},
+                detach=True
+            )
+            # Access nginx at http://localhost:80
+
+            # Run with environment variables
+            result = sandbox.docker.run(
+                "alpine",
+                command=["printenv", "MY_VAR"],
+                env={"MY_VAR": "hello"}
+            )
+
+            # Run and stream logs
+            result = sandbox.docker.run("alpine", command=["echo", "hello"])
+            for line in result.logs():
+                print(line)
+            ```
+        """
+        cmd = ["docker", "run"]
+        cmd.extend(["--network", "host"])
+
+        if detach:
+            cmd.append("-d")
+
+        if remove:
+            cmd.append("--rm")
+
+        if name:
+            cmd.extend(["--name", name])
+
+        if volumes:
+            for hp, cp in volumes.items():
+                cmd.extend(["-v", f"{hp}:{cp}"])
+
+        if env:
+            for k, v in env.items():
+                cmd.extend(["-e", f"{k}={v}"])
+
+        cmd.append(image)
+
+        if command:
+            if isinstance(command, str):
+                cmd.append(command)
+            else:
+                cmd.extend(command)
+
+        # Extract container ID from output if detached
+        def extract_container_id(process):
+            return process.stdout.read().strip()
+
+        return self._result(*cmd, extract_output=extract_container_id if detach else None)
+
+    def ps(self, all: bool = False, quiet: bool = False) -> Union[List[str], str]:
+        """
+        List containers.
+
+        Args:
+            all: Show all containers (default: running only)
+            quiet: Only return container IDs
+
+        Returns:
+            List[str]: Container IDs if quiet=True
+            str: Formatted table if quiet=False
+        """
+        cmd = ["docker", "ps"]
+        if all:
+            cmd.append("-a")
+        if quiet:
+            cmd.append("-q")
+
+        output = self._run(*cmd)
+        return output.split("\n") if quiet and output else output
+
+    def stop(self, container: str) -> bool:
+        """Stop a container. Returns True on success, False if container not found or already stopped."""
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            self._run("docker", "stop", container)
+            return True
+        except DockerCommandError:
+            return False
+
+    def rm(self, container: str, force: bool = False) -> bool:
+        """Remove a container. Returns True on success, False if container not found."""
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            cmd = ["docker", "rm"]
+            if force:
+                cmd.append("-f")
+            cmd.append(container)
+            self._run(*cmd)
+            return True
+        except DockerCommandError:
+            return False
+
+    def logs(self, container: str, follow: bool = False, tail: Optional[int] = None) -> str:
+        """
+        Get container logs.
+
+        Args:
+            container: Container name or ID
+            follow: Stream logs (default: False)
+            tail: Number of lines to show from the end (default: all)
+
+        Returns:
+            str: Container logs
+
+        Example:
+            ```python
+            logs = sandbox.docker.logs("my-container")
+            print(logs)
+            ```
+        """
+        cmd = ["docker", "logs"]
+        if follow:
+            cmd.append("-f")
+        if tail is not None:
+            cmd.extend(["--tail", str(tail)])
+        cmd.append(container)
+        result = self._run(*cmd)
+        return result.stdout
+
+    def exec(self, container: str, command: Union[str, List[str]], **kwargs) -> "SandboxProcess":
+        """Execute command in running container."""
+        cmd = ["docker", "exec", container]
+        if isinstance(command, str):
+            cmd.append(command)
+        else:
+            cmd.extend(command)
+        return self._exec(*cmd)
+
+    # === Image Operations ===
+
+    def pull(self, image: str, quiet: bool = False) -> DockerResult:
+        """
+        Pull an image.
+
+        Args:
+            image: Image to pull (e.g. "nginx:latest")
+            quiet: Suppress verbose output
+
+        Returns:
+            DockerResult: Result with streaming logs
+
+        Example:
+            ```python
+            # Pull and see progress
+            result = sandbox.docker.pull("nginx:latest")
+            for line in result.logs():
+                print(line)  # See pull progress
+
+            # Or just wait
+            result = sandbox.docker.pull("nginx:latest")
+            if result.success:
+                print("Pull succeeded!")
+            ```
+        """
+        # Ensure authentication before pull operations
+        if not self._authenticated:
+            self._auto_login()
+
+        cmd = ["docker", "pull"]
+        if quiet:
+            cmd.append("-q")
+        cmd.append(image)
+        return self._result(*cmd)
+
+    def build(
+        self,
+        tag: str,
+        context: str = ".",
+        dockerfile: Optional[str] = None,
+        build_args: Optional[Dict[str, str]] = None,
+        no_cache: bool = False,
+        quiet: bool = False,
+    ) -> DockerResult:
+        """
+        Build a Docker image.
+
+        Args:
+            tag: Image tag (e.g. "myapp:v1")
+            context: Build context path
+            dockerfile: Path to Dockerfile
+            build_args: Build arguments
+            no_cache: Don't use cache
+            quiet: Suppress output
+
+        Returns:
+            DockerResult: Result with streaming build logs
+
+        Example:
+            ```python
+            # Build and stream logs
+            result = sandbox.docker.build("myapp:v1", context=".")
+            for line in result.logs():
+                print(line)  # See build progress
+
+            # Or wait for completion
+            result = sandbox.docker.build("myapp:v1", context=".")
+            if result.success:
+                print("Build succeeded!")
+            else:
+                print(f"Build failed: {result.stderr}")
+            ```
+        """
+        # Ensure authentication before build operations
+        if not self._authenticated:
+            self._auto_login()
+
+        cmd = ["docker", "build", "-t", tag]
+
+        # Use host networking for gVisor
+        # Safe because "host" = sandbox's network namespace, still isolated
+        cmd.extend(["--network", "host"])
+
+        if dockerfile:
+            cmd.extend(["-f", dockerfile])
+
+        if build_args:
+            for k, v in build_args.items():
+                cmd.extend(["--build-arg", f"{k}={v}"])
+
+        if no_cache:
+            cmd.append("--no-cache")
+
+        if quiet:
+            cmd.append("--quiet")
+
+        cmd.append(context)
+        return self._result(*cmd)
+
+    def images(self, quiet: bool = False) -> Union[List[str], str]:
+        """
+        List images.
+
+        Args:
+            quiet: Only return image IDs
+
+        Returns:
+            List[str]: Image IDs if quiet=True
+            str: Formatted table if quiet=False
+        """
+        cmd = ["docker", "images"]
+        if quiet:
+            cmd.append("-q")
+
+        output = self._run(*cmd)
+        return output.split("\n") if quiet and output else output
+
+    def rmi(self, image: str, force: bool = False) -> bool:
+        """Remove an image. Returns True on success, False if image not found or in use."""
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            cmd = ["docker", "rmi"]
+            if force:
+                cmd.append("-f")
+            cmd.append(image)
+            self._run(*cmd)
+            return True
+        except DockerCommandError:
+            return False
+
+    def push(self, image: str) -> bool:
+        """Push an image to registry. Returns True on success, False if not authenticated or network error."""
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            self._run("docker", "push", image)
+            return True
+        except DockerCommandError:
+            return False
+
+    def tag(self, source: str, target: str) -> bool:
+        """Tag an image. Returns True on success, False if source image not found."""
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            self._run("docker", "tag", source, target)
+            return True
+        except DockerCommandError:
+            return False
+
+    # === Authentication ===
+
+    def login(
+        self,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        registry: Optional[str] = None,
+    ) -> bool:
+        """
+        Login to a Docker registry.
+
+        Args:
+            username: Docker registry username. If not provided, reads from DOCKER_USERNAME env var.
+            password: Docker registry password. If not provided, reads from DOCKER_PASSWORD env var.
+            registry: Docker registry URL. If not provided, defaults to Docker Hub.
+
+        Returns:
+            bool: True if login succeeded, False otherwise.
+
+        Example:
+            ```python
+            # Login with explicit credentials
+            sandbox.docker.login(username="myuser", password="mypass")
+
+            # Login using environment variables (DOCKER_USERNAME, DOCKER_PASSWORD)
+            sandbox.docker.login()
+
+            # Login to a private registry
+            sandbox.docker.login(username="myuser", password="mypass", registry="registry.example.com")
+            ```
+        """
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            # Get credentials from env if not provided
+            if not username:
+                proc = self.sandbox_instance.process.exec("printenv", "DOCKER_USERNAME")
+                proc.wait()
+                username = proc.stdout.read().strip()
+
+            if not password:
+                proc = self.sandbox_instance.process.exec("printenv", "DOCKER_PASSWORD")
+                proc.wait()
+                password = proc.stdout.read().strip()
+
+            if not username or not password:
+                return False
+
+            # Use docker login with password-stdin for security
+            # Pass password via stdin using process env to avoid shell escaping issues
+            registry_arg = f" {shlex.quote(registry)}" if registry else ""
+            login_cmd = (
+                f"docker login --username {shlex.quote(username)} --password-stdin{registry_arg}"
+            )
+
+            # Use printf instead of echo to handle special characters in password
+            cmd = ["sh", "-c", f"printf '%s' {shlex.quote(password)} | {login_cmd}"]
+
+            p = self._exec(*cmd)
+            exit_code = p.wait()
+
+            if exit_code == 0:
+                self._authenticated = True
+                return True
+            return False
+        except (DockerCommandError, Exception):
+            return False
+
+    # === Docker Compose ===
+
+    def _create_compose_override(self, file: str, cwd: Optional[str] = None) -> str:
+        """
+        Create gVisor-compatible compose override file.
+
+        Args:
+            file: Path to docker-compose file
+            cwd: Working directory
+
+        Returns:
+            str: Path to override file in sandbox
+        """
+        compose_file_path = file if file.startswith("/") else f"{cwd or '.'}/{file}"
+
+        # Download and parse compose file
+        service_names = []
+        services_with_build = set()
+        try:
+            import os
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
+                local_compose_path = tmp_file.name
+
+            try:
+                self.sandbox_instance.fs.download_file(compose_file_path, local_compose_path)
+                with open(local_compose_path, "r") as f:
+                    compose_data = yaml.safe_load(f.read())
+                    if compose_data and "services" in compose_data:
+                        service_names = list(compose_data["services"].keys())
+                        for svc_name, svc_config in compose_data["services"].items():
+                            if isinstance(svc_config, dict) and "build" in svc_config:
+                                services_with_build.add(svc_name)
+            finally:
+                if os.path.exists(local_compose_path):
+                    os.unlink(local_compose_path)
+        except Exception:
+            pass
+
+        # Generate override
+        override_path = "/tmp/.docker-compose-override.yml"
+        if service_names:
+            override_content = "services:\n"
+            for service_name in service_names:
+                override_content += f"  {service_name}:\n"
+                override_content += "    network_mode: host\n"
+                # Map all service names to localhost for inter-service communication
+                if len(service_names) > 1:
+                    override_content += "    extra_hosts:\n"
+                    for other_service in service_names:
+                        override_content += f"      - \"{other_service}:127.0.0.1\"\n"
+                if service_name in services_with_build:
+                    override_content += "    build:\n"
+                    override_content += "      network: host\n"
+        else:
+            override_content = (
+                "services:\n  default:\n    network_mode: host\n    build:\n      network: host\n"
+            )
+
+        # Upload override
+        import os
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp_file:
+            tmp_file.write(override_content)
+            tmp_file.flush()
+            local_override_path = tmp_file.name
+
+        try:
+            self.sandbox_instance.fs.upload_file(local_override_path, override_path)
+        finally:
+            if os.path.exists(local_override_path):
+                os.unlink(local_override_path)
+
+        return override_path
+
+    def compose_up(
+        self,
+        file: str = "docker-compose.yml",
+        detach: bool = True,
+        build: bool = False,
+        cwd: Optional[str] = None,
+    ) -> "DockerComposeStack":
+        """
+        Start services from docker-compose file.
+
+        Note: Automatically configures host networking for gVisor compatibility.
+        All services will use the host network - ports are directly accessible.
+
+        Args:
+            file: Path to docker-compose file (default: "docker-compose.yml")
+            detach: Run in background (default: True)
+            build: Build images before starting (default: False)
+            cwd: Working directory to run compose from (default: None, uses sandbox's current directory)
+
+        Returns:
+            DockerComposeStack: Object representing the running stack
+
+        Example:
+            ```python
+            # Start services
+            stack = sandbox.docker.compose_up()
+
+            # Get logs
+            logs = stack.logs("web")
+            print(logs)
+
+            # Stop stack
+            stack.stop()
+            ```
+        """
+        if not self._authenticated:
+            self._auto_login()
+
+        override_path = self._create_compose_override(file, cwd)
+
+        # Parse service names for the DockerComposeStack object
+        compose_file_path = file if file.startswith("/") else f"{cwd or '.'}/{file}"
+        service_names = []
+        try:
+            import os
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
+                local_compose_path = tmp_file.name
+            try:
+                self.sandbox_instance.fs.download_file(compose_file_path, local_compose_path)
+                with open(local_compose_path, "r") as f:
+                    compose_data = yaml.safe_load(f.read())
+                    if compose_data and "services" in compose_data:
+                        service_names = list(compose_data["services"].keys())
+            finally:
+                if os.path.exists(local_compose_path):
+                    os.unlink(local_compose_path)
+        except Exception:
+            pass
+
+        cmd = ["docker-compose", "-f", file, "-f", override_path, "up"]
+        if detach:
+            cmd.append("-d")
+        if build:
+            cmd.append("--build")
+
+        self._run(*cmd, cwd=cwd)
+        return DockerComposeStack(self, file, cwd, override_path, service_names)
+
+    def compose_down(
+        self,
+        file: str = "docker-compose.yml",
+        volumes: bool = False,
+        cwd: Optional[str] = None,
+    ) -> bool:
+        """
+        Stop and remove compose services.
+
+        Args:
+            file: Path to docker-compose file (default: "docker-compose.yml")
+            volumes: Also remove volumes (default: False)
+            cwd: Working directory to run compose from (default: None)
+
+        Returns:
+            bool: True on success, False if compose file not found.
+        """
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            override_path = self._create_compose_override(file, cwd)
+            cmd = ["docker-compose", "-f", file, "-f", override_path, "down"]
+            if volumes:
+                cmd.append("-v")
+            self._run(*cmd, cwd=cwd)
+            return True
+        except DockerCommandError:
+            return False
+
+    def compose_logs(
+        self,
+        file: str = "docker-compose.yml",
+        follow: bool = False,
+        cwd: Optional[str] = None,
+    ) -> "SandboxProcess":
+        """
+        View compose service logs.
+
+        Args:
+            file: Path to docker-compose file (default: "docker-compose.yml")
+            follow: Follow log output (default: False)
+            cwd: Working directory to run compose from (default: None)
+
+        Returns:
+            SandboxProcess: Process object for streaming logs
+        """
+        cmd = ["docker-compose", "-f", file, "logs"]
+        if follow:
+            cmd.append("-f")
+
+        if cwd:
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
+        return self._exec(*cmd)
+
+    def compose_ps(self, file: str = "docker-compose.yml", cwd: Optional[str] = None) -> str:
+        """List compose services."""
+        override_path = self._create_compose_override(file, cwd)
+        cmd = ["docker-compose", "-f", file, "-f", override_path, "ps"]
+        result = self._run(*cmd, cwd=cwd)
+        return result.stdout
+
+    def compose_build(
+        self,
+        file: str = "docker-compose.yml",
+        no_cache: bool = False,
+        pull: bool = False,
+        cwd: Optional[str] = None,
+    ) -> "SandboxProcess":
+        """
+        Build or rebuild services from docker-compose file.
+
+        Args:
+            file: Path to docker-compose file (default: "docker-compose.yml")
+            no_cache: Don't use cache when building (default: False)
+            pull: Always pull newer versions of images (default: False)
+            cwd: Working directory to run compose from (default: None)
+
+        Returns:
+            SandboxProcess: Process object for the compose build command
+
+        Example:
+            ```python
+            # Build services
+            process = sandbox.docker.compose_build()
+            process.wait()
+
+            # Build without cache
+            process = sandbox.docker.compose_build(no_cache=True, cwd=\"/workspace/myapp\")
+            for line in process.logs:
+                print(line)
+            ```
+        """
+
+        # Ensure authentication before compose build operations
+        if not self._authenticated:
+            self._auto_login()
+
+        cmd = ["docker-compose", "-f", file, "build"]
+
+        if no_cache:
+            cmd.append("--no-cache")
+        if pull:
+            cmd.append("--pull")
+
+        env = {}
+
+        if cwd:
+            return self.sandbox_instance.process.exec(*cmd, cwd=cwd, env=env)
+
+        return self.sandbox_instance.process.exec(*cmd, env=env)
+
+    # === Volumes ===
+
+    def volume_create(self, name: str) -> bool:
+        """Create a volume. Returns True on success, False if volume already exists."""
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            self._run("docker", "volume", "create", name)
+            return True
+        except DockerCommandError:
+            return False
+
+    def volume_rm(self, name: str, force: bool = False) -> bool:
+        """Remove a volume. Returns True on success, False if volume not found or in use."""
+        from beta9.exceptions import DockerCommandError
+
+        try:
+            cmd = ["docker", "volume", "rm"]
+            if force:
+                cmd.append("-f")
+            cmd.append(name)
+            self._run(*cmd)
+            return True
+        except DockerCommandError:
+            return False
+
+    def volume_ls(self, quiet: bool = False) -> Union[List[str], str]:
+        """List volumes."""
+        cmd = ["docker", "volume", "ls"]
+        if quiet:
+            cmd.append("-q")
+        output = self._run(*cmd)
+        return output.split("\n") if quiet and output else output

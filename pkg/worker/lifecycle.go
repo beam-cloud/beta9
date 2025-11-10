@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -21,28 +21,17 @@ import (
 	goproc "github.com/beam-cloud/goproc/pkg"
 	"tags.cncf.io/container-device-interface/pkg/cdi"
 
-	runc "github.com/beam-cloud/go-runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 )
 
 const (
-	baseConfigPath            string        = "/tmp"
-	defaultContainerDirectory string        = types.WorkerUserCodeVolume
-	specBaseName              string        = "config.json"
-	initialSpecBaseName       string        = "initial_config.json"
-	runcEventsInterval        time.Duration = 5 * time.Second
-	containerInnerPort        int           = 8001 // Use a fixed port inside the container
+	baseConfigPath            string = "/tmp"
+	defaultContainerDirectory string = types.WorkerUserCodeVolume
+	specBaseName              string = "config.json"
+	initialSpecBaseName       string = "initial_config.json"
+	containerInnerPort        int    = 8001 // Use a fixed port inside the container
 )
-
-//go:embed base_runc_config.json
-var baseRuncConfigRaw string
-
-// These parameters are set when runcResourcesEnforced is enabled in the worker config
-var cgroupV2Parameters map[string]string = map[string]string{
-	// When an OOM occurs within a runc container, the kernel will kill the container and all procceses within it.
-	"memory.oom.group": "1",
-}
 
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
@@ -66,7 +55,7 @@ func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
 	return true
 }
 
-// stopContainer stops a runc container. When force is true, a SIGKILL signal is sent to the container.
+// stopContainer stops a container. When force is true, a SIGKILL signal is sent to the container.
 func (s *Worker) stopContainer(containerId string, kill bool) error {
 	log.Info().Str("container_id", containerId).Msg("stopping container")
 
@@ -76,19 +65,25 @@ func (s *Worker) stopContainer(containerId string, kill bool) error {
 		return nil
 	}
 
-	signal := int(syscall.SIGTERM)
+	signal := syscall.SIGTERM
 	if kill {
-		signal = int(syscall.SIGKILL)
+		signal = syscall.SIGKILL
 	}
 
-	err := s.runcHandle.Kill(context.Background(), instance.Id, signal, &runc.KillOpts{All: true})
+	// Use the runtime that was selected for this container
+	rt := instance.Runtime
+	if rt == nil {
+		rt = s.runtime
+	}
+
+	// Kill the container - this will cause the runtime.Run() call to exit
+	// which triggers all the defers (overlay cleanup, mount cleanup, etc.)
+	err := rt.Kill(context.Background(), instance.Id, signal, &runtime.KillOpts{All: true})
 	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("error stopping container: %v", err)
-		s.containerNetworkManager.TearDown(containerId)
-		return nil
+		log.Debug().Str("container_id", containerId).Err(err).Msg("error killing container (may already be stopped)")
 	}
 
-	log.Info().Str("container_id", containerId).Msg("container stopped")
+	log.Info().Str("container_id", containerId).Msg("container stop signal sent")
 	return nil
 }
 
@@ -120,11 +115,13 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		s.containerGPUManager.UnassignGPUDevices(containerId)
 	}
 
-	// Tear down container network components
-	err := s.containerNetworkManager.TearDown(request.ContainerId)
-	if err != nil {
-		log.Error().Str("container_id", request.ContainerId).Msgf("failed to clean up container network: %v", err)
+	// Tear down container network components - best effort
+	if err := s.containerNetworkManager.TearDown(request.ContainerId); err != nil {
+		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("failed to clean up container network")
 	}
+
+	// Clean up upload directory
+	os.RemoveAll(filepath.Join(types.WorkerContainerUploadsHostPath, containerId))
 
 	s.completedRequests <- request
 	s.containerLock.Unlock()
@@ -145,10 +142,18 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		}
 
 		// If the container is still running, stop it. This happens when a sigterm is detected.
-		container, err := s.runcHandle.State(context.TODO(), containerId)
-		if err == nil && container.Status == types.RuncContainerStatusRunning {
-			if err := s.stopContainer(containerId, true); err != nil {
-				log.Error().Str("container_id", containerId).Msgf("failed to stop container: %v", err)
+		instance, exists := s.containerInstances.Get(containerId)
+		if exists && instance.Runtime != nil {
+			container, err := instance.Runtime.State(context.TODO(), containerId)
+			if err == nil && container.Status == types.RuncContainerStatusRunning {
+				if err := s.stopContainer(containerId, true); err != nil {
+					log.Error().Str("container_id", containerId).Msgf("failed to stop container: %v", err)
+				}
+			}
+
+			// Stop OOM watcher
+			if instance.OOMWatcher != nil {
+				instance.OOMWatcher.Stop()
 			}
 		}
 
@@ -161,9 +166,12 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 func (s *Worker) deleteContainer(containerId string) {
 	s.containerInstances.Delete(containerId)
 
-	_, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(context.Background(), &pb.DeleteContainerStateRequest{ContainerId: containerId}))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := handleGRPCResponse(s.containerRepoClient.DeleteContainerState(ctx, &pb.DeleteContainerStateRequest{ContainerId: containerId}))
 	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to remove container state: %v", err)
+		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to remove remote container state")
 	}
 }
 
@@ -171,17 +179,34 @@ func (s *Worker) deleteContainer(containerId string) {
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
 
+	caps := s.runtime.Capabilities()
+
+	// Gate features based on runtime capabilities
+	if request.CheckpointEnabled && !caps.CheckpointRestore {
+		log.Info().Str("container_id", containerId).
+			Str("runtime", s.runtime.Name()).
+			Msg("disabling checkpoint for runtime without CRIU support")
+
+		request.CheckpointEnabled = false
+		request.Checkpoint = nil
+	}
+
+	if request.RequiresGPU() && !caps.GPU {
+		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
+	}
+
 	s.containerInstances.Set(containerId, &ContainerInstance{
 		Id:        containerId,
 		StubId:    request.StubId,
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
+		Runtime:   s.runtime,
 	})
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Set worker hostname
-	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.runcServer.port)
+	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.containerServer.port)
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
 		ContainerId: containerId,
 		Address:     hostname,
@@ -443,7 +468,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	spec.Process.Args = request.EntryPoint
 	spec.Process.Terminal = false
 
-	if request.Stub.Type.Kind() == types.StubTypePod {
+	if request.Stub.Type.Kind() == types.StubTypePod && options.InitialSpec != nil {
 		if len(request.EntryPoint) == 0 {
 			log.Info().
 				Str("container_id", request.ContainerId).
@@ -463,12 +488,17 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	if throttlingEnabled && (s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced) {
 		spec.Linux.Resources.Unified = cgroupV2Parameters
 
-		if s.config.Worker.ContainerResourceLimits.CPUEnforced {
-			spec.Linux.Resources.CPU = getLinuxCPU(request)
-		}
-
-		if s.config.Worker.ContainerResourceLimits.MemoryEnforced {
-			spec.Linux.Resources.Memory = getLinuxMemory(request)
+		if s.config.Worker.ContainerResourceLimits.CPUEnforced || s.config.Worker.ContainerResourceLimits.MemoryEnforced {
+			resources, err := s.getContainerResources(request)
+			if err != nil {
+				return nil, err
+			}
+			if resources.CPU != nil {
+				spec.Linux.Resources.CPU = resources.CPU
+			}
+			if resources.Memory != nil {
+				spec.Linux.Resources.Memory = resources.Memory
+			}
 		}
 	}
 
@@ -583,6 +613,17 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 	spec.Mounts = append(spec.Mounts, resolvMount)
 
+	// External mount for gVisor file uploads (external mounts bypass directory caching)
+	uploadsPath := filepath.Join(types.WorkerContainerUploadsHostPath, request.ContainerId)
+	if err := os.MkdirAll(uploadsPath, 0755); err == nil {
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Type:        "none",
+			Source:      uploadsPath,
+			Destination: types.WorkerContainerUploadsMountPath,
+			Options:     []string{"rbind", "rw"},
+		})
+	}
+
 	// Add back tmpfs pod/sandbox mounts from initial spec if they exist
 	if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox) && options.InitialSpec != nil {
 		for _, m := range options.InitialSpec.Mounts {
@@ -597,7 +638,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 
 func (s *Worker) newSpecTemplate() (*specs.Spec, error) {
 	var newSpec specs.Spec
-	specTemplate := strings.TrimSpace(string(baseRuncConfigRaw))
+	// Get the appropriate base config for the runtime
+	baseConfig := runtime.GetBaseConfig(s.runtime.Name())
+	specTemplate := strings.TrimSpace(baseConfig)
 	err := json.Unmarshal([]byte(specTemplate), &newSpec)
 	if err != nil {
 		return nil, err
@@ -712,7 +755,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}()
 
 	// Setup container overlay filesystem
-	err := containerInstance.Overlay.Setup()
+	var err error
+	err = containerInstance.Overlay.Setup()
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup overlay: %v", err)
 		return
@@ -729,7 +773,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 
-	if request.RequiresGPU() {
+	// Only inject GPU devices if runtime supports GPU
+	if request.RequiresGPU() && s.runtime.Capabilities().GPU {
 		// Assign n-number of GPUs to a container
 		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
 		if err != nil {
@@ -737,22 +782,25 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		cdiCache := cdi.GetDefaultCache()
+		// Only use CDI if runtime supports it
+		if s.runtime.Capabilities().CDI {
+			cdiCache := cdi.GetDefaultCache()
 
-		var devicesToInject []string
-		for _, device := range assignedDevices {
-			devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
-			devicesToInject = append(devicesToInject, devicePath)
-		}
+			var devicesToInject []string
+			for _, device := range assignedDevices {
+				devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
+				devicesToInject = append(devicesToInject, devicePath)
+			}
 
-		unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
-			return
-		}
-		if len(unresolvable) > 0 {
-			log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
-			return
+			unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
+			if err != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
+				return
+			}
+			if len(unresolvable) > 0 {
+				log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
+				return
+			}
 		}
 	}
 
@@ -779,6 +827,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
+		instance.SandboxProcessManagerReady = false
 		s.containerInstances.Set(containerId, instance)
 
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
@@ -796,7 +845,21 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		})
 	}
 
-	// Write runc config spec to disk
+	// Add Docker capabilities if enabled for sandbox containers with gVisor
+	if request.DockerEnabled && request.Stub.Type.Kind() == types.StubTypeSandbox && s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
+		if runscRuntime, ok := s.runtime.(*runtime.Runsc); ok {
+			runscRuntime.AddDockerInDockerCapabilities(spec)
+			log.Info().Str("container_id", containerId).Msg("added docker capabilities for sandbox container")
+		}
+	}
+
+	// Prepare spec for the selected runtime
+	if err := s.runtime.Prepare(ctx, spec); err != nil {
+		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
+		return
+	}
+
+	// Write container config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
 	if err != nil {
 		return
@@ -805,7 +868,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	configPath := filepath.Join(spec.Root.Path, specBaseName)
 	err = os.WriteFile(configPath, configContents, 0644)
 	if err != nil {
-		log.Error().Str("container_id", containerId).Msgf("failed to write runc config: %v", err)
+		log.Error().Str("container_id", containerId).Msgf("failed to write container config: %v", err)
 		return
 	}
 	request.ConfigPath = configPath
@@ -837,13 +900,34 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
+
+		// For sandboxes, wait for process manager to be ready before allowing exec calls
+		if request.Stub.Type.Kind() == types.StubTypeSandbox {
+			instance, exists := s.containerInstances.Get(containerId)
+			if exists && instance.SandboxProcessManager != nil {
+
+				// Wait for process manager to be ready - this blocks until ready or timeout
+				if s.waitForProcessManager(ctx, containerId, instance) {
+					instance.SandboxProcessManagerReady = true
+					s.containerInstances.Set(containerId, instance)
+
+					// Now that process manager is ready, start Docker daemon if enabled
+					if request.DockerEnabled {
+						go s.startDockerDaemon(ctx, containerId, instance)
+					}
+
+				} else {
+					log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
+				}
+			}
+		}
 	}()
 
 	isOOMKilled := atomic.Bool{}
 	go func() {
 		pid := <-monitorPIDChan
-		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)  // Capture resource usage (cpu/mem/gpu)
-		go s.watchOOMEvents(ctx, request, outputLogger, &isOOMKilled) // Watch for OOM events
+		go s.collectAndSendContainerMetrics(ctx, request, spec, pid)
+		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
 	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
@@ -864,8 +948,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	case types.StopContainerReasonAdmin:
 		exitCode = int(types.ContainerExitCodeAdmin)
 	default:
+		// Check for OOM kill and ensure exit code is 137 for both runc and gVisor
 		if isOOMKilled.Load() {
-			exitCode = int(types.ContainerExitCodeOomKill)
+			exitCode = int(types.ContainerExitCodeOomKill) // 137
+			log.Info().Str("container_id", containerId).Int("exit_code", exitCode).Msg("overriding exit code to 137 for OOM kill")
 		} else if exitCode == int(types.ContainerExitCodeOomKill) || exitCode == -1 {
 			// Exit code will match OOM kill exit code, but container was not OOM killed so override it
 			exitCode = 0
@@ -875,7 +961,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d, stop reason: %s", exitCode, stopReason)
 	outputLogger.Info("", "done", true, "success", exitCode == 0)
 	if containerId != "" {
-		err = s.runcHandle.Delete(s.ctx, containerId, &runc.DeleteOpts{Force: true})
+		// Get the runtime for this container
+		instance, exists := s.containerInstances.Get(containerId)
+		rt := s.runtime
+		if exists && instance.Runtime != nil {
+			rt = instance.Runtime
+		}
+
+		err = rt.Delete(s.ctx, containerId, &runtime.DeleteOpts{Force: true})
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to delete container: %v", err)
 		}
@@ -883,14 +976,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 }
 
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, error) {
+	// Get the runtime for this container
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists {
+		return -1, fmt.Errorf("container instance not found")
+	}
+
+	supportsCheckpoint := instance.Runtime.Capabilities().CheckpointRestore && s.IsCRIUAvailable(request.GpuCount)
+
 	// Handle automatic checkpoint creation if applicable
 	// (This occurs when checkpoint_enabled is true and an existing checkpoint is not available)
-	if s.IsCRIUAvailable(request.GpuCount) && request.CheckpointEnabled {
+	if supportsCheckpoint && request.CheckpointEnabled {
 		go s.attemptAutoCheckpoint(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
 	}
 
 	// Handle restore from checkpoint if available
-	if s.IsCRIUAvailable(request.GpuCount) && request.Checkpoint != nil {
+	if supportsCheckpoint && request.Checkpoint != nil {
 		if request.Checkpoint != nil && request.Checkpoint.Status == string(types.CheckpointStatusAvailable) {
 			checkpointPath := s.checkpointPath(request.Checkpoint.CheckpointId)
 
@@ -923,9 +1024,10 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	bundlePath := filepath.Dir(request.ConfigPath)
-	exitCode, err := s.runcHandle.Run(ctx, request.ContainerId, bundlePath, &runc.CreateOpts{
-		OutputWriter: outputWriter,
-		Started:      startedChan,
+	exitCode, err := instance.Runtime.Run(ctx, request.ContainerId, bundlePath, &runtime.RunOpts{
+		OutputWriter:  outputWriter,
+		Started:       startedChan,
+		DockerEnabled: request.DockerEnabled,
 	})
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
@@ -950,87 +1052,19 @@ func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath strin
 	return common.NewContainerOverlay(request, rootPath, overlayPath)
 }
 
-func (s *Worker) watchOOMEvents(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, isOOMKilled *atomic.Bool) {
-	var (
-		seenEvents  = make(map[string]struct{})
-		ch          <-chan *runc.Event
-		err         error
-		ticker      = time.NewTicker(time.Second)
-		containerId = request.ContainerId
-	)
+func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.LinuxResources, error) {
+	var resources ContainerResources
 
-	defer ticker.Stop()
-
-	eventsCtx, cancelEvents := context.WithCancel(ctx)
-	defer cancelEvents()
-
-	select {
-	case <-ctx.Done():
-		return
-	default:
-		ch, err = s.runcHandle.Events(eventsCtx, containerId, time.Second)
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to open runc events channel: %v", err)
-			return
-		}
+	// Get runtime for this container
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if exists && instance.Runtime != nil && instance.Runtime.Name() == types.ContainerRuntimeGvisor.String() {
+		resources = NewGvisorResources()
+	} else {
+		resources = NewRuncResources()
 	}
 
-	maxTries, tries := 10, 0
-	baseBackoff := time.Second
-	maxBackoff := time.Minute
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			seenEvents = make(map[string]struct{})
-		case event, ok := <-ch:
-			if !ok {
-				if tries == maxTries {
-					return
-				}
-
-				backoff := baseBackoff * time.Duration(1<<uint(tries))
-				if backoff > maxBackoff {
-					backoff = maxBackoff
-				}
-
-				tries++
-
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoff):
-					ch, err = s.runcHandle.Events(eventsCtx, containerId, time.Second)
-					if err != nil {
-						log.Error().Str("container_id", containerId).Msgf("failed to open runc events channel: %v", err)
-					}
-				}
-				continue
-			}
-
-			if s.config.DebugMode {
-				log.Info().Str("container_id", containerId).Msgf("received container event: %+v", event)
-			}
-
-			if event.Type == "error" && event.Err != nil && strings.Contains(event.Err.Error(), "file already closed") {
-				log.Warn().Str("container_id", containerId).Msgf("received error event: %s, stopping OOM event monitoring", event.Err.Error())
-				cancelEvents()
-				return
-			}
-
-			if _, ok := seenEvents[event.Type]; ok {
-				continue
-			}
-
-			seenEvents[event.Type] = struct{}{}
-
-			if event.Type == "oom" {
-				isOOMKilled.Store(true)
-				outputLogger.Error("Container was killed due to out-of-memory conditions.")
-				s.eventRepo.PushContainerOOMEvent(containerId, s.workerId, request)
-			}
-		}
-	}
+	return &specs.LinuxResources{
+		CPU:    resources.GetCPU(request),
+		Memory: resources.GetMemory(request),
+	}, nil
 }

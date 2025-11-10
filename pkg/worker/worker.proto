@@ -5,94 +5,94 @@ option go_package = "github.com/beam-cloud/beta9/proto";
 import "gateway.proto";
 import "types.proto";
 
-package runc;
+package container;
 
-service RunCService {
-  rpc RunCKill(RunCKillRequest) returns (RunCKillResponse) {}
-  rpc RunCStatus(RunCStatusRequest) returns (RunCStatusResponse) {}
-  rpc RunCExec(RunCExecRequest) returns (RunCExecResponse) {}
-  rpc RunCStreamLogs(RunCStreamLogsRequest) returns (stream RunCLogEntry) {}
-  rpc RunCArchive(RunCArchiveRequest) returns (stream RunCArchiveResponse) {}
-  rpc RunCCheckpoint(RunCCheckpointRequest) returns (RunCCheckpointResponse) {}
-  rpc RunCSyncWorkspace(gateway.SyncContainerWorkspaceRequest)
+service ContainerService {
+  rpc ContainerKill(ContainerKillRequest) returns (ContainerKillResponse) {}
+  rpc ContainerStatus(ContainerStatusRequest) returns (ContainerStatusResponse) {}
+  rpc ContainerExec(ContainerExecRequest) returns (ContainerExecResponse) {}
+  rpc ContainerStreamLogs(ContainerStreamLogsRequest) returns (stream ContainerLogEntry) {}
+  rpc ContainerArchive(ContainerArchiveRequest) returns (stream ContainerArchiveResponse) {}
+  rpc ContainerCheckpoint(ContainerCheckpointRequest) returns (ContainerCheckpointResponse) {}
+  rpc ContainerSyncWorkspace(gateway.SyncContainerWorkspaceRequest)
       returns (gateway.SyncContainerWorkspaceResponse) {}
-  rpc RunCSandboxExec(RunCSandboxExecRequest)
-      returns (RunCSandboxExecResponse) {}
-  rpc RunCSandboxStatus(RunCSandboxStatusRequest)
-      returns (RunCSandboxStatusResponse) {}
-  rpc RunCSandboxStdout(RunCSandboxStdoutRequest)
-      returns (RunCSandboxStdoutResponse) {}
-  rpc RunCSandboxStderr(RunCSandboxStderrRequest)
-      returns (RunCSandboxStderrResponse) {}
-  rpc RunCSandboxKill(RunCSandboxKillRequest)
-      returns (RunCSandboxKillResponse) {}
-  rpc RunCSandboxListFiles(RunCSandboxListFilesRequest)
-      returns (RunCSandboxListFilesResponse) {}
-  rpc RunCSandboxUploadFile(RunCSandboxUploadFileRequest)
-      returns (RunCSandboxUploadFileResponse) {}
-  rpc RunCSandboxDownloadFile(RunCSandboxDownloadFileRequest)
-      returns (RunCSandboxDownloadFileResponse) {}
-  rpc RunCSandboxStatFile(RunCSandboxStatFileRequest)
-      returns (RunCSandboxStatFileResponse) {}
-  rpc RunCSandboxDeleteFile(RunCSandboxDeleteFileRequest)
-      returns (RunCSandboxDeleteFileResponse) {}
-  rpc RunCSandboxCreateDirectory(RunCSandboxCreateDirectoryRequest)
-      returns (RunCSandboxCreateDirectoryResponse) {}
-  rpc RunCSandboxDeleteDirectory(RunCSandboxDeleteDirectoryRequest)
-      returns (RunCSandboxDeleteDirectoryResponse) {}
-  rpc RunCSandboxExposePort(RunCSandboxExposePortRequest)
-      returns (RunCSandboxExposePortResponse) {}
-  rpc RunCSandboxReplaceInFiles(RunCSandboxReplaceInFilesRequest)
-      returns (RunCSandboxReplaceInFilesResponse) {}
-  rpc RunCSandboxFindInFiles(RunCSandboxFindInFilesRequest)
-      returns (RunCSandboxFindInFilesResponse) {}
-  rpc RunCSandboxListExposedPorts(RunCSandboxListExposedPortsRequest)
-      returns (RunCSandboxListExposedPortsResponse) {}
-  rpc RunCSandboxListProcesses(RunCSandboxListProcessesRequest)
-      returns (RunCSandboxListProcessesResponse) {}
+  rpc ContainerSandboxExec(ContainerSandboxExecRequest)
+      returns (ContainerSandboxExecResponse) {}
+  rpc ContainerSandboxStatus(ContainerSandboxStatusRequest)
+      returns (ContainerSandboxStatusResponse) {}
+  rpc ContainerSandboxStdout(ContainerSandboxStdoutRequest)
+      returns (ContainerSandboxStdoutResponse) {}
+  rpc ContainerSandboxStderr(ContainerSandboxStderrRequest)
+      returns (ContainerSandboxStderrResponse) {}
+  rpc ContainerSandboxKill(ContainerSandboxKillRequest)
+      returns (ContainerSandboxKillResponse) {}
+  rpc ContainerSandboxListFiles(ContainerSandboxListFilesRequest)
+      returns (ContainerSandboxListFilesResponse) {}
+  rpc ContainerSandboxUploadFile(ContainerSandboxUploadFileRequest)
+      returns (ContainerSandboxUploadFileResponse) {}
+  rpc ContainerSandboxDownloadFile(ContainerSandboxDownloadFileRequest)
+      returns (ContainerSandboxDownloadFileResponse) {}
+  rpc ContainerSandboxStatFile(ContainerSandboxStatFileRequest)
+      returns (ContainerSandboxStatFileResponse) {}
+  rpc ContainerSandboxDeleteFile(ContainerSandboxDeleteFileRequest)
+      returns (ContainerSandboxDeleteFileResponse) {}
+  rpc ContainerSandboxCreateDirectory(ContainerSandboxCreateDirectoryRequest)
+      returns (ContainerSandboxCreateDirectoryResponse) {}
+  rpc ContainerSandboxDeleteDirectory(ContainerSandboxDeleteDirectoryRequest)
+      returns (ContainerSandboxDeleteDirectoryResponse) {}
+  rpc ContainerSandboxExposePort(ContainerSandboxExposePortRequest)
+      returns (ContainerSandboxExposePortResponse) {}
+  rpc ContainerSandboxReplaceInFiles(ContainerSandboxReplaceInFilesRequest)
+      returns (ContainerSandboxReplaceInFilesResponse) {}
+  rpc ContainerSandboxFindInFiles(ContainerSandboxFindInFilesRequest)
+      returns (ContainerSandboxFindInFilesResponse) {}
+  rpc ContainerSandboxListExposedPorts(ContainerSandboxListExposedPortsRequest)
+      returns (ContainerSandboxListExposedPortsResponse) {}
+  rpc ContainerSandboxListProcesses(ContainerSandboxListProcessesRequest)
+      returns (ContainerSandboxListProcessesResponse) {}
 }
 
-message RunCKillRequest { string container_id = 1; }
+message ContainerKillRequest { string container_id = 1; }
 
-message RunCKillResponse { bool ok = 1; }
+message ContainerKillResponse { bool ok = 1; }
 
-message RunCExecRequest {
+message ContainerExecRequest {
   string container_id = 1;
   string cmd = 2;
   repeated string env = 3;
 }
 
-message RunCExecResponse { bool ok = 1; }
+message ContainerExecResponse { bool ok = 1; }
 
-message RunCStatusRequest { string container_id = 1; }
+message ContainerStatusRequest { string container_id = 1; }
 
-message RunCStatusResponse { bool running = 1; }
+message ContainerStatusResponse { bool running = 1; }
 
-message RunCStreamLogsRequest { string container_id = 1; }
+message ContainerStreamLogsRequest { string container_id = 1; }
 
-message RunCLogEntry { string msg = 1; }
+message ContainerLogEntry { string msg = 1; }
 
-message RunCArchiveRequest {
+message ContainerArchiveRequest {
   string container_id = 1;
   string image_id = 2;
 }
 
-message RunCArchiveResponse {
+message ContainerArchiveResponse {
   bool done = 1;
   bool success = 2;
   int32 progress = 3;
   string error_msg = 4;
 }
 
-message RunCCheckpointRequest { string container_id = 1; }
+message ContainerCheckpointRequest { string container_id = 1; }
 
-message RunCCheckpointResponse {
+message ContainerCheckpointResponse {
   bool ok = 1;
   string checkpoint_id = 2;
   string error_msg = 3;
 }
 
-message RunCSandboxExecRequest {
+message ContainerSandboxExecRequest {
   string container_id = 1;
   string cmd = 2;
   string cwd = 3;
@@ -100,180 +100,180 @@ message RunCSandboxExecRequest {
   bool interactive = 5;
 }
 
-message RunCSandboxExecResponse {
+message ContainerSandboxExecResponse {
   bool ok = 1;
   string error_msg = 2;
   int32 pid = 3;
 }
 
-message RunCSandboxStatusRequest {
+message ContainerSandboxStatusRequest {
   string container_id = 1;
   int32 pid = 2;
 }
 
-message RunCSandboxStatusResponse {
+message ContainerSandboxStatusResponse {
   bool ok = 1;
   string error_msg = 2;
   string status = 3;
   int32 exit_code = 4;
 }
 
-message RunCSandboxStdoutRequest {
+message ContainerSandboxStdoutRequest {
   string container_id = 1;
   int32 pid = 2;
 }
 
-message RunCSandboxStdoutResponse {
+message ContainerSandboxStdoutResponse {
   bool ok = 1;
   string error_msg = 2;
   string stdout = 3;
 }
 
-message RunCSandboxStderrRequest {
+message ContainerSandboxStderrRequest {
   string container_id = 1;
   int32 pid = 2;
 }
 
-message RunCSandboxStderrResponse {
+message ContainerSandboxStderrResponse {
   bool ok = 1;
   string error_msg = 2;
   string stderr = 3;
 }
 
-message RunCSandboxKillRequest {
+message ContainerSandboxKillRequest {
   string container_id = 1;
   int32 pid = 2;
 }
 
-message RunCSandboxKillResponse {
+message ContainerSandboxKillResponse {
   bool ok = 1;
   string error_msg = 2;
 }
 
-message RunCSandboxListFilesRequest {
+message ContainerSandboxListFilesRequest {
   string container_id = 1;
   string container_path = 2;
 }
 
-message RunCSandboxListFilesResponse {
+message ContainerSandboxListFilesResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated types.FileInfo files = 3;
 }
 
-message RunCSandboxDeleteFileRequest {
+message ContainerSandboxDeleteFileRequest {
   string container_id = 1;
   string container_path = 2;
 }
 
-message RunCSandboxDeleteFileResponse {
+message ContainerSandboxDeleteFileResponse {
   bool ok = 1;
   string error_msg = 2;
 }
 
-message RunCSandboxCreateDirectoryRequest {
+message ContainerSandboxCreateDirectoryRequest {
   string container_id = 1;
   string container_path = 2;
   int32 mode = 3;
 }
 
-message RunCSandboxCreateDirectoryResponse {
+message ContainerSandboxCreateDirectoryResponse {
   bool ok = 1;
   string error_msg = 2;
 }
 
-message RunCSandboxDeleteDirectoryRequest {
+message ContainerSandboxDeleteDirectoryRequest {
   string container_id = 1;
   string container_path = 2;
 }
 
-message RunCSandboxDeleteDirectoryResponse {
+message ContainerSandboxDeleteDirectoryResponse {
   bool ok = 1;
   string error_msg = 2;
 }
 
-message RunCSandboxUploadFileRequest {
+message ContainerSandboxUploadFileRequest {
   string container_id = 1;
   string container_path = 2;
   bytes data = 3;
   int32 mode = 4;
 }
 
-message RunCSandboxUploadFileResponse {
+message ContainerSandboxUploadFileResponse {
   bool ok = 1;
   string error_msg = 2;
 }
 
-message RunCSandboxDownloadFileRequest {
+message ContainerSandboxDownloadFileRequest {
   string container_id = 1;
   string container_path = 2;
 }
 
-message RunCSandboxDownloadFileResponse {
+message ContainerSandboxDownloadFileResponse {
   bool ok = 1;
   string error_msg = 2;
   bytes data = 3;
 }
 
-message RunCSandboxExposePortRequest {
+message ContainerSandboxExposePortRequest {
   string container_id = 1;
   int32 port = 2;
 }
 
-message RunCSandboxExposePortResponse {
+message ContainerSandboxExposePortResponse {
   bool ok = 1;
   string error_msg = 2;
 }
 
-message RunCSandboxStatFileRequest {
+message ContainerSandboxStatFileRequest {
   string container_id = 1;
   string container_path = 2;
 }
 
-message RunCSandboxStatFileResponse {
+message ContainerSandboxStatFileResponse {
   bool ok = 1;
   string error_msg = 2;
   types.FileInfo file_info = 3;
 }
 
-message RunCSandboxReplaceInFilesRequest {
+message ContainerSandboxReplaceInFilesRequest {
   string container_id = 1;
   string container_path = 2;
   string pattern = 3;
   string new_string = 4;
 }
 
-message RunCSandboxReplaceInFilesResponse {
+message ContainerSandboxReplaceInFilesResponse {
   bool ok = 1;
   string error_msg = 2;
 }
 
-message RunCSandboxFindInFilesRequest {
+message ContainerSandboxFindInFilesRequest {
   string container_id = 1;
   string container_path = 2;
   string pattern = 3;
 }
 
-message RunCSandboxFindInFilesResponse {
+message ContainerSandboxFindInFilesResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated types.FileSearchResult results = 3;
 }
 
-message RunCSandboxListExposedPortsRequest {
+message ContainerSandboxListExposedPortsRequest {
   string container_id = 1;
   int32 port = 2;
 }
 
-message RunCSandboxListExposedPortsResponse {
+message ContainerSandboxListExposedPortsResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated int32 exposed_ports = 3;
 }
 
-message RunCSandboxListProcessesRequest { string container_id = 1; }
+message ContainerSandboxListProcessesRequest { string container_id = 1; }
 
-message RunCSandboxListProcessesResponse {
+message ContainerSandboxListProcessesResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated types.ProcessInfo processes = 3;

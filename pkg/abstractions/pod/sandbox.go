@@ -509,7 +509,7 @@ func (s *GenericPodService) SandboxConnect(ctx context.Context, in *pb.PodSandbo
 	}, nil
 }
 
-func (s *GenericPodService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.RunCClient, *types.ContainerState, error) {
+func (s *GenericPodService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {
 	container, err := s.containerRepo.GetContainerState(containerId)
 	if err != nil {
 		return nil, nil, err
@@ -525,7 +525,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 
 	cacheKey := containerId + ":" + token
 	if cached, ok := s.clientCache.Load(cacheKey); ok {
-		if client, ok := cached.(*common.RunCClient); ok {
+		if client, ok := cached.(*common.ContainerClient); ok {
 			return client, container, nil
 		}
 	}
@@ -540,7 +540,7 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 		return nil, nil, err
 	}
 
-	client, err := common.NewRunCClient(hostname, token, conn)
+	client, err := common.NewContainerClient(hostname, token, conn)
 	if err != nil {
 		return nil, nil, err
 	}

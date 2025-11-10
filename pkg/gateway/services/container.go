@@ -135,7 +135,7 @@ func (gws GatewayService) CheckpointContainer(ctx context.Context, in *pb.Checkp
 	}, nil
 }
 
-func (gws *GatewayService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.RunCClient, *types.ContainerState, error) {
+func (gws *GatewayService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {
 	container, err := gws.containerRepo.GetContainerState(containerId)
 	if err != nil {
 		return nil, nil, err
@@ -151,7 +151,7 @@ func (gws *GatewayService) getClient(ctx context.Context, containerId, token str
 
 	cacheKey := containerId + ":" + token
 	if cached, ok := gws.clientCache.Load(cacheKey); ok {
-		if client, ok := cached.(*common.RunCClient); ok {
+		if client, ok := cached.(*common.ContainerClient); ok {
 			return client, container, nil
 		}
 	}
@@ -166,7 +166,7 @@ func (gws *GatewayService) getClient(ctx context.Context, containerId, token str
 		return nil, nil, err
 	}
 
-	client, err := common.NewRunCClient(hostname, token, conn)
+	client, err := common.NewContainerClient(hostname, token, conn)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -101,6 +101,7 @@ class ContainerRequest(betterproto.Message):
     build_registry_credentials: str = betterproto.string_field(27)
     block_network: bool = betterproto.bool_field(28)
     allow_list: List[str] = betterproto.string_field(29)
+    docker_enabled: bool = betterproto.bool_field(30)
 
 
 @dataclass(eq=False, repr=False)
@@ -250,8 +251,9 @@ class Worker(betterproto.Message):
     requires_pool_selector: bool = betterproto.bool_field(13)
     priority: int = betterproto.int32_field(14)
     preemptable: bool = betterproto.bool_field(15)
-    build_version: str = betterproto.string_field(16)
-    active_containers: List["Container"] = betterproto.message_field(17)
+    runtime: str = betterproto.string_field(16)
+    build_version: str = betterproto.string_field(17)
+    active_containers: List["Container"] = betterproto.message_field(18)
 
 
 @dataclass(eq=False, repr=False)
