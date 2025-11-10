@@ -752,109 +752,55 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	// For gVisor (runsc), write files through the sandbox process manager
-	// This ensures files go through gVisor's VFS and are immediately visible
-	// Host filesystem writes are cached by gVisor's gofer and may not be detected
-	if instance.Spec.Runtime == "runsc" {
-		return s.uploadFileThroughSandbox(ctx, in, instance, containerPath)
-	}
-
-	// For runc, write directly to host filesystem (works fine)
+	// Write to host filesystem - for both runc and runsc
+	// With runsc, the --file-access=shared and --directfs flags should make host changes visible
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+
+	runtimeName := "runc"
+	if instance.Runtime != nil {
+		runtimeName = instance.Runtime.Name()
+	}
 
 	log.Info().
 		Str("container_path", containerPath).
 		Str("host_path", hostPath).
 		Str("container_id", in.ContainerId).
-		Str("runtime", instance.Spec.Runtime).
-		Msg("ContainerSandboxUploadFile (runc)")
+		Str("runtime", runtimeName).
+		Msg("ContainerSandboxUploadFile")
 
 	hostDir := filepath.Dir(hostPath)
 	if err := os.MkdirAll(hostDir, 0755); err != nil {
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("Failed to create directory: %v", err)}, nil
 	}
 
+	// Write file and sync to ensure it's committed to disk
 	err = os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode))
 	if err != nil {
 		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
-}
-
-// uploadFileThroughSandbox writes files through the sandbox process manager for gVisor
-// This avoids gofer caching issues where files written to host aren't visible in container
-func (s *ContainerRuntimeServer) uploadFileThroughSandbox(ctx context.Context, in *pb.ContainerSandboxUploadFileRequest, instance *ContainerInstance, containerPath string) (*pb.ContainerSandboxUploadFileResponse, error) {
-	// Wait for process manager
-	timeout := time.After(10 * time.Second)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for !instance.SandboxProcessManagerReady {
-		select {
-		case <-timeout:
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "Process manager not ready"}, nil
-		case <-ctx.Done():
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: "Request cancelled"}, nil
-		case <-ticker.C:
-			if fresh, exists := s.containerInstances.Get(in.ContainerId); exists {
-				instance = fresh
-			}
-		}
+	// Open and sync the file to ensure it's fully written
+	if f, err := os.OpenFile(hostPath, os.O_RDWR, 0); err == nil {
+		_ = f.Sync()
+		f.Close()
 	}
 
-	// Create parent directory
-	parentDir := filepath.Dir(containerPath)
-	if parentDir != "/" && parentDir != "." {
-		pid, err := instance.SandboxProcessManager.RunCommand([]string{"mkdir", "-p", parentDir}, instance.Spec.Process.Env, "", nil)
-		if err != nil {
-			return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("mkdir failed: %v", err)}, nil
+	// For gVisor, update parent directory mtime to trigger gofer cache invalidation
+	// This helps gVisor detect the new file when listing the directory
+	if instance.Runtime != nil && instance.Runtime.Name() == "runsc" {
+		now := time.Now()
+		if err := os.Chtimes(hostDir, now, now); err != nil {
+			log.Warn().Err(err).Str("dir", hostDir).Msg("Failed to update directory mtime")
 		}
 		
-		for {
-			proc, _ := instance.SandboxProcessManager.GetProcess(pid)
-			if proc == nil || !proc.Running {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	}
-
-	// Write file using cat
-	pid, err := instance.SandboxProcessManager.RunCommand([]string{"sh", "-c", fmt.Sprintf("cat > %s", shellQuote(containerPath))}, instance.Spec.Process.Env, "", in.Data)
-	if err != nil {
-		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("write failed: %v", err)}, nil
-	}
-
-	// Wait for write
-	for {
-		proc, _ := instance.SandboxProcessManager.GetProcess(pid)
-		if proc == nil || !proc.Running {
-			if proc != nil && proc.ExitCode != 0 {
-				return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("write failed with exit code %d", proc.ExitCode)}, nil
-			}
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	// Set permissions
-	pid, _ = instance.SandboxProcessManager.RunCommand([]string{"chmod", fmt.Sprintf("%o", in.Mode), containerPath}, instance.Spec.Process.Env, "", nil)
-	if pid > 0 {
-		for {
-			proc, _ := instance.SandboxProcessManager.GetProcess(pid)
-			if proc == nil || !proc.Running {
-				break
-			}
-			time.Sleep(10 * time.Millisecond)
+		// Also sync the parent directory
+		if dir, err := os.Open(hostDir); err == nil {
+			_ = dir.Sync()
+			dir.Close()
 		}
 	}
 
 	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Context, in *pb.ContainerSandboxCreateDirectoryRequest) (*pb.ContainerSandboxCreateDirectoryResponse, error) {
