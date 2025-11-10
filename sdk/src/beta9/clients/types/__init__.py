@@ -99,7 +99,8 @@ class ContainerRequest(betterproto.Message):
     config_path: str = betterproto.string_field(25)
     image_credentials: str = betterproto.string_field(26)
     build_registry_credentials: str = betterproto.string_field(27)
-    docker_enabled: bool = betterproto.bool_field(28)
+    block_network: bool = betterproto.bool_field(28)
+    docker_enabled: bool = betterproto.bool_field(29)
 
 
 @dataclass(eq=False, repr=False)
@@ -249,8 +250,9 @@ class Worker(betterproto.Message):
     requires_pool_selector: bool = betterproto.bool_field(13)
     priority: int = betterproto.int32_field(14)
     preemptable: bool = betterproto.bool_field(15)
-    build_version: str = betterproto.string_field(16)
-    active_containers: List["Container"] = betterproto.message_field(17)
+    runtime: str = betterproto.string_field(16)
+    build_version: str = betterproto.string_field(17)
+    active_containers: List["Container"] = betterproto.message_field(18)
 
 
 @dataclass(eq=False, repr=False)

@@ -228,6 +228,7 @@ type ContainerRequest struct {
 	ConfigPath               string          `json:"config_path"`
 	ImageCredentials         string          `json:"image_credentials"`
 	BuildRegistryCredentials string          `json:"build_registry_credentials"`
+	BlockNetwork             bool            `json:"block_network"`
 	DockerEnabled            bool            `json:"docker_enabled"` // Enable Docker-in-Docker (gVisor only)
 }
 
@@ -303,6 +304,7 @@ func (c *ContainerRequest) ToProto() *pb.ContainerRequest {
 		CheckpointEnabled:        c.CheckpointEnabled,
 		Checkpoint:               checkpoint,
 		BuildRegistryCredentials: c.BuildRegistryCredentials,
+		BlockNetwork:             c.BlockNetwork,
 		DockerEnabled:            c.DockerEnabled,
 	}
 }
@@ -354,6 +356,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Ports:                    in.Ports,
 		Checkpoint:               checkpoint,
 		BuildRegistryCredentials: in.BuildRegistryCredentials,
+		BlockNetwork:             in.BlockNetwork,
 		DockerEnabled:            in.DockerEnabled,
 	}
 }

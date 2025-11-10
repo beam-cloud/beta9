@@ -225,13 +225,30 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	if err != nil {
 		return err
 	}
-	defer netns.Set(hostNS) // Reset to the original namespace after setting up the container network
 
-	return m.configureContainerNetwork(&containerNetworkConfigOpts{
+	err = m.configureContainerNetwork(&containerNetworkConfigOpts{
 		containerId:   containerId,
 		containerVeth: containerVeth,
 		request:       request,
 	})
+
+	// Switch back to host namespace before setting up BlockNetwork rules
+	if nsErr := netns.Set(hostNS); nsErr != nil {
+		return fmt.Errorf("failed to switch back to host namespace: %w", nsErr)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// Block network in host namespace (must be done in host namespace to affect forwarding)
+	if request.BlockNetwork {
+		if err := m.setupBlockNetwork(containerId, request); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName string) error {
@@ -509,6 +526,50 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 		m.containerInstances.Set(opts.containerId, containerInstance)
 	}
 
+	return nil
+}
+
+func (m *ContainerNetworkManager) setupBlockNetwork(containerId string, request *types.ContainerRequest) error {
+	// Get container IP
+	containerIpResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIp(m.ctx, &pb.GetContainerIpRequest{
+		NetworkPrefix: m.networkPrefix,
+		ContainerId:   containerId,
+	}))
+	if err != nil {
+		return err
+	}
+
+	truncatedContainerId := containerId[len(containerId)-5:]
+	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
+	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
+
+	containerIp := containerIpResponse.IpAddress
+
+	// Block IPv4 outbound traffic (but allow reply packets for exposed ports)
+	err = m.ipt.InsertUnique("filter", "FORWARD", 1, "-s", containerIp, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", comment)
+	if err != nil {
+		return err
+	}
+
+	// Block IPv6 outbound traffic if enabled (but allow reply packets for exposed ports)
+	if m.ipt6 != nil {
+		// Calculate the corresponding IPv6 address using the last octet of the IPv4 address
+		ip := net.ParseIP(containerIp)
+		if ip == nil {
+			return fmt.Errorf("invalid IPv4 address: %s", containerIp)
+		}
+		ipv4LastOctet := int(ip.To4()[3])
+		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
+		ipv6Prefix := ipv6Net.IP.String()
+		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
+
+		err = m.ipt6.InsertUnique("filter", "FORWARD", 1, "-s", ipv6Address, "-o", m.defaultLink.Attrs().Name, "-m", "conntrack", "!", "--ctstate", "ESTABLISHED,RELATED", "-j", "DROP", "-m", "comment", "--comment", comment)
+		if err != nil {
+			return err
+		}
+	}
+
+	log.Info().Str("container_id", containerId).Str("ip_address", containerIp).Msg("outbound network access blocked for container")
 	return nil
 }
 

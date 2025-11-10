@@ -1481,6 +1481,9 @@
         "tcp": {
           "type": "boolean"
         },
+        "blockNetwork": {
+          "type": "boolean"
+        },
         "dockerEnabled": {
           "type": "boolean"
         }
@@ -2322,6 +2325,9 @@
         },
         "preemptable": {
           "type": "boolean"
+        },
+        "runtime": {
+          "type": "string"
         },
         "buildVersion": {
           "type": "string"

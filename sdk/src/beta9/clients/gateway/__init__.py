@@ -343,7 +343,8 @@ class GetOrCreateStubRequest(betterproto.Message):
     inputs: "Schema" = betterproto.message_field(35)
     outputs: "Schema" = betterproto.message_field(36)
     tcp: bool = betterproto.bool_field(37)
-    docker_enabled: bool = betterproto.bool_field(38)
+    block_network: bool = betterproto.bool_field(38)
+    docker_enabled: bool = betterproto.bool_field(39)
 
 
 @dataclass(eq=False, repr=False)

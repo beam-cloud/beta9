@@ -85,6 +85,7 @@ func (i *podInstance) startContainers(containersToRun int) error {
 			Stub:              *i.Stub,
 			CheckpointEnabled: checkpointEnabled,
 			Ports:             ports,
+			BlockNetwork:      i.StubConfig.BlockNetwork,
 			DockerEnabled:     i.StubConfig.DockerEnabled,
 		}
 
