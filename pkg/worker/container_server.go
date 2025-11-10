@@ -752,9 +752,22 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 		containerPath = filepath.Join(instance.Spec.Process.Cwd, containerPath)
 	}
 
-	// Write to host filesystem - for both runc and runsc
-	// With runsc, the --file-access=shared and --directfs flags should make host changes visible
-	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
+	// Determine host path to write to
+	var hostPath string
+	
+	// Special handling for /tmp/.beta9 - this is a dedicated bind mount for file uploads
+	// External mounts in gVisor are always shared (no caching), ensuring immediate visibility
+	if strings.HasPrefix(containerPath, "/tmp/.beta9/") || containerPath == "/tmp/.beta9" {
+		// Map to the upload-specific host directory
+		relPath := strings.TrimPrefix(containerPath, "/tmp/.beta9")
+		if relPath == "" {
+			relPath = "/"
+		}
+		hostPath = filepath.Join("/tmp", "container-uploads", in.ContainerId, relPath)
+	} else {
+		// Use standard overlay path mapping
+		hostPath = s.getHostPathFromContainerPath(containerPath, instance)
+	}
 
 	runtimeName := "runc"
 	if instance.Runtime != nil {

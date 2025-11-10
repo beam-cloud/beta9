@@ -2430,7 +2430,9 @@ class SandboxDockerManager:
 
         # Create override file to force gVisor network compatibility
         # Use network_mode: host for each service to avoid network alias issues
-        override_path = "/tmp/.docker-compose-gvisor-override.yml"
+        # Use /tmp/.beta9 which is a dedicated bind mount (external mount in gVisor)
+        # External mounts are always shared and bypass gVisor's directory caching
+        override_path = "/tmp/.beta9/docker-compose-override.yml"
         
         if service_names:
             # Generate override for each service with network_mode: host

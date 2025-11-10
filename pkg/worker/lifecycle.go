@@ -120,6 +120,12 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msg("failed to clean up container network")
 	}
 
+	// Clean up the upload directory for this container
+	uploadsPath := filepath.Join("/tmp", "container-uploads", containerId)
+	if err := os.RemoveAll(uploadsPath); err != nil {
+		log.Warn().Str("container_id", containerId).Err(err).Msg("failed to clean up uploads directory")
+	}
+
 	s.completedRequests <- request
 	s.containerLock.Unlock()
 
@@ -609,6 +615,19 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	spec.Mounts = append(spec.Mounts, resolvMount)
+
+	// Add a dedicated bind mount for file uploads
+	// External mounts in gVisor are always shared (no caching), which ensures
+	// files uploaded via fs.upload_file() are immediately visible in the container
+	uploadsHostPath := filepath.Join("/tmp", "container-uploads", request.ContainerId)
+	if err := os.MkdirAll(uploadsHostPath, 0755); err == nil {
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Type:        "none",
+			Source:      uploadsHostPath,
+			Destination: "/tmp/.beta9",
+			Options:     []string{"rbind", "rw"},
+		})
+	}
 
 	// Add back tmpfs pod/sandbox mounts from initial spec if they exist
 	if (request.Stub.Type.Kind() == types.StubTypePod || request.Stub.Type.Kind() == types.StubTypeSandbox) && options.InitialSpec != nil {
