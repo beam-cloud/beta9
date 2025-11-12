@@ -776,10 +776,10 @@ func (s *ContainerRuntimeServer) ContainerSandboxUploadFile(ctx context.Context,
 	// For runc: direct write to overlay
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
-		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to create directory for %s: %s", containerPath, err.Error())}, nil
 	}
 	if err := os.WriteFile(hostPath, in.Data, os.FileMode(in.Mode)); err != nil {
-		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.ContainerSandboxUploadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to write file to %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.ContainerSandboxUploadFileResponse{Ok: true}, nil
@@ -802,7 +802,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxCreateDirectory(ctx context.Con
 
 	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
 	if err := os.MkdirAll(hostPath, os.FileMode(in.Mode)); err != nil {
-		return &pb.ContainerSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.ContainerSandboxCreateDirectoryResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to create directory %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.ContainerSandboxCreateDirectoryResponse{Ok: true}, nil
@@ -825,7 +825,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteDirectory(ctx context.Con
 
 	hostPath := s.getHostPathFromContainerPath(filepath.Clean(containerPath), instance)
 	if err := os.RemoveAll(hostPath); err != nil {
-		return &pb.ContainerSandboxDeleteDirectoryResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.ContainerSandboxDeleteDirectoryResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to delete directory %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.ContainerSandboxDeleteDirectoryResponse{Ok: true}, nil
@@ -850,7 +850,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxDownloadFile(ctx context.Contex
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	data, err := os.ReadFile(hostPath)
 	if err != nil {
-		return &pb.ContainerSandboxDownloadFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.ContainerSandboxDownloadFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to read file from %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.ContainerSandboxDownloadFileResponse{Ok: true, Data: data}, nil
@@ -875,7 +875,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxDeleteFile(ctx context.Context,
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	err = os.RemoveAll(hostPath)
 	if err != nil {
-		return &pb.ContainerSandboxDeleteFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.ContainerSandboxDeleteFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to delete file %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.ContainerSandboxDeleteFileResponse{Ok: true}, nil
@@ -900,7 +900,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatFile(ctx context.Context, i
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	stat, err := os.Stat(hostPath)
 	if err != nil {
-		return &pb.ContainerSandboxStatFileResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.ContainerSandboxStatFileResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to stat file %s: %s", containerPath, err.Error())}, nil
 	}
 
 	return &pb.ContainerSandboxStatFileResponse{Ok: true, FileInfo: &pb.FileInfo{
@@ -934,14 +934,14 @@ func (s *ContainerRuntimeServer) ContainerSandboxListFiles(ctx context.Context, 
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	files, err := os.ReadDir(hostPath)
 	if err != nil {
-		return &pb.ContainerSandboxListFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.ContainerSandboxListFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to list files in %s: %s", containerPath, err.Error())}, nil
 	}
 
 	responseFiles := make([]*pb.FileInfo, 0)
 	for _, file := range files {
 		stat, err := file.Info()
 		if err != nil {
-			return &pb.ContainerSandboxListFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			return &pb.ContainerSandboxListFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to get file info for %s: %s", file.Name(), err.Error())}, nil
 		}
 
 		responseFiles = append(responseFiles, &pb.FileInfo{
@@ -1032,13 +1032,13 @@ func (s *ContainerRuntimeServer) ContainerSandboxReplaceInFiles(ctx context.Cont
 	hostPath := s.getHostPathFromContainerPath(containerPath, instance)
 	stagedFiles, err := stageFilesForReplacement(hostPath, in.Pattern, in.NewString)
 	if err != nil {
-		return &pb.ContainerSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+		return &pb.ContainerSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to replace in files at %s: %s", containerPath, err.Error())}, nil
 	}
 
 	for _, stagedFile := range stagedFiles {
 		err = os.WriteFile(stagedFile.Path, []byte(stagedFile.Content), 0644)
 		if err != nil {
-			return &pb.ContainerSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: err.Error()}, nil
+			return &pb.ContainerSandboxReplaceInFilesResponse{Ok: false, ErrorMsg: fmt.Sprintf("failed to write replaced file %s: %s", stagedFile.Path, err.Error())}, nil
 		}
 	}
 
@@ -1091,7 +1091,7 @@ func (s *ContainerRuntimeServer) ContainerSandboxFindInFiles(ctx context.Context
 		}
 		return &pb.ContainerSandboxFindInFilesResponse{
 			Ok:       false,
-			ErrorMsg: fmt.Sprintf("ripgrep failed: %v, stderr: %s", err, stderr.String()),
+			ErrorMsg: fmt.Sprintf("failed to search for '%s' in %s: ripgrep failed: %v, stderr: %s", in.Pattern, containerPath, err, stderr.String()),
 		}, nil
 	}
 

@@ -168,7 +168,7 @@ func (s *GenericPodService) SandboxUploadFile(ctx context.Context, in *pb.PodSan
 	if err != nil {
 		return &pb.PodSandboxUploadFileResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to upload file to sandbox",
+			ErrorMsg: fmt.Sprintf("Failed to upload file '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
 
@@ -199,7 +199,7 @@ func (s *GenericPodService) SandboxDownloadFile(ctx context.Context, in *pb.PodS
 	if err != nil {
 		return &pb.PodSandboxDownloadFileResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to download file from sandbox",
+			ErrorMsg: fmt.Sprintf("Failed to download file '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
 
@@ -231,7 +231,7 @@ func (s *GenericPodService) SandboxDeleteFile(ctx context.Context, in *pb.PodSan
 	if err != nil {
 		return &pb.PodSandboxDeleteFileResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to delete file in sandbox",
+			ErrorMsg: fmt.Sprintf("Failed to delete file '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
 
@@ -262,7 +262,7 @@ func (s *GenericPodService) SandboxCreateDirectory(ctx context.Context, in *pb.P
 	if err != nil {
 		return &pb.PodSandboxCreateDirectoryResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to create dir in sandbox",
+			ErrorMsg: fmt.Sprintf("Failed to create directory '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
 
@@ -293,7 +293,7 @@ func (s *GenericPodService) SandboxDeleteDirectory(ctx context.Context, in *pb.P
 	if err != nil {
 		return &pb.PodSandboxDeleteDirectoryResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to delete dir in sandbox",
+			ErrorMsg: fmt.Sprintf("Failed to delete directory '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
 
@@ -361,7 +361,7 @@ func (s *GenericPodService) SandboxStatFile(ctx context.Context, in *pb.PodSandb
 	if err != nil {
 		return &pb.PodSandboxStatFileResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to get file info",
+			ErrorMsg: fmt.Sprintf("Failed to get file info for '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
 
@@ -404,7 +404,7 @@ func (s *GenericPodService) SandboxListFiles(ctx context.Context, in *pb.PodSand
 	if err != nil {
 		return &pb.PodSandboxListFilesResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to list files",
+			ErrorMsg: fmt.Sprintf("Failed to list files in '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
 
@@ -444,7 +444,7 @@ func (s *GenericPodService) SandboxReplaceInFiles(ctx context.Context, in *pb.Po
 	if err != nil {
 		return &pb.PodSandboxReplaceInFilesResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to replace in file",
+			ErrorMsg: fmt.Sprintf("Failed to replace in files at '%s': %s", in.ContainerPath, err.Error()),
 		}, nil
 	}
 
@@ -475,7 +475,7 @@ func (s *GenericPodService) SandboxFindInFiles(ctx context.Context, in *pb.PodSa
 	if err != nil {
 		return &pb.PodSandboxFindInFilesResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to find files",
+			ErrorMsg: fmt.Sprintf("Failed to find '%s' in '%s': %s", in.Pattern, in.ContainerPath, err.Error()),
 		}, nil
 	}
 
