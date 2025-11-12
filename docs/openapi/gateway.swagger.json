@@ -2332,9 +2332,6 @@
         "preemptable": {
           "type": "boolean"
         },
-        "runtime": {
-          "type": "string"
-        },
         "buildVersion": {
           "type": "string"
         },
@@ -2344,6 +2341,9 @@
             "type": "object",
             "$ref": "#/definitions/typesContainer"
           }
+        },
+        "runtime": {
+          "type": "string"
         }
       }
     },

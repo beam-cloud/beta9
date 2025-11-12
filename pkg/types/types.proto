@@ -160,8 +160,7 @@ message MountPointConfig {
 }
 
 message NullTime {
-  google.protobuf.Timestamp time = 1;
-  bool valid = 2;
+  NullTime null_time = 1;
 }
 
 message Object {
@@ -227,9 +226,9 @@ message Worker {
   bool requires_pool_selector = 13;
   int32 priority = 14;
   bool preemptable = 15;
-  string runtime = 16;
-  string build_version = 17;
-  repeated Container active_containers = 18;
+  string build_version = 16;
+  repeated Container active_containers = 17;
+  string runtime = 18;
 }
 
 message WorkerPoolState {

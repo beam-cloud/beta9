@@ -178,8 +178,7 @@ class MountPointConfig(betterproto.Message):
 
 @dataclass(eq=False, repr=False)
 class NullTime(betterproto.Message):
-    time: datetime = betterproto.message_field(1)
-    valid: bool = betterproto.bool_field(2)
+    null_time: "NullTime" = betterproto.message_field(1)
 
 
 @dataclass(eq=False, repr=False)
@@ -251,9 +250,9 @@ class Worker(betterproto.Message):
     requires_pool_selector: bool = betterproto.bool_field(13)
     priority: int = betterproto.int32_field(14)
     preemptable: bool = betterproto.bool_field(15)
-    runtime: str = betterproto.string_field(16)
-    build_version: str = betterproto.string_field(17)
-    active_containers: List["Container"] = betterproto.message_field(18)
+    build_version: str = betterproto.string_field(16)
+    active_containers: List["Container"] = betterproto.message_field(17)
+    runtime: str = betterproto.string_field(18)
 
 
 @dataclass(eq=False, repr=False)
