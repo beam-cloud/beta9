@@ -54,9 +54,9 @@ type Worker struct {
 	RequiresPoolSelector bool         `json:"requires_pool_selector" redis:"requires_pool_selector"`
 	Priority             int32        `json:"priority" redis:"priority"`
 	Preemptable          bool         `json:"preemptable" redis:"preemptable"`
-	Runtime              string       `json:"runtime" redis:"runtime"`
 	BuildVersion         string       `json:"build_version" redis:"build_version"`
 	ActiveContainers     []Container  `json:"active_containers" redis:"active_containers"`
+	Runtime              string       `json:"runtime" redis:"runtime"`
 }
 
 func (w *Worker) ToProto() *pb.Worker {
