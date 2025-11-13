@@ -31,6 +31,8 @@ from ..clients.pod import (
     PodSandboxExecRequest,
     PodSandboxExposePortRequest,
     PodSandboxExposePortResponse,
+    PodSandboxUpdateNetworkPermissionsRequest,
+    PodSandboxUpdateNetworkPermissionsResponse,
     PodSandboxFindInFilesRequest,
     PodSandboxKillRequest,
     PodSandboxListFilesRequest,
