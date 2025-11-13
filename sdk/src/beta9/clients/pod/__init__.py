@@ -240,6 +240,20 @@ class PodSandboxExposePortResponse(betterproto.Message):
 
 
 @dataclass(eq=False, repr=False)
+class PodSandboxUpdateNetworkPermissionsRequest(betterproto.Message):
+    container_id: str = betterproto.string_field(1)
+    stub_id: str = betterproto.string_field(2)
+    block_network: bool = betterproto.bool_field(3)
+    allow_list: List[str] = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxUpdateNetworkPermissionsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
 class PodSandboxFindInFilesRequest(betterproto.Message):
     container_id: str = betterproto.string_field(1)
     container_path: str = betterproto.string_field(2)
@@ -462,6 +476,16 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxExposePortRequest,
             PodSandboxExposePortResponse,
         )(pod_sandbox_expose_port_request)
+
+    def sandbox_update_network_permissions(
+        self,
+        pod_sandbox_update_network_permissions_request: "PodSandboxUpdateNetworkPermissionsRequest",
+    ) -> "PodSandboxUpdateNetworkPermissionsResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxUpdateNetworkPermissions",
+            PodSandboxUpdateNetworkPermissionsRequest,
+            PodSandboxUpdateNetworkPermissionsResponse,
+        )(pod_sandbox_update_network_permissions_request)
 
     def sandbox_replace_in_files(
         self, pod_sandbox_replace_in_files_request: "PodSandboxReplaceInFilesRequest"

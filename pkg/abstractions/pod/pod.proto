@@ -101,6 +101,13 @@ service PodService {
       body : "*"
     };
   }
+  rpc SandboxUpdateNetworkPermissions(PodSandboxUpdateNetworkPermissionsRequest)
+      returns (PodSandboxUpdateNetworkPermissionsResponse) {
+    option (google.api.http) = {
+      post : "/pods/{container_id}/network/update"
+      body : "*"
+    };
+  }
   rpc SandboxReplaceInFiles(PodSandboxReplaceInFilesRequest)
       returns (PodSandboxReplaceInFilesResponse) {
     option (google.api.http) = {
@@ -331,6 +338,18 @@ message PodSandboxExposePortResponse {
   bool ok = 1;
   string url = 2;
   string error_msg = 3;
+}
+
+message PodSandboxUpdateNetworkPermissionsRequest {
+  string container_id = 1;
+  string stub_id = 2;
+  bool block_network = 3;
+  repeated string allow_list = 4;
+}
+
+message PodSandboxUpdateNetworkPermissionsResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }
 
 message PodSandboxFindInFilesRequest {

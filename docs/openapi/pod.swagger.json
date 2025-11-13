@@ -535,6 +535,44 @@
         ]
       }
     },
+    "/pods/{containerId}/network/update": {
+      "post": {
+        "operationId": "PodService_SandboxUpdateNetworkPermissions",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/podPodSandboxUpdateNetworkPermissionsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "containerId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "body",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/PodServiceSandboxUpdateNetworkPermissionsBody"
+            }
+          }
+        ],
+        "tags": [
+          "PodService"
+        ]
+      }
+    },
     "/pods/{containerId}/ports/expose": {
       "post": {
         "operationId": "PodService_SandboxExposePort",
@@ -916,6 +954,23 @@
         }
       }
     },
+    "PodServiceSandboxUpdateNetworkPermissionsBody": {
+      "type": "object",
+      "properties": {
+        "stubId": {
+          "type": "string"
+        },
+        "blockNetwork": {
+          "type": "boolean"
+        },
+        "allowList": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "PodServiceSandboxUpdateTTLBody": {
       "type": "object",
       "properties": {
@@ -1273,6 +1328,17 @@
           "type": "string"
         },
         "stdout": {
+          "type": "string"
+        }
+      }
+    },
+    "podPodSandboxUpdateNetworkPermissionsResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
           "type": "string"
         }
       }
