@@ -806,6 +806,71 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 	return nil
 }
 
+func (m *ContainerNetworkManager) UpdateNetworkPermissions(containerId string, request *types.ContainerRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	info, err := getContainerNetworkInfo(m.ctx, m.workerRepoClient, m.networkPrefix, containerId, m.ipt6 != nil)
+	if err != nil {
+		return err
+	}
+
+	// Remove existing restriction rules (search by comment tag)
+	if err := m.removeNetworkRestrictionRules(info.ContainerIp, m.ipt); err != nil {
+		return err
+	}
+
+	if m.ipt6 != nil && info.ContainerIpv6 != "" {
+		if err := m.removeNetworkRestrictionRules(info.ContainerIpv6, m.ipt6); err != nil {
+			return err
+		}
+	}
+
+	// Apply new rules
+	if len(request.AllowList) > 0 {
+		m.setupAllowList(containerId, request, request.AllowList)
+	} else if request.BlockNetwork {
+		m.setupBlockNetwork(containerId, request)
+	}
+
+	return nil
+}
+
+func (m *ContainerNetworkManager) removeNetworkRestrictionRules(ip string, ipt *iptables.IPTables) error {
+	// Similar to removeIPTablesRules but only remove DROP/ACCEPT rules
+	// Preserve DNAT rules (exposed ports) and other infrastructure rules
+	tables := []string{"filter"}
+	for _, table := range tables {
+		chains := []string{"PREROUTING", "FORWARD"}
+
+		for _, chain := range chains {
+			// List rules in the chain
+			rules, err := ipt.List(table, chain)
+			if err != nil {
+				continue
+			}
+
+			for _, rule := range rules {
+				if strings.Contains(rule, ip) {
+					if strings.Contains(rule, "DROP") || strings.Contains(rule, "ACCEPT") {
+						parts := strings.Fields(rule)
+
+						// Remove any double quotes
+						for i, part := range parts {
+							parts[i] = strings.ReplaceAll(part, `"`, "")
+						}
+
+						if err := ipt.Delete(table, chain, parts[2:]...); err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // getRandomFreePort chooses a random free port
 func getRandomFreePort() (int, error) {
 	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")

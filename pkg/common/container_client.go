@@ -233,6 +233,18 @@ func (c *ContainerClient) SandboxExposePort(containerId string, port int32) (*pb
 	return resp, nil
 }
 
+func (c *ContainerClient) SandboxUpdateNetworkPermissions(containerId string, blockNetwork bool, allowList []string) (*pb.ContainerSandboxUpdateNetworkPermissionsResponse, error) {
+	resp, err := c.client.ContainerSandboxUpdateNetworkPermissions(context.TODO(), &pb.ContainerSandboxUpdateNetworkPermissionsRequest{
+		ContainerId:  containerId,
+		BlockNetwork: blockNetwork,
+		AllowList:    allowList,
+	})
+	if err != nil {
+		return resp, err
+	}
+	return resp, nil
+}
+
 func (c *ContainerClient) Kill(containerId string) (*pb.ContainerKillResponse, error) {
 	resp, err := c.client.ContainerKill(context.TODO(), &pb.ContainerKillRequest{ContainerId: containerId})
 	if err != nil {

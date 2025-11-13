@@ -346,6 +346,31 @@ func (s *GenericPodService) SandboxExposePort(ctx context.Context, in *pb.PodSan
 	}, nil
 }
 
+func (s *GenericPodService) SandboxUpdateNetworkPermissions(ctx context.Context, in *pb.PodSandboxUpdateNetworkPermissionsRequest) (*pb.PodSandboxUpdateNetworkPermissionsResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
+	if err != nil {
+		return &pb.PodSandboxUpdateNetworkPermissionsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to connect to sandbox",
+		}, nil
+	}
+
+	resp, err := client.SandboxUpdateNetworkPermissions(in.ContainerId, in.BlockNetwork, in.AllowList)
+	if err != nil {
+		return &pb.PodSandboxUpdateNetworkPermissionsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to update network permissions",
+		}, nil
+	}
+
+	return &pb.PodSandboxUpdateNetworkPermissionsResponse{
+		Ok:       resp.Ok,
+		ErrorMsg: resp.ErrorMsg,
+	}, nil
+}
+
 func (s *GenericPodService) SandboxStatFile(ctx context.Context, in *pb.PodSandboxStatFileRequest) (*pb.PodSandboxStatFileResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 

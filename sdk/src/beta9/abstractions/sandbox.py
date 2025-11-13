@@ -559,6 +559,70 @@ class SandboxInstance(BaseAbstraction):
 
         raise SandboxProcessError("Failed to expose port")
 
+    def update_network_permissions(
+        self, block_network: bool = False, allow_list: Optional[List[str]] = None
+    ) -> None:
+        """
+        Dynamically update network permissions for the sandbox at runtime.
+
+        This method allows you to modify the network access restrictions of a running
+        sandbox without needing to restart it. You can either block all network access
+        or specify an allowlist of CIDR ranges that the sandbox can communicate with. 
+        Does not block access via ports exposed by expose_port.
+
+        Parameters:
+            block_network (bool): If True, blocks all outbound network access from the
+                sandbox. Cannot be used together with allow_list. Default: False.
+            allow_list (Optional[List[str]]): List of CIDR ranges (e.g., "8.8.8.8/32",
+                "10.0.0.0/8") that the sandbox is allowed to access. If specified,
+                all other outbound traffic is blocked. Cannot be used with block_network=True.
+                Default: None.
+
+        Raises:
+            SandboxProcessError: If the network permissions update fails.
+            ValueError: If both block_network=True and allow_list are specified.
+
+        Example:
+            ```python
+            # Allow access only to specific IP ranges
+            instance.update_network_permissions(
+                allow_list=["8.8.8.8/32", "1.1.1.1/32"]
+            )
+
+            # Block all network access
+            instance.update_network_permissions(block_network=True)
+
+            # Remove all restrictions (allow full network access)
+            instance.update_network_permissions()
+            ```
+
+        Note:
+            - CIDR notation must be valid (e.g., "192.168.1.0/24", "8.8.8.8/32")
+            - IPv4 addresses should use /32 suffix for single hosts
+            - This replaces all existing network rules atomically
+        """
+        if block_network and allow_list:
+            raise ValueError("Cannot specify both block_network=True and allow_list")
+
+        if allow_list is None:
+            allow_list = []
+
+        res: "PodSandboxUpdateNetworkPermissionsResponse" = (
+            self.stub.sandbox_update_network_permissions(
+                PodSandboxUpdateNetworkPermissionsRequest(
+                    container_id=self.container_id,
+                    stub_id=self.stub_id,
+                    block_network=block_network,
+                    allow_list=allow_list,
+                )
+            )
+        )
+
+        if not res.ok:
+            raise SandboxProcessError(
+                f"Failed to update network permissions: {res.error_msg}"
+            )
+
     def list_urls(self) -> Dict[int, str]:
         """
         List all exposed URLs in the sandbox    .
