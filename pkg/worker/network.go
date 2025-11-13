@@ -828,9 +828,13 @@ func (m *ContainerNetworkManager) UpdateNetworkPermissions(containerId string, r
 
 	// Apply new rules
 	if len(request.AllowList) > 0 {
-		m.setupAllowList(containerId, request, request.AllowList)
+		if err := m.setupAllowList(containerId, request, request.AllowList); err != nil {
+			return err
+		}
 	} else if request.BlockNetwork {
-		m.setupBlockNetwork(containerId, request)
+		if err := m.setupBlockNetwork(containerId, request); err != nil {
+			return err
+		}
 	}
 
 	return nil
