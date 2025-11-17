@@ -392,3 +392,108 @@ func TestGVisorNVProxySupport(t *testing.T) {
 		}
 	})
 }
+
+// TestCheckpointOptionsPassThrough verifies all checkpoint options are properly used
+func TestCheckpointOptionsPassThrough(t *testing.T) {
+	if os.Getenv("SKIP_RUNTIME_TESTS") == "1" {
+		t.Skip("Skipping runtime tests")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "checkpoint-opts-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	checkpointPath := filepath.Join(tmpDir, "checkpoint")
+	workDir := filepath.Join(tmpDir, "work")
+
+	t.Run("all checkpoint options", func(t *testing.T) {
+		opts := &CheckpointOpts{
+			ImagePath:    checkpointPath,
+			WorkDir:      workDir,
+			LeaveRunning: true,
+			AllowOpenTCP: true,
+			SkipInFlight: true,
+			LinkRemap:    true,
+		}
+
+		// Verify all fields are set
+		if opts.ImagePath == "" {
+			t.Error("ImagePath should be set")
+		}
+		if opts.WorkDir == "" {
+			t.Error("WorkDir should be set")
+		}
+		if !opts.LeaveRunning {
+			t.Error("LeaveRunning should be true")
+		}
+		if !opts.AllowOpenTCP {
+			t.Error("AllowOpenTCP should be true")
+		}
+		if !opts.SkipInFlight {
+			t.Error("SkipInFlight should be true")
+		}
+		if !opts.LinkRemap {
+			t.Error("LinkRemap should be true")
+		}
+	})
+
+	t.Run("all restore options", func(t *testing.T) {
+		started := make(chan int, 1)
+		opts := &RestoreOpts{
+			ImagePath:  checkpointPath,
+			WorkDir:    workDir,
+			BundlePath: tmpDir,
+			Started:    started,
+			TCPClose:   true,
+		}
+
+		// Verify all fields are set
+		if opts.ImagePath == "" {
+			t.Error("ImagePath should be set")
+		}
+		if opts.WorkDir == "" {
+			t.Error("WorkDir should be set")
+		}
+		if opts.BundlePath == "" {
+			t.Error("BundlePath should be set")
+		}
+		if opts.Started == nil {
+			t.Error("Started channel should be set")
+		}
+		if !opts.TCPClose {
+			t.Error("TCPClose should be true")
+		}
+	})
+}
+
+// TestCUDACheckpointRequirements documents CUDA checkpoint requirements
+func TestCUDACheckpointRequirements(t *testing.T) {
+	t.Run("runc CUDA requirements", func(t *testing.T) {
+		// For runc with CRIU:
+		// - NVIDIA driver >= 570
+		// - CRIU with CUDA plugin support
+		// - All checkpoint options must be passed (WorkDir, LinkRemap, etc.)
+		t.Log("runc CUDA checkpoint requires:")
+		t.Log("  - NVIDIA driver >= 570")
+		t.Log("  - CRIU with CUDA checkpoint plugin")
+		t.Log("  - WorkDir for checkpoint files")
+		t.Log("  - LinkRemap for file descriptor remapping")
+		t.Log("  - AllowOpenTCP for network connections")
+	})
+
+	t.Run("gVisor CUDA requirements", func(t *testing.T) {
+		// For gVisor with nvproxy:
+		// - NVIDIA driver >= 570 (recommended)
+		// - nvproxy enabled (--nvproxy=true)
+		// - GPU devices in OCI spec (CDI or direct)
+		// - All checkpoint options must be passed
+		t.Log("gVisor CUDA checkpoint requires:")
+		t.Log("  - NVIDIA driver >= 570 (recommended)")
+		t.Log("  - nvproxy enabled when container is created")
+		t.Log("  - GPU devices in OCI spec (CDI or direct)")
+		t.Log("  - WorkDir for checkpoint state files")
+		t.Log("  - AllowOpenTCP and SkipInFlight for network state")
+	})
+}

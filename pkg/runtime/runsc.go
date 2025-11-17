@@ -15,6 +15,17 @@ import (
 )
 
 // Runsc implements Runtime using the gVisor runsc runtime
+//
+// CUDA Checkpoint/Restore:
+// gVisor supports CUDA checkpoint/restore through its nvproxy feature, which
+// intercepts CUDA API calls at the userspace level. For CUDA checkpoints to work:
+//   1. nvproxy must be enabled when the container is created (--nvproxy=true)
+//   2. GPU devices must be detected in the OCI spec (via CDI or device specifications)
+//   3. NVIDIA driver >= 570 is required for full checkpoint support
+//   4. GPU state (memory, contexts) is captured through nvproxy's interception layer
+//
+// The nvproxyEnabled flag is set during Prepare() based on GPU device detection.
+// Once enabled, it applies to all operations (run, checkpoint, restore).
 type Runsc struct {
 	cfg            Config
 	nvproxyEnabled bool // Whether GPU support via nvproxy is enabled
@@ -292,6 +303,9 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 		return fmt.Errorf("checkpoint options cannot be nil")
 	}
 
+	// Note: For checkpoint, we don't need to re-specify --nvproxy because it was
+	// already set when the container was created. The checkpoint operation will
+	// capture the GPU state through the existing nvproxy connection.
 	args := r.baseArgs(false)
 	args = append(args, "checkpoint")
 
@@ -300,9 +314,31 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 		args = append(args, "--image-path", opts.ImagePath)
 	}
 
+	// Work directory for checkpoint files (logs, cache, sockets)
+	if opts.WorkDir != "" {
+		args = append(args, "--work-dir", opts.WorkDir)
+	}
+
+	// Leave container running after checkpoint (important for hot checkpointing)
 	if opts.LeaveRunning {
 		args = append(args, "--leave-running")
 	}
+
+	// Allow open TCP connections during checkpoint
+	if opts.AllowOpenTCP {
+		args = append(args, "--allow-open-tcp")
+	}
+
+	// Skip in-flight TCP connections (similar to CRIU tcp-skip-in-flight)
+	if opts.SkipInFlight {
+		args = append(args, "--skip-in-flight")
+	}
+
+	// For CUDA checkpoints with gVisor:
+	// - nvproxy must be enabled when container was created (checked in Prepare)
+	// - GPU state is automatically captured through nvproxy's interception layer
+	// - NVIDIA driver >= 570 provides checkpoint support at the driver level
+	// - gVisor checkpoint will include GPU memory and context state
 
 	// gVisor checkpoint command
 	args = append(args, containerID)
@@ -334,6 +370,8 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	}()
 
 	args := r.baseArgs(false)
+	
+	// Enable nvproxy for GPU workloads (must be set before restore command)
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 	}
@@ -345,8 +383,20 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		args = append(args, "--image-path", opts.ImagePath)
 	}
 
+	// Work directory for restore files
+	if opts.WorkDir != "" {
+		args = append(args, "--work-dir", opts.WorkDir)
+	}
+
 	if opts.BundlePath != "" {
 		args = append(args, "--bundle", opts.BundlePath)
+	}
+
+	// Close TCP connections on restore (default behavior in gVisor)
+	// gVisor automatically handles TCP connection cleanup
+	if opts.TCPClose {
+		// This is the default behavior in gVisor, but we document it
+		// gVisor's restore will handle TCP connections appropriately
 	}
 
 	// Container ID
