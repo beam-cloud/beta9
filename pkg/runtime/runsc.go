@@ -184,10 +184,9 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 		// Allow all driver capabilities that the container might need  
-		// This must match or exceed what's in NVIDIA_DRIVER_CAPABILITIES env var
-		// Per gVisor docs: compute, utility, graphics, video are officially supported
-		// Adding ngx as well since containers request it (may be ignored if unsupported)
-		args = append(args, "--nvproxy-allowed-driver-capabilities=compute,utility,graphics,video,ngx")
+		// Per gVisor docs, supported capabilities are: compute, utility, graphics, video
+		// Note: ngx is NOT supported by gVisor and will cause a fatal error if included
+		args = append(args, "--nvproxy-allowed-driver-capabilities=compute,utility,graphics,video")
 	}
 	args = append(args, "run", "--bundle", bundlePath, containerID)
 
@@ -437,7 +436,8 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
 		// Allow all driver capabilities for restore as well
-		args = append(args, "--nvproxy-allowed-driver-capabilities=compute,utility,graphics,video,ngx")
+		// Supported by gVisor: compute, utility, graphics, video (ngx is NOT supported)
+		args = append(args, "--nvproxy-allowed-driver-capabilities=compute,utility,graphics,video")
 	}
 	args = append(args, "restore")
 	if opts.ImagePath != "" {
