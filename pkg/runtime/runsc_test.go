@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -12,14 +13,16 @@ import (
 // TestRunscPrepare_MultiGPU verifies that multi-GPU configurations work correctly
 // with gVisor's nvproxy by ensuring:
 // 1. CDI annotations are detected as GPU indicators
-// 2. spec.Linux.Devices is cleared to prevent conflicts with nvproxy
-// 3. nvproxy is enabled when GPUs are detected
+// 2. GPU devices are preserved for nvproxy to virtualize
+// 3. Non-GPU devices are filtered out
+// 4. nvproxy is enabled when GPUs are detected
 func TestRunscPrepare_MultiGPU(t *testing.T) {
 	tests := []struct {
-		name              string
-		setupSpec         func() *specs.Spec
-		wantNvproxyEnabled bool
-		wantDevicesCleared bool
+		name                   string
+		setupSpec              func() *specs.Spec
+		wantNvproxyEnabled     bool
+		wantGPUDevicesPreserved bool
+		wantDeviceCount        int
 	}{
 		{
 			name: "multi-GPU via CDI annotations",
@@ -29,6 +32,7 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 						Devices: []specs.LinuxDevice{
 							{Path: "/dev/nvidia0"},
 							{Path: "/dev/nvidia1"},
+							{Path: "/dev/nvidiactl"},
 						},
 					},
 					Annotations: map[string]string{
@@ -38,8 +42,9 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 					},
 				}
 			},
-			wantNvproxyEnabled: true,
-			wantDevicesCleared: true,
+			wantNvproxyEnabled:     true,
+			wantGPUDevicesPreserved: true,
+			wantDeviceCount:        3, // 2 GPUs + nvidiactl
 		},
 		{
 			name: "single GPU via CDI annotations",
@@ -48,6 +53,7 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 					Linux: &specs.Linux{
 						Devices: []specs.LinuxDevice{
 							{Path: "/dev/nvidia0"},
+							{Path: "/dev/nvidiactl"},
 						},
 					},
 					Annotations: map[string]string{
@@ -55,54 +61,44 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 					},
 				}
 			},
-			wantNvproxyEnabled: true,
-			wantDevicesCleared: true,
+			wantNvproxyEnabled:     true,
+			wantGPUDevicesPreserved: true,
+			wantDeviceCount:        2, // 1 GPU + nvidiactl
 		},
 		{
 			name: "CPU only - no GPUs",
 			setupSpec: func() *specs.Spec {
 				return &specs.Spec{
 					Linux: &specs.Linux{
-						Devices: []specs.LinuxDevice{},
-					},
-					Annotations: map[string]string{},
-				}
-			},
-			wantNvproxyEnabled: false,
-			wantDevicesCleared: true, // Devices should still be cleared for consistency
-		},
-		{
-			name: "GPU detection via device path only (legacy)",
-			setupSpec: func() *specs.Spec {
-				return &specs.Spec{
-					Linux: &specs.Linux{
 						Devices: []specs.LinuxDevice{
-							{Path: "/dev/nvidia0"},
-							{Path: "/dev/nvidiactl"},
-							{Path: "/dev/nvidia-uvm"},
+							{Path: "/dev/null"},
 						},
 					},
 					Annotations: map[string]string{},
 				}
 			},
-			wantNvproxyEnabled: true,
-			wantDevicesCleared: true,
+			wantNvproxyEnabled:     false,
+			wantGPUDevicesPreserved: false,
+			wantDeviceCount:        0, // All devices cleared for CPU-only
 		},
 		{
-			name: "GPU detection via CDI annotations only (devices already cleared)",
+			name: "GPU with non-GPU devices - filter non-GPU",
 			setupSpec: func() *specs.Spec {
 				return &specs.Spec{
 					Linux: &specs.Linux{
-						Devices: []specs.LinuxDevice{}, // No devices, only CDI annotations
+						Devices: []specs.LinuxDevice{
+							{Path: "/dev/nvidia0"},
+							{Path: "/dev/null"},      // Should be filtered
+							{Path: "/dev/random"},    // Should be filtered
+							{Path: "/dev/nvidiactl"},
+						},
 					},
-					Annotations: map[string]string{
-						"cdi.k8s.io/nvidia.com_gpu_0": "nvidia.com/gpu=0",
-						"cdi.k8s.io/nvidia.com_gpu_1": "nvidia.com/gpu=1",
-					},
+					Annotations: map[string]string{},
 				}
 			},
-			wantNvproxyEnabled: true,
-			wantDevicesCleared: true,
+			wantNvproxyEnabled:     true,
+			wantGPUDevicesPreserved: true,
+			wantDeviceCount:        2, // Only NVIDIA devices kept
 		},
 	}
 
@@ -127,23 +123,34 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 			assert.Equal(t, tt.wantNvproxyEnabled, runsc.nvproxyEnabled,
 				"nvproxy enablement mismatch")
 
-			// Verify devices were cleared
-			if tt.wantDevicesCleared {
+			// Verify device handling
+			if tt.wantGPUDevicesPreserved {
+				assert.NotNil(t, spec.Linux.Devices,
+					"GPU devices should be preserved for nvproxy to virtualize")
+				assert.Equal(t, tt.wantDeviceCount, len(spec.Linux.Devices),
+					"GPU device count mismatch")
+				
+				// Verify all remaining devices are GPU-related
+				for _, dev := range spec.Linux.Devices {
+					assert.True(t, strings.HasPrefix(dev.Path, "/dev/nvidia") || strings.HasPrefix(dev.Path, "/dev/dri"),
+						"Non-GPU device should have been filtered: %s", dev.Path)
+				}
+			} else {
 				assert.Nil(t, spec.Linux.Devices,
-					"spec.Linux.Devices should be cleared to prevent conflicts with nvproxy")
+					"Devices should be cleared for non-GPU workloads")
 			}
 
 			// Verify annotations are preserved (CDI needs these)
 			if tt.wantNvproxyEnabled && len(spec.Annotations) > 0 {
 				hasGPUAnnotation := false
 				for key := range spec.Annotations {
-					if key == "cdi.k8s.io/nvidia.com_gpu_0" || key == "cdi.k8s.io/nvidia.com_gpu_1" {
+					if strings.HasPrefix(key, "cdi.k8s.io") {
 						hasGPUAnnotation = true
 						break
 					}
 				}
 				assert.True(t, hasGPUAnnotation,
-					"CDI annotations should be preserved for nvproxy to read GPU configuration")
+					"CDI annotations should be preserved for nvproxy")
 			}
 		})
 	}

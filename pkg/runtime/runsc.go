@@ -75,15 +75,34 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 
 	if r.nvproxyEnabled {
 		r.mountCudaCheckpoint(spec)
+		// For nvproxy, keep only NVIDIA device entries and remove others
+		// nvproxy needs to see the GPU devices to virtualize them
+		r.filterNonGPUDevices(spec)
+	} else {
+		// For non-GPU workloads, clear all devices
+		spec.Linux.Devices = nil
 	}
 
-	// gVisor does not use spec.Linux.Devices for device passthrough.
-	// For GPU workloads, nvproxy handles GPU access via its own virtualization layer
-	// using CDI annotations and mounts, not device entries.
-	// Clear devices to prevent conflicts with nvproxy.
-	spec.Linux.Devices = nil
-
 	return nil
+}
+
+// filterNonGPUDevices removes non-NVIDIA devices from the spec
+// gVisor's nvproxy needs to see NVIDIA devices to virtualize them
+func (r *Runsc) filterNonGPUDevices(spec *specs.Spec) {
+	if spec.Linux == nil {
+		return
+	}
+
+	var gpuDevices []specs.LinuxDevice
+	for _, device := range spec.Linux.Devices {
+		// Keep only NVIDIA-related devices for nvproxy
+		if strings.HasPrefix(device.Path, "/dev/nvidia") ||
+			strings.HasPrefix(device.Path, "/dev/dri") {
+			gpuDevices = append(gpuDevices, device)
+		}
+	}
+
+	spec.Linux.Devices = gpuDevices
 }
 
 // mountCudaCheckpoint bind-mounts cuda-checkpoint binary into the container

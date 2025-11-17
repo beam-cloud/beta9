@@ -801,14 +801,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
 				return
 			}
-		}
 
-		// For gVisor with nvproxy, explicitly mount CUDA libraries from the host
-		// nvproxy intercepts GPU syscalls but still needs access to NVIDIA driver libraries
-		// CDI may not include all necessary library paths, so we ensure they're mounted
-		if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
-			spec.Mounts = s.containerGPUManager.InjectMounts(spec.Mounts)
-			log.Info().Str("container_id", request.ContainerId).Msg("injected CUDA library mounts for gVisor nvproxy")
+			// Debug: Log what CDI injected for troubleshooting
+			log.Debug().
+				Str("container_id", request.ContainerId).
+				Int("mount_count", len(spec.Mounts)).
+				Int("device_count", len(spec.Linux.Devices)).
+				Interface("annotations", spec.Annotations).
+				Msg("CDI injection complete")
 		}
 	}
 
