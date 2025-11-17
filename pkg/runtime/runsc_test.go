@@ -23,15 +23,19 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 		wantDeviceCount    int
 	}{
 		{
-			name: "multi-GPU via CDI - devices preserved",
+			name: "multi-GPU via CDI - unsupported devices filtered",
 			setupSpec: func() *specs.Spec {
 				return &specs.Spec{
 					Linux: &specs.Linux{
 						Devices: []specs.LinuxDevice{
-							{Path: "/dev/nvidia0"},
-							{Path: "/dev/nvidia1"},
-							{Path: "/dev/nvidiactl"},
-							{Path: "/dev/nvidia-uvm"},
+							{Path: "/dev/nvidia0"},              // Kept
+							{Path: "/dev/nvidia1"},              // Kept
+							{Path: "/dev/nvidiactl"},            // Kept
+							{Path: "/dev/nvidia-uvm"},           // Kept
+							{Path: "/dev/nvidia-modeset"},       // Filtered out
+							{Path: "/dev/nvidia-uvm-tools"},     // Filtered out
+							{Path: "/dev/dri/card1"},            // Filtered out
+							{Path: "/dev/dri/renderD128"},       // Filtered out
 						},
 					},
 					Annotations: map[string]string{
@@ -42,7 +46,7 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 			},
 			wantNvproxyEnabled: true,
 			wantDevicesCleared: false,
-			wantDeviceCount:    4, // All CDI devices preserved
+			wantDeviceCount:    4, // Only supported devices kept
 		},
 		{
 			name: "single GPU via CDI - devices preserved",

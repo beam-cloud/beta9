@@ -79,15 +79,40 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	if r.nvproxyEnabled {
 		// Mount cuda-checkpoint tool for CUDA checkpoint/restore support
 		r.mountCudaCheckpoint(spec)
-		// NOTE: We do NOT clear or filter spec.Linux.Devices
-		// gVisor's nvproxy reads these to know which GPU devices to virtualize
-		// CDI should only inject GPU devices, so all devices in the spec should be valid
+		// CRITICAL: Filter to only gVisor-supported GPU devices
+		// Per gVisor docs: "gVisor only exposes /dev/nvidiactl, /dev/nvidia-uvm and /dev/nvidia#"
+		// CDI injects unsupported devices like /dev/nvidia-modeset, /dev/dri/* which cause startup failures
+		r.filterToSupportedGPUDevices(spec)
 	} else {
 		// For non-GPU workloads, clear all devices as gVisor handles them internally
 		spec.Linux.Devices = nil
 	}
 
 	return nil
+}
+
+// filterToSupportedGPUDevices keeps only GPU devices that gVisor's nvproxy supports
+// Per gVisor documentation, only these devices are supported:
+// - /dev/nvidiactl
+// - /dev/nvidia-uvm  
+// - /dev/nvidia# (where # is a GPU number like 0, 1, 2, etc.)
+// All other devices (like /dev/nvidia-modeset, /dev/dri/*, etc.) cause startup failures
+func (r *Runsc) filterToSupportedGPUDevices(spec *specs.Spec) {
+	if spec.Linux == nil {
+		return
+	}
+
+	var supportedDevices []specs.LinuxDevice
+	for _, device := range spec.Linux.Devices {
+		// Only keep devices explicitly supported by gVisor nvproxy
+		if device.Path == "/dev/nvidiactl" ||
+			device.Path == "/dev/nvidia-uvm" ||
+			strings.HasPrefix(device.Path, "/dev/nvidia") && len(device.Path) > len("/dev/nvidia") && device.Path[len("/dev/nvidia")] >= '0' && device.Path[len("/dev/nvidia")] <= '9' {
+			supportedDevices = append(supportedDevices, device)
+		}
+	}
+
+	spec.Linux.Devices = supportedDevices
 }
 
 // mountCudaCheckpoint bind-mounts cuda-checkpoint binary into the container

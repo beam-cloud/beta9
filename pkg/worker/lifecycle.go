@@ -821,11 +821,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 			log.Info().
 				Str("container_id", request.ContainerId).
-				Strs("devices", devicePaths).
+				Strs("devices_before_filtering", devicePaths).
 				Strs("gpu_mounts", mountSources).
 				Strs("gpu_env_vars", envVars).
 				Interface("cdi_annotations", spec.Annotations).
-				Msg("CDI injection complete - inspect what was injected")
+				Msg("CDI injection complete - gVisor will filter unsupported devices")
 		}
 	}
 
