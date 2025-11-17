@@ -13,8 +13,8 @@ import (
 	cedanarunc "buf.build/gen/go/cedana/cedana/protocolbuffers/go/plugins/runc"
 	"buf.build/gen/go/cedana/criu/protocolbuffers/go/criu"
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
-	"github.com/beam-cloud/go-runc"
 	cedana "github.com/cedana/cedana/pkg/client"
 	"github.com/cedana/cedana/pkg/config"
 	"github.com/rs/zerolog"
@@ -99,48 +99,11 @@ func (c *CedanaCRIUManager) Available() bool {
 	return c.client != nil
 }
 
-// Spawn a runc container using cedana, creating a 'job' in cedana
-func (c *CedanaCRIUManager) Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error) {
-	// If config path provided directly, derive bundle from it
-	args := &cedanadaemon.RunReq{
-		Action:     cedanadaemon.RunAction_START_NEW,
-		JID:        request.ContainerId,
-		GPUEnabled: request.RequiresGPU(),
-		Attachable: true,
-		Type:       "runc",
-		Details: &cedanadaemon.Details{
-			Runc: &cedanarunc.Runc{
-				ID:     request.ContainerId,
-				Bundle: bundlePath,
-				Root:   runcRoot,
-			},
-		},
+func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
+	// Cedana currently only supports runc, not gVisor
+	if rt.Name() != "runc" {
+		return "", fmt.Errorf("cedana checkpoint only supports runc runtime, got: %s", rt.Name())
 	}
-
-	resp, profilingData, err := c.client.Run(ctx, args)
-	if err != nil {
-		return -1, fmt.Errorf("failed to run runc container: %w", err)
-	}
-
-	if runcOpts.Started != nil {
-		runcOpts.Started <- int(resp.PID)
-	}
-
-	_ = profilingData
-
-	_, stdout, stderr, exitCodeChan, _, err := c.client.AttachIO(ctx, &cedanadaemon.AttachReq{PID: resp.PID})
-	if err != nil {
-		return -1, fmt.Errorf("failed to attach to runc container: %w", err)
-	}
-
-	go io.Copy(runcOpts.OutputWriter, stdout)
-	go io.Copy(runcOpts.OutputWriter, stderr)
-
-	exitCode := <-exitCodeChan
-	return exitCode, nil
-}
-
-func (c *CedanaCRIUManager) CreateCheckpoint(ctx context.Context, checkpointId string, request *types.ContainerRequest) (string, error) {
 	args := &cedanadaemon.DumpReq{
 		Name: checkpointId,
 		Type: "job",
@@ -169,7 +132,11 @@ type cedanaRestoreOpts struct {
 	cacheFunc      func(string, string) (string, error)
 }
 
-func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
+func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
+	// Cedana currently only supports runc, not gVisor
+	if rt.Name() != "runc" {
+		return -1, fmt.Errorf("cedana restore only supports runc runtime, got: %s", rt.Name())
+	}
 	restoreOpts := cedanaRestoreOpts{
 		checkpointPath: opts.checkpoint.RemoteKey,
 		jobId:          opts.checkpoint.SourceContainerId,
@@ -201,8 +168,8 @@ func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 		return -1, fmt.Errorf("failed to restore runc container: %w", err)
 	}
 
-	if opts.runcOpts.Started != nil {
-		opts.runcOpts.Started <- int(resp.PID)
+	if opts.started != nil {
+		opts.started <- int(resp.PID)
 	}
 
 	_ = profilingData
@@ -212,8 +179,10 @@ func (c *CedanaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 		return -1, fmt.Errorf("failed to attach to runc container: %w", err)
 	}
 
-	go io.Copy(opts.runcOpts.OutputWriter, stdout)
-	go io.Copy(opts.runcOpts.OutputWriter, stderr)
+	if opts.outputWriter != nil {
+		go io.Copy(opts.outputWriter, stdout)
+		go io.Copy(opts.outputWriter, stderr)
+	}
 
 	exitCode := <-exitCodeChan
 	return exitCode, nil

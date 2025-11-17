@@ -53,6 +53,27 @@ type DeleteOpts struct {
 	Force bool // Force deletion
 }
 
+// CheckpointOpts contains options for checkpointing a container
+type CheckpointOpts struct {
+	ImagePath    string       // Path to store checkpoint image
+	WorkDir      string       // Working directory for checkpoint files
+	LeaveRunning bool         // Leave container running after checkpoint
+	AllowOpenTCP bool         // Allow open TCP connections
+	SkipInFlight bool         // Skip in-flight TCP connections
+	LinkRemap    bool         // Enable link remapping
+	OutputWriter OutputWriter // Writer for checkpoint output
+}
+
+// RestoreOpts contains options for restoring a container from checkpoint
+type RestoreOpts struct {
+	ImagePath    string       // Path to checkpoint image
+	WorkDir      string       // Working directory for restore files
+	BundlePath   string       // Path to container bundle
+	OutputWriter OutputWriter // Writer for restore output
+	Started      chan<- int   // PID channel
+	TCPClose     bool         // Close TCP connections on restore
+}
+
 // OutputWriter is an interface for writing container output
 type OutputWriter interface {
 	Write(p []byte) (n int, err error)
@@ -88,6 +109,14 @@ type Runtime interface {
 	// Events returns a channel for receiving container events
 	// Optional; use cgroup poller as portable fallback
 	Events(ctx context.Context, containerID string) (<-chan Event, error)
+
+	// Checkpoint creates a checkpoint of a running container
+	// Returns an error if the runtime doesn't support checkpointing
+	Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error
+
+	// Restore restores a container from a checkpoint
+	// Returns the exit code and any error
+	Restore(ctx context.Context, containerID string, opts *RestoreOpts) (int, error)
 
 	// Close cleans up any resources held by the runtime
 	Close() error

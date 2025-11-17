@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
-	"github.com/beam-cloud/go-runc"
 	"github.com/rs/zerolog/log"
 )
 
@@ -34,7 +34,6 @@ func IsCRIURestoreError(err error) bool {
 }
 
 type NvidiaCRIUManager struct {
-	runcHandle      runc.Runc
 	cpStorageConfig types.CheckpointStorageConfig
 	gpuCnt          int
 	available       bool
@@ -53,28 +52,28 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUMan
 
 	available := crCompatible(gpuCnt)
 
-	runcHandle := runc.Runc{}
-	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, gpuCnt: gpuCnt, available: available}, nil
+	return &NvidiaCRIUManager{cpStorageConfig: config.Storage, gpuCnt: gpuCnt, available: available}, nil
 }
 
-func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, checkpointId string, request *types.ContainerRequest) (string, error) {
+func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
 	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, checkpointId)
-	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
-		AllowOpenTCP: true,
+	
+	err := rt.Checkpoint(ctx, request.ContainerId, &runtime.CheckpointOpts{
+		ImagePath:    checkpointPath,
 		LeaveRunning: true,
+		AllowOpenTCP: true,
 		SkipInFlight: true,
 		LinkRemap:    true,
-		ImagePath:    checkpointPath,
-		Cgroups:      runc.Soft,
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("checkpoint failed for runtime %s: %w", rt.Name(), err)
 	}
 
+	log.Info().Str("runtime", rt.Name()).Str("checkpoint_id", checkpointId).Msg("checkpoint created successfully")
 	return checkpointPath, nil
 }
 
-func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
+func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.checkpoint.CheckpointId)
 	workDir := filepath.Join("/tmp", imagePath)
@@ -87,21 +86,17 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 	var stderrBuf strings.Builder
 	var outputWriter io.Writer = &stderrBuf
 
-	if opts.runcOpts.OutputWriter != nil {
-		outputWriter = io.MultiWriter(opts.runcOpts.OutputWriter, &stderrBuf)
+	if opts.outputWriter != nil {
+		outputWriter = io.MultiWriter(opts.outputWriter, &stderrBuf)
 	}
 
-	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
-		CheckpointOpts: runc.CheckpointOpts{
-			LinkRemap: true,
-			// Logs, irmap cache, sockets for lazy server and other go to working dir
-			WorkDir:      workDir,
-			ImagePath:    imagePath,
-			OutputWriter: outputWriter,
-			Cgroups:      runc.Soft,
-		},
-		TCPClose: true,
-		Started:  opts.runcOpts.Started,
+	exitCode, err := rt.Restore(ctx, opts.request.ContainerId, &runtime.RestoreOpts{
+		ImagePath:    imagePath,
+		WorkDir:      workDir,
+		BundlePath:   bundlePath,
+		OutputWriter: outputWriter,
+		Started:      opts.started,
+		TCPClose:     true,
 	})
 
 	if err != nil {
@@ -112,23 +107,15 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 			return -1, &ErrCRIURestoreFailed{Stderr: stderr}
 		}
 
-		return exitCode, err
+		return exitCode, fmt.Errorf("restore failed for runtime %s: %w", rt.Name(), err)
 	}
 
+	log.Info().Str("runtime", rt.Name()).Str("checkpoint_id", opts.checkpoint.CheckpointId).Msg("checkpoint restored successfully")
 	return exitCode, nil
 }
 
 func (c *NvidiaCRIUManager) Available() bool {
 	return c.available
-}
-
-func (c *NvidiaCRIUManager) Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error) {
-	exitCode, err := c.runcHandle.Run(ctx, request.ContainerId, bundlePath, runcOpts)
-	if err != nil {
-		return -1, err
-	}
-
-	return exitCode, nil
 }
 
 // getNvidiaDriverVersion returns the NVIDIA driver version as an integer

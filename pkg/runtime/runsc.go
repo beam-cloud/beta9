@@ -48,7 +48,7 @@ func (r *Runsc) Name() string {
 
 func (r *Runsc) Capabilities() Capabilities {
 	return Capabilities{
-		CheckpointRestore: false, // NOTE: We don't support CRIU for gvisor yet
+		CheckpointRestore: true, // gVisor has native checkpoint/restore support
 		GPU:               true,
 		OOMEvents:         false,
 		JoinExistingNetNS: true,
@@ -285,6 +285,110 @@ func (r *Runsc) Events(ctx context.Context, containerID string) (<-chan Event, e
 	ch := make(chan Event)
 	close(ch)
 	return ch, nil
+}
+
+func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {
+	if opts == nil {
+		return fmt.Errorf("checkpoint options cannot be nil")
+	}
+
+	args := r.baseArgs(false)
+	args = append(args, "checkpoint")
+
+	// Add checkpoint options
+	if opts.ImagePath != "" {
+		args = append(args, "--image-path", opts.ImagePath)
+	}
+
+	if opts.LeaveRunning {
+		args = append(args, "--leave-running")
+	}
+
+	// gVisor checkpoint command
+	args = append(args, containerID)
+
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+
+	if opts.OutputWriter != nil {
+		cmd.Stdout = opts.OutputWriter
+		cmd.Stderr = opts.OutputWriter
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("checkpoint failed: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOpts) (int, error) {
+	if opts == nil {
+		return -1, fmt.Errorf("restore options cannot be nil")
+	}
+
+	// Cleanup any existing container with this ID
+	defer func() {
+		deleteArgs := r.baseArgs(false)
+		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
+		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
+	}()
+
+	args := r.baseArgs(false)
+	if r.nvproxyEnabled {
+		args = append(args, "--nvproxy=true")
+	}
+
+	args = append(args, "restore")
+
+	// Add restore options
+	if opts.ImagePath != "" {
+		args = append(args, "--image-path", opts.ImagePath)
+	}
+
+	if opts.BundlePath != "" {
+		args = append(args, "--bundle", opts.BundlePath)
+	}
+
+	// Container ID
+	args = append(args, containerID)
+
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // Kill entire process tree
+
+	if opts.OutputWriter != nil {
+		cmd.Stdout = opts.OutputWriter
+		cmd.Stderr = opts.OutputWriter
+	}
+
+	if err := cmd.Start(); err != nil {
+		return -1, fmt.Errorf("restore failed to start: %w", err)
+	}
+
+	if opts.Started != nil {
+		opts.Started <- cmd.Process.Pid
+	}
+
+	// Handle cancellation by killing process group
+	go func() {
+		<-ctx.Done()
+		if pgid, _ := syscall.Getpgid(cmd.Process.Pid); pgid > 0 {
+			syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+	}()
+
+	// Wait for exit
+	err := cmd.Wait()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				return ws.ExitStatus(), nil
+			}
+		}
+
+		return -1, err
+	}
+
+	return 0, nil
 }
 
 func (r *Runsc) Close() error {

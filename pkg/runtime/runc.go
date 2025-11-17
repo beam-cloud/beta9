@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"syscall"
 	"time"
@@ -147,6 +148,48 @@ func (r *Runc) Events(ctx context.Context, containerID string) (<-chan Event, er
 	}()
 
 	return events, nil
+}
+
+func (r *Runc) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {
+	if opts == nil {
+		return fmt.Errorf("checkpoint options cannot be nil")
+	}
+
+	runcOpts := &runc.CheckpointOpts{
+		ImagePath:    opts.ImagePath,
+		WorkDir:      opts.WorkDir,
+		LeaveRunning: opts.LeaveRunning,
+		AllowOpenTCP: opts.AllowOpenTCP,
+		SkipInFlight: opts.SkipInFlight,
+		LinkRemap:    opts.LinkRemap,
+		Cgroups:      runc.Soft,
+	}
+
+	if opts.OutputWriter != nil {
+		runcOpts.OutputWriter = opts.OutputWriter
+	}
+
+	return r.handle.Checkpoint(ctx, containerID, runcOpts)
+}
+
+func (r *Runc) Restore(ctx context.Context, containerID string, opts *RestoreOpts) (int, error) {
+	if opts == nil {
+		return -1, fmt.Errorf("restore options cannot be nil")
+	}
+
+	runcOpts := &runc.RestoreOpts{
+		CheckpointOpts: runc.CheckpointOpts{
+			ImagePath:    opts.ImagePath,
+			WorkDir:      opts.WorkDir,
+			LinkRemap:    true,
+			Cgroups:      runc.Soft,
+			OutputWriter: opts.OutputWriter,
+		},
+		TCPClose: opts.TCPClose,
+		Started:  opts.Started,
+	}
+
+	return r.handle.Restore(ctx, containerID, opts.BundlePath, runcOpts)
 }
 
 func (r *Runc) Close() error {

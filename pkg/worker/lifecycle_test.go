@@ -364,6 +364,14 @@ func (m *mockRuntime) Events(ctx context.Context, containerID string) (<-chan ru
 	return nil, nil
 }
 
+func (m *mockRuntime) Checkpoint(ctx context.Context, containerID string, opts *runtime.CheckpointOpts) error {
+	return nil
+}
+
+func (m *mockRuntime) Restore(ctx context.Context, containerID string, opts *runtime.RestoreOpts) (int, error) {
+	return 0, nil
+}
+
 func (m *mockRuntime) Close() error {
 	return nil
 }
