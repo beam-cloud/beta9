@@ -235,9 +235,13 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // Kill entire process tree
 
+	// Capture stderr to log runsc errors
+	var stderrBuf bytes.Buffer
 	if opts != nil && opts.OutputWriter != nil {
 		cmd.Stdout = opts.OutputWriter
-		cmd.Stderr = opts.OutputWriter
+		cmd.Stderr = io.MultiWriter(opts.OutputWriter, &stderrBuf)
+	} else {
+		cmd.Stderr = &stderrBuf
 	}
 
 	if err := cmd.Start(); err != nil {
@@ -259,6 +263,32 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	// Wait for exit
 	err := cmd.Wait()
 	if err != nil {
+		// Log stderr output from runsc for debugging
+		stderrStr := stderrBuf.String()
+		if stderrStr != "" {
+			log.Error().
+				Str("container_id", containerID).
+				Str("runsc_stderr", stderrStr).
+				Msg("runsc command failed with stderr output")
+		}
+
+		// Try to read debug log if available
+		if r.cfg.Debug {
+			debugLogPath := filepath.Join(r.cfg.RunscRoot, "debug.log")
+			if debugContent, readErr := os.ReadFile(debugLogPath); readErr == nil {
+				// Log last 2000 chars to avoid overwhelming logs
+				maxLen := 2000
+				content := string(debugContent)
+				if len(content) > maxLen {
+					content = "..." + content[len(content)-maxLen:]
+				}
+				log.Error().
+					Str("container_id", containerID).
+					Str("debug_log_tail", content).
+					Msg("runsc debug log (last 2000 chars)")
+			}
+		}
+
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 				return ws.ExitStatus(), nil
@@ -528,6 +558,32 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	err := cmd.Wait()
 	if err != nil {
 		stderrStr := stderr.String()
+		
+		// Log stderr for debugging
+		if stderrStr != "" {
+			log.Error().
+				Str("container_id", containerID).
+				Str("runsc_stderr", stderrStr).
+				Msg("runsc restore failed with stderr output")
+		}
+
+		// Try to read debug log if available
+		if r.cfg.Debug {
+			debugLogPath := filepath.Join(r.cfg.RunscRoot, "debug.log")
+			if debugContent, readErr := os.ReadFile(debugLogPath); readErr == nil {
+				// Log last 2000 chars to avoid overwhelming logs
+				maxLen := 2000
+				content := string(debugContent)
+				if len(content) > maxLen {
+					content = "..." + content[len(content)-maxLen:]
+				}
+				log.Error().
+					Str("container_id", containerID).
+					Str("debug_log_tail", content).
+					Msg("runsc debug log (last 2000 chars)")
+			}
+		}
+
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
 				if stderrStr != "" {
