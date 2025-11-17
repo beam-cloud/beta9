@@ -75,9 +75,13 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 
 	if r.nvproxyEnabled {
 		r.mountCudaCheckpoint(spec)
-	} else {
-		spec.Linux.Devices = nil
 	}
+
+	// gVisor does not use spec.Linux.Devices for device passthrough.
+	// For GPU workloads, nvproxy handles GPU access via its own virtualization layer
+	// using CDI annotations and mounts, not device entries.
+	// Clear devices to prevent conflicts with nvproxy.
+	spec.Linux.Devices = nil
 
 	return nil
 }
