@@ -56,7 +56,7 @@ func (r *Runsc) Name() string {
 
 func (r *Runsc) Capabilities() Capabilities {
 	return Capabilities{
-		CheckpointRestore: true, // gVisor has native checkpoint/restore support
+		CheckpointRestore: true,
 		GPU:               true,
 		OOMEvents:         false,
 		JoinExistingNetNS: true,
@@ -320,7 +320,8 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 	if opts.ImagePath != "" {
 		args = append(args, "--image-path", opts.ImagePath)
 	}
-	// Note: gVisor's --work-path flag is marked as "ignored" in runsc
+
+	// NOTE: gVisor's --work-path flag is marked as "ignored" in runsc
 	// but we include it for compatibility
 	if opts.WorkDir != "" {
 		args = append(args, "--work-path", opts.WorkDir)
@@ -328,13 +329,14 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 	if opts.LeaveRunning {
 		args = append(args, "--leave-running")
 	}
-	// Note: gVisor doesn't support CRIU-specific flags like:
+
+	// NOTE: gVisor doesn't support CRIU-specific flags like:
 	// --allow-open-tcp, --skip-in-flight, --link-remap
 	// These are runc/CRIU specific and not available in runsc
 	args = append(args, containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
-	
+
 	// Capture both stdout and stderr for better error reporting
 	var stderr bytes.Buffer
 	if opts.OutputWriter != nil {
@@ -462,13 +464,13 @@ func (r *Runsc) cudaCheckpointProcesses(ctx context.Context, containerID, action
 	for _, pid := range pids {
 		args := r.baseArgs(false)
 		args = append(args, "exec", containerID, "/usr/local/bin/cuda-checkpoint", action, strconv.Itoa(pid))
-		
+
 		cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 		if outputWriter != nil {
 			cmd.Stdout = outputWriter
 			cmd.Stderr = outputWriter
 		}
-		
+
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("cuda-checkpoint %s failed for PID %d: %w", action, pid, err)
 		}
@@ -483,7 +485,7 @@ func (r *Runsc) findCUDAProcesses(ctx context.Context, containerID string) ([]in
 	args = append(args, "exec", containerID, "sh", "-c",
 		"for pid in /proc/[0-9]*; do "+
 			"[ -d \"$pid/fd\" ] && ls -l $pid/fd 2>/dev/null | grep -q nvidia && basename $pid; "+
-		"done")
+			"done")
 
 	output, err := exec.CommandContext(ctx, r.cfg.RunscPath, args...).Output()
 	if err != nil {

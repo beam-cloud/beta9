@@ -141,7 +141,6 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	}
 	defer f.Close()
 
-	// Get the runtime for this container
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, false, fmt.Errorf("container instance not found")
@@ -203,7 +202,6 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	// Proceed to create the checkpoint
-	// Get the runtime for this container
 	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, instance.Runtime, opts.CheckpointId, opts.Request)
 	if err != nil {
 		err := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp)
