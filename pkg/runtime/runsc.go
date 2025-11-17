@@ -15,6 +15,7 @@ import (
 
 	types "github.com/beam-cloud/beta9/pkg/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/rs/zerolog/log"
 )
 
 // Runsc implements Runtime using the gVisor runsc runtime
@@ -72,31 +73,31 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 
 	// gVisor requires seccomp to be disabled
 	spec.Linux.Seccomp = nil
-	
+
 	// Detect if GPU is requested by checking devices or CDI annotations
 	r.nvproxyEnabled = r.hasGPUDevices(spec)
 
 	if r.nvproxyEnabled {
 		// Mount cuda-checkpoint tool for CUDA checkpoint/restore support
 		r.mountCudaCheckpoint(spec)
-		
+
 		// Log devices before filtering
 		var devicesBefore []string
 		for _, dev := range spec.Linux.Devices {
 			devicesBefore = append(devicesBefore, dev.Path)
 		}
-		
+
 		// CRITICAL: Filter to only gVisor-supported GPU devices
 		// Per gVisor docs: "gVisor only exposes /dev/nvidiactl, /dev/nvidia-uvm and /dev/nvidia#"
 		// CDI injects unsupported devices like /dev/nvidia-modeset, /dev/dri/* which cause startup failures
 		r.filterToSupportedGPUDevices(spec)
-		
+
 		// Log devices after filtering
 		var devicesAfter []string
 		for _, dev := range spec.Linux.Devices {
 			devicesAfter = append(devicesAfter, dev.Path)
 		}
-		
+
 		log.Info().
 			Strs("devices_before_filter", devicesBefore).
 			Strs("devices_after_filter", devicesAfter).
@@ -113,7 +114,7 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 // filterToSupportedGPUDevices keeps only GPU devices that gVisor's nvproxy supports
 // Per gVisor documentation, only these devices are supported:
 // - /dev/nvidiactl
-// - /dev/nvidia-uvm  
+// - /dev/nvidia-uvm
 // - /dev/nvidia# (where # is a GPU number like 0, 1, 2, etc.)
 // All other devices (like /dev/nvidia-modeset, /dev/dri/*, etc.) cause startup failures
 func (r *Runsc) filterToSupportedGPUDevices(spec *specs.Spec) {
