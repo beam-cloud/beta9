@@ -7,6 +7,25 @@ CUDA checkpoint/restore for gVisor works by:
 2. Running `cuda-checkpoint` inside the container via `runsc exec`
 3. Freezing GPU state before checkpoint, unfreezing after restore
 
+## Important: gVisor vs runc Flags
+
+gVisor's `runsc checkpoint` supports **different flags** than `runc checkpoint`:
+
+### gVisor (runsc) Supported Flags:
+- `--image-path` - directory path to saved container image
+- `--leave-running` - restart the container after checkpointing
+- `--work-path` - work files and logs (marked as "ignored" in runsc)
+- `--compression` - compress checkpoint image
+- `--direct` - use O_DIRECT for writing
+
+### NOT Supported by gVisor:
+- ~~`--allow-open-tcp`~~ / ~~`--tcp-established`~~ (runc/CRIU only)
+- ~~`--skip-in-flight`~~ / ~~`--tcp-skip-in-flight`~~ (runc/CRIU only)
+- ~~`--link-remap`~~ (runc/CRIU only)
+- ~~`--ext-unix-sk`~~, ~~`--lazy-pages`~~, etc. (runc/CRIU only)
+
+**Our implementation only uses flags that gVisor actually supports.**
+
 ## Implementation
 
 ### Auto-Mount (in `Prepare()`)

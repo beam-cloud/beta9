@@ -320,18 +320,17 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 	if opts.ImagePath != "" {
 		args = append(args, "--image-path", opts.ImagePath)
 	}
+	// Note: gVisor's --work-path flag is marked as "ignored" in runsc
+	// but we include it for compatibility
 	if opts.WorkDir != "" {
-		args = append(args, "--work-dir", opts.WorkDir)
+		args = append(args, "--work-path", opts.WorkDir)
 	}
 	if opts.LeaveRunning {
 		args = append(args, "--leave-running")
 	}
-	if opts.AllowOpenTCP {
-		args = append(args, "--allow-open-tcp")
-	}
-	if opts.SkipInFlight {
-		args = append(args, "--skip-in-flight")
-	}
+	// Note: gVisor doesn't support CRIU-specific flags like:
+	// --allow-open-tcp, --skip-in-flight, --link-remap
+	// These are runc/CRIU specific and not available in runsc
 	args = append(args, containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
@@ -382,8 +381,9 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	if opts.ImagePath != "" {
 		args = append(args, "--image-path", opts.ImagePath)
 	}
+	// Note: gVisor uses --work-path (not --work-dir)
 	if opts.WorkDir != "" {
-		args = append(args, "--work-dir", opts.WorkDir)
+		args = append(args, "--work-path", opts.WorkDir)
 	}
 	if opts.BundlePath != "" {
 		args = append(args, "--bundle", opts.BundlePath)
