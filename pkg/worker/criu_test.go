@@ -96,189 +96,147 @@ func (m *MockRuntime) Close() error {
 	return nil
 }
 
-// TestNvidiaCRIUManagerWithRunc tests NVIDIA CRIU manager with runc runtime
-func TestNvidiaCRIUManagerWithRunc(t *testing.T) {
-	if os.Getenv("SKIP_CRIU_TESTS") == "1" {
-		t.Skip("Skipping CRIU tests")
-	}
-
-	tmpDir, err := os.MkdirTemp("", "criu-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	config := types.CRIUConfig{
-		Storage: types.CheckpointStorageConfig{
-			MountPath: tmpDir,
-		},
-	}
-
-	manager, err := InitializeNvidiaCRIU(context.Background(), config)
-	if err != nil {
-		t.Fatalf("Failed to initialize NVIDIA CRIU manager: %v", err)
-	}
-
-	mockRunc := NewMockRuntime("runc", runtime.Capabilities{
-		CheckpointRestore: true,
-		GPU:               true,
-	})
-
-	t.Run("CreateCheckpoint with runc", func(t *testing.T) {
-		request := &types.ContainerRequest{
-			ContainerId: "test-container-1",
-		}
-
-		checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRunc, "checkpoint-1", request)
-		if err != nil {
-			t.Errorf("CreateCheckpoint failed: %v", err)
-		}
-
-		if !mockRunc.checkpointCalled {
-			t.Error("Expected Checkpoint to be called on runtime")
-		}
-
-		if checkpointPath == "" {
-			t.Error("Expected non-empty checkpoint path")
-		}
-	})
-
-	t.Run("RestoreCheckpoint with runc", func(t *testing.T) {
-		request := &types.ContainerRequest{
-			ContainerId: "test-container-2",
-		}
-
-		checkpoint := &types.Checkpoint{
-			CheckpointId: "checkpoint-1",
-		}
-
-		// Create checkpoint directory
-		checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
-		os.MkdirAll(checkpointPath, 0755)
-
-		opts := &RestoreOpts{
-			request:    request,
-			checkpoint: checkpoint,
-			configPath: filepath.Join(tmpDir, "config.json"),
-			started:    make(chan int, 1),
-		}
-
-		exitCode, err := manager.RestoreCheckpoint(context.Background(), mockRunc, opts)
-		if err != nil {
-			t.Errorf("RestoreCheckpoint failed: %v", err)
-		}
-
-		if !mockRunc.restoreCalled {
-			t.Error("Expected Restore to be called on runtime")
-		}
-
-		if exitCode != 0 {
-			t.Errorf("Expected exit code 0, got %d", exitCode)
-		}
-	})
+// Reset clears the mock runtime state flags for reuse in subtests
+func (m *MockRuntime) Reset() {
+	m.checkpointCalled = false
+	m.restoreCalled = false
 }
 
-// TestNvidiaCRIUManagerWithGVisor tests NVIDIA CRIU manager with gVisor runtime
-func TestNvidiaCRIUManagerWithGVisor(t *testing.T) {
+// TestNvidiaCRIUManager tests NVIDIA CRIU manager with different runtimes
+func TestNvidiaCRIUManager(t *testing.T) {
 	if os.Getenv("SKIP_CRIU_TESTS") == "1" {
 		t.Skip("Skipping CRIU tests")
 	}
 
-	tmpDir, err := os.MkdirTemp("", "criu-gvisor-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	testCases := []struct {
+		name         string
+		runtimeName  string
+		capabilities runtime.Capabilities
+		extraTests   func(t *testing.T, manager CRIUManager, mockRuntime *MockRuntime, tmpDir string)
+	}{
+		{
+			name:        "runc",
+			runtimeName: "runc",
+			capabilities: runtime.Capabilities{
+				CheckpointRestore: true,
+				GPU:               true,
+			},
+		},
+		{
+			name:        "gvisor",
+			runtimeName: "gvisor",
+			capabilities: runtime.Capabilities{
+				CheckpointRestore: true,
+				GPU:               true,
+			},
+			extraTests: func(t *testing.T, manager CRIUManager, mockRuntime *MockRuntime, tmpDir string) {
+				t.Run("checkpoint with CUDA support", func(t *testing.T) {
+					// Reset mock state to ensure this test's assertions are independent
+					mockRuntime.Reset()
 
-	config := types.CRIUConfig{
-		Storage: types.CheckpointStorageConfig{
-			MountPath: tmpDir,
+					request := &types.ContainerRequest{
+						ContainerId: "cuda-container",
+						Gpu:         "nvidia-tesla-v100",
+						GpuCount:    1,
+					}
+
+					checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "cuda-checkpoint", request)
+					if err != nil {
+						t.Errorf("CreateCheckpoint with CUDA support failed: %v", err)
+					}
+
+					if !mockRuntime.checkpointCalled {
+						t.Error("Expected Checkpoint to be called for CUDA container")
+					}
+
+					if checkpointPath == "" {
+						t.Error("Expected non-empty checkpoint path for CUDA container")
+					}
+				})
+			},
 		},
 	}
 
-	manager, err := InitializeNvidiaCRIU(context.Background(), config)
-	if err != nil {
-		t.Fatalf("Failed to initialize NVIDIA CRIU manager: %v", err)
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", fmt.Sprintf("criu-%s-test-*", tc.runtimeName))
+			if err != nil {
+				t.Fatalf("Failed to create temp dir: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			config := types.CRIUConfig{
+				Storage: types.CheckpointStorageConfig{
+					MountPath: tmpDir,
+				},
+			}
+
+			manager, err := InitializeNvidiaCRIU(context.Background(), config)
+			if err != nil {
+				t.Fatalf("Failed to initialize NVIDIA CRIU manager: %v", err)
+			}
+
+			mockRuntime := NewMockRuntime(tc.runtimeName, tc.capabilities)
+
+			t.Run("CreateCheckpoint", func(t *testing.T) {
+				request := &types.ContainerRequest{
+					ContainerId: fmt.Sprintf("%s-container-1", tc.runtimeName),
+				}
+
+				checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockRuntime, "checkpoint-1", request)
+				if err != nil {
+					t.Errorf("CreateCheckpoint failed: %v", err)
+				}
+
+				if !mockRuntime.checkpointCalled {
+					t.Error("Expected Checkpoint to be called on runtime")
+				}
+
+				if checkpointPath == "" {
+					t.Error("Expected non-empty checkpoint path")
+				}
+			})
+
+			t.Run("RestoreCheckpoint", func(t *testing.T) {
+				request := &types.ContainerRequest{
+					ContainerId: fmt.Sprintf("%s-container-2", tc.runtimeName),
+				}
+
+				checkpoint := &types.Checkpoint{
+					CheckpointId: "checkpoint-1",
+				}
+
+				// Create checkpoint directory
+				checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
+				os.MkdirAll(checkpointPath, 0755)
+
+				opts := &RestoreOpts{
+					request:    request,
+					checkpoint: checkpoint,
+					configPath: filepath.Join(tmpDir, "config.json"),
+					started:    make(chan int, 1),
+				}
+
+				exitCode, err := manager.RestoreCheckpoint(context.Background(), mockRuntime, opts)
+				if err != nil {
+					t.Errorf("RestoreCheckpoint failed: %v", err)
+				}
+
+				if !mockRuntime.restoreCalled {
+					t.Error("Expected Restore to be called on runtime")
+				}
+
+				if exitCode != 0 {
+					t.Errorf("Expected exit code 0, got %d", exitCode)
+				}
+			})
+
+			// Run any extra tests specific to this runtime
+			if tc.extraTests != nil {
+				tc.extraTests(t, manager, mockRuntime, tmpDir)
+			}
+		})
 	}
-
-	mockGVisor := NewMockRuntime("gvisor", runtime.Capabilities{
-		CheckpointRestore: true,
-		GPU:               true,
-	})
-
-	t.Run("CreateCheckpoint with gVisor", func(t *testing.T) {
-		request := &types.ContainerRequest{
-			ContainerId: "gvisor-container-1",
-		}
-
-		checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockGVisor, "gvisor-checkpoint-1", request)
-		if err != nil {
-			t.Errorf("CreateCheckpoint with gVisor failed: %v", err)
-		}
-
-		if !mockGVisor.checkpointCalled {
-			t.Error("Expected Checkpoint to be called on gVisor runtime")
-		}
-
-		if checkpointPath == "" {
-			t.Error("Expected non-empty checkpoint path")
-		}
-	})
-
-	t.Run("RestoreCheckpoint with gVisor", func(t *testing.T) {
-		request := &types.ContainerRequest{
-			ContainerId: "gvisor-container-2",
-		}
-
-		checkpoint := &types.Checkpoint{
-			CheckpointId: "gvisor-checkpoint-1",
-		}
-
-		// Create checkpoint directory
-		checkpointPath := filepath.Join(tmpDir, checkpoint.CheckpointId)
-		os.MkdirAll(checkpointPath, 0755)
-
-		opts := &RestoreOpts{
-			request:    request,
-			checkpoint: checkpoint,
-			configPath: filepath.Join(tmpDir, "config.json"),
-			started:    make(chan int, 1),
-		}
-
-		exitCode, err := manager.RestoreCheckpoint(context.Background(), mockGVisor, opts)
-		if err != nil {
-			t.Errorf("RestoreCheckpoint with gVisor failed: %v", err)
-		}
-
-		if !mockGVisor.restoreCalled {
-			t.Error("Expected Restore to be called on gVisor runtime")
-		}
-
-		if exitCode != 0 {
-			t.Errorf("Expected exit code 0, got %d", exitCode)
-		}
-	})
-
-	t.Run("gVisor checkpoint with CUDA support", func(t *testing.T) {
-		request := &types.ContainerRequest{
-			ContainerId: "gvisor-cuda-container",
-			Gpu:         "nvidia-tesla-v100",
-			GpuCount:    1,
-		}
-
-		checkpointPath, err := manager.CreateCheckpoint(context.Background(), mockGVisor, "gvisor-cuda-checkpoint", request)
-		if err != nil {
-			t.Errorf("CreateCheckpoint with CUDA support failed: %v", err)
-		}
-
-		if !mockGVisor.checkpointCalled {
-			t.Error("Expected Checkpoint to be called for CUDA container")
-		}
-
-		if checkpointPath == "" {
-			t.Error("Expected non-empty checkpoint path for CUDA container")
-		}
-	})
 }
 
 // TestCedanaCRIUManagerRuntimeCheck tests that Cedana only works with runc
