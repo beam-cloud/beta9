@@ -103,6 +103,11 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 			Strs("devices_after_filter", devicesAfter).
 			Int("removed_count", len(devicesBefore)-len(devicesAfter)).
 			Msg("gVisor device filtering complete")
+
+		// CRITICAL: Filter mounts to remove paths that don't exist
+		// CDI may inject mounts for libraries that aren't present (e.g., ngx libraries)
+		// Attempting to mount non-existent files causes StartRoot to fail with EOF
+		r.filterNonExistentMounts(spec)
 	} else {
 		// For non-GPU workloads, clear all devices as gVisor handles them internally
 		spec.Linux.Devices = nil
@@ -148,6 +153,41 @@ func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
 		Source:      cudaCheckpointPath,
 		Options:     []string{"bind", "ro"},
 	})
+}
+
+// filterNonExistentMounts removes mounts where the source path doesn't exist on the host
+// This is critical for gVisor as mounting non-existent files causes StartRoot to fail with EOF
+func (r *Runsc) filterNonExistentMounts(spec *specs.Spec) {
+	if spec.Mounts == nil {
+		return
+	}
+
+	var validMounts []specs.Mount
+	var removedMounts []string
+
+	for _, mount := range spec.Mounts {
+		// Skip non-bind mounts (they don't require source path to exist)
+		if mount.Type != "bind" && mount.Type != "rbind" {
+			validMounts = append(validMounts, mount)
+			continue
+		}
+
+		// Check if source exists
+		if _, err := os.Stat(mount.Source); err == nil {
+			validMounts = append(validMounts, mount)
+		} else {
+			removedMounts = append(removedMounts, mount.Source)
+		}
+	}
+
+	if len(removedMounts) > 0 {
+		log.Warn().
+			Strs("removed_mounts", removedMounts).
+			Int("removed_count", len(removedMounts)).
+			Msg("Filtered out non-existent mount paths for gVisor")
+	}
+
+	spec.Mounts = validMounts
 }
 
 // hasGPUDevices checks if the spec contains GPU device configurations
