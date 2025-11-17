@@ -70,39 +70,24 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		return fmt.Errorf("spec is nil")
 	}
 
+	// gVisor requires seccomp to be disabled
 	spec.Linux.Seccomp = nil
+	
+	// Detect if GPU is requested by checking devices or CDI annotations
 	r.nvproxyEnabled = r.hasGPUDevices(spec)
 
 	if r.nvproxyEnabled {
+		// Mount cuda-checkpoint tool for CUDA checkpoint/restore support
 		r.mountCudaCheckpoint(spec)
-		// For nvproxy, keep only NVIDIA device entries and remove others
-		// nvproxy needs to see the GPU devices to virtualize them
-		r.filterNonGPUDevices(spec)
+		// NOTE: We do NOT clear or filter spec.Linux.Devices
+		// gVisor's nvproxy reads these to know which GPU devices to virtualize
+		// CDI should only inject GPU devices, so all devices in the spec should be valid
 	} else {
-		// For non-GPU workloads, clear all devices
+		// For non-GPU workloads, clear all devices as gVisor handles them internally
 		spec.Linux.Devices = nil
 	}
 
 	return nil
-}
-
-// filterNonGPUDevices removes non-NVIDIA devices from the spec
-// gVisor's nvproxy needs to see NVIDIA devices to virtualize them
-func (r *Runsc) filterNonGPUDevices(spec *specs.Spec) {
-	if spec.Linux == nil {
-		return
-	}
-
-	var gpuDevices []specs.LinuxDevice
-	for _, device := range spec.Linux.Devices {
-		// Keep only NVIDIA-related devices for nvproxy
-		if strings.HasPrefix(device.Path, "/dev/nvidia") ||
-			strings.HasPrefix(device.Path, "/dev/dri") {
-			gpuDevices = append(gpuDevices, device)
-		}
-	}
-
-	spec.Linux.Devices = gpuDevices
 }
 
 // mountCudaCheckpoint bind-mounts cuda-checkpoint binary into the container
