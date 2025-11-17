@@ -124,7 +124,7 @@ func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuC
 
 func (c *ContainerNvidiaManager) InjectEnvVars(env []string) []string {
 	cudaEnvVarDefaults := map[string]string{
-		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics,ngx,video",
+		"NVIDIA_DRIVER_CAPABILITIES": "compute,utility,graphics,video",
 		"NVIDIA_REQUIRE_CUDA":        "",
 		"NVARCH":                     "",
 		"NV_CUDA_COMPAT_PACKAGE":     "",
