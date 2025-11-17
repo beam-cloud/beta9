@@ -488,16 +488,17 @@ func TestCUDACheckpointRequirements(t *testing.T) {
 		// For gVisor with nvproxy:
 		// - NVIDIA driver >= 570 (recommended)
 		// - nvproxy enabled (--nvproxy=true)
-		// - cuda-checkpoint binary inside container
-		// - Two-step process: freeze, checkpoint, restore, unfreeze
+		// - cuda-checkpoint binary on WORKER/HOST
+		// - Two-step process: freeze (from host), checkpoint, restore, unfreeze (from host)
 		t.Log("gVisor CUDA checkpoint requires:")
 		t.Log("  - NVIDIA driver >= 570 (recommended)")
 		t.Log("  - nvproxy enabled when container is created")
-		t.Log("  - cuda-checkpoint binary INSIDE the container")
+		t.Log("  - cuda-checkpoint binary on WORKER (host), NOT in container")
+		t.Log("  - nvidia-smi on worker for process detection")
 		t.Log("  - GPU devices in OCI spec (CDI or direct)")
-		t.Log("  - Two-step process:")
-		t.Log("    1. Checkpoint: freeze CUDA (cuda-checkpoint), then runsc checkpoint")
-		t.Log("    2. Restore: runsc restore, then unfreeze CUDA (cuda-checkpoint)")
+		t.Log("  - Two-step process (similar to runc+CRIU):")
+		t.Log("    1. Checkpoint: freeze CUDA from HOST, then runsc checkpoint")
+		t.Log("    2. Restore: runsc restore, then unfreeze CUDA from HOST")
 	})
 }
 
@@ -515,52 +516,58 @@ func TestGVisorCUDACheckpointWorkflow(t *testing.T) {
 
 	t.Run("checkpoint workflow", func(t *testing.T) {
 		// Test that the workflow is correct even if runsc is not available
-		t.Log("gVisor CUDA checkpoint workflow:")
-		t.Log("1. Find CUDA processes inside container (via runsc exec)")
-		t.Log("2. For each CUDA process:")
-		t.Log("   - runsc exec container-id cuda-checkpoint checkpoint PID")
-		t.Log("3. Run runsc checkpoint command")
-		t.Log("4. GPU state is frozen and checkpointed")
+		t.Log("gVisor CUDA checkpoint workflow (from HOST):")
+		t.Log("1. Find CUDA processes using nvidia-smi on HOST")
+		t.Log("   nvidia-smi --query-compute-apps=pid --format=csv,noheader")
+		t.Log("2. Filter to PIDs belonging to this container (via cgroup check)")
+		t.Log("3. For each CUDA process (HOST PID):")
+		t.Log("   - cuda-checkpoint checkpoint <HOST_PID>  (from HOST)")
+		t.Log("4. Run runsc checkpoint command")
+		t.Log("5. GPU state is frozen and checkpointed")
 	})
 
 	t.Run("restore workflow", func(t *testing.T) {
-		t.Log("gVisor CUDA restore workflow:")
+		t.Log("gVisor CUDA restore workflow (from HOST):")
 		t.Log("1. Run runsc restore command")
 		t.Log("2. Wait for restore to complete")
-		t.Log("3. Find CUDA processes in restored container")
-		t.Log("4. For each CUDA process:")
-		t.Log("   - runsc exec container-id cuda-checkpoint restore PID")
-		t.Log("5. GPU state is unfrozen and operations resume")
+		t.Log("3. Find CUDA processes using nvidia-smi on HOST")
+		t.Log("4. Filter to PIDs belonging to this container")
+		t.Log("5. For each CUDA process (HOST PID):")
+		t.Log("   - cuda-checkpoint restore <HOST_PID>  (from HOST)")
+		t.Log("6. GPU state is unfrozen and operations resume")
 	})
 
 	t.Run("process detection methods", func(t *testing.T) {
-		t.Log("CUDA process detection methods:")
-		t.Log("Method 1: lsof /dev/nvidia* | awk '{print $2}' | sort -u")
-		t.Log("Method 2: Check /proc/[0-9]*/fd for nvidia device file descriptors")
-		t.Log("Graceful fallback if neither method works")
+		t.Log("CUDA process detection (clean approach):")
+		t.Log("Method: nvidia-smi --query-compute-apps=pid on HOST")
+		t.Log("  - Returns HOST PIDs of all GPU processes")
+		t.Log("  - Filter to container by checking cgroup membership")
+		t.Log("  - Clean, reliable, and already used elsewhere in codebase")
 	})
 }
 
 // TestCUDACheckpointBinaryRequirement documents the cuda-checkpoint binary requirement
 func TestCUDACheckpointBinaryRequirement(t *testing.T) {
-	t.Run("cuda-checkpoint must be in container", func(t *testing.T) {
+	t.Run("cuda-checkpoint must be on worker host", func(t *testing.T) {
 		t.Log("For gVisor CUDA checkpoint to work:")
-		t.Log("  - cuda-checkpoint binary must be installed INSIDE the container")
-		t.Log("  - It is NOT sufficient to have it on the host")
-		t.Log("  - Add to Dockerfile: RUN apt-get install -y cuda-checkpoint")
-		t.Log("  - Or COPY cuda-checkpoint /usr/local/bin/cuda-checkpoint")
+		t.Log("  - cuda-checkpoint binary must be installed on the WORKER (host)")
+		t.Log("  - It runs FROM THE HOST, not inside the container")
+		t.Log("  - Similar to how CRIU runs from the host with runc")
+		t.Log("  - No need to install cuda-checkpoint in container images!")
 	})
 
 	t.Run("cuda-checkpoint commands", func(t *testing.T) {
-		t.Log("cuda-checkpoint usage inside container:")
-		t.Log("  - cuda-checkpoint checkpoint PID  # Freeze CUDA state for process")
-		t.Log("  - cuda-checkpoint restore PID     # Unfreeze CUDA state for process")
+		t.Log("cuda-checkpoint usage from host:")
+		t.Log("  - cuda-checkpoint checkpoint <HOST_PID>  # Freeze CUDA state for process")
+		t.Log("  - cuda-checkpoint restore <HOST_PID>     # Unfreeze CUDA state for process")
+		t.Log("  - PIDs are HOST PIDs, not container PIDs")
 	})
 
 	t.Run("automatic vs manual", func(t *testing.T) {
-		t.Log("Difference between runc and gVisor:")
-		t.Log("  - runc: CRIU automatically calls cuda-checkpoint")
-		t.Log("  - gVisor: Must manually call cuda-checkpoint via runsc exec")
-		t.Log("  - gVisor: Two-step process (freeze, checkpoint, restore, unfreeze)")
+		t.Log("Similarity between runc and gVisor:")
+		t.Log("  - runc: CRIU runs from host, calls cuda-checkpoint from host")
+		t.Log("  - gVisor: We run cuda-checkpoint from host directly")
+		t.Log("  - Both use HOST PIDs and operate at host level")
+		t.Log("  - gVisor: Manual orchestration of what CRIU does automatically")
 	})
 }

@@ -19,28 +19,37 @@ import (
 // Runsc implements Runtime using the gVisor runsc runtime
 //
 // CUDA Checkpoint/Restore Workflow:
-// gVisor requires a two-step process for CUDA checkpoints:
+// gVisor requires a two-step process for CUDA checkpoints, similar to runc+CRIU:
 //
 // 1. Checkpoint:
-//    a. Run cuda-checkpoint binary INSIDE the gVisor sandbox on all CUDA processes
-//       This freezes the GPU state (memory, contexts, streams)
-//    b. Then run `runsc checkpoint` to create the checkpoint image
+//    a. Find CUDA processes using nvidia-smi from the HOST
+//       nvidia-smi --query-compute-apps=pid gives us host PIDs using GPU
+//    b. Run cuda-checkpoint from the HOST on each CUDA process (using host PIDs)
+//       cuda-checkpoint checkpoint <host_pid>
+//       This freezes the GPU state (memory, contexts, streams) at the driver level
+//    c. Then run `runsc checkpoint` to create the checkpoint image
 //       This captures the container state with frozen GPU operations
 //
 // 2. Restore:
 //    a. Run `runsc restore` to restore the sandbox from checkpoint
 //       This brings back the container with frozen CUDA state
-//    b. Run cuda-checkpoint binary INSIDE the restored sandbox to unfreeze CUDA processes
-//       This resumes GPU operations
+//    b. Find CUDA processes again using nvidia-smi from the HOST
+//    c. Run cuda-checkpoint from the HOST on each CUDA process (using host PIDs)
+//       cuda-checkpoint restore <host_pid>
+//       This unfreezes GPU operations at the driver level
 //
-// Requirements:
-//   - nvproxy must be enabled (--nvproxy=true)
-//   - cuda-checkpoint binary must be available inside the container
-//   - NVIDIA driver >= 570 recommended
-//   - GPU devices in OCI spec (CDI or direct)
+// Key Points:
+//   - cuda-checkpoint runs from the HOST (installed on worker), not inside the container
+//   - PIDs are HOST PIDs, not container PIDs (similar to CRIU)
+//   - Process detection uses nvidia-smi on host (cleaner than lsof/proc)
+//   - nvproxy must be enabled (--nvproxy=true) for GPU passthrough
+//   - NVIDIA driver >= 570 recommended for full checkpoint support
+//   - GPU devices must be in OCI spec (CDI or direct)
 //
-// The cuda-checkpoint binary is NVIDIA's tool for freezing/unfreezing CUDA state.
-// Unlike runc where CRIU automatically handles this, gVisor requires manual execution.
+// This approach is analogous to how runc+CRIU works:
+//   - CRIU runs on host and operates on host PIDs
+//   - cuda-checkpoint (as CRIU plugin) runs on host
+//   - For gVisor, we manually orchestrate what CRIU would do automatically
 type Runsc struct {
 	cfg            Config
 	nvproxyEnabled bool // Whether GPU support via nvproxy is enabled
@@ -506,64 +515,19 @@ func (r *Runsc) unfreezeCUDAProcesses(ctx context.Context, containerID string, o
 }
 
 // findCUDAProcesses finds all processes in the container that are using CUDA
-// Returns a list of PIDs (as seen inside the container) that have CUDA contexts
+// Returns a list of PIDs (as seen from the HOST perspective) that have CUDA contexts
 func (r *Runsc) findCUDAProcesses(ctx context.Context, containerID string) ([]int, error) {
-	// Use runsc exec to run a command that finds CUDA processes
-	// We look for processes that have opened CUDA device files or have CUDA libraries loaded
-	
-	// Method 1: Look for processes with /dev/nvidia* file descriptors
-	// Run: lsof /dev/nvidia* | awk '{print $2}' | sort -u
-	args := r.baseArgs(false)
-	args = append(args, "exec", containerID)
-	args = append(args, "sh", "-c", "lsof /dev/nvidia* 2>/dev/null | awk 'NR>1 {print $2}' | sort -u || true")
-
-	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	// Use nvidia-smi on the host to find all processes using the GPU
+	// This is cleaner and more reliable than parsing /proc or using lsof
+	cmd := exec.CommandContext(ctx, "nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
-		// lsof might not be available or no CUDA processes found
-		// Try alternative method using /proc
-		return r.findCUDAProcessesViaProcfs(ctx, containerID)
-	}
-
-	// Parse PIDs from output
-	var pids []int
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if pid, err := strconv.Atoi(line); err == nil {
-			pids = append(pids, pid)
-		}
-	}
-
-	return pids, nil
-}
-
-// findCUDAProcessesViaProcfs finds CUDA processes by checking /proc for nvidia device file descriptors
-func (r *Runsc) findCUDAProcessesViaProcfs(ctx context.Context, containerID string) ([]int, error) {
-	// List all processes and check if they have nvidia device file descriptors
-	args := r.baseArgs(false)
-	args = append(args, "exec", containerID)
-	args = append(args, "sh", "-c", 
-		"for pid in /proc/[0-9]*; do "+
-		"if [ -d \"$pid/fd\" ]; then "+
-		"if ls -l $pid/fd 2>/dev/null | grep -q nvidia; then "+
-		"basename $pid; "+
-		"fi; "+
-		"fi; "+
-		"done")
-
-	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
-	output, err := cmd.Output()
-	if err != nil {
-		// If this also fails, return empty list (no CUDA processes or unable to detect)
+		// nvidia-smi not available or no GPU processes
 		return []int{}, nil
 	}
 
 	// Parse PIDs from output
-	var pids []int
+	var hostPIDs []int
 	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -571,24 +535,79 @@ func (r *Runsc) findCUDAProcessesViaProcfs(ctx context.Context, containerID stri
 			continue
 		}
 		if pid, err := strconv.Atoi(line); err == nil {
-			pids = append(pids, pid)
+			hostPIDs = append(hostPIDs, pid)
 		}
 	}
 
-	return pids, nil
+	if len(hostPIDs) == 0 {
+		return []int{}, nil
+	}
+
+	// Filter to only PIDs that belong to this container
+	// by checking if the PID's parent chain includes the container's sandbox process
+	containerPIDs := []int{}
+	for _, pid := range hostPIDs {
+		if belongs, err := r.pidBelongsToContainer(ctx, pid, containerID); err == nil && belongs {
+			containerPIDs = append(containerPIDs, pid)
+		}
+	}
+
+	return containerPIDs, nil
 }
 
-// runCUDACheckpoint runs the cuda-checkpoint binary inside the container on a specific process
+// pidBelongsToContainer checks if a given PID (from host perspective) belongs to the specified container
+func (r *Runsc) pidBelongsToContainer(ctx context.Context, pid int, containerID string) (bool, error) {
+	// Get the container's sandbox PID
+	stateCmd := exec.CommandContext(ctx, r.cfg.RunscPath, "--root", r.cfg.RunscRoot, "state", containerID)
+	output, err := stateCmd.Output()
+	if err != nil {
+		return false, err
+	}
+
+	// Parse the state JSON to get the sandbox PID
+	var state struct {
+		Pid int `json:"pid"`
+	}
+	if err := json.Unmarshal(output, &state); err != nil {
+		return false, err
+	}
+
+	sandboxPID := state.Pid
+	if sandboxPID == 0 {
+		return false, fmt.Errorf("container not running")
+	}
+
+	// Check if the PID is in the same PID namespace as the sandbox
+	// by comparing cgroup or checking parent chain
+	pidCgroup, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return false, err
+	}
+
+	sandboxCgroup, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", sandboxPID))
+	if err != nil {
+		return false, err
+	}
+
+	// If cgroups match, the PID belongs to this container
+	return bytes.Contains(pidCgroup, []byte(containerID)) || 
+	       bytes.Equal(pidCgroup, sandboxCgroup), nil
+}
+
+// runCUDACheckpoint runs the cuda-checkpoint binary from the HOST on a specific process
+// The PID is from the host perspective (not container PID namespace)
 // action should be "checkpoint" (freeze) or "restore" (unfreeze)
 func (r *Runsc) runCUDACheckpoint(ctx context.Context, containerID string, pid int, action string, outputWriter OutputWriter) error {
-	// cuda-checkpoint takes the form: cuda-checkpoint [action] [pid]
+	// cuda-checkpoint runs from the HOST and targets host PIDs
+	// This is similar to how CRIU operates with runc
+	// 
+	// The cuda-checkpoint binary is installed on the worker/host, not in the container
+	// It operates at the host level, checkpointing GPU state for specific PIDs
+	//
 	// Example: cuda-checkpoint checkpoint 1234
 	//          cuda-checkpoint restore 1234
 	
-	args := r.baseArgs(false)
-	args = append(args, "exec", containerID, "cuda-checkpoint", action, fmt.Sprintf("%d", pid))
-
-	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	cmd := exec.CommandContext(ctx, "cuda-checkpoint", action, fmt.Sprintf("%d", pid))
 	
 	if outputWriter != nil {
 		cmd.Stdout = outputWriter
@@ -598,7 +617,7 @@ func (r *Runsc) runCUDACheckpoint(ctx context.Context, containerID string, pid i
 	if err := cmd.Run(); err != nil {
 		// cuda-checkpoint might not be installed or the process might not have CUDA contexts
 		// Log but don't fail - this allows graceful degradation
-		return fmt.Errorf("cuda-checkpoint %s failed for PID %d: %w", action, pid, err)
+		return fmt.Errorf("cuda-checkpoint %s failed for host PID %d: %w", action, pid, err)
 	}
 
 	return nil
