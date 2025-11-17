@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -15,9 +18,14 @@ import (
 )
 
 // Runsc implements Runtime using the gVisor runsc runtime
+//
+// CUDA Checkpoint/Restore:
+// For GPU workloads, cuda-checkpoint is bind-mounted from the host and executed
+// inside the container via runsc exec to freeze/unfreeze GPU state before/after
+// checkpoint/restore operations.
 type Runsc struct {
 	cfg            Config
-	nvproxyEnabled bool // Whether GPU support via nvproxy is enabled
+	nvproxyEnabled bool
 }
 
 // NewRunsc creates a new runsc (gVisor) runtime
@@ -48,7 +56,7 @@ func (r *Runsc) Name() string {
 
 func (r *Runsc) Capabilities() Capabilities {
 	return Capabilities{
-		CheckpointRestore: false, // NOTE: We don't support CRIU for gvisor yet
+		CheckpointRestore: true,
 		GPU:               true,
 		OOMEvents:         false,
 		JoinExistingNetNS: true,
@@ -58,29 +66,35 @@ func (r *Runsc) Capabilities() Capabilities {
 
 // Prepare mutates the OCI spec to be compatible with gVisor
 func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
-	if spec == nil {
+	if spec == nil || spec.Linux == nil {
 		return fmt.Errorf("spec is nil")
 	}
 
-	// Remove seccomp profiles - gVisor is a userspace kernel and doesn't use seccomp
-	if spec.Linux != nil {
-		spec.Linux.Seccomp = nil
+	spec.Linux.Seccomp = nil
+	r.nvproxyEnabled = r.hasGPUDevices(spec)
 
-		// Check if this spec has GPU devices (CDI or direct)
-		// If so, enable nvproxy support
-		r.nvproxyEnabled = r.hasGPUDevices(spec)
-
-		if r.nvproxyEnabled {
-			// For nvproxy, we keep the device specifications
-			// gVisor will intercept GPU calls and proxy them to the host driver
-			// The devices will be available through nvproxy, not direct passthrough
-		} else {
-			// Clear devices list if no GPU - gVisor virtualizes /dev
-			spec.Linux.Devices = nil
-		}
+	if r.nvproxyEnabled {
+		r.mountCudaCheckpoint(spec)
+	} else {
+		spec.Linux.Devices = nil
 	}
 
 	return nil
+}
+
+// mountCudaCheckpoint bind-mounts cuda-checkpoint binary into the container
+func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
+	cudaCheckpointPath, err := exec.LookPath("cuda-checkpoint")
+	if err != nil {
+		return // Not found, skip
+	}
+
+	spec.Mounts = append(spec.Mounts, specs.Mount{
+		Destination: "/usr/local/bin/cuda-checkpoint",
+		Type:        "bind",
+		Source:      cudaCheckpointPath,
+		Options:     []string{"bind", "ro"},
+	})
 }
 
 // hasGPUDevices checks if the spec contains GPU device configurations
@@ -89,28 +103,15 @@ func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
 		return false
 	}
 
-	// Check for NVIDIA GPU devices
 	for _, device := range spec.Linux.Devices {
-		path := device.Path
-		// NVIDIA GPU devices typically start with /dev/nvidia
-		if len(path) >= 11 && path[:11] == "/dev/nvidia" {
-			return true
-		}
-		if len(path) >= 13 && path[:13] == "/dev/nvidiactl" {
-			return true
-		}
-		if len(path) >= 15 && path[:15] == "/dev/nvidia-uvm" {
+		if strings.HasPrefix(device.Path, "/dev/nvidia") {
 			return true
 		}
 	}
 
-	// Check for CDI device annotations
-	if spec.Annotations != nil {
-		for key := range spec.Annotations {
-			// CDI devices are specified via annotations like "cdi.k8s.io/nvidia"
-			if len(key) >= 10 && key[:10] == "cdi.k8s.io" {
-				return true
-			}
+	for key := range spec.Annotations {
+		if strings.HasPrefix(key, "cdi.k8s.io") {
+			return true
 		}
 	}
 
@@ -285,6 +286,224 @@ func (r *Runsc) Events(ctx context.Context, containerID string) (<-chan Event, e
 	ch := make(chan Event)
 	close(ch)
 	return ch, nil
+}
+
+func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *CheckpointOpts) error {
+	if opts == nil {
+		return fmt.Errorf("checkpoint options cannot be nil")
+	}
+
+	// Freeze CUDA processes before checkpointing (non-fatal)
+	if r.nvproxyEnabled {
+		if err := r.cudaCheckpointProcesses(ctx, containerID, "checkpoint", opts.OutputWriter); err != nil {
+			// Log but don't fail - CUDA checkpoint is optional
+			if opts.OutputWriter != nil {
+				fmt.Fprintf(opts.OutputWriter, "Warning: CUDA checkpoint failed: %v\n", err)
+			}
+		}
+	}
+
+	// Ensure directories exist
+	if opts.ImagePath != "" {
+		if err := os.MkdirAll(opts.ImagePath, 0755); err != nil {
+			return fmt.Errorf("failed to create image path: %w", err)
+		}
+	}
+	if opts.WorkDir != "" {
+		if err := os.MkdirAll(opts.WorkDir, 0755); err != nil {
+			return fmt.Errorf("failed to create work dir: %w", err)
+		}
+	}
+
+	args := r.baseArgs(false)
+	args = append(args, "checkpoint")
+	if opts.ImagePath != "" {
+		args = append(args, "--image-path", opts.ImagePath)
+	}
+
+	// NOTE: gVisor's --work-path flag is marked as "ignored" in runsc
+	// but we include it for compatibility
+	if opts.WorkDir != "" {
+		args = append(args, "--work-path", opts.WorkDir)
+	}
+	if opts.LeaveRunning {
+		args = append(args, "--leave-running")
+	}
+
+	// NOTE: gVisor doesn't support CRIU-specific flags like:
+	// --allow-open-tcp, --skip-in-flight, --link-remap
+	// These are runc/CRIU specific and not available in runsc
+	args = append(args, containerID)
+
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+
+	// Capture both stdout and stderr for better error reporting
+	var stderr bytes.Buffer
+	if opts.OutputWriter != nil {
+		cmd.Stdout = opts.OutputWriter
+		cmd.Stderr = io.MultiWriter(opts.OutputWriter, &stderr)
+	} else {
+		cmd.Stderr = &stderr
+	}
+
+	if err := cmd.Run(); err != nil {
+		stderrStr := stderr.String()
+		if stderrStr != "" {
+			return fmt.Errorf("checkpoint failed: %w (stderr: %s)", err, stderrStr)
+		}
+		return fmt.Errorf("checkpoint failed: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOpts) (int, error) {
+	if opts == nil {
+		return -1, fmt.Errorf("restore options cannot be nil")
+	}
+
+	defer func() {
+		deleteArgs := r.baseArgs(false)
+		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
+		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
+	}()
+
+	// Ensure directories exist
+	if opts.WorkDir != "" {
+		if err := os.MkdirAll(opts.WorkDir, 0755); err != nil {
+			return -1, fmt.Errorf("failed to create work dir: %w", err)
+		}
+	}
+
+	args := r.baseArgs(false)
+	if r.nvproxyEnabled {
+		args = append(args, "--nvproxy=true")
+	}
+	args = append(args, "restore")
+	if opts.ImagePath != "" {
+		args = append(args, "--image-path", opts.ImagePath)
+	}
+	// Note: gVisor uses --work-path (not --work-dir)
+	if opts.WorkDir != "" {
+		args = append(args, "--work-path", opts.WorkDir)
+	}
+	if opts.BundlePath != "" {
+		args = append(args, "--bundle", opts.BundlePath)
+	}
+	args = append(args, containerID)
+
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Capture stderr for better error reporting
+	var stderr bytes.Buffer
+	if opts.OutputWriter != nil {
+		cmd.Stdout = opts.OutputWriter
+		cmd.Stderr = io.MultiWriter(opts.OutputWriter, &stderr)
+	} else {
+		cmd.Stderr = &stderr
+	}
+
+	if err := cmd.Start(); err != nil {
+		stderrStr := stderr.String()
+		if stderrStr != "" {
+			return -1, fmt.Errorf("restore failed to start: %w (stderr: %s)", err, stderrStr)
+		}
+		return -1, err
+	}
+
+	if opts.Started != nil {
+		opts.Started <- cmd.Process.Pid
+	}
+
+	go func() {
+		<-ctx.Done()
+		if pgid, _ := syscall.Getpgid(cmd.Process.Pid); pgid > 0 {
+			syscall.Kill(-pgid, syscall.SIGKILL)
+		}
+	}()
+
+	err := cmd.Wait()
+	if err != nil {
+		stderrStr := stderr.String()
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				if stderrStr != "" {
+					return ws.ExitStatus(), fmt.Errorf("restore failed with exit code %d (stderr: %s)", ws.ExitStatus(), stderrStr)
+				}
+				return ws.ExitStatus(), nil
+			}
+		}
+		if stderrStr != "" {
+			return -1, fmt.Errorf("restore failed: %w (stderr: %s)", err, stderrStr)
+		}
+		return -1, err
+	}
+
+	// Unfreeze CUDA processes after restore (non-fatal)
+	if r.nvproxyEnabled {
+		if err := r.cudaCheckpointProcesses(ctx, containerID, "restore", opts.OutputWriter); err != nil {
+			// Log but don't fail - CUDA restore is optional
+			if opts.OutputWriter != nil {
+				fmt.Fprintf(opts.OutputWriter, "Warning: CUDA restore failed: %v\n", err)
+			}
+		}
+	}
+
+	return 0, nil
+}
+
+// cudaCheckpointProcesses runs cuda-checkpoint on all CUDA processes inside the container
+// action should be "checkpoint" (freeze) or "restore" (unfreeze)
+func (r *Runsc) cudaCheckpointProcesses(ctx context.Context, containerID, action string, outputWriter OutputWriter) error {
+	pids, err := r.findCUDAProcesses(ctx, containerID)
+	if err != nil || len(pids) == 0 {
+		return nil // No CUDA processes, skip
+	}
+
+	for _, pid := range pids {
+		args := r.baseArgs(false)
+		args = append(args, "exec", containerID, "/usr/local/bin/cuda-checkpoint", action, strconv.Itoa(pid))
+
+		cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+		if outputWriter != nil {
+			cmd.Stdout = outputWriter
+			cmd.Stderr = outputWriter
+		}
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("cuda-checkpoint %s failed for PID %d: %w", action, pid, err)
+		}
+	}
+
+	return nil
+}
+
+// findCUDAProcesses finds container PIDs with nvidia device file descriptors
+func (r *Runsc) findCUDAProcesses(ctx context.Context, containerID string) ([]int, error) {
+	args := r.baseArgs(false)
+	args = append(args, "exec", containerID, "sh", "-c",
+		"for pid in /proc/[0-9]*; do "+
+			"[ -d \"$pid/fd\" ] && ls -l $pid/fd 2>/dev/null | grep -q nvidia && basename $pid; "+
+			"done")
+
+	output, err := exec.CommandContext(ctx, r.cfg.RunscPath, args...).Output()
+	if err != nil {
+		return []int{1}, nil // Fallback to PID 1
+	}
+
+	var pids []int
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+
+	if len(pids) == 0 {
+		return []int{1}, nil // Fallback to PID 1
+	}
+
+	return pids, nil
 }
 
 func (r *Runsc) Close() error {

@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	types "github.com/beam-cloud/beta9/pkg/types"
-	"github.com/beam-cloud/go-runc"
 	"github.com/rs/zerolog/log"
 )
 
@@ -34,7 +34,6 @@ func IsCRIURestoreError(err error) bool {
 }
 
 type NvidiaCRIUManager struct {
-	runcHandle      runc.Runc
 	cpStorageConfig types.CheckpointStorageConfig
 	gpuCnt          int
 	available       bool
@@ -53,55 +52,68 @@ func InitializeNvidiaCRIU(ctx context.Context, config types.CRIUConfig) (CRIUMan
 
 	available := crCompatible(gpuCnt)
 
-	runcHandle := runc.Runc{}
-	return &NvidiaCRIUManager{runcHandle: runcHandle, cpStorageConfig: config.Storage, gpuCnt: gpuCnt, available: available}, nil
+	return &NvidiaCRIUManager{cpStorageConfig: config.Storage, gpuCnt: gpuCnt, available: available}, nil
 }
 
-func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, checkpointId string, request *types.ContainerRequest) (string, error) {
+func (c *NvidiaCRIUManager) CreateCheckpoint(ctx context.Context, rt runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error) {
 	checkpointPath := fmt.Sprintf("%s/%s", c.cpStorageConfig.MountPath, checkpointId)
-	err := c.runcHandle.Checkpoint(ctx, request.ContainerId, &runc.CheckpointOpts{
-		AllowOpenTCP: true,
-		LeaveRunning: true,
-		SkipInFlight: true,
-		LinkRemap:    true,
+	workDir := filepath.Join("/tmp", checkpointId)
+	
+	// Setup work directory for checkpoint files
+	if err := os.MkdirAll(workDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create checkpoint work directory: %w", err)
+	}
+	
+	// Create checkpoint with all required options for proper CUDA checkpoint
+	err := rt.Checkpoint(ctx, request.ContainerId, &runtime.CheckpointOpts{
 		ImagePath:    checkpointPath,
-		Cgroups:      runc.Soft,
+		WorkDir:      workDir,        // Required for checkpoint files (logs, cache, sockets)
+		LeaveRunning: true,            // Keep container running (hot checkpoint)
+		AllowOpenTCP: true,            // Allow open TCP connections
+		SkipInFlight: true,            // Skip in-flight TCP packets
+		LinkRemap:    true,            // Enable link remapping for file descriptors
 	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("checkpoint failed for runtime %s: %w", rt.Name(), err)
 	}
 
+	log.Info().
+		Str("runtime", rt.Name()).
+		Str("checkpoint_id", checkpointId).
+		Str("checkpoint_path", checkpointPath).
+		Str("work_dir", workDir).
+		Msg("checkpoint created successfully")
+	
 	return checkpointPath, nil
 }
 
-func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error) {
+func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, rt runtime.Runtime, opts *RestoreOpts) (int, error) {
 	bundlePath := filepath.Dir(opts.configPath)
 	imagePath := filepath.Join(c.cpStorageConfig.MountPath, opts.checkpoint.CheckpointId)
-	workDir := filepath.Join("/tmp", imagePath)
+	workDir := filepath.Join("/tmp", opts.checkpoint.CheckpointId)
+	
+	// Setup work directory for restore files
 	err := c.setupRestoreWorkDir(workDir)
 	if err != nil {
-		return -1, err
+		return -1, fmt.Errorf("failed to setup restore work directory: %w", err)
 	}
 
 	// Create a buffer to capture stderr while still forwarding to the original writer
 	var stderrBuf strings.Builder
 	var outputWriter io.Writer = &stderrBuf
 
-	if opts.runcOpts.OutputWriter != nil {
-		outputWriter = io.MultiWriter(opts.runcOpts.OutputWriter, &stderrBuf)
+	if opts.outputWriter != nil {
+		outputWriter = io.MultiWriter(opts.outputWriter, &stderrBuf)
 	}
 
-	exitCode, err := c.runcHandle.Restore(ctx, opts.request.ContainerId, bundlePath, &runc.RestoreOpts{
-		CheckpointOpts: runc.CheckpointOpts{
-			LinkRemap: true,
-			// Logs, irmap cache, sockets for lazy server and other go to working dir
-			WorkDir:      workDir,
-			ImagePath:    imagePath,
-			OutputWriter: outputWriter,
-			Cgroups:      runc.Soft,
-		},
-		TCPClose: true,
-		Started:  opts.runcOpts.Started,
+	// Restore with all required options for proper CUDA restore
+	exitCode, err := rt.Restore(ctx, opts.request.ContainerId, &runtime.RestoreOpts{
+		ImagePath:    imagePath,                // Path to checkpoint image
+		WorkDir:      workDir,                  // Working directory for restore files
+		BundlePath:   bundlePath,               // Container bundle path
+		OutputWriter: outputWriter,             // Output writer for logs
+		Started:      opts.started,             // Channel to signal process start
+		TCPClose:     true,                     // Close TCP connections on restore
 	})
 
 	if err != nil {
@@ -112,23 +124,21 @@ func (c *NvidiaCRIUManager) RestoreCheckpoint(ctx context.Context, opts *Restore
 			return -1, &ErrCRIURestoreFailed{Stderr: stderr}
 		}
 
-		return exitCode, err
+		return exitCode, fmt.Errorf("restore failed for runtime %s: %w", rt.Name(), err)
 	}
 
+	log.Info().
+		Str("runtime", rt.Name()).
+		Str("checkpoint_id", opts.checkpoint.CheckpointId).
+		Str("image_path", imagePath).
+		Str("work_dir", workDir).
+		Msg("checkpoint restored successfully")
+	
 	return exitCode, nil
 }
 
 func (c *NvidiaCRIUManager) Available() bool {
 	return c.available
-}
-
-func (c *NvidiaCRIUManager) Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error) {
-	exitCode, err := c.runcHandle.Run(ctx, request.ContainerId, bundlePath, runcOpts)
-	if err != nil {
-		return -1, err
-	}
-
-	return exitCode, nil
 }
 
 // getNvidiaDriverVersion returns the NVIDIA driver version as an integer

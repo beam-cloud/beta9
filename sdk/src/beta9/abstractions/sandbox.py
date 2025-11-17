@@ -5,8 +5,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Union
 
-import yaml
-
 from .. import terminal
 from ..abstractions.base import unset_channel
 from ..abstractions.base.runner import (
@@ -2472,6 +2470,8 @@ class SandboxDockerManager:
         Returns:
             str: Path to override file in sandbox
         """
+        import yaml
+
         compose_file_path = file if file.startswith("/") else f"{cwd or '.'}/{file}"
 
         # Download and parse compose file
@@ -2510,7 +2510,7 @@ class SandboxDockerManager:
                 if len(service_names) > 1:
                     override_content += "    extra_hosts:\n"
                     for other_service in service_names:
-                        override_content += f"      - \"{other_service}:127.0.0.1\"\n"
+                        override_content += f'      - "{other_service}:127.0.0.1"\n'
                 if service_name in services_with_build:
                     override_content += "    build:\n"
                     override_content += "      network: host\n"
@@ -2571,6 +2571,8 @@ class SandboxDockerManager:
             stack.stop()
             ```
         """
+        import yaml
+
         if not self._authenticated:
             self._auto_login()
 

@@ -961,7 +961,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	log.Info().Str("container_id", containerId).Msgf("container has exited with code: %d, stop reason: %s", exitCode, stopReason)
 	outputLogger.Info("", "done", true, "success", exitCode == 0)
 	if containerId != "" {
-		// Get the runtime for this container
 		instance, exists := s.containerInstances.Get(containerId)
 		rt := s.runtime
 		if exists && instance.Runtime != nil {
@@ -976,7 +975,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 }
 
 func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, error) {
-	// Get the runtime for this container
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")

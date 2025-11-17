@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/runtime"
 	storage "github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	"github.com/beam-cloud/go-runc"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -30,17 +30,17 @@ const (
 )
 
 type RestoreOpts struct {
-	request    *types.ContainerRequest
-	checkpoint *types.Checkpoint
-	runcOpts   *runc.CreateOpts
-	configPath string
+	request      *types.ContainerRequest
+	checkpoint   *types.Checkpoint
+	outputWriter io.Writer
+	started      chan int
+	configPath   string
 }
 
 type CRIUManager interface {
 	Available() bool
-	Run(ctx context.Context, request *types.ContainerRequest, bundlePath string, runcOpts *runc.CreateOpts) (int, error)
-	CreateCheckpoint(ctx context.Context, checkpointId string, request *types.ContainerRequest) (string, error)
-	RestoreCheckpoint(ctx context.Context, opts *RestoreOpts) (int, error)
+	CreateCheckpoint(ctx context.Context, runtime runtime.Runtime, checkpointId string, request *types.ContainerRequest) (string, error)
+	RestoreCheckpoint(ctx context.Context, runtime runtime.Runtime, opts *RestoreOpts) (int, error)
 }
 
 // InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers
@@ -141,14 +141,17 @@ func (s *Worker) attemptRestoreCheckpoint(ctx context.Context, request *types.Co
 	}
 	defer f.Close()
 
-	exitCode, err = s.criuManager.RestoreCheckpoint(ctx, &RestoreOpts{
-		request:    request,
-		checkpoint: checkpoint,
-		runcOpts: &runc.CreateOpts{
-			OutputWriter: outputWriter,
-			Started:      startedChan,
-		},
-		configPath: request.ConfigPath,
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists {
+		return -1, false, fmt.Errorf("container instance not found")
+	}
+
+	exitCode, err = s.criuManager.RestoreCheckpoint(ctx, instance.Runtime, &RestoreOpts{
+		request:      request,
+		checkpoint:   checkpoint,
+		outputWriter: outputWriter,
+		started:      startedChan,
+		configPath:   request.ConfigPath,
 	})
 	if err != nil && IsCRIURestoreError(err) {
 		log.Error().Str("container_id", request.ContainerId).Str("checkpoint_id", checkpoint.CheckpointId).Msgf("failed to restore checkpoint: %v", err)
@@ -199,7 +202,7 @@ func (s *Worker) createCheckpoint(ctx context.Context, opts *CreateCheckpointOpt
 	}
 
 	// Proceed to create the checkpoint
-	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, opts.CheckpointId, opts.Request)
+	checkpointPath, err := s.criuManager.CreateCheckpoint(ctx, instance.Runtime, opts.CheckpointId, opts.Request)
 	if err != nil {
 		err := s.createCheckpointState(opts.CheckpointId, opts.Request, types.CheckpointStatusCheckpointFailed, opts.ContainerIp)
 		if err != nil {
