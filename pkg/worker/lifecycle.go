@@ -802,6 +802,14 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 		}
+
+		// For gVisor with nvproxy, explicitly mount CUDA libraries from the host
+		// nvproxy intercepts GPU syscalls but still needs access to NVIDIA driver libraries
+		// CDI may not include all necessary library paths, so we ensure they're mounted
+		if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
+			spec.Mounts = s.containerGPUManager.InjectMounts(spec.Mounts)
+			log.Info().Str("container_id", request.ContainerId).Msg("injected CUDA library mounts for gVisor nvproxy")
+		}
 	}
 
 	// Expose the bind ports
