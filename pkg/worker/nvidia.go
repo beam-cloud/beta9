@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,12 +42,20 @@ type ContainerNvidiaManager struct {
 
 func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 	if gpuCount > 0 {
-		// Generate CDI config with only gVisor-supported driver capabilities
-		// Exclude 'ngx' as it's not supported by gVisor's nvproxy
-		cmd := exec.Command("nvidia-ctk", "cdi", "generate",
-			"--driver-capabilities", "compute,utility,graphics,video",
-			"--output", "/etc/cdi/nvidia.yaml")
+		// Generate CDI config
+		// Note: CDI will include all driver capabilities, but our runtime mount filtering
+		// will remove paths that don't exist (e.g., ngx libraries not installed)
+		cmd := exec.Command("nvidia-ctk", "cdi", "generate", "--output", "/etc/cdi/nvidia.yaml")
+		
+		// Capture stderr for better error reporting
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		
 		if err := cmd.Run(); err != nil {
+			stderrStr := stderr.String()
+			if stderrStr != "" {
+				log.Fatal().Msgf("failed to generate cdi config: %v (stderr: %s)", err, stderrStr)
+			}
 			log.Fatal().Msgf("failed to generate cdi config: %v", err)
 		}
 	}
