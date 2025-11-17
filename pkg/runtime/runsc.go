@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -292,10 +293,25 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 		return fmt.Errorf("checkpoint options cannot be nil")
 	}
 
-	// Freeze CUDA processes before checkpointing
+	// Freeze CUDA processes before checkpointing (non-fatal)
 	if r.nvproxyEnabled {
 		if err := r.cudaCheckpointProcesses(ctx, containerID, "checkpoint", opts.OutputWriter); err != nil {
-			return fmt.Errorf("failed to freeze CUDA: %w", err)
+			// Log but don't fail - CUDA checkpoint is optional
+			if opts.OutputWriter != nil {
+				fmt.Fprintf(opts.OutputWriter, "Warning: CUDA checkpoint failed: %v\n", err)
+			}
+		}
+	}
+
+	// Ensure directories exist
+	if opts.ImagePath != "" {
+		if err := os.MkdirAll(opts.ImagePath, 0755); err != nil {
+			return fmt.Errorf("failed to create image path: %w", err)
+		}
+	}
+	if opts.WorkDir != "" {
+		if err := os.MkdirAll(opts.WorkDir, 0755); err != nil {
+			return fmt.Errorf("failed to create work dir: %w", err)
 		}
 	}
 
@@ -319,12 +335,25 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 	args = append(args, containerID)
 
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	
+	// Capture both stdout and stderr for better error reporting
+	var stderr bytes.Buffer
 	if opts.OutputWriter != nil {
 		cmd.Stdout = opts.OutputWriter
-		cmd.Stderr = opts.OutputWriter
+		cmd.Stderr = io.MultiWriter(opts.OutputWriter, &stderr)
+	} else {
+		cmd.Stderr = &stderr
 	}
 
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		stderrStr := stderr.String()
+		if stderrStr != "" {
+			return fmt.Errorf("checkpoint failed: %w (stderr: %s)", err, stderrStr)
+		}
+		return fmt.Errorf("checkpoint failed: %w", err)
+	}
+
+	return nil
 }
 
 func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOpts) (int, error) {
@@ -337,6 +366,13 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		deleteArgs = append(deleteArgs, "delete", "--force", containerID)
 		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
 	}()
+
+	// Ensure directories exist
+	if opts.WorkDir != "" {
+		if err := os.MkdirAll(opts.WorkDir, 0755); err != nil {
+			return -1, fmt.Errorf("failed to create work dir: %w", err)
+		}
+	}
 
 	args := r.baseArgs(false)
 	if r.nvproxyEnabled {
@@ -357,12 +393,20 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	// Capture stderr for better error reporting
+	var stderr bytes.Buffer
 	if opts.OutputWriter != nil {
 		cmd.Stdout = opts.OutputWriter
-		cmd.Stderr = opts.OutputWriter
+		cmd.Stderr = io.MultiWriter(opts.OutputWriter, &stderr)
+	} else {
+		cmd.Stderr = &stderr
 	}
 
 	if err := cmd.Start(); err != nil {
+		stderrStr := stderr.String()
+		if stderrStr != "" {
+			return -1, fmt.Errorf("restore failed to start: %w (stderr: %s)", err, stderrStr)
+		}
 		return -1, err
 	}
 
@@ -379,18 +423,28 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 
 	err := cmd.Wait()
 	if err != nil {
+		stderrStr := stderr.String()
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				if stderrStr != "" {
+					return ws.ExitStatus(), fmt.Errorf("restore failed with exit code %d (stderr: %s)", ws.ExitStatus(), stderrStr)
+				}
 				return ws.ExitStatus(), nil
 			}
+		}
+		if stderrStr != "" {
+			return -1, fmt.Errorf("restore failed: %w (stderr: %s)", err, stderrStr)
 		}
 		return -1, err
 	}
 
-	// Unfreeze CUDA processes after restore
+	// Unfreeze CUDA processes after restore (non-fatal)
 	if r.nvproxyEnabled {
 		if err := r.cudaCheckpointProcesses(ctx, containerID, "restore", opts.OutputWriter); err != nil {
-			return -1, fmt.Errorf("failed to unfreeze CUDA: %w", err)
+			// Log but don't fail - CUDA restore is optional
+			if opts.OutputWriter != nil {
+				fmt.Fprintf(opts.OutputWriter, "Warning: CUDA restore failed: %v\n", err)
+			}
 		}
 	}
 
