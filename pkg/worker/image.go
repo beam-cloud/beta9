@@ -174,11 +174,6 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
-	localCachePath := c.imageCachePath
-	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer {
-		localCachePath = ""
-	}
-
 	startTime := time.Now()
 
 	// Always fetch the remote archive into the cache directory first
@@ -200,6 +195,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			storageType := strings.ToLower(t.Type())
 			isClipV2Image = storageType == "oci" || storageType == string(clipCommon.StorageModeOCI)
 		}
+	}
+
+	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
+	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer && !isClipV2Image {
+		localCachePath = ""
+	}
+
+	if isClipV2Image {
+		localCachePath = c.imageCachePath
 	}
 
 	// If we have a valid cache client, attempt to cache entirety of the image
