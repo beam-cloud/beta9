@@ -110,6 +110,11 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		log.Info().Int("total_mounts_before_filter", len(spec.Mounts)).Msg("About to filter mounts")
 		r.filterNonExistentMounts(spec)
 		log.Info().Int("total_mounts_after_filter", len(spec.Mounts)).Msg("Mount filtering complete")
+
+		// CRITICAL: Filter env vars to remove unsupported driver capabilities
+		// CDI injects NVIDIA_DRIVER_CAPABILITIES with all capabilities including ngx
+		// gVisor's nvproxy doesn't support ngx, so we need to remove it
+		r.filterUnsupportedDriverCapabilities(spec)
 	} else {
 		// For non-GPU workloads, clear all devices as gVisor handles them internally
 		spec.Linux.Devices = nil
@@ -166,18 +171,28 @@ func (r *Runsc) filterNonExistentMounts(spec *specs.Spec) {
 
 	var validMounts []specs.Mount
 	var removedMounts []string
+	bindMountCount := 0
 
 	for _, mount := range spec.Mounts {
 		// Skip non-bind mounts (they don't require source path to exist)
-		if mount.Type != "bind" && mount.Type != "rbind" {
+		// Note: CDI often uses empty Type which defaults to "bind"
+		if mount.Type != "" && mount.Type != "bind" && mount.Type != "rbind" {
 			validMounts = append(validMounts, mount)
 			continue
 		}
 
+		bindMountCount++
+		
 		// Check if source exists
 		if _, err := os.Stat(mount.Source); err == nil {
 			validMounts = append(validMounts, mount)
 		} else {
+			log.Debug().
+				Str("mount_source", mount.Source).
+				Str("mount_dest", mount.Destination).
+				Str("mount_type", mount.Type).
+				Str("error", err.Error()).
+				Msg("Removing non-existent mount")
 			removedMounts = append(removedMounts, mount.Source)
 		}
 	}
@@ -186,10 +201,64 @@ func (r *Runsc) filterNonExistentMounts(spec *specs.Spec) {
 		log.Warn().
 			Strs("removed_mounts", removedMounts).
 			Int("removed_count", len(removedMounts)).
+			Int("total_bind_mounts", bindMountCount).
 			Msg("Filtered out non-existent mount paths for gVisor")
 	}
 
 	spec.Mounts = validMounts
+}
+
+// filterUnsupportedDriverCapabilities removes unsupported capabilities from NVIDIA_DRIVER_CAPABILITIES
+// gVisor's nvproxy only supports: compute, utility, graphics, video (not ngx)
+func (r *Runsc) filterUnsupportedDriverCapabilities(spec *specs.Spec) {
+	if spec.Process == nil || spec.Process.Env == nil {
+		return
+	}
+
+	supportedCaps := []string{"compute", "utility", "graphics", "video"}
+	
+	for i, env := range spec.Process.Env {
+		if strings.HasPrefix(env, "NVIDIA_DRIVER_CAPABILITIES=") {
+			value := strings.TrimPrefix(env, "NVIDIA_DRIVER_CAPABILITIES=")
+			caps := strings.Split(value, ",")
+			
+			// Filter to only supported capabilities
+			var filtered []string
+			var removed []string
+			for _, cap := range caps {
+				cap = strings.TrimSpace(cap)
+				if cap == "" {
+					continue
+				}
+				
+				supported := false
+				for _, supportedCap := range supportedCaps {
+					if cap == supportedCap {
+						supported = true
+						break
+					}
+				}
+				
+				if supported {
+					filtered = append(filtered, cap)
+				} else {
+					removed = append(removed, cap)
+				}
+			}
+			
+			if len(removed) > 0 {
+				newValue := strings.Join(filtered, ",")
+				spec.Process.Env[i] = "NVIDIA_DRIVER_CAPABILITIES=" + newValue
+				log.Warn().
+					Strs("removed_capabilities", removed).
+					Str("old_value", value).
+					Str("new_value", newValue).
+					Msg("Filtered unsupported NVIDIA driver capabilities for gVisor")
+			}
+			
+			break // Only one NVIDIA_DRIVER_CAPABILITIES env var
+		}
+	}
 }
 
 // hasGPUDevices checks if the spec contains GPU device configurations
