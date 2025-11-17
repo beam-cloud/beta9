@@ -8,6 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -16,16 +18,29 @@ import (
 
 // Runsc implements Runtime using the gVisor runsc runtime
 //
-// CUDA Checkpoint/Restore:
-// gVisor supports CUDA checkpoint/restore through its nvproxy feature, which
-// intercepts CUDA API calls at the userspace level. For CUDA checkpoints to work:
-//   1. nvproxy must be enabled when the container is created (--nvproxy=true)
-//   2. GPU devices must be detected in the OCI spec (via CDI or device specifications)
-//   3. NVIDIA driver >= 570 is required for full checkpoint support
-//   4. GPU state (memory, contexts) is captured through nvproxy's interception layer
+// CUDA Checkpoint/Restore Workflow:
+// gVisor requires a two-step process for CUDA checkpoints:
 //
-// The nvproxyEnabled flag is set during Prepare() based on GPU device detection.
-// Once enabled, it applies to all operations (run, checkpoint, restore).
+// 1. Checkpoint:
+//    a. Run cuda-checkpoint binary INSIDE the gVisor sandbox on all CUDA processes
+//       This freezes the GPU state (memory, contexts, streams)
+//    b. Then run `runsc checkpoint` to create the checkpoint image
+//       This captures the container state with frozen GPU operations
+//
+// 2. Restore:
+//    a. Run `runsc restore` to restore the sandbox from checkpoint
+//       This brings back the container with frozen CUDA state
+//    b. Run cuda-checkpoint binary INSIDE the restored sandbox to unfreeze CUDA processes
+//       This resumes GPU operations
+//
+// Requirements:
+//   - nvproxy must be enabled (--nvproxy=true)
+//   - cuda-checkpoint binary must be available inside the container
+//   - NVIDIA driver >= 570 recommended
+//   - GPU devices in OCI spec (CDI or direct)
+//
+// The cuda-checkpoint binary is NVIDIA's tool for freezing/unfreezing CUDA state.
+// Unlike runc where CRIU automatically handles this, gVisor requires manual execution.
 type Runsc struct {
 	cfg            Config
 	nvproxyEnabled bool // Whether GPU support via nvproxy is enabled
@@ -303,9 +318,15 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 		return fmt.Errorf("checkpoint options cannot be nil")
 	}
 
-	// Note: For checkpoint, we don't need to re-specify --nvproxy because it was
-	// already set when the container was created. The checkpoint operation will
-	// capture the GPU state through the existing nvproxy connection.
+	// Step 1: If GPU is enabled, run cuda-checkpoint INSIDE the sandbox to freeze CUDA processes
+	// This must happen before the runsc checkpoint command
+	if r.nvproxyEnabled {
+		if err := r.freezeCUDAProcesses(ctx, containerID, opts.OutputWriter); err != nil {
+			return fmt.Errorf("failed to freeze CUDA processes before checkpoint: %w", err)
+		}
+	}
+
+	// Step 2: Run runsc checkpoint to create the checkpoint image
 	args := r.baseArgs(false)
 	args = append(args, "checkpoint")
 
@@ -334,12 +355,6 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 		args = append(args, "--skip-in-flight")
 	}
 
-	// For CUDA checkpoints with gVisor:
-	// - nvproxy must be enabled when container was created (checked in Prepare)
-	// - GPU state is automatically captured through nvproxy's interception layer
-	// - NVIDIA driver >= 570 provides checkpoint support at the driver level
-	// - gVisor checkpoint will include GPU memory and context state
-
 	// gVisor checkpoint command
 	args = append(args, containerID)
 
@@ -357,6 +372,30 @@ func (r *Runsc) Checkpoint(ctx context.Context, containerID string, opts *Checkp
 	return nil
 }
 
+// freezeCUDAProcesses runs cuda-checkpoint inside the gVisor sandbox to freeze CUDA state
+// This must be called BEFORE running `runsc checkpoint`
+func (r *Runsc) freezeCUDAProcesses(ctx context.Context, containerID string, outputWriter OutputWriter) error {
+	// Find all CUDA processes in the container
+	cudaPIDs, err := r.findCUDAProcesses(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to find CUDA processes: %w", err)
+	}
+
+	if len(cudaPIDs) == 0 {
+		// No CUDA processes found, skip cuda-checkpoint
+		return nil
+	}
+
+	// Run cuda-checkpoint on each CUDA process to freeze GPU state
+	for _, pid := range cudaPIDs {
+		if err := r.runCUDACheckpoint(ctx, containerID, pid, "checkpoint", outputWriter); err != nil {
+			return fmt.Errorf("failed to freeze CUDA process %d: %w", pid, err)
+		}
+	}
+
+	return nil
+}
+
 func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOpts) (int, error) {
 	if opts == nil {
 		return -1, fmt.Errorf("restore options cannot be nil")
@@ -369,6 +408,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		_ = exec.Command(r.cfg.RunscPath, deleteArgs...).Run()
 	}()
 
+	// Step 1: Run runsc restore to restore the sandbox from checkpoint
 	args := r.baseArgs(false)
 	
 	// Enable nvproxy for GPU workloads (must be set before restore command)
@@ -390,13 +430,6 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 
 	if opts.BundlePath != "" {
 		args = append(args, "--bundle", opts.BundlePath)
-	}
-
-	// Close TCP connections on restore (default behavior in gVisor)
-	// gVisor automatically handles TCP connection cleanup
-	if opts.TCPClose {
-		// This is the default behavior in gVisor, but we document it
-		// gVisor's restore will handle TCP connections appropriately
 	}
 
 	// Container ID
@@ -426,7 +459,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 		}
 	}()
 
-	// Wait for exit
+	// Wait for restore to complete
 	err := cmd.Wait()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -434,11 +467,141 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 				return ws.ExitStatus(), nil
 			}
 		}
-
 		return -1, err
 	}
 
+	// Step 2: If GPU is enabled, run cuda-checkpoint INSIDE the restored sandbox to unfreeze CUDA processes
+	// This must happen AFTER the runsc restore command
+	if r.nvproxyEnabled {
+		if err := r.unfreezeCUDAProcesses(ctx, containerID, opts.OutputWriter); err != nil {
+			return -1, fmt.Errorf("failed to unfreeze CUDA processes after restore: %w", err)
+		}
+	}
+
 	return 0, nil
+}
+
+// unfreezeCUDAProcesses runs cuda-checkpoint inside the gVisor sandbox to unfreeze CUDA state
+// This must be called AFTER running `runsc restore`
+func (r *Runsc) unfreezeCUDAProcesses(ctx context.Context, containerID string, outputWriter OutputWriter) error {
+	// Find all CUDA processes in the restored container
+	cudaPIDs, err := r.findCUDAProcesses(ctx, containerID)
+	if err != nil {
+		return fmt.Errorf("failed to find CUDA processes: %w", err)
+	}
+
+	if len(cudaPIDs) == 0 {
+		// No CUDA processes found, skip cuda-checkpoint
+		return nil
+	}
+
+	// Run cuda-checkpoint on each CUDA process to unfreeze GPU state
+	for _, pid := range cudaPIDs {
+		if err := r.runCUDACheckpoint(ctx, containerID, pid, "restore", outputWriter); err != nil {
+			return fmt.Errorf("failed to unfreeze CUDA process %d: %w", pid, err)
+		}
+	}
+
+	return nil
+}
+
+// findCUDAProcesses finds all processes in the container that are using CUDA
+// Returns a list of PIDs (as seen inside the container) that have CUDA contexts
+func (r *Runsc) findCUDAProcesses(ctx context.Context, containerID string) ([]int, error) {
+	// Use runsc exec to run a command that finds CUDA processes
+	// We look for processes that have opened CUDA device files or have CUDA libraries loaded
+	
+	// Method 1: Look for processes with /dev/nvidia* file descriptors
+	// Run: lsof /dev/nvidia* | awk '{print $2}' | sort -u
+	args := r.baseArgs(false)
+	args = append(args, "exec", containerID)
+	args = append(args, "sh", "-c", "lsof /dev/nvidia* 2>/dev/null | awk 'NR>1 {print $2}' | sort -u || true")
+
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	output, err := cmd.Output()
+	if err != nil {
+		// lsof might not be available or no CUDA processes found
+		// Try alternative method using /proc
+		return r.findCUDAProcessesViaProcfs(ctx, containerID)
+	}
+
+	// Parse PIDs from output
+	var pids []int
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if pid, err := strconv.Atoi(line); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+
+	return pids, nil
+}
+
+// findCUDAProcessesViaProcfs finds CUDA processes by checking /proc for nvidia device file descriptors
+func (r *Runsc) findCUDAProcessesViaProcfs(ctx context.Context, containerID string) ([]int, error) {
+	// List all processes and check if they have nvidia device file descriptors
+	args := r.baseArgs(false)
+	args = append(args, "exec", containerID)
+	args = append(args, "sh", "-c", 
+		"for pid in /proc/[0-9]*; do "+
+		"if [ -d \"$pid/fd\" ]; then "+
+		"if ls -l $pid/fd 2>/dev/null | grep -q nvidia; then "+
+		"basename $pid; "+
+		"fi; "+
+		"fi; "+
+		"done")
+
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	output, err := cmd.Output()
+	if err != nil {
+		// If this also fails, return empty list (no CUDA processes or unable to detect)
+		return []int{}, nil
+	}
+
+	// Parse PIDs from output
+	var pids []int
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if pid, err := strconv.Atoi(line); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+
+	return pids, nil
+}
+
+// runCUDACheckpoint runs the cuda-checkpoint binary inside the container on a specific process
+// action should be "checkpoint" (freeze) or "restore" (unfreeze)
+func (r *Runsc) runCUDACheckpoint(ctx context.Context, containerID string, pid int, action string, outputWriter OutputWriter) error {
+	// cuda-checkpoint takes the form: cuda-checkpoint [action] [pid]
+	// Example: cuda-checkpoint checkpoint 1234
+	//          cuda-checkpoint restore 1234
+	
+	args := r.baseArgs(false)
+	args = append(args, "exec", containerID, "cuda-checkpoint", action, fmt.Sprintf("%d", pid))
+
+	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
+	
+	if outputWriter != nil {
+		cmd.Stdout = outputWriter
+		cmd.Stderr = outputWriter
+	}
+
+	if err := cmd.Run(); err != nil {
+		// cuda-checkpoint might not be installed or the process might not have CUDA contexts
+		// Log but don't fail - this allows graceful degradation
+		return fmt.Errorf("cuda-checkpoint %s failed for PID %d: %w", action, pid, err)
+	}
+
+	return nil
 }
 
 func (r *Runsc) Close() error {

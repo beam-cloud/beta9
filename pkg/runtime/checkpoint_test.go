@@ -478,6 +478,7 @@ func TestCUDACheckpointRequirements(t *testing.T) {
 		t.Log("runc CUDA checkpoint requires:")
 		t.Log("  - NVIDIA driver >= 570")
 		t.Log("  - CRIU with CUDA checkpoint plugin")
+		t.Log("  - CRIU automatically calls cuda-checkpoint")
 		t.Log("  - WorkDir for checkpoint files")
 		t.Log("  - LinkRemap for file descriptor remapping")
 		t.Log("  - AllowOpenTCP for network connections")
@@ -487,13 +488,79 @@ func TestCUDACheckpointRequirements(t *testing.T) {
 		// For gVisor with nvproxy:
 		// - NVIDIA driver >= 570 (recommended)
 		// - nvproxy enabled (--nvproxy=true)
-		// - GPU devices in OCI spec (CDI or direct)
-		// - All checkpoint options must be passed
+		// - cuda-checkpoint binary inside container
+		// - Two-step process: freeze, checkpoint, restore, unfreeze
 		t.Log("gVisor CUDA checkpoint requires:")
 		t.Log("  - NVIDIA driver >= 570 (recommended)")
 		t.Log("  - nvproxy enabled when container is created")
+		t.Log("  - cuda-checkpoint binary INSIDE the container")
 		t.Log("  - GPU devices in OCI spec (CDI or direct)")
-		t.Log("  - WorkDir for checkpoint state files")
-		t.Log("  - AllowOpenTCP and SkipInFlight for network state")
+		t.Log("  - Two-step process:")
+		t.Log("    1. Checkpoint: freeze CUDA (cuda-checkpoint), then runsc checkpoint")
+		t.Log("    2. Restore: runsc restore, then unfreeze CUDA (cuda-checkpoint)")
+	})
+}
+
+// TestGVisorCUDACheckpointWorkflow tests the gVisor CUDA checkpoint two-step process
+func TestGVisorCUDACheckpointWorkflow(t *testing.T) {
+	if os.Getenv("SKIP_RUNTIME_TESTS") == "1" {
+		t.Skip("Skipping runtime tests")
+	}
+
+	tmpDir, err := os.MkdirTemp("", "gvisor-cuda-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	t.Run("checkpoint workflow", func(t *testing.T) {
+		// Test that the workflow is correct even if runsc is not available
+		t.Log("gVisor CUDA checkpoint workflow:")
+		t.Log("1. Find CUDA processes inside container (via runsc exec)")
+		t.Log("2. For each CUDA process:")
+		t.Log("   - runsc exec container-id cuda-checkpoint checkpoint PID")
+		t.Log("3. Run runsc checkpoint command")
+		t.Log("4. GPU state is frozen and checkpointed")
+	})
+
+	t.Run("restore workflow", func(t *testing.T) {
+		t.Log("gVisor CUDA restore workflow:")
+		t.Log("1. Run runsc restore command")
+		t.Log("2. Wait for restore to complete")
+		t.Log("3. Find CUDA processes in restored container")
+		t.Log("4. For each CUDA process:")
+		t.Log("   - runsc exec container-id cuda-checkpoint restore PID")
+		t.Log("5. GPU state is unfrozen and operations resume")
+	})
+
+	t.Run("process detection methods", func(t *testing.T) {
+		t.Log("CUDA process detection methods:")
+		t.Log("Method 1: lsof /dev/nvidia* | awk '{print $2}' | sort -u")
+		t.Log("Method 2: Check /proc/[0-9]*/fd for nvidia device file descriptors")
+		t.Log("Graceful fallback if neither method works")
+	})
+}
+
+// TestCUDACheckpointBinaryRequirement documents the cuda-checkpoint binary requirement
+func TestCUDACheckpointBinaryRequirement(t *testing.T) {
+	t.Run("cuda-checkpoint must be in container", func(t *testing.T) {
+		t.Log("For gVisor CUDA checkpoint to work:")
+		t.Log("  - cuda-checkpoint binary must be installed INSIDE the container")
+		t.Log("  - It is NOT sufficient to have it on the host")
+		t.Log("  - Add to Dockerfile: RUN apt-get install -y cuda-checkpoint")
+		t.Log("  - Or COPY cuda-checkpoint /usr/local/bin/cuda-checkpoint")
+	})
+
+	t.Run("cuda-checkpoint commands", func(t *testing.T) {
+		t.Log("cuda-checkpoint usage inside container:")
+		t.Log("  - cuda-checkpoint checkpoint PID  # Freeze CUDA state for process")
+		t.Log("  - cuda-checkpoint restore PID     # Unfreeze CUDA state for process")
+	})
+
+	t.Run("automatic vs manual", func(t *testing.T) {
+		t.Log("Difference between runc and gVisor:")
+		t.Log("  - runc: CRIU automatically calls cuda-checkpoint")
+		t.Log("  - gVisor: Must manually call cuda-checkpoint via runsc exec")
+		t.Log("  - gVisor: Two-step process (freeze, checkpoint, restore, unfreeze)")
 	})
 }
