@@ -107,7 +107,9 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		// CRITICAL: Filter mounts to remove paths that don't exist
 		// CDI may inject mounts for libraries that aren't present (e.g., ngx libraries)
 		// Attempting to mount non-existent files causes StartRoot to fail with EOF
+		log.Info().Int("total_mounts_before_filter", len(spec.Mounts)).Msg("About to filter mounts")
 		r.filterNonExistentMounts(spec)
+		log.Info().Int("total_mounts_after_filter", len(spec.Mounts)).Msg("Mount filtering complete")
 	} else {
 		// For non-GPU workloads, clear all devices as gVisor handles them internally
 		spec.Linux.Devices = nil

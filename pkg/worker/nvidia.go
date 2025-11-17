@@ -41,8 +41,12 @@ type ContainerNvidiaManager struct {
 
 func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 	if gpuCount > 0 {
-		err := exec.Command("nvidia-ctk", "cdi", "generate", "--output", "/etc/cdi/nvidia.yaml").Run()
-		if err != nil {
+		// Generate CDI config with only gVisor-supported driver capabilities
+		// Exclude 'ngx' as it's not supported by gVisor's nvproxy
+		cmd := exec.Command("nvidia-ctk", "cdi", "generate",
+			"--driver-capabilities", "compute,utility,graphics,video",
+			"--output", "/etc/cdi/nvidia.yaml")
+		if err := cmd.Run(); err != nil {
 			log.Fatal().Msgf("failed to generate cdi config: %v", err)
 		}
 	}
