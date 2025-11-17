@@ -1,0 +1,96 @@
+# Example Beta9 environment configuration
+#
+# This is the meta-config that users provide to create a new Beta9 environment.
+# The provisioning API will:
+#   1. Validate this configuration
+#   2. Provision infrastructure (VPC, K8s, DB, cache, storage) in the user's cloud account
+#   3. Bootstrap Beta9 into the cluster
+
+# Environment name (used for resource naming)
+name: production-us-east
+
+# Cloud provider configuration
+cloud:
+  provider: aws  # aws or gcp
+  region: us-east-1
+  account_id: "123456789012"  # AWS account ID or GCP project ID
+
+  # AWS: IAM role that the provisioning service will assume
+  role_arn: "arn:aws:iam::123456789012:role/Beta9Provisioner"
+  external_id: "my-external-id"  # Optional: for additional security
+
+  # GCP: Service account for provisioning (use instead of role_arn)
+  # service_account: "terraform@my-project.iam.gserviceaccount.com"
+
+# Kubernetes cluster configuration
+cluster:
+  profile: medium  # small, medium, or large
+
+  # Use existing cluster (if true, skip EKS/GKE creation)
+  use_existing: false
+  # existing_cluster_name: my-eks-cluster
+
+  # Optional: additional node labels and taints
+  node_labels:
+    team: platform
+    environment: production
+  node_taints: []
+
+# Data layer configuration
+data:
+  # PostgreSQL database
+  postgres:
+    size: medium  # small, medium, or large
+    multi_az: true  # High availability across availability zones
+    backup_retention_days: 14
+    # storage_gb: 100  # Optional: override default storage
+
+  # Redis cache
+  redis:
+    size: medium  # small, medium, or large
+    ha: true  # High availability (multi-AZ replication)
+    # num_replicas: 2  # Optional: override default replica count
+
+  # Object storage (S3/GCS)
+  object_store:
+    bucket_prefix: beta9  # Bucket name will be: {prefix}-{name}-{id}
+    versioning: true  # Enable object versioning
+    lifecycle_days: 90  # Archive objects after N days
+
+# Beta9-specific configuration
+beta9:
+  # Domain for Beta9 API (must be set up in DNS)
+  domain: api.beta9.production.com
+
+  # Beta9 version to install
+  version: latest  # or specific version like v1.2.3
+
+  # Worker configuration
+  workers:
+    gpu_enabled: true
+    gpu_type: nvidia-tesla-t4  # or nvidia-tesla-v100, nvidia-tesla-a100
+    min_workers: 2
+    max_workers: 20
+
+  # Observability
+  enable_metrics: true
+  enable_logging: true
+
+---
+# Minimal configuration example
+# This uses all default values for a small development environment
+
+name: dev-test
+cloud:
+  provider: aws
+  region: us-east-1
+  account_id: "123456789012"
+  role_arn: "arn:aws:iam::123456789012:role/Beta9Provisioner"
+beta9:
+  domain: dev.beta9.example.com
+
+# Everything else uses defaults:
+# - cluster.profile: small
+# - data.postgres.size: small, multi_az: true
+# - data.redis.size: small, ha: true
+# - workers.gpu_enabled: false

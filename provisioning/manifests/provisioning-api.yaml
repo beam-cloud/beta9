@@ -1,0 +1,182 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: beta9-provisioning
+
+---
+# ConfigMap for API configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: provisioning-config
+  namespace: beta9-provisioning
+data:
+  DATABASE_URL: "postgresql://postgres:postgres@postgres:5432/provisioning"
+  REDIS_URL: "redis://redis:6379/0"
+  WORKDIR_BASE: "/tmp/beta9-provisioning"
+  LOG_LEVEL: "INFO"
+  MAX_ENVIRONMENTS_PER_USER: "10"
+  ALLOWED_REGIONS: "us-east-1,us-east-2,us-west-2,eu-west-1,eu-central-1"
+
+---
+# Deployment for API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provisioning-api
+  namespace: beta9-provisioning
+  labels:
+    app: provisioning-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: provisioning-api
+  template:
+    metadata:
+      labels:
+        app: provisioning-api
+    spec:
+      serviceAccountName: provisioning-api
+      containers:
+        - name: api
+          image: beta9-provisioning-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: provisioning-config
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+
+---
+# Service for API
+apiVersion: v1
+kind: Service
+metadata:
+  name: provisioning-api
+  namespace: beta9-provisioning
+  labels:
+    app: provisioning-api
+spec:
+  type: ClusterIP
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: provisioning-api
+
+---
+# Deployment for Worker
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: provisioning-worker
+  namespace: beta9-provisioning
+  labels:
+    app: provisioning-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: provisioning-worker
+  template:
+    metadata:
+      labels:
+        app: provisioning-worker
+    spec:
+      serviceAccountName: provisioning-worker
+      containers:
+        - name: worker
+          image: beta9-provisioning-worker:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: provisioning-config
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "1000m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: workdir
+              mountPath: /tmp/beta9-provisioning
+      volumes:
+        - name: workdir
+          emptyDir:
+            sizeLimit: 10Gi
+
+---
+# ServiceAccount for API (with permissions to assume roles)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: provisioning-api
+  namespace: beta9-provisioning
+  annotations:
+    # For AWS EKS IRSA (IAM Roles for Service Accounts)
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/beta9-provisioning-api
+
+---
+# ServiceAccount for Worker
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: provisioning-worker
+  namespace: beta9-provisioning
+  annotations:
+    # For AWS EKS IRSA
+    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/beta9-provisioning-worker
+
+---
+# Ingress for API
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: provisioning-api
+  namespace: beta9-provisioning
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - provisioning.beta9.example.com
+      secretName: provisioning-api-tls
+  rules:
+    - host: provisioning.beta9.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: provisioning-api
+                port:
+                  number: 80
