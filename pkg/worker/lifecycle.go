@@ -879,10 +879,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Prepare spec for the selected runtime
+	log.Info().Str("container_id", containerId).Str("runtime", s.runtime.Name()).Msg("calling runtime.Prepare()")
 	if err := s.runtime.Prepare(ctx, spec); err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
 		return
 	}
+	log.Info().Str("container_id", containerId).Msg("runtime.Prepare() completed successfully")
 
 	// Write container config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")

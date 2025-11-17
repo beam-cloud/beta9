@@ -79,10 +79,29 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	if r.nvproxyEnabled {
 		// Mount cuda-checkpoint tool for CUDA checkpoint/restore support
 		r.mountCudaCheckpoint(spec)
+		
+		// Log devices before filtering
+		var devicesBefore []string
+		for _, dev := range spec.Linux.Devices {
+			devicesBefore = append(devicesBefore, dev.Path)
+		}
+		
 		// CRITICAL: Filter to only gVisor-supported GPU devices
 		// Per gVisor docs: "gVisor only exposes /dev/nvidiactl, /dev/nvidia-uvm and /dev/nvidia#"
 		// CDI injects unsupported devices like /dev/nvidia-modeset, /dev/dri/* which cause startup failures
 		r.filterToSupportedGPUDevices(spec)
+		
+		// Log devices after filtering
+		var devicesAfter []string
+		for _, dev := range spec.Linux.Devices {
+			devicesAfter = append(devicesAfter, dev.Path)
+		}
+		
+		log.Info().
+			Strs("devices_before_filter", devicesBefore).
+			Strs("devices_after_filter", devicesAfter).
+			Int("removed_count", len(devicesBefore)-len(devicesAfter)).
+			Msg("gVisor device filtering complete")
 	} else {
 		// For non-GPU workloads, clear all devices as gVisor handles them internally
 		spec.Linux.Devices = nil
