@@ -899,6 +899,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 	request.ConfigPath = configPath
+	
+	// Log the final spec for debugging (truncated to reasonable size)
+	specPreview := string(configContents)
+	maxLen := 3000
+	if len(specPreview) > maxLen {
+		specPreview = specPreview[:maxLen] + "... (truncated)"
+	}
+	log.Debug().
+		Str("container_id", containerId).
+		Str("config_path", configPath).
+		Str("spec_preview", specPreview).
+		Msg("Written OCI spec to disk")
 
 	outputWriter := containerInstance.OutputWriter
 
