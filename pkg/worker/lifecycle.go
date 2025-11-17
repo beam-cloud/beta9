@@ -803,12 +803,29 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			}
 
 			// Debug: Log what CDI injected for troubleshooting
-			log.Debug().
+			var devicePaths []string
+			for _, dev := range spec.Linux.Devices {
+				devicePaths = append(devicePaths, dev.Path)
+			}
+			var mountSources []string
+			for _, mnt := range spec.Mounts {
+				if strings.Contains(mnt.Source, "nvidia") || strings.Contains(mnt.Source, "cuda") {
+					mountSources = append(mountSources, mnt.Source)
+				}
+			}
+			var envVars []string
+			for _, env := range spec.Process.Env {
+				if strings.Contains(env, "NVIDIA") || strings.Contains(env, "CUDA") {
+					envVars = append(envVars, env)
+				}
+			}
+			log.Info().
 				Str("container_id", request.ContainerId).
-				Int("mount_count", len(spec.Mounts)).
-				Int("device_count", len(spec.Linux.Devices)).
-				Interface("annotations", spec.Annotations).
-				Msg("CDI injection complete")
+				Strs("devices", devicePaths).
+				Strs("gpu_mounts", mountSources).
+				Strs("gpu_env_vars", envVars).
+				Interface("cdi_annotations", spec.Annotations).
+				Msg("CDI injection complete - inspect what was injected")
 		}
 	}
 
