@@ -183,6 +183,10 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	args := r.baseArgs(dockerEnabled)
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
+		// Allow all driver capabilities that the container might need  
+		// This must match or exceed what's in NVIDIA_DRIVER_CAPABILITIES env var
+		// Supported by gVisor: compute, utility, graphics, video
+		args = append(args, "--nvproxy-allowed-driver-capabilities=compute,utility,graphics,video")
 	}
 	args = append(args, "run", "--bundle", bundlePath, containerID)
 
@@ -431,6 +435,8 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	args := r.baseArgs(false)
 	if r.nvproxyEnabled {
 		args = append(args, "--nvproxy=true")
+		// Allow all driver capabilities for restore as well
+		args = append(args, "--nvproxy-allowed-driver-capabilities=compute,utility,graphics,video")
 	}
 	args = append(args, "restore")
 	if opts.ImagePath != "" {
