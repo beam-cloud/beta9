@@ -859,9 +859,25 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				})
 			}
 			
+			// CRITICAL: Set NVIDIA_VISIBLE_DEVICES to control which GPUs are visible
+			// This tells gVisor's nvproxy which GPUs to expose inside the sandbox
+			// Format: comma-separated list of GPU indices (e.g., "0" or "0,1")
+			var gpuIDStrs []string
+			for _, gpuID := range assignedDevices {
+				gpuIDStrs = append(gpuIDStrs, fmt.Sprintf("%d", gpuID))
+			}
+			visibleDevices := strings.Join(gpuIDStrs, ",")
+			
+			// Set NVIDIA_VISIBLE_DEVICES environment variable
+			spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", visibleDevices))
+			
+			// Also set NVIDIA_DRIVER_CAPABILITIES for completeness
+			spec.Process.Env = append(spec.Process.Env, "NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,video")
+			
 			log.Info().
 				Str("container_id", request.ContainerId).
 				Ints("gpu_ids", assignedDevices).
+				Str("visible_devices", visibleDevices).
 				Int("device_count", len(spec.Linux.Devices)).
 				Msg("Manually injected GPU devices for gVisor nvproxy (no CDI)")
 		}
