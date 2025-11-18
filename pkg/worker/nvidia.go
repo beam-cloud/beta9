@@ -31,6 +31,7 @@ type GPUManager interface {
 	UnassignGPUDevices(containerId string)
 	InjectEnvVars(env []string) []string
 	InjectMounts(mounts []specs.Mount) []specs.Mount
+	InjectGVisorMounts(mounts []specs.Mount) []specs.Mount
 }
 
 type ContainerNvidiaManager struct {
@@ -278,7 +279,7 @@ func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount) []spec
 
 	// Mount binaries
 	for _, file := range nvidiaFiles {
-		if _, err := c.statFunc(file, nil); err == nil {
+		if _, err := os.Stat(file); err == nil {
 			mounts = append(mounts, specs.Mount{
 				Type:        "bind",
 				Source:      file,
