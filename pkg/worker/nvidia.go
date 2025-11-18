@@ -31,7 +31,7 @@ type GPUManager interface {
 	UnassignGPUDevices(containerId string)
 	InjectEnvVars(env []string) []string
 	InjectMounts(mounts []specs.Mount) []specs.Mount
-	InjectGVisorMounts(mounts []specs.Mount) []specs.Mount
+	InjectGVisorMounts(mounts []specs.Mount, gpuIDs []int) []specs.Mount
 }
 
 type ContainerNvidiaManager struct {
