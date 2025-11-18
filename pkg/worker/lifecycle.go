@@ -830,7 +830,18 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				Msg("CDI injection complete - gVisor will filter unsupported devices")
 		} else {
 			// For gVisor: DO NOT inject device nodes - nvproxy creates them internally!
-			// Just set environment variables to control GPU visibility
+			// But we still need to mount nvidia-smi and CUDA libraries from the host
+			
+			// Mount nvidia-smi binary if it exists on the host
+			nvidiaSmiBinary := "/usr/bin/nvidia-smi"
+			if _, err := os.Stat(nvidiaSmiBinary); err == nil {
+				spec.Mounts = append(spec.Mounts, specs.Mount{
+					Type:        "bind",
+					Source:      nvidiaSmiBinary,
+					Destination: nvidiaSmiBinary,
+					Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
+				})
+			}
 			
 			// CRITICAL: Set NVIDIA_VISIBLE_DEVICES to control which GPUs are visible
 			// This tells gVisor's nvproxy which GPUs to expose inside the sandbox
