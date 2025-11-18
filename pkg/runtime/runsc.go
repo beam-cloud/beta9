@@ -61,7 +61,7 @@ func (r *Runsc) Capabilities() Capabilities {
 		GPU:               true,
 		OOMEvents:         false,
 		JoinExistingNetNS: true,
-		CDI:               false, // gVisor's nvproxy doesn't use CDI - it's a proxy driver
+		CDI:               true, // Use CDI to get mounts/env vars, just remove devices in Prepare()
 	}
 }
 

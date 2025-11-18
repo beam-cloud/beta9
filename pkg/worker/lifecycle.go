@@ -784,52 +784,31 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		// Only use CDI if runtime supports it
-		if s.runtime.Capabilities().CDI {
-			cdiCache := cdi.GetDefaultCache()
+		// Use CDI for both runc and gVisor
+		// CDI knows exactly what mounts/env vars are needed
+		// For gVisor: Prepare() will remove spec.Linux.Devices (which cause panic)
+		cdiCache := cdi.GetDefaultCache()
 
-			var devicesToInject []string
-			for _, device := range assignedDevices {
-				devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
-				devicesToInject = append(devicesToInject, devicePath)
-			}
-
-			unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
-				return
-			}
-			if len(unresolvable) > 0 {
-				log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
-				return
-			}
-
-			log.Info().
-				Str("container_id", request.ContainerId).
-				Ints("gpu_ids", assignedDevices).
-				Msg("CDI injection complete for runc")
-		} else {
-			// For gVisor: Mount /dev/nvidia* devices as bind mounts (not Linux devices)
-			// This gives nvproxy access to the real host driver
-			spec.Mounts = s.containerGPUManager.InjectGVisorMounts(spec.Mounts, assignedDevices)
-			
-			// Set NVIDIA_VISIBLE_DEVICES to control GPU visibility
-			var gpuIDStrs []string
-			for _, gpuID := range assignedDevices {
-				gpuIDStrs = append(gpuIDStrs, fmt.Sprintf("%d", gpuID))
-			}
-			visibleDevices := strings.Join(gpuIDStrs, ",")
-			
-			spec.Process.Env = append(spec.Process.Env, 
-				fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", visibleDevices),
-				"NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,video")
-			
-			log.Info().
-				Str("container_id", request.ContainerId).
-				Ints("gpu_ids", assignedDevices).
-				Str("visible_devices", visibleDevices).
-				Msg("Configured gVisor nvproxy GPU support")
+		var devicesToInject []string
+		for _, device := range assignedDevices {
+			devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
+			devicesToInject = append(devicesToInject, devicePath)
 		}
+
+		unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
+			return
+		}
+		if len(unresolvable) > 0 {
+			log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
+			return
+		}
+
+		log.Info().
+			Str("container_id", request.ContainerId).
+			Ints("gpu_ids", assignedDevices).
+			Msg("CDI injection complete")
 	}
 
 	// Expose the bind ports
