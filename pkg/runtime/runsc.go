@@ -88,30 +88,6 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	return nil
 }
 
-// filterToSupportedGPUDevices keeps only GPU devices that gVisor's nvproxy supports
-// Per gVisor documentation, only these devices are supported:
-// - /dev/nvidiactl
-// - /dev/nvidia-uvm
-// - /dev/nvidia# (where # is a GPU number like 0, 1, 2, etc.)
-// All other devices (like /dev/nvidia-modeset, /dev/dri/*, etc.) cause startup failures
-func (r *Runsc) filterToSupportedGPUDevices(spec *specs.Spec) {
-	if spec.Linux == nil {
-		return
-	}
-
-	var supportedDevices []specs.LinuxDevice
-	for _, device := range spec.Linux.Devices {
-		// Only keep devices explicitly supported by gVisor nvproxy
-		if device.Path == "/dev/nvidiactl" ||
-			device.Path == "/dev/nvidia-uvm" ||
-			strings.HasPrefix(device.Path, "/dev/nvidia") && len(device.Path) > len("/dev/nvidia") && device.Path[len("/dev/nvidia")] >= '0' && device.Path[len("/dev/nvidia")] <= '9' {
-			supportedDevices = append(supportedDevices, device)
-		}
-	}
-
-	spec.Linux.Devices = supportedDevices
-}
-
 // mountCudaCheckpoint bind-mounts cuda-checkpoint binary into the container
 func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
 	cudaCheckpointPath, err := exec.LookPath("cuda-checkpoint")
