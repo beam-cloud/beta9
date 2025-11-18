@@ -804,30 +804,10 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				return
 			}
 
-			// Debug: Log what CDI injected for troubleshooting
-			var devicePaths []string
-			for _, dev := range spec.Linux.Devices {
-				devicePaths = append(devicePaths, dev.Path)
-			}
-			var mountSources []string
-			for _, mnt := range spec.Mounts {
-				if strings.Contains(mnt.Source, "nvidia") || strings.Contains(mnt.Source, "cuda") {
-					mountSources = append(mountSources, mnt.Source)
-				}
-			}
-			var envVars []string
-			for _, env := range spec.Process.Env {
-				if strings.Contains(env, "NVIDIA") || strings.Contains(env, "CUDA") {
-					envVars = append(envVars, env)
-				}
-			}
 			log.Info().
 				Str("container_id", request.ContainerId).
-				Strs("devices_before_filtering", devicePaths).
-				Strs("gpu_mounts", mountSources).
-				Strs("gpu_env_vars", envVars).
-				Interface("cdi_annotations", spec.Annotations).
-				Msg("CDI injection complete - gVisor will filter unsupported devices")
+				Ints("gpu_ids", assignedDevices).
+				Msg("CDI injection complete for runc")
 		} else {
 			// For gVisor: DO NOT inject device nodes - nvproxy creates them internally!
 			// But we DO need to mount NVIDIA binaries and libraries from the host
