@@ -74,7 +74,7 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	// gVisor requires seccomp to be disabled
 	spec.Linux.Seccomp = nil
 
-	// Detect if GPU is requested by checking env vars (NVIDIA_VISIBLE_DEVICES)
+	// Detect if GPU is requested by checking env vars or devices
 	r.nvproxyEnabled = r.hasGPUDevices(spec)
 
 	// For GPU workloads, mount cuda-checkpoint tool for checkpoint/restore support
@@ -82,8 +82,13 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 		r.mountCudaCheckpoint(spec)
 	}
 
-	// gVisor creates all device nodes internally, clear any that were in the spec
-	spec.Linux.Devices = nil
+	// gVisor creates device nodes internally (including virtual NVIDIA devices for nvproxy)
+	// Remove ALL devices from spec to prevent conflicts
+	// CDI may inject NVIDIA devices here, but gVisor's nvproxy creates virtual devices instead
+	if spec.Linux.Devices != nil {
+		log.Debug().Int("device_count", len(spec.Linux.Devices)).Msg("Clearing spec.Linux.Devices for gVisor")
+		spec.Linux.Devices = nil
+	}
 
 	return nil
 }
