@@ -295,17 +295,32 @@ func (r *Runsc) filterUnsupportedDriverCapabilities(spec *specs.Spec) {
 }
 
 // hasGPUDevices checks if the spec contains GPU device configurations
+// For gVisor, we don't inject device nodes, so check env vars instead
 func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
-	if spec.Linux == nil {
-		return false
-	}
-
-	for _, device := range spec.Linux.Devices {
-		if strings.HasPrefix(device.Path, "/dev/nvidia") {
-			return true
+	// Check environment variables for NVIDIA_VISIBLE_DEVICES
+	// This is how we signal GPU requirements for gVisor (no device nodes needed)
+	if spec.Process != nil && spec.Process.Env != nil {
+		for _, env := range spec.Process.Env {
+			if strings.HasPrefix(env, "NVIDIA_VISIBLE_DEVICES=") {
+				value := strings.TrimPrefix(env, "NVIDIA_VISIBLE_DEVICES=")
+				// Check if it's not empty, "void", or "none"
+				if value != "" && value != "void" && value != "none" {
+					return true
+				}
+			}
 		}
 	}
 
+	// Fallback: check for device nodes (for CDI/runc compatibility)
+	if spec.Linux != nil {
+		for _, device := range spec.Linux.Devices {
+			if strings.HasPrefix(device.Path, "/dev/nvidia") {
+				return true
+			}
+		}
+	}
+
+	// Check CDI annotations
 	for key := range spec.Annotations {
 		if strings.HasPrefix(key, "cdi.k8s.io") {
 			return true
