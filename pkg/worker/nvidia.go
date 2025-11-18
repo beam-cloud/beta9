@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -43,8 +44,6 @@ type ContainerNvidiaManager struct {
 func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 	if gpuCount > 0 {
 		// Generate CDI config
-		// Note: CDI will include all driver capabilities, but our runtime mount filtering
-		// will remove paths that don't exist (e.g., ngx libraries not installed)
 		cmd := exec.Command("nvidia-ctk", "cdi", "generate", "--output", "/etc/cdi/nvidia.yaml")
 		
 		// Capture stderr for better error reporting
@@ -58,6 +57,11 @@ func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 			}
 			log.Fatal().Msgf("failed to generate cdi config: %v", err)
 		}
+		
+		// Create NVIDIA library symlinks for gVisor
+		// gVisor doesn't run OCI createContainer hooks, so CDI hooks won't create symlinks
+		// We need to create them on the host for nvidia-smi and CUDA apps to work
+		createNvidiaLibrarySymlinks()
 	}
 
 	return &ContainerNvidiaManager{
@@ -216,6 +220,40 @@ func mergePaths(pathName string, initEnv map[string]string, mergeIn []string) {
 	}
 
 	initEnv[pathName] = strings.Join(pathMembers, ":")
+}
+
+// createNvidiaLibrarySymlinks creates library symlinks that CDI hooks would create
+// gVisor doesn't run createContainer hooks, so we create them on the host
+func createNvidiaLibrarySymlinks() {
+	libDir := "/usr/lib/x86_64-linux-gnu"
+	
+	// Essential symlinks for nvidia-smi and CUDA (from CDI hooks)
+	symlinks := map[string]string{
+		"libcuda.so.1":                  "libcuda.so.570.86.15",
+		"libnvidia-ml.so.1":             "libnvidia-ml.so.570.86.15",
+		"libnvidia-ptxjitcompiler.so.1": "libnvidia-ptxjitcompiler.so.570.86.15",
+		"libnvidia-nvvm.so.4":           "libnvidia-nvvm.so.570.86.15",
+		"libnvidia-allocator.so.1":      "libnvidia-allocator.so.570.86.15",
+		"libnvidia-cfg.so.1":            "libnvidia-cfg.so.570.86.15",
+	}
+	
+	for link, target := range symlinks {
+		linkPath := filepath.Join(libDir, link)
+		targetPath := filepath.Join(libDir, target)
+		
+		// Check if target exists
+		if _, err := os.Stat(targetPath); err != nil {
+			continue // Target doesn't exist, skip
+		}
+		
+		// Remove existing symlink if present
+		os.Remove(linkPath)
+		
+		// Create symlink
+		if err := os.Symlink(target, linkPath); err != nil {
+			log.Warn().Str("link", linkPath).Str("target", target).Err(err).Msg("Failed to create NVIDIA library symlink")
+		}
+	}
 }
 
 func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Mount {
