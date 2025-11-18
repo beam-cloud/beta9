@@ -61,7 +61,7 @@ func (r *Runsc) Capabilities() Capabilities {
 		GPU:               true,
 		OOMEvents:         false,
 		JoinExistingNetNS: true,
-		CDI:               true,
+		CDI:               false, // gVisor's nvproxy doesn't use CDI - it's a proxy driver
 	}
 }
 
