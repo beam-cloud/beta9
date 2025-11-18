@@ -809,9 +809,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				Ints("gpu_ids", assignedDevices).
 				Msg("CDI injection complete for runc")
 		} else {
-			// For gVisor: nvproxy creates /dev/nvidia* devices internally
-			// We just need to mount userspace libraries and set env vars
-			spec.Mounts = s.containerGPUManager.InjectGVisorMounts(spec.Mounts)
+			// For gVisor: Mount /dev/nvidia* devices as bind mounts (not Linux devices)
+			// This gives nvproxy access to the real host driver
+			spec.Mounts = s.containerGPUManager.InjectGVisorMounts(spec.Mounts, assignedDevices)
 			
 			// Set NVIDIA_VISIBLE_DEVICES to control GPU visibility
 			var gpuIDStrs []string

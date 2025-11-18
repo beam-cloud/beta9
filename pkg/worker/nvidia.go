@@ -247,9 +247,34 @@ func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Moun
 	return mounts
 }
 
-// InjectGVisorMounts adds minimal NVIDIA mounts needed for gVisor's nvproxy
-// nvproxy creates /dev/nvidia* devices internally, but apps still need userspace libraries
-func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount) []specs.Mount {
+// InjectGVisorMounts adds NVIDIA mounts for gVisor's nvproxy
+// CRITICAL: Must mount /dev/nvidia* as bind mounts (NOT as Linux devices)
+// gVisor's nvproxy needs access to real host devices to forward ioctl calls
+func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount, gpuIDs []int) []specs.Mount {
+	// CRITICAL: Mount GPU character devices as bind mounts
+	// These give nvproxy access to the real host NVIDIA driver
+	gpuDevices := []string{
+		"/dev/nvidiactl",     // NVIDIA control device
+		"/dev/nvidia-uvm",    // Unified memory
+	}
+	
+	// Add specific GPU devices based on assigned IDs
+	for _, gpuID := range gpuIDs {
+		gpuDevices = append(gpuDevices, fmt.Sprintf("/dev/nvidia%d", gpuID))
+	}
+	
+	// Mount GPU devices
+	for _, dev := range gpuDevices {
+		if _, err := os.Stat(dev); err == nil {
+			mounts = append(mounts, specs.Mount{
+				Type:        "bind",
+				Source:      dev,
+				Destination: dev,
+				Options:     []string{"rbind", "rprivate"},
+			})
+		}
+	}
+	
 	// Essential NVIDIA binaries
 	nvidiaFiles := []string{
 		"/usr/bin/nvidia-smi",
@@ -262,19 +287,18 @@ func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount) []spec
 	// Library directory
 	libDir := "/usr/lib/x86_64-linux-gnu"
 
-	// Essential NVIDIA libraries for nvproxy
-	// These are needed for nvidia-smi and CUDA applications to work with nvproxy
+	// Essential NVIDIA libraries
 	nvidiaLibPatterns := []string{
-		"libcuda.so*",                     // CUDA driver API
-		"libnvidia-ml.so*",                // nvidia-smi and NVML
-		"libnvidia-ptxjitcompiler.so*",    // PTX JIT compiler
-		"libnvidia-allocator.so*",         // Memory allocator
-		"libnvidia-nvvm.so*",              // NVVM compiler
-		"libnvidia-cfg.so*",               // Configuration
-		"libnvcuvid.so*",                  // Video decode
-		"libnvidia-encode.so*",            // Video encode  
-		"libnvidia-fbc.so*",               // Framebuffer capture
-		"libnvidia-tls.so*",               // Thread local storage
+		"libcuda.so*",
+		"libnvidia-ml.so*",
+		"libnvidia-ptxjitcompiler.so*",
+		"libnvidia-allocator.so*",
+		"libnvidia-nvvm.so*",
+		"libnvidia-cfg.so*",
+		"libnvcuvid.so*",
+		"libnvidia-encode.so*",
+		"libnvidia-fbc.so*",
+		"libnvidia-tls.so*",
 	}
 
 	// Mount binaries
