@@ -108,6 +108,30 @@ func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
 	})
 }
 
+// fixNvidiaVisibleDevices ensures NVIDIA_VISIBLE_DEVICES is not set to "void"
+// CDI may set it to "void" when device injection doesn't match expectations
+// For gVisor, we need it set correctly for dev gofer creation
+func (r *Runsc) fixNvidiaVisibleDevices(spec *specs.Spec) {
+	for i, env := range spec.Process.Env {
+		if strings.HasPrefix(env, "NVIDIA_VISIBLE_DEVICES=") {
+			value := strings.TrimPrefix(env, "NVIDIA_VISIBLE_DEVICES=")
+			if value == "void" || value == "none" || value == "" {
+				// CDI set it to void - fix it to "all" to enable dev gofer
+				spec.Process.Env[i] = "NVIDIA_VISIBLE_DEVICES=all"
+				log.Warn().
+					Str("old_value", value).
+					Str("new_value", "all").
+					Msg("Fixed NVIDIA_VISIBLE_DEVICES for gVisor nvproxy")
+				return
+			}
+		}
+	}
+	
+	// If not found, add it
+	spec.Process.Env = append(spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=all")
+	log.Info().Msg("Added NVIDIA_VISIBLE_DEVICES=all for gVisor nvproxy")
+}
+
 // hasGPUDevices checks if the spec contains GPU device configurations
 // For gVisor, we don't inject device nodes, so check env vars instead
 func (r *Runsc) hasGPUDevices(spec *specs.Spec) bool {
