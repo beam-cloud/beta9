@@ -247,34 +247,10 @@ func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Moun
 	return mounts
 }
 
-// InjectGVisorMounts adds NVIDIA mounts for gVisor's nvproxy
-// CRITICAL: Must mount /dev/nvidia* as bind mounts (NOT as Linux devices)
-// gVisor's nvproxy needs access to real host devices to forward ioctl calls
+// InjectGVisorMounts adds NVIDIA userspace mounts for gVisor's nvproxy
+// nvproxy accesses /dev/nvidia* on the host directly - we DON'T mount them
+// We only mount userspace libraries and binaries that applications need
 func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount, gpuIDs []int) []specs.Mount {
-	// CRITICAL: Mount GPU character devices as bind mounts
-	// These give nvproxy access to the real host NVIDIA driver
-	gpuDevices := []string{
-		"/dev/nvidiactl",     // NVIDIA control device
-		"/dev/nvidia-uvm",    // Unified memory
-	}
-	
-	// Add specific GPU devices based on assigned IDs
-	for _, gpuID := range gpuIDs {
-		gpuDevices = append(gpuDevices, fmt.Sprintf("/dev/nvidia%d", gpuID))
-	}
-	
-	// Mount GPU devices
-	for _, dev := range gpuDevices {
-		if _, err := os.Stat(dev); err == nil {
-			mounts = append(mounts, specs.Mount{
-				Type:        "bind",
-				Source:      dev,
-				Destination: dev,
-				Options:     []string{"rbind", "rprivate"},
-			})
-		}
-	}
-	
 	// Essential NVIDIA binaries
 	nvidiaFiles := []string{
 		"/usr/bin/nvidia-smi",
