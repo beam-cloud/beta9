@@ -31,7 +31,6 @@ type GPUManager interface {
 	UnassignGPUDevices(containerId string)
 	InjectEnvVars(env []string) []string
 	InjectMounts(mounts []specs.Mount) []specs.Mount
-	InjectGVisorMounts(mounts []specs.Mount, gpuIDs []int) []specs.Mount
 }
 
 type ContainerNvidiaManager struct {
@@ -243,68 +242,6 @@ func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Moun
 			},
 		}...)
 	}
-
-	return mounts
-}
-
-// InjectGVisorMounts adds NVIDIA userspace mounts for gVisor's nvproxy
-// nvproxy accesses /dev/nvidia* through the dev gofer automatically
-// We only need to mount userspace libraries and binaries
-func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount, gpuIDs []int) []specs.Mount {
-	// Essential NVIDIA binaries
-	nvidiaFiles := []string{
-		"/usr/bin/nvidia-smi",
-		"/usr/bin/nvidia-debugdump", 
-		"/usr/bin/nvidia-persistenced",
-		"/usr/bin/nvidia-cuda-mps-control",
-		"/usr/bin/nvidia-cuda-mps-server",
-	}
-
-	// Library directory
-	libDir := "/usr/lib/x86_64-linux-gnu"
-
-	// Mount ALL nvidia libraries (not just patterns)
-	// nvidia-smi needs libnvidia-ml.so which depends on many other libs
-	nvidiaLibPatterns := []string{
-		"libcuda.so*",
-		"libnvidia-*.so*",  // All nvidia libraries
-		"libnvcuvid.so*",
-	}
-
-	mountCount := 0
-
-	// Mount binaries
-	for _, file := range nvidiaFiles {
-		if _, err := os.Stat(file); err == nil {
-			mounts = append(mounts, specs.Mount{
-				Type:        "bind",
-				Source:      file,
-				Destination: file,
-				Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
-			})
-			mountCount++
-		}
-	}
-
-	// Mount libraries
-	for _, pattern := range nvidiaLibPatterns {
-		libPath := filepath.Join(libDir, pattern)
-		matches, _ := filepath.Glob(libPath)
-		for _, lib := range matches {
-			mounts = append(mounts, specs.Mount{
-				Type:        "bind",
-				Source:      lib,
-				Destination: lib,
-				Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
-			})
-			mountCount++
-		}
-	}
-
-	log.Info().
-		Ints("gpu_ids", gpuIDs).
-		Int("nvidia_mounts_added", mountCount).
-		Msg("Injected NVIDIA mounts for gVisor nvproxy")
 
 	return mounts
 }
