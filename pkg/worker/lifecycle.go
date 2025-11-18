@@ -829,37 +829,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				Interface("cdi_annotations", spec.Annotations).
 				Msg("CDI injection complete - gVisor will filter unsupported devices")
 		} else {
-			// For gVisor: manually inject minimal GPU device nodes (nvproxy handles the rest)
-			// gVisor's nvproxy is a proxy driver that intercepts GPU syscalls
-			if spec.Linux.Devices == nil {
-				spec.Linux.Devices = []specs.LinuxDevice{}
-			}
-			
-			for _, gpuID := range assignedDevices {
-				// Add nvidia control device
-				if gpuID == assignedDevices[0] { // Only add once
-					spec.Linux.Devices = append(spec.Linux.Devices, specs.LinuxDevice{
-						Path:  "/dev/nvidiactl",
-						Type:  "c",
-						Major: 195,
-						Minor: 255,
-					})
-					spec.Linux.Devices = append(spec.Linux.Devices, specs.LinuxDevice{
-						Path:  "/dev/nvidia-uvm",
-						Type:  "c",
-						Major: 510,
-						Minor: 0,
-					})
-				}
-				
-				// Add specific GPU device
-				spec.Linux.Devices = append(spec.Linux.Devices, specs.LinuxDevice{
-					Path:  fmt.Sprintf("/dev/nvidia%d", gpuID),
-					Type:  "c",
-					Major: 195,
-					Minor: int64(gpuID),
-				})
-			}
+			// For gVisor: DO NOT inject device nodes - nvproxy creates them internally!
+			// Just set environment variables to control GPU visibility
 			
 			// CRITICAL: Set NVIDIA_VISIBLE_DEVICES to control which GPUs are visible
 			// This tells gVisor's nvproxy which GPUs to expose inside the sandbox
@@ -880,8 +851,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				Str("container_id", request.ContainerId).
 				Ints("gpu_ids", assignedDevices).
 				Str("visible_devices", visibleDevices).
-				Int("device_count", len(spec.Linux.Devices)).
-				Msg("Manually injected GPU devices for gVisor nvproxy (no CDI)")
+				Msg("Set GPU env vars for gVisor nvproxy (nvproxy creates devices internally)")
 		}
 	}
 
