@@ -83,12 +83,12 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	}
 
 	// gVisor creates device nodes internally (including virtual NVIDIA devices for nvproxy)
-	// Remove ALL devices from spec to prevent conflicts
-	// CDI may inject NVIDIA devices here, but gVisor's nvproxy creates virtual devices instead
-	if spec.Linux.Devices != nil {
-		log.Debug().Int("device_count", len(spec.Linux.Devices)).Msg("Clearing spec.Linux.Devices for gVisor")
-		spec.Linux.Devices = nil
+	// CDI injects device nodes, but gVisor handles device creation itself
+	// Set to empty list (not nil) to explicitly indicate "no devices to create"
+	if len(spec.Linux.Devices) > 0 {
+		log.Debug().Int("device_count", len(spec.Linux.Devices)).Msg("Clearing CDI-injected devices for gVisor")
 	}
+	spec.Linux.Devices = []specs.LinuxDevice{}
 
 	return nil
 }
