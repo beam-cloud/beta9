@@ -261,15 +261,19 @@ func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount) []spec
 	// Library directory
 	libDir := "/usr/lib/x86_64-linux-gnu"
 
-	// Essential CUDA libraries for nvproxy
-	// These are the minimal set needed for nvidia-smi and CUDA applications
+	// Essential NVIDIA libraries for nvproxy
+	// These are needed for nvidia-smi and CUDA applications to work with nvproxy
 	nvidiaLibPatterns := []string{
-		"libcuda.so*",
-		"libnvidia-ml.so*",              // Required by nvidia-smi
-		"libnvidia-ptxjitcompiler.so*",
-		"libnvidia-allocator.so*",
-		"libnvidia-nvvm.so*",             // CUDA compiler
-		"libnvidia-cfg.so*",              // Configuration library
+		"libcuda.so*",                     // CUDA driver API
+		"libnvidia-ml.so*",                // nvidia-smi and NVML
+		"libnvidia-ptxjitcompiler.so*",    // PTX JIT compiler
+		"libnvidia-allocator.so*",         // Memory allocator
+		"libnvidia-nvvm.so*",              // NVVM compiler
+		"libnvidia-cfg.so*",               // Configuration
+		"libnvcuvid.so*",                  // Video decode
+		"libnvidia-encode.so*",            // Video encode  
+		"libnvidia-fbc.so*",               // Framebuffer capture
+		"libnvidia-tls.so*",               // Thread local storage
 	}
 
 	// Mount binaries
