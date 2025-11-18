@@ -503,7 +503,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	env := s.getContainerEnvironment(request, options)
-	if request.Gpu != "" {
+	// Only inject GPU env vars if using CDI (runc)
+	// For gVisor, env vars are set manually in the GPU device injection logic
+	if request.Gpu != "" && s.runtime.Capabilities().CDI {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
 

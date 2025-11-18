@@ -334,6 +334,14 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 	}
 	args = append(args, "run", "--bundle", bundlePath, containerID)
 
+	// Log the full runsc command for debugging
+	log.Info().
+		Str("container_id", containerID).
+		Str("command", r.cfg.RunscPath).
+		Strs("args", args).
+		Bool("nvproxy_enabled", r.nvproxyEnabled).
+		Msg("Executing runsc command")
+
 	cmd := exec.CommandContext(ctx, r.cfg.RunscPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // Kill entire process tree
 
