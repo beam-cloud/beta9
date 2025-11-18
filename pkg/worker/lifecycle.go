@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -503,10 +504,7 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	env := s.getContainerEnvironment(request, options)
-	// Inject GPU env vars for both runc and gVisor (both use CDI now)
-	// This adds CUDA_HOME, PATH, LD_LIBRARY_PATH, NVIDIA_DRIVER_CAPABILITIES, etc.
-	// Note: Does NOT set NVIDIA_VISIBLE_DEVICES (CDI does that)
-	if request.Gpu != "" && s.runtime.Capabilities().CDI {
+	if request.RequiresGPU() {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
 
@@ -785,31 +783,35 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		// Use CDI for both runc and gVisor
-		// CDI knows exactly what mounts/env vars are needed
-		// For gVisor: Prepare() will remove spec.Linux.Devices (which cause panic)
-		cdiCache := cdi.GetDefaultCache()
+		if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
+			if spec.Process == nil {
+				spec.Process = &specs.Process{}
+			}
+			spec.Process.Env = setEnvVar(spec.Process.Env, "NVIDIA_VISIBLE_DEVICES", formatVisibleDevicesEnv(assignedDevices))
+		} else if s.runtime.Capabilities().CDI {
+			cdiCache := cdi.GetDefaultCache()
 
-		var devicesToInject []string
-		for _, device := range assignedDevices {
-			devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
-			devicesToInject = append(devicesToInject, devicePath)
-		}
+			var devicesToInject []string
+			for _, device := range assignedDevices {
+				devicePath := fmt.Sprintf("%s=%d", nvidiaDeviceKindPrefix, device)
+				devicesToInject = append(devicesToInject, devicePath)
+			}
 
-		unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
-			return
-		}
-		if len(unresolvable) > 0 {
-			log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
-			return
-		}
+			unresolvable, err := cdiCache.InjectDevices(spec, devicesToInject...)
+			if err != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("failed to inject devices: %v", err)
+				return
+			}
+			if len(unresolvable) > 0 {
+				log.Error().Str("container_id", request.ContainerId).Msgf("unresolvable devices: %v", unresolvable)
+				return
+			}
 
-		log.Info().
-			Str("container_id", request.ContainerId).
-			Ints("gpu_ids", assignedDevices).
-			Msg("CDI injection complete")
+			log.Info().
+				Str("container_id", request.ContainerId).
+				Ints("gpu_ids", assignedDevices).
+				Msg("CDI injection complete")
+		}
 	}
 
 	// Expose the bind ports
@@ -882,7 +884,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		return
 	}
 	request.ConfigPath = configPath
-	
+
 	// Log the final spec for debugging (truncated to reasonable size)
 	specPreview := string(configContents)
 	maxLen := 3000
@@ -1087,4 +1089,29 @@ func (s *Worker) getContainerResources(request *types.ContainerRequest) (*specs.
 		CPU:    resources.GetCPU(request),
 		Memory: resources.GetMemory(request),
 	}, nil
+}
+
+func setEnvVar(env []string, key, value string) []string {
+	if key == "" {
+		return env
+	}
+	prefix := key + "="
+	for i, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func formatVisibleDevicesEnv(devices []int) string {
+	if len(devices) == 0 {
+		return "none"
+	}
+	parts := make([]string, len(devices))
+	for i, id := range devices {
+		parts[i] = strconv.Itoa(id)
+	}
+	return strings.Join(parts, ",")
 }

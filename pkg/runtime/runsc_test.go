@@ -19,8 +19,6 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 		name               string
 		setupSpec          func() *specs.Spec
 		wantNvproxyEnabled bool
-		wantDevicesCleared bool
-		wantDeviceCount    int
 	}{
 		{
 			name: "multi-GPU via CDI - unsupported devices filtered",
@@ -28,14 +26,14 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 				return &specs.Spec{
 					Linux: &specs.Linux{
 						Devices: []specs.LinuxDevice{
-							{Path: "/dev/nvidia0"},              // Kept
-							{Path: "/dev/nvidia1"},              // Kept
-							{Path: "/dev/nvidiactl"},            // Kept
-							{Path: "/dev/nvidia-uvm"},           // Kept
-							{Path: "/dev/nvidia-modeset"},       // Filtered out
-							{Path: "/dev/nvidia-uvm-tools"},     // Filtered out
-							{Path: "/dev/dri/card1"},            // Filtered out
-							{Path: "/dev/dri/renderD128"},       // Filtered out
+							{Path: "/dev/nvidia0"},          // Kept
+							{Path: "/dev/nvidia1"},          // Kept
+							{Path: "/dev/nvidiactl"},        // Kept
+							{Path: "/dev/nvidia-uvm"},       // Kept
+							{Path: "/dev/nvidia-modeset"},   // Filtered out
+							{Path: "/dev/nvidia-uvm-tools"}, // Filtered out
+							{Path: "/dev/dri/card1"},        // Filtered out
+							{Path: "/dev/dri/renderD128"},   // Filtered out
 						},
 					},
 					Annotations: map[string]string{
@@ -45,8 +43,6 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 				}
 			},
 			wantNvproxyEnabled: true,
-			wantDevicesCleared: false,
-			wantDeviceCount:    4, // Only supported devices kept
 		},
 		{
 			name: "single GPU via CDI - devices preserved",
@@ -65,8 +61,6 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 				}
 			},
 			wantNvproxyEnabled: true,
-			wantDevicesCleared: false,
-			wantDeviceCount:    3,
 		},
 		{
 			name: "CPU only - no GPUs, devices cleared",
@@ -81,8 +75,6 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 				}
 			},
 			wantNvproxyEnabled: false,
-			wantDevicesCleared: true,
-			wantDeviceCount:    0,
 		},
 		{
 			name: "GPU detection via annotation only",
@@ -97,8 +89,6 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 				}
 			},
 			wantNvproxyEnabled: true,
-			wantDevicesCleared: false,
-			wantDeviceCount:    0, // No devices, just annotation
 		},
 	}
 
@@ -121,21 +111,11 @@ func TestRunscPrepare_MultiGPU(t *testing.T) {
 			assert.Equal(t, tt.wantNvproxyEnabled, runsc.nvproxyEnabled,
 				"nvproxy enablement mismatch")
 
-			// Verify device handling
-			if tt.wantDevicesCleared {
-				assert.Nil(t, spec.Linux.Devices,
-					"Devices should be cleared for non-GPU workloads")
-			} else {
-				assert.Equal(t, tt.wantDeviceCount, len(spec.Linux.Devices),
-					"Device count should match what CDI provided")
-			}
+			assert.Equal(t, 0, len(spec.Linux.Devices), "gVisor specs should not include device nodes")
 
-			// Verify annotations are always preserved
-			if len(tt.setupSpec().Annotations) > 0 {
-				for key := range tt.setupSpec().Annotations {
-					assert.Contains(t, spec.Annotations, key,
-						"Annotations should be preserved")
-				}
+			if tt.wantNvproxyEnabled {
+				assert.Equal(t, "true", spec.Annotations["dev.gvisor.internal.nvproxy"],
+					"nvproxy annotation should be set when GPUs are requested")
 			}
 		})
 	}
@@ -224,20 +204,18 @@ func TestRunscRun_MultiGPU_FlagPropagation(t *testing.T) {
 		},
 	}
 
-	// Test with nvproxy enabled
 	runsc.nvproxyEnabled = true
 	args := runsc.baseArgs(false)
-	args = append(args, "--nvproxy=true")
-	
-	// Verify --nvproxy=true is in the args
-	found := false
-	for _, arg := range args {
-		if arg == "--nvproxy=true" {
-			found = true
-			break
-		}
+	if runsc.nvproxyEnabled {
+		args = append(args, "--nvproxy=true", "--nvproxy-docker=true")
 	}
-	assert.True(t, found, "Expected --nvproxy=true flag when nvproxy is enabled")
+
+	flags := map[string]bool{}
+	for _, arg := range args {
+		flags[arg] = true
+	}
+	assert.True(t, flags["--nvproxy=true"])
+	assert.True(t, flags["--nvproxy-docker=true"])
 
 	// Verify base args include necessary gVisor flags
 	hasRoot := false

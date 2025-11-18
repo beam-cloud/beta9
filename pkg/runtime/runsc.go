@@ -61,7 +61,7 @@ func (r *Runsc) Capabilities() Capabilities {
 		GPU:               true,
 		OOMEvents:         false,
 		JoinExistingNetNS: true,
-		CDI:               true, // Use CDI to get mounts/env vars, just remove devices in Prepare()
+		CDI:               false,
 	}
 }
 
@@ -76,10 +76,11 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 
 	// Detect if GPU is requested by checking env vars or devices
 	r.nvproxyEnabled = r.hasGPUDevices(spec)
-
-	// For GPU workloads, mount cuda-checkpoint tool for checkpoint/restore support
 	if r.nvproxyEnabled {
-		r.mountCudaCheckpoint(spec)
+		if spec.Annotations == nil {
+			spec.Annotations = map[string]string{}
+		}
+		spec.Annotations["dev.gvisor.internal.nvproxy"] = "true"
 	}
 
 	// gVisor creates device nodes internally (including virtual NVIDIA devices for nvproxy)
@@ -106,30 +107,6 @@ func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
 		Source:      cudaCheckpointPath,
 		Options:     []string{"bind", "ro"},
 	})
-}
-
-// fixNvidiaVisibleDevices ensures NVIDIA_VISIBLE_DEVICES is not set to "void"
-// CDI may set it to "void" when device injection doesn't match expectations
-// For gVisor, we need it set correctly for dev gofer creation
-func (r *Runsc) fixNvidiaVisibleDevices(spec *specs.Spec) {
-	for i, env := range spec.Process.Env {
-		if strings.HasPrefix(env, "NVIDIA_VISIBLE_DEVICES=") {
-			value := strings.TrimPrefix(env, "NVIDIA_VISIBLE_DEVICES=")
-			if value == "void" || value == "none" || value == "" {
-				// CDI set it to void - fix it to "all" to enable dev gofer
-				spec.Process.Env[i] = "NVIDIA_VISIBLE_DEVICES=all"
-				log.Warn().
-					Str("old_value", value).
-					Str("new_value", "all").
-					Msg("Fixed NVIDIA_VISIBLE_DEVICES for gVisor nvproxy")
-				return
-			}
-		}
-	}
-	
-	// If not found, add it
-	spec.Process.Env = append(spec.Process.Env, "NVIDIA_VISIBLE_DEVICES=all")
-	log.Info().Msg("Added NVIDIA_VISIBLE_DEVICES=all for gVisor nvproxy")
 }
 
 // hasGPUDevices checks if the spec contains GPU device configurations
@@ -179,11 +156,7 @@ func (r *Runsc) Run(ctx context.Context, containerID, bundlePath string, opts *R
 
 	args := r.baseArgs(dockerEnabled)
 	if r.nvproxyEnabled {
-		args = append(args, "--nvproxy=true")
-		// Allow all driver capabilities that the container might need  
-		// Per gVisor docs, supported capabilities are: compute, utility, graphics, video
-		// Note: ngx is NOT supported by gVisor and will cause a fatal error if included
-		args = append(args, "--nvproxy-allowed-driver-capabilities=compute,utility,graphics,video")
+		args = append(args, "--nvproxy=true", "--nvproxy-docker=true")
 	}
 	args = append(args, "run", "--bundle", bundlePath, containerID)
 
@@ -469,10 +442,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 
 	args := r.baseArgs(false)
 	if r.nvproxyEnabled {
-		args = append(args, "--nvproxy=true")
-		// Allow all driver capabilities for restore as well
-		// Supported by gVisor: compute, utility, graphics, video (ngx is NOT supported)
-		args = append(args, "--nvproxy-allowed-driver-capabilities=compute,utility,graphics,video")
+		args = append(args, "--nvproxy=true", "--nvproxy-docker=true")
 	}
 	args = append(args, "restore")
 	if opts.ImagePath != "" {
@@ -521,7 +491,7 @@ func (r *Runsc) Restore(ctx context.Context, containerID string, opts *RestoreOp
 	err := cmd.Wait()
 	if err != nil {
 		stderrStr := stderr.String()
-		
+
 		// Log stderr for debugging
 		if stderrStr != "" {
 			log.Error().
