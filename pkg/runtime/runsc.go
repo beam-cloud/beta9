@@ -166,36 +166,67 @@ func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
 // This is critical for gVisor as mounting non-existent files causes StartRoot to fail with EOF
 func (r *Runsc) filterNonExistentMounts(spec *specs.Spec) {
 	if spec.Mounts == nil {
+		log.Warn().Msg("spec.Mounts is nil!")
 		return
 	}
 
 	var validMounts []specs.Mount
 	var removedMounts []string
+	var skippedTypes []string
 	bindMountCount := 0
+	checkCount := 0
+
+	// Log first 3 mounts to see what we're dealing with
+	for i, mount := range spec.Mounts {
+		if i < 3 {
+			log.Info().
+				Str("source", mount.Source).
+				Str("dest", mount.Destination).
+				Str("type", mount.Type).
+				Strs("options", mount.Options).
+				Msgf("Sample mount %d", i)
+		}
+	}
 
 	for _, mount := range spec.Mounts {
 		// Skip non-bind mounts (they don't require source path to exist)
 		// Note: CDI often uses empty Type which defaults to "bind"
 		if mount.Type != "" && mount.Type != "bind" && mount.Type != "rbind" {
 			validMounts = append(validMounts, mount)
+			skippedTypes = append(skippedTypes, mount.Type)
 			continue
 		}
 
 		bindMountCount++
+		checkCount++
 		
 		// Check if source exists
-		if _, err := os.Stat(mount.Source); err == nil {
+		if stat, err := os.Stat(mount.Source); err == nil {
 			validMounts = append(validMounts, mount)
+			if checkCount <= 3 {
+				log.Info().
+					Str("source", mount.Source).
+					Bool("is_dir", stat.IsDir()).
+					Msg("Mount source EXISTS")
+			}
 		} else {
-			log.Debug().
+			log.Warn().
 				Str("mount_source", mount.Source).
 				Str("mount_dest", mount.Destination).
 				Str("mount_type", mount.Type).
 				Str("error", err.Error()).
-				Msg("Removing non-existent mount")
+				Msg("REMOVING non-existent mount")
 			removedMounts = append(removedMounts, mount.Source)
 		}
 	}
+
+	log.Info().
+		Int("total_mounts", len(spec.Mounts)).
+		Int("bind_mount_count", bindMountCount).
+		Int("checked_count", checkCount).
+		Strs("skipped_types", skippedTypes).
+		Int("removed_count", len(removedMounts)).
+		Msg("Mount filtering stats")
 
 	if len(removedMounts) > 0 {
 		log.Warn().
@@ -203,6 +234,8 @@ func (r *Runsc) filterNonExistentMounts(spec *specs.Spec) {
 			Int("removed_count", len(removedMounts)).
 			Int("total_bind_mounts", bindMountCount).
 			Msg("Filtered out non-existent mount paths for gVisor")
+	} else {
+		log.Warn().Msg("NO MOUNTS WERE REMOVED - all mount sources exist or were skipped!")
 	}
 
 	spec.Mounts = validMounts
