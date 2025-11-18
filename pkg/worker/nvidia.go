@@ -248,8 +248,8 @@ func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Moun
 }
 
 // InjectGVisorMounts adds NVIDIA userspace mounts for gVisor's nvproxy
-// nvproxy accesses /dev/nvidia* on the host directly - we DON'T mount them
-// We only mount userspace libraries and binaries that applications need
+// nvproxy accesses /dev/nvidia* through the dev gofer automatically
+// We only need to mount userspace libraries and binaries
 func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount, gpuIDs []int) []specs.Mount {
 	// Essential NVIDIA binaries
 	nvidiaFiles := []string{
@@ -263,19 +263,15 @@ func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount, gpuIDs
 	// Library directory
 	libDir := "/usr/lib/x86_64-linux-gnu"
 
-	// Essential NVIDIA libraries
+	// Mount ALL nvidia libraries (not just patterns)
+	// nvidia-smi needs libnvidia-ml.so which depends on many other libs
 	nvidiaLibPatterns := []string{
 		"libcuda.so*",
-		"libnvidia-ml.so*",
-		"libnvidia-ptxjitcompiler.so*",
-		"libnvidia-allocator.so*",
-		"libnvidia-nvvm.so*",
-		"libnvidia-cfg.so*",
+		"libnvidia-*.so*",  // All nvidia libraries
 		"libnvcuvid.so*",
-		"libnvidia-encode.so*",
-		"libnvidia-fbc.so*",
-		"libnvidia-tls.so*",
 	}
+
+	mountCount := 0
 
 	// Mount binaries
 	for _, file := range nvidiaFiles {
@@ -286,6 +282,7 @@ func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount, gpuIDs
 				Destination: file,
 				Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
 			})
+			mountCount++
 		}
 	}
 
@@ -300,8 +297,14 @@ func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount, gpuIDs
 				Destination: lib,
 				Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
 			})
+			mountCount++
 		}
 	}
+
+	log.Info().
+		Ints("gpu_ids", gpuIDs).
+		Int("nvidia_mounts_added", mountCount).
+		Msg("Injected NVIDIA mounts for gVisor nvproxy")
 
 	return mounts
 }
