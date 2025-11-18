@@ -809,79 +809,26 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				Ints("gpu_ids", assignedDevices).
 				Msg("CDI injection complete for runc")
 		} else {
-			// For gVisor: DO NOT inject device nodes - nvproxy creates them internally!
-			// But we DO need to mount NVIDIA binaries and libraries from the host
-			// nvproxy makes the /dev/nvidia* devices work, but apps need the userspace libraries
+			// For gVisor: nvproxy creates /dev/nvidia* devices internally
+			// We just need to mount userspace libraries and set env vars
+			spec.Mounts = s.containerGPUManager.InjectGVisorMounts(spec.Mounts)
 			
-			// Mount essential NVIDIA utilities and libraries
-			// These are the minimal set needed for CUDA applications to work with nvproxy
-			nvidiaFiles := []string{
-				"/usr/bin/nvidia-smi",
-				"/usr/bin/nvidia-debugdump",
-				"/usr/bin/nvidia-persistenced",
-				"/usr/bin/nvidia-cuda-mps-control",
-				"/usr/bin/nvidia-cuda-mps-server",
-			}
-			
-			// Find library directory (x86_64-linux-gnu is standard on Ubuntu/Debian)
-			libDir := "/usr/lib/x86_64-linux-gnu"
-			
-			// Mount CUDA and NVIDIA libraries needed for GPU workloads
-			// These libraries interact with /dev/nvidia* devices that nvproxy provides
-			nvidiaLibPatterns := []string{
-				"libcuda.so*",
-				"libnvidia-ml.so*",
-				"libnvidia-ptxjitcompiler.so*",
-				"libnvidia-allocator.so*",
-				"libnvidia-compiler.so*",
-			}
-			
-			// Add binaries
-			for _, file := range nvidiaFiles {
-				if _, err := os.Stat(file); err == nil {
-					spec.Mounts = append(spec.Mounts, specs.Mount{
-						Type:        "bind",
-						Source:      file,
-						Destination: file,
-						Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
-					})
-				}
-			}
-			
-			// Add libraries
-			for _, pattern := range nvidiaLibPatterns {
-				matches, _ := filepath.Glob(filepath.Join(libDir, pattern))
-				for _, lib := range matches {
-					spec.Mounts = append(spec.Mounts, specs.Mount{
-						Type:        "bind",
-						Source:      lib,
-						Destination: lib,
-						Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
-					})
-				}
-			}
-			
-			// CRITICAL: Set NVIDIA_VISIBLE_DEVICES to control which GPUs are visible
-			// This tells gVisor's nvproxy which GPUs to expose inside the sandbox
-			// Format: comma-separated list of GPU indices (e.g., "0" or "0,1")
+			// Set NVIDIA_VISIBLE_DEVICES to control GPU visibility
 			var gpuIDStrs []string
 			for _, gpuID := range assignedDevices {
 				gpuIDStrs = append(gpuIDStrs, fmt.Sprintf("%d", gpuID))
 			}
 			visibleDevices := strings.Join(gpuIDStrs, ",")
 			
-			// Set NVIDIA_VISIBLE_DEVICES environment variable
-			spec.Process.Env = append(spec.Process.Env, fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", visibleDevices))
-			
-			// Also set NVIDIA_DRIVER_CAPABILITIES for completeness
-			spec.Process.Env = append(spec.Process.Env, "NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,video")
+			spec.Process.Env = append(spec.Process.Env, 
+				fmt.Sprintf("NVIDIA_VISIBLE_DEVICES=%s", visibleDevices),
+				"NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,video")
 			
 			log.Info().
 				Str("container_id", request.ContainerId).
 				Ints("gpu_ids", assignedDevices).
 				Str("visible_devices", visibleDevices).
-				Int("nvidia_mounts", len(nvidiaFiles)+len(nvidiaLibPatterns)*5).
-				Msg("Set GPU env vars and mounts for gVisor nvproxy")
+				Msg("Configured gVisor nvproxy GPU support")
 		}
 	}
 

@@ -74,51 +74,16 @@ func (r *Runsc) Prepare(ctx context.Context, spec *specs.Spec) error {
 	// gVisor requires seccomp to be disabled
 	spec.Linux.Seccomp = nil
 
-	// Detect if GPU is requested by checking devices or CDI annotations
+	// Detect if GPU is requested by checking env vars (NVIDIA_VISIBLE_DEVICES)
 	r.nvproxyEnabled = r.hasGPUDevices(spec)
 
+	// For GPU workloads, mount cuda-checkpoint tool for checkpoint/restore support
 	if r.nvproxyEnabled {
-		// Mount cuda-checkpoint tool for CUDA checkpoint/restore support
 		r.mountCudaCheckpoint(spec)
-
-		// Log devices before filtering
-		var devicesBefore []string
-		for _, dev := range spec.Linux.Devices {
-			devicesBefore = append(devicesBefore, dev.Path)
-		}
-
-		// CRITICAL: Filter to only gVisor-supported GPU devices
-		// Per gVisor docs: "gVisor only exposes /dev/nvidiactl, /dev/nvidia-uvm and /dev/nvidia#"
-		// CDI injects unsupported devices like /dev/nvidia-modeset, /dev/dri/* which cause startup failures
-		r.filterToSupportedGPUDevices(spec)
-
-		// Log devices after filtering
-		var devicesAfter []string
-		for _, dev := range spec.Linux.Devices {
-			devicesAfter = append(devicesAfter, dev.Path)
-		}
-
-		log.Info().
-			Strs("devices_before_filter", devicesBefore).
-			Strs("devices_after_filter", devicesAfter).
-			Int("removed_count", len(devicesBefore)-len(devicesAfter)).
-			Msg("gVisor device filtering complete")
-
-		// CRITICAL: Filter mounts to remove paths that don't exist
-		// CDI may inject mounts for libraries that aren't present (e.g., ngx libraries)
-		// Attempting to mount non-existent files causes StartRoot to fail with EOF
-		log.Info().Int("total_mounts_before_filter", len(spec.Mounts)).Msg("About to filter mounts")
-		r.filterNonExistentMounts(spec)
-		log.Info().Int("total_mounts_after_filter", len(spec.Mounts)).Msg("Mount filtering complete")
-
-		// CRITICAL: Filter env vars to remove unsupported driver capabilities
-		// CDI injects NVIDIA_DRIVER_CAPABILITIES with all capabilities including ngx
-		// gVisor's nvproxy doesn't support ngx, so we need to remove it
-		r.filterUnsupportedDriverCapabilities(spec)
-	} else {
-		// For non-GPU workloads, clear all devices as gVisor handles them internally
-		spec.Linux.Devices = nil
 	}
+
+	// gVisor creates all device nodes internally, clear any that were in the spec
+	spec.Linux.Devices = nil
 
 	return nil
 }
@@ -160,138 +125,6 @@ func (r *Runsc) mountCudaCheckpoint(spec *specs.Spec) {
 		Source:      cudaCheckpointPath,
 		Options:     []string{"bind", "ro"},
 	})
-}
-
-// filterNonExistentMounts removes mounts where the source path doesn't exist on the host
-// This is critical for gVisor as mounting non-existent files causes StartRoot to fail with EOF
-func (r *Runsc) filterNonExistentMounts(spec *specs.Spec) {
-	if spec.Mounts == nil {
-		log.Warn().Msg("spec.Mounts is nil!")
-		return
-	}
-
-	var validMounts []specs.Mount
-	var removedMounts []string
-	var skippedTypes []string
-	bindMountCount := 0
-	checkCount := 0
-
-	// Log first 3 mounts to see what we're dealing with
-	for i, mount := range spec.Mounts {
-		if i < 3 {
-			log.Info().
-				Str("source", mount.Source).
-				Str("dest", mount.Destination).
-				Str("type", mount.Type).
-				Strs("options", mount.Options).
-				Msgf("Sample mount %d", i)
-		}
-	}
-
-	for _, mount := range spec.Mounts {
-		// Skip non-bind mounts (they don't require source path to exist)
-		// Note: CDI often uses empty Type which defaults to "bind"
-		if mount.Type != "" && mount.Type != "bind" && mount.Type != "rbind" {
-			validMounts = append(validMounts, mount)
-			skippedTypes = append(skippedTypes, mount.Type)
-			continue
-		}
-
-		bindMountCount++
-		checkCount++
-		
-		// Check if source exists
-		if stat, err := os.Stat(mount.Source); err == nil {
-			validMounts = append(validMounts, mount)
-			if checkCount <= 3 {
-				log.Info().
-					Str("source", mount.Source).
-					Bool("is_dir", stat.IsDir()).
-					Msg("Mount source EXISTS")
-			}
-		} else {
-			log.Warn().
-				Str("mount_source", mount.Source).
-				Str("mount_dest", mount.Destination).
-				Str("mount_type", mount.Type).
-				Str("error", err.Error()).
-				Msg("REMOVING non-existent mount")
-			removedMounts = append(removedMounts, mount.Source)
-		}
-	}
-
-	log.Info().
-		Int("total_mounts", len(spec.Mounts)).
-		Int("bind_mount_count", bindMountCount).
-		Int("checked_count", checkCount).
-		Strs("skipped_types", skippedTypes).
-		Int("removed_count", len(removedMounts)).
-		Msg("Mount filtering stats")
-
-	if len(removedMounts) > 0 {
-		log.Warn().
-			Strs("removed_mounts", removedMounts).
-			Int("removed_count", len(removedMounts)).
-			Int("total_bind_mounts", bindMountCount).
-			Msg("Filtered out non-existent mount paths for gVisor")
-	} else {
-		log.Warn().Msg("NO MOUNTS WERE REMOVED - all mount sources exist or were skipped!")
-	}
-
-	spec.Mounts = validMounts
-}
-
-// filterUnsupportedDriverCapabilities removes unsupported capabilities from NVIDIA_DRIVER_CAPABILITIES
-// gVisor's nvproxy only supports: compute, utility, graphics, video (not ngx)
-func (r *Runsc) filterUnsupportedDriverCapabilities(spec *specs.Spec) {
-	if spec.Process == nil || spec.Process.Env == nil {
-		return
-	}
-
-	supportedCaps := []string{"compute", "utility", "graphics", "video"}
-	
-	for i, env := range spec.Process.Env {
-		if strings.HasPrefix(env, "NVIDIA_DRIVER_CAPABILITIES=") {
-			value := strings.TrimPrefix(env, "NVIDIA_DRIVER_CAPABILITIES=")
-			caps := strings.Split(value, ",")
-			
-			// Filter to only supported capabilities
-			var filtered []string
-			var removed []string
-			for _, cap := range caps {
-				cap = strings.TrimSpace(cap)
-				if cap == "" {
-					continue
-				}
-				
-				supported := false
-				for _, supportedCap := range supportedCaps {
-					if cap == supportedCap {
-						supported = true
-						break
-					}
-				}
-				
-				if supported {
-					filtered = append(filtered, cap)
-				} else {
-					removed = append(removed, cap)
-				}
-			}
-			
-			if len(removed) > 0 {
-				newValue := strings.Join(filtered, ",")
-				spec.Process.Env[i] = "NVIDIA_DRIVER_CAPABILITIES=" + newValue
-				log.Warn().
-					Strs("removed_capabilities", removed).
-					Str("old_value", value).
-					Str("new_value", newValue).
-					Msg("Filtered unsupported NVIDIA driver capabilities for gVisor")
-			}
-			
-			break // Only one NVIDIA_DRIVER_CAPABILITIES env var
-		}
-	}
 }
 
 // hasGPUDevices checks if the spec contains GPU device configurations

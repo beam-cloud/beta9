@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"syscall"
@@ -240,6 +241,61 @@ func (c *ContainerNvidiaManager) InjectMounts(mounts []specs.Mount) []specs.Moun
 				},
 			},
 		}...)
+	}
+
+	return mounts
+}
+
+// InjectGVisorMounts adds minimal NVIDIA mounts needed for gVisor's nvproxy
+// nvproxy creates /dev/nvidia* devices internally, but apps still need userspace libraries
+func (c *ContainerNvidiaManager) InjectGVisorMounts(mounts []specs.Mount) []specs.Mount {
+	// Essential NVIDIA binaries
+	nvidiaFiles := []string{
+		"/usr/bin/nvidia-smi",
+		"/usr/bin/nvidia-debugdump", 
+		"/usr/bin/nvidia-persistenced",
+		"/usr/bin/nvidia-cuda-mps-control",
+		"/usr/bin/nvidia-cuda-mps-server",
+	}
+
+	// Library directory
+	libDir := "/usr/lib/x86_64-linux-gnu"
+
+	// Essential CUDA libraries for nvproxy
+	// These are the minimal set needed for nvidia-smi and CUDA applications
+	nvidiaLibPatterns := []string{
+		"libcuda.so*",
+		"libnvidia-ml.so*",              // Required by nvidia-smi
+		"libnvidia-ptxjitcompiler.so*",
+		"libnvidia-allocator.so*",
+		"libnvidia-nvvm.so*",             // CUDA compiler
+		"libnvidia-cfg.so*",              // Configuration library
+	}
+
+	// Mount binaries
+	for _, file := range nvidiaFiles {
+		if _, err := c.statFunc(file, nil); err == nil {
+			mounts = append(mounts, specs.Mount{
+				Type:        "bind",
+				Source:      file,
+				Destination: file,
+				Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
+			})
+		}
+	}
+
+	// Mount libraries
+	for _, pattern := range nvidiaLibPatterns {
+		libPath := filepath.Join(libDir, pattern)
+		matches, _ := filepath.Glob(libPath)
+		for _, lib := range matches {
+			mounts = append(mounts, specs.Mount{
+				Type:        "bind",
+				Source:      lib,
+				Destination: lib,
+				Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
+			})
+		}
 	}
 
 	return mounts
