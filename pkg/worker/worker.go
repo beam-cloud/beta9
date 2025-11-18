@@ -235,7 +235,7 @@ func NewWorker() (*Worker, error) {
 			RunscPath:     "runsc",
 			RunscRoot:     gvisorRoot,
 			RunscPlatform: gvisorPlatform,
-			Debug:         config.DebugMode,
+			Debug:         true, // ALWAYS enable debug for GPU containers to diagnose issues
 		})
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")
