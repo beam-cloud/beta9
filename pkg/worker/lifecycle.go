@@ -503,8 +503,9 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	env := s.getContainerEnvironment(request, options)
-	// Only inject GPU env vars if using CDI (runc)
-	// For gVisor, env vars are set manually in the GPU device injection logic
+	// Inject GPU env vars for both runc and gVisor (both use CDI now)
+	// This adds CUDA_HOME, PATH, LD_LIBRARY_PATH, NVIDIA_DRIVER_CAPABILITIES, etc.
+	// Note: Does NOT set NVIDIA_VISIBLE_DEVICES (CDI does that)
 	if request.Gpu != "" && s.runtime.Capabilities().CDI {
 		env = s.containerGPUManager.InjectEnvVars(env)
 	}
