@@ -2057,6 +2057,243 @@ func TestCpuBatchProvisioning_Threshold(t *testing.T) {
 	tjassert.True(t, scheduler.addToCpuBatch(req), "6 requests = threshold")
 }
 
+// Test that processRequestWithWorkers enforces pool selectors
+func TestProcessRequestWithWorkers_PoolSelector(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	tjassert.Nil(t, err)
+	tjassert.NotNil(t, wb)
+
+	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
+	wb.backendRepo = &BackendRepoConcurrencyLimitsForTest{
+		BackendRepository: backendRepo,
+	}
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).CPUConcurrencyLimit = 100000
+
+	// Create a worker with RequiresPoolSelector
+	workerWithPoolSelector := &types.Worker{
+		Id:                   "pool-worker",
+		Status:               types.WorkerStatusAvailable,
+		FreeCpu:              10000,
+		FreeMemory:           10000,
+		PoolName:             "special-pool",
+		RequiresPoolSelector: true,
+	}
+	err = wb.workerRepo.AddWorker(workerWithPoolSelector)
+	tjassert.Nil(t, err)
+
+	// Create a regular worker
+	regularWorker := &types.Worker{
+		Id:         "regular-worker",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    10000,
+		FreeMemory: 10000,
+		PoolName:   "default",
+	}
+	err = wb.workerRepo.AddWorker(regularWorker)
+	tjassert.Nil(t, err)
+
+	// Request without pool selector should NOT use the RequiresPoolSelector worker
+	requestWithoutSelector := &types.ContainerRequest{
+		ContainerId: "no-selector",
+		Cpu:         1000,
+		Memory:      1000,
+		Timestamp:   time.Now(),
+		WorkspaceId: "test",
+		StubId:      "test",
+	}
+	err = wb.containerRepo.SetContainerState(requestWithoutSelector)
+	tjassert.Nil(t, err)
+
+	workers, _ := wb.workerRepo.GetAllWorkersLockFree()
+	wb.processRequestWithWorkers(requestWithoutSelector, workers)
+
+	// Verify it was scheduled on regular worker, not the pool-selector worker
+	regularWorkerUpdated, _ := wb.workerRepo.GetWorkerById(regularWorker.Id)
+	tjassert.Equal(t, int64(9000), regularWorkerUpdated.FreeCpu, "Should schedule on regular worker")
+
+	poolWorkerUpdated, _ := wb.workerRepo.GetWorkerById(workerWithPoolSelector.Id)
+	tjassert.Equal(t, int64(10000), poolWorkerUpdated.FreeCpu, "Should NOT schedule on pool-selector worker")
+
+	// Request WITH pool selector should use the RequiresPoolSelector worker
+	requestWithSelector := &types.ContainerRequest{
+		ContainerId:  "with-selector",
+		Cpu:          1000,
+		Memory:       1000,
+		PoolSelector: "special-pool",
+		Timestamp:    time.Now(),
+		WorkspaceId:  "test",
+		StubId:       "test",
+	}
+	err = wb.containerRepo.SetContainerState(requestWithSelector)
+	tjassert.Nil(t, err)
+
+	workers, _ = wb.workerRepo.GetAllWorkersLockFree()
+	wb.processRequestWithWorkers(requestWithSelector, workers)
+
+	// Verify it was scheduled on pool-selector worker
+	poolWorkerUpdated, _ = wb.workerRepo.GetWorkerById(workerWithPoolSelector.Id)
+	tjassert.Equal(t, int64(9000), poolWorkerUpdated.FreeCpu, "Should schedule on pool-selector worker")
+}
+
+// Test that processRequestWithWorkers enforces runtime flags
+func TestProcessRequestWithWorkers_RuntimeFlags(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	tjassert.Nil(t, err)
+	tjassert.NotNil(t, wb)
+
+	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
+	wb.backendRepo = &BackendRepoConcurrencyLimitsForTest{
+		BackendRepository: backendRepo,
+	}
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).CPUConcurrencyLimit = 100000
+
+	// Create a worker with gvisor runtime
+	gvisorWorker := &types.Worker{
+		Id:         "gvisor-worker",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    10000,
+		FreeMemory: 10000,
+		Runtime:    types.ContainerRuntimeGvisor.String(),
+	}
+	err = wb.workerRepo.AddWorker(gvisorWorker)
+	tjassert.Nil(t, err)
+
+	// Create a worker with runc runtime
+	runcWorker := &types.Worker{
+		Id:         "runc-worker",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    10000,
+		FreeMemory: 10000,
+		Runtime:    types.ContainerRuntimeRunc.String(),
+	}
+	err = wb.workerRepo.AddWorker(runcWorker)
+	tjassert.Nil(t, err)
+
+	// Request with DockerEnabled should only use gvisor worker
+	dockerRequest := &types.ContainerRequest{
+		ContainerId:   "docker-req",
+		Cpu:           1000,
+		Memory:        1000,
+		DockerEnabled: true,
+		Timestamp:     time.Now(),
+		WorkspaceId:   "test",
+		StubId:        "test",
+	}
+	err = wb.containerRepo.SetContainerState(dockerRequest)
+	tjassert.Nil(t, err)
+
+	workers, _ := wb.workerRepo.GetAllWorkersLockFree()
+	wb.processRequestWithWorkers(dockerRequest, workers)
+
+	// Verify it was scheduled on gvisor worker
+	gvisorUpdated, _ := wb.workerRepo.GetWorkerById(gvisorWorker.Id)
+	tjassert.Equal(t, int64(9000), gvisorUpdated.FreeCpu, "Should schedule on gvisor worker")
+
+	runcUpdated, _ := wb.workerRepo.GetWorkerById(runcWorker.Id)
+	tjassert.Equal(t, int64(10000), runcUpdated.FreeCpu, "Should NOT schedule on runc worker")
+
+	// Request without DockerEnabled can use either worker
+	normalRequest := &types.ContainerRequest{
+		ContainerId:   "normal-req",
+		Cpu:           1000,
+		Memory:        1000,
+		DockerEnabled: false,
+		Timestamp:     time.Now(),
+		WorkspaceId:   "test",
+		StubId:        "test",
+	}
+	err = wb.containerRepo.SetContainerState(normalRequest)
+	tjassert.Nil(t, err)
+
+	workers, _ = wb.workerRepo.GetAllWorkersLockFree()
+	wb.processRequestWithWorkers(normalRequest, workers)
+
+	// Verify it was scheduled on one of the workers (gvisor already has load, so should go to runc)
+	runcUpdated, _ = wb.workerRepo.GetWorkerById(runcWorker.Id)
+	gvisorUpdated, _ = wb.workerRepo.GetWorkerById(gvisorWorker.Id)
+	
+	totalUsedCpu := (10000 - runcUpdated.FreeCpu) + (10000 - gvisorUpdated.FreeCpu)
+	tjassert.Equal(t, int64(2000), totalUsedCpu, "Should have scheduled 2 requests total")
+}
+
+// Test that processRequestWithWorkers enforces preemptability
+func TestProcessRequestWithWorkers_Preemptability(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	tjassert.Nil(t, err)
+	tjassert.NotNil(t, wb)
+
+	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
+	wb.backendRepo = &BackendRepoConcurrencyLimitsForTest{
+		BackendRepository: backendRepo,
+	}
+	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).CPUConcurrencyLimit = 100000
+
+	// Create a preemptable worker
+	preemptableWorker := &types.Worker{
+		Id:          "preemptable-worker",
+		Status:      types.WorkerStatusAvailable,
+		FreeCpu:     10000,
+		FreeMemory:  10000,
+		Preemptable: true,
+	}
+	err = wb.workerRepo.AddWorker(preemptableWorker)
+	tjassert.Nil(t, err)
+
+	// Create a non-preemptable worker
+	nonPreemptableWorker := &types.Worker{
+		Id:          "non-preemptable-worker",
+		Status:      types.WorkerStatusAvailable,
+		FreeCpu:     10000,
+		FreeMemory:  10000,
+		Preemptable: false,
+	}
+	err = wb.workerRepo.AddWorker(nonPreemptableWorker)
+	tjassert.Nil(t, err)
+
+	// Non-preemptable request should NOT use preemptable worker
+	nonPreemptableRequest := &types.ContainerRequest{
+		ContainerId: "non-preempt-req",
+		Cpu:         1000,
+		Memory:      1000,
+		Preemptable: false,
+		Timestamp:   time.Now(),
+		WorkspaceId: "test",
+		StubId:      "test",
+	}
+	err = wb.containerRepo.SetContainerState(nonPreemptableRequest)
+	tjassert.Nil(t, err)
+
+	workers, _ := wb.workerRepo.GetAllWorkersLockFree()
+	wb.processRequestWithWorkers(nonPreemptableRequest, workers)
+
+	// Verify it was scheduled on non-preemptable worker
+	nonPreemptUpdated, _ := wb.workerRepo.GetWorkerById(nonPreemptableWorker.Id)
+	tjassert.Equal(t, int64(9000), nonPreemptUpdated.FreeCpu, "Should schedule on non-preemptable worker")
+
+	preemptUpdated, _ := wb.workerRepo.GetWorkerById(preemptableWorker.Id)
+	tjassert.Equal(t, int64(10000), preemptUpdated.FreeCpu, "Should NOT schedule on preemptable worker")
+
+	// Preemptable request CAN use preemptable worker
+	preemptableRequest := &types.ContainerRequest{
+		ContainerId: "preempt-req",
+		Cpu:         1000,
+		Memory:      1000,
+		Preemptable: true,
+		Timestamp:   time.Now(),
+		WorkspaceId: "test",
+		StubId:      "test",
+	}
+	err = wb.containerRepo.SetContainerState(preemptableRequest)
+	tjassert.Nil(t, err)
+
+	workers, _ = wb.workerRepo.GetAllWorkersLockFree()
+	wb.processRequestWithWorkers(preemptableRequest, workers)
+
+	// Verify it was scheduled on preemptable worker
+	preemptUpdated, _ = wb.workerRepo.GetWorkerById(preemptableWorker.Id)
+	tjassert.Equal(t, int64(9000), preemptUpdated.FreeCpu, "Should schedule on preemptable worker")
+}
+
 // Test worker sizing for batch (total CPU + memory with capping)
 func TestCpuBatchProvisioning_WorkerSizing(t *testing.T) {
 	mr, _ := miniredis.Run()
