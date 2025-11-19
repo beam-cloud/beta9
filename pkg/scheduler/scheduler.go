@@ -35,17 +35,11 @@ const (
 	batchSize           int           = 15
 	workerCacheDuration time.Duration = 0
 
-	// CPU batch provisioning
-	cpuBatchBacklogThreshold int   = 6
-	cpuBatchSize             int   = 6
-	cpuBatchWorkerMaxCpu     int64 = 200000
-	cpuBatchWorkerMaxMemory  int64 = 200000
-
-	// Burst provisioning
-	burstBacklogThreshold int     = 20
-	burstSizeMultiplier   float64 = 2.0
-	maxBurstWorkerCpu     int64   = 200000
-	maxBurstWorkerMemory  int64   = 200000
+	// Bulk provisioning (formerly burst provisioning)
+	bulkBacklogThreshold int     = 20
+	bulkSizeMultiplier   float64 = 2.0
+	maxBulkWorkerCpu     int64   = 200000
+	maxBulkWorkerMemory  int64   = 200000
 
 	// Worker scoring
 	scoreAvailableWorker int32 = 10
@@ -64,10 +58,6 @@ type Scheduler struct {
 	schedulerUsageMetrics SchedulerUsageMetrics
 	eventBus              *common.EventBus
 	schedulingSemaphore   chan struct{} // Semaphore to limit concurrent scheduling
-
-	// Batch provisioning for failed CPU-only requests
-	failedCpuRequests []*types.ContainerRequest
-	failedRequestsMu  sync.Mutex
 
 	// Worker cache for batch processing
 	cachedWorkers   []*types.Worker
@@ -341,6 +331,9 @@ func (s *Scheduler) processBatch(requests []*types.ContainerRequest) {
 		return
 	}
 
+	// Sort workers by utilization (bin packing) to improve density
+	workers = sortWorkersByUtilization(workers)
+
 	// Process all requests in parallel with shared worker list
 	for _, request := range requests {
 		req := request
@@ -387,18 +380,77 @@ func shuffleWorkers(workers []*types.Worker) []*types.Worker {
 	return shuffled
 }
 
+// isWorkerSuitable checks if a worker meets all scheduling constraints for a request.
+// This centralizes all filtering logic to ensure consistency across scheduling paths.
+func (s *Scheduler) isWorkerSuitable(worker *types.Worker, request *types.ContainerRequest) bool {
+	// Check worker status
+	if worker.Status == types.WorkerStatusDisabled {
+		return false
+	}
+
+	// Check pool selector
+	if request.PoolSelector != "" {
+		if worker.PoolName != request.PoolSelector {
+			return false
+		}
+	} else {
+		// If request has no pool selector, worker must not require one
+		if worker.RequiresPoolSelector {
+			return false
+		}
+	}
+
+	// Check preemptability
+	if !request.Preemptable && worker.Preemptable {
+		return false
+	}
+
+	// Check runtime (Docker requires gvisor)
+	if request.DockerEnabled && worker.Runtime != types.ContainerRuntimeGvisor.String() {
+		return false
+	}
+
+	// Check GPU requirements
+	requiresGPU := request.RequiresGPU()
+	hasGPU := worker.Gpu != ""
+
+	if requiresGPU != hasGPU {
+		return false
+	}
+
+	if requiresGPU {
+		// Check if worker GPU matches request
+		gpuRequestsMap := map[string]bool{}
+		for _, gpu := range request.GpuRequest {
+			gpuRequestsMap[gpu] = true
+		}
+
+		// If the request contains the "any" GPU selector, accept any GPU type
+		if slices.Contains(request.GpuRequest, string(types.GPU_ANY)) {
+			// Any GPU type is acceptable
+		} else if !gpuRequestsMap[worker.Gpu] {
+			return false
+		}
+
+		// Check GPU count
+		if worker.FreeGpuCount < request.GpuCount {
+			return false
+		}
+	}
+
+	// Check CPU and memory capacity
+	if worker.FreeCpu < request.Cpu || worker.FreeMemory < request.Memory {
+		return false
+	}
+
+	return true
+}
+
 // Process single request with pre-fetched workers
 func (s *Scheduler) processRequestWithWorkers(request *types.ContainerRequest, workers []*types.Worker) {
-	filteredWorkers := filterWorkersByPoolSelector(workers, request)
-	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)
-
-	// Try existing workers
-	for _, w := range filteredWorkers {
-		// Quick capacity check
-		if w.FreeCpu < request.Cpu || w.FreeMemory < request.Memory {
-			continue
-		}
-		if request.GpuCount > 0 && (w.Gpu != request.Gpu || w.FreeGpuCount < request.GpuCount) {
+	// Try existing workers using the unified isWorkerSuitable check
+	for _, w := range workers {
+		if !s.isWorkerSuitable(w, request) {
 			continue
 		}
 
@@ -409,22 +461,9 @@ func (s *Scheduler) processRequestWithWorkers(request *types.ContainerRequest, w
 		}
 	}
 
-	// No existing worker - check CPU batch provisioning
-	if request.GpuCount == 0 && s.shouldUseCpuBatching() {
-		if s.addToCpuBatch(request) {
-			// Batch threshold reached - provision and schedule all
-			if s.provisionCpuBatchWorker() {
-				return
-			}
-		}
-		// Batch not ready yet, requeue for next attempt
-		s.addRequestToBacklog(request)
-		return
-	}
-
-	// Burst provisioning for high load
-	if s.shouldProvisionBurst(request) {
-		if s.provisionBurstWorker(request) {
+	// No existing worker - check bulk provisioning for high load
+	if s.shouldProvisionBulk(request) {
+		if s.provisionBulkWorker(request) {
 			return
 		}
 	}
@@ -456,78 +495,23 @@ func (s *Scheduler) provisionIndividualWorker(request *types.ContainerRequest) {
 	s.addRequestToBacklog(request)
 }
 
-func (s *Scheduler) processRequest(request *types.ContainerRequest) {
-	// Try existing workers first (up to 3 attempts with different workers)
-	for attempt := 0; attempt < 3; attempt++ {
-		workers, err := s.workerRepo.GetAllWorkersLockFree()
-		if err != nil {
-			continue
-		}
 
-		filteredWorkers := filterWorkersByPoolSelector(workers, request)
-		filteredWorkers = filterWorkersByFlags(filteredWorkers, request)
-
-		// Try each suitable worker
-		for _, worker := range filteredWorkers {
-			if worker.FreeCpu < request.Cpu || worker.FreeMemory < request.Memory {
-				continue
-			}
-			if request.GpuCount > 0 && (worker.Gpu != request.Gpu || worker.FreeGpuCount < request.GpuCount) {
-				continue
-			}
-
-			err := s.scheduleOnWorker(worker, request)
-			if err == nil {
-				metrics.RecordRequestSchedulingDuration(time.Since(request.Timestamp), request)
-				return
-			}
-			// Version conflict or capacity taken - try next worker
-		}
-
-		// Brief backoff before retrying worker list
-		if attempt < 2 {
-			time.Sleep(time.Duration(attempt+1) * 2 * time.Millisecond)
-		}
-	}
-
-	// Provision new worker (burst mode for CPU-only if backlog high)
-	if s.shouldProvisionBurst(request) {
-		if s.provisionBurstWorker(request) {
-			return
-		}
-	}
-
-	// CPU batching
-	if request.GpuCount == 0 && s.shouldUseCpuBatching() {
-		if s.addToCpuBatch(request) {
-			if s.provisionCpuBatchWorker() {
-				return
-			}
-		}
-		s.addRequestToBacklog(request)
-		return
-	}
-
-	// Standard provisioning fallback
-	s.provisionIndividualWorker(request)
+// shouldProvisionBulk checks if bulk provisioning should be used
+func (s *Scheduler) shouldProvisionBulk(request *types.ContainerRequest) bool {
+	return request.GpuCount == 0 && s.requestBacklog.Len() >= int64(bulkBacklogThreshold)
 }
 
-// Check if burst provisioning should be used
-func (s *Scheduler) shouldProvisionBurst(request *types.ContainerRequest) bool {
-	return request.GpuCount == 0 && s.requestBacklog.Len() >= int64(burstBacklogThreshold)
-}
-
-// Provision larger worker for burst capacity
-func (s *Scheduler) provisionBurstWorker(request *types.ContainerRequest) bool {
-	cpu := int64(float64(request.Cpu) * burstSizeMultiplier)
-	memory := int64(float64(request.Memory) * burstSizeMultiplier)
+// provisionBulkWorker provisions a larger worker for handling high load
+func (s *Scheduler) provisionBulkWorker(request *types.ContainerRequest) bool {
+	cpu := int64(float64(request.Cpu) * bulkSizeMultiplier)
+	memory := int64(float64(request.Memory) * bulkSizeMultiplier)
 
 	// Cap to prevent huge workers
-	if cpu > maxBurstWorkerCpu {
-		cpu = maxBurstWorkerCpu
+	if cpu > maxBulkWorkerCpu {
+		cpu = maxBulkWorkerCpu
 	}
-	if memory > maxBurstWorkerMemory {
-		memory = maxBurstWorkerMemory
+	if memory > maxBulkWorkerMemory {
+		memory = maxBulkWorkerMemory
 	}
 
 	controllers, err := s.getControllers(request)
@@ -543,11 +527,11 @@ func (s *Scheduler) provisionBurstWorker(request *types.ContainerRequest) bool {
 		newWorker, err := c.AddWorker(cpu, memory, 0)
 		if err == nil && s.scheduleOnWorker(newWorker, request) == nil {
 			log.Info().
-				Int64("burst_cpu", cpu).
-				Int64("burst_memory", memory).
+				Int64("bulk_cpu", cpu).
+				Int64("bulk_memory", memory).
 				Int64("backlog_size", s.requestBacklog.Len()).
 				Str("worker_id", newWorker.Id).
-				Msg("burst worker provisioned")
+				Msg("bulk worker provisioned for high load")
 
 			metrics.RecordRequestSchedulingDuration(time.Since(request.Timestamp), request)
 			return true
@@ -556,95 +540,6 @@ func (s *Scheduler) provisionBurstWorker(request *types.ContainerRequest) bool {
 	return false
 }
 
-func (s *Scheduler) shouldUseCpuBatching() bool {
-	return s.requestBacklog.Len() >= int64(cpuBatchBacklogThreshold)
-}
-
-func (s *Scheduler) addToCpuBatch(request *types.ContainerRequest) bool {
-	s.failedRequestsMu.Lock()
-	defer s.failedRequestsMu.Unlock()
-
-	s.failedCpuRequests = append(s.failedCpuRequests, request)
-	return len(s.failedCpuRequests) >= cpuBatchSize
-}
-
-func (s *Scheduler) provisionCpuBatchWorker() bool {
-	s.failedRequestsMu.Lock()
-
-	if len(s.failedCpuRequests) < cpuBatchSize {
-		s.failedRequestsMu.Unlock()
-		return false
-	}
-
-	batch := make([]*types.ContainerRequest, len(s.failedCpuRequests))
-	copy(batch, s.failedCpuRequests)
-	s.failedCpuRequests = nil
-	s.failedRequestsMu.Unlock()
-
-	var totalCpu, totalMemory int64
-	for _, req := range batch {
-		totalCpu += req.Cpu
-		totalMemory += req.Memory
-	}
-
-	if totalCpu > cpuBatchWorkerMaxCpu {
-		totalCpu = cpuBatchWorkerMaxCpu
-	}
-	if totalMemory > cpuBatchWorkerMaxMemory {
-		totalMemory = cpuBatchWorkerMaxMemory
-	}
-
-	controllers, err := s.getControllers(batch[0])
-	if err != nil {
-		for _, req := range batch {
-			s.addRequestToBacklog(req)
-		}
-		return false
-	}
-
-	for _, c := range controllers {
-		if c == nil {
-			continue
-		}
-
-		worker, err := c.AddWorker(totalCpu, totalMemory, 0)
-		if err != nil {
-			continue
-		}
-
-		scheduled := 0
-		failed := []*types.ContainerRequest{}
-
-		for _, req := range batch {
-			if s.scheduleOnWorker(worker, req) == nil {
-				metrics.RecordRequestSchedulingDuration(time.Since(req.Timestamp), req)
-				scheduled++
-			} else {
-				failed = append(failed, req)
-			}
-		}
-
-		for _, req := range failed {
-			s.addRequestToBacklog(req)
-		}
-
-		log.Info().
-			Int("batch_size", len(batch)).
-			Int("scheduled", scheduled).
-			Int("failed", len(failed)).
-			Int64("cpu", totalCpu).
-			Int64("memory", totalMemory).
-			Str("worker_id", worker.Id).
-			Msg("CPU batch worker provisioned")
-
-		return scheduled > 0
-	}
-
-	for _, req := range batch {
-		s.addRequestToBacklog(req)
-	}
-	return false
-}
 
 func (s *Scheduler) scheduleOnWorker(worker *types.Worker, request *types.ContainerRequest) error {
 	const maxRetries = 5
