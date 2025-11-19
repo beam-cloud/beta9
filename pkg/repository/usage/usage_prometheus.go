@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
@@ -34,6 +35,9 @@ type PrometheusUsageMetricsRepository struct {
 	summaryVecs   *common.SafeMap[*prometheus.SummaryVec]
 	histograms    *common.SafeMap[prometheus.Histogram]
 	histogramVecs *common.SafeMap[*prometheus.HistogramVec]
+
+	// Mutex to prevent concurrent metric registration
+	registerMu sync.Mutex
 }
 
 func NewPrometheusUsageMetricsRepository(promConfig types.PrometheusConfig) repository.UsageMetricsRepository {
@@ -128,17 +132,31 @@ func (pr *PrometheusUsageMetricsRepository) getCounter(opts prometheus.CounterOp
 		return handler
 	}
 
-	pr.counters.Set(metricName, promauto.With(pr.collectorRegistrar).NewCounter(
-		opts,
-	))
+	pr.registerMu.Lock()
+	defer pr.registerMu.Unlock()
 
-	handler, _ := pr.counters.Get(metricName)
-	return handler
+	if handler, exists := pr.counters.Get(metricName); exists {
+		return handler
+	}
+
+	counter := promauto.With(pr.collectorRegistrar).NewCounter(opts)
+	pr.counters.Set(metricName, counter)
+
+	return counter
 }
 
 // getCounterVec registers and returns a new counter vector metric
 func (pr *PrometheusUsageMetricsRepository) getCounterVec(opts prometheus.CounterOpts, labels []string) *prometheus.CounterVec {
 	metricName := opts.Name
+	if handler, exists := pr.counterVecs.Get(metricName); exists {
+		return handler
+	}
+
+	// Lock to prevent concurrent registration of same metric
+	pr.registerMu.Lock()
+	defer pr.registerMu.Unlock()
+
+	// Double-check after acquiring lock
 	if handler, exists := pr.counterVecs.Get(metricName); exists {
 		return handler
 	}
@@ -149,8 +167,7 @@ func (pr *PrometheusUsageMetricsRepository) getCounterVec(opts prometheus.Counte
 	)
 	pr.counterVecs.Set(metricName, counterVec)
 
-	handler, _ := pr.counterVecs.Get(metricName)
-	return handler
+	return counterVec
 }
 
 // getGauge registers and returns a new gauge metric handler
@@ -162,11 +179,17 @@ func (pr *PrometheusUsageMetricsRepository) getGauge(opts prometheus.GaugeOpts) 
 		return handler
 	}
 
+	pr.registerMu.Lock()
+	defer pr.registerMu.Unlock()
+
+	if handler, exists := pr.gauges.Get(metricName); exists {
+		return handler
+	}
+
 	gauge := promauto.With(pr.collectorRegistrar).NewGauge(opts)
 	pr.gauges.Set(metricName, gauge)
 
-	handler, _ := pr.gauges.Get(metricName)
-	return handler
+	return gauge
 }
 
 // getGaugeVec registers and returns a new gauge vector metric handler
@@ -176,11 +199,17 @@ func (pr *PrometheusUsageMetricsRepository) getGaugeVec(opts prometheus.GaugeOpt
 		return handler
 	}
 
+	pr.registerMu.Lock()
+	defer pr.registerMu.Unlock()
+
+	if handler, exists := pr.gaugeVecs.Get(metricName); exists {
+		return handler
+	}
+
 	gaugeVec := promauto.With(pr.collectorRegistrar).NewGaugeVec(opts, labels)
 	pr.gaugeVecs.Set(metricName, gaugeVec)
 
-	handler, _ := pr.gaugeVecs.Get(metricName)
-	return handler
+	return gaugeVec
 }
 
 // getSummary registers and returns a new summary metric handler
@@ -192,11 +221,17 @@ func (pr *PrometheusUsageMetricsRepository) getSummary(opts prometheus.SummaryOp
 		return handler
 	}
 
+	pr.registerMu.Lock()
+	defer pr.registerMu.Unlock()
+
+	if handler, exists := pr.summaries.Get(metricName); exists {
+		return handler
+	}
+
 	summary := promauto.With(pr.collectorRegistrar).NewSummary(opts)
 	pr.summaries.Set(metricName, summary)
 
-	handler, _ := pr.summaries.Get(metricName)
-	return handler
+	return summary
 }
 
 // getSummaryVec registers and returns a new summary vector metric handler
@@ -208,11 +243,17 @@ func (pr *PrometheusUsageMetricsRepository) getSummaryVec(opts prometheus.Summar
 		return handler
 	}
 
+	pr.registerMu.Lock()
+	defer pr.registerMu.Unlock()
+
+	if handler, exists := pr.summaryVecs.Get(metricName); exists {
+		return handler
+	}
+
 	summaryVec := promauto.With(pr.collectorRegistrar).NewSummaryVec(opts, labels)
 	pr.summaryVecs.Set(metricName, summaryVec)
 
-	handler, _ := pr.summaryVecs.Get(metricName)
-	return handler
+	return summaryVec
 }
 
 // getHistogram registers and returns a new histogram metric handler
@@ -224,11 +265,17 @@ func (pr *PrometheusUsageMetricsRepository) getHistogram(opts prometheus.Histogr
 		return handler
 	}
 
+	pr.registerMu.Lock()
+	defer pr.registerMu.Unlock()
+
+	if handler, exists := pr.histograms.Get(metricName); exists {
+		return handler
+	}
+
 	histogram := promauto.With(pr.collectorRegistrar).NewHistogram(opts)
 	pr.histograms.Set(metricName, histogram)
 
-	handler, _ := pr.histograms.Get(metricName)
-	return handler
+	return histogram
 }
 
 // getHistogramVec registers and returns a new histogram vector metric handler
@@ -240,11 +287,17 @@ func (pr *PrometheusUsageMetricsRepository) getHistogramVec(opts prometheus.Hist
 		return handler
 	}
 
+	pr.registerMu.Lock()
+	defer pr.registerMu.Unlock()
+
+	if handler, exists := pr.histogramVecs.Get(metricName); exists {
+		return handler
+	}
+
 	histogramVec := promauto.With(pr.collectorRegistrar).NewHistogramVec(opts, labels)
 	pr.histogramVecs.Set(metricName, histogramVec)
 
-	handler, _ := pr.histogramVecs.Get(metricName)
-	return handler
+	return histogramVec
 }
 
 func (pr *PrometheusUsageMetricsRepository) parseMetadata(metadata map[string]interface{}) (keys []string, values []string) {

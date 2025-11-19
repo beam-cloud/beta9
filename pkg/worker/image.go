@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -12,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
@@ -177,16 +177,18 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	startTime := time.Now()
 
 	// Always fetch the remote archive into the cache directory first
-	downloadPath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
-	_ = os.MkdirAll(filepath.Dir(downloadPath), 0755)
+	archivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
 
-	sourceRegistry, err := c.pullImageFromRegistry(ctx, downloadPath, imageId)
+	sourceRegistry, err := c.pullImageFromRegistry(ctx, archivePath, imageId)
 	if err != nil {
 		return time.Since(startTime), err
 	}
 
-	// Extract metadata and determine the mount archive path
-	mountArchivePath, meta := c.processPulledArchive(downloadPath, imageId)
+	// Extract metadata from archive
+	meta, err := c.processPulledArchive(archivePath, imageId)
+	if err != nil {
+		return time.Since(startTime), err
+	}
 
 	// Check if this is a CLIP v2 (OCI) image by examining its metadata
 	isClipV2Image := false
@@ -194,9 +196,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
 			storageType := strings.ToLower(t.Type())
 			isClipV2Image = storageType == "oci" || storageType == string(clipCommon.StorageModeOCI)
+
+			if isClipV2Image {
+				log.Info().Str("image_id", imageId).Str("storage_type", storageType).Msg("detected CLIP v2 image, skipping remote caching")
+			}
 		}
 	}
 
+	// Don't assume CLIP v2 just because metadata is unavailable
+	// Let the normal caching flow handle it
 	localCachePath := fmt.Sprintf("%s/%s.cache", c.imageCachePath, imageId)
 	if !c.config.ImageService.LocalCacheEnabled && !isBuildContainer && !isClipV2Image {
 		localCachePath = ""
@@ -213,10 +221,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	if c.cacheClient != nil && !isBuildContainer && !isClipV2Image {
 		sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
 
-		// Create constant backoff
-		b := backoff.NewConstantBackOff(pullLazyBackoff)
+		// Exponential backoff with max 30s total retry time
+		b := backoff.NewExponentialBackOff()
+		b.InitialInterval = 500 * time.Millisecond
+		b.MaxInterval = 5 * time.Second
+		b.MaxElapsedTime = 30 * time.Second
 
+		retryCount := 0
 		operation := func() error {
+			retryCount++
 			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
 			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, sourcePath) {
 				localCachePath = baseBlobFsContentPath
@@ -242,12 +255,13 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			})
 			if err != nil {
 				if err == blobcache.ErrUnableToAcquireLock {
-					log.Error().Str("image_id", imageId).Msg("unable to acquire lock on image, retrying...")
+					log.Warn().Str("image_id", imageId).Int("attempt", retryCount).Msg("unable to acquire lock, retrying...")
 					return err
 				}
 
-				outputLogger.Error(fmt.Sprintf("Failed to cache image in worker's region <%s>: %v\n", imageId, err))
-				return backoff.Permanent(err)
+				// Retry transient errors, don't give up immediately
+				log.Warn().Str("image_id", imageId).Int("attempt", retryCount).Err(err).Msg("failed to cache image, retrying...")
+				return err
 			}
 
 			localCachePath = baseBlobFsContentPath
@@ -259,17 +273,18 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		// Run with context
 		err := backoff.RetryNotify(operation, backoff.WithContext(b, ctx),
 			func(err error, d time.Duration) {
-				log.Info().Str("image_id", imageId).Err(err).Msg("retrying cache attempt")
+				log.Info().Str("image_id", imageId).Dur("next_retry_in", d).Err(err).Msg("retrying cache attempt")
 			})
 		if err != nil {
-			outputLogger.Info(fmt.Sprintf("Giving up on caching image <%s>: %v\n", imageId, err))
+			log.Error().Str("image_id", imageId).Err(err).Msg("giving up on caching image after retries")
+			outputLogger.Error(fmt.Sprintf("Failed to cache image <%s> after retries: %v\n", imageId, err))
 		}
 	}
 
 	elapsed := time.Since(startTime)
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
-		ArchivePath:           mountArchivePath,
+		ArchivePath:           archivePath,
 		MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
@@ -342,10 +357,12 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 }
 
 // processPulledArchive extracts metadata and moves v2 OCI archives to canonical location
-func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (string, *clipCommon.ClipArchiveMetadata) {
-	// Extract metadata from the archive
+func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipCommon.ClipArchiveMetadata, error) {
 	archiver := clip.NewClipArchiver()
-	meta, _ := archiver.ExtractMetadata(downloadPath)
+	meta, err := archiver.ExtractMetadata(downloadPath)
+	if err != nil {
+		return nil, err
+	}
 
 	// Check if this is an OCI v2 image
 	isOCI := false
@@ -353,39 +370,18 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (string
 		if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
 			isOCI = t.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(t.Type()) == "oci"
 		}
+	} else {
+		return nil, fmt.Errorf("metadata not available")
 	}
 
-	// For non-OCI images, use download path as-is
 	if !isOCI {
-		return downloadPath, meta
-	}
-
-	// For OCI images, move to canonical location
-	canonicalPath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
-	_ = os.MkdirAll(filepath.Dir(canonicalPath), 0755)
-
-	if downloadPath != canonicalPath {
-		// Move file to canonical location (with fallback to copy+remove)
-		if err := os.Rename(downloadPath, canonicalPath); err != nil {
-			// Fallback: copy then remove
-			if in, e1 := os.Open(downloadPath); e1 == nil {
-				defer in.Close()
-				if out, e2 := os.Create(canonicalPath); e2 == nil {
-					if _, e3 := io.Copy(out, in); e3 == nil {
-						out.Close()
-						_ = os.Remove(downloadPath)
-					} else {
-						out.Close()
-					}
-				}
-			}
-		}
+		return meta, nil
 	}
 
 	// Cache OCI metadata for later use
 	c.cacheOCIMetadata(imageId, meta)
 
-	return canonicalPath, meta
+	return meta, nil
 }
 
 // cacheOCIMetadata extracts and caches OCI image metadata
@@ -548,27 +544,53 @@ func (c *ImageClient) Cleanup() error {
 func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string) (*types.S3ImageRegistryConfig, error) {
 	sourceRegistry := c.config.ImageService.Registries.S3
 
-	if _, err := os.Stat(archivePath); err != nil {
-		// First try pulling from the configured store
-		if err = c.registry.Pull(ctx, archivePath, imageId); err != nil {
-			// If local store failed (object missing), attempt to copy from S3 then retry
-			if c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
-				if s3Registry, e2 := registry.NewImageRegistry(c.config, c.config.ImageService.Registries.S3); e2 == nil {
-					_ = c.registry.CopyImageFromRegistry(ctx, imageId, s3Registry)
-					// Retry pull after copy
-					if err2 := c.registry.Pull(ctx, archivePath, imageId); err2 == nil {
-						return &sourceRegistry, nil
-					} else {
-						err = err2
-					}
+	// Ensure directory exists for lock file and archive
+	if err := os.MkdirAll(filepath.Dir(archivePath), 0755); err != nil {
+		return nil, err
+	}
+
+	lockPath := archivePath + ".lock"
+	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, err
+	}
+	defer lockFile.Close()
+
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, err
+	}
+
+	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+	defer os.Remove(lockPath)
+
+	// Check if file exists now that we have the lock (another worker may have downloaded it)
+	if _, err := os.Stat(archivePath); err == nil {
+		return &sourceRegistry, nil
+	}
+
+	// Download to temp file, then atomically rename
+	tempPath := archivePath + ".tmp"
+	defer os.Remove(tempPath)
+
+	if err = c.registry.Pull(ctx, tempPath, imageId); err != nil {
+		if c.config.ImageService.RegistryStore == registry.LocalImageRegistryStore {
+			if s3Registry, e2 := registry.NewImageRegistry(c.config, c.config.ImageService.Registries.S3); e2 == nil {
+				_ = c.registry.CopyImageFromRegistry(ctx, imageId, s3Registry)
+				if err2 := c.registry.Pull(ctx, tempPath, imageId); err2 == nil {
+					err = nil
+				} else {
+					err = err2
 				}
 			}
-
+		}
+		if err != nil {
 			log.Error().Err(err).Str("image_id", imageId).Msg("failed to pull image from registry")
 			return nil, err
 		}
+	}
 
-		return &sourceRegistry, nil
+	if err := os.Rename(tempPath, archivePath); err != nil {
+		return nil, err
 	}
 
 	return &sourceRegistry, nil

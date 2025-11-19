@@ -31,4 +31,4 @@ build.sh
 okteto.yaml
 .vscode/launch.json
 pyrightconfig.json
-.go-version
+.go-version/gateway

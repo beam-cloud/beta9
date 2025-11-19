@@ -363,6 +363,11 @@ func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 	return workers, nil
 }
 
+// Lock-free read for higher throughput -  optimistic locking handles conflicts (using the resource version field)
+func (r *WorkerRedisRepository) GetAllWorkersLockFree() ([]*types.Worker, error) {
+	return r.getWorkers(false)
+}
+
 func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
 	workers, err := r.getWorkers(false)
 	if err != nil {
@@ -416,67 +421,55 @@ func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*typ
 }
 
 func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, CapacityUpdateType types.CapacityUpdateType) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	// Short lock + version check = optimistic locking
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 5, Retries: 1})
 	if err != nil {
 		return err
 	}
 	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
 
 	key := common.RedisKeys.SchedulerWorkerState(worker.Id)
-
-	// Retrieve current worker capacity
 	currentWorker, err := r.getWorkerFromKey(key)
 	if err != nil {
-		return fmt.Errorf("failed to get worker state <%v>: %v", key, err)
+		return fmt.Errorf("failed to get worker state: %v", err)
 	}
 
-	sourceWorker := currentWorker // worker from the Redis store
-	if sourceWorker == nil {
-		sourceWorker = worker // worker from the argument
+	if currentWorker == nil {
+		currentWorker = worker
 	}
 
-	updatedWorker := &types.Worker{}
-	if err := common.CopyStruct(sourceWorker, updatedWorker); err != nil {
-		return fmt.Errorf("failed to copy worker struct: %v", err)
+	updated := &types.Worker{}
+	if err := common.CopyStruct(currentWorker, updated); err != nil {
+		return err
 	}
 
-	if updatedWorker.ResourceVersion != worker.ResourceVersion {
+	// Version mismatch = concurrent update detected
+	if updated.ResourceVersion != worker.ResourceVersion {
 		return errors.New("invalid worker resource version")
 	}
 
 	switch CapacityUpdateType {
 	case types.AddCapacity:
-		updatedWorker.FreeCpu = updatedWorker.FreeCpu + request.Cpu
-		updatedWorker.FreeMemory = updatedWorker.FreeMemory + request.Memory
-
+		updated.FreeCpu += request.Cpu
+		updated.FreeMemory += request.Memory
 		if request.Gpu != "" {
-			updatedWorker.FreeGpuCount += request.GpuCount
+			updated.FreeGpuCount += request.GpuCount
 		}
-
 	case types.RemoveCapacity:
-		updatedWorker.FreeCpu = updatedWorker.FreeCpu - request.Cpu
-		updatedWorker.FreeMemory = updatedWorker.FreeMemory - request.Memory
-
+		updated.FreeCpu -= request.Cpu
+		updated.FreeMemory -= request.Memory
 		if request.Gpu != "" {
-			updatedWorker.FreeGpuCount -= request.GpuCount
+			updated.FreeGpuCount -= request.GpuCount
 		}
-
-		if updatedWorker.FreeCpu < 0 || updatedWorker.FreeMemory < 0 || updatedWorker.FreeGpuCount < 0 {
+		if updated.FreeCpu < 0 || updated.FreeMemory < 0 || updated.FreeGpuCount < 0 {
 			return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
 		}
-
 	default:
 		return errors.New("invalid capacity update type")
 	}
 
-	// Update the worker capacity with the new values
-	updatedWorker.ResourceVersion++
-	err = r.rdb.HSet(context.TODO(), key, common.ToSlice(updatedWorker)).Err()
-	if err != nil {
-		return fmt.Errorf("failed to update worker capacity <%s>: %v", key, err)
-	}
-
-	return nil
+	updated.ResourceVersion++
+	return r.rdb.HSet(context.TODO(), key, common.ToSlice(updated)).Err()
 }
 
 func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {
