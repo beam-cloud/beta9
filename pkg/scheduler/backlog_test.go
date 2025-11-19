@@ -68,3 +68,25 @@ func TestRequestBacklogOrdering(t *testing.T) {
 		t.Errorf("Expected timestamp %v, got %v", req3.Timestamp.Unix(), poppedReq.Timestamp.Unix())
 	}
 }
+
+func TestPopBatchWithInvalidJSON(t *testing.T) {
+	s, err := miniredis.Run()
+	assert.NotNil(t, s)
+	assert.NoError(t, err)
+
+	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
+	assert.NotNil(t, redisClient)
+	assert.NoError(t, err)
+
+	rb := NewRequestBacklogForTest(redisClient)
+
+	req1 := &types.ContainerRequest{Timestamp: time.Unix(1, 0)}
+	if err := rb.Push(req1); err != nil {
+		t.Fatalf("Could not push request: %v", err)
+	}
+
+	s.ZAdd(common.RedisKeys.SchedulerContainerRequests(), 2.0, "invalid json")
+
+	_, err = rb.PopBatch(2)
+	assert.Error(t, err)
+}

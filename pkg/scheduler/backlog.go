@@ -59,7 +59,7 @@ func (rb *RequestBacklog) PopBatch(count int64) ([]*types.ContainerRequest, erro
 	for _, z := range result {
 		var req types.ContainerRequest
 		if err := json.Unmarshal([]byte(z.Member.(string)), &req); err != nil {
-			continue
+			return nil, err
 		}
 		requests = append(requests, &req)
 	}
