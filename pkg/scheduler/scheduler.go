@@ -34,6 +34,12 @@ const (
 	// Batch scheduling
 	batchSize           int           = 15
 	workerCacheDuration time.Duration = 0
+	
+	// Debounce for micro-batching sequential requests
+	// This allows sequential requests to accumulate into batches
+	// before processing, enabling bulk provisioning
+	batchDebounceWindow time.Duration = 100 * time.Millisecond
+	minBatchSize        int           = 5 // Minimum requests before processing a batch
 
 	// Bulk provisioning (formerly burst provisioning)
 	bulkBacklogThreshold int     = 20
@@ -63,6 +69,10 @@ type Scheduler struct {
 	cachedWorkers   []*types.Worker
 	workerCacheTime time.Time
 	workerCacheMu   sync.RWMutex
+	
+	// Debounce state for micro-batching
+	debounceTimer     *time.Timer
+	debounceTimerLock sync.Mutex
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
@@ -285,16 +295,61 @@ func (s *Scheduler) processRequestWorker() {
 		default:
 		}
 
-		if s.requestBacklog.Len() == 0 {
+		backlogLen := int(s.requestBacklog.Len())
+		
+		// If backlog is empty, sleep and continue
+		if backlogLen == 0 {
 			time.Sleep(requestProcessingInterval)
 			continue
 		}
 
+		// Micro-batching strategy for sequential requests:
+		// Wait for more requests to accumulate before processing
+		// This enables bulk provisioning for CPU-only workloads
+		if backlogLen < minBatchSize {
+			// Start or reset debounce timer
+			s.debounceTimerLock.Lock()
+			if s.debounceTimer == nil {
+				// First request - start debounce window
+				s.debounceTimer = time.NewTimer(batchDebounceWindow)
+				s.debounceTimerLock.Unlock()
+				
+				select {
+				case <-s.debounceTimer.C:
+					// Timer expired, process what we have
+					s.debounceTimerLock.Lock()
+					s.debounceTimer = nil
+					s.debounceTimerLock.Unlock()
+				case <-s.ctx.Done():
+					return
+				}
+			} else {
+				// Timer already running, check if batch is growing
+				s.debounceTimerLock.Unlock()
+				time.Sleep(requestProcessingInterval)
+				continue
+			}
+		} else {
+			// Have enough requests, stop timer if running and process immediately
+			s.debounceTimerLock.Lock()
+			if s.debounceTimer != nil {
+				s.debounceTimer.Stop()
+				s.debounceTimer = nil
+			}
+			s.debounceTimerLock.Unlock()
+		}
+
+		// Pop and process batch
 		requests, err := s.requestBacklog.PopBatch(int64(batchSize))
 		if err != nil || len(requests) == 0 {
 			time.Sleep(requestProcessingInterval)
 			continue
 		}
+
+		log.Info().
+			Int("batch_size", len(requests)).
+			Int("backlog_remaining", int(s.requestBacklog.Len())).
+			Msg("processing batch after debounce")
 
 		s.processBatch(requests)
 	}
