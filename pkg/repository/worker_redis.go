@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -658,4 +659,119 @@ func (r *WorkerRedisRepository) RemoveContainerIp(networkPrefix string, containe
 	}
 
 	return nil
+}
+
+// BatchUpdateWorkerCapacity updates capacity for multiple workers in a batched manner
+// This reduces lock acquisitions from O(containers) to O(workers)
+func (r *WorkerRedisRepository) BatchUpdateWorkerCapacity(
+	ctx context.Context,
+	reservations []CapacityReservation,
+	capacityUpdateType types.CapacityUpdateType,
+) (map[string]error, error) {
+	if len(reservations) == 0 {
+		return nil, nil
+	}
+
+	errors := make(map[string]error)
+	var mu sync.Mutex
+
+	// Process each worker's reservations in parallel
+	var wg sync.WaitGroup
+	for _, reservation := range reservations {
+		wg.Add(1)
+		go func(res CapacityReservation) {
+			defer wg.Done()
+
+			// Acquire lock once per worker
+			err := r.lock.Acquire(ctx, common.RedisKeys.SchedulerWorkerLock(res.WorkerId), common.RedisLockOptions{TtlS: 10, Retries: 3})
+			if err != nil {
+				mu.Lock()
+				errors[res.WorkerId] = fmt.Errorf("failed to acquire lock: %w", err)
+				mu.Unlock()
+				return
+			}
+			defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(res.WorkerId))
+
+			key := common.RedisKeys.SchedulerWorkerState(res.WorkerId)
+
+			// Get current worker state
+			currentWorker, err := r.getWorkerFromKey(key)
+			if err != nil {
+				mu.Lock()
+				errors[res.WorkerId] = fmt.Errorf("failed to get worker state: %w", err)
+				mu.Unlock()
+				return
+			}
+
+			updatedWorker := &types.Worker{}
+			if err := common.CopyStruct(currentWorker, updatedWorker); err != nil {
+				mu.Lock()
+				errors[res.WorkerId] = fmt.Errorf("failed to copy worker struct: %w", err)
+				mu.Unlock()
+				return
+			}
+
+			// Apply all reservations for this worker atomically
+			for _, r := range res.Reservations {
+				switch capacityUpdateType {
+				case types.AddCapacity:
+					updatedWorker.FreeCpu += r.CPU
+					updatedWorker.FreeMemory += r.Memory
+					if r.GPUType != "" {
+						updatedWorker.FreeGpuCount += uint32(r.GPU)
+					}
+
+				case types.RemoveCapacity:
+					updatedWorker.FreeCpu -= r.CPU
+					updatedWorker.FreeMemory -= r.Memory
+					if r.GPUType != "" {
+						updatedWorker.FreeGpuCount -= uint32(r.GPU)
+					}
+
+				default:
+					mu.Lock()
+					errors[res.WorkerId] = fmt.Errorf("invalid capacity update type")
+					mu.Unlock()
+					return
+				}
+			}
+
+			// Check for negative capacity
+			if capacityUpdateType == types.RemoveCapacity {
+				if updatedWorker.FreeCpu < 0 || updatedWorker.FreeMemory < 0 {
+					mu.Lock()
+					errors[res.WorkerId] = fmt.Errorf("unable to schedule containers, worker out of cpu, memory, or gpu")
+					mu.Unlock()
+					return
+				}
+			}
+
+			// Update resource version
+			updatedWorker.ResourceVersion++
+
+			// Persist updated worker state
+			err = r.rdb.HSet(ctx, key, common.ToSlice(updatedWorker)).Err()
+			if err != nil {
+				mu.Lock()
+				errors[res.WorkerId] = fmt.Errorf("failed to update worker capacity: %w", err)
+				mu.Unlock()
+				return
+			}
+
+			log.Debug().
+				Str("worker_id", res.WorkerId).
+				Int("reservation_count", len(res.Reservations)).
+				Int64("free_cpu", updatedWorker.FreeCpu).
+				Int64("free_memory", updatedWorker.FreeMemory).
+				Msg("batch updated worker capacity")
+		}(reservation)
+	}
+
+	wg.Wait()
+
+	if len(errors) > 0 {
+		return errors, fmt.Errorf("failed to update capacity for %d workers", len(errors))
+	}
+
+	return nil, nil
 }

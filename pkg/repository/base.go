@@ -10,6 +10,21 @@ import (
 
 type SchedulerRepository interface{}
 
+// CapacityReservation represents a batch of resource reservations for a single worker
+type CapacityReservation struct {
+	WorkerId     string
+	Reservations []ResourceReservation
+}
+
+// ResourceReservation represents a single container's resource requirements
+type ResourceReservation struct {
+	ContainerId string
+	CPU         int64
+	Memory      int64
+	GPU         int64
+	GPUType     string
+}
+
 type WorkerRepository interface {
 	GetId() string
 	GetWorkerById(workerId string) (*types.Worker, error)
@@ -23,6 +38,7 @@ type WorkerRepository interface {
 	RemoveWorker(workerId string) error
 	SetWorkerKeepAlive(workerId string) error
 	UpdateWorkerCapacity(w *types.Worker, cr *types.ContainerRequest, ut types.CapacityUpdateType) error
+	BatchUpdateWorkerCapacity(ctx context.Context, reservations []CapacityReservation, capacityUpdateType types.CapacityUpdateType) (map[string]error, error)
 	ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error
 	GetNextContainerRequest(workerId string) (*types.ContainerRequest, error)
 	AddContainerToWorker(workerId string, containerId string) error

@@ -2,13 +2,16 @@ package scheduler
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -22,6 +25,7 @@ import (
 
 const (
 	requestProcessingInterval time.Duration = 100 * time.Millisecond
+	workerCacheDuration       time.Duration = 500 * time.Millisecond
 )
 
 type Scheduler struct {
@@ -36,6 +40,83 @@ type Scheduler struct {
 	eventRepo             repo.EventRepository
 	schedulerUsageMetrics SchedulerUsageMetrics
 	eventBus              *common.EventBus
+	workerCache           *WorkerStateCache
+}
+
+// WorkerStateCache provides a memory-level cache for worker state
+type WorkerStateCache struct {
+	mu           sync.RWMutex
+	workers      map[string]*types.Worker
+	lastUpdate   time.Time
+	maxStaleness time.Duration
+	workerRepo   repo.WorkerRepository
+}
+
+// NewWorkerStateCache creates a new worker state cache
+func NewWorkerStateCache(workerRepo repo.WorkerRepository, maxStaleness time.Duration) *WorkerStateCache {
+	return &WorkerStateCache{
+		workers:      make(map[string]*types.Worker),
+		maxStaleness: maxStaleness,
+		workerRepo:   workerRepo,
+	}
+}
+
+// Get retrieves workers from cache or refreshes if stale
+func (c *WorkerStateCache) Get(ctx context.Context) ([]*types.Worker, error) {
+	c.mu.RLock()
+	if time.Since(c.lastUpdate) < c.maxStaleness && len(c.workers) > 0 {
+		result := make([]*types.Worker, 0, len(c.workers))
+		for _, w := range c.workers {
+			// Return a copy to prevent external modifications
+			workerCopy := &types.Worker{}
+			if err := common.CopyStruct(w, workerCopy); err != nil {
+				c.mu.RUnlock()
+				return nil, err
+			}
+			result = append(result, workerCopy)
+		}
+		c.mu.RUnlock()
+		return result, nil
+	}
+	c.mu.RUnlock()
+
+	// Cache miss or stale - refresh from repository
+	return c.refresh(ctx)
+}
+
+// refresh fetches fresh worker state from the repository
+func (c *WorkerStateCache) refresh(ctx context.Context) ([]*types.Worker, error) {
+	workers, err := c.workerRepo.GetAllWorkers()
+	if err != nil {
+		return nil, err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Update cache
+	c.workers = make(map[string]*types.Worker)
+	for _, w := range workers {
+		c.workers[w.Id] = w
+	}
+	c.lastUpdate = time.Now()
+
+	return workers, nil
+}
+
+// InvalidateWorker removes a specific worker from the cache
+func (c *WorkerStateCache) InvalidateWorker(workerId string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.workers, workerId)
+}
+
+// InvalidateAll clears the entire cache
+func (c *WorkerStateCache) InvalidateAll() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.workers = make(map[string]*types.Worker)
+	c.lastUpdate = time.Time{}
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
@@ -48,6 +129,9 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
+
+	// Initialize worker cache
+	workerCache := NewWorkerStateCache(workerRepo, workerCacheDuration)
 
 	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
@@ -108,6 +192,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		schedulerUsageMetrics: schedulerUsage,
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
+		workerCache:           workerCache,
 	}, nil
 }
 
@@ -350,7 +435,16 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
-	return s.workerRepo.ScheduleContainerRequest(worker, request)
+	
+	err := s.workerRepo.ScheduleContainerRequest(worker, request)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate worker cache after scheduling to keep it fresh
+	s.workerCache.InvalidateWorker(worker.Id)
+	
+	return nil
 }
 
 // attachImageCredentials fetches and attaches OCI credentials to a container request
@@ -579,7 +673,8 @@ const (
 )
 
 func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker, error) {
-	workers, err := s.workerRepo.GetAllWorkers()
+	// Use cached worker state instead of fetching from repository every time
+	workers, err := s.workerCache.Get(s.ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -590,6 +685,11 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}
+	}
+
+	// Apply worker affinity for CPU-only containers to distribute load
+	if !request.RequiresGPU() && len(filteredWorkers) > 1 {
+		filteredWorkers = applyWorkerAffinity(request.ContainerId, filteredWorkers)
 	}
 
 	// Score workers based on status and priority
@@ -612,6 +712,32 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	})
 
 	return scoredWorkers[0].worker, nil
+}
+
+// hashContainerId computes a stable hash for a container ID
+func hashContainerId(containerId string) uint64 {
+	hash := sha256.Sum256([]byte(containerId))
+	return binary.BigEndian.Uint64(hash[:8])
+}
+
+// applyWorkerAffinity rotates the worker list based on container ID hash
+// This distributes containers across workers to reduce lock contention
+func applyWorkerAffinity(containerId string, workers []*types.Worker) []*types.Worker {
+	if len(workers) <= 1 {
+		return workers
+	}
+
+	// Calculate affinity index based on container ID hash
+	hash := hashContainerId(containerId)
+	affinityIndex := int(hash % uint64(len(workers)))
+
+	// Rotate workers list to put preferred worker first
+	rotated := make([]*types.Worker, len(workers))
+	for i := 0; i < len(workers); i++ {
+		rotated[i] = workers[(affinityIndex+i)%len(workers)]
+	}
+
+	return rotated
 }
 
 const maxScheduleRetryCount = 3
