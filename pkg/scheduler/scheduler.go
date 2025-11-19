@@ -11,7 +11,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -25,9 +24,6 @@ import (
 
 const (
 	requestProcessingInterval time.Duration = 100 * time.Millisecond
-	workerCacheDuration       time.Duration = 500 * time.Millisecond
-	batchSchedulingWindow     time.Duration = 50 * time.Millisecond
-	maxBatchSize              int           = 100
 )
 
 type Scheduler struct {
@@ -42,83 +38,6 @@ type Scheduler struct {
 	eventRepo             repo.EventRepository
 	schedulerUsageMetrics SchedulerUsageMetrics
 	eventBus              *common.EventBus
-	workerCache           *WorkerStateCache
-}
-
-// WorkerStateCache provides a memory-level cache for worker state
-type WorkerStateCache struct {
-	mu           sync.RWMutex
-	workers      map[string]*types.Worker
-	lastUpdate   time.Time
-	maxStaleness time.Duration
-	workerRepo   repo.WorkerRepository
-}
-
-// NewWorkerStateCache creates a new worker state cache
-func NewWorkerStateCache(workerRepo repo.WorkerRepository, maxStaleness time.Duration) *WorkerStateCache {
-	return &WorkerStateCache{
-		workers:      make(map[string]*types.Worker),
-		maxStaleness: maxStaleness,
-		workerRepo:   workerRepo,
-	}
-}
-
-// Get retrieves workers from cache or refreshes if stale
-func (c *WorkerStateCache) Get(ctx context.Context) ([]*types.Worker, error) {
-	c.mu.RLock()
-	if time.Since(c.lastUpdate) < c.maxStaleness && len(c.workers) > 0 {
-		result := make([]*types.Worker, 0, len(c.workers))
-		for _, w := range c.workers {
-			// Return a copy to prevent external modifications
-			workerCopy := &types.Worker{}
-			if err := common.CopyStruct(w, workerCopy); err != nil {
-				c.mu.RUnlock()
-				return nil, err
-			}
-			result = append(result, workerCopy)
-		}
-		c.mu.RUnlock()
-		return result, nil
-	}
-	c.mu.RUnlock()
-
-	// Cache miss or stale - refresh from repository
-	return c.refresh(ctx)
-}
-
-// refresh fetches fresh worker state from the repository
-func (c *WorkerStateCache) refresh(ctx context.Context) ([]*types.Worker, error) {
-	workers, err := c.workerRepo.GetAllWorkers()
-	if err != nil {
-		return nil, err
-	}
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Update cache
-	c.workers = make(map[string]*types.Worker)
-	for _, w := range workers {
-		c.workers[w.Id] = w
-	}
-	c.lastUpdate = time.Now()
-
-	return workers, nil
-}
-
-// InvalidateWorker removes a specific worker from the cache
-func (c *WorkerStateCache) InvalidateWorker(workerId string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.workers, workerId)
-}
-
-// InvalidateAll clears the entire cache
-func (c *WorkerStateCache) InvalidateAll() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.workers = make(map[string]*types.Worker)
-	c.lastUpdate = time.Time{}
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
@@ -131,9 +50,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
-
-	// Initialize worker cache
-	workerCache := NewWorkerStateCache(workerRepo, workerCacheDuration)
 
 	// Load worker pools
 	workerPoolManager := NewWorkerPoolManager(config.Worker.Failover.Enabled)
@@ -194,7 +110,6 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		schedulerUsageMetrics: schedulerUsage,
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
-		workerCache:           workerCache,
 	}, nil
 }
 
@@ -347,22 +262,99 @@ func (s *Scheduler) StartProcessingRequests() {
 			continue
 		}
 
-		// Collect a batch of requests to process together
-		batch := s.collectRequestBatch()
-		if len(batch) == 0 {
+		request, err := s.requestBacklog.Pop()
+		if err != nil {
+			time.Sleep(requestProcessingInterval)
 			continue
 		}
 
-		// Process the batch together to reduce lock contention and worker thrashing
-		s.processBatch(batch)
+		// Find a worker to schedule ContainerRequests on
+		worker, err := s.selectWorker(request)
+		if err != nil || worker == nil {
+			// We didn't find a Worker that fit the ContainerRequest's requirements. Let's find a controller
+			// so we can add a new worker.
+
+			controllers, err := s.getControllers(request)
+			if err != nil {
+				log.Error().Interface("request", request).Err(err).Msg("no controller found for request")
+				continue
+			}
+
+			go func() {
+				var err error
+				for _, c := range controllers {
+					// Iterates through controllers in the order of prioritized gpus to attempt to add a worker
+					if c == nil {
+						continue
+					}
+
+					var newWorker *types.Worker
+					newWorker, err = c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
+					if err == nil {
+						log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added new worker")
+
+						err = s.scheduleRequest(newWorker, request)
+						if err != nil {
+							log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request")
+							s.addRequestToBacklog(request)
+						}
+
+						return
+					}
+				}
+
+				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to add worker")
+				s.addRequestToBacklog(request)
+			}()
+
+			continue
+		}
+
+		// We found a worker that met the ContainerRequest's requirements. Schedule the request
+		// on that worker.
+		err = s.scheduleRequest(worker, request)
+		if err != nil {
+			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request on existing worker")
+			s.addRequestToBacklog(request)
+			continue
+		}
+
+		// Record the request processing duration
+		schedulingDuration := time.Since(request.Timestamp)
+		metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
 	}
 }
 
-// scheduleRequest is deprecated - use finalizeScheduling instead for batch processing
-// Kept for backward compatibility with external callers
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	s.finalizeScheduling(worker, request)
-	return nil
+	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to update assigned container gpu")
+		return err
+	}
+
+	request.Gpu = worker.Gpu
+
+	// Attach OCI credentials for runtime lazy layer loading
+	if err := s.attachImageCredentials(request); err != nil {
+		log.Warn().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Str("image_id", request.ImageId).
+			Msg("failed to attach OCI credentials, will use default provider")
+	}
+
+	// Attach build registry credentials for push + runtime layer loading
+	if err := s.attachBuildRegistryCredentials(request); err != nil {
+		log.Warn().
+			Err(err).
+			Str("container_id", request.ContainerId).
+			Msg("failed to attach build registry credentials to request")
+	}
+
+	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
+	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
+
+	// ScheduleContainerRequest handles capacity update internally
+	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 
 // attachImageCredentials fetches and attaches OCI credentials to a container request
@@ -591,8 +583,7 @@ const (
 )
 
 func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker, error) {
-	// Use cached worker state instead of fetching from repository every time
-	workers, err := s.workerCache.Get(s.ctx)
+	workers, err := s.workerRepo.GetAllWorkers()
 	if err != nil {
 		return nil, err
 	}
