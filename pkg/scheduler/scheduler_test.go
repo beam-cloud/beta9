@@ -1226,9 +1226,6 @@ func TestScheduling_NoDoubleScheduling(t *testing.T) {
 			break
 		}
 		
-		workers, err := scheduler.getCachedWorkers()
-		require.NoError(t, err)
-		
 		for _, request := range batch {
 			req := request
 			wg.Add(1)
@@ -1240,23 +1237,39 @@ func TestScheduling_NoDoubleScheduling(t *testing.T) {
 					wg.Done()
 				}()
 				
-				// Try to schedule
-				for _, worker := range workers {
-					if worker.FreeCpu >= r.Cpu && worker.FreeMemory >= r.Memory {
-						err := workerRepo.UpdateWorkerCapacity(worker, r, types.RemoveCapacity)
-						if err == nil {
-							// Check if already scheduled
-							if _, exists := scheduledContainers.LoadOrStore(r.ContainerId, worker.Id); exists {
-								atomic.AddInt64(&doubleScheduled, 1)
-								t.Logf("❌ DOUBLE SCHEDULED: %s (first: %v, second: %s)", 
-									r.ContainerId, 
-									func() string { v, _ := scheduledContainers.Load(r.ContainerId); return v.(string) }(),
-									worker.Id)
-							} else {
-								atomic.AddInt64(&scheduled, 1)
+				// Try to schedule with retry logic (simulating scheduleOnWorker behavior)
+				const maxRetries = 5
+				for attempt := 0; attempt < maxRetries; attempt++ {
+					// Fetch fresh workers on each attempt
+					workers, err := workerRepo.GetAllWorkersLockFree()
+					if err != nil {
+						continue
+					}
+					
+					// Try each worker
+					for _, worker := range workers {
+						if worker.FreeCpu >= r.Cpu && worker.FreeMemory >= r.Memory {
+							err := workerRepo.UpdateWorkerCapacity(worker, r, types.RemoveCapacity)
+							if err == nil {
+								// Check if already scheduled
+								if _, exists := scheduledContainers.LoadOrStore(r.ContainerId, worker.Id); exists {
+									atomic.AddInt64(&doubleScheduled, 1)
+									t.Logf("❌ DOUBLE SCHEDULED: %s (first: %v, second: %s)", 
+										r.ContainerId, 
+										func() string { v, _ := scheduledContainers.Load(r.ContainerId); return v.(string) }(),
+										worker.Id)
+								} else {
+									atomic.AddInt64(&scheduled, 1)
+								}
+								return
 							}
-							return
+							// Version conflict - try next worker
 						}
+					}
+					
+					// Brief backoff before retry
+					if attempt < maxRetries-1 {
+						time.Sleep(time.Millisecond * time.Duration(attempt+1))
 					}
 				}
 			}(req)
@@ -1334,7 +1347,7 @@ func TestCpuBatchWorker_NoDoubleScheduling(t *testing.T) {
 	scheduler.failedRequestsMu.Unlock()
 	require.Equal(t, 6, batchSize, "Batch should contain 6 requests")
 	
-	// Schedule the batch on the worker (simulate what provisionCpuBatchWorker does)
+	// Schedule the batch on the worker (simulate what provisionCpuBatchWorker does with retry logic)
 	scheduler.failedRequestsMu.Lock()
 	batchRequests := make([]*types.ContainerRequest, len(scheduler.failedCpuRequests))
 	copy(batchRequests, scheduler.failedCpuRequests)
@@ -1343,14 +1356,31 @@ func TestCpuBatchWorker_NoDoubleScheduling(t *testing.T) {
 	var scheduled int64
 	var doubleScheduled int64
 	
+	// Schedule each request with retry logic (like scheduleOnWorker does)
 	for _, req := range batchRequests {
-		err := workerRepo.UpdateWorkerCapacity(worker, req, types.RemoveCapacity)
-		if err == nil {
-			if _, exists := scheduledContainers.LoadOrStore(req.ContainerId, worker.Id); exists {
-				atomic.AddInt64(&doubleScheduled, 1)
-				t.Logf("❌ DOUBLE SCHEDULED in batch: %s", req.ContainerId)
-			} else {
-				atomic.AddInt64(&scheduled, 1)
+		const maxRetries = 5
+		success := false
+		
+		for attempt := 0; attempt < maxRetries && !success; attempt++ {
+			if attempt > 0 {
+				time.Sleep(time.Millisecond * time.Duration(attempt))
+			}
+			
+			// Fetch fresh worker on retry
+			freshWorker, err := workerRepo.GetWorkerById(worker.Id)
+			if err != nil {
+				continue
+			}
+			
+			err = workerRepo.UpdateWorkerCapacity(freshWorker, req, types.RemoveCapacity)
+			if err == nil {
+				if _, exists := scheduledContainers.LoadOrStore(req.ContainerId, worker.Id); exists {
+					atomic.AddInt64(&doubleScheduled, 1)
+					t.Logf("❌ DOUBLE SCHEDULED in batch: %s", req.ContainerId)
+				} else {
+					atomic.AddInt64(&scheduled, 1)
+				}
+				success = true
 			}
 		}
 	}
