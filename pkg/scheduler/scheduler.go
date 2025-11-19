@@ -334,15 +334,81 @@ func (s *Scheduler) processBatch(requests []*types.ContainerRequest) {
 	// Sort workers by utilization (bin packing) to improve density
 	workers = sortWorkersByUtilization(workers)
 
-	// Process all requests in parallel with shared worker list
-	for _, request := range requests {
-		req := request
-		s.schedulingSemaphore <- struct{}{}
-		go func(r *types.ContainerRequest) {
-			defer func() { <-s.schedulingSemaphore }()
-			s.processRequestWithWorkers(r, workers)
-		}(req)
+	workerCount := len(workers)
+	if workerCount == 0 {
+		for _, req := range requests {
+			s.addRequestToBacklog(req)
+		}
+		return
 	}
+
+	// Group requests by worker affinity to reduce contention
+	// Process one "wave" at a time where each request targets a different worker
+	requestCount := len(requests)
+	wavesNeeded := (requestCount + workerCount - 1) / workerCount
+
+	for wave := 0; wave < wavesNeeded; wave++ {
+		waveStart := wave * workerCount
+		waveEnd := waveStart + workerCount
+		if waveEnd > requestCount {
+			waveEnd = requestCount
+		}
+
+		waveRequests := requests[waveStart:waveEnd]
+
+		// Process this wave in parallel (each targets a different primary worker)
+		var wg sync.WaitGroup
+		for i, request := range waveRequests {
+			req := request
+			requestIndex := waveStart + i
+			wg.Add(1)
+
+			s.schedulingSemaphore <- struct{}{}
+			go func(r *types.ContainerRequest, idx int) {
+				defer func() {
+					<-s.schedulingSemaphore
+					wg.Done()
+				}()
+
+				// Use worker affinity to reduce contention
+				// Primary worker is based on request index, with fallback to others
+				affinityWorkers := createAffinityWorkerList(workers, idx)
+				s.processRequestWithWorkers(r, affinityWorkers)
+			}(req, requestIndex)
+		}
+
+		// Wait for this wave to complete before starting next wave
+		// This ensures minimal conflicts as each request has its own primary worker
+		wg.Wait()
+
+		// Refresh worker cache for next wave to get updated capacity
+		workers, _ = s.getCachedWorkers()
+		workers = sortWorkersByUtilization(workers)
+	}
+}
+
+// createAffinityWorkerList creates a worker list with affinity-based ordering
+// to reduce contention. The primary worker is determined by the request index,
+// with fallback workers ordered by proximity.
+func createAffinityWorkerList(workers []*types.Worker, requestIndex int) []*types.Worker {
+	if len(workers) == 0 {
+		return workers
+	}
+
+	// Create a new slice to avoid mutating the shared workers slice
+	affinity := make([]*types.Worker, len(workers))
+	copy(affinity, workers)
+
+	// Primary worker based on request index (modulo worker count)
+	primaryIdx := requestIndex % len(workers)
+
+	// Move primary worker to front
+	if primaryIdx != 0 {
+		affinity[0], affinity[primaryIdx] = affinity[primaryIdx], affinity[0]
+	}
+
+	// Keep rest of list for fallback (already sorted by utilization)
+	return affinity
 }
 
 // sortWorkersByUtilization sorts workers to prioritize those already in use
