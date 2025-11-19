@@ -389,8 +389,11 @@ func shuffleWorkers(workers []*types.Worker) []*types.Worker {
 
 // Process single request with pre-fetched workers
 func (s *Scheduler) processRequestWithWorkers(request *types.ContainerRequest, workers []*types.Worker) {
+	filteredWorkers := filterWorkersByPoolSelector(workers, request)
+	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)
+
 	// Try existing workers
-	for _, w := range workers {
+	for _, w := range filteredWorkers {
 		// Quick capacity check
 		if w.FreeCpu < request.Cpu || w.FreeMemory < request.Memory {
 			continue
@@ -461,8 +464,11 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest) {
 			continue
 		}
 
+		filteredWorkers := filterWorkersByPoolSelector(workers, request)
+		filteredWorkers = filterWorkersByFlags(filteredWorkers, request)
+
 		// Try each suitable worker
-		for _, worker := range workers {
+		for _, worker := range filteredWorkers {
 			if worker.FreeCpu < request.Cpu || worker.FreeMemory < request.Memory {
 				continue
 			}
