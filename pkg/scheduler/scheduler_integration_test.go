@@ -116,8 +116,8 @@ func TestSchedule100ContainersUnder2Seconds(t *testing.T) {
 			selectedWorker := filteredWorkers[0]
 
 			reservations <- &schedulingDecision{
-				worker:    selectedWorker,
-				container: req,
+				worker:  selectedWorker,
+				request: req,
 			}
 		}(container)
 	}
@@ -137,10 +137,10 @@ func TestSchedule100ContainersUnder2Seconds(t *testing.T) {
 		workerReservations[decision.worker.Id] = append(
 			workerReservations[decision.worker.Id],
 			repo.ResourceReservation{
-				ContainerId: decision.container.ContainerId,
-				CPU:         decision.container.Cpu,
-				Memory:      decision.container.Memory,
-				GPU:         int64(decision.container.GpuCount),
+				ContainerId: decision.request.ContainerId,
+				CPU:         decision.request.Cpu,
+				Memory:      decision.request.Memory,
+				GPU:         int64(decision.request.GpuCount),
 			},
 		)
 	}
@@ -173,10 +173,7 @@ func TestSchedule100ContainersUnder2Seconds(t *testing.T) {
 	t.Logf("Number of workers touched: %d", len(batchReservations))
 }
 
-type schedulingDecision struct {
-	worker    *types.Worker
-	container *types.ContainerRequest
-}
+// schedulingDecision is defined in scheduler_batch.go
 
 // TestConcurrentSchedulingCorrectness verifies no double-booking under contention
 func TestConcurrentSchedulingCorrectness(t *testing.T) {
@@ -234,8 +231,8 @@ func TestConcurrentSchedulingCorrectness(t *testing.T) {
 			}
 
 			reservations <- &schedulingDecision{
-				worker:    filteredWorkers[0],
-				container: req,
+				worker:  filteredWorkers[0],
+				request: req,
 			}
 		}(container)
 	}
@@ -251,10 +248,10 @@ func TestConcurrentSchedulingCorrectness(t *testing.T) {
 		workerReservations[decision.worker.Id] = append(
 			workerReservations[decision.worker.Id],
 			repo.ResourceReservation{
-				ContainerId: decision.container.ContainerId,
-				CPU:         decision.container.Cpu,
-				Memory:      decision.container.Memory,
-				GPU:         int64(decision.container.GpuCount),
+				ContainerId: decision.request.ContainerId,
+				CPU:         decision.request.Cpu,
+				Memory:      decision.request.Memory,
+				GPU:         int64(decision.request.GpuCount),
 			},
 		)
 	}

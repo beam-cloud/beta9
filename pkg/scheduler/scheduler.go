@@ -26,6 +26,8 @@ import (
 const (
 	requestProcessingInterval time.Duration = 100 * time.Millisecond
 	workerCacheDuration       time.Duration = 500 * time.Millisecond
+	batchSchedulingWindow     time.Duration = 50 * time.Millisecond
+	maxBatchSize              int           = 100
 )
 
 type Scheduler struct {
@@ -345,105 +347,21 @@ func (s *Scheduler) StartProcessingRequests() {
 			continue
 		}
 
-		request, err := s.requestBacklog.Pop()
-		if err != nil {
-			time.Sleep(requestProcessingInterval)
+		// Collect a batch of requests to process together
+		batch := s.collectRequestBatch()
+		if len(batch) == 0 {
 			continue
 		}
 
-		// Find a worker to schedule ContainerRequests on
-		worker, err := s.selectWorker(request)
-		if err != nil || worker == nil {
-			// We didn't find a Worker that fit the ContainerRequest's requirements. Let's find a controller
-			// so we can add a new worker.
-
-			controllers, err := s.getControllers(request)
-			if err != nil {
-				log.Error().Interface("request", request).Err(err).Msg("no controller found for request")
-				continue
-			}
-
-			go func() {
-				var err error
-				for _, c := range controllers {
-					// Iterates through controllers in the order of prioritized gpus to attempt to add a worker
-					if c == nil {
-						continue
-					}
-
-					var newWorker *types.Worker
-					newWorker, err = c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
-					if err == nil {
-						log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added new worker")
-
-						err = s.scheduleRequest(newWorker, request)
-						if err != nil {
-							log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request")
-							s.addRequestToBacklog(request)
-						}
-
-						return
-					}
-				}
-
-				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to add worker")
-				s.addRequestToBacklog(request)
-			}()
-
-			continue
-		}
-
-		// We found a worker that met the ContainerRequest's requirements. Schedule the request
-		// on that worker.
-		err = s.scheduleRequest(worker, request)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request on existing worker")
-			s.addRequestToBacklog(request)
-			continue
-		}
-
-		// Record the request processing duration
-		schedulingDuration := time.Since(request.Timestamp)
-		metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
+		// Process the batch together to reduce lock contention and worker thrashing
+		s.processBatch(batch)
 	}
 }
 
+// scheduleRequest is deprecated - use finalizeScheduling instead for batch processing
+// Kept for backward compatibility with external callers
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
-		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to update assigned container gpu")
-		return err
-	}
-
-	request.Gpu = worker.Gpu
-
-	// Attach OCI credentials for runtime lazy layer loading
-	if err := s.attachImageCredentials(request); err != nil {
-		log.Warn().
-			Err(err).
-			Str("container_id", request.ContainerId).
-			Str("image_id", request.ImageId).
-			Msg("failed to attach OCI credentials, will use default provider")
-	}
-
-	// Attach build registry credentials for push + runtime layer loading
-	if err := s.attachBuildRegistryCredentials(request); err != nil {
-		log.Warn().
-			Err(err).
-			Str("container_id", request.ContainerId).
-			Msg("failed to attach build registry credentials to request")
-	}
-
-	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
-	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
-	
-	err := s.workerRepo.ScheduleContainerRequest(worker, request)
-	if err != nil {
-		return err
-	}
-
-	// Invalidate worker cache after scheduling to keep it fresh
-	s.workerCache.InvalidateWorker(worker.Id)
-	
+	s.finalizeScheduling(worker, request)
 	return nil
 }
 
