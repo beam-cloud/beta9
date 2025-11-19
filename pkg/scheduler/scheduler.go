@@ -491,21 +491,6 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest) {
 		}
 	}
 
-	// Standard provisioning
-	controllers, err := s.getControllers(request)
-	if err == nil {
-		for _, c := range controllers {
-			if c == nil {
-				continue
-			}
-			newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
-			if err == nil && s.scheduleOnWorker(newWorker, request) == nil {
-				metrics.RecordRequestSchedulingDuration(time.Since(request.Timestamp), request)
-				return
-			}
-		}
-	}
-
 	// CPU batching
 	if request.GpuCount == 0 && s.shouldUseCpuBatching() {
 		if s.addToCpuBatch(request) {
