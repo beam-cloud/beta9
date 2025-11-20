@@ -32,6 +32,11 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
+const (
+	gRPCMaxRecvMsgSize = 1024 * 1024 * 16
+	gRPCMaxSendMsgSize = 1024 * 1024 * 16
+)
+
 // ContainerRuntimeServer is a runtime-agnostic container server that works with any OCI runtime
 type ContainerRuntimeServer struct {
 	baseConfigSpec specs.Spec
@@ -99,7 +104,11 @@ func (s *ContainerRuntimeServer) Start() error {
 	s.port = listener.Addr().(*net.TCPAddr).Port
 	log.Info().Int("port", s.port).Msg("container runtime server started")
 
-	s.grpcServer = grpc.NewServer()
+	s.grpcServer = grpc.NewServer(
+		grpc.MaxRecvMsgSize(gRPCMaxRecvMsgSize),
+		grpc.MaxSendMsgSize(gRPCMaxSendMsgSize),
+	)
+
 	pb.RegisterContainerServiceServer(s.grpcServer, s)
 
 	go func() {
