@@ -122,13 +122,23 @@ func (wpc *LocalKubernetesWorkerPoolController) Mode() types.PoolMode {
 
 func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
-	return wpc.addWorkerWithId(workerId, cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
+	worker, err := wpc.addWorkerWithId(workerId, cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := wpc.workerRepo.AddWorker(worker); err != nil {
+		log.Error().Err(err).Msg("unable to create worker")
+		return nil, err
+	}
+
+	return worker, nil
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) AddWorkerWithDelay(request *types.ContainerRequest, delay time.Duration) (*types.Worker, error) {
 	workerId := GenerateWorkerId()
 
-	log.Info().Str("worker_id", workerId).Msg("adding worker with delay")
+	log.Info().Str("worker_id", workerId).Dur("delay", delay).Msg("adding worker with delay")
 
 	worker := &types.Worker{
 		Id:           workerId,
@@ -157,28 +167,32 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorkerWithDelay(request *type
 			return
 		}
 
-		totalCpu := int64(0)
-		totalMemory := int64(0)
-		totalGpuCount := uint32(0)
+		totalRequiredCpu := int64(0)
+		totalRequireMemory := int64(0)
+		totalRequiredGpuCount := uint32(0)
 
 		for _, request := range requests {
-			totalCpu += request.Cpu
-			totalMemory += request.Memory
-			totalGpuCount += request.GpuCount
+			totalRequiredCpu += request.Cpu
+			totalRequireMemory += request.Memory
+			totalRequiredGpuCount += request.GpuCount
 		}
 
-		_, err = wpc.addWorkerWithId(workerId, totalCpu, totalMemory, wpc.workerPoolConfig.GPUType, totalGpuCount)
+		// TODO: ensure free capacity is subtracted from the worker
+		worker, err = wpc.addWorkerWithId(workerId, totalRequiredCpu, totalRequireMemory, wpc.workerPoolConfig.GPUType, totalRequiredGpuCount)
 		if err != nil {
 			log.Error().Err(err).Msg("unable to add worker")
 			return
 		}
 
-		err = wpc.workerRepo.BatchUpdateWorkerCapacity(workerId, requests)
-		if err != nil {
-			log.Error().Err(err).Msg("unable to update worker capacity")
+		worker.FreeCpu = 0
+		worker.FreeMemory = 0
+		worker.FreeGpuCount = 0
+
+		// Add the worker state
+		if err := wpc.workerRepo.AddWorker(worker); err != nil {
+			log.Error().Err(err).Msg("unable to create worker")
 			return
 		}
-
 	}()
 
 	return worker, nil
@@ -213,12 +227,6 @@ func (wpc *LocalKubernetesWorkerPoolController) addWorkerWithId(workerId string,
 
 	worker.PoolName = wpc.name
 	worker.RequiresPoolSelector = wpc.workerPoolConfig.RequiresPoolSelector
-
-	// Add the worker state
-	if err := wpc.workerRepo.AddWorker(worker); err != nil {
-		log.Error().Err(err).Msg("unable to create worker")
-		return nil, err
-	}
 
 	return worker, nil
 }
