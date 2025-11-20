@@ -128,6 +128,10 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 	return worker, nil
 }
 
+func (wpc *LocalWorkerPoolControllerForTest) AddWorkerWithDelay(request *types.ContainerRequest, delay time.Duration) (*types.Worker, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (wpc *LocalWorkerPoolControllerForTest) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
 	return nil, errors.New("unimplemented")
 }
@@ -176,6 +180,10 @@ func (wpc *ExternalWorkerPoolControllerForTest) ContainerRuntime() string {
 
 func (wpc *ExternalWorkerPoolControllerForTest) generateWorkerId() string {
 	return uuid.New().String()[:8]
+}
+
+func (wpc *ExternalWorkerPoolControllerForTest) AddWorkerWithDelay(request *types.ContainerRequest, delay time.Duration) (*types.Worker, error) {
+	return nil, errors.New("not implemented")
 }
 
 func (wpc *ExternalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {

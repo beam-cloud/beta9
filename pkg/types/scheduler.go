@@ -21,6 +21,7 @@ const (
 	WorkerStatusAvailable WorkerStatus = "available"
 	WorkerStatusPending   WorkerStatus = "pending"
 	WorkerStatusDisabled  WorkerStatus = "disabled"
+	WorkerStatusDelayed   WorkerStatus = "delayed"
 	WorkerStateTtlS       int          = 60
 )
 

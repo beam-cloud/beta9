@@ -286,7 +286,27 @@ func (s *Scheduler) StartProcessingRequests() {
 						continue
 					}
 
+					// 1. If we have a pending worker in the zset for this controller, push request to that
+					// the key should be the worker ID
 					var newWorker *types.Worker
+
+					threshold := int64(2)
+					if !request.RequiresGPU() && s.requestBacklog.Len() > threshold {
+						newWorker, err := c.AddWorkerWithDelay(request, time.Second*5)
+						if err == nil {
+							log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added delayed worker")
+
+							err = s.scheduleRequest(newWorker, request)
+							if err != nil {
+								log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request")
+								s.addRequestToBacklog(request)
+							}
+
+							return
+						}
+
+					}
+
 					newWorker, err = c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
 					if err == nil {
 						log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added new worker")
@@ -331,7 +351,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	request.Gpu = worker.Gpu
 
-	// Attach OCI credentials for runtime lazy layer loading
+	// Attach OCI credentials for image pull
 	if err := s.attachImageCredentials(request); err != nil {
 		log.Warn().
 			Err(err).
@@ -340,7 +360,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 			Msg("failed to attach OCI credentials, will use default provider")
 	}
 
-	// Attach build registry credentials for push + runtime layer loading
+	// Attach build registry credentials for image push / pull
 	if err := s.attachBuildRegistryCredentials(request); err != nil {
 		log.Warn().
 			Err(err).
@@ -507,6 +527,12 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	for _, worker := range workers {
 		isGpuWorker := worker.Gpu != ""
 
+		// Add delayed workers to the filtered workers
+		if worker.Status == types.WorkerStatusDelayed {
+			filteredWorkers = append(filteredWorkers, worker)
+			continue
+		}
+
 		// Check if the worker has enough free cpu and memory to run the container
 		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < int64(request.Memory) {
 			continue
@@ -565,6 +591,7 @@ type scoredWorker struct {
 // Constants used for scoring workers
 const (
 	scoreAvailableWorker int32 = 10
+	scoreDelayedWorker   int32 = 100
 )
 
 func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker, error) {
@@ -572,6 +599,12 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	if err != nil {
 		return nil, err
 	}
+
+	delayedWorkers, err := s.workerRepo.GetAllDelayedWorkers()
+	if err != nil {
+		return nil, err
+	}
+	workers = append(workers, delayedWorkers...)
 
 	filteredWorkers := filterWorkersByPoolSelector(workers, request)     // Filter workers by pool selector
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request) // Filter workers resource requirements

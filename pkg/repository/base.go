@@ -14,10 +14,13 @@ type WorkerRepository interface {
 	GetId() string
 	GetWorkerById(workerId string) (*types.Worker, error)
 	GetAllWorkers() ([]*types.Worker, error)
+	GetAllDelayedWorkers() ([]*types.Worker, error)
 	GetAllWorkersInPool(poolName string) ([]*types.Worker, error)
 	CordonAllPendingWorkersInPool(poolName string) error
 	GetAllWorkersOnMachine(machineId string) ([]*types.Worker, error)
 	AddWorker(w *types.Worker) error
+	AddWorkerReservation(workerId string, request *types.ContainerRequest) error
+	GetWorkerReservations(workerId string) ([]*types.ContainerRequest, error)
 	ToggleWorkerAvailable(workerId string) error
 	UpdateWorkerStatus(workerId string, status types.WorkerStatus) error
 	RemoveWorker(workerId string) error

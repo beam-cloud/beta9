@@ -12,7 +12,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	"github.com/rs/zerolog/log"
 )
 
 type WorkerRedisRepository struct {
@@ -56,6 +55,43 @@ func (r *WorkerRedisRepository) AddWorker(worker *types.Worker) error {
 	}
 
 	return nil
+}
+
+func (r *WorkerRedisRepository) AddWorkerReservation(workerId string, request *types.ContainerRequest) error {
+	requestJSON, err := json.Marshal(request)
+	if err != nil {
+		return fmt.Errorf("failed to serialize worker compute reservation: %w", err)
+	}
+
+	err = r.rdb.ZAdd(context.TODO(), common.RedisKeys.SchedulerWorkerReservation(workerId), redis.Z{
+		Score:  float64(time.Now().Unix()),
+		Member: requestJSON,
+	}).Err()
+	if err != nil {
+		return fmt.Errorf("failed to add worker reservation <%v>: %w", workerId, err)
+	}
+
+	return nil
+}
+
+func (r *WorkerRedisRepository) GetWorkerReservations(workerId string) ([]*types.ContainerRequest, error) {
+	requests := []*types.ContainerRequest{}
+	requestJSONs, err := r.rdb.ZRangeWithScores(context.TODO(), common.RedisKeys.SchedulerWorkerReservation(workerId), 0, -1).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, requestJSON := range requestJSONs {
+		request := &types.ContainerRequest{}
+		err = json.Unmarshal([]byte(requestJSON.Member.(string)), request)
+		if err != nil {
+			return nil, err
+		}
+
+		requests = append(requests, request)
+	}
+
+	return requests, nil
 }
 
 func (r *WorkerRedisRepository) RemoveWorker(workerId string) error {
@@ -363,6 +399,22 @@ func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
 	return workers, nil
 }
 
+func (r *WorkerRedisRepository) GetAllDelayedWorkers() ([]*types.Worker, error) {
+	workers, err := r.getWorkers(false)
+	if err != nil {
+		return nil, err
+	}
+
+	delayedWorkers := []*types.Worker{}
+	for _, w := range workers {
+		if w.Status == types.WorkerStatusDelayed {
+			delayedWorkers = append(delayedWorkers, w)
+		}
+	}
+
+	return delayedWorkers, nil
+}
+
 func (r *WorkerRedisRepository) GetAllWorkersInPool(poolName string) ([]*types.Worker, error) {
 	workers, err := r.getWorkers(false)
 	if err != nil {
@@ -416,7 +468,7 @@ func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*typ
 }
 
 func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, CapacityUpdateType types.CapacityUpdateType) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3})
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 5})
 	if err != nil {
 		return err
 	}
@@ -480,16 +532,9 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 }
 
 func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {
-	// Serialize the ContainerRequest -> JSON
 	requestJSON, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("failed to serialize request: %w", err)
-	}
-
-	// Update the worker capacity first
-	err = r.UpdateWorkerCapacity(worker, request, types.RemoveCapacity)
-	if err != nil {
-		return err
 	}
 
 	// Push the serialized ContainerRequest
@@ -498,7 +543,20 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 		return fmt.Errorf("failed to push request: %w", err)
 	}
 
-	log.Info().Str("container_id", request.ContainerId).Str("worker_id", worker.Id).Msg("request for container added")
+	if worker.Status == types.WorkerStatusDelayed {
+		err := r.AddWorkerReservation(worker.Id, request)
+		if err != nil {
+			return fmt.Errorf("failed to add worker reservation: %w", err)
+		}
+
+		return nil
+	}
+
+	// Update the worker capacity first
+	err = r.UpdateWorkerCapacity(worker, request, types.RemoveCapacity)
+	if err != nil {
+		return err
+	}
 
 	return nil
 }

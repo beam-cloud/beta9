@@ -125,6 +125,60 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorker(cpu int64, memory int6
 	return wpc.addWorkerWithId(workerId, cpu, memory, wpc.workerPoolConfig.GPUType, gpuCount)
 }
 
+func (wpc *LocalKubernetesWorkerPoolController) AddWorkerWithDelay(request *types.ContainerRequest, delay time.Duration) (*types.Worker, error) {
+	workerId := GenerateWorkerId()
+
+	log.Info().Str("worker_id", workerId).Msg("adding worker with delay")
+
+	worker := &types.Worker{
+		Id:           workerId,
+		Gpu:          wpc.workerPoolConfig.GPUType,
+		Status:       types.WorkerStatusDelayed,
+		Priority:     wpc.workerPoolConfig.Priority,
+		Runtime:      wpc.workerPoolConfig.ContainerRuntime,
+		BuildVersion: wpc.config.Worker.ImageTag,
+		Preemptable:  wpc.workerPoolConfig.Preemptable,
+	}
+
+	// Add the worker state
+	if err := wpc.workerRepo.AddWorker(worker); err != nil {
+		log.Error().Err(err).Msg("unable to create worker")
+		return nil, err
+	}
+
+	go func() {
+		time.Sleep(delay)
+
+		log.Info().Str("worker_id", workerId).Msg("allocating worker with capacity reservation")
+
+		requests, err := wpc.workerRepo.GetWorkerReservations(workerId)
+		if err != nil {
+			log.Error().Err(err).Msg("unable to get worker reservations")
+			return
+		}
+
+		totalCpu := int64(0)
+		totalMemory := int64(0)
+		totalGpuCount := uint32(0)
+
+		for _, request := range requests {
+			totalCpu += request.Cpu
+			totalMemory += request.Memory
+			totalGpuCount += request.GpuCount
+		}
+
+		// TODO: update worker capacity
+		_, err = wpc.addWorkerWithId(workerId, totalCpu, totalMemory, wpc.workerPoolConfig.GPUType, totalGpuCount)
+		if err != nil {
+			log.Error().Err(err).Msg("unable to add worker")
+			return
+		}
+
+	}()
+
+	return worker, nil
+}
+
 func (wpc *LocalKubernetesWorkerPoolController) AddWorkerToMachine(cpu int64, memory int64, gpuType string, gpuCount uint32, machineId string) (*types.Worker, error) {
 	return nil, errors.New("unimplemented")
 }
