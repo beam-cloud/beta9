@@ -24,6 +24,12 @@ const (
 	requestProcessingInterval time.Duration = 100 * time.Millisecond
 )
 
+const (
+	maxCpuPerWorker      int64  = 1000
+	maxMemoryPerWorker   int64  = 1000 * 1024 * 1024
+	maxGpuCountPerWorker uint32 = 1
+)
+
 type Scheduler struct {
 	ctx                   context.Context
 	config                types.AppConfig
@@ -292,7 +298,7 @@ func (s *Scheduler) StartProcessingRequests() {
 
 					threshold := int64(2)
 					if !request.RequiresGPU() && s.requestBacklog.Len() > threshold {
-						newWorker, err := c.AddWorkerWithDelay(request, time.Second*5)
+						newWorker, err := c.AddWorkerWithDelay(request, time.Second*1)
 						if err == nil {
 							log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added delayed worker")
 
@@ -528,8 +534,17 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	for _, worker := range workers {
 		isGpuWorker := worker.Gpu != ""
 
-		// Add delayed workers to the filtered workers
+		// Check delayed worker capacity requests
 		if worker.Status == types.WorkerStatusDelayed {
+			log.Info().Int64("total_cpu", worker.TotalCpu).Int64("total_memory", worker.TotalMemory).Uint32("total_gpu_count", worker.TotalGpuCount).Int64("request_cpu", request.Cpu).Int64("request_memory", request.Memory).Uint32("request_gpu_count", request.GpuCount).Msg("checking delayed worker capacity")
+
+			if worker.TotalCpu+request.Cpu > maxCpuPerWorker ||
+				worker.TotalMemory+request.Memory > maxMemoryPerWorker ||
+				worker.TotalGpuCount+request.GpuCount > maxGpuCountPerWorker {
+				log.Info().Int64("total_cpu", worker.TotalCpu).Int64("total_memory", worker.TotalMemory).Uint32("total_gpu_count", worker.TotalGpuCount).Int64("request_cpu", request.Cpu).Int64("request_memory", request.Memory).Uint32("request_gpu_count", request.GpuCount).Msg("delayed worker capacity request exceeded")
+				continue
+			}
+
 			filteredWorkers = append(filteredWorkers, worker)
 			continue
 		}
@@ -610,6 +625,11 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	filteredWorkers := filterWorkersByPoolSelector(workers, request)     // Filter workers by pool selector
 	filteredWorkers = filterWorkersByResources(filteredWorkers, request) // Filter workers resource requirements
 	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)     // Filter workers by flags
+
+	log.Info().Int("filtered_workers", len(filteredWorkers)).Msg("filtered workers")
+	for _, worker := range filteredWorkers {
+		log.Info().Str("worker_id", worker.Id).Int64("total_cpu", worker.TotalCpu).Int64("total_memory", worker.TotalMemory).Uint32("total_gpu_count", worker.TotalGpuCount).Msg("filtered worker")
+	}
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}

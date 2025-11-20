@@ -453,6 +453,9 @@ type WorkerPoolJobSpecPoolSizingConfig struct {
 	DefaultWorkerMemory   string `key:"defaultWorkerMemory" json:"default_worker_memory"`
 	DefaultWorkerGpuType  string `key:"defaultWorkerGPUType" json:"default_worker_gpu_type"`
 	DefaultWorkerGpuCount string `key:"defaultWorkerGpuCount" json:"default_worker_gpu_count"`
+	MaxWorkerCPU          string `key:"maxWorkerCPU" json:"max_worker_cpu"`
+	MaxWorkerMemory       string `key:"maxWorkerMemory" json:"max_worker_memory"`
+	MaxWorkerGpuCount     string `key:"maxWorkerGpuCount" json:"max_worker_gpu_count"`
 	MinFreeCPU            string `key:"minFreeCPU" json:"min_free_cpu"`
 	MinFreeMemory         string `key:"minFreeMemory" json:"min_free_memory"`
 	MinFreeGPU            string `key:"minFreeGPU" json:"min_free_gpu"`

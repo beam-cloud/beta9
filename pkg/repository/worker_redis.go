@@ -408,6 +408,17 @@ func (r *WorkerRedisRepository) GetAllDelayedWorkers() ([]*types.Worker, error) 
 	delayedWorkers := []*types.Worker{}
 	for _, w := range workers {
 		if w.Status == types.WorkerStatusDelayed {
+			reservations, err := r.GetWorkerReservations(w.Id)
+			if err != nil {
+				return nil, err
+			}
+
+			for _, r := range reservations {
+				w.TotalCpu += r.Cpu
+				w.TotalMemory += r.Memory
+				w.TotalGpuCount += r.GpuCount
+			}
+
 			delayedWorkers = append(delayedWorkers, w)
 		}
 	}
