@@ -167,10 +167,15 @@ func (wpc *LocalKubernetesWorkerPoolController) AddWorkerWithDelay(request *type
 			totalGpuCount += request.GpuCount
 		}
 
-		// TODO: update worker capacity
 		_, err = wpc.addWorkerWithId(workerId, totalCpu, totalMemory, wpc.workerPoolConfig.GPUType, totalGpuCount)
 		if err != nil {
 			log.Error().Err(err).Msg("unable to add worker")
+			return
+		}
+
+		err = wpc.workerRepo.BatchUpdateWorkerCapacity(workerId, requests)
+		if err != nil {
+			log.Error().Err(err).Msg("unable to update worker capacity")
 			return
 		}
 

@@ -467,12 +467,38 @@ func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*typ
 	return machineWorkers, nil
 }
 
-func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, CapacityUpdateType types.CapacityUpdateType) error {
-	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 5})
+func (r *WorkerRedisRepository) BatchUpdateWorkerCapacity(workerId string, requests []*types.ContainerRequest) error {
+	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(workerId), common.RedisLockOptions{TtlS: 10, Retries: 5})
 	if err != nil {
 		return err
 	}
-	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
+	defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(workerId))
+
+	key := common.RedisKeys.SchedulerWorkerState(workerId)
+
+	worker, err := r.getWorkerFromKey(key)
+	if err != nil {
+		return fmt.Errorf("failed to get worker state <%v>: %v", key, err)
+	}
+
+	for _, request := range requests {
+		err := r.UpdateWorkerCapacity(worker, request, types.RemoveCapacity, false)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, CapacityUpdateType types.CapacityUpdateType, lock bool) error {
+	if lock {
+		err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 5})
+		if err != nil {
+			return err
+		}
+		defer r.lock.Release(common.RedisKeys.SchedulerWorkerLock(worker.Id))
+	}
 
 	key := common.RedisKeys.SchedulerWorkerState(worker.Id)
 
@@ -553,7 +579,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	}
 
 	// Update the worker capacity first
-	err = r.UpdateWorkerCapacity(worker, request, types.RemoveCapacity)
+	err = r.UpdateWorkerCapacity(worker, request, types.RemoveCapacity, true)
 	if err != nil {
 		return err
 	}

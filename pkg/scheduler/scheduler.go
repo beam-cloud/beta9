@@ -370,6 +370,7 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 
 	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
 	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
+
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 

@@ -156,7 +156,7 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 		Gpu:         "A10G",
 		GpuCount:    1,
 	}
-	err = repo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
+	err = repo.UpdateWorkerCapacity(worker, request, types.AddCapacity, true)
 	assert.Nil(t, err)
 
 	// Retrieve the updated worker
@@ -176,7 +176,7 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 		Gpu:         "A10G",
 		GpuCount:    1,
 	}
-	err = repo.UpdateWorkerCapacity(updatedWorker, request, types.RemoveCapacity)
+	err = repo.UpdateWorkerCapacity(updatedWorker, request, types.RemoveCapacity, true)
 	assert.Nil(t, err)
 
 	// Retrieve the worker again
@@ -224,7 +224,7 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 		Memory:      100,
 		Gpu:         "",
 	}
-	err = repo.UpdateWorkerCapacity(newWorker, firstRequest, types.RemoveCapacity)
+	err = repo.UpdateWorkerCapacity(newWorker, firstRequest, types.RemoveCapacity, true)
 	assert.Nil(t, err)
 
 	// Retrieve the updated worker
@@ -243,7 +243,7 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 		Memory:      200,
 		Gpu:         "",
 	}
-	err = repo.UpdateWorkerCapacity(updatedWorker, secondRequest, types.RemoveCapacity)
+	err = repo.UpdateWorkerCapacity(updatedWorker, secondRequest, types.RemoveCapacity, true)
 	assert.Nil(t, err)
 
 	updatedWorker, err = repo.GetWorkerById(newWorker.Id)
@@ -256,7 +256,7 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 		Memory:      100,
 		Gpu:         "",
 	}
-	err = repo.UpdateWorkerCapacity(updatedWorker, thirdRequest, types.RemoveCapacity)
+	err = repo.UpdateWorkerCapacity(updatedWorker, thirdRequest, types.RemoveCapacity, true)
 	assert.Nil(t, err)
 
 	// Retrieve the worker again
