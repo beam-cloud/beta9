@@ -356,19 +356,12 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 // attachImageCredentials fetches and attaches OCI credentials to a container request
 func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) error {
 	if request.ImageId == "" {
-		log.Debug().
-			Str("container_id", request.ContainerId).
-			Msg("no image ID, skipping credential attachment")
 		return nil
 	}
 
 	// Skip credential attachment for build containers - they already have credentials
 	// in BuildOptions.SourceImageCreds for pulling the base image during the build
 	if strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix) {
-		log.Debug().
-			Str("container_id", request.ContainerId).
-			Str("image_id", request.ImageId).
-			Msg("build container, skipping credential attachment")
 		return nil
 	}
 
@@ -425,10 +418,6 @@ func (s *Scheduler) attachBuildRegistryCredentials(request *types.ContainerReque
 	// Check if we have credentials configured for the build registry
 	buildRegistryCredentials := s.config.ImageService.BuildRegistryCredentials
 	if buildRegistryCredentials.Type == "" || len(buildRegistryCredentials.Credentials) == 0 {
-		log.Debug().
-			Str("container_id", request.ContainerId).
-			Str("build_registry", buildRegistry).
-			Msg("no build registry credentials in config, will use ambient auth")
 		return nil
 	}
 
