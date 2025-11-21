@@ -1022,6 +1022,35 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 	return &pb.ContainerSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err
 }
 
+func (s *ContainerRuntimeServer) ContainerSandboxUpdateNetworkPermissions(ctx context.Context, in *pb.ContainerSandboxUpdateNetworkPermissionsRequest) (*pb.ContainerSandboxUpdateNetworkPermissionsResponse, error) {
+	_, exists := s.containerInstances.Get(in.ContainerId)
+	if !exists {
+		return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: false, ErrorMsg: "Container not found"}, nil
+	}
+
+	err := s.waitForContainer(ctx, in.ContainerId)
+	if err != nil {
+		return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	// Create a container request with the new network permissions
+	request := &types.ContainerRequest{
+		BlockNetwork: in.BlockNetwork,
+		AllowList:    in.AllowList,
+	}
+
+	// Update network permissions via the network manager
+	err = s.containerNetworkManager.UpdateNetworkPermissions(in.ContainerId, request)
+	if err != nil {
+		log.Error().Str("container_id", in.ContainerId).Msgf("failed to update network permissions: %v", err)
+		return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: false, ErrorMsg: err.Error()}, nil
+	}
+
+	log.Info().Str("container_id", in.ContainerId).Msgf("updated network permissions: block_network=%v, allow_list=%v", in.BlockNetwork, in.AllowList)
+
+	return &pb.ContainerSandboxUpdateNetworkPermissionsResponse{Ok: true}, nil
+}
+
 func (s *ContainerRuntimeServer) ContainerSandboxReplaceInFiles(ctx context.Context, in *pb.ContainerSandboxReplaceInFilesRequest) (*pb.ContainerSandboxReplaceInFilesResponse, error) {
 	instance, exists := s.containerInstances.Get(in.ContainerId)
 	if !exists {

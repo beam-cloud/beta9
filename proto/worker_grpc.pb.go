@@ -19,30 +19,31 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	ContainerService_ContainerKill_FullMethodName                    = "/container.ContainerService/ContainerKill"
-	ContainerService_ContainerStatus_FullMethodName                  = "/container.ContainerService/ContainerStatus"
-	ContainerService_ContainerExec_FullMethodName                    = "/container.ContainerService/ContainerExec"
-	ContainerService_ContainerStreamLogs_FullMethodName              = "/container.ContainerService/ContainerStreamLogs"
-	ContainerService_ContainerArchive_FullMethodName                 = "/container.ContainerService/ContainerArchive"
-	ContainerService_ContainerCheckpoint_FullMethodName              = "/container.ContainerService/ContainerCheckpoint"
-	ContainerService_ContainerSyncWorkspace_FullMethodName           = "/container.ContainerService/ContainerSyncWorkspace"
-	ContainerService_ContainerSandboxExec_FullMethodName             = "/container.ContainerService/ContainerSandboxExec"
-	ContainerService_ContainerSandboxStatus_FullMethodName           = "/container.ContainerService/ContainerSandboxStatus"
-	ContainerService_ContainerSandboxStdout_FullMethodName           = "/container.ContainerService/ContainerSandboxStdout"
-	ContainerService_ContainerSandboxStderr_FullMethodName           = "/container.ContainerService/ContainerSandboxStderr"
-	ContainerService_ContainerSandboxKill_FullMethodName             = "/container.ContainerService/ContainerSandboxKill"
-	ContainerService_ContainerSandboxListFiles_FullMethodName        = "/container.ContainerService/ContainerSandboxListFiles"
-	ContainerService_ContainerSandboxUploadFile_FullMethodName       = "/container.ContainerService/ContainerSandboxUploadFile"
-	ContainerService_ContainerSandboxDownloadFile_FullMethodName     = "/container.ContainerService/ContainerSandboxDownloadFile"
-	ContainerService_ContainerSandboxStatFile_FullMethodName         = "/container.ContainerService/ContainerSandboxStatFile"
-	ContainerService_ContainerSandboxDeleteFile_FullMethodName       = "/container.ContainerService/ContainerSandboxDeleteFile"
-	ContainerService_ContainerSandboxCreateDirectory_FullMethodName  = "/container.ContainerService/ContainerSandboxCreateDirectory"
-	ContainerService_ContainerSandboxDeleteDirectory_FullMethodName  = "/container.ContainerService/ContainerSandboxDeleteDirectory"
-	ContainerService_ContainerSandboxExposePort_FullMethodName       = "/container.ContainerService/ContainerSandboxExposePort"
-	ContainerService_ContainerSandboxReplaceInFiles_FullMethodName   = "/container.ContainerService/ContainerSandboxReplaceInFiles"
-	ContainerService_ContainerSandboxFindInFiles_FullMethodName      = "/container.ContainerService/ContainerSandboxFindInFiles"
-	ContainerService_ContainerSandboxListExposedPorts_FullMethodName = "/container.ContainerService/ContainerSandboxListExposedPorts"
-	ContainerService_ContainerSandboxListProcesses_FullMethodName    = "/container.ContainerService/ContainerSandboxListProcesses"
+	ContainerService_ContainerKill_FullMethodName                            = "/container.ContainerService/ContainerKill"
+	ContainerService_ContainerStatus_FullMethodName                          = "/container.ContainerService/ContainerStatus"
+	ContainerService_ContainerExec_FullMethodName                            = "/container.ContainerService/ContainerExec"
+	ContainerService_ContainerStreamLogs_FullMethodName                      = "/container.ContainerService/ContainerStreamLogs"
+	ContainerService_ContainerArchive_FullMethodName                         = "/container.ContainerService/ContainerArchive"
+	ContainerService_ContainerCheckpoint_FullMethodName                      = "/container.ContainerService/ContainerCheckpoint"
+	ContainerService_ContainerSyncWorkspace_FullMethodName                   = "/container.ContainerService/ContainerSyncWorkspace"
+	ContainerService_ContainerSandboxExec_FullMethodName                     = "/container.ContainerService/ContainerSandboxExec"
+	ContainerService_ContainerSandboxStatus_FullMethodName                   = "/container.ContainerService/ContainerSandboxStatus"
+	ContainerService_ContainerSandboxStdout_FullMethodName                   = "/container.ContainerService/ContainerSandboxStdout"
+	ContainerService_ContainerSandboxStderr_FullMethodName                   = "/container.ContainerService/ContainerSandboxStderr"
+	ContainerService_ContainerSandboxKill_FullMethodName                     = "/container.ContainerService/ContainerSandboxKill"
+	ContainerService_ContainerSandboxListFiles_FullMethodName                = "/container.ContainerService/ContainerSandboxListFiles"
+	ContainerService_ContainerSandboxUploadFile_FullMethodName               = "/container.ContainerService/ContainerSandboxUploadFile"
+	ContainerService_ContainerSandboxDownloadFile_FullMethodName             = "/container.ContainerService/ContainerSandboxDownloadFile"
+	ContainerService_ContainerSandboxStatFile_FullMethodName                 = "/container.ContainerService/ContainerSandboxStatFile"
+	ContainerService_ContainerSandboxDeleteFile_FullMethodName               = "/container.ContainerService/ContainerSandboxDeleteFile"
+	ContainerService_ContainerSandboxCreateDirectory_FullMethodName          = "/container.ContainerService/ContainerSandboxCreateDirectory"
+	ContainerService_ContainerSandboxDeleteDirectory_FullMethodName          = "/container.ContainerService/ContainerSandboxDeleteDirectory"
+	ContainerService_ContainerSandboxExposePort_FullMethodName               = "/container.ContainerService/ContainerSandboxExposePort"
+	ContainerService_ContainerSandboxUpdateNetworkPermissions_FullMethodName = "/container.ContainerService/ContainerSandboxUpdateNetworkPermissions"
+	ContainerService_ContainerSandboxReplaceInFiles_FullMethodName           = "/container.ContainerService/ContainerSandboxReplaceInFiles"
+	ContainerService_ContainerSandboxFindInFiles_FullMethodName              = "/container.ContainerService/ContainerSandboxFindInFiles"
+	ContainerService_ContainerSandboxListExposedPorts_FullMethodName         = "/container.ContainerService/ContainerSandboxListExposedPorts"
+	ContainerService_ContainerSandboxListProcesses_FullMethodName            = "/container.ContainerService/ContainerSandboxListProcesses"
 )
 
 // ContainerServiceClient is the client API for ContainerService service.
@@ -69,6 +70,7 @@ type ContainerServiceClient interface {
 	ContainerSandboxCreateDirectory(ctx context.Context, in *ContainerSandboxCreateDirectoryRequest, opts ...grpc.CallOption) (*ContainerSandboxCreateDirectoryResponse, error)
 	ContainerSandboxDeleteDirectory(ctx context.Context, in *ContainerSandboxDeleteDirectoryRequest, opts ...grpc.CallOption) (*ContainerSandboxDeleteDirectoryResponse, error)
 	ContainerSandboxExposePort(ctx context.Context, in *ContainerSandboxExposePortRequest, opts ...grpc.CallOption) (*ContainerSandboxExposePortResponse, error)
+	ContainerSandboxUpdateNetworkPermissions(ctx context.Context, in *ContainerSandboxUpdateNetworkPermissionsRequest, opts ...grpc.CallOption) (*ContainerSandboxUpdateNetworkPermissionsResponse, error)
 	ContainerSandboxReplaceInFiles(ctx context.Context, in *ContainerSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxReplaceInFilesResponse, error)
 	ContainerSandboxFindInFiles(ctx context.Context, in *ContainerSandboxFindInFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxFindInFilesResponse, error)
 	ContainerSandboxListExposedPorts(ctx context.Context, in *ContainerSandboxListExposedPortsRequest, opts ...grpc.CallOption) (*ContainerSandboxListExposedPortsResponse, error)
@@ -309,6 +311,15 @@ func (c *containerServiceClient) ContainerSandboxExposePort(ctx context.Context,
 	return out, nil
 }
 
+func (c *containerServiceClient) ContainerSandboxUpdateNetworkPermissions(ctx context.Context, in *ContainerSandboxUpdateNetworkPermissionsRequest, opts ...grpc.CallOption) (*ContainerSandboxUpdateNetworkPermissionsResponse, error) {
+	out := new(ContainerSandboxUpdateNetworkPermissionsResponse)
+	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxUpdateNetworkPermissions_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *containerServiceClient) ContainerSandboxReplaceInFiles(ctx context.Context, in *ContainerSandboxReplaceInFilesRequest, opts ...grpc.CallOption) (*ContainerSandboxReplaceInFilesResponse, error) {
 	out := new(ContainerSandboxReplaceInFilesResponse)
 	err := c.cc.Invoke(ctx, ContainerService_ContainerSandboxReplaceInFiles_FullMethodName, in, out, opts...)
@@ -369,6 +380,7 @@ type ContainerServiceServer interface {
 	ContainerSandboxCreateDirectory(context.Context, *ContainerSandboxCreateDirectoryRequest) (*ContainerSandboxCreateDirectoryResponse, error)
 	ContainerSandboxDeleteDirectory(context.Context, *ContainerSandboxDeleteDirectoryRequest) (*ContainerSandboxDeleteDirectoryResponse, error)
 	ContainerSandboxExposePort(context.Context, *ContainerSandboxExposePortRequest) (*ContainerSandboxExposePortResponse, error)
+	ContainerSandboxUpdateNetworkPermissions(context.Context, *ContainerSandboxUpdateNetworkPermissionsRequest) (*ContainerSandboxUpdateNetworkPermissionsResponse, error)
 	ContainerSandboxReplaceInFiles(context.Context, *ContainerSandboxReplaceInFilesRequest) (*ContainerSandboxReplaceInFilesResponse, error)
 	ContainerSandboxFindInFiles(context.Context, *ContainerSandboxFindInFilesRequest) (*ContainerSandboxFindInFilesResponse, error)
 	ContainerSandboxListExposedPorts(context.Context, *ContainerSandboxListExposedPortsRequest) (*ContainerSandboxListExposedPortsResponse, error)
@@ -439,6 +451,9 @@ func (UnimplementedContainerServiceServer) ContainerSandboxDeleteDirectory(conte
 }
 func (UnimplementedContainerServiceServer) ContainerSandboxExposePort(context.Context, *ContainerSandboxExposePortRequest) (*ContainerSandboxExposePortResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxExposePort not implemented")
+}
+func (UnimplementedContainerServiceServer) ContainerSandboxUpdateNetworkPermissions(context.Context, *ContainerSandboxUpdateNetworkPermissionsRequest) (*ContainerSandboxUpdateNetworkPermissionsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxUpdateNetworkPermissions not implemented")
 }
 func (UnimplementedContainerServiceServer) ContainerSandboxReplaceInFiles(context.Context, *ContainerSandboxReplaceInFilesRequest) (*ContainerSandboxReplaceInFilesResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ContainerSandboxReplaceInFiles not implemented")
@@ -831,6 +846,24 @@ func _ContainerService_ContainerSandboxExposePort_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ContainerService_ContainerSandboxUpdateNetworkPermissions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ContainerSandboxUpdateNetworkPermissionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ContainerServiceServer).ContainerSandboxUpdateNetworkPermissions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ContainerService_ContainerSandboxUpdateNetworkPermissions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ContainerServiceServer).ContainerSandboxUpdateNetworkPermissions(ctx, req.(*ContainerSandboxUpdateNetworkPermissionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ContainerService_ContainerSandboxReplaceInFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ContainerSandboxReplaceInFilesRequest)
 	if err := dec(in); err != nil {
@@ -981,6 +1014,10 @@ var ContainerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ContainerSandboxExposePort",
 			Handler:    _ContainerService_ContainerSandboxExposePort_Handler,
+		},
+		{
+			MethodName: "ContainerSandboxUpdateNetworkPermissions",
+			Handler:    _ContainerService_ContainerSandboxUpdateNetworkPermissions_Handler,
 		},
 		{
 			MethodName: "ContainerSandboxReplaceInFiles",

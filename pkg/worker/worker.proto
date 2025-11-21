@@ -42,6 +42,8 @@ service ContainerService {
       returns (ContainerSandboxDeleteDirectoryResponse) {}
   rpc ContainerSandboxExposePort(ContainerSandboxExposePortRequest)
       returns (ContainerSandboxExposePortResponse) {}
+  rpc ContainerSandboxUpdateNetworkPermissions(ContainerSandboxUpdateNetworkPermissionsRequest)
+      returns (ContainerSandboxUpdateNetworkPermissionsResponse) {}
   rpc ContainerSandboxReplaceInFiles(ContainerSandboxReplaceInFilesRequest)
       returns (ContainerSandboxReplaceInFilesResponse) {}
   rpc ContainerSandboxFindInFiles(ContainerSandboxFindInFilesRequest)
@@ -277,4 +279,15 @@ message ContainerSandboxListProcessesResponse {
   bool ok = 1;
   string error_msg = 2;
   repeated types.ProcessInfo processes = 3;
+}
+
+message ContainerSandboxUpdateNetworkPermissionsRequest {
+  string container_id = 1;
+  bool block_network = 2;
+  repeated string allow_list = 3;
+}
+
+message ContainerSandboxUpdateNetworkPermissionsResponse {
+  bool ok = 1;
+  string error_msg = 2;
 }
