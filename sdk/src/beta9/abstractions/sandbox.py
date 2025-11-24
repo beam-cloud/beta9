@@ -118,6 +118,10 @@ class Sandbox(Pod):
                 # Docker daemon will be automatically started
                 instance.docker.run("hello-world")
                 ```
+        ports (Optional[List[int]]):
+            List of ports to expose from the sandbox. When specified, these ports will be accessible
+            via public URLs upon sandbox creation. Default is an empty list. You can also dynamically
+            expose ports at runtime using `instance.expose_port(port)`.
 
     Example:
         ```python
@@ -160,6 +164,7 @@ class Sandbox(Pod):
         block_network: bool = False,
         allow_list: Optional[List[str]] = None,
         docker_enabled: bool = False,
+        ports: Optional[List[int]] = [],
     ):
         self.debug_buffer = io.StringIO()
         self.sync_local_dir = sync_local_dir
@@ -179,6 +184,7 @@ class Sandbox(Pod):
             block_network=block_network,
             allow_list=allow_list,
             docker_enabled=docker_enabled,
+            ports=ports,
         )
 
     def debug(self):
