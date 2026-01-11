@@ -3422,14 +3422,34 @@ class AsyncDockerResult:
     async def logs(self):
         """
         Async generator for streaming logs line by line.
+
+        Yields log lines as they become available, providing true streaming behavior.
         """
+        queue: asyncio.Queue = asyncio.Queue()
+        sentinel = object()  # Marker for end of stream
+        loop = asyncio.get_running_loop()
 
-        def _get_logs():
-            return list(self._sync.logs())
+        def _producer():
+            """Run in thread: iterate sync generator and push to queue."""
+            try:
+                for line in self._sync.logs():
+                    loop.call_soon_threadsafe(queue.put_nowait, line)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
-        lines = await asyncio.to_thread(_get_logs)
-        for line in lines:
-            yield line
+        # Start producer in background thread
+        producer_task = loop.run_in_executor(None, _producer)
+
+        # Consume from queue, yielding items as they arrive
+        try:
+            while True:
+                item = await queue.get()
+                if item is sentinel:
+                    break
+                yield item
+        finally:
+            # Ensure producer completes
+            await producer_task
 
     @property
     async def output(self) -> str:
