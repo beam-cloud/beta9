@@ -54,6 +54,7 @@ from ..clients.pod import (
 from ..env import is_remote
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias
+from ..utils import retry_on_transient_error
 
 
 class Sandbox(Pod):
@@ -871,14 +872,18 @@ class SandboxProcessManager:
         command = list(args) if not isinstance(args[0], list) else args[0]
         shell_command = " ".join(shlex.quote(arg) for arg in command)
 
-        response = self.sandbox_instance.stub.sandbox_exec(
-            PodSandboxExecRequest(
-                container_id=self.sandbox_instance.container_id,
-                command=shell_command,
-                cwd=cwd,
-                env=env,
+        def _do_exec():
+            return self.sandbox_instance.stub.sandbox_exec(
+                PodSandboxExecRequest(
+                    container_id=self.sandbox_instance.container_id,
+                    command=shell_command,
+                    cwd=cwd,
+                    env=env,
+                )
             )
-        )
+
+        response = retry_on_transient_error(_do_exec)
+
         if not response.ok or response.pid <= 0:
             raise SandboxProcessError(response.error_msg)
 
@@ -1063,7 +1068,11 @@ class SandboxProcessStream:
         Returns:
             str: New output chunk, or empty string if no new output.
         """
-        output = self.fetch_fn()
+        try:
+            output = retry_on_transient_error(self.fetch_fn, max_retries=2, delay=0.2)
+        except Exception:
+            # On persistent failure, return empty to avoid blocking
+            return ""
 
         if output == self._last_output:
             return ""
@@ -1220,9 +1229,15 @@ class SandboxProcess:
                 time.sleep(1)
             ```
         """
-        response = self.sandbox_instance.stub.sandbox_status(
-            PodSandboxStatusRequest(container_id=self.sandbox_instance.container_id, pid=self.pid)
-        )
+
+        def _get_status():
+            return self.sandbox_instance.stub.sandbox_status(
+                PodSandboxStatusRequest(
+                    container_id=self.sandbox_instance.container_id, pid=self.pid
+                )
+            )
+
+        response = retry_on_transient_error(_get_status)
 
         if not response.ok:
             raise SandboxProcessError(response.error_msg)
@@ -1244,14 +1259,17 @@ class SandboxProcess:
             print(f"STDOUT: {stdout_content}")
             ```
         """
-        return SandboxProcessStream(
-            self,
-            lambda: self.sandbox_instance.stub.sandbox_stdout(
-                PodSandboxStdoutRequest(
-                    container_id=self.sandbox_instance.container_id, pid=self.pid
-                )
-            ).stdout,
-        )
+        # Cache the stream to preserve buffer state across multiple accesses
+        if not hasattr(self, "_stdout_stream"):
+            self._stdout_stream = SandboxProcessStream(
+                self,
+                lambda: self.sandbox_instance.stub.sandbox_stdout(
+                    PodSandboxStdoutRequest(
+                        container_id=self.sandbox_instance.container_id, pid=self.pid
+                    )
+                ).stdout,
+            )
+        return self._stdout_stream
 
     @property
     def stderr(self):
@@ -1268,14 +1286,17 @@ class SandboxProcess:
             print(f"STDERR: {stderr_content}")
             ```
         """
-        return SandboxProcessStream(
-            self,
-            lambda: self.sandbox_instance.stub.sandbox_stderr(
-                PodSandboxStderrRequest(
-                    container_id=self.sandbox_instance.container_id, pid=self.pid
-                )
-            ).stderr,
-        )
+        # Cache the stream to preserve buffer state across multiple accesses
+        if not hasattr(self, "_stderr_stream"):
+            self._stderr_stream = SandboxProcessStream(
+                self,
+                lambda: self.sandbox_instance.stub.sandbox_stderr(
+                    PodSandboxStderrRequest(
+                        container_id=self.sandbox_instance.container_id, pid=self.pid
+                    )
+                ).stderr,
+            )
+        return self._stderr_stream
 
     @property
     def logs(self):
@@ -1301,6 +1322,9 @@ class SandboxProcess:
             all_logs = process.logs.read()
             ```
         """
+        # Cache to preserve state across multiple accesses
+        if hasattr(self, "_logs_stream"):
+            return self._logs_stream
 
         class CombinedStream:
             def __init__(self, process: "SandboxProcess"):
@@ -1369,7 +1393,8 @@ class SandboxProcess:
                 stderr_data = self._stderr.read()
                 return stdout_data + stderr_data
 
-        return CombinedStream(self)
+        self._logs_stream = CombinedStream(self)
+        return self._logs_stream
 
     @property
     def aio(self) -> "AsyncSandboxProcess":
@@ -1394,6 +1419,9 @@ class SandboxProcess:
     def __getstate__(self):
         state = self.__dict__.copy()
         state.pop("_aio", None)
+        state.pop("_stdout_stream", None)
+        state.pop("_stderr_stream", None)
+        state.pop("_logs_stream", None)
         return state
 
     def __setstate__(self, state):
@@ -2949,6 +2977,8 @@ class AsyncSandboxProcessStream:
         ```
     """
 
+    _STOP_SENTINEL = object()
+
     def __init__(self, sync_stream: "SandboxProcessStream"):
         self._sync = sync_stream
 
@@ -2956,12 +2986,19 @@ class AsyncSandboxProcessStream:
         """Return an async iterator for reading the stream line by line."""
         return self
 
+    def _get_next(self):
+        """Get next item, returning sentinel on StopIteration."""
+        try:
+            return self._sync.__next__()
+        except StopIteration:
+            return AsyncSandboxProcessStream._STOP_SENTINEL
+
     async def __anext__(self):
         """Get the next line from the stream asynchronously."""
-        try:
-            return await asyncio.to_thread(self._sync.__next__)
-        except StopIteration:
+        result = await asyncio.to_thread(self._get_next)
+        if result is AsyncSandboxProcessStream._STOP_SENTINEL:
             raise StopAsyncIteration
+        return result
 
     async def read(self) -> str:
         """Return whatever output is currently available in the stream."""
@@ -2979,6 +3016,8 @@ class AsyncCombinedStream:
         ```
     """
 
+    _STOP_SENTINEL = object()
+
     def __init__(self, sync_process: "SandboxProcess"):
         self._sync_process = sync_process
         self._sync_logs = None
@@ -2988,15 +3027,21 @@ class AsyncCombinedStream:
             self._sync_logs = self._sync_process.logs
         return self._sync_logs
 
+    def _get_next(self):
+        """Get next item, returning sentinel on StopIteration."""
+        try:
+            return self._get_sync_logs().__next__()
+        except StopIteration:
+            return AsyncCombinedStream._STOP_SENTINEL
+
     def __aiter__(self):
         return self
 
     async def __anext__(self):
-        try:
-            sync_logs = self._get_sync_logs()
-            return await asyncio.to_thread(sync_logs.__next__)
-        except StopIteration:
+        result = await asyncio.to_thread(self._get_next)
+        if result is AsyncCombinedStream._STOP_SENTINEL:
             raise StopAsyncIteration
+        return result
 
     async def read(self) -> str:
         """Read all combined output."""
@@ -3096,7 +3141,10 @@ class AsyncSandboxProcess:
         Returns:
             AsyncSandboxProcessStream: An async stream object for reading stdout.
         """
-        return AsyncSandboxProcessStream(self._sync.stdout)
+        # Cache to preserve buffer state across multiple accesses
+        if not hasattr(self, "_stdout_stream"):
+            self._stdout_stream = AsyncSandboxProcessStream(self._sync.stdout)
+        return self._stdout_stream
 
     @property
     def stderr(self) -> "AsyncSandboxProcessStream":
@@ -3106,7 +3154,10 @@ class AsyncSandboxProcess:
         Returns:
             AsyncSandboxProcessStream: An async stream object for reading stderr.
         """
-        return AsyncSandboxProcessStream(self._sync.stderr)
+        # Cache to preserve buffer state across multiple accesses
+        if not hasattr(self, "_stderr_stream"):
+            self._stderr_stream = AsyncSandboxProcessStream(self._sync.stderr)
+        return self._stderr_stream
 
     @property
     def logs(self) -> "AsyncCombinedStream":
@@ -3116,7 +3167,10 @@ class AsyncSandboxProcess:
         Returns:
             AsyncCombinedStream: An async stream object that combines stdout and stderr.
         """
-        return AsyncCombinedStream(self._sync)
+        # Cache to preserve state across multiple accesses
+        if not hasattr(self, "_logs_stream"):
+            self._logs_stream = AsyncCombinedStream(self._sync)
+        return self._logs_stream
 
 
 class AsyncSandboxProcessResponse:

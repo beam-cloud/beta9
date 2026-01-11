@@ -2,9 +2,46 @@ import importlib
 import inspect
 import os
 import sys
+import time
 from pathlib import Path
 
 from . import terminal
+
+
+def retry_on_transient_error(fn, max_retries: int = 3, delay: float = 0.5):
+    """
+    Retry a function on transient gRPC/connection errors.
+    Returns the result or raises the last exception.
+
+    Args:
+        fn: The function to call.
+        max_retries: Maximum number of retry attempts. Default is 3.
+        delay: Base delay in seconds between retries (uses exponential backoff). Default is 0.5.
+
+    Returns:
+        The result of the function call.
+
+    Raises:
+        The last exception encountered if all retries fail.
+    """
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            error_str = str(e).lower()
+            # Retry on transient connection errors
+            if any(
+                keyword in error_str
+                for keyword in ["connection", "unavailable", "timeout", "reset", "eof"]
+            ):
+                last_exception = e
+                if attempt < max_retries - 1:
+                    time.sleep(delay * (attempt + 1))  # Exponential backoff
+                    continue
+            # Non-transient error, raise immediately
+            raise
+    raise last_exception
 
 
 class TempFile:
