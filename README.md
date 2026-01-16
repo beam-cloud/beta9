@@ -300,3 +300,14 @@ Beta9 uses **Tailscale** for secure mesh networking between components.
   - Internal management endpoints (inference control, keepalives) are bound to `0.0.0.0` but are effectively protected because the nodes are only reachable via the private Tailscale network.
   - The Gateway uses `hostNetwork: true` to expose these services directly to the mesh.
   - **Note:** Do not expose the Gateway's ports (1993, 1994) to the public internet. Access should only be possible via the Tailscale mesh or a secure ingress.
+
+## Known Limitations & Roadmap
+
+The following security enhancements are planned for the upcoming **Security Epic** but are currently mitigated by the network architecture:
+
+1.  **Inference Endpoint Auth (`beta9-b1j`)**: Direct inference endpoints (port 11434/8000) currently do not require per-request authentication.
+    - *Mitigation*: These ports are only accessible within the encrypted Tailscale mesh. Workers are isolated from the public internet.
+2.  **RBAC Scoping (`beta9-7aw`)**: The k3d manifest uses broad ClusterRole permissions for simplicity during beta.
+    - *Mitigation*: The cluster is intended for single-tenant use. Scoped RBAC profiles will be introduced in Phase 3.
+3.  **Token Binding (`beta9-bx0`)**: Keepalive tokens are not strictly bound to machine IDs in the current implementation.
+    - *Mitigation*: Tokens are secret and transmitted over encrypted channels. Token binding will be enforced in the next auth refactor.
