@@ -15,11 +15,7 @@ from ..abstractions.base.runner import (
 from ..abstractions.image import Image
 from ..abstractions.pod import Pod
 from ..abstractions.volume import CloudBucket, Volume
-from ..clients.gateway import (
-    GatewayServiceStub,
-    StopContainerRequest,
-    StopContainerResponse,
-)
+from ..clients.gateway import GatewayServiceStub, StopContainerRequest, StopContainerResponse
 from ..clients.pod import (
     CreatePodRequest,
     CreatePodResponse,
@@ -56,11 +52,7 @@ from ..clients.pod import (
     PodServiceStub,
 )
 from ..env import is_remote
-from ..exceptions import (
-    SandboxConnectionError,
-    SandboxFileSystemError,
-    SandboxProcessError,
-)
+from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias
 from ..utils import retry_on_transient_error
 
@@ -272,18 +264,14 @@ class Sandbox(Pod):
 
         self.stub_id = create_response.stub_id
 
-        terminal.header(
-            f"Sandbox created successfully ===> {create_response.container_id}"
-        )
+        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
 
         if self.keep_warm_seconds < 0:
             terminal.header(
                 "This sandbox has no timeout, it will run until it is shut down manually."
             )
         else:
-            terminal.header(
-                f"This sandbox will timeout after {self.keep_warm_seconds} seconds."
-            )
+            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
 
         return SandboxInstance(
             stub_id=self.stub_id,
@@ -335,18 +323,14 @@ class Sandbox(Pod):
         if not create_response.ok:
             raise SandboxConnectionError(create_response.error_msg)
 
-        terminal.header(
-            f"Sandbox created successfully ===> {create_response.container_id}"
-        )
+        terminal.header(f"Sandbox created successfully ===> {create_response.container_id}")
 
         if self.keep_warm_seconds < 0:
             terminal.header(
                 "This sandbox has no timeout, it will run until it is shut down manually."
             )
         else:
-            terminal.header(
-                f"This sandbox will timeout after {self.keep_warm_seconds} seconds."
-            )
+            terminal.header(f"This sandbox will timeout after {self.keep_warm_seconds} seconds.")
 
         return SandboxInstance(
             stub_id=self.stub_id,
@@ -414,11 +398,7 @@ class SandboxInstance(BaseAbstraction):
 
     def _cleanup(self):
         try:
-            if (
-                hasattr(self, "container_id")
-                and self.container_id
-                and not self.terminated
-            ):
+            if hasattr(self, "container_id") and self.container_id and not self.terminated:
                 if not is_remote():
                     terminal.warn(
                         f'WARNING: {self.container_id} is still running, to terminate use Sandbox().connect("{self.container_id}").terminate()'
@@ -467,9 +447,7 @@ class SandboxInstance(BaseAbstraction):
             print(f"Image created with ID: {image_id}")
             ```
         """
-        terminal.header(
-            f"Creating an image from sandbox filesystem: {self.container_id}"
-        )
+        terminal.header(f"Creating an image from sandbox filesystem: {self.container_id}")
 
         res: "PodSandboxCreateImageFromFilesystemResponse" = (
             self.stub.sandbox_create_image_from_filesystem(
@@ -501,9 +479,7 @@ class SandboxInstance(BaseAbstraction):
         terminal.header(f"Creating a memory snapshot of sandbox: {self.container_id}")
 
         res: "PodSandboxSnapshotMemoryResponse" = self.stub.sandbox_snapshot_memory(
-            PodSandboxSnapshotMemoryRequest(
-                stub_id=self.stub_id, container_id=self.container_id
-            )
+            PodSandboxSnapshotMemoryRequest(stub_id=self.stub_id, container_id=self.container_id)
         )
 
         if not res.ok:
@@ -651,9 +627,7 @@ class SandboxInstance(BaseAbstraction):
         )
 
         if not res.ok:
-            raise SandboxProcessError(
-                f"Failed to update network permissions: {res.error_msg}"
-            )
+            raise SandboxProcessError(f"Failed to update network permissions: {res.error_msg}")
 
     def list_urls(self) -> Dict[int, str]:
         """
@@ -940,9 +914,7 @@ class SandboxProcessManager:
         """
         processes: PodSandboxListProcessesResponse = (
             self.sandbox_instance.stub.sandbox_list_processes(
-                PodSandboxListProcessesRequest(
-                    container_id=self.sandbox_instance.container_id
-                )
+                PodSandboxListProcessesRequest(container_id=self.sandbox_instance.container_id)
             )
         )
         if not processes.ok:
@@ -1226,9 +1198,7 @@ class SandboxProcess:
             ```
         """
         response = self.sandbox_instance.stub.sandbox_kill(
-            PodSandboxKillRequest(
-                container_id=self.sandbox_instance.container_id, pid=self.pid
-            )
+            PodSandboxKillRequest(container_id=self.sandbox_instance.container_id, pid=self.pid)
         )
         if not response.ok:
             raise SandboxProcessError(response.error_msg)
@@ -1363,16 +1333,8 @@ class SandboxProcess:
                 self._stderr = process.stderr
                 self._queue = []
                 self._streams = {
-                    "stdout": {
-                        "stream": self._stdout,
-                        "buffer": "",
-                        "exhausted": False,
-                    },
-                    "stderr": {
-                        "stream": self._stderr,
-                        "buffer": "",
-                        "exhausted": False,
-                    },
+                    "stdout": {"stream": self._stdout, "buffer": "", "exhausted": False},
+                    "stderr": {"stream": self._stderr, "buffer": "", "exhausted": False},
                 }
 
             def _process_stream(self, stream_name):
@@ -1386,9 +1348,7 @@ class SandboxProcess:
                     stream_info["buffer"] += chunk
 
                     while "\n" in stream_info["buffer"]:  # Process any complete lines
-                        line, stream_info["buffer"] = stream_info["buffer"].split(
-                            "\n", 1
-                        )
+                        line, stream_info["buffer"] = stream_info["buffer"].split("\n", 1)
                         self._queue.append(line + "\n")
 
                 else:
@@ -1414,9 +1374,7 @@ class SandboxProcess:
                     if not self._queue:
                         self._fill_queue()
                         # If still empty after trying to fill, we're done
-                        if not self._queue and all(
-                            s["exhausted"] for s in self._streams.values()
-                        ):
+                        if not self._queue and all(s["exhausted"] for s in self._streams.values()):
                             raise StopIteration
 
                         # If queue is still empty but streams aren't exhausted, wait and try again
@@ -1932,9 +1890,7 @@ class SandboxFileSystem:
                 container_id=self.sandbox_instance.container_id,
             )
 
-    def find_in_files(
-        self, sandbox_path: str, pattern: str
-    ) -> List[SandboxFileSearchResult]:
+    def find_in_files(self, sandbox_path: str, pattern: str) -> List[SandboxFileSearchResult]:
         r"""
         Search file contents in the sandbox using a regular expression pattern.
 
@@ -2082,12 +2038,8 @@ class DockerResult:
                 pass
 
         # Read both stdout and stderr concurrently
-        stdout_thread = threading.Thread(
-            target=read_stream, args=(self.process.stdout, "")
-        )
-        stderr_thread = threading.Thread(
-            target=read_stream, args=(self.process.stderr, "")
-        )
+        stdout_thread = threading.Thread(target=read_stream, args=(self.process.stdout, ""))
+        stderr_thread = threading.Thread(target=read_stream, args=(self.process.stderr, ""))
 
         stdout_thread.daemon = True
         stderr_thread.daemon = True
@@ -2153,10 +2105,7 @@ class DockerComposeStack:
         self.services = service_names
 
     def logs(
-        self,
-        service: Optional[str] = None,
-        follow: bool = False,
-        tail: Optional[int] = None,
+        self, service: Optional[str] = None, follow: bool = False, tail: Optional[int] = None
     ) -> str:
         """Get logs from compose stack or specific service."""
         cmd = ["docker-compose", "-f", self.file, "-f", self.override_path, "logs"]
@@ -2384,9 +2333,7 @@ class SandboxDockerManager:
         def extract_container_id(process):
             return process.stdout.read().strip()
 
-        return self._result(
-            *cmd, extract_output=extract_container_id if detach else None
-        )
+        return self._result(*cmd, extract_output=extract_container_id if detach else None)
 
     def ps(self, all: bool = False, quiet: bool = False) -> Union[List[str], str]:
         """
@@ -2433,9 +2380,7 @@ class SandboxDockerManager:
         except DockerCommandError:
             return False
 
-    def logs(
-        self, container: str, follow: bool = False, tail: Optional[int] = None
-    ) -> str:
+    def logs(self, container: str, follow: bool = False, tail: Optional[int] = None) -> str:
         """
         Get container logs.
 
@@ -2462,9 +2407,7 @@ class SandboxDockerManager:
         result = self._run(*cmd)
         return result.stdout
 
-    def exec(
-        self, container: str, command: Union[str, List[str]], **kwargs
-    ) -> "SandboxProcess":
+    def exec(self, container: str, command: Union[str, List[str]], **kwargs) -> "SandboxProcess":
         """Execute command in running container."""
         cmd = ["docker", "exec", container]
         if isinstance(command, str):
@@ -2676,7 +2619,9 @@ class SandboxDockerManager:
             # Use docker login with password-stdin for security
             # Pass password via stdin using process env to avoid shell escaping issues
             registry_arg = f" {shlex.quote(registry)}" if registry else ""
-            login_cmd = f"docker login --username {shlex.quote(username)} --password-stdin{registry_arg}"
+            login_cmd = (
+                f"docker login --username {shlex.quote(username)} --password-stdin{registry_arg}"
+            )
 
             # Use printf instead of echo to handle special characters in password
             cmd = ["sh", "-c", f"printf '%s' {shlex.quote(password)} | {login_cmd}"]
@@ -2715,15 +2660,11 @@ class SandboxDockerManager:
             import os
             import tempfile
 
-            with tempfile.NamedTemporaryFile(
-                mode="w+", suffix=".yml", delete=False
-            ) as tmp_file:
+            with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
                 local_compose_path = tmp_file.name
 
             try:
-                self.sandbox_instance.fs.download_file(
-                    compose_file_path, local_compose_path
-                )
+                self.sandbox_instance.fs.download_file(compose_file_path, local_compose_path)
                 with open(local_compose_path, "r") as f:
                     compose_data = yaml.safe_load(f.read())
                     if compose_data and "services" in compose_data:
@@ -2753,15 +2694,15 @@ class SandboxDockerManager:
                     override_content += "    build:\n"
                     override_content += "      network: host\n"
         else:
-            override_content = "services:\n  default:\n    network_mode: host\n    build:\n      network: host\n"
+            override_content = (
+                "services:\n  default:\n    network_mode: host\n    build:\n      network: host\n"
+            )
 
         # Upload override
         import os
         import tempfile
 
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".yml", delete=False
-        ) as tmp_file:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yml", delete=False) as tmp_file:
             tmp_file.write(override_content)
             tmp_file.flush()
             local_override_path = tmp_file.name
@@ -2823,14 +2764,10 @@ class SandboxDockerManager:
             import os
             import tempfile
 
-            with tempfile.NamedTemporaryFile(
-                mode="w+", suffix=".yml", delete=False
-            ) as tmp_file:
+            with tempfile.NamedTemporaryFile(mode="w+", suffix=".yml", delete=False) as tmp_file:
                 local_compose_path = tmp_file.name
             try:
-                self.sandbox_instance.fs.download_file(
-                    compose_file_path, local_compose_path
-                )
+                self.sandbox_instance.fs.download_file(compose_file_path, local_compose_path)
                 with open(local_compose_path, "r") as f:
                     compose_data = yaml.safe_load(f.read())
                     if compose_data and "services" in compose_data:
@@ -2904,9 +2841,7 @@ class SandboxDockerManager:
             return self.sandbox_instance.process.exec(*cmd, cwd=cwd)
         return self._exec(*cmd)
 
-    def compose_ps(
-        self, file: str = "docker-compose.yml", cwd: Optional[str] = None
-    ) -> str:
+    def compose_ps(self, file: str = "docker-compose.yml", cwd: Optional[str] = None) -> str:
         """List compose services."""
         override_path = self._create_compose_override(file, cwd)
         cmd = ["docker-compose", "-f", file, "-f", override_path, "ps"]
@@ -3414,9 +3349,7 @@ class AsyncSandboxFileSystem:
         Raises:
             SandboxFileSystemError: If the download fails.
         """
-        return await asyncio.to_thread(
-            self._sync.download_file, sandbox_path, local_path
-        )
+        return await asyncio.to_thread(self._sync.download_file, sandbox_path, local_path)
 
     async def stat_file(self, sandbox_path: str) -> "SandboxFileInfo":
         """
@@ -3484,9 +3417,7 @@ class AsyncSandboxFileSystem:
         """
         return await asyncio.to_thread(self._sync.delete_file, sandbox_path)
 
-    async def replace_in_files(
-        self, sandbox_path: str, old_string: str, new_string: str
-    ):
+    async def replace_in_files(self, sandbox_path: str, old_string: str, new_string: str):
         """
         Replace a string in all files in a directory asynchronously.
 
@@ -3607,10 +3538,7 @@ class AsyncDockerComposeStack:
         return self._sync.services
 
     async def logs(
-        self,
-        service: Optional[str] = None,
-        follow: bool = False,
-        tail: Optional[int] = None,
+        self, service: Optional[str] = None, follow: bool = False, tail: Optional[int] = None
     ) -> str:
         """Get logs from compose stack or specific service asynchronously."""
         return await asyncio.to_thread(self._sync.logs, service, follow, tail)
@@ -3712,21 +3640,15 @@ class AsyncSandboxDockerManager:
         """Remove a container asynchronously."""
         return await asyncio.to_thread(self._sync.rm, container, force=force)
 
-    async def logs(
-        self, container: str, follow: bool = False, tail: Optional[int] = None
-    ) -> str:
+    async def logs(self, container: str, follow: bool = False, tail: Optional[int] = None) -> str:
         """Get container logs asynchronously."""
-        return await asyncio.to_thread(
-            self._sync.logs, container, follow=follow, tail=tail
-        )
+        return await asyncio.to_thread(self._sync.logs, container, follow=follow, tail=tail)
 
     async def exec(
         self, container: str, command: Union[str, List[str]], **kwargs
     ) -> "AsyncSandboxProcess":
         """Execute command in running container asynchronously."""
-        sync_process = await asyncio.to_thread(
-            self._sync.exec, container, command, **kwargs
-        )
+        sync_process = await asyncio.to_thread(self._sync.exec, container, command, **kwargs)
         return AsyncSandboxProcess(sync_process)
 
     # === Image Operations ===
@@ -3808,9 +3730,7 @@ class AsyncSandboxDockerManager:
         cwd: Optional[str] = None,
     ) -> bool:
         """Stop and remove compose services asynchronously."""
-        return await asyncio.to_thread(
-            self._sync.compose_down, file=file, volumes=volumes, cwd=cwd
-        )
+        return await asyncio.to_thread(self._sync.compose_down, file=file, volumes=volumes, cwd=cwd)
 
     async def compose_logs(
         self,
@@ -3824,9 +3744,7 @@ class AsyncSandboxDockerManager:
         )
         return AsyncSandboxProcess(sync_process)
 
-    async def compose_ps(
-        self, file: str = "docker-compose.yml", cwd: Optional[str] = None
-    ) -> str:
+    async def compose_ps(self, file: str = "docker-compose.yml", cwd: Optional[str] = None) -> str:
         """List compose services asynchronously."""
         return await asyncio.to_thread(self._sync.compose_ps, file=file, cwd=cwd)
 
