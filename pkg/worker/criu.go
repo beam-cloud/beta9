@@ -306,7 +306,7 @@ func (s *Worker) waitForSyncFile(request *types.ContainerRequest, outputLogger *
 	// If so, delete the sync file to force a re-sync from S3
 	if _, err := os.Stat(syncFilePath); err == nil {
 		if _, err := os.Stat(checkpointPath); os.IsNotExist(err) {
-			outputLogger.Info("Checkpoint data missing, forcing re-sync from S3")
+			outputLogger.Info("Checkpoint data missing, forcing re-sync")
 			os.Remove(syncFilePath)
 		}
 	}
