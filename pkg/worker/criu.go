@@ -300,16 +300,37 @@ func (s *Worker) waitForSyncFile(request *types.ContainerRequest, outputLogger *
 	defer cancel()
 
 	syncFilePath := filepath.Join(s.config.Worker.CRIU.Storage.MountPath, fmt.Sprintf("%s.%s", request.Checkpoint.CheckpointId, syncFileExtension))
+	checkpointPath := s.checkpointPath(request.Checkpoint.CheckpointId)
 
-	_, err := os.Stat(syncFilePath)
-	if err == nil {
-		return nil
+	// Check if sync file exists but checkpoint data is missing (cleaned up due to inactivity)
+	// If so, delete the sync file to force a re-sync from S3
+	if _, err := os.Stat(syncFilePath); err == nil {
+		if _, err := os.Stat(checkpointPath); os.IsNotExist(err) {
+			outputLogger.Info("Checkpoint data missing, forcing re-sync from S3")
+			os.Remove(syncFilePath)
+		}
+	}
+
+	// Check if both sync file and checkpoint data exist
+	if _, err := os.Stat(syncFilePath); err == nil {
+		if _, err := os.Stat(checkpointPath); err == nil {
+			return nil
+		}
 	}
 
 	outputLogger.Info("Waiting for checkpoint to sync")
 	for {
-		_, err := os.Stat(syncFilePath)
-		if err == nil {
+		syncFileExists := false
+		checkpointExists := false
+
+		if _, err := os.Stat(syncFilePath); err == nil {
+			syncFileExists = true
+		}
+		if _, err := os.Stat(checkpointPath); err == nil {
+			checkpointExists = true
+		}
+
+		if syncFileExists && checkpointExists {
 			return nil
 		}
 
