@@ -428,7 +428,7 @@ def configure(
             _default_client._client.close()
         except Exception:
             pass
-    _default_client = InferenceClient(host=host, port=port, timeout=timeout)
+    _default_client = InferenceClient(host=host, port=port, token=token, timeout=timeout)
 
 
 # Convenience functions using the default client
