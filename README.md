@@ -2,7 +2,7 @@
 
 **A fork of [beam-cloud/beta9](https://github.com/beam-cloud/beta9) for [Agentosaurus](https://agentosaurus.com)**
 
-Beta9 is an open-source distributed GPU compute platform enabling serverless AI workloads across heterogeneous hardware. This fork extends the original with support for external GPU workers, Apple Silicon (MPS) inference, and a unified control API for inference lifecycle management.
+Enable external worker support with a new Go-based agent and unified inference routing, so you can run hybrid GPU workloads over SSH/Tailscale with clear docs and a multi-arch CI build pipeline.
 
 ## Project Status
 
@@ -44,38 +44,21 @@ Build a distributed GPU compute platform that:
      Control Plane           MPS Inference         CUDA Inference
 ```
 
-## Key Features
+### New Features in this Fork
 
-### External Worker Support
+- **New Go-based Agent (`b9agent`)**: Includes TUI, persistent config, control API (start/stop/pull models), keepalive, and job monitoring.
+- **Unified Inference Routing**: Gateway inference router, model registry, and OpenAI-compatible endpoints; enabled Tailscale and hostNetwork for external connectivity.
+- **External Worker API**: Expanded machine API with register/keepalive and TTL-based lifecycle; added detailed API/docs for external workers and self-hosting.
+- **Python SDK**: Added `beta9.inference` module (chat/generate/embed) and test scripts.
+- **Flexible Configuration**: External worker config supports direct Redis host, external image registries/ports, CoreDNS override, and Podman-friendly k3d settings.
+- **Multi-Arch CI**: New GitHub Action to build/push multi-arch images to `registry.agentosaurus.com` with improved sequencing and reliability.
 
-Connect machines outside your Kubernetes cluster to participate in distributed job execution:
+### Migration Guide for Existing Users
 
-- HTTP-based machine registration with the gateway
-- Keepalive heartbeats to maintain worker pool membership
-- Tailscale mesh VPN for secure machine-to-machine connectivity
-- Real-time TUI dashboard showing worker status and job execution
-
-### Apple Silicon (MPS) Inference
-
-Native support for Apple Silicon GPUs via Metal Performance Shaders:
-
-- Ollama-based inference server management
-- Automatic Tailscale IP binding for mesh accessibility
-- Control API for inference lifecycle (start/stop/pull models)
-- Model pull progress streaming to TUI logs
-
-### Control API
-
-HTTP control server (port 9999) for external management:
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/inference/start` | POST | Start Ollama inference server |
-| `/inference/stop` | POST | Stop inference server |
-| `/inference/status` | GET | Get inference server status |
-| `/inference/pull` | POST | Pull model with progress logging |
-| `/status` | GET | Get agent status |
-| `/health` | GET | Health check |
+1.  **Registry Credentials**: Create `registry-credentials` secret and set `ExternalImageRegistry` / runner registry in config.
+2.  **Networking**: Configure `TAILSCALE_AUTHKEY` or direct `REDIS_HOST`; expose NodePorts for Redis/S3/Registry; deploy Gateway with `hostNetwork: true`.
+3.  **Agent Setup**: Initialize and run `b9agent`, then set up SSH tunnel (forward 1994; reverse 6443 if needed).
+4.  **K8s Config**: Apply CoreDNS and metrics-server manifests; update k3d config for Podman compatibility.
 
 ### TUI Dashboard
 
