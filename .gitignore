@@ -35,16 +35,14 @@ pyrightconfig.json
 # Build output binaries (not source directories)
 /agent-go
 /cmd/agent-go/b9agent
+/cmd/b9agent/b9agent
 /b9agent
+/b9gateway-linux
 /gateway
 /worker
-agent-go
-cmd/agent-go/b9agent
-cmd/b9agent/b9agent
-b9agent
-b9gateway-linux
-gateway
-worker
+
+# Build logs
 *.log
-b9agent
-cmd/b9agent/b9agent
+build_gateway.log
+build_output.log
+build_runner.log

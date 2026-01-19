@@ -236,8 +236,7 @@ func (g *Gateway) initHttp() error {
 	g.rootRouteGroup = e.Group(apiv1.HttpServerRootRoute)
 
 	// Register inference routes
-	// Note: Authentication is skipped for now to facilitate testing, or use authMiddleware if needed
-	inferenceGroup := g.baseRouteGroup.Group("/inference")
+	inferenceGroup := g.baseRouteGroup.Group("/inference", authMiddleware)
 	if g.InferenceRegistry == nil {
 		g.InferenceRegistry = NewModelRegistry()
 	}

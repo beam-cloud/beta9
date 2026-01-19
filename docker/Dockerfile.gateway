@@ -1,5 +1,5 @@
 # Beta9 Gateway - Multi-arch build with cross-compilation
-FROM golang:1.23-bookworm AS base
+FROM golang:1.25-bookworm AS base
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends fuse3
@@ -60,7 +60,7 @@ EOT
 
 # Cross-compile gateway binary on native architecture (FAST)
 # ========================
-FROM --platform=$BUILDPLATFORM golang:1.23-bookworm AS gateway-builder
+FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS gateway-builder
 
 ARG TARGETOS
 ARG TARGETARCH

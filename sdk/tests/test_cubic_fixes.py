@@ -98,5 +98,32 @@ class TestCubicFixes(unittest.TestCase):
         # Verify first client was closed
         mock_client1.close.assert_called_once()
 
+    @patch('beta9.inference.httpx.Client')
+    def test_authentication(self, mock_client_cls):
+        """Test that auth token is forwarded in Authorization header."""
+        # Setup mock
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"models": []}
+        mock_client.get.return_value = mock_response
+
+        # Test 1: With token
+        inference.configure(token="secret-token")
+        
+        # Verify client initialized with headers
+        _, kwargs = mock_client_cls.call_args
+        headers = kwargs.get('headers', {})
+        self.assertEqual(headers.get('Authorization'), 'Bearer secret-token')
+        
+        # Test 2: Without token
+        inference.configure(token=None)
+        
+        # Verify client initialized without headers
+        _, kwargs = mock_client_cls.call_args
+        headers = kwargs.get('headers', {})
+        self.assertNotIn('Authorization', headers)
+
 if __name__ == '__main__':
     unittest.main()

@@ -68,6 +68,8 @@ func NewKeepaliveLoopWithState(config *AgentConfig, state *AgentState) *Keepaliv
 
 // GetLastMetrics returns the last collected metrics
 func (k *KeepaliveLoop) GetLastMetrics() *MachineMetrics {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
 	if k.lastMetrics != nil {
 		return k.lastMetrics
 	}

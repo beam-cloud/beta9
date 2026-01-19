@@ -10,17 +10,19 @@ metadata:
   namespace: beta9
 rules:
 - apiGroups:
-  - '*'
+  - ""
+  - "apps"
+  - "batch"
   resources:
-  - '*'
+  - pods
+  - services
+  - deployments
+  - nodes
+  - persistentvolumeclaims
+  - configmaps
+  - secrets
   verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
+  - '*'
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -71,7 +73,7 @@ spec:
            echo "All dependencies ready!"']
       containers:
       - name: gateway
-        image: registry.agentosaurus.com/beta9-gateway:v0.1.0
+        image: registry.agentosaurus.com/beta9-gateway:latest
         imagePullPolicy: IfNotPresent
         command:
         - /usr/local/bin/gateway
@@ -139,7 +141,7 @@ spec:
     spec:
       containers:
       - name: proxy
-        image: registry.agentosaurus.com/beta9-proxy:v0.1.0
+        image: registry.agentosaurus.com/beta9-proxy:latest
         imagePullPolicy: IfNotPresent
         command:
         - /usr/local/bin/proxy
@@ -210,10 +212,12 @@ spec:
     auth:
       enabled: false
     image:
-      registry: docker.io
+      registry: registry.agentosaurus.com
       repository: bitnami/redis
-      tag: "7.4.2-debian-12-r3"
+      tag: "latest"
       pullPolicy: IfNotPresent
+      pullSecrets:
+        - registry-credentials
     master:
       configuration: |
         activedefrag yes
@@ -245,10 +249,12 @@ spec:
           password: password
           database: main
     image:
-      registry: docker.io
+      registry: registry.agentosaurus.com
       repository: bitnami/postgresql
-      tag: "17.2.0-debian-12-r14"
+      tag: "latest"
       pullPolicy: IfNotPresent
+      pullSecrets:
+        - registry-credentials
     primary:
       extendedConfiguration: |
         max_connections=400
@@ -260,7 +266,11 @@ spec:
     volumePermissions:
       enabled: true
       image:
-        tag: 12-debian-12-r10
+        registry: registry.agentosaurus.com
+        repository: bitnami/os-shell
+        tag: "latest"
+        pullSecrets:
+          - registry-credentials
     persistence:
       enabled: true
       size: 1Gi
@@ -283,10 +293,12 @@ spec:
     auth:
       enabled: false
     image:
-      registry: docker.io
+      registry: registry.agentosaurus.com
       repository: bitnami/redis
-      tag: "7.4.2-debian-12-r3"
+      tag: "latest"
       pullPolicy: IfNotPresent
+      pullSecrets:
+        - registry-credentials
     master:
       persistence:
         size: 1Gi

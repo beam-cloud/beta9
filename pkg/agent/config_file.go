@@ -79,8 +79,14 @@ func LoadConfigFile() (*ConfigFile, error) {
 
 // SaveConfigFile saves config to YAML file
 func SaveConfigFile(cfg *ConfigFile) error {
+	configDir := DefaultConfigDir()
 	path := DefaultConfigPath()
-	configDir := filepath.Dir(path)
+
+	// Respect B9AGENT_CONFIG override
+	if envPath := os.Getenv("B9AGENT_CONFIG"); envPath != "" {
+		path = envPath
+		configDir = filepath.Dir(path)
+	}
 
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)

@@ -116,11 +116,20 @@ class InferenceClient:
         self,
         host: str = DEFAULT_INFERENCE_HOST,
         port: int = DEFAULT_INFERENCE_PORT,
+        token: Optional[str] = None,
         timeout: float = 300.0,  # 5 minute timeout for slow model loads
     ):
         self.base_url = f"http://{host}:{port}"
         self.timeout = timeout
-        self._client = httpx.Client(timeout=timeout)
+        
+        # Prioritize explicit token, then env var
+        self.token = token or os.getenv("BETA9_INFERENCE_TOKEN")
+        
+        headers = {}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+            
+        self._client = httpx.Client(timeout=timeout, headers=headers)
 
     def chat(
         self,
@@ -286,23 +295,16 @@ class InferenceClient:
             data = resp.json()
 
             # Ollama returns embeddings in different formats depending on version
-            # New format: {"embeddings": [[...], [...]]}
-            # Old format: {"embedding": [...]}
-            batch_embeddings = data.get("embeddings", [])
-            
-            if len(batch_embeddings) == 0:
-                # Fallback check for single embedding
-                single = data.get("embedding", None)
-                if single:
-                    batch_embeddings = [single]
+            embeddings = data.get("embeddings", [])
+            if len(embeddings) == 0:
+                # Fallback for older Ollama versions
+                single = data.get("embedding", [])
+                embeddings = [single] if single else []
 
-            # Populate legacy 'embedding' with first result for backward compat
-            first_embedding = batch_embeddings[0] if batch_embeddings else []
-
+            # Return all embeddings for batch input
             return EmbeddingResult(
                 model=model,
-                embedding=first_embedding,
-                embeddings=batch_embeddings,
+                embedding=embeddings[0] if len(embeddings) == 1 else embeddings,
                 usage={
                     "prompt_tokens": data.get("prompt_eval_count", 0),
                 },
@@ -407,6 +409,7 @@ def get_client() -> InferenceClient:
 def configure(
     host: str = DEFAULT_INFERENCE_HOST,
     port: int = DEFAULT_INFERENCE_PORT,
+    token: Optional[str] = None,
     timeout: float = 300.0,
 ) -> None:
     """
@@ -415,6 +418,7 @@ def configure(
     Args:
         host: Inference server hostname
         port: Inference server port
+        token: Authentication token (optional)
         timeout: Request timeout in seconds
     """
     global _default_client
@@ -424,7 +428,7 @@ def configure(
             _default_client._client.close()
         except Exception:
             pass
-    _default_client = InferenceClient(host=host, port=port, timeout=timeout)
+    _default_client = InferenceClient(host=host, port=port, token=token, timeout=timeout)
 
 
 # Convenience functions using the default client
