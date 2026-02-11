@@ -264,7 +264,13 @@ func (g *Gateway) initGrpcProxy(grpcAddr string) error {
 		cancel()
 	})
 	mux := runtime.NewServeMux()
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	opts := []grpc.DialOption{
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(
+			grpc.MaxCallRecvMsgSize(g.Config.GatewayService.GRPC.MaxRecvMsgSize*1024*1024),
+			grpc.MaxCallSendMsgSize(g.Config.GatewayService.GRPC.MaxSendMsgSize*1024*1024),
+		),
+	}
 	if err := pb.RegisterPodServiceHandlerFromEndpoint(ctx, mux, grpcAddr, opts); err != nil {
 		return err
 	}
