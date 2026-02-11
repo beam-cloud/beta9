@@ -58,12 +58,13 @@ func (c *ContainerClient) connect() error {
 	}
 
 	maxMessageSize := 1 << 30 // 1Gi
+	dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(
+		grpc.MaxCallRecvMsgSize(maxMessageSize),
+		grpc.MaxCallSendMsgSize(maxMessageSize),
+	))
+
 	if c.ServiceToken != "" {
-		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(GRPCClientAuthInterceptor(c.ServiceToken)),
-			grpc.WithDefaultCallOptions(
-				grpc.MaxCallRecvMsgSize(maxMessageSize),
-				grpc.MaxCallSendMsgSize(maxMessageSize),
-			))
+		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(GRPCClientAuthInterceptor(c.ServiceToken)))
 	}
 
 	conn, err := grpc.Dial(c.ServiceUrl, dialOpts...)

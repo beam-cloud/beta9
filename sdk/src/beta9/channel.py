@@ -142,7 +142,10 @@ def handle_grpc_error(error: grpc.RpcError):
     elif code == grpc.StatusCode.CANCELLED:
         return
     elif code == grpc.StatusCode.RESOURCE_EXHAUSTED:
-        terminal.error("Please ensure your payload or function arguments are less than 4 MiB.")
+        terminal.error(
+            f"Message size exceeds the gRPC limit. "
+            f"Please ensure your payload or function arguments are less than {GRPC_MAX_MESSAGE_SIZE // (1024 * 1024)} MiB."
+        )
     elif code == grpc.StatusCode.UNKNOWN:
         terminal.error(f"Error {details}")
     else:
