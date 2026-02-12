@@ -21,6 +21,7 @@ rules:
   - persistentvolumeclaims
   - configmaps
   - secrets
+  - jobs
   verbs:
   - '*'
 ---
