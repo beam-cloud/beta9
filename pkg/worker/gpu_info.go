@@ -80,7 +80,7 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 		}
 
 		uuid := strings.TrimSpace(parts[3])
-		if !strings.Contains(visibleDevices, uuid) && visibleDevices != "all" {
+		if !strings.Contains(visibleDevices, uuid) && visibleDevices != "all" && visibleDevices != "void" && visibleDevices != "" {
 			continue
 		}
 
