@@ -41,10 +41,17 @@ type ContainerNvidiaManager struct {
 
 func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 	if gpuCount > 0 {
+		// nvidia-ctk cdi generate writes NVIDIA_VISIBLE_DEVICES=void into the CDI
+		// spec's global containerEdits, which contaminates the worker process env.
+		// Capture the real value before generation and force it back after.
+		visibleDevices := os.Getenv("NVIDIA_VISIBLE_DEVICES")
+
 		err := exec.Command("nvidia-ctk", "cdi", "generate", "--output", "/etc/cdi/nvidia.yaml").Run()
 		if err != nil {
 			log.Fatal().Msgf("failed to generate cdi config: %v", err)
 		}
+
+		os.Setenv("NVIDIA_VISIBLE_DEVICES", visibleDevices)
 	}
 
 	return &ContainerNvidiaManager{
@@ -110,7 +117,8 @@ func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuC
 
 	// Check if we managed to allocate the requested number of GPUs
 	if len(allocableDevices) < int(requestedGpuCount) {
-		return nil, fmt.Errorf("not enough GPUs available, requested: %d, allocable: %d out of %d", requestedGpuCount, int(c.gpuCount)-len(allocableDevices), len(availableDevices))
+		return nil, fmt.Errorf("not enough GPUs available: requested=%d, allocable=%d, visible=%d, configured=%d, already_allocated=%d, NVIDIA_VISIBLE_DEVICES=%q",
+			requestedGpuCount, len(allocableDevices), len(availableDevices), c.gpuCount, len(currentAllocations), os.Getenv("NVIDIA_VISIBLE_DEVICES"))
 	}
 
 	// Allocate the requested number of GPUs
