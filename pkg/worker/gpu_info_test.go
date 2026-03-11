@@ -2,7 +2,6 @@ package worker
 
 import (
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -173,33 +172,6 @@ func TestAvailableGPUDevicesReturnsQueryErrors(t *testing.T) {
 	devices, err := client.AvailableGPUDevices()
 	assert.Error(t, err)
 	assert.Nil(t, devices)
-}
-
-func TestResolveVisibleDevicesUsesChildProcess(t *testing.T) {
-	origResolve := resolveVisibleDevices
-	defer func() { resolveVisibleDevices = origResolve }()
-
-	resolveVisibleDevices = func() string {
-		return "GPU-04612b44-abcd-1234-5678-aabbccddeeff"
-	}
-
-	result := resolveVisibleDevices()
-	assert.Equal(t, "GPU-04612b44-abcd-1234-5678-aabbccddeeff", result)
-}
-
-func TestResolveVisibleDevicesFallsBackToEnv(t *testing.T) {
-	origResolve := resolveVisibleDevices
-	defer func() { resolveVisibleDevices = origResolve }()
-
-	os.Setenv("NVIDIA_VISIBLE_DEVICES", "GPU-fallback-uuid")
-	defer os.Unsetenv("NVIDIA_VISIBLE_DEVICES")
-
-	resolveVisibleDevices = func() string {
-		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
-	}
-
-	result := resolveVisibleDevices()
-	assert.Equal(t, "GPU-fallback-uuid", result)
 }
 
 func TestAvailableGPUDevicesSingleGPUUUID(t *testing.T) {
