@@ -20,7 +20,27 @@ type GPUMemoryUsageStats struct {
 	TotalCapacity int64
 }
 
-type NvidiaInfoClient struct{}
+type NvidiaInfoClient struct {
+	visibleDevices string
+}
+
+// resolveVisibleDevices gets the runtime-injected NVIDIA_VISIBLE_DEVICES by spawning
+// a child process. The nvidia container runtime hook injects the correct per-worker
+// GPU UUID into new processes, but PID 1 retains the base image default ("void").
+// A child sh process receives the hook-injected value.
+var resolveVisibleDevices = func() string {
+	out, err := exec.Command("sh", "-c", "printenv NVIDIA_VISIBLE_DEVICES").Output()
+	if err != nil {
+		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
+	}
+
+	resolved := strings.TrimSpace(string(out))
+	if resolved == "" || resolved == "void" {
+		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
+	}
+
+	return resolved
+}
 
 func (c *NvidiaInfoClient) hexToPaddedString(hexStr string) (string, error) {
 	// Remove the "0x" prefix if it exists
@@ -56,7 +76,7 @@ var checkGPUExists = func(busId string) (bool, error) {
 }
 
 func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
-	visibleDevices := os.Getenv("NVIDIA_VISIBLE_DEVICES") // Find available GPU BUS IDs
+	visibleDevices := c.visibleDevices
 	devices, err := queryDevices()
 	if err != nil {
 		return nil, err
@@ -80,7 +100,7 @@ func (c *NvidiaInfoClient) AvailableGPUDevices() ([]int, error) {
 		}
 
 		uuid := strings.TrimSpace(parts[3])
-		if !strings.Contains(visibleDevices, uuid) && visibleDevices != "all" && visibleDevices != "void" && visibleDevices != "" {
+		if !strings.Contains(visibleDevices, uuid) && visibleDevices != "all" {
 			continue
 		}
 
