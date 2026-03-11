@@ -29,6 +29,8 @@ const (
 	imagesVolumeName            string  = "beta9-images"
 	storageVolumeName           string  = "beta9-storage"
 	checkpointVolumeName        string  = "beta9-checkpoints"
+	devicePluginVolumeName      string  = "kubelet-device-plugins"
+	defaultDevicePluginPath     string  = "/var/lib/kubelet/device-plugins"
 	defaultContainerName        string  = "worker"
 	defaultWorkerEntrypoint     string  = "/usr/local/bin/worker"
 	defaultWorkerLogPath        string  = "/var/log/worker"

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -24,22 +25,54 @@ type NvidiaInfoClient struct {
 	visibleDevices string
 }
 
-// resolveVisibleDevices gets the runtime-injected NVIDIA_VISIBLE_DEVICES by spawning
-// a child process. The nvidia container runtime hook injects the correct per-worker
-// GPU UUID into new processes, but PID 1 retains the base image default ("void").
-// A child sh process receives the hook-injected value.
+const defaultDeviceCheckpointPath = "/var/lib/kubelet/device-plugins/kubelet_internal_checkpoint"
+
+type kubeletCheckpoint struct {
+	Data struct {
+		PodDeviceEntries []podDeviceEntry `json:"PodDeviceEntries"`
+	} `json:"Data"`
+}
+
+type podDeviceEntry struct {
+	PodUID       string              `json:"PodUID"`
+	ResourceName string              `json:"ResourceName"`
+	DeviceIDs    map[string][]string `json:"DeviceIDs"`
+}
+
+// resolveVisibleDevices determines which GPU is assigned to this worker pod.
+//
+// The nvidia/cuda base image sets ENV NVIDIA_VISIBLE_DEVICES=void which the
+// container runtime processes AFTER PID 1 starts, so os.Getenv always returns
+// "void". The authoritative GPU assignment lives in the kubelet device plugin
+// checkpoint file, which maps pod UIDs to allocated GPU UUIDs.
 var resolveVisibleDevices = func() string {
-	out, err := exec.Command("sh", "-c", "printenv NVIDIA_VISIBLE_DEVICES").Output()
+	podUID := os.Getenv("POD_UID")
+	if podUID == "" {
+		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
+	}
+
+	data, err := os.ReadFile(defaultDeviceCheckpointPath)
 	if err != nil {
 		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
 	}
 
-	resolved := strings.TrimSpace(string(out))
-	if resolved == "" || resolved == "void" {
+	var checkpoint kubeletCheckpoint
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
 		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
 	}
 
-	return resolved
+	for _, entry := range checkpoint.Data.PodDeviceEntries {
+		if entry.PodUID != podUID || entry.ResourceName != "nvidia.com/gpu" {
+			continue
+		}
+		for _, uuids := range entry.DeviceIDs {
+			if len(uuids) > 0 {
+				return strings.Join(uuids, ",")
+			}
+		}
+	}
+
+	return os.Getenv("NVIDIA_VISIBLE_DEVICES")
 }
 
 func (c *NvidiaInfoClient) hexToPaddedString(hexStr string) (string, error) {
