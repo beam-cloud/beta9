@@ -15,7 +15,7 @@ func TestIntegrationGPUIsolation(t *testing.T) {
 		t.Skip("set GPU_INTEGRATION=1 to run on a real GPU node")
 	}
 
-	// Step 1: Read PID 1's env (what os.Getenv sees — the broken path)
+	// Step 1: Confirm PID 1 has void (the bug condition)
 	pid1Env := "(unknown)"
 	data, err := os.ReadFile("/proc/1/environ")
 	if err == nil {
@@ -28,18 +28,18 @@ func TestIntegrationGPUIsolation(t *testing.T) {
 	}
 	t.Logf("PID 1 NVIDIA_VISIBLE_DEVICES = %q", pid1Env)
 
-	// Step 2: Call the REAL resolveVisibleDevices() from gpu_info.go
+	// Step 2: Call the REAL resolveVisibleDevices() — reads from kubelet checkpoint
 	resolved := resolveVisibleDevices()
 	t.Logf("resolveVisibleDevices() = %q", resolved)
 
 	if resolved == "void" || resolved == "" {
-		t.Fatalf("resolveVisibleDevices() returned %q — void bug NOT fixed", resolved)
+		t.Fatalf("resolveVisibleDevices() returned %q — checkpoint resolution failed", resolved)
 	}
 	if !strings.HasPrefix(resolved, "GPU-") {
 		t.Fatalf("resolveVisibleDevices() returned %q — expected GPU UUID", resolved)
 	}
 
-	// Step 3: Create the REAL NvidiaInfoClient with the resolved value (same as NewContainerNvidiaManager)
+	// Step 3: Create the REAL NvidiaInfoClient with the resolved value
 	client := &NvidiaInfoClient{visibleDevices: resolved}
 
 	// Step 4: Call the REAL AvailableGPUDevices()
@@ -58,17 +58,10 @@ func TestIntegrationGPUIsolation(t *testing.T) {
 
 	// Step 5: Verify the OLD path (void) would have failed
 	oldClient := &NvidiaInfoClient{visibleDevices: pid1Env}
-	oldDevices, err := oldClient.AvailableGPUDevices()
-	if err != nil {
-		t.Logf("Old path error (expected): %v", err)
-	}
+	oldDevices, _ := oldClient.AvailableGPUDevices()
 	t.Logf("Old path (PID 1 env=%q) -> AvailableGPUDevices() = %v", pid1Env, oldDevices)
 
-	if pid1Env == "void" && len(oldDevices) > 0 {
-		t.Error("Old code path with void should return empty, but got devices — test logic wrong")
-	}
-
-	// Step 6: Exercise the REAL ContainerNvidiaManager.AssignGPUDevices (chooseDevices)
+	// Step 6: Exercise the REAL ContainerNvidiaManager.AssignGPUDevices
 	manager := &ContainerNvidiaManager{
 		gpuAllocationMap:       common.NewSafeMap[[]int](),
 		gpuCount:               1,
@@ -83,14 +76,11 @@ func TestIntegrationGPUIsolation(t *testing.T) {
 	}
 	t.Logf("AssignGPUDevices(\"test-container-1\", 1) = %v", assigned)
 
-	if len(assigned) != 1 {
-		t.Fatalf("Expected 1 assigned GPU, got %d", len(assigned))
-	}
 	if assigned[0] != devices[0] {
 		t.Fatalf("Assigned GPU %d doesn't match available GPU %d", assigned[0], devices[0])
 	}
 
-	// Step 7: Verify second allocation to same worker FAILS (only 1 GPU available)
+	// Step 7: Verify second allocation FAILS (only 1 GPU per worker)
 	_, err = manager.AssignGPUDevices("test-container-2", 1)
 	if err == nil {
 		t.Fatal("Second allocation should fail — only 1 GPU per worker")

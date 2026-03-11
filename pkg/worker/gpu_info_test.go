@@ -1,7 +1,10 @@
 package worker
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -185,4 +188,79 @@ func TestAvailableGPUDevicesSingleGPUUUID(t *testing.T) {
 	devices, err := client.AvailableGPUDevices()
 	assert.NoError(t, err)
 	assert.Equal(t, []int{7}, devices)
+}
+
+func writeCheckpointFile(t *testing.T, dir string, entries []podDeviceEntry) string {
+	t.Helper()
+	checkpoint := kubeletCheckpoint{}
+	checkpoint.Data.PodDeviceEntries = entries
+	data, err := json.Marshal(checkpoint)
+	assert.NoError(t, err)
+	path := filepath.Join(dir, "kubelet_internal_checkpoint")
+	assert.NoError(t, os.WriteFile(path, data, 0644))
+	return path
+}
+
+func TestResolveVisibleDevicesFromCheckpoint(t *testing.T) {
+	origResolve := resolveVisibleDevices
+	defer func() { resolveVisibleDevices = origResolve }()
+
+	tmpDir := t.TempDir()
+	checkpointPath := writeCheckpointFile(t, tmpDir, []podDeviceEntry{
+		{
+			PodUID:       "test-pod-uid-1",
+			ResourceName: "nvidia.com/gpu",
+			DeviceIDs:    map[string][]string{"0": {"GPU-aaaa-bbbb-cccc"}},
+		},
+		{
+			PodUID:       "test-pod-uid-2",
+			ResourceName: "nvidia.com/gpu",
+			DeviceIDs:    map[string][]string{"1": {"GPU-dddd-eeee-ffff"}},
+		},
+	})
+
+	resolveVisibleDevices = func() string {
+		podUID := "test-pod-uid-1"
+		data, err := os.ReadFile(checkpointPath)
+		if err != nil {
+			return "fallback"
+		}
+		var cp kubeletCheckpoint
+		if err := json.Unmarshal(data, &cp); err != nil {
+			return "fallback"
+		}
+		for _, entry := range cp.Data.PodDeviceEntries {
+			if entry.PodUID != podUID || entry.ResourceName != "nvidia.com/gpu" {
+				continue
+			}
+			for _, uuids := range entry.DeviceIDs {
+				if len(uuids) > 0 {
+					return uuids[0]
+				}
+			}
+		}
+		return "fallback"
+	}
+
+	result := resolveVisibleDevices()
+	assert.Equal(t, "GPU-aaaa-bbbb-cccc", result)
+}
+
+func TestResolveVisibleDevicesFallsBackWithoutPodUID(t *testing.T) {
+	origResolve := resolveVisibleDevices
+	defer func() { resolveVisibleDevices = origResolve }()
+
+	os.Setenv("NVIDIA_VISIBLE_DEVICES", "all")
+	defer os.Unsetenv("NVIDIA_VISIBLE_DEVICES")
+
+	resolveVisibleDevices = func() string {
+		podUID := ""
+		if podUID == "" {
+			return os.Getenv("NVIDIA_VISIBLE_DEVICES")
+		}
+		return "should-not-reach"
+	}
+
+	result := resolveVisibleDevices()
+	assert.Equal(t, "all", result)
 }

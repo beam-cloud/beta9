@@ -376,6 +376,17 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 		})
 	}
 
+	hostPathDir := corev1.HostPathDirectory
+	volumes = append(volumes, corev1.Volume{
+		Name: devicePluginVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: defaultDevicePluginPath,
+				Type: &hostPathDir,
+			},
+		},
+	})
+
 	return append(volumes,
 		corev1.Volume{
 			Name:         imagesVolumeName,
@@ -406,6 +417,12 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 			Name:      "dshm",
 		},
 	}
+
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      devicePluginVolumeName,
+		MountPath: defaultDevicePluginPath,
+		ReadOnly:  true,
+	})
 
 	if len(wpc.workerPoolConfig.JobSpec.VolumeMounts) > 0 {
 		volumeMounts = append(volumeMounts, wpc.workerPoolConfig.JobSpec.VolumeMounts...)
@@ -460,6 +477,14 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 		{
 			Name:  "GPU_COUNT",
 			Value: strconv.FormatInt(int64(gpuCount), 10),
+		},
+		{
+			Name: "POD_UID",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.uid",
+				},
+			},
 		},
 		{
 			Name: "POD_IP",

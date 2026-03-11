@@ -478,6 +478,14 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Value: strconv.FormatInt(int64(gpuCount), 10),
 		},
 		{
+			Name: "POD_UID",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "metadata.uid",
+				},
+			},
+		},
+		{
 			Name:  "POD_NAMESPACE",
 			Value: wpc.config.Worker.Namespace,
 		},
@@ -607,6 +615,17 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 		})
 	}
 
+	hostPathDir := corev1.HostPathDirectory
+	volumes = append(volumes, corev1.Volume{
+		Name: devicePluginVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{
+				Path: defaultDevicePluginPath,
+				Type: &hostPathDir,
+			},
+		},
+	})
+
 	return volumes
 }
 
@@ -632,6 +651,12 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 			Name:      "dshm",
 		},
 	}
+
+	volumeMounts = append(volumeMounts, corev1.VolumeMount{
+		Name:      devicePluginVolumeName,
+		MountPath: defaultDevicePluginPath,
+		ReadOnly:  true,
+	})
 
 	if wpc.workerPoolConfig.CRIUEnabled && wpc.config.Worker.CRIU.Storage.Mode == string(types.CheckpointStorageModeLocal) {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
