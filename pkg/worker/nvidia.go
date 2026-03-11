@@ -47,12 +47,15 @@ func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 		}
 	}
 
+	visibleDevices := resolveVisibleDevices()
+	log.Info().Str("resolved_visible_devices", visibleDevices).Msg("resolved NVIDIA_VISIBLE_DEVICES for GPU filtering")
+
 	return &ContainerNvidiaManager{
 		gpuAllocationMap: common.NewSafeMap[[]int](),
 		gpuCount:         gpuCount,
 		mu:               sync.Mutex{},
 		statFunc:         syscall.Stat,
-		infoClient:       &NvidiaInfoClient{},
+		infoClient:       &NvidiaInfoClient{visibleDevices: visibleDevices},
 	}
 }
 
@@ -111,7 +114,7 @@ func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuC
 	// Check if we managed to allocate the requested number of GPUs
 	if len(allocableDevices) < int(requestedGpuCount) {
 		return nil, fmt.Errorf("not enough GPUs available: requested=%d, allocable=%d, visible=%d, configured=%d, already_allocated=%d, NVIDIA_VISIBLE_DEVICES=%q",
-			requestedGpuCount, len(allocableDevices), len(availableDevices), c.gpuCount, len(currentAllocations), os.Getenv("NVIDIA_VISIBLE_DEVICES"))
+			requestedGpuCount, len(allocableDevices), len(availableDevices), c.gpuCount, len(currentAllocations), c.infoClient.(*NvidiaInfoClient).visibleDevices)
 	}
 
 	// Allocate the requested number of GPUs
