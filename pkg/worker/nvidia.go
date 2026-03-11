@@ -41,17 +41,10 @@ type ContainerNvidiaManager struct {
 
 func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 	if gpuCount > 0 {
-		// nvidia-ctk cdi generate writes NVIDIA_VISIBLE_DEVICES=void into the CDI
-		// spec's global containerEdits, which contaminates the worker process env.
-		// Capture the real value before generation and force it back after.
-		visibleDevices := os.Getenv("NVIDIA_VISIBLE_DEVICES")
-
 		err := exec.Command("nvidia-ctk", "cdi", "generate", "--output", "/etc/cdi/nvidia.yaml").Run()
 		if err != nil {
 			log.Fatal().Msgf("failed to generate cdi config: %v", err)
 		}
-
-		os.Setenv("NVIDIA_VISIBLE_DEVICES", visibleDevices)
 	}
 
 	return &ContainerNvidiaManager{
