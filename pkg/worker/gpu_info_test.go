@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"errors"
 	"os"
 	"testing"
 
@@ -93,4 +94,92 @@ func TestAvailableGPUDevicesWithNonZeroPCIDomains(t *testing.T) {
 	devices, err := client.AvailableGPUDevices()
 	assert.NoError(t, err)
 	assert.Equal(t, []int{0}, devices)
+}
+
+func TestAvailableGPUDevicesReturnsEmptyWhenVisibleDevicesDoNotMatch(t *testing.T) {
+	originalQueryDevices := queryDevices
+	defer func() { queryDevices = originalQueryDevices }()
+
+	originalCheckGPUExists := checkGPUExists
+	defer func() { checkGPUExists = originalCheckGPUExists }()
+
+	queryDevices = func() ([]byte, error) {
+		mockOutput := `0x0000, 00000000:23:00.0, 0, GPU-afb8c77a-62ef-a631-48d0-edc9670fef25`
+		return []byte(mockOutput), nil
+	}
+
+	checkGPUExists = func(busId string) (bool, error) {
+		return true, nil
+	}
+
+	client := &NvidiaInfoClient{}
+	os.Setenv("NVIDIA_VISIBLE_DEVICES", "GPU-some-other-device")
+
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Empty(t, devices)
+}
+
+func TestAvailableGPUDevicesReturnsEmptyWhenProcEntryMissing(t *testing.T) {
+	originalQueryDevices := queryDevices
+	defer func() { queryDevices = originalQueryDevices }()
+
+	originalCheckGPUExists := checkGPUExists
+	defer func() { checkGPUExists = originalCheckGPUExists }()
+
+	queryDevices = func() ([]byte, error) {
+		mockOutput := `0x0000, 00000000:23:00.0, 0, GPU-afb8c77a-62ef-a631-48d0-edc9670fef25`
+		return []byte(mockOutput), nil
+	}
+
+	checkGPUExists = func(busId string) (bool, error) {
+		return false, nil
+	}
+
+	client := &NvidiaInfoClient{}
+	os.Setenv("NVIDIA_VISIBLE_DEVICES", "all")
+
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Empty(t, devices)
+}
+
+func TestAvailableGPUDevicesIgnoresProcCheckErrors(t *testing.T) {
+	originalQueryDevices := queryDevices
+	defer func() { queryDevices = originalQueryDevices }()
+
+	originalCheckGPUExists := checkGPUExists
+	defer func() { checkGPUExists = originalCheckGPUExists }()
+
+	queryDevices = func() ([]byte, error) {
+		mockOutput := `0x0000, 00000000:23:00.0, 0, GPU-afb8c77a-62ef-a631-48d0-edc9670fef25`
+		return []byte(mockOutput), nil
+	}
+
+	checkGPUExists = func(busId string) (bool, error) {
+		return false, errors.New("procfs unavailable")
+	}
+
+	client := &NvidiaInfoClient{}
+	os.Setenv("NVIDIA_VISIBLE_DEVICES", "all")
+
+	devices, err := client.AvailableGPUDevices()
+	assert.NoError(t, err)
+	assert.Empty(t, devices)
+}
+
+func TestAvailableGPUDevicesReturnsQueryErrors(t *testing.T) {
+	originalQueryDevices := queryDevices
+	defer func() { queryDevices = originalQueryDevices }()
+
+	queryDevices = func() ([]byte, error) {
+		return nil, errors.New("nvidia-smi failed")
+	}
+
+	client := &NvidiaInfoClient{}
+	os.Setenv("NVIDIA_VISIBLE_DEVICES", "all")
+
+	devices, err := client.AvailableGPUDevices()
+	assert.Error(t, err)
+	assert.Nil(t, devices)
 }
