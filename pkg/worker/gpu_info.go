@@ -61,15 +61,17 @@ var resolveVisibleDevices = func() string {
 		return os.Getenv("NVIDIA_VISIBLE_DEVICES")
 	}
 
+	var allUUIDs []string
 	for _, entry := range checkpoint.Data.PodDeviceEntries {
 		if entry.PodUID != podUID || entry.ResourceName != "nvidia.com/gpu" {
 			continue
 		}
 		for _, uuids := range entry.DeviceIDs {
-			if len(uuids) > 0 {
-				return strings.Join(uuids, ",")
-			}
+			allUUIDs = append(allUUIDs, uuids...)
 		}
+	}
+	if len(allUUIDs) > 0 {
+		return strings.Join(allUUIDs, ",")
 	}
 
 	return os.Getenv("NVIDIA_VISIBLE_DEVICES")
