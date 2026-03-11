@@ -32,11 +32,12 @@ type GPUManager interface {
 }
 
 type ContainerNvidiaManager struct {
-	gpuAllocationMap *common.SafeMap[[]int]
-	gpuCount         uint32
-	mu               sync.Mutex
-	statFunc         func(path string, stat *syscall.Stat_t) (err error)
-	infoClient       GPUInfoClient
+	gpuAllocationMap       *common.SafeMap[[]int]
+	gpuCount               uint32
+	mu                     sync.Mutex
+	statFunc               func(path string, stat *syscall.Stat_t) (err error)
+	infoClient             GPUInfoClient
+	resolvedVisibleDevices string
 }
 
 func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
@@ -51,11 +52,12 @@ func NewContainerNvidiaManager(gpuCount uint32) GPUManager {
 	log.Info().Str("resolved_visible_devices", visibleDevices).Msg("resolved NVIDIA_VISIBLE_DEVICES for GPU filtering")
 
 	return &ContainerNvidiaManager{
-		gpuAllocationMap: common.NewSafeMap[[]int](),
-		gpuCount:         gpuCount,
-		mu:               sync.Mutex{},
-		statFunc:         syscall.Stat,
-		infoClient:       &NvidiaInfoClient{visibleDevices: visibleDevices},
+		gpuAllocationMap:       common.NewSafeMap[[]int](),
+		gpuCount:               gpuCount,
+		mu:                     sync.Mutex{},
+		statFunc:               syscall.Stat,
+		infoClient:             &NvidiaInfoClient{visibleDevices: visibleDevices},
+		resolvedVisibleDevices: visibleDevices,
 	}
 }
 
@@ -114,7 +116,7 @@ func (c *ContainerNvidiaManager) chooseDevices(containerId string, requestedGpuC
 	// Check if we managed to allocate the requested number of GPUs
 	if len(allocableDevices) < int(requestedGpuCount) {
 		return nil, fmt.Errorf("not enough GPUs available: requested=%d, allocable=%d, visible=%d, configured=%d, already_allocated=%d, NVIDIA_VISIBLE_DEVICES=%q",
-			requestedGpuCount, len(allocableDevices), len(availableDevices), c.gpuCount, len(currentAllocations), c.infoClient.(*NvidiaInfoClient).visibleDevices)
+			requestedGpuCount, len(allocableDevices), len(availableDevices), c.gpuCount, len(currentAllocations), c.resolvedVisibleDevices)
 	}
 
 	// Allocate the requested number of GPUs
