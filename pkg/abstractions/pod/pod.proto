@@ -157,6 +157,12 @@ service PodService {
       get : "/pods/{container_id}/urls"
     };
   }
+  rpc SandboxListEvents(PodSandboxListEventsRequest)
+      returns (PodSandboxListEventsResponse) {
+    option (google.api.http) = {
+      get : "/pods/{stub_id}/events"
+    };
+  }
 }
 
 message CreatePodRequest {
@@ -418,4 +424,27 @@ message PodSandboxListUrlsResponse {
   bool ok = 1;
   map<int32, string> urls = 2;
   string error_msg = 3;
+}
+
+message PodSandboxListEventsRequest {
+  string stub_id = 1;
+  repeated string search_after = 2;
+}
+
+message PodSandboxListEventsResponse {
+  bool ok = 1;
+  string error_msg = 2;
+  repeated PodSandboxEvent events = 3;
+  repeated string next_cursor = 4;
+}
+
+message PodSandboxEvent {
+  string id = 1;
+  string time = 2;
+  string type = 3;
+  string status = 4;
+  string container_id = 5;
+  string worker_id = 6;
+  string stub_id = 7;
+  int32 exit_code = 8;
 }

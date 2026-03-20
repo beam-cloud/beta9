@@ -32,6 +32,8 @@ from ..clients.pod import (
     PodSandboxExposePortResponse,
     PodSandboxFindInFilesRequest,
     PodSandboxKillRequest,
+    PodSandboxListEventsRequest,
+    PodSandboxListEventsResponse,
     PodSandboxListFilesRequest,
     PodSandboxListProcessesRequest,
     PodSandboxListProcessesResponse,
@@ -653,6 +655,59 @@ class SandboxInstance(BaseAbstraction):
             raise SandboxConnectionError(res.error_msg)
 
         return res.urls
+
+    def list_events(
+        self, cursor: Optional[List[str]] = None
+    ) -> Tuple[List["SandboxEvent"], Optional[List[str]]]:
+        """
+        List container lifecycle events for this sandbox.
+
+        Returns events in reverse chronological order (newest first), with pagination support.
+
+        Parameters:
+            cursor (Optional[List[str]]): Pagination cursor from a previous call.
+
+        Returns:
+            Tuple[List[SandboxEvent], Optional[List[str]]]: A tuple of (events, next_cursor).
+                next_cursor is None if there are no more results.
+
+        Raises:
+            SandboxConnectionError: If listing events fails.
+
+        Example:
+            ```python
+            events, cursor = instance.list_events()
+            for e in events:
+                print(f"{e.time}: {e.status} ({e.container_id})")
+
+            # Paginate
+            if cursor:
+                more_events, next_cursor = instance.list_events(cursor=cursor)
+            ```
+        """
+        res: "PodSandboxListEventsResponse" = self.stub.sandbox_list_events(
+            PodSandboxListEventsRequest(
+                stub_id=self.stub_id,
+                search_after=cursor or [],
+            )
+        )
+        if not res.ok:
+            raise SandboxConnectionError(res.error_msg)
+
+        events = [
+            SandboxEvent(
+                id=e.id,
+                time=e.time,
+                status=e.status,
+                container_id=e.container_id,
+                worker_id=e.worker_id,
+                stub_id=e.stub_id,
+                exit_code=e.exit_code,
+            )
+            for e in res.events
+        ]
+        next_cursor = list(res.next_cursor) if res.next_cursor else None
+        return events, next_cursor
 
     @property
     def aio(self) -> "AsyncSandboxInstance":
@@ -1426,6 +1481,30 @@ class SandboxProcess:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+
+
+@dataclass
+class SandboxEvent:
+    """
+    A container lifecycle event from the sandbox.
+
+    Attributes:
+        id (str): The unique event ID.
+        time (str): The timestamp of the event.
+        status (str): The event status (e.g. requested, scheduled, started, stopped, oom, failed).
+        container_id (str): The container ID associated with the event.
+        worker_id (str): The worker ID that handled the event.
+        stub_id (str): The stub ID associated with the event.
+        exit_code (int): The exit code of the container, if applicable.
+    """
+
+    id: str
+    time: str
+    status: str
+    container_id: str
+    worker_id: str
+    stub_id: str
+    exit_code: int
 
 
 @dataclass
@@ -3935,3 +4014,20 @@ class AsyncSandboxInstance:
             SandboxConnectionError: If listing URLs fails.
         """
         return await asyncio.to_thread(self._sync.list_urls)
+
+    async def list_events(
+        self, cursor: Optional[List[str]] = None
+    ) -> Tuple[List["SandboxEvent"], Optional[List[str]]]:
+        """
+        List container lifecycle events for this sandbox asynchronously.
+
+        Parameters:
+            cursor (Optional[List[str]]): Pagination cursor from a previous call.
+
+        Returns:
+            Tuple[List[SandboxEvent], Optional[List[str]]]: A tuple of (events, next_cursor).
+
+        Raises:
+            SandboxConnectionError: If listing events fails.
+        """
+        return await asyncio.to_thread(self._sync.list_events, cursor)
