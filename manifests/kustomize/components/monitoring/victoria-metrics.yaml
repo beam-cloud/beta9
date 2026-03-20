@@ -46,7 +46,7 @@ valuesInline:
       regex: true
     - source_labels: [__meta_kubernetes_pod_container_port_number]
       action: keep
-      regex: 9090
+      regex: (9090|8112)
 ---
 apiVersion: builtin
 kind: HelmChartInflationGenerator

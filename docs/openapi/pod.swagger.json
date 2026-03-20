@@ -857,6 +857,46 @@
           "PodService"
         ]
       }
+    },
+    "/pods/{stubId}/events": {
+      "get": {
+        "operationId": "PodService_SandboxListEvents",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/podPodSandboxListEventsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "stubId",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "searchAfter",
+            "in": "query",
+            "required": false,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "collectionFormat": "multi"
+          }
+        ],
+        "tags": [
+          "PodService"
+        ]
+      }
     }
   },
   "definitions": {
@@ -1103,6 +1143,36 @@
         }
       }
     },
+    "podPodSandboxEvent": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "containerId": {
+          "type": "string"
+        },
+        "workerId": {
+          "type": "string"
+        },
+        "stubId": {
+          "type": "string"
+        },
+        "exitCode": {
+          "type": "integer",
+          "format": "int32"
+        }
+      }
+    },
     "podPodSandboxExecResponse": {
       "type": "object",
       "properties": {
@@ -1191,6 +1261,30 @@
         },
         "errorMsg": {
           "type": "string"
+        }
+      }
+    },
+    "podPodSandboxListEventsResponse": {
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "errorMsg": {
+          "type": "string"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/podPodSandboxEvent"
+          }
+        },
+        "nextCursor": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

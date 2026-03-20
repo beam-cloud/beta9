@@ -343,6 +343,32 @@ class PodSandboxListUrlsResponse(betterproto.Message):
     error_msg: str = betterproto.string_field(3)
 
 
+@dataclass(eq=False, repr=False)
+class PodSandboxListEventsRequest(betterproto.Message):
+    stub_id: str = betterproto.string_field(1)
+    search_after: List[str] = betterproto.string_field(2)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxListEventsResponse(betterproto.Message):
+    ok: bool = betterproto.bool_field(1)
+    error_msg: str = betterproto.string_field(2)
+    events: List["PodSandboxEvent"] = betterproto.message_field(3)
+    next_cursor: List[str] = betterproto.string_field(4)
+
+
+@dataclass(eq=False, repr=False)
+class PodSandboxEvent(betterproto.Message):
+    id: str = betterproto.string_field(1)
+    time: str = betterproto.string_field(2)
+    type: str = betterproto.string_field(3)
+    status: str = betterproto.string_field(4)
+    container_id: str = betterproto.string_field(5)
+    worker_id: str = betterproto.string_field(6)
+    stub_id: str = betterproto.string_field(7)
+    exit_code: int = betterproto.int32_field(8)
+
+
 class PodServiceStub(SyncServiceStub):
     def create_pod(self, create_pod_request: "CreatePodRequest") -> "CreatePodResponse":
         return self._unary_unary(
@@ -550,3 +576,12 @@ class PodServiceStub(SyncServiceStub):
             PodSandboxListUrlsRequest,
             PodSandboxListUrlsResponse,
         )(pod_sandbox_list_urls_request)
+
+    def sandbox_list_events(
+        self, pod_sandbox_list_events_request: "PodSandboxListEventsRequest"
+    ) -> "PodSandboxListEventsResponse":
+        return self._unary_unary(
+            "/pod.PodService/SandboxListEvents",
+            PodSandboxListEventsRequest,
+            PodSandboxListEventsResponse,
+        )(pod_sandbox_list_events_request)

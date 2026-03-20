@@ -1,9 +1,13 @@
 package pod
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -738,4 +742,168 @@ func (s *GenericPodService) SandboxListProcesses(ctx context.Context, in *pb.Pod
 		Ok:        true,
 		Processes: resp.Processes,
 	}, nil
+}
+
+func (s *GenericPodService) SandboxListEvents(ctx context.Context, in *pb.PodSandboxListEventsRequest) (*pb.PodSandboxListEventsResponse, error) {
+	authInfo, _ := auth.AuthInfoFromContext(ctx)
+
+	// Validate stub ownership
+	stub, err := s.backendRepo.GetStubByExternalId(ctx, in.StubId, types.QueryFilter{
+		Field: "workspace_id",
+		Value: authInfo.Workspace.ExternalId,
+	})
+	if err != nil || stub == nil {
+		return &pb.PodSandboxListEventsResponse{
+			Ok:       false,
+			ErrorMsg: "Stub not found",
+		}, nil
+	}
+
+	esConfig := s.config.Agent.ElasticSearch
+	if esConfig.Host == "" {
+		return &pb.PodSandboxListEventsResponse{
+			Ok:       false,
+			ErrorMsg: "Elasticsearch not configured",
+		}, nil
+	}
+
+	// Build ES query
+	query := map[string]interface{}{
+		"size": 25,
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"must": []map[string]interface{}{
+					{"term": map[string]interface{}{"type.keyword": "container.lifecycle"}},
+				},
+				"should": []map[string]interface{}{
+					{"term": map[string]interface{}{"data.stub_id.keyword": in.StubId}},
+					{"term": map[string]interface{}{"data.request.stub_id.keyword": in.StubId}},
+				},
+				"minimum_should_match": 1,
+			},
+		},
+		"sort": []map[string]interface{}{
+			{"@timestamp": map[string]string{"order": "desc"}},
+			{"id.keyword": map[string]string{"order": "desc"}},
+		},
+	}
+
+	if len(in.SearchAfter) > 0 {
+		query["search_after"] = in.SearchAfter
+	}
+
+	queryBytes, err := json.Marshal(query)
+	if err != nil {
+		return &pb.PodSandboxListEventsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to build query",
+		}, nil
+	}
+
+	esURL := fmt.Sprintf("http://%s:%s/events-*/_search", esConfig.Host, esConfig.Port)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, esURL, bytes.NewReader(queryBytes))
+	if err != nil {
+		return &pb.PodSandboxListEventsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to create request",
+		}, nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if esConfig.HttpUser != "" {
+		req.SetBasicAuth(esConfig.HttpUser, esConfig.HttpPasswd)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return &pb.PodSandboxListEventsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to query Elasticsearch",
+		}, nil
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &pb.PodSandboxListEventsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to read Elasticsearch response",
+		}, nil
+	}
+
+	var esResp esSearchResponse
+	if err := json.Unmarshal(body, &esResp); err != nil {
+		return &pb.PodSandboxListEventsResponse{
+			Ok:       false,
+			ErrorMsg: "Failed to parse Elasticsearch response",
+		}, nil
+	}
+
+	events := make([]*pb.PodSandboxEvent, 0, len(esResp.Hits.Hits))
+	var lastSort []interface{}
+
+	for _, hit := range esResp.Hits.Hits {
+		event := &pb.PodSandboxEvent{
+			Id:          hit.Source.ID,
+			Time:        hit.Source.Time,
+			Type:        hit.Source.Type,
+			Status:      hit.Source.Data.Status,
+			ContainerId: hit.Source.Data.ContainerID,
+			WorkerId:    hit.Source.Data.WorkerID,
+			StubId:      hit.Source.Data.StubID,
+			ExitCode:    hit.Source.Data.ExitCode,
+		}
+
+		// Fall back to request-level stub_id if top-level is empty
+		if event.StubId == "" && hit.Source.Data.Request != nil {
+			event.StubId = hit.Source.Data.Request.StubID
+		}
+
+		events = append(events, event)
+		lastSort = hit.Sort
+	}
+
+	var nextCursor []string
+	if len(lastSort) > 0 {
+		for _, v := range lastSort {
+			nextCursor = append(nextCursor, fmt.Sprintf("%v", v))
+		}
+	}
+
+	return &pb.PodSandboxListEventsResponse{
+		Ok:         true,
+		Events:     events,
+		NextCursor: nextCursor,
+	}, nil
+}
+
+// Elasticsearch response types for SandboxListEvents
+type esSearchResponse struct {
+	Hits struct {
+		Hits []esHit `json:"hits"`
+	} `json:"hits"`
+}
+
+type esHit struct {
+	Source esEventSource   `json:"_source"`
+	Sort   []interface{}  `json:"sort"`
+}
+
+type esEventSource struct {
+	ID   string        `json:"id"`
+	Time string        `json:"time"`
+	Type string        `json:"type"`
+	Data esEventData   `json:"data"`
+}
+
+type esEventData struct {
+	Status      string          `json:"status"`
+	ContainerID string          `json:"container_id"`
+	WorkerID    string          `json:"worker_id"`
+	StubID      string          `json:"stub_id"`
+	ExitCode    int32           `json:"exit_code"`
+	Request     *esEventRequest `json:"request,omitempty"`
+}
+
+type esEventRequest struct {
+	StubID string `json:"stub_id"`
 }
