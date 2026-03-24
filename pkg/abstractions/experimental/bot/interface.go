@@ -54,8 +54,17 @@ func NewBotInterface(opts botInterfaceOpts) (*BotInterface, error) {
 		}
 	}
 
+	var client *openai.Client
+	if opts.BotConfig.BaseUrl != "" {
+		config := openai.DefaultConfig(opts.BotConfig.ApiKey)
+		config.BaseURL = opts.BotConfig.BaseUrl
+		client = openai.NewClientWithConfig(config)
+	} else {
+		client = openai.NewClient(opts.BotConfig.ApiKey)
+	}
+
 	bi := &BotInterface{
-		client:       openai.NewClient(opts.BotConfig.ApiKey),
+		client:       client,
 		botConfig:    opts.BotConfig,
 		model:        opts.BotConfig.Model,
 		systemPrompt: systemPrompt,
