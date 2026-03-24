@@ -42,6 +42,7 @@
 - **Scale-to-Zero**: Workloads are serverless by default
 - **Volume Storage**: Mount distributed storage volumes
 - **GPU Support**: Run on our cloud (4090s, H100s, and more) or bring your own GPUs
+- **Multi-Provider LLM Support**: Built-in support for OpenAI and [MiniMax](https://www.minimaxi.com) models via OpenAI-compatible API
 
 ## 📦 Installation
 

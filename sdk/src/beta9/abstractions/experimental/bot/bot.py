@@ -224,8 +224,14 @@ class Bot(RunnerAbstraction, DeployableMixin):
     Parameters:
         model (Optional[str]):
             Which model to use for the bot. Default is "gpt-4o".
+            Supports OpenAI models (gpt-4o, gpt-4, etc.) and MiniMax models
+            (MiniMax-M2.7, MiniMax-M2.5, MiniMax-M2.5-highspeed).
         api_key (str):
-            OpenAI API key to use for the bot. In the future this will support other LLM providers.
+            API key for the LLM provider. Works with OpenAI, MiniMax, or any
+            OpenAI-compatible API.
+        base_url (Optional[str]):
+            Custom base URL for the LLM API. When using MiniMax models, this
+            is automatically set to https://api.minimax.io/v1 if not provided.
         locations (Optional[List[BotLocation]]):
             A list of locations where the bot can store markers. Default is [].
         description (Optional[str]):
@@ -251,12 +257,21 @@ class Bot(RunnerAbstraction, DeployableMixin):
         "gpt-3.5-turbo-16k",
         "gpt-3.5-turbo-0613",
         "gpt-4-0613",
+        "MiniMax-M2.7",
+        "MiniMax-M2.5",
+        "MiniMax-M2.5-highspeed",
     ]
+
+    # Provider base URLs for OpenAI-compatible providers
+    PROVIDER_BASE_URLS = {
+        "minimax": "https://api.minimax.io/v1",
+    }
 
     def __init__(
         self,
         model: str = "gpt-4o",
         api_key: str = "",
+        base_url: Optional[str] = None,
         locations: List[BotLocation] = [],
         description: Optional[str] = None,
         volumes: Optional[List[Volume]] = None,
@@ -273,6 +288,10 @@ class Bot(RunnerAbstraction, DeployableMixin):
                 f"Invalid model name: {model}. We currently only support: {', '.join(self.VALID_MODELS)}"
             )
 
+        # Auto-detect provider base URL from model name
+        if base_url is None and model.startswith("MiniMax-"):
+            base_url = self.PROVIDER_BASE_URLS["minimax"]
+
         self.is_websocket = True
         self._bot_stub: Optional[BotServiceStub] = None
         self.syncer: FileSyncer = FileSyncer(self.gateway_stub)
@@ -286,6 +305,8 @@ class Bot(RunnerAbstraction, DeployableMixin):
         self.extra["api_key"] = api_key
         self.extra["authorized"] = authorized
         self.extra["welcome_message"] = welcome_message
+        if base_url:
+            self.extra["base_url"] = base_url
 
         for location in self.locations:
             location_config = location.to_dict()

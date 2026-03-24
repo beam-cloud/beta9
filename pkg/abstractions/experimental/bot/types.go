@@ -157,6 +157,7 @@ type BotConfig struct {
 	Locations      map[string]BotLocationConfig   `json:"locations" redis:"locations"`
 	Transitions    map[string]BotTransitionConfig `json:"transitions" redis:"transitions"`
 	ApiKey         string                         `json:"api_key" redis:"api_key"`
+	BaseUrl        string                         `json:"base_url,omitempty" redis:"base_url,omitempty"`
 	Authorized     bool                           `json:"authorized" redis:"authorized"`
 	WelcomeMessage string                         `json:"welcome_message" redis:"welcome_message"`
 }
