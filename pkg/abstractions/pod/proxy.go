@@ -330,6 +330,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 
 	proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {
 		log.Error().Err(err).Str("stubId", pb.stubId).Msg("pod proxy error")
+		rw.WriteHeader(http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(response, request)
 }
