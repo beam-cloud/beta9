@@ -89,6 +89,13 @@ func (c *AgentConfig) Validate() error {
 	if c.GatewayPort < 1 || c.GatewayPort > 65535 {
 		return &ErrConfigValidation{Field: "gateway_port", Message: fmt.Sprintf("must be 1-65535, got: %d", c.GatewayPort)}
 	}
+	// Security: never ship the k3s cluster bearer token over plaintext HTTP.
+	// The token grants cluster-admin-equivalent access; anyone with passive
+	// network capture on the Tailnet or access to the gateway's logs would
+	// otherwise be able to harvest it.
+	if c.K3sToken != "" && c.GatewayScheme != "https" {
+		return &ErrConfigValidation{Field: "gateway_scheme", Message: "must be 'https' when a k3s token is configured (set BETA9_GATEWAY_SCHEME=https)"}
+	}
 	return nil
 }
 
@@ -97,16 +104,25 @@ func NewConfigFromEnv() *AgentConfig {
 	port := getEnvIntOrDefault("BETA9_GATEWAY_PORT", DefaultGatewayPort)
 	keepaliveInterval := getEnvIntOrDefault("BETA9_KEEPALIVE_INTERVAL", int(DefaultKeepaliveInterval.Seconds()))
 
+	// Default to http for local dev, but promote to https if a k3s token is
+	// present (it is an admin-equivalent credential and must not travel in
+	// plaintext). Callers can always override via BETA9_GATEWAY_SCHEME.
+	scheme := getEnvOrDefault("BETA9_GATEWAY_SCHEME", "http")
+	k3sToken := os.Getenv("BETA9_K3S_TOKEN")
+	if k3sToken != "" && scheme == "http" {
+		scheme = "https"
+	}
+
 	return &AgentConfig{
 		Token:               os.Getenv("BETA9_TOKEN"),
 		MachineID:           os.Getenv("BETA9_MACHINE_ID"),
 		PoolName:            getEnvOrDefault("BETA9_POOL_NAME", DefaultPoolName),
 		GatewayHost:         getEnvOrDefault("BETA9_GATEWAY_HOST", "localhost"),
 		GatewayPort:         port,
-		GatewayScheme:       "http",
+		GatewayScheme:       scheme,
 		ProviderName:        getEnvOrDefault("BETA9_PROVIDER_NAME", DefaultProviderName),
 		Hostname:            os.Getenv("BETA9_HOSTNAME"),
-		K3sToken:            os.Getenv("BETA9_K3S_TOKEN"),
+		K3sToken:            k3sToken,
 		KeepaliveInterval:   time.Duration(keepaliveInterval) * time.Second,
 		RegistrationTimeout: DefaultRegistrationTimeout,
 		Debug:               getEnvBool("BETA9_DEBUG"),

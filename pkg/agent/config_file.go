@@ -15,6 +15,7 @@ type ConfigFile struct {
 	Pool     string        `yaml:"pool"`
 	Provider string        `yaml:"provider,omitempty"`
 	K3s      K3sConfig     `yaml:"k3s,omitempty"`
+	Scheme   string        `yaml:"scheme,omitempty"`
 	Debug    bool          `yaml:"debug,omitempty"`
 }
 
@@ -127,13 +128,24 @@ func (c *ConfigFile) ToAgentConfig() *AgentConfig {
 		provider = DefaultProviderName
 	}
 
+	// Default scheme to http for back-compat, but if a k3s token is present
+	// we force https: the k3s bearer token is admin-equivalent and must not
+	// travel in plaintext.
+	scheme := c.Scheme
+	if scheme == "" {
+		scheme = "http"
+	}
+	if c.K3s.Token != "" && scheme == "http" {
+		scheme = "https"
+	}
+
 	return &AgentConfig{
 		Token:               c.Machine.Token,
 		MachineID:           c.Machine.ID,
 		PoolName:            pool,
 		GatewayHost:         c.Gateway.Host,
 		GatewayPort:         port,
-		GatewayScheme:       "http",
+		GatewayScheme:       scheme,
 		ProviderName:        provider,
 		Hostname:            c.Machine.Hostname,
 		K3sToken:            c.K3s.Token,
@@ -160,7 +172,8 @@ func NewConfigFileFromAgentConfig(cfg *AgentConfig) *ConfigFile {
 		K3s: K3sConfig{
 			Token: cfg.K3sToken,
 		},
-		Debug: cfg.Debug,
+		Scheme: cfg.GatewayScheme,
+		Debug:  cfg.Debug,
 	}
 }
 

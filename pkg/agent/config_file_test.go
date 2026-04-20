@@ -182,8 +182,11 @@ func TestToAgentConfig(t *testing.T) {
 	if agentCfg.ProviderName != "aws" {
 		t.Errorf("expected ProviderName 'aws', got '%s'", agentCfg.ProviderName)
 	}
-	if agentCfg.GatewayScheme != "http" {
-		t.Errorf("expected GatewayScheme 'http', got '%s'", agentCfg.GatewayScheme)
+	// Security: ToAgentConfig now forces https when a k3s token is present,
+	// because the k3s bearer token is cluster-admin-equivalent and must not
+	// be shipped over plaintext HTTP.
+	if agentCfg.GatewayScheme != "https" {
+		t.Errorf("expected GatewayScheme 'https' (auto-promoted due to k3s token), got '%s'", agentCfg.GatewayScheme)
 	}
 }
 

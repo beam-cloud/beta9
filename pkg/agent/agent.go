@@ -197,7 +197,11 @@ func (a *Agent) runWithLogs() error {
 
 	log.Info().Msg("Machine registered successfully")
 	if result.Config != nil && len(result.Config) > 0 {
-		log.Debug().Interface("config", result.Config).Msg("Gateway config received")
+		// Redact sensitive fields (k3s_token, auth_token, password, ...)
+		// before dumping the gateway-echoed config map at Debug level.
+		// Without this, a misconfigured Debug flag or shared-log sink
+		// leaks cluster-admin-equivalent tokens.
+		log.Debug().Interface("config", redactSensitive(result.Config)).Msg("Gateway config received")
 	}
 
 	// Step 2: Handle --once mode
@@ -398,3 +402,62 @@ func GenerateMachineID() string {
 	}
 	return hex.EncodeToString(bytes)
 }
+
+// redactSensitive returns a shallow copy of m with any values whose keys
+// look sensitive (token/password/secret/key) replaced with "[REDACTED]".
+// Key matching is case-insensitive and substring-based so that
+// "k3s_token", "authToken", "API-Key", etc. are all covered. Nested maps
+// and slices are walked one level deep — enough for the flat config map
+// the gateway currently echoes back.
+func redactSensitive(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if isSensitiveKey(k) {
+			out[k] = "[REDACTED]"
+			continue
+		}
+		switch vv := v.(type) {
+		case map[string]any:
+			out[k] = redactSensitive(vv)
+		case []any:
+			arr := make([]any, len(vv))
+			for i, item := range vv {
+				if inner, ok := item.(map[string]any); ok {
+					arr[i] = redactSensitive(inner)
+				} else {
+					arr[i] = item
+				}
+			}
+			out[k] = arr
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// isSensitiveKey reports whether a config key name looks like it holds a
+// credential. The key is lowercased and stripped of non-alphanumerics
+// before a substring check, so "api_key", "API-Key", "apiKey" and
+// "apikey" all match the same "apikey" needle.
+func isSensitiveKey(k string) bool {
+	lk := strings.ToLower(k)
+	var b strings.Builder
+	b.Grow(len(lk))
+	for _, r := range lk {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	norm := b.String()
+	for _, needle := range []string{"token", "password", "passwd", "secret", "apikey", "credential", "privatekey"} {
+		if strings.Contains(norm, needle) {
+			return true
+		}
+	}
+	return false
+}
+
