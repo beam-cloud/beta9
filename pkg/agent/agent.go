@@ -38,6 +38,13 @@ func New(config *AgentConfig) *Agent {
 
 // NewWithTUI creates a new agent instance with optional TUI
 func NewWithTUI(config *AgentConfig, useTUI bool) *Agent {
+	// Resolve absolute paths for external binaries (kubectl, nvidia-smi,
+	// tailscale) exactly once, up-front. Subsequent call sites reuse the
+	// cached paths; a missing binary logs a warning and the corresponding
+	// feature is skipped at runtime rather than falling back to PATH
+	// lookup (P1-C: PATH hijack).
+	_ = resolveBinaries()
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	state := NewAgentState(
@@ -81,8 +88,14 @@ func detectTailscaleIP() string {
 		return ip
 	}
 
-	// Try running tailscale ip command
-	cmd := exec.Command("tailscale", "ip", "-4")
+	// Try running tailscale ip command. Use the cached absolute path
+	// (P1-C: PATH hijack) and skip gracefully if the binary isn't
+	// present — non-Tailscale workers should still come up.
+	tsPath := TailscalePath()
+	if tsPath == "" {
+		return "localhost"
+	}
+	cmd := exec.Command(tsPath, "ip", "-4")
 	output, err := cmd.Output()
 	if err == nil {
 		ip := strings.TrimSpace(string(output))

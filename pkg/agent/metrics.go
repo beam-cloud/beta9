@@ -85,9 +85,15 @@ func (c *MetricsCollector) Collect() (*MachineMetrics, error) {
 	}, nil
 }
 
-// DetectGPUCount returns the number of NVIDIA GPUs
+// DetectGPUCount returns the number of NVIDIA GPUs. Uses the cached
+// absolute path for nvidia-smi (P1-C: PATH hijack) and returns 0 if the
+// binary isn't installed.
 func DetectGPUCount() int {
-	cmd := exec.Command("nvidia-smi", "--query-gpu=name", "--format=csv,noheader")
+	nvPath := NvidiaSMIPath()
+	if nvPath == "" {
+		return 0
+	}
+	cmd := exec.Command(nvPath, "--query-gpu=name", "--format=csv,noheader")
 	output, err := cmd.Output()
 	if err != nil {
 		return 0

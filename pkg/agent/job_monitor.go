@@ -79,9 +79,16 @@ func (m *JobMonitor) watchPods(ctx context.Context) {
 		default:
 		}
 
-		// Run kubectl watch
+		// Run kubectl watch. Use the cached absolute path (P1-C: PATH
+		// hijack) and exit the loop if kubectl isn't installed —
+		// non-k3s workers don't need a pod watcher.
+		kubectlPath := KubectlPath()
+		if kubectlPath == "" {
+			log.Debug().Msg("kubectl not installed; pod watcher disabled")
+			return
+		}
 		// Watch for pods with beta9-related labels
-		cmd := exec.CommandContext(ctx, "kubectl", "get", "pods",
+		cmd := exec.CommandContext(ctx, kubectlPath, "get", "pods",
 			"-n", "default",
 			"-l", "app.kubernetes.io/managed-by=beta9",
 			"-o", "json",
@@ -236,7 +243,12 @@ func parseK8sTime(ts string) time.Time {
 
 // RefreshPods does a one-time refresh of current pods
 func (m *JobMonitor) RefreshPods(ctx context.Context) {
-	cmd := exec.CommandContext(ctx, "kubectl", "get", "pods",
+	kubectlPath := KubectlPath()
+	if kubectlPath == "" {
+		log.Debug().Msg("kubectl not installed; skipping RefreshPods")
+		return
+	}
+	cmd := exec.CommandContext(ctx, kubectlPath, "get", "pods",
 		"-n", "default",
 		"-l", "app.kubernetes.io/managed-by=beta9",
 		"-o", "json")
