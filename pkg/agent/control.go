@@ -6,12 +6,54 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
 )
 
 const DefaultControlPort = 9999
+
+// maxInferencePullBodyBytes caps the /inference/pull request body. The handler
+// only consumes a single JSON object with a short "model" field, so 4 KiB is
+// ample and prevents a slow-loris or memory-exhaustion vector on the unauth
+// control API.
+const maxInferencePullBodyBytes = 4096
+
+// ollamaModelNamePattern enforces a conservative allowlist on model names
+// accepted by /inference/pull.
+//
+// Allowed: lowercase letters, digits, dot, underscore, hyphen, optionally
+// followed by a single ":tag" suffix with the same character class.
+// Disallowed in particular: '/' (which would let a caller specify a fully
+// qualified remote registry like "attacker.example.com/evil:latest") and '..'
+// (traversal hints). Uppercase is rejected because Ollama normalises tags to
+// lowercase anyway and accepting case-variants would make the allowlist
+// awkward to reason about.
+var ollamaModelNamePattern = regexp.MustCompile(`^[a-z0-9._-]+(:[a-z0-9._-]+)?$`)
+
+// validateOllamaModelName returns nil if name is safe to pass through to the
+// local Ollama /api/pull endpoint. It is deliberately strict: any change here
+// should be considered a security-relevant diff.
+func validateOllamaModelName(name string) error {
+	if name == "" {
+		return fmt.Errorf("model name is required")
+	}
+	if len(name) > 128 {
+		return fmt.Errorf("model name too long")
+	}
+	if strings.Contains(name, "/") {
+		return fmt.Errorf("model name must not contain '/'")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("model name must not contain '..'")
+	}
+	if !ollamaModelNamePattern.MatchString(name) {
+		return fmt.Errorf("model name must match %s", ollamaModelNamePattern.String())
+	}
+	return nil
+}
 
 // ControlServer handles external commands to the agent
 type ControlServer struct {
@@ -124,6 +166,10 @@ func (c *ControlServer) handleInferencePull(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Cap request body size. The control API is unauthenticated on the
+	// Tailscale network so we treat the body as hostile.
+	r.Body = http.MaxBytesReader(w, r.Body, maxInferencePullBodyBytes)
+
 	// Parse request body
 	var req struct {
 		Model string `json:"model"`
@@ -136,10 +182,11 @@ func (c *ControlServer) handleInferencePull(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if req.Model == "" {
+	if err := validateOllamaModelName(req.Model); err != nil {
+		log.Warn().Str("model", req.Model).Err(err).Msg("Rejected /inference/pull: bad model name")
 		writeJSON(w, http.StatusBadRequest, map[string]any{
 			"status": "error",
-			"error":  "Model name required",
+			"error":  err.Error(),
 		})
 		return
 	}
