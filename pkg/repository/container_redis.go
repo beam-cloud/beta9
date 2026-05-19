@@ -212,8 +212,6 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 		state.StartedAt = time.Now().Unix()
 	}
 
-	previousStatus := state.Status
-
 	// Update status
 	state.Status = status
 
@@ -229,7 +227,9 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 		return fmt.Errorf("failed to set container state ttl <%v>: %w", stateKey, err)
 	}
 
-	if status == types.ContainerStatusStopping && previousStatus != types.ContainerStatusStopping {
+	if status == types.ContainerStatusStopping {
+		// The release script is idempotent. Run it on every STOPPING update so
+		// callers can retry if a previous release failed after status persisted.
 		if err := cr.releaseContainerConcurrencyReservation(context.TODO(), state.WorkspaceId, containerId); err != nil {
 			return err
 		}

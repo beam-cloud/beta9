@@ -172,6 +172,52 @@ func TestUpdateContainerStatusStoppingReleasesConcurrencyReservation(t *testing.
 	}
 }
 
+func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFailure(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
+	firstRequest := testContainerRequest("sandbox-test-stub-release-retry-first", "test-workspace", 100)
+	secondRequest := testContainerRequest("sandbox-test-stub-release-retry-second", "test-workspace", 100)
+	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(firstRequest.WorkspaceId)
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rdb.HSet(context.Background(), usageKey, "cpu", "not-an-int").Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.UpdateContainerStatus(firstRequest.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
+	if err == nil {
+		t.Fatal("expected transient release error")
+	}
+
+	state, err := repo.GetContainerState(firstRequest.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != types.ContainerStatusStopping {
+		t.Fatalf("expected status to be persisted as STOPPING, got %s", state.Status)
+	}
+
+	if err := rdb.HSet(context.Background(), usageKey, "cpu", firstRequest.Cpu).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.UpdateContainerStatus(firstRequest.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending); err != nil {
+		t.Fatalf("expected retry to release existing reservation, got %v", err)
+	}
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+		t.Fatalf("expected quota to be available after retry release, got %v", err)
+	}
+}
+
 func testContainerRequest(containerId, workspaceId string, cpu int64) *types.ContainerRequest {
 	return &types.ContainerRequest{
 		ContainerId: containerId,
