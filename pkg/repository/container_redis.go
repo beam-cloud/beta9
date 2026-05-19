@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -523,7 +524,9 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 	})
 	if err != nil {
 		if reservedConcurrency {
-			_ = c.releaseContainerConcurrencyReservation(context.TODO(), request.WorkspaceId, request.ContainerId)
+			if releaseErr := c.releaseContainerConcurrencyReservation(context.TODO(), request.WorkspaceId, request.ContainerId); releaseErr != nil {
+				return errors.Join(err, fmt.Errorf("failed to release concurrency reservation after container state error: %w", releaseErr))
+			}
 		}
 		return err
 	}

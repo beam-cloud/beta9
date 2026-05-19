@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -215,6 +216,48 @@ func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFai
 
 	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected quota to be available after retry release, got %v", err)
+	}
+}
+
+func TestSetContainerStateWithConcurrencyLimitReturnsReservationReleaseError(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
+	request := testContainerRequest("sandbox-test-stub-state-release-error", "test-workspace", 100)
+
+	stateKey := common.RedisKeys.SchedulerContainerState(request.ContainerId)
+	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId)
+	reservationKey := common.RedisKeys.WorkspaceConcurrencyLimitReservation(request.WorkspaceId, request.ContainerId)
+
+	if err := rdb.HSet(context.Background(), usageKey,
+		"gpu_count", 0,
+		"cpu", 0,
+		"initialized", concurrencyUsageInitialized,
+		"updated_at", time.Now().Unix(),
+	).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.Set(context.Background(), reservationKey, "not-a-hash", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rdb.Set(context.Background(), stateKey, "not-a-hash", 0).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.SetContainerStateWithConcurrencyLimit(quota, request)
+	if err == nil {
+		t.Fatal("expected state write and reservation release errors")
+	}
+
+	if !strings.Contains(err.Error(), "failed to set container state") {
+		t.Fatalf("expected state write error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "failed to release concurrency reservation") {
+		t.Fatalf("expected reservation release error, got %v", err)
 	}
 }
 
