@@ -73,11 +73,13 @@ func NewSchedulerForTest() (*Scheduler, error) {
 }
 
 type LocalWorkerPoolControllerForTest struct {
-	ctx         context.Context
-	name        string
-	config      types.AppConfig
-	workerRepo  repo.WorkerRepository
-	preemptable bool
+	ctx              context.Context
+	name             string
+	config           types.AppConfig
+	workerRepo       repo.WorkerRepository
+	preemptable      bool
+	addWorkerStarted chan struct{}
+	unblockAddWorker chan struct{}
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) Context() context.Context {
@@ -109,6 +111,21 @@ func (wpc *LocalWorkerPoolControllerForTest) generateWorkerId() string {
 }
 
 func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, gpuCount uint32) (*types.Worker, error) {
+	if wpc.addWorkerStarted != nil {
+		select {
+		case wpc.addWorkerStarted <- struct{}{}:
+		default:
+		}
+	}
+
+	if wpc.unblockAddWorker != nil {
+		select {
+		case <-wpc.unblockAddWorker:
+		case <-wpc.ctx.Done():
+			return nil, wpc.ctx.Err()
+		}
+	}
+
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
 		Id:           workerId,
@@ -383,6 +400,79 @@ func TestProcessRequests(t *testing.T) {
 	<-ctx.Done()
 
 	assert.Equal(t, int64(0), wb.requestBacklog.Len())
+}
+
+func TestSchedulerDoesNotBlockOnSlowWorkerProvisioning(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wb.ctx = ctx
+
+	started := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+	wb.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, &LocalWorkerPoolControllerForTest{
+		ctx:              ctx,
+		name:             "beta9-cpu",
+		workerRepo:       wb.workerRepo,
+		addWorkerStarted: started,
+		unblockAddWorker: unblock,
+	})
+
+	fastWorker := &types.Worker{
+		Id:         uuid.New().String(),
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    100,
+		FreeMemory: 200,
+		PoolName:   "beta9-build",
+	}
+	err = wb.workerRepo.AddWorker(fastWorker)
+	assert.Nil(t, err)
+
+	slowRequest := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+	}
+	fastRequest := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-build",
+	}
+
+	err = wb.Run(slowRequest)
+	assert.Nil(t, err)
+	time.Sleep(time.Millisecond)
+	err = wb.Run(fastRequest)
+	assert.Nil(t, err)
+
+	go wb.StartProcessingRequests()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected scheduler to start worker provisioning")
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("expected unrelated request to schedule while worker provisioning is blocked")
+		default:
+		}
+
+		request, err := wb.workerRepo.GetNextContainerRequest(fastWorker.Id)
+		assert.Nil(t, err)
+		if request != nil && request.ContainerId == fastRequest.ContainerId {
+			break
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestGetController(t *testing.T) {

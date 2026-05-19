@@ -297,33 +297,7 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 			return nil
 		}
 
-		var addWorkerErr error
-		for _, c := range controllers {
-			// Iterates through controllers in the order of prioritized gpus to attempt to add a worker
-			if c == nil {
-				continue
-			}
-
-			var newWorker *types.Worker
-			newWorker, addWorkerErr = c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
-			if addWorkerErr == nil {
-				log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added new worker")
-
-				err = s.scheduleRequest(newWorker, request)
-				if err != nil {
-					log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request")
-					metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "schedule_failed")
-					s.addRequestToBacklog(request)
-				}
-
-				return newWorker
-			}
-		}
-
-		log.Error().Str("container_id", request.ContainerId).Err(addWorkerErr).Msg("unable to add worker")
-		metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "add_worker_failed")
-		s.addRequestToBacklog(request)
-
+		go s.addWorkerAndScheduleRequest(request, controllers)
 		return nil
 	}
 
@@ -342,6 +316,45 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 	metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
 	metrics.RecordSchedulerWorkerWait(schedulingDuration, request, "scheduled")
 	return nil
+}
+
+func (s *Scheduler) addWorkerAndScheduleRequest(request *types.ContainerRequest, controllers []WorkerPoolController) {
+	var addWorkerErr error
+	for _, c := range controllers {
+		if c == nil {
+			continue
+		}
+
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+
+		newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
+		if err != nil {
+			addWorkerErr = err
+			continue
+		}
+
+		log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added new worker")
+
+		if err := s.scheduleRequest(newWorker, request); err != nil {
+			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request")
+			metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "schedule_failed")
+			s.addRequestToBacklog(request)
+			return
+		}
+
+		schedulingDuration := time.Since(request.Timestamp)
+		metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
+		metrics.RecordSchedulerWorkerWait(schedulingDuration, request, "scheduled")
+		return
+	}
+
+	log.Error().Str("container_id", request.ContainerId).Err(addWorkerErr).Msg("unable to add worker")
+	metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "add_worker_failed")
+	s.addRequestToBacklog(request)
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
