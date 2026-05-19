@@ -33,7 +33,9 @@ func (s *Worker) setupOOMWatcher(
 			return
 		}
 
-		if spec.Linux.Resources == nil ||
+		if spec == nil ||
+			spec.Linux == nil ||
+			spec.Linux.Resources == nil ||
 			spec.Linux.Resources.Memory == nil ||
 			spec.Linux.Resources.Memory.Limit == nil {
 			return
@@ -72,7 +74,11 @@ func (s *Worker) setupOOMWatcher(
 
 // getMemoryLimit extracts memory limit from spec or request
 func (s *Worker) getMemoryLimit(spec *specs.Spec, request *types.ContainerRequest) uint64 {
-	if spec.Linux.Resources != nil && spec.Linux.Resources.Memory != nil && spec.Linux.Resources.Memory.Limit != nil {
+	if spec != nil &&
+		spec.Linux != nil &&
+		spec.Linux.Resources != nil &&
+		spec.Linux.Resources.Memory != nil &&
+		spec.Linux.Resources.Memory.Limit != nil {
 		return uint64(*spec.Linux.Resources.Memory.Limit)
 	}
 	// Fallback to request memory (convert MB to bytes)
