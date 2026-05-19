@@ -595,11 +595,6 @@ func (s *ContainerRuntimeServer) waitForSandboxProcessManager(ctx context.Contex
 		select {
 		case <-instance.ProcessManagerReadyChan:
 			return s.refreshContainerInstance(containerId, instance), nil
-		case <-time.After(2 * time.Second):
-			// Keep going and let the exec call itself act as a readiness probe.
-			// The initialization probe can time out under burst load, but the
-			// process manager may become available shortly after.
-			return s.refreshContainerInstance(containerId, instance), nil
 		case <-ctx.Done():
 			return instance, errors.New("Request cancelled")
 		}
