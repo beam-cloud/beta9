@@ -591,12 +591,8 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 	return client, container, nil
 }
 
-func sandboxConnectErrorMessage(err error) string {
-	if err == nil {
-		return "Failed to connect to sandbox"
-	}
-
-	return fmt.Sprintf("Failed to connect to sandbox: %s", err.Error())
+func sandboxConnectErrorMessage(_ error) string {
+	return "Failed to connect to sandbox"
 }
 
 func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSandboxUpdateTTLRequest) (*pb.PodSandboxUpdateTTLResponse, error) {
