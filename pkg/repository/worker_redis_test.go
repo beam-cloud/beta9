@@ -158,12 +158,13 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	}
 	err = repo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
 	assert.Nil(t, err)
+	freeMemoryAfterAdd := capacityMemoryForRequest(request)
 
 	// Retrieve the updated worker
 	updatedWorker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, request.Cpu, updatedWorker.FreeCpu)
-	assert.Equal(t, request.Memory, updatedWorker.FreeMemory)
+	assert.Equal(t, freeMemoryAfterAdd, updatedWorker.FreeMemory)
 	assert.Equal(t, request.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusPending, worker.Status)
 	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
@@ -185,7 +186,7 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Equal(t, int64(400), updatedWorker.FreeCpu)
-	assert.Equal(t, int64(900), updatedWorker.FreeMemory)
+	assert.Equal(t, freeMemoryAfterAdd-capacityMemoryForRequest(request), updatedWorker.FreeMemory)
 	assert.Equal(t, request.Gpu, updatedWorker.Gpu)
 }
 
@@ -230,8 +231,9 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	// Retrieve the updated worker
 	updatedWorker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
+	freeMemoryAfterFirstRequest := worker.FreeMemory - capacityMemoryForRequest(firstRequest)
 	assert.Equal(t, worker.FreeCpu-firstRequest.Cpu, updatedWorker.FreeCpu)
-	assert.Equal(t, worker.FreeMemory-firstRequest.Memory, updatedWorker.FreeMemory)
+	assert.Equal(t, freeMemoryAfterFirstRequest, updatedWorker.FreeMemory)
 	assert.Equal(t, firstRequest.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, worker.Status, updatedWorker.Status)
 	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
@@ -262,11 +264,21 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	// Retrieve the worker again
 	updatedWorker, err = repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
+	freeMemoryAfterThirdRequest := freeMemoryAfterFirstRequest -
+		capacityMemoryForRequest(secondRequest) -
+		capacityMemoryForRequest(thirdRequest)
 
 	assert.Equal(t, worker.FreeCpu-firstRequest.Cpu-secondRequest.Cpu-thirdRequest.Cpu, updatedWorker.FreeCpu)
-	assert.Equal(t, worker.FreeMemory-firstRequest.Memory-secondRequest.Memory-thirdRequest.Memory, updatedWorker.FreeMemory)
+	assert.Equal(t, freeMemoryAfterThirdRequest, updatedWorker.FreeMemory)
 	assert.Equal(t, worker.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, int64(3), updatedWorker.ResourceVersion)
+}
+
+func TestCapacityMemoryForRequest(t *testing.T) {
+	assert.Equal(t, int64(0), capacityMemoryForRequest(&types.ContainerRequest{}))
+	assert.Equal(t, int64(-1), capacityMemoryForRequest(&types.ContainerRequest{Memory: -1}))
+	assert.Equal(t, int64(125), capacityMemoryForRequest(&types.ContainerRequest{Memory: 100}))
+	assert.Equal(t, int64(2), capacityMemoryForRequest(&types.ContainerRequest{Memory: 1}))
 }
 
 func TestGetAllWorkers(t *testing.T) {
