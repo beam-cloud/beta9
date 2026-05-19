@@ -34,7 +34,7 @@ const (
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
 	defaultRuncStartConcurrency                  = 8
-	defaultGvisorStartConcurrency                = 2
+	defaultGvisorStartConcurrency                = 8
 )
 
 type Worker struct {
