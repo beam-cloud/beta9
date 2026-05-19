@@ -1120,27 +1120,29 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	bundlePath := filepath.Dir(request.ConfigPath)
 	runtimeStartedChan := make(chan int, 1)
 	runtimeStartedDone := make(chan struct{})
+	runtimeStartedHandled := make(chan struct{})
 	runtimeStart := time.Now()
-	go func() {
-		select {
-		case pid := <-runtimeStartedChan:
-			if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
-				instance.RuntimeStarted = true
-				instance.RuntimePid = pid
-				instance.RuntimeStartedAt = time.Now().Unix()
-				s.containerInstances.Set(request.ContainerId, instance)
-			}
 
-			metrics.RecordWorkerStartupPhase("runtime_start_to_pid", time.Since(runtimeStart), request, map[string]string{
-				"runtime": instance.Runtime.Name(),
-			})
-			select {
-			case startedChan <- pid:
-			case <-ctx.Done():
-			}
-		case <-ctx.Done():
-		case <-runtimeStartedDone:
+	handleRuntimeStarted := func(pid int) {
+		if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+			instance.RuntimeStarted = true
+			instance.RuntimePid = pid
+			instance.RuntimeStartedAt = time.Now().Unix()
+			s.containerInstances.Set(request.ContainerId, instance)
 		}
+
+		metrics.RecordWorkerStartupPhase("runtime_start_to_pid", time.Since(runtimeStart), request, map[string]string{
+			"runtime": instance.Runtime.Name(),
+		})
+		select {
+		case startedChan <- pid:
+		case <-ctx.Done():
+		}
+	}
+
+	go func() {
+		defer close(runtimeStartedHandled)
+		waitForRuntimeStarted(ctx, runtimeStartedChan, runtimeStartedDone, handleRuntimeStarted)
 	}()
 
 	exitCode, err := instance.Runtime.Run(ctx, request.ContainerId, bundlePath, &runtime.RunOpts{
@@ -1149,11 +1151,26 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		DockerEnabled: request.DockerEnabled,
 	})
 	close(runtimeStartedDone)
+	<-runtimeStartedHandled
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}
 
 	return exitCode, err
+}
+
+func waitForRuntimeStarted(ctx context.Context, runtimeStarted <-chan int, runtimeDone <-chan struct{}, handle func(int)) {
+	select {
+	case pid := <-runtimeStarted:
+		handle(pid)
+	case <-ctx.Done():
+	case <-runtimeDone:
+		select {
+		case pid := <-runtimeStarted:
+			handle(pid)
+		default:
+		}
+	}
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {

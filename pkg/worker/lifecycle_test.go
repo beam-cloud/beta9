@@ -17,6 +17,36 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWaitForRuntimeStartedDrainsQueuedPIDWhenRuntimeDone(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		runtimeStarted := make(chan int, 1)
+		runtimeDone := make(chan struct{})
+		runtimeStarted <- 1234
+		close(runtimeDone)
+
+		handled := 0
+		waitForRuntimeStarted(context.Background(), runtimeStarted, runtimeDone, func(pid int) {
+			require.Equal(t, 1234, pid)
+			handled++
+		})
+
+		require.Equal(t, 1, handled)
+	}
+}
+
+func TestWaitForRuntimeStartedReturnsWhenRuntimeDoneWithoutPID(t *testing.T) {
+	runtimeStarted := make(chan int, 1)
+	runtimeDone := make(chan struct{})
+	close(runtimeDone)
+
+	handled := false
+	waitForRuntimeStarted(context.Background(), runtimeStarted, runtimeDone, func(pid int) {
+		handled = true
+	})
+
+	require.False(t, handled)
+}
+
 // TestV2ImageEnvironmentFlow tests that v2 images correctly extract metadata from CLIP archives
 // Note: Without actual CLIP archives, this test verifies graceful handling
 func TestV2ImageEnvironmentFlow(t *testing.T) {
