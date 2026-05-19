@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/redislock"
 	redis "github.com/redis/go-redis/v9"
@@ -427,6 +428,12 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 	if err != nil && err != redislock.ErrNotObtained {
 		return err
 	}
+	if err == redislock.ErrNotObtained {
+		metrics.RecordConcurrencyLimitThrottle("lock", request)
+		return &types.ThrottledByConcurrencyLimitError{
+			Reason: "concurrency limit lock unavailable",
+		}
+	}
 
 	defer lock.Release(context)
 
@@ -450,12 +457,14 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 		}
 
 		if totalGpuCount+int(request.GpuCount) > int(quota.GPULimit) {
+			metrics.RecordConcurrencyLimitThrottle("gpu", request)
 			return &types.ThrottledByConcurrencyLimitError{
 				Reason: "gpu quota exceeded",
 			}
 		}
 
 		if totalCpu+int(request.Cpu) > int(quota.CPUMillicoreLimit) {
+			metrics.RecordConcurrencyLimitThrottle("cpu", request)
 			return &types.ThrottledByConcurrencyLimitError{
 				Reason: "cpu quota exceeded",
 			}

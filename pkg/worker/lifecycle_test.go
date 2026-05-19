@@ -3,12 +3,15 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"os"
 	"syscall"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -292,6 +295,70 @@ func TestCachedImageMetadata(t *testing.T) {
 
 		t.Logf("✅ Gracefully handled missing v2 archive")
 	})
+}
+
+func TestGetCLIPImageMetadataUsesCachedV2ArchiveMetadata(t *testing.T) {
+	imageId := "v2-cached-metadata"
+	imageMetadata := &clipCommon.ImageMetadata{
+		Env:        []string{"FOO=bar"},
+		WorkingDir: "/workspace",
+		Cmd:        []string{"python", "app.py"},
+	}
+
+	imageClient := &ImageClient{
+		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+		v2ImageRefs:       common.NewSafeMap[string](),
+	}
+	imageClient.v2ArchiveMetadata.Set(imageId, &clipCommon.ClipArchiveMetadata{
+		StorageInfo: &clipCommon.OCIStorageInfo{
+			ImageMetadata: imageMetadata,
+		},
+	})
+
+	got, ok := imageClient.GetCLIPImageMetadata(imageId)
+	require.True(t, ok)
+	assert.Equal(t, imageMetadata, got)
+}
+
+func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
+	imageId := "v2-pointer-metadata"
+	imageClient := &ImageClient{
+		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+		v2ImageRefs:       common.NewSafeMap[string](),
+	}
+
+	meta := &clipCommon.ClipArchiveMetadata{
+		StorageInfo: &clipCommon.OCIStorageInfo{
+			RegistryURL: "https://registry.example.com",
+			Repository:  "team/image",
+			Reference:   "latest",
+		},
+	}
+	imageClient.cacheOCIMetadata(imageId, meta)
+
+	cachedMeta, ok := imageClient.v2ArchiveMetadata.Get(imageId)
+	require.True(t, ok)
+	assert.Equal(t, meta, cachedMeta)
+
+	sourceRef, ok := imageClient.GetSourceImageRef(imageId)
+	require.True(t, ok)
+	assert.Equal(t, "registry.example.com/team/image:latest", sourceRef)
+}
+
+func TestMountedImageReadyVerifiesMountPath(t *testing.T) {
+	imageId := "warm-image"
+	mountRoot := t.TempDir()
+	imageClient := &ImageClient{
+		imageMountPath:     mountRoot,
+		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+	}
+
+	imageClient.mountedFuseServers.Set(imageId, nil)
+	assert.False(t, imageClient.mountedImageReady(imageId))
+
+	require.NoError(t, os.MkdirAll(imageClient.imageMountPoint(imageId), 0755))
+	imageClient.mountedFuseServers.Set(imageId, nil)
+	assert.True(t, imageClient.mountedImageReady(imageId))
 }
 
 // Get a base test spec

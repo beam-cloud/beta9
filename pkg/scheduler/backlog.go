@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/redis/go-redis/v9"
 )
@@ -32,7 +33,12 @@ func (rb *RequestBacklog) Push(request *types.ContainerRequest) error {
 
 	// Use the timestamp as the score for sorting
 	timestamp := float64(request.Timestamp.UnixNano())
-	return rb.rdb.ZAdd(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), redis.Z{Score: timestamp, Member: jsonData}).Err()
+	if err := rb.rdb.ZAdd(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), redis.Z{Score: timestamp, Member: jsonData}).Err(); err != nil {
+		return err
+	}
+
+	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
+	return nil
 }
 
 // Pops the oldest container request from the sorted set
@@ -55,6 +61,7 @@ func (rb *RequestBacklog) Pop() (*types.ContainerRequest, error) {
 		return nil, err
 	}
 
+	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
 	return &poppedItem, nil
 }
 

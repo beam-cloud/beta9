@@ -138,3 +138,32 @@ func TestRingBuffer_PriorityPushOnFullBuffer(t *testing.T) {
 	}
 
 }
+
+func TestRingBuffer_OverwriteStats(t *testing.T) {
+	rb := NewRingBuffer[int](2)
+
+	if rb.Capacity() != 2 {
+		t.Errorf("expected capacity 2, got %d", rb.Capacity())
+	}
+
+	if overwritten := rb.Push(1, false); overwritten {
+		t.Errorf("expected first push not to overwrite")
+	}
+	if overwritten := rb.Push(2, false); overwritten {
+		t.Errorf("expected second push not to overwrite")
+	}
+	if overwritten := rb.Push(3, false); !overwritten {
+		t.Errorf("expected full buffer push to overwrite")
+	}
+
+	if rb.Overwrites() != 1 {
+		t.Errorf("expected 1 overwrite, got %d", rb.Overwrites())
+	}
+
+	if overwritten := rb.Push(0, true); !overwritten {
+		t.Errorf("expected full priority push to overwrite")
+	}
+	if rb.Overwrites() != 2 {
+		t.Errorf("expected 2 overwrites, got %d", rb.Overwrites())
+	}
+}

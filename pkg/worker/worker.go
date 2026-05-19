@@ -93,16 +93,18 @@ type ContainerInstance struct {
 	StopReason                 types.StopContainerReason
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
+	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string
 	Runtime                    runtime.Runtime
 	OOMWatcher                 runtime.OOMWatcher
 }
 
 type ContainerOptions struct {
-	BundlePath   string
-	HostBindPort int
-	BindPorts    []int
-	InitialSpec  *specs.Spec
+	BundlePath       string
+	HostBindPort     int
+	BindPorts        []int
+	InitialSpec      *specs.Spec
+	StartupStartedAt time.Time
 }
 
 type stopContainerEvent struct {

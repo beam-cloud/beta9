@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	requestProcessingInterval time.Duration = 100 * time.Millisecond
+	requestProcessingInterval time.Duration = 50 * time.Millisecond
 )
 
 type Scheduler struct {
@@ -269,6 +269,7 @@ func (s *Scheduler) StartProcessingRequests() {
 		// Find a worker to schedule ContainerRequests on
 		worker, err := s.selectWorker(request)
 		if err != nil || worker == nil {
+			metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "no_worker")
 			// We didn't find a Worker that fit the ContainerRequest's requirements. Let's find a controller
 			// so we can add a new worker.
 
@@ -294,6 +295,7 @@ func (s *Scheduler) StartProcessingRequests() {
 						err = s.scheduleRequest(newWorker, request)
 						if err != nil {
 							log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request")
+							metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "schedule_failed")
 							s.addRequestToBacklog(request)
 						}
 
@@ -302,6 +304,7 @@ func (s *Scheduler) StartProcessingRequests() {
 				}
 
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to add worker")
+				metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "add_worker_failed")
 				s.addRequestToBacklog(request)
 			}()
 
@@ -313,6 +316,7 @@ func (s *Scheduler) StartProcessingRequests() {
 		err = s.scheduleRequest(worker, request)
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request on existing worker")
+			metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "schedule_failed")
 			s.addRequestToBacklog(request)
 			continue
 		}
@@ -320,6 +324,7 @@ func (s *Scheduler) StartProcessingRequests() {
 		// Record the request processing duration
 		schedulingDuration := time.Since(request.Timestamp)
 		metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
+		metrics.RecordSchedulerWorkerWait(schedulingDuration, request, "scheduled")
 	}
 }
 
@@ -621,6 +626,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 			delay := calculateBackoffDelay(request.RetryCount)
 			time.Sleep(delay)
 			request.RetryCount++
+			metrics.RecordRequestRetry(request)
 			s.requestBacklog.Push(request)
 			return
 		}

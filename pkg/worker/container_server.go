@@ -569,21 +569,33 @@ func (s *ContainerRuntimeServer) ContainerSandboxExec(ctx context.Context, in *p
 }
 
 func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.ContainerSandboxExecRequest, instance *ContainerInstance, env, cmd []string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	// Wait for process manager to be ready (polls the flag set by startup initialization)
-	timeout := time.After(10 * time.Second)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	if !instance.SandboxProcessManagerReady {
+		readyChan := instance.ProcessManagerReadyChan
+		if readyChan != nil {
+			select {
+			case <-readyChan:
+			case <-time.After(10 * time.Second):
+				return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Process manager not ready within timeout"}, nil
+			case <-ctx.Done():
+				return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Request cancelled"}, nil
+			}
+		} else {
+			// Fallback: poll if no channel available
+			timeout := time.After(10 * time.Second)
+			ticker := time.NewTicker(50 * time.Millisecond)
+			defer ticker.Stop()
 
-	for !instance.SandboxProcessManagerReady {
-		select {
-		case <-timeout:
-			return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Process manager not ready within timeout"}, nil
-		case <-ctx.Done():
-			return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Request cancelled"}, nil
-		case <-ticker.C:
-			// Refresh instance to get latest SandboxProcessManagerReady state
-			if fresh, exists := s.containerInstances.Get(in.ContainerId); exists {
-				instance = fresh
+			for !instance.SandboxProcessManagerReady {
+				select {
+				case <-timeout:
+					return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Process manager not ready within timeout"}, nil
+				case <-ctx.Done():
+					return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Request cancelled"}, nil
+				case <-ticker.C:
+					if fresh, exists := s.containerInstances.Get(in.ContainerId); exists {
+						instance = fresh
+					}
+				}
 			}
 		}
 	}

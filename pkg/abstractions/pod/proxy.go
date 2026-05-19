@@ -18,6 +18,7 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -27,8 +28,8 @@ import (
 )
 
 const (
-	bufferProcessingInterval      time.Duration = time.Millisecond * 100
-	containerDiscoveryInterval    time.Duration = time.Millisecond * 500
+	bufferProcessingInterval      time.Duration = time.Millisecond * 50
+	containerDiscoveryInterval    time.Duration = time.Millisecond * 250
 	containerDialTimeoutDurationS time.Duration = time.Second * 30
 	connectionKeepAliveInterval   time.Duration = time.Second * 1
 	connectionReadTimeout         time.Duration = time.Minute * 5
@@ -42,9 +43,10 @@ type container struct {
 }
 
 type connection struct {
-	ctx  echo.Context
-	tc   *tcpConnection
-	done chan struct{}
+	ctx        echo.Context
+	tc         *tcpConnection
+	done       chan struct{}
+	enqueuedAt time.Time
 }
 
 type PodProxyBuffer struct {
@@ -106,11 +108,15 @@ func (pb *PodProxyBuffer) ForwardRequest(ctx echo.Context) error {
 
 	done := make(chan struct{})
 	conn := &connection{
-		ctx:  ctx,
-		done: done,
+		ctx:        ctx,
+		done:       done,
+		enqueuedAt: time.Now(),
 	}
 
-	pb.buffer.Push(conn, false)
+	if pb.buffer.Push(conn, false) {
+		metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
+	}
+	pb.recordBufferOccupancy()
 
 	for {
 		select {
@@ -130,12 +136,16 @@ func (pb *PodProxyBuffer) ForwardTCPRequest(tc *tcpConnection) error {
 
 	done := make(chan struct{})
 	conn := &connection{
-		ctx:  nil,
-		done: done,
-		tc:   tc,
+		ctx:        nil,
+		done:       done,
+		tc:         tc,
+		enqueuedAt: time.Now(),
 	}
 
-	pb.buffer.Push(conn, false)
+	if pb.buffer.Push(conn, false) {
+		metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
+	}
+	pb.recordBufferOccupancy()
 
 	for {
 		select {
@@ -161,6 +171,7 @@ func (pb *PodProxyBuffer) processBuffer() {
 				time.Sleep(bufferProcessingInterval)
 				continue
 			}
+			pb.recordBufferOccupancy()
 
 			if conn.tc != nil {
 				go pb.handleTCPConnection(conn)
@@ -179,7 +190,10 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 	pb.availableContainersLock.RLock()
 
 	if len(pb.availableContainers) == 0 {
-		pb.buffer.Push(conn, true)
+		if pb.buffer.Push(conn, true) {
+			metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
+		}
+		pb.recordBufferOccupancy()
 		pb.availableContainersLock.RUnlock()
 		return
 	}
@@ -189,6 +203,7 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 	container := pb.availableContainers[0]
 	pb.availableContainersLock.RUnlock()
 	defer close(conn.done)
+	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, "tcp", time.Since(conn.enqueuedAt))
 
 	port := tc.Fields.Port
 	targetHost, ok := container.addressMap[int32(port)]
@@ -198,7 +213,9 @@ func (pb *PodProxyBuffer) handleTCPConnection(conn *connection) {
 		return
 	}
 
+	dialStart := time.Now()
 	podConn, err := network.ConnectToHost(context.TODO(), targetHost, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+	metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "tcp", err == nil, time.Since(dialStart))
 	if err == nil {
 		abstractions.SetConnOptions(podConn, true, connectionKeepAliveInterval, connectionReadTimeout)
 	} else if err != nil {
@@ -256,7 +273,10 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	pb.availableContainersLock.RLock()
 
 	if len(pb.availableContainers) == 0 {
-		pb.buffer.Push(conn, true)
+		if pb.buffer.Push(conn, true) {
+			metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
+		}
+		pb.recordBufferOccupancy()
 		pb.availableContainersLock.RUnlock()
 		return
 	}
@@ -264,6 +284,7 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	container := pb.availableContainers[0]
 	pb.availableContainersLock.RUnlock()
 	defer close(conn.done)
+	metrics.RecordProxyQueuedRequestWait("pod", pb.workspaceName(), pb.stubId, "http", time.Since(conn.enqueuedAt))
 
 	request := conn.ctx.Request()
 	response := conn.ctx.Response()
@@ -293,7 +314,10 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	// Increment container connections
 	err = pb.incrementContainerConnections(container.id)
 	if err != nil {
-		pb.buffer.Push(conn, true)
+		if pb.buffer.Push(conn, true) {
+			metrics.RecordRingBufferOverwrite("pod", pb.workspaceName(), pb.stubId)
+		}
+		pb.recordBufferOccupancy()
 		return
 	}
 	defer pb.decrementContainerConnections(container.id)
@@ -314,7 +338,9 @@ func (pb *PodProxyBuffer) handleConnection(conn *connection) {
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
 	proxy.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, networkType, addr string) (net.Conn, error) {
+			start := time.Now()
 			conn, err := network.ConnectToHost(ctx, addr, containerDialTimeoutDurationS, pb.tailscale, pb.tsConfig)
+			metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "http", err == nil, time.Since(start))
 			if err == nil {
 				abstractions.SetConnOptions(conn, true, connectionKeepAliveInterval, connectionReadTimeout)
 			}
@@ -458,11 +484,14 @@ func (pb *PodProxyBuffer) discoverContainers() {
 
 // checkContainerAvailable checks if a container is available (meaning you can connect to it via a TCP dial)
 func (pb *PodProxyBuffer) checkContainerAvailable(containerAddress string) bool {
+	start := time.Now()
 	conn, err := network.ConnectToHost(pb.ctx, containerAddress, containerAvailableTimeout, pb.tailscale, pb.tsConfig)
 	if err != nil {
+		metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", false, time.Since(start))
 		return false
 	}
 	defer conn.Close()
+	metrics.RecordProxyBackendDialLatency("pod", pb.workspaceName(), pb.stubId, "discovery", true, time.Since(start))
 	return conn != nil
 }
 
@@ -564,4 +593,15 @@ func (pb *PodProxyBuffer) decrementContainerConnections(containerId string) erro
 	)
 
 	return nil
+}
+
+func (pb *PodProxyBuffer) workspaceName() string {
+	if pb.workspace == nil {
+		return ""
+	}
+	return pb.workspace.Name
+}
+
+func (pb *PodProxyBuffer) recordBufferOccupancy() {
+	metrics.RecordRingBufferOccupancy("pod", pb.workspaceName(), pb.stubId, pb.buffer.Len(), pb.buffer.Capacity())
 }

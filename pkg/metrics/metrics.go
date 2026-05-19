@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,7 +39,93 @@ const (
 	metricS3GetSpeed                = "s3_get_speed_mbps"
 	metricDialTime                  = "dial_time_ms"
 	metricContainerStartLatency     = "container_start_latency_ms"
+	metricWorkerStartupLatency      = "worker_startup_latency_ms"
+	metricWorkerStartupPhase        = "worker_startup_phase_duration_ms"
+	metricSchedulerBacklogDepth     = "scheduler_backlog_depth"
+	metricSchedulerWorkerWait       = "scheduler_worker_wait_duration_ms"
+	metricWorkerQueueDepth          = "worker_queue_depth"
+	metricWorkerQueueReceiveLatency = "worker_queue_receive_latency_ms"
+	metricWorkerQueueEmptyPolls     = "worker_queue_empty_polls"
+	metricConcurrencyLimitThrottles = "concurrency_limit_throttles"
+	metricRingBufferOccupancy       = "ring_buffer_occupancy"
+	metricRingBufferOverwrites      = "ring_buffer_overwrites"
+	metricProxyTokenDenials         = "proxy_token_denials"
+	metricProxyQueuedRequestWait    = "proxy_queued_request_wait_ms"
+	metricProxyBackendDialLatency   = "proxy_backend_dial_latency_ms"
 )
+
+func escapeLabelValue(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "\n", `\n`)
+	value = strings.ReplaceAll(value, `"`, `\"`)
+	return value
+}
+
+func metricWithLabels(metric string, labels map[string]string) string {
+	if len(labels) == 0 {
+		return metric
+	}
+
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	labelParts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		labelParts = append(labelParts, fmt.Sprintf(`%s="%s"`, key, escapeLabelValue(labels[key])))
+	}
+
+	return fmt.Sprintf("%s{%s}", metric, strings.Join(labelParts, ","))
+}
+
+func requestMetricLabels(request *types.ContainerRequest) map[string]string {
+	labels := map[string]string{
+		"stub_type": "unknown",
+		"gpu":       "none",
+		"gpu_count": "0",
+		"cpu":       "0",
+		"memory":    "0",
+	}
+
+	if request == nil {
+		return labels
+	}
+
+	labels["gpu_count"] = fmt.Sprintf("%d", request.GpuCount)
+	labels["cpu"] = fmt.Sprintf("%d", request.Cpu)
+	labels["memory"] = fmt.Sprintf("%d", request.Memory)
+	if request.Gpu != "" {
+		labels["gpu"] = request.Gpu
+	}
+	if request.Stub.Type != "" {
+		labels["stub_type"] = string(request.Stub.Type.Kind())
+	}
+	if request.Checkpoint != nil {
+		labels["checkpoint"] = "true"
+	} else {
+		labels["checkpoint"] = "false"
+	}
+	if request.DockerEnabled {
+		labels["docker_enabled"] = "true"
+	} else {
+		labels["docker_enabled"] = "false"
+	}
+
+	return labels
+}
+
+func mergeLabels(base map[string]string, extra map[string]string) map[string]string {
+	labels := make(map[string]string, len(base)+len(extra))
+	for key, value := range base {
+		labels[key] = value
+	}
+	for key, value := range extra {
+		labels[key] = value
+	}
+	return labels
+}
 
 func InitializeMetricsRepository(config types.VictoriaMetricsConfig) {
 	workerPoolName := os.Getenv("WORKER_POOL_NAME")
@@ -197,5 +284,115 @@ func RecordContainerStartLatency(container *types.ContainerState, duration time.
 		container.Cpu,
 		container.Memory,
 	)
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+func RecordWorkerStartupLatency(duration time.Duration, request *types.ContainerRequest) {
+	metricName := metricWithLabels(metricWorkerStartupLatency, requestMetricLabels(request))
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+func RecordWorkerStartupPhase(phase string, duration time.Duration, request *types.ContainerRequest, extraLabels map[string]string) {
+	labels := requestMetricLabels(request)
+	labels["phase"] = phase
+	labels = mergeLabels(labels, extraLabels)
+
+	metricName := metricWithLabels(metricWorkerStartupPhase, labels)
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+func RecordSchedulerBacklogDepth(depth int64) {
+	metricName := metricWithLabels(metricSchedulerBacklogDepth, nil)
+	vmetrics.GetDefaultSet().GetOrCreateGauge(metricName, nil).Set(float64(depth))
+}
+
+func RecordSchedulerWorkerWait(duration time.Duration, request *types.ContainerRequest, outcome string) {
+	labels := requestMetricLabels(request)
+	labels["outcome"] = outcome
+
+	metricName := metricWithLabels(metricSchedulerWorkerWait, labels)
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+func RecordWorkerQueueDepth(workerId string, depth int64) {
+	metricName := metricWithLabels(metricWorkerQueueDepth, map[string]string{"worker_id": workerId})
+	vmetrics.GetDefaultSet().GetOrCreateGauge(metricName, nil).Set(float64(depth))
+}
+
+func RecordWorkerQueueReceiveLatency(workerId string, duration time.Duration, request *types.ContainerRequest) {
+	labels := requestMetricLabels(request)
+	labels["worker_id"] = workerId
+
+	metricName := metricWithLabels(metricWorkerQueueReceiveLatency, labels)
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+func RecordWorkerQueueEmptyPoll(workerId string) {
+	metricName := metricWithLabels(metricWorkerQueueEmptyPolls, map[string]string{"worker_id": workerId})
+	vmetrics.GetDefaultSet().GetOrCreateCounter(metricName).Inc()
+}
+
+func RecordConcurrencyLimitThrottle(resource string, request *types.ContainerRequest) {
+	labels := requestMetricLabels(request)
+	labels["resource"] = resource
+
+	metricName := metricWithLabels(metricConcurrencyLimitThrottles, labels)
+	vmetrics.GetDefaultSet().GetOrCreateCounter(metricName).Inc()
+}
+
+func RecordRingBufferOccupancy(bufferName, workspaceName, stubId string, length, capacity int) {
+	labels := map[string]string{
+		"buffer":    bufferName,
+		"workspace": workspaceName,
+		"stub_id":   stubId,
+	}
+	metricName := metricWithLabels(metricRingBufferOccupancy, mergeLabels(labels, map[string]string{"stat": "length"}))
+	vmetrics.GetDefaultSet().GetOrCreateGauge(metricName, nil).Set(float64(length))
+
+	capacityMetricName := metricWithLabels(metricRingBufferOccupancy, mergeLabels(labels, map[string]string{"stat": "capacity"}))
+	vmetrics.GetDefaultSet().GetOrCreateGauge(capacityMetricName, nil).Set(float64(capacity))
+}
+
+func RecordRingBufferOverwrite(bufferName, workspaceName, stubId string) {
+	metricName := metricWithLabels(metricRingBufferOverwrites, map[string]string{
+		"buffer":    bufferName,
+		"workspace": workspaceName,
+		"stub_id":   stubId,
+	})
+	vmetrics.GetDefaultSet().GetOrCreateCounter(metricName).Inc()
+}
+
+func RecordProxyTokenDenial(proxyName, workspaceName, stubId string) {
+	metricName := metricWithLabels(metricProxyTokenDenials, map[string]string{
+		"proxy":     proxyName,
+		"workspace": workspaceName,
+		"stub_id":   stubId,
+	})
+	vmetrics.GetDefaultSet().GetOrCreateCounter(metricName).Inc()
+}
+
+func RecordProxyQueuedRequestWait(proxyName, workspaceName, stubId, protocol string, duration time.Duration) {
+	metricName := metricWithLabels(metricProxyQueuedRequestWait, map[string]string{
+		"proxy":     proxyName,
+		"workspace": workspaceName,
+		"stub_id":   stubId,
+		"protocol":  protocol,
+	})
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+func RecordProxyBackendDialLatency(proxyName, workspaceName, stubId, protocol string, success bool, duration time.Duration) {
+	successLabel := "false"
+	if success {
+		successLabel = "true"
+	}
+
+	metricName := metricWithLabels(metricProxyBackendDialLatency, map[string]string{
+		"proxy":     proxyName,
+		"workspace": workspaceName,
+		"stub_id":   stubId,
+		"protocol":  protocol,
+		"success":   successLabel,
+	})
 	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
 }

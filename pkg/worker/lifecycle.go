@@ -13,6 +13,7 @@ import (
 	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -178,6 +179,7 @@ func (s *Worker) deleteContainer(containerId string) {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
+	startupStartedAt := time.Now()
 
 	caps := s.runtime.Capabilities()
 
@@ -207,10 +209,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.containerServer.port)
+	phaseStart := time.Now()
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
 		ContainerId: containerId,
 		Address:     hostname,
 	}))
+	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(phaseStart), request, nil)
 	if err != nil {
 		return err
 	}
@@ -223,7 +227,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Attempt to pull image
 	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
+	phaseStart = time.Now()
 	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
+	metrics.RecordWorkerStartupPhase("pull_lazy", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		if !request.IsBuildRequest() {
 			log.Error().Str("container_id", containerId).Msgf("failed to pull image: %v", err)
@@ -234,10 +240,15 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		case <-ctx.Done():
 			return nil
 		default:
+			phaseStart = time.Now()
 			if err := s.buildOrPullBaseImage(ctx, request, containerId, outputLogger); err != nil {
+				metrics.RecordWorkerStartupPhase("build_or_pull_base_image", time.Since(phaseStart), request, map[string]string{"success": "false"})
 				return err
 			}
+			metrics.RecordWorkerStartupPhase("build_or_pull_base_image", time.Since(phaseStart), request, map[string]string{"success": "true"})
+			phaseStart = time.Now()
 			elapsed, err = s.imageClient.PullLazy(ctx, request, outputLogger)
+			metrics.RecordWorkerStartupPhase("pull_lazy_after_build", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 			if err != nil {
 				return err
 			}
@@ -258,10 +269,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		go func() {
 			s.finalizeContainer(containerId, request, &exitCode)
 		}()
+		metrics.RecordWorkerStartupLatency(time.Since(startupStartedAt), request)
 		return nil
 	}
 
 	// Determine how many ports we need to expose
+	phaseStart = time.Now()
 	portsToExpose := len(request.Ports)
 	if portsToExpose == 0 {
 		portsToExpose = 1
@@ -294,27 +307,38 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
+	metrics.RecordWorkerStartupPhase("port_allocation", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(bindPorts))})
 
 	// Read spec from bundle; guard against empty image IDs
 	if request.ImageId == "" {
 		return fmt.Errorf("empty image id in request")
 	}
+	phaseStart = time.Now()
 	initialBundleSpec, _ := s.readBundleConfig(request)
+	metrics.RecordWorkerStartupPhase("read_bundle_config", time.Since(phaseStart), request, map[string]string{"derived": fmt.Sprintf("%t", initialBundleSpec == nil)})
 
 	opts := &ContainerOptions{
-		BundlePath:   bundlePath,
-		HostBindPort: bindPorts[0],
-		BindPorts:    bindPorts,
-		InitialSpec:  initialBundleSpec,
+		BundlePath:       bundlePath,
+		HostBindPort:     bindPorts[0],
+		BindPorts:        bindPorts,
+		InitialSpec:      initialBundleSpec,
+		StartupStartedAt: startupStartedAt,
 	}
 
+	phaseStart = time.Now()
 	err = s.containerMountManager.SetupContainerMounts(ctx, request, outputLogger)
+	metrics.RecordWorkerStartupPhase("setup_mounts", time.Since(phaseStart), request, map[string]string{
+		"mount_count": fmt.Sprintf("%d", len(request.Mounts)),
+		"success":     fmt.Sprintf("%t", err == nil),
+	})
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
 	}
 
 	// Generate dynamic runc spec for this container
+	phaseStart = time.Now()
 	spec, err := s.specFromRequest(request, opts)
+	metrics.RecordWorkerStartupPhase("spec_from_request", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -323,10 +347,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
 	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[0])
+	phaseStart = time.Now()
 	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
 		ContainerId: request.ContainerId,
 		Address:     containerAddr,
 	}))
+	metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
 	if err != nil {
 		return err
 	}
@@ -336,10 +362,12 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	for idx, containerPort := range request.Ports {
 		addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
 	}
+	phaseStart = time.Now()
 	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
 		ContainerId: request.ContainerId,
 		AddressMap:  addressMap,
 	}))
+	metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
 	if err != nil {
 		return err
 	}
@@ -353,7 +381,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return ctx.Err()
 	default:
 		// Start the container
+		phaseStart = time.Now()
 		go s.spawn(request, spec, outputLogger, opts)
+		metrics.RecordWorkerStartupPhase("spawn_enqueue", time.Since(phaseStart), request, nil)
 	}
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
@@ -718,8 +748,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Every 30 seconds, update container status
 	go s.updateContainerStatus(request)
 
+	// Closed when the container process actually starts (PID received).
+	// Used to trigger the status update to Running without an artificial sleep.
+	containerStarted := make(chan struct{})
+
 	go func() {
-		time.Sleep(time.Second)
+		select {
+		case <-containerStarted:
+		case <-ctx.Done():
+			return
+		}
 
 		s.containerLock.Lock()
 		defer s.containerLock.Unlock()
@@ -744,19 +782,27 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 
 		// Update container status to running
+		phaseStart := time.Now()
 		_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
 			ContainerId:   containerId,
 			Status:        string(types.ContainerStatusRunning),
 			ExpirySeconds: int64(types.ContainerStateTtlS),
 		}))
+		metrics.RecordWorkerStartupPhase("set_running_status", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
+			return
+		}
+		if !opts.StartupStartedAt.IsZero() {
+			metrics.RecordWorkerStartupLatency(time.Since(opts.StartupStartedAt), request)
 		}
 	}()
 
 	// Setup container overlay filesystem
 	var err error
+	phaseStart := time.Now()
 	err = containerInstance.Overlay.Setup()
+	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup overlay: %v", err)
 		return
@@ -767,7 +813,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
+	phaseStart = time.Now()
 	err = s.containerNetworkManager.Setup(containerId, spec, request)
+	metrics.RecordWorkerStartupPhase("network_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
@@ -776,7 +824,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Only inject GPU devices if runtime supports GPU
 	if request.RequiresGPU() && s.runtime.Capabilities().GPU {
 		// Assign n-number of GPUs to a container
+		phaseStart = time.Now()
 		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
+		metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to assign GPUs: %v", err)
 			return
@@ -805,13 +855,27 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Expose the bind ports
+	phaseStart = time.Now()
+	portBindings := make([]PortBinding, 0, len(opts.BindPorts))
 	for idx, bindPort := range opts.BindPorts {
-		err = s.containerNetworkManager.ExposePort(containerId, bindPort, int(request.Ports[idx]))
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
-			return
-		}
+		portBindings = append(portBindings, PortBinding{
+			HostPort:      bindPort,
+			ContainerPort: int(request.Ports[idx]),
+		})
 	}
+	err = s.containerNetworkManager.ExposePorts(containerId, portBindings)
+	if err != nil {
+		metrics.RecordWorkerStartupPhase("network_expose_ports", time.Since(phaseStart), request, map[string]string{
+			"port_count": fmt.Sprintf("%d", len(opts.BindPorts)),
+			"success":    "false",
+		})
+		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
+		return
+	}
+	metrics.RecordWorkerStartupPhase("network_expose_ports", time.Since(phaseStart), request, map[string]string{
+		"port_count": fmt.Sprintf("%d", len(opts.BindPorts)),
+		"success":    "true",
+	})
 
 	// Modify sandbox entry point to point to process manager binary
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
@@ -821,13 +885,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
+		phaseStart = time.Now()
 		instance.SandboxProcessManager, err = goproc.NewGoProcClient(ctx, instance.ContainerIp, uint(types.WorkerSandboxProcessManagerPort))
+		metrics.RecordWorkerStartupPhase("sandbox_process_manager_client", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to create sandbox process manager client: %v", err)
 			return
 		}
 
 		instance.SandboxProcessManagerReady = false
+		instance.ProcessManagerReadyChan = make(chan struct{})
 		s.containerInstances.Set(containerId, instance)
 
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
@@ -854,10 +921,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Prepare spec for the selected runtime
+	phaseStart = time.Now()
 	if err := s.runtime.Prepare(ctx, spec); err != nil {
+		metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
+			"runtime": s.runtime.Name(),
+			"success": "false",
+		})
 		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
 		return
 	}
+	metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
+		"runtime": s.runtime.Name(),
+		"success": "true",
+	})
 
 	// Write container config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
@@ -866,7 +942,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	configPath := filepath.Join(spec.Root.Path, specBaseName)
+	phaseStart = time.Now()
 	err = os.WriteFile(configPath, configContents, 0644)
+	metrics.RecordWorkerStartupPhase("config_write", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to write container config: %v", err)
 		return
@@ -898,6 +976,8 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
+		close(containerStarted)
+
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 
@@ -909,6 +989,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 				// Wait for process manager to be ready - this blocks until ready or timeout
 				if s.waitForProcessManager(ctx, containerId, instance) {
 					instance.SandboxProcessManagerReady = true
+					if instance.ProcessManagerReadyChan != nil {
+						close(instance.ProcessManagerReadyChan)
+					}
 					s.containerInstances.Set(containerId, instance)
 
 					// Now that process manager is ready, start Docker daemon if enabled
@@ -1022,11 +1105,30 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	bundlePath := filepath.Dir(request.ConfigPath)
+	runtimeStartedChan := make(chan int, 1)
+	runtimeStartedDone := make(chan struct{})
+	runtimeStart := time.Now()
+	go func() {
+		select {
+		case pid := <-runtimeStartedChan:
+			metrics.RecordWorkerStartupPhase("runtime_start_to_pid", time.Since(runtimeStart), request, map[string]string{
+				"runtime": instance.Runtime.Name(),
+			})
+			select {
+			case startedChan <- pid:
+			case <-ctx.Done():
+			}
+		case <-ctx.Done():
+		case <-runtimeStartedDone:
+		}
+	}()
+
 	exitCode, err := instance.Runtime.Run(ctx, request.ContainerId, bundlePath, &runtime.RunOpts{
 		OutputWriter:  outputWriter,
-		Started:       startedChan,
+		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,
 	})
+	close(runtimeStartedDone)
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}

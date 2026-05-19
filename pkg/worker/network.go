@@ -18,6 +18,7 @@ import (
 	mathrand "math/rand"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/coreos/go-iptables/iptables"
@@ -54,6 +55,11 @@ type ContainerNetworkManager struct {
 	mu                  sync.Mutex
 	config              types.AppConfig
 	containerInstances  *common.SafeMap[*ContainerInstance]
+}
+
+type PortBinding struct {
+	HostPort      int
+	ContainerPort int
 }
 
 func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance]) (*ContainerNetworkManager, error) {
@@ -167,16 +173,21 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	defer hostNS.Close()
 
 	// Create a veth pair in the host namespace
+	phaseStart := time.Now()
 	if err = m.createVethPair(vethHost, vethContainer); err != nil {
+		metrics.RecordWorkerStartupPhase("network_create_veth", time.Since(phaseStart), request, map[string]string{"success": "false"})
 		return err
 	}
+	metrics.RecordWorkerStartupPhase("network_create_veth", time.Since(phaseStart), request, map[string]string{"success": "true"})
 
 	// Set up the bridge in the host namespace and add the host side of the veth pair to it
 	hostVeth, err := netlink.LinkByName(vethHost)
 	if err != nil {
 		return err
 	}
+	phaseStart = time.Now()
 	bridge, err := m.setupBridge(containerBridgeLinkName)
+	metrics.RecordWorkerStartupPhase("network_setup_bridge", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -191,7 +202,9 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	}
 
 	// Create a new namespace for the container
+	phaseStart = time.Now()
 	newNs, err := netns.NewNamed(namespace)
+	metrics.RecordWorkerStartupPhase("network_create_namespace", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -226,11 +239,13 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 		return err
 	}
 
+	phaseStart = time.Now()
 	err = m.configureContainerNetwork(&containerNetworkConfigOpts{
 		containerId:   containerId,
 		containerVeth: containerVeth,
 		request:       request,
 	})
+	metrics.RecordWorkerStartupPhase("network_configure_namespace", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 
 	// Switch back to host namespace before setting up BlockNetwork rules
 	if nsErr := netns.Set(hostNS); nsErr != nil {
@@ -244,14 +259,20 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	// Setup network restrictions in host namespace (must be done in host namespace to affect forwarding)
 	if len(request.AllowList) > 0 {
 		// Use allowlist (which internally blocks all other traffic)
+		phaseStart = time.Now()
 		if err := m.setupAllowList(containerId, request, request.AllowList); err != nil {
+			metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "allowlist", "success": "false"})
 			return err
 		}
+		metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "allowlist", "success": "true"})
 	} else if request.BlockNetwork {
 		// Block all network if no allowlist is specified
+		phaseStart = time.Now()
 		if err := m.setupBlockNetwork(containerId, request); err != nil {
+			metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "block", "success": "false"})
 			return err
 		}
+		metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "block", "success": "true"})
 	}
 
 	return nil
@@ -368,11 +389,13 @@ type containerNetworkConfigOpts struct {
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetworkConfigOpts) error {
+	phaseStart := time.Now()
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
 		Retries:       10,
 	}))
+	metrics.RecordWorkerStartupPhase("network_ip_lock", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -428,9 +451,11 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 	}
 
 	// See what IP addresses are already allocated
+	phaseStart = time.Now()
 	getContainerIpsResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIps(m.ctx, &pb.GetContainerIpsRequest{
 		NetworkPrefix: m.networkPrefix,
 	}))
+	metrics.RecordWorkerStartupPhase("network_ip_scan", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -474,7 +499,9 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 		return errors.New("unable to assign IP address to container")
 	}
 
+	phaseStart = time.Now()
 	if err := netlink.AddrAdd(opts.containerVeth, ipAddr); err != nil {
+		metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "false"})
 		return err
 	}
 
@@ -484,6 +511,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 		Gw:        net.ParseIP(containerGatewayAddress),
 	}
 	if err := netlink.RouteAdd(defaultRoute); err != nil {
+		metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "false"})
 		return err
 	}
 
@@ -502,6 +530,7 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 		}
 
 		if err := netlink.AddrAdd(opts.containerVeth, ipv6Addr); err != nil {
+			metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "false"})
 			return err
 		}
 
@@ -511,15 +540,19 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 			Gw:        net.ParseIP(containerGatewayAddressIPv6),
 		}
 		if err := netlink.RouteAdd(defaultIPv6Route); err != nil {
+			metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "false"})
 			return err
 		}
 	}
+	metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "true"})
 
+	phaseStart = time.Now()
 	_, err = handleGRPCResponse(m.workerRepoClient.SetContainerIp(m.ctx, &pb.SetContainerIpRequest{
 		NetworkPrefix: m.networkPrefix,
 		ContainerId:   opts.containerId,
 		IpAddress:     ipAddr.IP.String(),
 	}))
+	metrics.RecordWorkerStartupPhase("network_set_container_ip", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -765,6 +798,10 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
+	return m.ExposePorts(containerId, []PortBinding{{HostPort: hostPort, ContainerPort: containerPort}})
+}
+
+func (m *ContainerNetworkManager) ExposePorts(containerId string, bindings []PortBinding) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -773,9 +810,19 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 		return err
 	}
 
+	for _, binding := range bindings {
+		if err := m.exposePortLocked(info, binding.HostPort, binding.ContainerPort); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *ContainerNetworkManager) exposePortLocked(info *containerNetworkInfo, hostPort, containerPort int) error {
 	// Insert NAT PREROUTING rule at the top of the chain
 	// IPv4
-	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", info.ContainerIp, containerPort), "-m", "comment", "--comment", info.Comment)
+	err := m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", info.ContainerIp, containerPort), "-m", "comment", "--comment", info.Comment)
 	if err != nil {
 		return err
 	}

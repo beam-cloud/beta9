@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -480,8 +481,11 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 }
 
 func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	queuedRequest := *request
+	queuedRequest.Timestamp = time.Now()
+
 	// Serialize the ContainerRequest -> JSON
-	requestJSON, err := json.Marshal(request)
+	requestJSON, err := json.Marshal(&queuedRequest)
 	if err != nil {
 		return fmt.Errorf("failed to serialize request: %w", err)
 	}
@@ -497,6 +501,7 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	if err != nil {
 		return fmt.Errorf("failed to push request: %w", err)
 	}
+	metrics.RecordWorkerQueueDepth(worker.Id, r.rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
 
 	log.Info().Str("container_id", request.ContainerId).Str("worker_id", worker.Id).Msg("request for container added")
 
@@ -532,6 +537,8 @@ func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types
 	}
 
 	if queueLength == 0 {
+		metrics.RecordWorkerQueueDepth(workerId, 0)
+		metrics.RecordWorkerQueueEmptyPoll(workerId)
 		return nil, nil
 	}
 
@@ -544,6 +551,10 @@ func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types
 	err = json.Unmarshal(requestJSON, &request)
 	if err != nil {
 		return nil, err
+	}
+	metrics.RecordWorkerQueueDepth(workerId, queueLength-1)
+	if !request.Timestamp.IsZero() {
+		metrics.RecordWorkerQueueReceiveLatency(workerId, time.Since(request.Timestamp), &request)
 	}
 
 	return &request, nil

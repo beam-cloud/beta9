@@ -130,7 +130,8 @@ type ImageClient struct {
 	workerRepoClient   pb.WorkerRepositoryServiceClient
 	logger             *ContainerLogger
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
-	v2ImageRefs *common.SafeMap[string]
+	v2ImageRefs       *common.SafeMap[string]
+	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
@@ -151,6 +152,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
 		v2ImageRefs:        common.NewSafeMap[string](),
+		v2ArchiveMetadata:  common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
@@ -170,22 +172,85 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 	return c, nil
 }
 
+func (c *ImageClient) imageMountPoint(imageId string) string {
+	return filepath.Join(c.imageMountPath, imageId)
+}
+
+func (c *ImageClient) mountedImageReady(imageId string) bool {
+	if c.mountedFuseServers == nil {
+		return false
+	}
+
+	_, mounted := c.mountedFuseServers.Get(imageId)
+	if !mounted {
+		return false
+	}
+
+	mountPoint := c.imageMountPoint(imageId)
+	if _, err := os.Stat(mountPoint); err == nil {
+		return true
+	}
+
+	c.mountedFuseServers.Delete(imageId)
+	return false
+}
+
+func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorageInfo, bool) {
+	if meta == nil || meta.StorageInfo == nil {
+		return nil, false
+	}
+
+	if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok {
+		return &ociInfo, true
+	}
+
+	if ociInfo, ok := meta.StorageInfo.(*clipCommon.OCIStorageInfo); ok {
+		return ociInfo, true
+	}
+
+	return nil, false
+}
+
 func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, error) {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
 
 	startTime := time.Now()
 
+	if c.mountedImageReady(imageId) {
+		elapsed := time.Since(startTime)
+		metrics.RecordWorkerStartupPhase("clip_mounted_fuse_hit", elapsed, request, map[string]string{
+			"clip_version":      fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+			"mounted_fuse_hit": "true",
+		})
+		return elapsed, nil
+	}
+
 	// Always fetch the remote archive into the cache directory first
 	archivePath := fmt.Sprintf("%s/%s.%s", c.imageCachePath, imageId, c.registry.ImageFileExtension)
+	archiveAlreadyOnDisk := false
+	if _, err := os.Stat(archivePath); err == nil {
+		archiveAlreadyOnDisk = true
+	}
 
+	phaseStart := time.Now()
 	sourceRegistry, err := c.pullImageFromRegistry(ctx, archivePath, imageId)
+	metrics.RecordWorkerStartupPhase("image_registry_pull", time.Since(phaseStart), request, map[string]string{
+		"archive_on_disk": fmt.Sprintf("%t", archiveAlreadyOnDisk),
+		"clip_version":    fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+		"success":         fmt.Sprintf("%t", err == nil),
+	})
 	if err != nil {
 		return time.Since(startTime), err
 	}
 
 	// Extract metadata from archive
+	phaseStart = time.Now()
 	meta, err := c.processPulledArchive(archivePath, imageId)
+	metrics.RecordWorkerStartupPhase("clip_metadata_extract", time.Since(phaseStart), request, map[string]string{
+		"clip_version": fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+		"success":      fmt.Sprintf("%t", err == nil),
+	})
 	if err != nil {
 		return time.Since(startTime), err
 	}
@@ -219,6 +284,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	// the local cache - which is basically just downloading the image to disk
 	// Skip full image caching for CLIP v2 images (which are index-only and pull data on-demand)
 	if c.cacheClient != nil && !isBuildContainer && !isClipV2Image {
+		phaseStart = time.Now()
 		sourcePath := fmt.Sprintf("/images/%s.clip", imageId)
 
 		// Exponential backoff with max 30s total retry time
@@ -279,13 +345,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			log.Error().Str("image_id", imageId).Err(err).Msg("giving up on caching image after retries")
 			outputLogger.Error(fmt.Sprintf("Failed to cache image <%s> after retries: %v\n", imageId, err))
 		}
+		metrics.RecordWorkerStartupPhase("clip_blobcache", time.Since(phaseStart), request, map[string]string{
+			"clip_version": fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+			"success":      fmt.Sprintf("%t", err == nil),
+		})
 	}
-
-	elapsed := time.Since(startTime)
 
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
 		ArchivePath:           archivePath,
-		MountPoint:            fmt.Sprintf("%s/%s", c.imageMountPath, imageId),
+		MountPoint:            c.imageMountPoint(imageId),
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
 		ContentCacheAvailable: c.cacheClient != nil,
@@ -323,8 +391,12 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	}
 
 	// Check if a fuse server exists for this imageId
-	_, mounted := c.mountedFuseServers.Get(imageId)
-	if mounted {
+	if c.mountedImageReady(imageId) {
+		elapsed := time.Since(startTime)
+		metrics.RecordWorkerStartupPhase("clip_mounted_fuse_hit", elapsed, request, map[string]string{
+			"clip_version":      fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+			"mounted_fuse_hit": "true",
+		})
 		return elapsed, nil
 	}
 
@@ -334,7 +406,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		ImageId:  imageId,
 	}))
 	if err != nil {
-		return elapsed, err
+		return time.Since(startTime), err
 	}
 	defer handleGRPCResponse(c.workerRepoClient.RemoveImagePullLock(context.Background(), &pb.RemoveImagePullLockRequest{
 		WorkerId: c.workerId,
@@ -342,17 +414,37 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		Token:    lockResponse.Token,
 	}))
 
-	startServer, _, server, err := clip.MountArchive(*mountOptions)
-	if err != nil {
-		return elapsed, err
+	if c.mountedImageReady(imageId) {
+		elapsed := time.Since(startTime)
+		metrics.RecordWorkerStartupPhase("clip_mounted_fuse_hit_after_lock", elapsed, request, map[string]string{
+			"clip_version":      fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+			"mounted_fuse_hit": "true",
+		})
+		return elapsed, nil
 	}
 
-	err = startServer()
+	phaseStart = time.Now()
+	startServer, _, server, err := clip.MountArchive(*mountOptions)
+	metrics.RecordWorkerStartupPhase("clip_mount_archive_init", time.Since(phaseStart), request, map[string]string{
+		"clip_version": fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+		"success":      fmt.Sprintf("%t", err == nil),
+	})
 	if err != nil {
-		return elapsed, err
+		return time.Since(startTime), err
+	}
+
+	phaseStart = time.Now()
+	err = startServer()
+	metrics.RecordWorkerStartupPhase("clip_mount_archive_start", time.Since(phaseStart), request, map[string]string{
+		"clip_version": fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+		"success":      fmt.Sprintf("%t", err == nil),
+	})
+	if err != nil {
+		return time.Since(startTime), err
 	}
 
 	c.mountedFuseServers.Set(imageId, server)
+	elapsed := time.Since(startTime)
 	return elapsed, nil
 }
 
@@ -367,7 +459,9 @@ func (c *ImageClient) processPulledArchive(downloadPath, imageId string) (*clipC
 	// Check if this is an OCI v2 image
 	isOCI := false
 	if meta != nil {
-		if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
+		if ociInfo, ok := ociStorageInfo(meta); ok {
+			isOCI = ociInfo.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(ociInfo.Type()) == "oci"
+		} else if t, ok := meta.StorageInfo.(interface{ Type() string }); ok {
 			isOCI = t.Type() == string(clipCommon.StorageModeOCI) || strings.ToLower(t.Type()) == "oci"
 		}
 	} else {
@@ -390,7 +484,11 @@ func (c *ImageClient) cacheOCIMetadata(imageId string, meta *clipCommon.ClipArch
 		return
 	}
 
-	ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo)
+	if c.v2ArchiveMetadata != nil {
+		c.v2ArchiveMetadata.Set(imageId, meta)
+	}
+
+	ociInfo, ok := ociStorageInfo(meta)
 	if !ok {
 		return
 	}
@@ -415,6 +513,14 @@ func (c *ImageClient) GetSourceImageRef(imageId string) (string, bool) {
 
 // GetCLIPImageMetadata extracts CLIP image metadata from the archive
 func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMetadata, bool) {
+	if c.v2ArchiveMetadata != nil {
+		if meta, ok := c.v2ArchiveMetadata.Get(imageId); ok {
+			if ociInfo, ok := ociStorageInfo(meta); ok && ociInfo.ImageMetadata != nil {
+				return ociInfo.ImageMetadata, true
+			}
+		}
+	}
+
 	// Determine the archive path for this image
 	archivePath := fmt.Sprintf("/images/%s.%s", imageId, reg.LocalImageFileExtension)
 
@@ -441,10 +547,9 @@ func (c *ImageClient) GetCLIPImageMetadata(imageId string) (*clipCommon.ImageMet
 	}
 
 	// Check if this is an OCI archive with metadata
-	if meta != nil && meta.StorageInfo != nil {
-		if ociInfo, ok := meta.StorageInfo.(clipCommon.OCIStorageInfo); ok && ociInfo.ImageMetadata != nil {
-			return ociInfo.ImageMetadata, true
-		}
+	c.cacheOCIMetadata(imageId, meta)
+	if ociInfo, ok := ociStorageInfo(meta); ok && ociInfo.ImageMetadata != nil {
+		return ociInfo.ImageMetadata, true
 	}
 
 	return nil, false

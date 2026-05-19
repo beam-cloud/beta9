@@ -3,12 +3,76 @@ tag := latest
 workerTag := latest
 runnerTag := latest
 runnerPlatform := linux/$(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+BENCH_NAMESPACE ?= beta9
+BENCH_GATEWAY_URL ?= http://127.0.0.1:11994
+BENCH_GRPC_ADDR ?= 127.0.0.1:11993
+BENCH_TOKEN ?= $(BETA9_TOKEN)
+BENCH_TOKEN_CACHE ?= /tmp/beta9-startup-benchmark-$(BENCH_NAMESPACE).token
+BENCH_STUB_ID ?= $(STUB_ID)
+BENCH_IMAGE_ID ?= $(IMAGE_ID)
+BENCH_CHECKPOINT_ID ?= $(CHECKPOINT_ID)
+BENCH_BOOTSTRAP_STUB ?= 1
+BENCH_BOOTSTRAP_LOCAL_IMAGE ?= 1
+BENCH_BOOTSTRAP_IMAGE_URI ?= k3d-registry.localhost:5000/beta9-bench-alpine:latest
+BENCH_BOOTSTRAP_SOURCE_IMAGE ?= alpine:latest
+BENCH_BOOTSTRAP_ENTRYPOINT ?= sh -c 'sleep 3600'
+BENCH_ITERATIONS ?= 10
+BENCH_WARMUP ?= 1
+BENCH_INSTALL ?= 1
+BENCH_PORT_FORWARD ?= 1
+BENCH_RESET_WORKERS ?= 0
+BENCH_RESET_WORKERS_EACH ?= 0
+BENCH_TIMEOUT_SECONDS ?= 240
+BENCH_POLL_INTERVAL_MS ?= 50
+BENCH_SLEEP_SECONDS ?= 1
+BENCH_CLEANUP_TTL_SECONDS ?= 5
+BENCH_POD_PROBE_PORT ?=
+BENCH_POD_PROBE_PATH ?= /
+BENCH_OUTPUT ?= /tmp/beta9-startup-benchmark.json
+
+.PHONY: startup-benchmark startup-benchmark-build
 
 setup:
 	bash bin/setup.sh
 	make k3d-up runner worker gateway
 	# helm install beta9 deploy/charts/beta9 --create-namespace --values deploy/charts/beta9/values.local.yaml
 	kustomize build --enable-helm manifests/kustomize/overlays/cluster-dev | kubectl apply -f-
+
+startup-benchmark:
+	BENCH_NAMESPACE="$(BENCH_NAMESPACE)" \
+	BENCH_GATEWAY_URL="$(BENCH_GATEWAY_URL)" \
+	BENCH_GRPC_ADDR="$(BENCH_GRPC_ADDR)" \
+	BENCH_TOKEN="$(BENCH_TOKEN)" \
+	BENCH_TOKEN_CACHE="$(BENCH_TOKEN_CACHE)" \
+	BENCH_STUB_ID="$(BENCH_STUB_ID)" \
+	BENCH_IMAGE_ID="$(BENCH_IMAGE_ID)" \
+	BENCH_CHECKPOINT_ID="$(BENCH_CHECKPOINT_ID)" \
+	BENCH_BOOTSTRAP_STUB="$(BENCH_BOOTSTRAP_STUB)" \
+	BENCH_BOOTSTRAP_LOCAL_IMAGE="$(BENCH_BOOTSTRAP_LOCAL_IMAGE)" \
+	BENCH_BOOTSTRAP_IMAGE_URI="$(BENCH_BOOTSTRAP_IMAGE_URI)" \
+	BENCH_BOOTSTRAP_SOURCE_IMAGE="$(BENCH_BOOTSTRAP_SOURCE_IMAGE)" \
+	BENCH_BOOTSTRAP_ENTRYPOINT="$(BENCH_BOOTSTRAP_ENTRYPOINT)" \
+	BENCH_ITERATIONS="$(BENCH_ITERATIONS)" \
+	BENCH_WARMUP="$(BENCH_WARMUP)" \
+	BENCH_INSTALL="$(BENCH_INSTALL)" \
+	BENCH_PORT_FORWARD="$(BENCH_PORT_FORWARD)" \
+	BENCH_RESET_WORKERS="$(BENCH_RESET_WORKERS)" \
+	BENCH_RESET_WORKERS_EACH="$(BENCH_RESET_WORKERS_EACH)" \
+	BENCH_TIMEOUT_SECONDS="$(BENCH_TIMEOUT_SECONDS)" \
+	BENCH_POLL_INTERVAL_MS="$(BENCH_POLL_INTERVAL_MS)" \
+	BENCH_SLEEP_SECONDS="$(BENCH_SLEEP_SECONDS)" \
+	BENCH_CLEANUP_TTL_SECONDS="$(BENCH_CLEANUP_TTL_SECONDS)" \
+	BENCH_POD_PROBE_PORT="$(BENCH_POD_PROBE_PORT)" \
+	BENCH_POD_PROBE_PATH="$(BENCH_POD_PROBE_PATH)" \
+	BENCH_OUTPUT="$(BENCH_OUTPUT)" \
+	python3 hack/startup_benchmark.py
+
+startup-benchmark-build:
+	docker build . --target build -f ./docker/Dockerfile.gateway -t localhost:5001/beta9-gateway:$(tag)
+	docker push localhost:5001/beta9-gateway:$(tag)
+	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
+	docker push localhost:5001/beta9-worker:$(workerTag)
+	$(MAKE) startup-benchmark BENCH_INSTALL=1
 
 setup-sdk:
 	@if ! command -v uv &> /dev/null; then \
@@ -107,4 +171,3 @@ sdk-clean:
 
 sdk-publish:
 	make -C sdk publish
-
