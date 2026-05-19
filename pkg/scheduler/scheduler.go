@@ -291,27 +291,25 @@ func (s *Scheduler) StartProcessingRequests() {
 		}
 
 		for _, request := range requests {
-			if newWorker := s.processRequest(request, workers); newWorker != nil {
-				workers = append(workers, newWorker)
-			}
+			s.processRequest(request, workers)
 		}
 	}
 }
 
-func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*types.Worker) *types.Worker {
+func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*types.Worker) {
 	// Find a worker to schedule ContainerRequests on
 	worker, err := s.selectWorkerFromWorkers(workers, request)
 	if err != nil || worker == nil {
 		if s.reserveProvisioningCapacity(workers, request) {
 			metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "waiting_for_worker")
 			s.requeueRequestForWorkerWait(request)
-			return nil
+			return
 		}
 
 		controllers, err := s.getControllers(request)
 		if err != nil {
 			log.Error().Interface("request", request).Err(err).Msg("no controller found for request")
-			return nil
+			return
 		}
 
 		metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "no_worker")
@@ -319,7 +317,7 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 		reservationID := s.addProvisioningReservation(request, controllers[0])
 		go s.addWorkerForReservation(request, controllers, reservationID)
 		s.requeueRequestForWorkerWait(request)
-		return nil
+		return
 	}
 
 	// We found a worker that met the ContainerRequest's requirements. Schedule the request
@@ -329,14 +327,13 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request on existing worker")
 		metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "schedule_failed")
 		s.addRequestToBacklog(request)
-		return nil
+		return
 	}
 
 	// Record the request processing duration
 	schedulingDuration := time.Since(request.Timestamp)
 	metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
 	metrics.RecordSchedulerWorkerWait(schedulingDuration, request, "scheduled")
-	return nil
 }
 
 func (s *Scheduler) addWorkerForReservation(request *types.ContainerRequest, controllers []WorkerPoolController, reservationID string) {
@@ -352,7 +349,11 @@ func (s *Scheduler) addWorkerForReservation(request *types.ContainerRequest, con
 		default:
 		}
 
-		newWorker, err := c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
+		newWorker, err := c.AddWorker(
+			s.workerCPUForRequest(request),
+			s.workerMemoryForRequest(request),
+			s.workerGPUCountForRequest(request),
+		)
 		if err != nil {
 			addWorkerErr = err
 			continue
@@ -457,24 +458,12 @@ func (s *Scheduler) ensureProvisioningReservationMaps() {
 }
 
 func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, controller WorkerPoolController) *provisioningReservation {
-	cpu := request.Cpu
-	if s.config.Worker.DefaultWorkerCPURequest > cpu {
-		cpu = s.config.Worker.DefaultWorkerCPURequest
-	}
-
-	memory := request.Memory
-	if s.config.Worker.DefaultWorkerMemoryRequest > memory {
-		memory = s.config.Worker.DefaultWorkerMemoryRequest
-	}
+	cpu := s.workerCPUForRequest(request)
+	memory := s.workerMemoryForRequest(request)
 
 	gpu := ""
-	gpuCount := uint32(0)
+	gpuCount := s.workerGPUCountForRequest(request)
 	if request.RequiresGPU() {
-		gpuCount = request.GpuCount
-		if gpuCount == 0 {
-			gpuCount = 1
-		}
-
 		if pool, ok := s.workerPoolManager.GetPool(controller.Name()); ok {
 			gpu = pool.Config.GPUType
 		}
@@ -505,6 +494,32 @@ func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, 
 		worker:     worker,
 		requestIDs: map[string]struct{}{},
 	}
+}
+
+func (s *Scheduler) workerCPUForRequest(request *types.ContainerRequest) int64 {
+	cpu := request.Cpu
+	if s.config.Worker.DefaultWorkerCPURequest > cpu {
+		cpu = s.config.Worker.DefaultWorkerCPURequest
+	}
+	return cpu
+}
+
+func (s *Scheduler) workerMemoryForRequest(request *types.ContainerRequest) int64 {
+	memory := capacityMemoryForScheduling(request)
+	if s.config.Worker.DefaultWorkerMemoryRequest > memory {
+		memory = s.config.Worker.DefaultWorkerMemoryRequest
+	}
+	return memory
+}
+
+func (s *Scheduler) workerGPUCountForRequest(request *types.ContainerRequest) uint32 {
+	if !request.RequiresGPU() {
+		return 0
+	}
+	if request.GpuCount == 0 {
+		return 1
+	}
+	return request.GpuCount
 }
 
 func (s *Scheduler) selectInFlightProvisioningWorkerLocked(request *types.ContainerRequest) *types.Worker {

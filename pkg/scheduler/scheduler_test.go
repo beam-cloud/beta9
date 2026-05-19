@@ -133,11 +133,14 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 
 	workerId := wpc.generateWorkerId()
 	worker := &types.Worker{
-		Id:           workerId,
-		FreeCpu:      cpu,
-		FreeMemory:   memory,
-		FreeGpuCount: gpuCount,
-		Status:       types.WorkerStatusPending,
+		Id:            workerId,
+		TotalCpu:      cpu,
+		TotalMemory:   memory,
+		TotalGpuCount: gpuCount,
+		FreeCpu:       cpu,
+		FreeMemory:    memory,
+		FreeGpuCount:  gpuCount,
+		Status:        types.WorkerStatusPending,
 	}
 
 	// Add the worker state
@@ -478,6 +481,105 @@ func TestSchedulerDoesNotBlockOnSlowWorkerProvisioning(t *testing.T) {
 
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func TestProcessRequestUsesInFlightProvisioningForCurrentBatch(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wb.ctx = ctx
+	wb.config.Worker.DefaultWorkerCPURequest = 200
+	wb.config.Worker.DefaultWorkerMemoryRequest = 250
+
+	started := make(chan struct{}, 2)
+	unblock := make(chan struct{})
+	defer close(unblock)
+
+	wb.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, &LocalWorkerPoolControllerForTest{
+		ctx:              ctx,
+		name:             "beta9-cpu",
+		workerRepo:       wb.workerRepo,
+		addWorkerStarted: started,
+		unblockAddWorker: unblock,
+	})
+
+	firstRequest := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+	}
+	secondRequest := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+	}
+
+	wb.processRequest(firstRequest, nil)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected scheduler to start worker provisioning")
+	}
+
+	wb.processRequest(secondRequest, nil)
+
+	select {
+	case <-started:
+		t.Fatal("expected second request to reserve the in-flight worker instead of provisioning another")
+	default:
+	}
+
+	wb.provisioningMu.Lock()
+	defer wb.provisioningMu.Unlock()
+
+	assert.Equal(t, 1, len(wb.provisioningReservations))
+	for _, reservation := range wb.provisioningReservations {
+		_, firstReserved := reservation.requestIDs[firstRequest.ContainerId]
+		_, secondReserved := reservation.requestIDs[secondRequest.ContainerId]
+		assert.True(t, firstReserved)
+		assert.True(t, secondReserved)
+	}
+}
+
+func TestProvisionedWorkerUsesSchedulingMemory(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          1000,
+		Memory:       1000,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+	}
+
+	controllers, err := wb.getControllers(request)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(controllers))
+
+	expectedMemory := capacityMemoryForScheduling(request)
+	reservationID := wb.addProvisioningReservation(request, controllers[0])
+
+	wb.provisioningMu.Lock()
+	reservation := wb.provisioningReservations[reservationID]
+	assert.NotNil(t, reservation)
+	assert.Equal(t, expectedMemory, reservation.worker.TotalMemory)
+	assert.Equal(t, int64(0), reservation.worker.FreeMemory)
+	wb.provisioningMu.Unlock()
+
+	wb.addWorkerForReservation(request, controllers, reservationID)
+
+	workers, err := wb.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(workers))
+	assert.Equal(t, expectedMemory, workers[0].TotalMemory)
+	assert.Equal(t, expectedMemory, workers[0].FreeMemory)
 }
 
 func TestGetController(t *testing.T) {
