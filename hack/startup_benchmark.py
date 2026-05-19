@@ -648,44 +648,10 @@ def redis_snapshot(namespace, pod_name):
     }
 
 
-def wait_container_running(args, token, container_id, request_start_ns, redis_pod):
-    deadline = time.monotonic() + args.timeout_seconds
-    interval = args.poll_interval_ms / 1000
-    last_state = None
-    attempts = 0
-
-    while time.monotonic() < deadline:
-        attempts += 1
-        if redis_pod:
-            state = redis_hgetall(args.namespace, redis_pod, f"scheduler:container:state:{container_id}")
-            if state:
-                last_state = state
-                if state.get("status") == "RUNNING":
-                    return {
-                        "observedMs": (time.monotonic_ns() - request_start_ns) / 1_000_000,
-                        "attempts": attempts,
-                        "state": state,
-                    }
-        else:
-            status, body, raw, _ = http_json(
-                "GET",
-                api_url(args.gateway_url, API_PREFIX + f"/pods/{container_id}/status"),
-                token=token,
-                timeout=5,
-            )
-            last_state = body if status < 500 else {"raw": raw}
-            if status == 200 and body.get("ok") and str(body.get("status", "")).lower() == "running":
-                return {
-                    "observedMs": (time.monotonic_ns() - request_start_ns) / 1_000_000,
-                    "attempts": attempts,
-                    "state": body,
-                }
-        time.sleep(interval)
-
-    raise TimeoutError(f"Timed out waiting for {container_id} RUNNING; last state={last_state}")
+NO_POLL_OBSERVATION = object()
 
 
-def wait_connect_ready(args, token, container_id, request_start_ns):
+def poll_until(args, request_start_ns, label, attempt, *, last_label="response"):
     deadline = time.monotonic() + args.timeout_seconds
     interval = args.poll_interval_ms / 1000
     last = None
@@ -693,6 +659,42 @@ def wait_connect_ready(args, token, container_id, request_start_ns):
 
     while time.monotonic() < deadline:
         attempts += 1
+        done, result, observation = attempt()
+        if observation is not NO_POLL_OBSERVATION:
+            last = observation
+        if done:
+            result = dict(result)
+            result["observedMs"] = (time.monotonic_ns() - request_start_ns) / 1_000_000
+            result["attempts"] = attempts
+            return result
+        time.sleep(interval)
+
+    raise TimeoutError(f"Timed out waiting for {label}; last {last_label}={last}")
+
+
+def wait_container_running(args, token, container_id, request_start_ns, redis_pod):
+    def attempt():
+        if redis_pod:
+            state = redis_hgetall(args.namespace, redis_pod, f"scheduler:container:state:{container_id}")
+            if not state:
+                return False, {}, NO_POLL_OBSERVATION
+            return state.get("status") == "RUNNING", {"state": state}, state
+
+        status, body, raw, _ = http_json(
+            "GET",
+            api_url(args.gateway_url, API_PREFIX + f"/pods/{container_id}/status"),
+            token=token,
+            timeout=5,
+        )
+        state = body if status < 500 else {"raw": raw}
+        running = status == 200 and body.get("ok") and str(body.get("status", "")).lower() == "running"
+        return running, {"state": body}, state
+
+    return poll_until(args, request_start_ns, f"{container_id} RUNNING", attempt, last_label="state")
+
+
+def wait_connect_ready(args, token, container_id, request_start_ns):
+    def attempt():
         status, body, raw, _ = http_json(
             "POST",
             api_url(args.gateway_url, API_PREFIX + f"/pods/{container_id}/connect"),
@@ -700,16 +702,10 @@ def wait_connect_ready(args, token, container_id, request_start_ns):
             body={"containerId": container_id},
             timeout=5,
         )
-        last = body if status < 500 else {"raw": raw}
-        if status == 200 and body.get("ok"):
-            return {
-                "observedMs": (time.monotonic_ns() - request_start_ns) / 1_000_000,
-                "attempts": attempts,
-                "body": body,
-            }
-        time.sleep(interval)
+        response = body if status < 500 else {"raw": raw}
+        return status == 200 and body.get("ok"), {"body": body}, response
 
-    raise TimeoutError(f"Timed out waiting for {container_id} connect-ready; last response={last}")
+    return poll_until(args, request_start_ns, f"{container_id} connect-ready", attempt)
 
 
 def wait_pod_probe(args, token, request_start_ns):
@@ -721,13 +717,8 @@ def wait_pod_probe(args, token, request_start_ns):
         path = "/" + path
 
     probe_path = f"/api/v1/pod/id/{args.stub_id}/{args.pod_probe_port}{path}"
-    deadline = time.monotonic() + args.timeout_seconds
-    interval = args.poll_interval_ms / 1000
-    last = None
-    attempts = 0
 
-    while time.monotonic() < deadline:
-        attempts += 1
+    def attempt():
         try:
             status, body, raw, _ = http_json(
                 "GET",
@@ -735,18 +726,12 @@ def wait_pod_probe(args, token, request_start_ns):
                 token=token,
                 timeout=5,
             )
-            last = {"status": status, "body": body if body else raw[:200]}
-            if status < 500:
-                return {
-                    "observedMs": (time.monotonic_ns() - request_start_ns) / 1_000_000,
-                    "attempts": attempts,
-                    "status": status,
-                }
+            response = {"status": status, "body": body if body else raw[:200]}
+            return status < 500, {"status": status}, response
         except Exception as exc:
-            last = {"error": str(exc)}
-        time.sleep(interval)
+            return False, {}, {"error": str(exc)}
 
-    raise TimeoutError(f"Timed out waiting for pod probe {probe_path}; last response={last}")
+    return poll_until(args, request_start_ns, f"pod probe {probe_path}", attempt)
 
 
 def cleanup_container(args, token, container_id):
