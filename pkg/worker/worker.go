@@ -33,8 +33,8 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
-	defaultRuncStartConcurrency                  = 8
-	defaultGvisorStartConcurrency                = 8
+	defaultRuncStartConcurrency    int           = 8
+	defaultGvisorStartConcurrency  int           = 8
 )
 
 type Worker struct {
@@ -105,6 +105,15 @@ type ContainerInstance struct {
 	ContainerIp                string
 	Runtime                    runtime.Runtime
 	OOMWatcher                 runtime.OOMWatcher
+}
+
+func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
+	i.SandboxProcessManagerReady = ready
+	if i.ProcessManagerReadyChan != nil {
+		i.ProcessManagerReadyOnce.Do(func() {
+			close(i.ProcessManagerReadyChan)
+		})
+	}
 }
 
 type ContainerOptions struct {
@@ -262,18 +271,7 @@ func NewWorker() (*Worker, error) {
 		defaultRuntime = runcRuntime
 	}
 
-	containerStartLimit := defaultRuncStartConcurrency
-	if runtimeType == types.ContainerRuntimeGvisor.String() {
-		containerStartLimit = defaultGvisorStartConcurrency
-	}
-	if raw := os.Getenv("WORKER_CONTAINER_START_CONCURRENCY"); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err != nil {
-			log.Warn().Str("value", raw).Err(err).Msg("invalid WORKER_CONTAINER_START_CONCURRENCY")
-		} else if parsed > 0 {
-			containerStartLimit = parsed
-		}
-	}
+	containerStartLimit := containerStartLimitForRuntime(runtimeType)
 
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
@@ -432,24 +430,51 @@ containerRequestStream:
 	return s.shutdown()
 }
 
-// handleContainerRequest handles an individual container request, spawning a new runc container
-func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
-	containerId := request.ContainerId
-
-	s.containerLock.Lock()
-	_, exists := s.containerInstances.Get(containerId)
-	if !exists {
-		s.containerInstances.Set(containerId, &ContainerInstance{
-			Id:        containerId,
-			StubId:    request.StubId,
-			LogBuffer: common.NewLogBuffer(),
-			Request:   request,
-			Runtime:   s.runtime,
-		})
+func containerStartLimitForRuntime(runtimeType string) int {
+	limit := defaultRuncStartConcurrency
+	if runtimeType == types.ContainerRuntimeGvisor.String() {
+		limit = defaultGvisorStartConcurrency
 	}
-	s.containerLock.Unlock()
 
-	if exists {
+	raw := os.Getenv("WORKER_CONTAINER_START_CONCURRENCY")
+	if raw == "" {
+		return limit
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Warn().Str("value", raw).Err(err).Msg("invalid WORKER_CONTAINER_START_CONCURRENCY")
+		return limit
+	}
+	if parsed <= 0 {
+		return limit
+	}
+
+	return parsed
+}
+
+func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool {
+	s.containerLock.Lock()
+	defer s.containerLock.Unlock()
+
+	if _, exists := s.containerInstances.Get(request.ContainerId); exists {
+		return false
+	}
+
+	s.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:        request.ContainerId,
+		StubId:    request.StubId,
+		LogBuffer: common.NewLogBuffer(),
+		Request:   request,
+		Runtime:   s.runtime,
+	})
+
+	return true
+}
+
+// handleContainerRequest handles an individual container request.
+func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
+	if !s.reserveContainerInstance(request) {
 		return
 	}
 
@@ -504,7 +529,6 @@ func (s *Worker) failContainerRequest(containerId string, request *types.Contain
 	}
 
 	s.clearContainer(containerId, request, exitCode)
-
 }
 
 // checkForStoppedBuilds checks if a build has been cancelled and cancels the context if it has.

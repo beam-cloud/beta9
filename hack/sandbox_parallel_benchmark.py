@@ -41,6 +41,13 @@ from startup_benchmark import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HEALTH_PATH = "/api/v1/health"
+TABLE_HEADER = "\n".join(
+    (
+        "",
+        " run   kind container                                           create   running  proc_rdy exec_done   status",
+        "---- ------ ---------------------------------------------- --------- --------- --------- --------- --------",
+    )
+)
 
 
 def parse_args():
@@ -381,8 +388,8 @@ def run_sandbox_iteration(args, sandbox, token, index, warmup=False, start_event
 def summarize_metric(samples, key):
     values = [
         sample.get(key)
-        for sample in samples
-        if sample.get("ok") and not sample.get("warmup") and sample.get(key) is not None
+        for sample in measured_ok_samples(samples)
+        if sample.get(key) is not None
     ]
     if not values:
         return None
@@ -394,6 +401,14 @@ def summarize_metric(samples, key):
         "p95": percentile(values, 95),
         "max": max(values),
     }
+
+
+def measured_ok_samples(samples):
+    return [sample for sample in samples if sample.get("ok") and not sample.get("warmup")]
+
+
+def measured_failed_samples(samples):
+    return [sample for sample in samples if sample.get("warmup") is False and not sample.get("ok")]
 
 
 def print_sample(sample):
@@ -512,8 +527,7 @@ def wait_for_prewarm_idle(args, redis_pod, samples):
 def run_parallel_samples(args, sandbox, token, redis_pod):
     samples = []
 
-    print("\n run   kind container                                           create   running  proc_rdy exec_done   status")
-    print("---- ------ ---------------------------------------------- --------- --------- --------- --------- --------")
+    print(TABLE_HEADER)
 
     if args.prewarm_count > 0:
         log(f"Prewarming worker pool with {args.prewarm_count} sandbox(es)")
@@ -551,7 +565,7 @@ def run_parallel_samples(args, sandbox, token, redis_pod):
     )
 
     batch_wall_ms = (time.monotonic_ns() - batch_start_ns) / 1_000_000
-    ok_count = len([sample for sample in samples if sample.get("ok") and not sample.get("warmup")])
+    ok_count = len(measured_ok_samples(samples))
     return samples, {
         "count": args.count,
         "okCount": ok_count,
@@ -651,7 +665,7 @@ def main():
     output_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     log(f"Wrote sandbox benchmark report to {output_path}")
 
-    failures = [sample for sample in samples if sample.get("warmup") is False and not sample.get("ok")]
+    failures = measured_failed_samples(samples)
     if failures:
         raise SystemExit(f"{len(failures)} measured sandbox benchmark run(s) failed")
 

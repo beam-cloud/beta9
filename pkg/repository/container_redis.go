@@ -14,7 +14,11 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
-const concurrencyUsageInitialized = "1"
+const (
+	concurrencyUsageInitialized              = "1"
+	concurrencyUsageInitializationTimeout    = 15 * time.Second
+	concurrencyUsageInitializationPollPeriod = 100 * time.Millisecond
+)
 
 var reserveConcurrencyLimitScript = redis.NewScript(`
 local used_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0")
@@ -494,7 +498,8 @@ func (cr *ContainerRedisRepository) GetFailedContainersByStubId(stubId string) (
 }
 
 func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *types.ConcurrencyLimit, request *types.ContainerRequest) error {
-	if quota != nil {
+	reservedConcurrency := quota != nil
+	if reservedConcurrency {
 		if err := c.ensureWorkspaceConcurrencyUsageInitialized(request.WorkspaceId); err != nil {
 			return err
 		}
@@ -517,7 +522,7 @@ func (c *ContainerRedisRepository) SetContainerStateWithConcurrencyLimit(quota *
 		Memory:      request.Memory,
 	})
 	if err != nil {
-		if quota != nil {
+		if reservedConcurrency {
 			_ = c.releaseContainerConcurrencyReservation(context.TODO(), request.WorkspaceId, request.ContainerId)
 		}
 		return err
@@ -538,29 +543,12 @@ func (c *ContainerRedisRepository) ensureWorkspaceConcurrencyUsageInitialized(wo
 		return err
 	}
 
-	lock, err := redislock.Obtain(ctx, c.rdb, common.RedisKeys.WorkspaceConcurrencyLimitLock(workspaceId), 15*time.Second, nil)
+	lock, err := redislock.Obtain(ctx, c.rdb, common.RedisKeys.WorkspaceConcurrencyLimitLock(workspaceId), concurrencyUsageInitializationTimeout, nil)
 	if err != nil && err != redislock.ErrNotObtained {
 		return err
 	}
 	if err == redislock.ErrNotObtained {
-		deadline := time.After(15 * time.Second)
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-deadline:
-				return fmt.Errorf("concurrency limit usage initialization timed out for workspace %s", workspaceId)
-			case <-ticker.C:
-				initialized, err = c.rdb.HGet(ctx, usageKey, "initialized").Result()
-				if err == nil && initialized == concurrencyUsageInitialized {
-					return nil
-				}
-				if err != nil && err != redis.Nil {
-					return err
-				}
-			}
-		}
+		return c.waitForWorkspaceConcurrencyUsageInitialized(ctx, usageKey, workspaceId)
 	}
 	defer lock.Release(ctx)
 
@@ -573,6 +561,27 @@ func (c *ContainerRedisRepository) ensureWorkspaceConcurrencyUsageInitialized(wo
 	}
 
 	return c.rebuildWorkspaceConcurrencyUsage(ctx, workspaceId)
+}
+
+func (c *ContainerRedisRepository) waitForWorkspaceConcurrencyUsageInitialized(ctx context.Context, usageKey, workspaceId string) error {
+	deadline := time.After(concurrencyUsageInitializationTimeout)
+	ticker := time.NewTicker(concurrencyUsageInitializationPollPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			return fmt.Errorf("concurrency limit usage initialization timed out for workspace %s", workspaceId)
+		case <-ticker.C:
+			initialized, err := c.rdb.HGet(ctx, usageKey, "initialized").Result()
+			if err == nil && initialized == concurrencyUsageInitialized {
+				return nil
+			}
+			if err != nil && err != redis.Nil {
+				return err
+			}
+		}
+	}
 }
 
 func (c *ContainerRedisRepository) rebuildWorkspaceConcurrencyUsage(ctx context.Context, workspaceId string) error {

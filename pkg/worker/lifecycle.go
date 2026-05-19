@@ -274,37 +274,11 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return nil
 	}
 
-	// Determine how many ports we need to expose
 	phaseStart = time.Now()
-	portsToExpose := len(request.Ports)
-	if portsToExpose == 0 {
-		portsToExpose = 1
-		request.Ports = []uint32{uint32(containerInnerPort)}
-	}
-
-	// Expose SSH port
-	request.Ports = append(request.Ports, uint32(types.WorkerShellPort))
-	portsToExpose++
-
-	// Expose sandbox process manager port
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
-		request.Ports = append(request.Ports, uint32(types.WorkerSandboxProcessManagerPort))
-		portsToExpose++
-	}
-
-	// Only expose checkpoint exposed ports if they are available
-	if request.Checkpoint != nil {
-		request.Ports = request.Checkpoint.ExposedPorts
-		portsToExpose = len(request.Ports)
-	}
-
-	bindPorts := make([]int, 0, portsToExpose)
-	for i := 0; i < portsToExpose; i++ {
-		bindPort, err := getRandomFreePort()
-		if err != nil {
-			return err
-		}
-		bindPorts = append(bindPorts, bindPort)
+	request.Ports = portsForRequest(request)
+	bindPorts, err := allocateBindPorts(len(request.Ports))
+	if err != nil {
+		return err
 	}
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
@@ -389,6 +363,36 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
+}
+
+func portsForRequest(request *types.ContainerRequest) []uint32 {
+	if request.Checkpoint != nil {
+		return request.Checkpoint.ExposedPorts
+	}
+
+	ports := request.Ports
+	if len(ports) == 0 {
+		ports = []uint32{uint32(containerInnerPort)}
+	}
+
+	ports = append(ports, uint32(types.WorkerShellPort))
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		ports = append(ports, uint32(types.WorkerSandboxProcessManagerPort))
+	}
+
+	return ports
+}
+
+func allocateBindPorts(count int) ([]int, error) {
+	bindPorts := make([]int, 0, count)
+	for i := 0; i < count; i++ {
+		bindPort, err := getRandomFreePort()
+		if err != nil {
+			return nil, err
+		}
+		bindPorts = append(bindPorts, bindPort)
+	}
+	return bindPorts, nil
 }
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
@@ -991,38 +995,26 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 
-		// For sandboxes, wait for process manager to be ready before allowing exec calls
 		if request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance, exists := s.containerInstances.Get(containerId)
-			if exists && instance.SandboxProcessManager != nil {
+			if !exists || instance.SandboxProcessManager == nil {
+				return
+			}
 
-				// Wait for process manager to be ready - this blocks until ready or timeout
-				phaseStart := time.Now()
-				processManagerReady := s.waitForProcessManager(ctx, containerId, instance)
-				metrics.RecordWorkerStartupPhase("sandbox_process_manager_ready", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", processManagerReady)})
-				if processManagerReady {
-					instance.SandboxProcessManagerReady = true
-					if instance.ProcessManagerReadyChan != nil {
-						instance.ProcessManagerReadyOnce.Do(func() {
-							close(instance.ProcessManagerReadyChan)
-						})
-					}
-					s.containerInstances.Set(containerId, instance)
+			phaseStart := time.Now()
+			processManagerReady := s.waitForProcessManager(ctx, containerId, instance)
+			metrics.RecordWorkerStartupPhase("sandbox_process_manager_ready", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", processManagerReady)})
 
-					// Now that process manager is ready, start Docker daemon if enabled
-					if request.DockerEnabled {
-						go s.startDockerDaemon(ctx, containerId, instance)
-					}
+			instance.signalProcessManagerReadiness(processManagerReady)
+			s.containerInstances.Set(containerId, instance)
 
-				} else {
-					if instance.ProcessManagerReadyChan != nil {
-						instance.ProcessManagerReadyOnce.Do(func() {
-							close(instance.ProcessManagerReadyChan)
-						})
-					}
-					s.containerInstances.Set(containerId, instance)
-					log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
-				}
+			if !processManagerReady {
+				log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
+				return
+			}
+
+			if request.DockerEnabled {
+				go s.startDockerDaemon(ctx, containerId, instance)
 			}
 		}
 	}()
@@ -1112,7 +1104,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if !restored && !request.Stub.Type.IsDeployment() {
 			return exitCode, err
 		} else if !restored {
-			// Disable checkpoing flag if the restore fails
+			// Disable checkpoint flag if the restore fails
 			request.CheckpointEnabled = false
 		}
 	}
