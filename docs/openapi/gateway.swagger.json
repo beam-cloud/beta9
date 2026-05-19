@@ -996,29 +996,6 @@
         }
       }
     },
-    "gatewayAttachToContainerRequest": {
-      "type": "object",
-      "properties": {
-        "containerId": {
-          "type": "string"
-        }
-      }
-    },
-    "gatewayAttachToContainerResponse": {
-      "type": "object",
-      "properties": {
-        "output": {
-          "type": "string"
-        },
-        "done": {
-          "type": "boolean"
-        },
-        "exitCode": {
-          "type": "integer",
-          "format": "int32"
-        }
-      }
-    },
     "gatewayAuthorizeResponse": {
       "type": "object",
       "properties": {
@@ -1053,20 +1030,6 @@
         "minContainers": {
           "type": "integer",
           "format": "int64"
-        }
-      }
-    },
-    "gatewayCheckpointContainerResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "checkpointId": {
-          "type": "string"
-        },
-        "errorMsg": {
-          "type": "string"
         }
       }
     },
@@ -1837,20 +1800,6 @@
         }
       }
     },
-    "gatewayPutObjectResponse": {
-      "type": "object",
-      "properties": {
-        "ok": {
-          "type": "boolean"
-        },
-        "objectId": {
-          "type": "string"
-        },
-        "errorMsg": {
-          "type": "string"
-        }
-      }
-    },
     "gatewayScaleDeploymentResponse": {
       "type": "object",
       "properties": {
@@ -2002,39 +1951,6 @@
           "items": {
             "type": "string"
           }
-        }
-      }
-    },
-    "gatewaySyncContainerWorkspaceOperation": {
-      "type": "string",
-      "enum": [
-        "WRITE",
-        "DELETE",
-        "MOVED"
-      ],
-      "default": "WRITE"
-    },
-    "gatewaySyncContainerWorkspaceRequest": {
-      "type": "object",
-      "properties": {
-        "containerId": {
-          "type": "string"
-        },
-        "path": {
-          "type": "string"
-        },
-        "newPath": {
-          "type": "string"
-        },
-        "isDir": {
-          "type": "boolean"
-        },
-        "data": {
-          "type": "string",
-          "format": "byte"
-        },
-        "op": {
-          "$ref": "#/definitions/gatewaySyncContainerWorkspaceOperation"
         }
       }
     },

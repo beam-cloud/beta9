@@ -68,6 +68,6 @@ check_status
 echo "=> Installing go2proto"
 go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
 go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@v2.27.1
-go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@latest
-go install github.com/beam-cloud/go2proto@latest
+go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.27.1
+go install github.com/beam-cloud/go2proto@091f2e319b32a829052fdc8f02bbb6561c4f0504
 check_status

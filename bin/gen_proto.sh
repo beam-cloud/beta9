@@ -1,18 +1,39 @@
 #!/bin/bash
 
-if [ -z "$PROTOC_INCLUDE_PATH" ]; then
+set -euo pipefail
+
+if [ -z "${PROTOC_INCLUDE_PATH:-}" ]; then
     PROTOC_INCLUDE_PATH="/usr/local/include"
 fi
 
-GRPC_PATH=$(which protoc-gen-go-grpc)
-if [[ "$GRPC_PATH" == *"/go/bin/"*  ]]; then
-    echo "protoc-gen-go-grpc is a go install"
-elif [ -f "$GRPC_PATH" ]; then
-    echo "WARNING: protoc-gen-go-grpc is a system install and there might be version conflicts"
-else
-    echo "protoc-gen-go-grpc is not installed"
-    exit 1
+go_bin_path="$(go env GOBIN)"
+if [ -z "$go_bin_path" ]; then
+    go_bin_path="$(go env GOPATH)/bin"
 fi
+export PATH="$go_bin_path:$PATH"
+
+ensure_go_tool() {
+    local binary="$1"
+    local module="$2"
+
+    if command -v "$binary" >/dev/null 2>&1; then
+        return
+    fi
+
+    echo "$binary is not installed; installing $module"
+    go install "$module"
+}
+
+PROTOC_GEN_GO_VERSION="${PROTOC_GEN_GO_VERSION:-v1.31.0}"
+PROTOC_GEN_GO_GRPC_VERSION="${PROTOC_GEN_GO_GRPC_VERSION:-v1.3.0}"
+GRPC_GATEWAY_VERSION="${GRPC_GATEWAY_VERSION:-v2.27.1}"
+GO2PROTO_VERSION="${GO2PROTO_VERSION:-091f2e319b32a829052fdc8f02bbb6561c4f0504}"
+
+ensure_go_tool protoc-gen-go "google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}"
+ensure_go_tool protoc-gen-go-grpc "google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}"
+ensure_go_tool protoc-gen-grpc-gateway "github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@${GRPC_GATEWAY_VERSION}"
+ensure_go_tool protoc-gen-openapiv2 "github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@${GRPC_GATEWAY_VERSION}"
+ensure_go_tool go2proto "github.com/beam-cloud/go2proto@${GO2PROTO_VERSION}"
 
 go2proto -f ./pkg/types/types.proto -p ./pkg/types -n github.com/beam-cloud/beta9/proto -t types
 

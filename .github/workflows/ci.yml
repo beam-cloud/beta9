@@ -59,7 +59,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
-          go-version: "1.21"
+          go-version: "1.23.0"
 
       - name: Cache Go modules
         uses: actions/cache@v3
@@ -81,7 +81,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v3
         with:
-          go-version: "1.21"
+          go-version: "1.23.0"
       
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -98,10 +98,13 @@ jobs:
         run: |
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31.0
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
+          go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-grpc-gateway@v2.27.1
+          go install github.com/grpc-ecosystem/grpc-gateway/v2/protoc-gen-openapiv2@v2.27.1
+          go install github.com/beam-cloud/go2proto@091f2e319b32a829052fdc8f02bbb6561c4f0504
         
       - name: Install Python GRPC Package
         run: |
-          python3 -m pip install -U "betterproto-beta9[compiler]" betterproto-beta9 grpcio
+          python3 -m pip install -U "betterproto-beta9[compiler]==2.0.1" "grpcio==1.69.0"
           sudo apt update
           sudo apt install protobuf-compiler -y
       

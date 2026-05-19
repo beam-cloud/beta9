@@ -12,7 +12,7 @@ tmpWorkDir="$tmpWorkDir/beta9"
 cp -r . "$tmpWorkDir"
 pushd "$tmpWorkDir"
 git add -A
-git commit -m init || true # maybe fail because nothing to commit 
+git -c user.name="proto verifier" -c user.email="proto-verifier@example.com" commit --allow-empty -m init
 ./bin/gen_proto.sh
 diff=$(git --no-pager diff )
 popd
