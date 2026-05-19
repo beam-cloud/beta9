@@ -61,8 +61,15 @@ end
 local reserved_gpu = tonumber(redis.call("HGET", KEYS[2], "gpu_count") or "0")
 local reserved_cpu = tonumber(redis.call("HGET", KEYS[2], "cpu") or "0")
 
-local used_gpu = redis.call("HINCRBY", KEYS[1], "gpu_count", -reserved_gpu)
-local used_cpu = redis.call("HINCRBY", KEYS[1], "cpu", -reserved_cpu)
+local used_gpu = tonumber(redis.call("HGET", KEYS[1], "gpu_count") or "0")
+local used_cpu = tonumber(redis.call("HGET", KEYS[1], "cpu") or "0")
+
+if reserved_gpu ~= 0 then
+	used_gpu = redis.call("HINCRBY", KEYS[1], "gpu_count", -reserved_gpu)
+end
+if reserved_cpu ~= 0 then
+	used_cpu = redis.call("HINCRBY", KEYS[1], "cpu", -reserved_cpu)
+end
 
 if used_gpu < 0 then
 	redis.call("HSET", KEYS[1], "gpu_count", 0)

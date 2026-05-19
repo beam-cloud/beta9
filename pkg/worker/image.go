@@ -50,9 +50,7 @@ var (
 func getImageCachePath() string {
 	path := baseImageCachePath
 
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		os.MkdirAll(path, 0755)
-	}
+	_ = ensureImageDirectory(path, 0755)
 
 	return path
 }
@@ -60,11 +58,17 @@ func getImageCachePath() string {
 func getImageMountPath(workerId string) string {
 	path := fmt.Sprintf(baseImageMountPath, workerId)
 
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		os.MkdirAll(path, 0755)
-	}
+	_ = ensureImageDirectory(path, 0755)
 
 	return path
+}
+
+func ensureImageDirectory(dir string, perm os.FileMode) error {
+	if err := os.MkdirAll(dir, perm); err != nil {
+		return fmt.Errorf("failed to create image directory <%s>: %w", dir, err)
+	}
+
+	return nil
 }
 
 type PathInfo struct {
@@ -140,13 +144,22 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		return nil, err
 	}
 
+	imageCachePath := getImageCachePath()
+	imageMountPath := getImageMountPath(workerId)
+	if err := ensureImageDirectory(imageCachePath, 0755); err != nil {
+		return nil, err
+	}
+	if err := ensureImageDirectory(imageMountPath, 0755); err != nil {
+		return nil, err
+	}
+
 	c := &ImageClient{
 		config:             config,
 		registry:           registry,
 		cacheClient:        fileCacheManager.GetClient(),
 		imageBundlePath:    imageBundlePath,
-		imageCachePath:     getImageCachePath(),
-		imageMountPath:     getImageMountPath(workerId),
+		imageCachePath:     imageCachePath,
+		imageMountPath:     imageMountPath,
 		workerId:           workerId,
 		workerRepoClient:   workerRepoClient,
 		skopeoClient:       common.NewSkopeoClient(config),
@@ -220,7 +233,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	if c.mountedImageReady(imageId) {
 		elapsed := time.Since(startTime)
 		metrics.RecordWorkerStartupPhase("clip_mounted_fuse_hit", elapsed, request, map[string]string{
-			"clip_version":      fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+			"clip_version":     fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
 			"mounted_fuse_hit": "true",
 		})
 		return elapsed, nil
@@ -394,7 +407,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	if c.mountedImageReady(imageId) {
 		elapsed := time.Since(startTime)
 		metrics.RecordWorkerStartupPhase("clip_mounted_fuse_hit", elapsed, request, map[string]string{
-			"clip_version":      fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+			"clip_version":     fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
 			"mounted_fuse_hit": "true",
 		})
 		return elapsed, nil
@@ -417,7 +430,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	if c.mountedImageReady(imageId) {
 		elapsed := time.Since(startTime)
 		metrics.RecordWorkerStartupPhase("clip_mounted_fuse_hit_after_lock", elapsed, request, map[string]string{
-			"clip_version":      fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+			"clip_version":     fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
 			"mounted_fuse_hit": "true",
 		})
 		return elapsed, nil
@@ -649,13 +662,8 @@ func (c *ImageClient) Cleanup() error {
 func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string) (*types.S3ImageRegistryConfig, error) {
 	sourceRegistry := c.config.ImageService.Registries.S3
 
-	// Ensure directory exists for lock file and archive
-	if err := os.MkdirAll(filepath.Dir(archivePath), 0755); err != nil {
-		return nil, err
-	}
-
 	lockPath := archivePath + ".lock"
-	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	lockFile, err := openImageLockFile(lockPath)
 	if err != nil {
 		return nil, err
 	}
@@ -666,7 +674,6 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	}
 
 	defer syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
-	defer os.Remove(lockPath)
 
 	// Check if file exists now that we have the lock (another worker may have downloaded it)
 	if _, err := os.Stat(archivePath); err == nil {
@@ -699,6 +706,30 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	}
 
 	return &sourceRegistry, nil
+}
+
+func openImageLockFile(lockPath string) (*os.File, error) {
+	var lastErr error
+
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := ensureImageDirectory(filepath.Dir(lockPath), 0755); err != nil {
+			return nil, err
+		}
+
+		lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+		if err == nil {
+			return lockFile, nil
+		}
+
+		lastErr = err
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+
+		time.Sleep(time.Duration(attempt+1) * 10 * time.Millisecond)
+	}
+
+	return nil, lastErr
 }
 
 func (c *ImageClient) inspectAndVerifyImage(ctx context.Context, request *types.ContainerRequest) error {

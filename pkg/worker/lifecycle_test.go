@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 
@@ -389,6 +390,31 @@ func TestMountedImageReadyVerifiesMountPath(t *testing.T) {
 	require.NoError(t, os.MkdirAll(imageClient.imageMountPoint(imageId), 0755))
 	imageClient.mountedFuseServers.Set(imageId, nil)
 	assert.True(t, imageClient.mountedImageReady(imageId))
+}
+
+func TestPullImageFromRegistryKeepsPersistentLockFile(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "image.clip")
+	lockPath := archivePath + ".lock"
+	require.NoError(t, os.WriteFile(archivePath, []byte("clip"), 0644))
+
+	imageClient := &ImageClient{}
+	_, err := imageClient.pullImageFromRegistry(context.Background(), archivePath, "image")
+	require.NoError(t, err)
+
+	_, err = os.Stat(lockPath)
+	require.NoError(t, err)
+}
+
+func TestOpenImageLockFileCreatesParentDirectory(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "missing", "nested", "image.clip.lock")
+
+	lockFile, err := openImageLockFile(lockPath)
+	require.NoError(t, err)
+	require.NoError(t, lockFile.Close())
+
+	_, err = os.Stat(lockPath)
+	require.NoError(t, err)
 }
 
 // Get a base test spec

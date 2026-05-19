@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
@@ -21,8 +22,10 @@ import (
 )
 
 const (
-	requestProcessingInterval  time.Duration = 50 * time.Millisecond
-	requestProcessingBatchSize               = 128
+	requestProcessingInterval      time.Duration = 50 * time.Millisecond
+	requestProcessingBatchSize                   = 128
+	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
+	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
 )
 
 type Scheduler struct {
@@ -37,6 +40,15 @@ type Scheduler struct {
 	eventRepo             repo.EventRepository
 	schedulerUsageMetrics SchedulerUsageMetrics
 	eventBus              *common.EventBus
+
+	provisioningMu                  sync.Mutex
+	provisioningReservations        map[string]*provisioningReservation
+	requestProvisioningReservations map[string]string
+}
+
+type provisioningReservation struct {
+	worker     *types.Worker
+	requestIDs map[string]struct{}
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
@@ -109,6 +121,9 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		schedulerUsageMetrics: schedulerUsage,
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
+
+		provisioningReservations:        map[string]*provisioningReservation{},
+		requestProvisioningReservations: map[string]string{},
 	}, nil
 }
 
@@ -287,9 +302,11 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 	// Find a worker to schedule ContainerRequests on
 	worker, err := s.selectWorkerFromWorkers(workers, request)
 	if err != nil || worker == nil {
-		metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "no_worker")
-		// We didn't find a Worker that fit the ContainerRequest's requirements. Let's find a controller
-		// so we can add a new worker.
+		if s.reserveProvisioningCapacity(workers, request) {
+			metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "waiting_for_worker")
+			s.requeueRequestForWorkerWait(request)
+			return nil
+		}
 
 		controllers, err := s.getControllers(request)
 		if err != nil {
@@ -297,7 +314,11 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 			return nil
 		}
 
-		go s.addWorkerAndScheduleRequest(request, controllers)
+		metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "no_worker")
+
+		reservationID := s.addProvisioningReservation(request, controllers[0])
+		go s.addWorkerForReservation(request, controllers, reservationID)
+		s.requeueRequestForWorkerWait(request)
 		return nil
 	}
 
@@ -318,7 +339,7 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 	return nil
 }
 
-func (s *Scheduler) addWorkerAndScheduleRequest(request *types.ContainerRequest, controllers []WorkerPoolController) {
+func (s *Scheduler) addWorkerForReservation(request *types.ContainerRequest, controllers []WorkerPoolController, reservationID string) {
 	var addWorkerErr error
 	for _, c := range controllers {
 		if c == nil {
@@ -338,23 +359,198 @@ func (s *Scheduler) addWorkerAndScheduleRequest(request *types.ContainerRequest,
 		}
 
 		log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added new worker")
-
-		if err := s.scheduleRequest(newWorker, request); err != nil {
-			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request")
-			metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "schedule_failed")
-			s.addRequestToBacklog(request)
-			return
-		}
-
-		schedulingDuration := time.Since(request.Timestamp)
-		metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
-		metrics.RecordSchedulerWorkerWait(schedulingDuration, request, "scheduled")
+		time.AfterFunc(provisioningReservationHandoff, func() {
+			s.releaseProvisioningReservation(reservationID)
+		})
 		return
 	}
 
 	log.Error().Str("container_id", request.ContainerId).Err(addWorkerErr).Msg("unable to add worker")
 	metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "add_worker_failed")
-	s.addRequestToBacklog(request)
+	s.releaseProvisioningReservation(reservationID)
+}
+
+func (s *Scheduler) requeueRequestForWorkerWait(request *types.ContainerRequest) {
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-time.After(provisioningWorkerRequeueDelay):
+		}
+
+		if time.Since(request.Timestamp) >= maxScheduleRetryDuration {
+			log.Error().Str("container_id", request.ContainerId).Msg("giving up on request waiting for worker capacity")
+			s.containerRepo.DeleteContainerState(request.ContainerId)
+			s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed)
+			metrics.RecordRequestScheduleFailure(request)
+			return
+		}
+
+		s.requestBacklog.Push(request)
+	}()
+}
+
+func (s *Scheduler) reserveProvisioningCapacity(workers []*types.Worker, request *types.ContainerRequest) bool {
+	s.provisioningMu.Lock()
+	defer s.provisioningMu.Unlock()
+	s.ensureProvisioningReservationMaps()
+
+	if reservationID, ok := s.requestProvisioningReservations[request.ContainerId]; ok {
+		if _, exists := s.provisioningReservations[reservationID]; exists {
+			return true
+		}
+
+		delete(s.requestProvisioningReservations, request.ContainerId)
+	}
+
+	if worker := s.selectInFlightProvisioningWorkerLocked(request); worker != nil {
+		if s.reserveWorkerCapacity(worker, request) {
+			s.trackProvisioningRequestLocked(worker.Id, request.ContainerId)
+			return true
+		}
+	}
+
+	worker, err := s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusPending)
+	if err != nil || worker == nil {
+		return false
+	}
+
+	return s.reserveWorkerCapacity(worker, request)
+}
+
+func (s *Scheduler) addProvisioningReservation(request *types.ContainerRequest, controller WorkerPoolController) string {
+	s.provisioningMu.Lock()
+	defer s.provisioningMu.Unlock()
+	s.ensureProvisioningReservationMaps()
+
+	reservation := s.newProvisioningReservation(request, controller)
+	s.reserveWorkerCapacity(reservation.worker, request)
+	reservation.requestIDs[request.ContainerId] = struct{}{}
+
+	s.provisioningReservations[reservation.worker.Id] = reservation
+	s.requestProvisioningReservations[request.ContainerId] = reservation.worker.Id
+	return reservation.worker.Id
+}
+
+func (s *Scheduler) releaseProvisioningReservation(reservationID string) {
+	s.provisioningMu.Lock()
+	defer s.provisioningMu.Unlock()
+
+	reservation, ok := s.provisioningReservations[reservationID]
+	if !ok {
+		return
+	}
+
+	for requestID := range reservation.requestIDs {
+		delete(s.requestProvisioningReservations, requestID)
+	}
+	delete(s.provisioningReservations, reservationID)
+}
+
+func (s *Scheduler) ensureProvisioningReservationMaps() {
+	if s.provisioningReservations == nil {
+		s.provisioningReservations = map[string]*provisioningReservation{}
+	}
+	if s.requestProvisioningReservations == nil {
+		s.requestProvisioningReservations = map[string]string{}
+	}
+}
+
+func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, controller WorkerPoolController) *provisioningReservation {
+	cpu := request.Cpu
+	if s.config.Worker.DefaultWorkerCPURequest > cpu {
+		cpu = s.config.Worker.DefaultWorkerCPURequest
+	}
+
+	memory := request.Memory
+	if s.config.Worker.DefaultWorkerMemoryRequest > memory {
+		memory = s.config.Worker.DefaultWorkerMemoryRequest
+	}
+
+	gpu := ""
+	gpuCount := uint32(0)
+	if request.RequiresGPU() {
+		gpuCount = request.GpuCount
+		if gpuCount == 0 {
+			gpuCount = 1
+		}
+
+		if pool, ok := s.workerPoolManager.GetPool(controller.Name()); ok {
+			gpu = pool.Config.GPUType
+		}
+	}
+
+	worker := &types.Worker{
+		Id:                   fmt.Sprintf("provisioning-%s-%d", controller.Name(), time.Now().UnixNano()),
+		Status:               types.WorkerStatusPending,
+		TotalCpu:             cpu,
+		TotalMemory:          memory,
+		TotalGpuCount:        gpuCount,
+		FreeCpu:              cpu,
+		FreeMemory:           memory,
+		FreeGpuCount:         gpuCount,
+		Gpu:                  gpu,
+		PoolName:             controller.Name(),
+		RequiresPoolSelector: controller.RequiresPoolSelector(),
+		Runtime:              controller.ContainerRuntime(),
+		BuildVersion:         s.config.Worker.ImageTag,
+		Preemptable:          controller.IsPreemptable(),
+	}
+
+	if pool, ok := s.workerPoolManager.GetPool(controller.Name()); ok {
+		worker.Priority = pool.Config.Priority
+	}
+
+	return &provisioningReservation{
+		worker:     worker,
+		requestIDs: map[string]struct{}{},
+	}
+}
+
+func (s *Scheduler) selectInFlightProvisioningWorkerLocked(request *types.ContainerRequest) *types.Worker {
+	if len(s.provisioningReservations) == 0 {
+		return nil
+	}
+
+	workers := make([]*types.Worker, 0, len(s.provisioningReservations))
+	for _, reservation := range s.provisioningReservations {
+		workers = append(workers, reservation.worker)
+	}
+
+	worker, err := s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusPending)
+	if err != nil {
+		return nil
+	}
+
+	return worker
+}
+
+func (s *Scheduler) trackProvisioningRequestLocked(reservationID string, requestID string) {
+	reservation, ok := s.provisioningReservations[reservationID]
+	if !ok {
+		return
+	}
+
+	reservation.requestIDs[requestID] = struct{}{}
+	s.requestProvisioningReservations[requestID] = reservationID
+}
+
+func (s *Scheduler) reserveWorkerCapacity(worker *types.Worker, request *types.ContainerRequest) bool {
+	memory := capacityMemoryForScheduling(request)
+	if worker.FreeCpu < request.Cpu || worker.FreeMemory < memory {
+		return false
+	}
+
+	if request.RequiresGPU() {
+		if worker.FreeGpuCount < request.GpuCount {
+			return false
+		}
+		worker.FreeGpuCount -= request.GpuCount
+	}
+
+	worker.FreeCpu -= request.Cpu
+	worker.FreeMemory -= memory
+	return true
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
@@ -528,6 +724,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
+	memory := capacityMemoryForScheduling(request)
 
 	for index, gpu := range request.GpuRequest {
 		gpuRequestsMap[gpu] = index
@@ -542,7 +739,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		isGpuWorker := worker.Gpu != ""
 
 		// Check if the worker has enough free cpu and memory to run the container
-		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < int64(request.Memory) {
+		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < memory {
 			continue
 		}
 
@@ -574,6 +771,14 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	return filteredWorkers
 }
 
+func capacityMemoryForScheduling(request *types.ContainerRequest) int64 {
+	if request.Memory <= 0 {
+		return request.Memory
+	}
+
+	return (request.Memory*125 + 99) / 100
+}
+
 func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
 	filteredWorkers := []*types.Worker{}
 	for _, worker := range workers {
@@ -586,6 +791,22 @@ func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerReque
 		}
 
 		filteredWorkers = append(filteredWorkers, worker)
+	}
+
+	return filteredWorkers
+}
+
+func filterWorkersByStatus(workers []*types.Worker, statuses ...types.WorkerStatus) []*types.Worker {
+	statusSet := map[types.WorkerStatus]struct{}{}
+	for _, status := range statuses {
+		statusSet[status] = struct{}{}
+	}
+
+	filteredWorkers := []*types.Worker{}
+	for _, worker := range workers {
+		if _, ok := statusSet[worker.Status]; ok {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
 	}
 
 	return filteredWorkers
@@ -611,13 +832,18 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 }
 
 func (s *Scheduler) selectWorkerFromWorkers(workers []*types.Worker, request *types.ContainerRequest) (*types.Worker, error) {
+	return s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusAvailable)
+}
+
+func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, request *types.ContainerRequest, statuses ...types.WorkerStatus) (*types.Worker, error) {
 	if len(workers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
 
-	filteredWorkers := filterWorkersByPoolSelector(workers, request)     // Filter workers by pool selector
-	filteredWorkers = filterWorkersByResources(filteredWorkers, request) // Filter workers resource requirements
-	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)     // Filter workers by flags
+	filteredWorkers := filterWorkersByPoolSelector(workers, request)      // Filter workers by pool selector
+	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
+	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)      // Filter workers by flags
+	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}

@@ -33,6 +33,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	workerRepo := repo.NewWorkerRedisRepositoryForTest(rdb)
 	containerRepo := repo.NewContainerRedisRepositoryForTest(rdb)
 	workspaceRepo := repo.NewWorkspaceRedisRepositoryForTest(rdb)
+	backendRepo, _ := repo.NewBackendPostgresRepositoryForTest()
 	requestBacklog := NewRequestBacklogForTest(rdb)
 
 	configManager, err := common.NewConfigManager[types.AppConfig]()
@@ -62,6 +63,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 	return &Scheduler{
 		ctx:                   context.Background(),
 		eventBus:              eventBus,
+		backendRepo:           &BackendRepoConcurrencyLimitsForTest{BackendRepository: backendRepo, GPUConcurrencyLimit: 100, CPUConcurrencyLimit: 100000},
 		workerRepo:            workerRepo,
 		workerPoolManager:     workerPoolManager,
 		requestBacklog:        requestBacklog,
@@ -69,6 +71,9 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		schedulerUsageMetrics: schedulerUsageMetrics,
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
+
+		provisioningReservations:        map[string]*provisioningReservation{},
+		requestProvisioningReservations: map[string]string{},
 	}, nil
 }
 
@@ -519,9 +524,9 @@ func TestSelectGPUWorker(t *testing.T) {
 	assert.NotNil(t, wb)
 
 	newWorker := &types.Worker{
-		Status:     types.WorkerStatusPending,
+		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    1000,
-		FreeMemory: 1000,
+		FreeMemory: 1250,
 		Gpu:        "A10G",
 	}
 
@@ -580,17 +585,17 @@ func TestSelectCPUWorker(t *testing.T) {
 
 	newWorker := &types.Worker{
 		Id:         uuid.New().String(),
-		Status:     types.WorkerStatusPending,
+		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    2000,
-		FreeMemory: 2000,
+		FreeMemory: 2500,
 		Gpu:        "",
 	}
 
 	newWorker2 := &types.Worker{
 		Id:         uuid.New().String(),
-		Status:     types.WorkerStatusPending,
+		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    1000,
-		FreeMemory: 1000,
+		FreeMemory: 1250,
 		Gpu:        "",
 	}
 
@@ -635,9 +640,9 @@ func TestSelectCPUWorker(t *testing.T) {
 	// Add GPU worker to test that CPU workers won't select it
 	gpuWorker := &types.Worker{
 		Id:         uuid.New().String(),
-		Status:     types.WorkerStatusPending,
+		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    1000,
-		FreeMemory: 1000,
+		FreeMemory: 1250,
 		Gpu:        "A10G",
 	}
 
@@ -671,8 +676,41 @@ func TestSelectCPUWorker(t *testing.T) {
 	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
 	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
-	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
+	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
 
+}
+
+func TestSelectWorkerIgnoresPendingWorkers(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	assert.NotNil(t, wb)
+
+	worker := &types.Worker{
+		Id:         uuid.New().String(),
+		Status:     types.WorkerStatusPending,
+		FreeCpu:    1000,
+		FreeMemory: 1250,
+		Gpu:        "",
+	}
+
+	err = wb.workerRepo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		Cpu:    1000,
+		Memory: 1000,
+		Gpu:    "",
+	}
+
+	_, err = wb.selectWorker(request)
+	assert.Equal(t, &types.ErrNoSuitableWorkerFound{}, err)
+
+	err = wb.workerRepo.UpdateWorkerStatus(worker.Id, types.WorkerStatusAvailable)
+	assert.Nil(t, err)
+
+	selectedWorker, err := wb.selectWorker(request)
+	assert.Nil(t, err)
+	assert.Equal(t, worker.Id, selectedWorker.Id)
 }
 
 func stringInSlice(a string, list []string) bool {
@@ -793,9 +831,9 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 			for _, gpu := range tt.gpus {
 				newWorker := &types.Worker{
 					Id:         uuid.New().String(),
-					Status:     types.WorkerStatusPending,
+					Status:     types.WorkerStatusAvailable,
 					FreeCpu:    1000,
-					FreeMemory: 1000,
+					FreeMemory: 1250,
 					Gpu:        gpu,
 				}
 
@@ -897,7 +935,7 @@ func TestRequiresPoolSelectorWorker(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Equal(t, int64(1000), updatedWorker.FreeCpu)
-	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
+	assert.Equal(t, int64(2000)-capacityMemoryForScheduling(firstRequest), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
 }
@@ -970,7 +1008,7 @@ func TestPoolPriority(t *testing.T) {
 		Id:         "worker1",
 		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    2000,
-		FreeMemory: 2000,
+		FreeMemory: 2500,
 		Gpu:        "",
 		PoolName:   "cpu",
 		Priority:   0,
@@ -980,7 +1018,7 @@ func TestPoolPriority(t *testing.T) {
 		Id:         "worker2",
 		Status:     types.WorkerStatusAvailable,
 		FreeCpu:    2000,
-		FreeMemory: 2000,
+		FreeMemory: 2500,
 		Gpu:        "",
 		PoolName:   "cpu2",
 		Priority:   1,
@@ -1025,9 +1063,9 @@ func TestSelectBuildWorker(t *testing.T) {
 	assert.NotNil(t, wb)
 
 	newWorker := &types.Worker{
-		Status:               types.WorkerStatusPending,
+		Status:               types.WorkerStatusAvailable,
 		FreeCpu:              2000,
-		FreeMemory:           2000,
+		FreeMemory:           2500,
 		Gpu:                  "",
 		PoolName:             "beta9-build",
 		RequiresPoolSelector: true,
@@ -1057,7 +1095,7 @@ func TestSelectBuildWorker(t *testing.T) {
 	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
 	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
 	assert.Equal(t, "", updatedWorker.Gpu)
-	assert.Equal(t, types.WorkerStatusPending, updatedWorker.Status)
+	assert.Equal(t, types.WorkerStatusAvailable, updatedWorker.Status)
 }
 
 type BackendRepoConcurrencyLimitsForTest struct {
