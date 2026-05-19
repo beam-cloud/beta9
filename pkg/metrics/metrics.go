@@ -52,6 +52,7 @@ const (
 	metricProxyTokenDenials         = "proxy_token_denials"
 	metricProxyQueuedRequestWait    = "proxy_queued_request_wait_ms"
 	metricProxyBackendDialLatency   = "proxy_backend_dial_latency_ms"
+	metricSandboxConnectPhase       = "sandbox_connect_phase_duration_ms"
 )
 
 func escapeLabelValue(value string) string {
@@ -393,6 +394,33 @@ func RecordProxyBackendDialLatency(proxyName, workspaceName, stubId, protocol st
 		"stub_id":   stubId,
 		"protocol":  protocol,
 		"success":   successLabel,
+	})
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+func RecordSandboxConnectPhase(phase, workspaceId, stubId, containerStatus, errorCode string, success bool, duration time.Duration) {
+	successLabel := "false"
+	if success {
+		successLabel = "true"
+	}
+
+	if stubId == "" {
+		stubId = "unknown"
+	}
+	if containerStatus == "" {
+		containerStatus = "unknown"
+	}
+	if errorCode == "" {
+		errorCode = "none"
+	}
+
+	metricName := metricWithLabels(metricSandboxConnectPhase, map[string]string{
+		"phase":            phase,
+		"workspace_id":     workspaceId,
+		"stub_id":          stubId,
+		"container_status": containerStatus,
+		"error":            errorCode,
+		"success":          successLabel,
 	})
 	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
 }

@@ -43,10 +43,20 @@ func (rb *RequestBacklog) Push(request *types.ContainerRequest) error {
 
 // Pops the oldest container request from the sorted set
 func (rb *RequestBacklog) Pop() (*types.ContainerRequest, error) {
+	requests, err := rb.PopN(1)
+	if err != nil {
+		return nil, err
+	}
+
+	return requests[0], nil
+}
+
+// Pops the oldest container requests from the sorted set.
+func (rb *RequestBacklog) PopN(count int64) ([]*types.ContainerRequest, error) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
-	result, err := rb.rdb.ZPopMin(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), 1).Result()
+	result, err := rb.rdb.ZPopMin(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), count).Result()
 	if err != nil {
 		return nil, err
 	}
@@ -55,14 +65,18 @@ func (rb *RequestBacklog) Pop() (*types.ContainerRequest, error) {
 		return nil, errors.New("backlog empty")
 	}
 
-	var poppedItem types.ContainerRequest
-	err = json.Unmarshal([]byte(result[0].Member.(string)), &poppedItem)
-	if err != nil {
-		return nil, err
+	requests := make([]*types.ContainerRequest, 0, len(result))
+	for _, item := range result {
+		var poppedItem types.ContainerRequest
+		err = json.Unmarshal([]byte(item.Member.(string)), &poppedItem)
+		if err != nil {
+			return nil, err
+		}
+		requests = append(requests, &poppedItem)
 	}
 
 	metrics.RecordSchedulerBacklogDepth(rb.rdb.ZCard(context.TODO(), common.RedisKeys.SchedulerContainerRequests()).Val())
-	return &poppedItem, nil
+	return requests, nil
 }
 
 // Gets the length of the sorted set

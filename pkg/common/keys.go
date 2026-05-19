@@ -65,10 +65,12 @@ var (
 var (
 	workspacePrefix string = "workspace"
 
-	workspaceVolumePathDownloadToken string = "workspace:volume_path_download_token:%s"
-	workspaceConcurrencyLimit        string = "workspace:concurrency_limit:%s"
-	workspaceConcurrencyLimitLock    string = "workspace:concurrency_limit:lock:%s"
-	workspaceAuthorizedToken         string = "workspace:authorization:token:%s"
+	workspaceVolumePathDownloadToken     string = "workspace:volume_path_download_token:%s"
+	workspaceConcurrencyLimit            string = "workspace:concurrency_limit:%s"
+	workspaceConcurrencyLimitLock        string = "workspace:concurrency_limit:lock:%s"
+	workspaceConcurrencyLimitUsage       string = "workspace:{%s}:concurrency_limit:usage"
+	workspaceConcurrencyLimitReservation string = "workspace:{%s}:concurrency_limit:reservation:%s"
+	workspaceAuthorizedToken             string = "workspace:authorization:token:%s"
 )
 
 var (
@@ -284,6 +286,14 @@ func (rk *redisKeys) WorkspaceConcurrencyLimit(workspaceId string) string {
 
 func (rk *redisKeys) WorkspaceConcurrencyLimitLock(workspaceId string) string {
 	return fmt.Sprintf(workspaceConcurrencyLimitLock, workspaceId)
+}
+
+func (rk *redisKeys) WorkspaceConcurrencyLimitUsage(workspaceId string) string {
+	return fmt.Sprintf(workspaceConcurrencyLimitUsage, workspaceId)
+}
+
+func (rk *redisKeys) WorkspaceConcurrencyLimitReservation(workspaceId, containerId string) string {
+	return fmt.Sprintf(workspaceConcurrencyLimitReservation, workspaceId, containerId)
 }
 
 func (rk *redisKeys) WorkspaceVolumePathDownloadToken(token string) string {

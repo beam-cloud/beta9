@@ -37,9 +37,6 @@ const (
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
 func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
-	s.containerLock.Lock()
-	defer s.containerLock.Unlock()
-
 	stopArgs, err := types.ToStopContainerArgs(event.Args)
 	if err != nil {
 		log.Error().Str("worker_id", s.workerId).Msgf("failed to parse stop container args: %v", err)
@@ -197,13 +194,17 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
 
-	s.containerInstances.Set(containerId, &ContainerInstance{
+	instance := &ContainerInstance{
 		Id:        containerId,
 		StubId:    request.StubId,
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
 		Runtime:   s.runtime,
-	})
+	}
+	if existing, exists := s.containerInstances.Get(containerId); exists {
+		instance.StopReason = existing.StopReason
+	}
+	s.containerInstances.Set(containerId, instance)
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
@@ -374,7 +375,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
 
-	go s.containerWg.Add(1)
+	s.containerWg.Add(1)
 
 	select {
 	case <-ctx.Done():
@@ -707,6 +708,15 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
 
+	phaseStart := time.Now()
+	if s.containerStartSem != nil {
+		s.containerStartSem <- struct{}{}
+		defer func() { <-s.containerStartSem }()
+	}
+	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
+		"limit": fmt.Sprintf("%d", s.containerStartLimit),
+	})
+
 	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
 		WorkerId:    s.workerId,
 		ContainerId: request.ContainerId,
@@ -800,7 +810,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Setup container overlay filesystem
 	var err error
-	phaseStart := time.Now()
+	phaseStart = time.Now()
 	err = containerInstance.Overlay.Setup()
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
@@ -987,10 +997,15 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			if exists && instance.SandboxProcessManager != nil {
 
 				// Wait for process manager to be ready - this blocks until ready or timeout
-				if s.waitForProcessManager(ctx, containerId, instance) {
+				phaseStart := time.Now()
+				processManagerReady := s.waitForProcessManager(ctx, containerId, instance)
+				metrics.RecordWorkerStartupPhase("sandbox_process_manager_ready", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", processManagerReady)})
+				if processManagerReady {
 					instance.SandboxProcessManagerReady = true
 					if instance.ProcessManagerReadyChan != nil {
-						close(instance.ProcessManagerReadyChan)
+						instance.ProcessManagerReadyOnce.Do(func() {
+							close(instance.ProcessManagerReadyChan)
+						})
 					}
 					s.containerInstances.Set(containerId, instance)
 
@@ -1000,6 +1015,12 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 					}
 
 				} else {
+					if instance.ProcessManagerReadyChan != nil {
+						instance.ProcessManagerReadyOnce.Do(func() {
+							close(instance.ProcessManagerReadyChan)
+						})
+					}
+					s.containerInstances.Set(containerId, instance)
 					log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
 				}
 			}
@@ -1111,6 +1132,13 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	go func() {
 		select {
 		case pid := <-runtimeStartedChan:
+			if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+				instance.RuntimeStarted = true
+				instance.RuntimePid = pid
+				instance.RuntimeStartedAt = time.Now().Unix()
+				s.containerInstances.Set(request.ContainerId, instance)
+			}
+
 			metrics.RecordWorkerStartupPhase("runtime_start_to_pid", time.Since(runtimeStart), request, map[string]string{
 				"runtime": instance.Runtime.Name(),
 			})

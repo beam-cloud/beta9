@@ -105,10 +105,11 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		}
 	}
 
-	networkPrefix := os.Getenv("NETWORK_PREFIX")
-	if networkPrefix == "" {
+	baseNetworkPrefix := os.Getenv("NETWORK_PREFIX")
+	if baseNetworkPrefix == "" {
 		return nil, errors.New("invalid network prefix")
 	}
+	networkPrefix := fmt.Sprintf("%s-%s", baseNetworkPrefix, workerId)
 
 	m := &ContainerNetworkManager{
 		ctx:                 ctx,

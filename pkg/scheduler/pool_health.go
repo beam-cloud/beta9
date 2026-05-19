@@ -197,14 +197,10 @@ func (p *PoolHealthMonitor) updatePoolStatus(nextState *types.WorkerPoolState) e
 	failoverReasons := []string{}
 
 	// Go through each condition that could trigger a degraded status
-	if nextState.PendingWorkers >= p.workerConfig.Failover.MaxPendingWorkers {
+	if nextState.PendingWorkers >= p.workerConfig.Failover.MaxPendingWorkers &&
+		nextState.SchedulingLatency > p.workerConfig.Failover.MaxSchedulingLatencyMs {
 		status = types.WorkerPoolStatusDegraded
-		failoverReasons = append(failoverReasons, "exceeded max pending workers")
-	}
-
-	if nextState.SchedulingLatency > p.workerConfig.Failover.MaxSchedulingLatencyMs {
-		status = types.WorkerPoolStatusDegraded
-		failoverReasons = append(failoverReasons, "exceeded max scheduling latency")
+		failoverReasons = append(failoverReasons, "exceeded max pending workers with high scheduling latency")
 	}
 
 	if (nextState.ReadyMachines < p.workerConfig.Failover.MinMachinesAvailable) && p.wpc.Mode() == types.PoolModeExternal {

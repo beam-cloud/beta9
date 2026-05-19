@@ -574,8 +574,13 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 		if readyChan != nil {
 			select {
 			case <-readyChan:
-			case <-time.After(10 * time.Second):
-				return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Process manager not ready within timeout"}, nil
+				if fresh, exists := s.containerInstances.Get(in.ContainerId); exists {
+					instance = fresh
+				}
+			case <-time.After(2 * time.Second):
+				// Keep going and let the exec call itself act as a readiness probe.
+				// The initialization probe can time out under burst load, but the
+				// process manager may become available shortly after.
 			case <-ctx.Done():
 				return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: "Request cancelled"}, nil
 			}
@@ -604,6 +609,16 @@ func (s *ContainerRuntimeServer) handleSandboxExec(ctx context.Context, in *pb.C
 	pid, err := instance.SandboxProcessManager.Exec(cmd, cwd, env, false)
 	if err != nil {
 		return &pb.ContainerSandboxExecResponse{Ok: false, Pid: -1, ErrorMsg: err.Error()}, nil
+	}
+
+	if !instance.SandboxProcessManagerReady {
+		instance.SandboxProcessManagerReady = true
+		if instance.ProcessManagerReadyChan != nil {
+			instance.ProcessManagerReadyOnce.Do(func() {
+				close(instance.ProcessManagerReadyChan)
+			})
+		}
+		s.containerInstances.Set(in.ContainerId, instance)
 	}
 
 	return &pb.ContainerSandboxExecResponse{Ok: true, Pid: int32(pid)}, nil

@@ -31,6 +31,7 @@ from startup_benchmark import (
     percentile,
     prepare_local_image,
     require_tools,
+    redis_hgetall,
     save_cached_token,
     start_grpc_port_forward_if_needed,
     start_http_port_forward_if_needed,
@@ -58,10 +59,14 @@ def parse_args():
 
     parser.add_argument("--count", type=int, default=env_int("BENCH_SANDBOX_COUNT", 100))
     parser.add_argument("--parallelism", type=int, default=env_int("BENCH_SANDBOX_PARALLELISM", env_int("BENCH_SANDBOX_COUNT", 100)))
+    parser.add_argument("--prewarm-count", type=int, default=env_int("BENCH_SANDBOX_PREWARM_COUNT", 0))
+    parser.add_argument("--prewarm-parallelism", type=int, default=env_int("BENCH_SANDBOX_PREWARM_PARALLELISM", env_int("BENCH_SANDBOX_PREWARM_COUNT", 0)))
+    parser.add_argument("--prewarm-cooldown-seconds", type=float, default=env_float("BENCH_SANDBOX_PREWARM_COOLDOWN_SECONDS", 5))
+    parser.add_argument("--prewarm-idle-timeout-seconds", type=float, default=env_float("BENCH_SANDBOX_PREWARM_IDLE_TIMEOUT_SECONDS", 180))
     parser.add_argument("--warmup", type=int, default=env_int("BENCH_SANDBOX_WARMUP", 1))
     parser.add_argument("--sandbox-cpu", default=os.getenv("BENCH_SANDBOX_CPU", "0.1"))
-    parser.add_argument("--sandbox-memory", default=os.getenv("BENCH_SANDBOX_MEMORY", "128"))
-    parser.add_argument("--sandbox-keep-warm-seconds", type=int, default=env_int("BENCH_SANDBOX_KEEP_WARM_SECONDS", 60))
+    parser.add_argument("--sandbox-memory", default=os.getenv("BENCH_SANDBOX_MEMORY", "192"))
+    parser.add_argument("--sandbox-keep-warm-seconds", type=int, default=env_int("BENCH_SANDBOX_KEEP_WARM_SECONDS", 600))
     parser.add_argument("--sandbox-image-uri", default=os.getenv("BENCH_SANDBOX_IMAGE_URI", os.getenv("BENCH_BOOTSTRAP_IMAGE_URI", "k3d-registry.localhost:5000/beta9-bench-alpine:latest")))
     parser.add_argument("--sandbox-exec", default=os.getenv("BENCH_SANDBOX_EXEC", "true"))
     parser.add_argument("--sandbox-exec-cwd", default=os.getenv("BENCH_SANDBOX_EXEC_CWD", "/"))
@@ -82,6 +87,10 @@ def parse_args():
     parser.add_argument("--reset-workers", dest="reset_workers", action="store_true")
     parser.add_argument("--no-reset-workers", dest="reset_workers", action="store_false")
     parser.set_defaults(reset_workers=env_bool("BENCH_RESET_WORKERS", False))
+
+    parser.add_argument("--prewarm-wait-idle", dest="prewarm_wait_idle", action="store_true")
+    parser.add_argument("--no-prewarm-wait-idle", dest="prewarm_wait_idle", action="store_false")
+    parser.set_defaults(prewarm_wait_idle=env_bool("BENCH_SANDBOX_PREWARM_WAIT_IDLE", True))
 
     parser.add_argument("--bootstrap-local-image", dest="bootstrap_local_image", action="store_true")
     parser.add_argument("--no-bootstrap-local-image", dest="bootstrap_local_image", action="store_false")
@@ -108,10 +117,16 @@ def parse_args():
         raise SystemExit("BENCH_SANDBOX_COUNT must be greater than 0")
     if args.parallelism <= 0:
         raise SystemExit("BENCH_SANDBOX_PARALLELISM must be greater than 0")
+    if args.prewarm_count < 0:
+        raise SystemExit("BENCH_SANDBOX_PREWARM_COUNT cannot be negative")
+    if args.prewarm_count > 0 and args.prewarm_parallelism <= 0:
+        raise SystemExit("BENCH_SANDBOX_PREWARM_PARALLELISM must be greater than 0 when prewarming")
     if args.sandbox_create_retries < 0:
         raise SystemExit("BENCH_SANDBOX_CREATE_RETRIES cannot be negative")
     if args.sandbox_ready_timeout_seconds <= 0:
         raise SystemExit("BENCH_SANDBOX_READY_TIMEOUT_SECONDS must be greater than 0")
+    if args.prewarm_idle_timeout_seconds <= 0:
+        raise SystemExit("BENCH_SANDBOX_PREWARM_IDLE_TIMEOUT_SECONDS must be greater than 0")
     args.bootstrap_image_uri = args.sandbox_image_uri
     return args
 
@@ -280,7 +295,7 @@ def create_sandbox_with_retries(args, sandbox):
             time.sleep(min(2.0, 0.1 * attempts))
 
 
-def exec_readiness(args, instance, command, request_start_ns):
+def exec_readiness(args, instance, command, request_start_ns, sample=None):
     deadline = time.monotonic() + args.sandbox_ready_timeout_seconds
     attempts = 0
     errors = []
@@ -308,6 +323,10 @@ def exec_readiness(args, instance, command, request_start_ns):
             return result
         except Exception as exc:
             errors.append(str(exc))
+            if sample is not None:
+                sample["execAttempts"] = attempts
+                sample["execErrors"] = list(errors)
+                sample["lastExecError"] = str(exc)
             if time.monotonic() >= deadline:
                 raise RuntimeError(f"sandbox readiness command did not start before timeout; last error: {exc}")
             time.sleep(args.sandbox_ready_retry_ms / 1000)
@@ -343,7 +362,7 @@ def run_sandbox_iteration(args, sandbox, token, index, warmup=False, start_event
             sample["containerState"] = running["state"]
 
         command = shlex.split(args.sandbox_exec)
-        exec_info = exec_readiness(args, instance, command, request_start_ns)
+        exec_info = exec_readiness(args, instance, command, request_start_ns, sample)
         sample.update(exec_info)
         if args.wait_exec_complete and sample["execExitCode"] != 0:
             raise RuntimeError(f"Sandbox readiness command exited {sample['execExitCode']}")
@@ -425,12 +444,93 @@ def print_summary(summary):
         )
 
 
-def run_parallel_samples(args, sandbox, token):
+def run_batch(args, sandbox, token, count, parallelism, start_index, warmup=False):
     start_event = threading.Event()
+    samples = []
+
+    with ThreadPoolExecutor(max_workers=parallelism) as executor:
+        futures = [
+            executor.submit(
+                run_sandbox_iteration,
+                args,
+                sandbox,
+                token,
+                start_index + offset,
+                warmup,
+                start_event,
+            )
+            for offset in range(count)
+        ]
+        start_event.set()
+        for future in as_completed(futures):
+            sample = future.result()
+            samples.append(sample)
+            print_sample(sample)
+
+    return samples
+
+
+def wait_for_prewarm_idle(args, redis_pod, samples):
+    if not args.prewarm_wait_idle:
+        return None
+
+    container_ids = [sample.get("containerId") for sample in samples if sample.get("containerId")]
+    if not container_ids:
+        return None
+
+    if not redis_pod:
+        log("Redis pod unavailable; using fixed prewarm cooldown without state validation")
+        return None
+
+    active_statuses = {"PENDING", "RUNNING"}
+    deadline = time.monotonic() + args.prewarm_idle_timeout_seconds
+    interval = max(0.1, args.poll_interval_ms / 1000)
+    last_counts = {}
+
+    while time.monotonic() < deadline:
+        counts = {}
+        active = 0
+        for container_id in container_ids:
+            state = redis_hgetall(args.namespace, redis_pod, f"scheduler:container:state:{container_id}")
+            status = (state or {}).get("status", "")
+            counts[status or "missing"] = counts.get(status or "missing", 0) + 1
+            if status in active_statuses:
+                active += 1
+
+        last_counts = counts
+        if active == 0:
+            log(f"Prewarm workers are idle; container states: {counts}")
+            return counts
+
+        time.sleep(interval)
+
+    raise TimeoutError(
+        f"Timed out waiting for prewarm sandboxes to stop before measured batch; last states={last_counts}"
+    )
+
+
+def run_parallel_samples(args, sandbox, token, redis_pod):
     samples = []
 
     print("\n run   kind container                                           create   running  proc_rdy exec_done   status")
     print("---- ------ ---------------------------------------------- --------- --------- --------- --------- --------")
+
+    if args.prewarm_count > 0:
+        log(f"Prewarming worker pool with {args.prewarm_count} sandbox(es)")
+        prewarm_samples = run_batch(
+            args,
+            sandbox,
+            token,
+            args.prewarm_count,
+            args.prewarm_parallelism,
+            1,
+            warmup=True,
+        )
+        samples.extend(prewarm_samples)
+        wait_for_prewarm_idle(args, redis_pod, prewarm_samples)
+        if args.prewarm_cooldown_seconds > 0:
+            log(f"Waiting {args.prewarm_cooldown_seconds:g}s for prewarm sandboxes to terminate")
+            time.sleep(args.prewarm_cooldown_seconds)
 
     for index in range(1, args.warmup + 1):
         sample = run_sandbox_iteration(args, sandbox, token, index, warmup=True)
@@ -438,24 +538,17 @@ def run_parallel_samples(args, sandbox, token):
         print_sample(sample)
 
     batch_start_ns = time.monotonic_ns()
-    with ThreadPoolExecutor(max_workers=args.parallelism) as executor:
-        futures = [
-            executor.submit(
-                run_sandbox_iteration,
-                args,
-                sandbox,
-                token,
-                args.warmup + offset + 1,
-                False,
-                start_event,
-            )
-            for offset in range(args.count)
-        ]
-        start_event.set()
-        for future in as_completed(futures):
-            sample = future.result()
-            samples.append(sample)
-            print_sample(sample)
+    samples.extend(
+        run_batch(
+            args,
+            sandbox,
+            token,
+            args.count,
+            args.parallelism,
+            args.warmup + args.prewarm_count + 1,
+            warmup=False,
+        )
+    )
 
     batch_wall_ms = (time.monotonic_ns() - batch_start_ns) / 1_000_000
     ok_count = len([sample for sample in samples if sample.get("ok") and not sample.get("warmup")])
@@ -503,7 +596,7 @@ def main():
         os.chdir(sdk_sync_dir)
         try:
             sandbox = prepare_sandbox_runtime(args)
-            samples, batch = run_parallel_samples(args, sandbox, args.token)
+            samples, batch = run_parallel_samples(args, sandbox, args.token, redis_pod)
         finally:
             os.chdir(original_cwd)
 
@@ -525,6 +618,11 @@ def main():
             "grpcAddr": grpc_addr(args),
             "count": args.count,
             "parallelism": args.parallelism,
+            "prewarmCount": args.prewarm_count,
+            "prewarmParallelism": args.prewarm_parallelism,
+            "prewarmCooldownSeconds": args.prewarm_cooldown_seconds,
+            "prewarmWaitIdle": args.prewarm_wait_idle,
+            "prewarmIdleTimeoutSeconds": args.prewarm_idle_timeout_seconds,
             "warmup": args.warmup,
             "sandboxCpu": args.sandbox_cpu,
             "sandboxMemory": args.sandbox_memory,

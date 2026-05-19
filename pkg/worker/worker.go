@@ -33,6 +33,8 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
+	defaultRuncStartConcurrency                  = 8
+	defaultGvisorStartConcurrency                = 2
 )
 
 type Worker struct {
@@ -61,6 +63,8 @@ type Worker struct {
 	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
 	containerLock           sync.Mutex
+	containerStartSem       chan struct{}
+	containerStartLimit     int
 	containerWg             sync.WaitGroup
 	containerLogger         *ContainerLogger
 	workerUsageMetrics      *WorkerUsageMetrics
@@ -91,8 +95,12 @@ type ContainerInstance struct {
 	LogBuffer                  *common.LogBuffer
 	Request                    *types.ContainerRequest
 	StopReason                 types.StopContainerReason
+	RuntimeStarted             bool
+	RuntimePid                 int
+	RuntimeStartedAt           int64
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
+	ProcessManagerReadyOnce    sync.Once
 	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string
 	Runtime                    runtime.Runtime
@@ -254,6 +262,19 @@ func NewWorker() (*Worker, error) {
 		defaultRuntime = runcRuntime
 	}
 
+	containerStartLimit := defaultRuncStartConcurrency
+	if runtimeType == types.ContainerRuntimeGvisor.String() {
+		containerStartLimit = defaultGvisorStartConcurrency
+	}
+	if raw := os.Getenv("WORKER_CONTAINER_START_CONCURRENCY"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil {
+			log.Warn().Str("value", raw).Err(err).Msg("invalid WORKER_CONTAINER_START_CONCURRENCY")
+		} else if parsed > 0 {
+			containerStartLimit = parsed
+		}
+	}
+
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
 		return nil, err
@@ -314,6 +335,8 @@ func NewWorker() (*Worker, error) {
 		eventBus:                nil,
 		containerInstances:      containerInstances,
 		containerLock:           sync.Mutex{},
+		containerStartSem:       make(chan struct{}, containerStartLimit),
+		containerStartLimit:     containerStartLimit,
 		containerWg:             sync.WaitGroup{},
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
@@ -416,52 +439,71 @@ func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
 	s.containerLock.Lock()
 	_, exists := s.containerInstances.Get(containerId)
 	if !exists {
-		log.Info().Str("container_id", containerId).Msg("running container")
+		s.containerInstances.Set(containerId, &ContainerInstance{
+			Id:        containerId,
+			StubId:    request.StubId,
+			LogBuffer: common.NewLogBuffer(),
+			Request:   request,
+			Runtime:   s.runtime,
+		})
+	}
+	s.containerLock.Unlock()
 
-		ctx, cancel := context.WithCancel(s.ctx)
+	if exists {
+		return
+	}
 
-		if request.IsBuildRequest() {
-			go s.checkForStoppedBuilds(ctx, cancel, containerId)
-		}
+	go s.runContainerRequest(request)
+}
 
-		// If isolated workspace storage is available, mount it
-		if request.StorageAvailable() {
-			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
+func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
+	containerId := request.ContainerId
+	log.Info().Str("container_id", containerId).Msg("running container")
 
-			_, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
-			if err != nil {
-				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
-				return
-			}
-		}
+	ctx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
 
-		if err := s.RunContainer(ctx, request); err != nil {
-			s.containerLock.Unlock()
+	if request.IsBuildRequest() {
+		go s.checkForStoppedBuilds(ctx, cancel, containerId)
+	}
 
-			log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
+	// If isolated workspace storage is available, mount it
+	if request.StorageAvailable() {
+		log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
 
-			// Set a non-zero exit code for the container (both in memory, and in repo)
-			exitCode := 1
-
-			serr, ok := err.(*types.ExitCodeError)
-			if ok {
-				exitCode = int(serr.ExitCode)
-			}
-
-			_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
-				ContainerId: containerId,
-				ExitCode:    int32(exitCode),
-			}))
-			if err != nil {
-				log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
-			}
-
-			s.clearContainer(containerId, request, exitCode)
+		_, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
+		if err != nil {
+			log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
+			s.failContainerRequest(containerId, request, err)
 			return
 		}
-
-		s.containerLock.Unlock()
 	}
+
+	if err := s.RunContainer(ctx, request); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
+		s.failContainerRequest(containerId, request, err)
+		return
+	}
+}
+
+func (s *Worker) failContainerRequest(containerId string, request *types.ContainerRequest, runErr error) {
+	// Set a non-zero exit code for the container (both in memory, and in repo)
+	exitCode := 1
+
+	serr, ok := runErr.(*types.ExitCodeError)
+	if ok {
+		exitCode = int(serr.ExitCode)
+	}
+
+	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+		ContainerId: containerId,
+		ExitCode:    int32(exitCode),
+	}))
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+	}
+
+	s.clearContainer(containerId, request, exitCode)
 
 }
 
@@ -529,9 +571,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		case <-s.ctx.Done():
 			return nil
 		case <-ticker.C:
-			s.containerLock.Lock()
-			_, exists := s.containerInstances.Get(request.ContainerId)
-			s.containerLock.Unlock()
+			instance, exists := s.containerInstances.Get(request.ContainerId)
 
 			if !exists {
 				return nil
@@ -556,16 +596,23 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 
 			log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
 
-			// TODO: remove this hotfix
+			expirySeconds := int64(types.ContainerStateTtlS)
 			if status == types.ContainerStatusPending {
-				log.Info().Str("container_id", request.ContainerId).Msg("forcing container status to running")
-				state.Status = string(types.ContainerStatusRunning)
+				if instance.RuntimeStarted {
+					log.Info().
+						Str("container_id", request.ContainerId).
+						Int("pid", instance.RuntimePid).
+						Msg("reconciling pending container to running from runtime start signal")
+					state.Status = string(types.ContainerStatusRunning)
+				} else {
+					expirySeconds = int64(types.ContainerStateTtlSWhilePending)
+				}
 			}
 
 			_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
 				ContainerId:   request.ContainerId,
 				Status:        string(state.Status),
-				ExpirySeconds: int64(types.ContainerStateTtlS),
+				ExpirySeconds: expirySeconds,
 			}))
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")

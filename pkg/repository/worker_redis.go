@@ -356,7 +356,7 @@ func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
-	workers, err := r.getWorkers(true)
+	workers, err := r.getWorkers(false)
 	if err != nil {
 		return nil, err
 	}
@@ -416,6 +416,17 @@ func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*typ
 	return machineWorkers, nil
 }
 
+func capacityMemoryForRequest(request *types.ContainerRequest) int64 {
+	if request.Memory <= 0 {
+		return request.Memory
+	}
+
+	// Runtime cgroups use a 1.25x hard memory limit over the requested soft
+	// memory. Capacity accounting must reserve that hard limit; otherwise a
+	// worker can be packed past its pod limit before accounting says it is full.
+	return (request.Memory*125 + 99) / 100
+}
+
 func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, CapacityUpdateType types.CapacityUpdateType) error {
 	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3})
 	if err != nil {
@@ -448,7 +459,7 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 	switch CapacityUpdateType {
 	case types.AddCapacity:
 		updatedWorker.FreeCpu = updatedWorker.FreeCpu + request.Cpu
-		updatedWorker.FreeMemory = updatedWorker.FreeMemory + request.Memory
+		updatedWorker.FreeMemory = updatedWorker.FreeMemory + capacityMemoryForRequest(request)
 
 		if request.Gpu != "" {
 			updatedWorker.FreeGpuCount += request.GpuCount
@@ -456,7 +467,7 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 
 	case types.RemoveCapacity:
 		updatedWorker.FreeCpu = updatedWorker.FreeCpu - request.Cpu
-		updatedWorker.FreeMemory = updatedWorker.FreeMemory - request.Memory
+		updatedWorker.FreeMemory = updatedWorker.FreeMemory - capacityMemoryForRequest(request)
 
 		if request.Gpu != "" {
 			updatedWorker.FreeGpuCount -= request.GpuCount
@@ -477,6 +488,7 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 		return fmt.Errorf("failed to update worker capacity <%s>: %v", key, err)
 	}
 
+	*worker = *updatedWorker
 	return nil
 }
 
