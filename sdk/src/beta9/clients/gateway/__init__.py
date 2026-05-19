@@ -24,7 +24,6 @@ from betterproto.grpcstub.grpclib_server import ServiceBase
 
 from .. import types as _types__
 
-
 if TYPE_CHECKING:
     import grpclib.server
     from betterproto.grpcstub.grpclib_client import MetadataLike

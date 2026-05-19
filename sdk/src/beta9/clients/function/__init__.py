@@ -17,7 +17,6 @@ import grpc
 from betterproto.grpcstub.grpcio_client import SyncServiceStub
 from betterproto.grpcstub.grpclib_server import ServiceBase
 
-
 if TYPE_CHECKING:
     import grpclib.server
     from betterproto.grpcstub.grpclib_client import MetadataLike
