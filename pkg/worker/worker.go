@@ -271,7 +271,7 @@ func NewWorker() (*Worker, error) {
 		defaultRuntime = runcRuntime
 	}
 
-	containerStartLimit := containerStartLimitForRuntime(runtimeType)
+	containerStartLimit := containerStartLimitForRuntime(defaultRuntime.Name())
 
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
@@ -431,9 +431,13 @@ containerRequestStream:
 }
 
 func containerStartLimitForRuntime(runtimeType string) int {
-	limit := defaultRuncStartConcurrency
+	return containerStartLimitForRuntimeWithDefaults(runtimeType, defaultRuncStartConcurrency, defaultGvisorStartConcurrency)
+}
+
+func containerStartLimitForRuntimeWithDefaults(runtimeType string, runcLimit, gvisorLimit int) int {
+	limit := runcLimit
 	if runtimeType == types.ContainerRuntimeGvisor.String() {
-		limit = defaultGvisorStartConcurrency
+		limit = gvisorLimit
 	}
 
 	raw := os.Getenv("WORKER_CONTAINER_START_CONCURRENCY")

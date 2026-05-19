@@ -1,6 +1,11 @@
 package worker
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/stretchr/testify/require"
+)
 
 func TestCalculateCPUShares(t *testing.T) {
 	tests := []struct {
@@ -54,4 +59,19 @@ func TestCalculateCPUShares(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestContainerStartLimitForRuntimeUsesRuntimeName(t *testing.T) {
+	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "")
+
+	require.Equal(t, 16, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeRunc.String(), 16, 2))
+	require.Equal(t, 2, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeGvisor.String(), 16, 2))
+	require.Equal(t, 16, containerStartLimitForRuntimeWithDefaults("unknown", 16, 2))
+}
+
+func TestContainerStartLimitForRuntimeAllowsExplicitOverride(t *testing.T) {
+	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "4")
+
+	require.Equal(t, 4, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeRunc.String(), 16, 2))
+	require.Equal(t, 4, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeGvisor.String(), 16, 2))
 }
