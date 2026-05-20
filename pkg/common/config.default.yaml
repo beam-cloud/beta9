@@ -161,6 +161,7 @@ worker:
       priority: 1
       # runtime: ""  # Optional: Kubernetes RuntimeClass for the pod (e.g., "nvidia")
       containerRuntime: gvisor  # Pool-specific container runtime: "runc" or "gvisor"
+      containerStartConcurrency: 128
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor

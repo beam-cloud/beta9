@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,4 +63,30 @@ func TestWaitForSandboxProcessManagerRefreshesAfterReadySignal(t *testing.T) {
 	got, err := server.waitForSandboxProcessManager(context.Background(), containerId, instance)
 	require.NoError(t, err)
 	require.True(t, got.SandboxProcessManagerReady)
+}
+
+func TestWritableContainerAddressMapHandlesNilMap(t *testing.T) {
+	addressMap := writableContainerAddressMap(nil)
+	addressMap[1234] = "127.0.0.1:1234"
+
+	require.Equal(t, "127.0.0.1:1234", addressMap[1234])
+}
+
+func TestRecordSandboxExposedPortOnlyAppendsMissingPort(t *testing.T) {
+	containerId := "sandbox-test"
+	instances := common.NewSafeMap[*ContainerInstance]()
+	instance := &ContainerInstance{
+		Id: containerId,
+		Request: &types.ContainerRequest{
+			Ports: []uint32{8000},
+		},
+	}
+
+	recordSandboxExposedPort(instances, containerId, instance, 8000)
+	recordSandboxExposedPort(instances, containerId, instance, 9000)
+	recordSandboxExposedPort(instances, containerId, instance, 9000)
+
+	got, exists := instances.Get(containerId)
+	require.True(t, exists)
+	require.Equal(t, []uint32{8000, 9000}, got.Request.Ports)
 }

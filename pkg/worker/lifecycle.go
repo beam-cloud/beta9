@@ -276,6 +276,7 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	phaseStart = time.Now()
+	requestedPorts := append([]uint32(nil), request.Ports...)
 	request.Ports = portsForRequest(request)
 	bindPorts, err := allocateBindPorts(len(request.Ports))
 	if err != nil {
@@ -293,12 +294,14 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	initialBundleSpec, _ := s.readBundleConfig(request)
 	metrics.RecordWorkerStartupPhase("read_bundle_config", time.Since(phaseStart), request, map[string]string{"derived": fmt.Sprintf("%t", initialBundleSpec == nil)})
 
+	startupPortBindings := startupPortBindingsForRequest(request, requestedPorts, bindPorts)
 	opts := &ContainerOptions{
-		BundlePath:       bundlePath,
-		HostBindPort:     bindPorts[0],
-		BindPorts:        bindPorts,
-		InitialSpec:      initialBundleSpec,
-		StartupStartedAt: startupStartedAt,
+		BundlePath:          bundlePath,
+		HostBindPort:        bindPorts[0],
+		BindPorts:           bindPorts,
+		StartupPortBindings: startupPortBindings,
+		InitialSpec:         initialBundleSpec,
+		StartupStartedAt:    startupStartedAt,
 	}
 
 	phaseStart = time.Now()
@@ -322,21 +325,23 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
-	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[0])
-	phaseStart = time.Now()
-	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
-		ContainerId: request.ContainerId,
-		Address:     containerAddr,
-	}))
-	metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
-	if err != nil {
-		return err
+	if len(opts.StartupPortBindings) > 0 {
+		containerAddr := fmt.Sprintf("%s:%d", s.podAddr, opts.StartupPortBindings[0].HostPort)
+		phaseStart = time.Now()
+		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
+			ContainerId: request.ContainerId,
+			Address:     containerAddr,
+		}))
+		metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
+		if err != nil {
+			return err
+		}
+		log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
 	}
-	log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
 
-	addressMap := make(map[int32]string)
-	for idx, containerPort := range request.Ports {
-		addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
+	addressMap := make(map[int32]string, len(opts.StartupPortBindings))
+	for _, binding := range opts.StartupPortBindings {
+		addressMap[int32(binding.ContainerPort)] = fmt.Sprintf("%s:%d", s.podAddr, binding.HostPort)
 	}
 	phaseStart = time.Now()
 	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
@@ -382,6 +387,47 @@ func portsForRequest(request *types.ContainerRequest) []uint32 {
 	}
 
 	return ports
+}
+
+func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPorts []uint32, bindPorts []int) []PortBinding {
+	if len(request.Ports) == 0 || len(bindPorts) == 0 {
+		return nil
+	}
+
+	exposePorts := make(map[uint32]struct{}, len(request.Ports))
+	if request.Checkpoint != nil {
+		for _, port := range request.Ports {
+			exposePorts[port] = struct{}{}
+		}
+	} else if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		for _, port := range requestedPorts {
+			exposePorts[port] = struct{}{}
+		}
+	} else {
+		for _, port := range request.Ports {
+			exposePorts[port] = struct{}{}
+		}
+	}
+
+	if len(exposePorts) == 0 {
+		return nil
+	}
+
+	bindings := make([]PortBinding, 0, len(exposePorts))
+	for idx, containerPort := range request.Ports {
+		if idx >= len(bindPorts) {
+			break
+		}
+		if _, ok := exposePorts[containerPort]; !ok {
+			continue
+		}
+		bindings = append(bindings, PortBinding{
+			HostPort:      bindPorts[idx],
+			ContainerPort: int(containerPort),
+		})
+	}
+
+	return bindings
 }
 
 func allocateBindPorts(count int) ([]int, error) {
@@ -754,56 +800,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Every 30 seconds, update container status
 	go s.updateContainerStatus(request)
 
-	// Closed when the container process actually starts (PID received).
-	// Used to trigger the status update to Running without an artificial sleep.
-	containerStarted := make(chan struct{})
-
-	go func() {
-		select {
-		case <-containerStarted:
-		case <-ctx.Done():
-			return
-		}
-
-		s.containerLock.Lock()
-		defer s.containerLock.Unlock()
-
-		_, exists := s.containerInstances.Get(containerId)
-		if !exists {
-			return
-		}
-
-		resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
-		if err != nil {
-			notFoundErr := &types.ErrContainerStateNotFound{}
-
-			if notFoundErr.From(err) {
-				log.Warn().Str("container_id", containerId).Msg("container state not found, returning")
-				return
-			}
-		} else if resp.State.Status == string(types.ContainerStatusStopping) {
-			log.Info().Str("container_id", containerId).Msg("container started after stop request, sending stop signal")
-			s.stopContainer(containerId, false)
-			return
-		}
-
-		// Update container status to running
-		phaseStart := time.Now()
-		_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
-			ContainerId:   containerId,
-			Status:        string(types.ContainerStatusRunning),
-			ExpirySeconds: int64(types.ContainerStateTtlS),
-		}))
-		metrics.RecordWorkerStartupPhase("set_running_status", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
-			return
-		}
-		if !opts.StartupStartedAt.IsZero() {
-			metrics.RecordWorkerStartupLatency(time.Since(opts.StartupStartedAt), request)
-		}
-	}()
-
 	// Setup container overlay filesystem
 	var err error
 	phaseStart := time.Now()
@@ -862,24 +858,17 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Expose the bind ports
 	phaseStart = time.Now()
-	portBindings := make([]PortBinding, 0, len(opts.BindPorts))
-	for idx, bindPort := range opts.BindPorts {
-		portBindings = append(portBindings, PortBinding{
-			HostPort:      bindPort,
-			ContainerPort: int(request.Ports[idx]),
-		})
-	}
-	err = s.containerNetworkManager.ExposePorts(containerId, portBindings)
+	err = s.containerNetworkManager.ExposePorts(containerId, opts.StartupPortBindings)
 	if err != nil {
 		metrics.RecordWorkerStartupPhase("network_expose_ports", time.Since(phaseStart), request, map[string]string{
-			"port_count": fmt.Sprintf("%d", len(opts.BindPorts)),
+			"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings)),
 			"success":    "false",
 		})
 		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
 		return
 	}
 	metrics.RecordWorkerStartupPhase("network_expose_ports", time.Since(phaseStart), request, map[string]string{
-		"port_count": fmt.Sprintf("%d", len(opts.BindPorts)),
+		"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings)),
 		"success":    "true",
 	})
 
@@ -998,7 +987,6 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
-		close(containerStarted)
 		releaseStartupSlot()
 
 		monitorPIDChan <- pid
@@ -1035,7 +1023,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -1079,7 +1067,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time) (int, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
@@ -1146,7 +1134,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		select {
 		case startedChan <- pid:
 		case <-ctx.Done():
+			return
 		}
+		s.markContainerRunning(request, startupStartedAt)
 	}
 
 	go func() {
@@ -1166,6 +1156,42 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	return exitCode, err
+}
+
+func (s *Worker) markContainerRunning(request *types.ContainerRequest, startupStartedAt time.Time) {
+	containerId := request.ContainerId
+	resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+	if err != nil {
+		notFoundErr := &types.ErrContainerStateNotFound{}
+		if notFoundErr.From(err) {
+			log.Warn().Str("container_id", containerId).Msg("container state not found, returning")
+			return
+		}
+
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state before marking running")
+		return
+	}
+
+	if resp.State.Status == string(types.ContainerStatusStopping) {
+		log.Info().Str("container_id", containerId).Msg("container started after stop request, sending stop signal")
+		s.stopContainer(containerId, false)
+		return
+	}
+
+	phaseStart := time.Now()
+	_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+		ContainerId:   containerId,
+		Status:        string(types.ContainerStatusRunning),
+		ExpirySeconds: int64(types.ContainerStateTtlS),
+	}))
+	metrics.RecordWorkerStartupPhase("set_running_status", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to update container status to running")
+		return
+	}
+	if !startupStartedAt.IsZero() {
+		metrics.RecordWorkerStartupLatency(time.Since(startupStartedAt), request)
+	}
 }
 
 func waitForRuntimeStarted(ctx context.Context, runtimeStarted <-chan int, runtimeDone <-chan struct{}, handle func(int)) {

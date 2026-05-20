@@ -164,7 +164,13 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		return err
 	}
 
-	return s.addRequestToBacklog(request)
+	if err := s.addRequestToBacklog(request); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to add request to backlog")
+		s.failSchedulingRequest(request, "backlog_push_failed")
+		return err
+	}
+
+	return nil
 }
 
 func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types.ConcurrencyLimit, error) {
@@ -280,7 +286,7 @@ func (s *Scheduler) StartProcessingRequests() {
 		workers, err := s.workerRepo.GetAllWorkers()
 		if err != nil {
 			for _, request := range requests {
-				s.addRequestToBacklog(request)
+				s.retrySchedulingRequest(request, "worker_list_failed")
 			}
 			continue
 		}
@@ -304,6 +310,7 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 		controllers, err := s.getControllers(request)
 		if err != nil {
 			log.Error().Interface("request", request).Err(err).Msg("no controller found for request")
+			s.failSchedulingRequest(request, "no_controller")
 			return
 		}
 
@@ -321,7 +328,7 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 	if err != nil {
 		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request on existing worker")
 		metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "schedule_failed")
-		s.addRequestToBacklog(request)
+		s.retrySchedulingRequest(request, "schedule_failed")
 		return
 	}
 
@@ -332,6 +339,13 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 }
 
 func (s *Scheduler) addWorkerForReservation(request *types.ContainerRequest, controllers []WorkerPoolController, reservationID string) {
+	releaseOnReturn := true
+	defer func() {
+		if releaseOnReturn {
+			s.releaseProvisioningReservation(reservationID)
+		}
+	}()
+
 	var addWorkerErr error
 	for _, c := range controllers {
 		if c == nil {
@@ -355,6 +369,7 @@ func (s *Scheduler) addWorkerForReservation(request *types.ContainerRequest, con
 		}
 
 		log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added new worker")
+		releaseOnReturn = false
 		time.AfterFunc(provisioningReservationHandoff, func() {
 			s.releaseProvisioningReservation(reservationID)
 		})
@@ -363,20 +378,17 @@ func (s *Scheduler) addWorkerForReservation(request *types.ContainerRequest, con
 
 	log.Error().Str("container_id", request.ContainerId).Err(addWorkerErr).Msg("unable to add worker")
 	metrics.RecordSchedulerWorkerWait(time.Since(request.Timestamp), request, "add_worker_failed")
-	s.releaseProvisioningReservation(reservationID)
 }
 
 func (s *Scheduler) requeueRequestForWorkerWait(request *types.ContainerRequest) {
 	if time.Since(request.Timestamp) >= maxScheduleRetryDuration {
-		log.Error().Str("container_id", request.ContainerId).Msg("giving up on request waiting for worker capacity")
-		s.containerRepo.DeleteContainerState(request.ContainerId)
-		s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed)
-		metrics.RecordRequestScheduleFailure(request)
+		s.failSchedulingRequest(request, "worker_capacity_timeout")
 		return
 	}
 
 	if err := s.requestBacklog.PushAfter(request, provisioningWorkerRequeueDelay); err != nil {
 		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to requeue request waiting for worker capacity")
+		s.failSchedulingRequest(request, "worker_wait_requeue_failed")
 	}
 }
 
@@ -587,6 +599,33 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 	return s.workerRepo.ScheduleContainerRequest(worker, request)
 }
 
+func (s *Scheduler) failSchedulingRequest(request *types.ContainerRequest, reason string) {
+	log.Error().
+		Str("container_id", request.ContainerId).
+		Str("reason", reason).
+		Int("retry_count", request.RetryCount).
+		Msg("giving up on request")
+
+	if err := s.containerRepo.DeleteContainerState(request.ContainerId); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to delete container state after scheduling failure")
+	}
+	if err := s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to record container request scheduling failure")
+	}
+	metrics.RecordRequestScheduleFailure(request)
+}
+
+func (s *Scheduler) retrySchedulingRequest(request *types.ContainerRequest, reason string) {
+	if err := s.addRequestToBacklog(request); err != nil {
+		log.Error().
+			Str("container_id", request.ContainerId).
+			Str("reason", reason).
+			Err(err).
+			Msg("failed to requeue request")
+		s.failSchedulingRequest(request, reason+"_requeue_failed")
+	}
+}
+
 // attachImageCredentials fetches and attaches OCI credentials to a container request
 func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) error {
 	if request.ImageId == "" {
@@ -631,7 +670,6 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 		Str("image_id", request.ImageId).
 		Str("secret_name", secretName).
 		Int("credentials_length", len(secret.Value)).
-		Str("credentials", secret.Value).
 		Msg("attached OCI credentials")
 
 	return nil
@@ -899,10 +937,7 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 	}
 
 	if request.RetryCount >= maxScheduleRetryCount || time.Since(request.Timestamp) >= maxScheduleRetryDuration {
-		log.Error().Str("container_id", request.ContainerId).Int("retry_count", request.RetryCount).Msg("giving up on request")
-		s.containerRepo.DeleteContainerState(request.ContainerId)
-		s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed)
-		metrics.RecordRequestScheduleFailure(request)
+		s.failSchedulingRequest(request, "retry_limit")
 		return nil
 	}
 

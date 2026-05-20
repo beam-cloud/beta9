@@ -51,6 +51,7 @@ type ContainerRuntimeServer struct {
 	createCheckpoint        func(ctx context.Context, opts *CreateCheckpointOpts) error
 	grpcServer              *grpc.Server
 	mu                      sync.Mutex
+	exposePortMu            sync.Mutex
 }
 
 type ContainerRuntimeServerOpts struct {
@@ -1007,6 +1008,9 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
+	s.exposePortMu.Lock()
+	defer s.exposePortMu.Unlock()
+
 	getAddressMapResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerAddressMap(context.Background(), &pb.GetContainerAddressMapRequest{
 		ContainerId: in.ContainerId,
 	}))
@@ -1014,12 +1018,10 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	addressMap := getAddressMapResponse.AddressMap
+	addressMap := writableContainerAddressMap(getAddressMapResponse.AddressMap)
 	if _, exists := addressMap[int32(in.Port)]; exists {
-		return &pb.ContainerSandboxExposePortResponse{
-			Ok:       false,
-			ErrorMsg: fmt.Sprintf("Port %d is already exposed", in.Port),
-		}, nil
+		recordSandboxExposedPort(s.containerInstances, in.ContainerId, instance, uint32(in.Port))
+		return &pb.ContainerSandboxExposePortResponse{Ok: true}, nil
 	}
 
 	bindPort, err := getRandomFreePort()
@@ -1042,12 +1044,28 @@ func (s *ContainerRuntimeServer) ContainerSandboxExposePort(ctx context.Context,
 		return &pb.ContainerSandboxExposePortResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	instance.Request.Ports = append(instance.Request.Ports, uint32(in.Port))
-	s.containerInstances.Set(in.ContainerId, instance)
+	recordSandboxExposedPort(s.containerInstances, in.ContainerId, instance, uint32(in.Port))
 
 	log.Info().Str("container_id", in.ContainerId).Msgf("exposed sandbox port %d to %s", in.Port, addressMap[int32(in.Port)])
 
 	return &pb.ContainerSandboxExposePortResponse{Ok: setAddressMapResponse.Ok}, err
+}
+
+func writableContainerAddressMap(addressMap map[int32]string) map[int32]string {
+	if addressMap == nil {
+		return map[int32]string{}
+	}
+
+	return addressMap
+}
+
+func recordSandboxExposedPort(containerInstances *common.SafeMap[*ContainerInstance], containerId string, instance *ContainerInstance, port uint32) {
+	if instance == nil || instance.Request == nil || slices.Contains(instance.Request.Ports, port) {
+		return
+	}
+
+	instance.Request.Ports = append(instance.Request.Ports, port)
+	containerInstances.Set(containerId, instance)
 }
 
 func (s *ContainerRuntimeServer) ContainerSandboxUpdateNetworkPermissions(ctx context.Context, in *pb.ContainerSandboxUpdateNetworkPermissionsRequest) (*pb.ContainerSandboxUpdateNetworkPermissionsResponse, error) {

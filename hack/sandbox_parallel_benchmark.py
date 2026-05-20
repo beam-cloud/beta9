@@ -295,8 +295,15 @@ def cleanup_sandbox(args, instance, sample):
 
 def is_transient_create_error(exc):
     message = str(exc)
-    return (
+    is_quota_capacity_error = (
         "concurrency_limit_reached" in message
+        and ("cpu quota exceeded" in message or "gpu quota exceeded" in message)
+    )
+    if is_quota_capacity_error:
+        return False
+
+    return (
+        "concurrency limit" in message
         or "Unavailable" in message
         or "connection refused" in message
         or "error reading from server" in message

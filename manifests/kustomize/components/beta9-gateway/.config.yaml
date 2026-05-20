@@ -1,6 +1,7 @@
 worker:
   pools:
     default:
+      containerStartConcurrency: 128
       jobSpec:
         env:
         - name: CONFIG_PATH

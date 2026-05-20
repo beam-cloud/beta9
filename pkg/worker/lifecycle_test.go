@@ -48,6 +48,50 @@ func TestWaitForRuntimeStartedReturnsWhenRuntimeDoneWithoutPID(t *testing.T) {
 	require.False(t, handled)
 }
 
+func TestStartupPortBindingsForSandboxSkipsInternalPorts(t *testing.T) {
+	request := &types.ContainerRequest{
+		Ports: []uint32{
+			uint32(containerInnerPort),
+			uint32(types.WorkerShellPort),
+			uint32(types.WorkerSandboxProcessManagerPort),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+
+	bindings := startupPortBindingsForRequest(request, nil, []int{30001, 30002, 30003})
+	require.Empty(t, bindings)
+}
+
+func TestStartupPortBindingsForSandboxExposesRequestedPorts(t *testing.T) {
+	request := &types.ContainerRequest{
+		Ports: []uint32{
+			9000,
+			uint32(types.WorkerShellPort),
+			uint32(types.WorkerSandboxProcessManagerPort),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+
+	bindings := startupPortBindingsForRequest(request, []uint32{9000}, []int{30001, 30002, 30003})
+	require.Equal(t, []PortBinding{{HostPort: 30001, ContainerPort: 9000}}, bindings)
+}
+
+func TestStartupPortBindingsForPodKeepsStartupPorts(t *testing.T) {
+	request := &types.ContainerRequest{
+		Ports: []uint32{
+			uint32(containerInnerPort),
+			uint32(types.WorkerShellPort),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePodRun)}},
+	}
+
+	bindings := startupPortBindingsForRequest(request, nil, []int{30001, 30002})
+	require.Equal(t, []PortBinding{
+		{HostPort: 30001, ContainerPort: containerInnerPort},
+		{HostPort: 30002, ContainerPort: int(types.WorkerShellPort)},
+	}, bindings)
+}
+
 // TestV2ImageEnvironmentFlow tests that v2 images correctly extract metadata from CLIP archives
 // Note: Without actual CLIP archives, this test verifies graceful handling
 func TestV2ImageEnvironmentFlow(t *testing.T) {

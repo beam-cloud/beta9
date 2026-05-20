@@ -18,8 +18,6 @@ import (
 	"sync"
 	"time"
 
-	mathrand "math/rand"
-
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -60,6 +58,7 @@ type ContainerNetworkManager struct {
 	mu                  sync.Mutex
 	config              types.AppConfig
 	containerInstances  *common.SafeMap[*ContainerInstance]
+	bridgeConfigured    bool
 }
 
 type PortBinding struct {
@@ -273,7 +272,7 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 		return err
 	}
 	phaseStart = time.Now()
-	bridge, err := m.setupBridge(containerBridgeLinkName)
+	bridge, err := m.getOrSetupBridge(containerBridgeLinkName)
 	metrics.RecordWorkerStartupPhase("network_setup_bridge", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
@@ -376,6 +375,24 @@ func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName
 	}
 
 	return netlink.LinkAdd(link)
+}
+
+func (m *ContainerNetworkManager) getOrSetupBridge(bridgeName string) (netlink.Link, error) {
+	if m.bridgeConfigured {
+		bridge, err := netlink.LinkByName(bridgeName)
+		if err == nil {
+			return bridge, nil
+		}
+		m.bridgeConfigured = false
+	}
+
+	bridge, err := m.setupBridge(bridgeName)
+	if err != nil {
+		return nil, err
+	}
+
+	m.bridgeConfigured = true
+	return bridge, nil
 }
 
 func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, error) {
@@ -890,6 +907,10 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 }
 
 func (m *ContainerNetworkManager) ExposePorts(containerId string, bindings []PortBinding) error {
+	if len(bindings) == 0 {
+		return nil
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1136,49 +1157,4 @@ func generateUniqueMAC() net.HardwareAddr {
 	mac[0] = (mac[0] | 0x02) & 0xfe
 
 	return net.HardwareAddr(mac)
-}
-
-// assignIpInRange assigns an IP address in the range [rangeStart, rangeEnd) that is not already allocated.
-// (returns an error if no IP address can be assigned)
-func assignIpInRange(allocatedSet map[string]bool, rangeStart, rangeEnd uint8) (*netlink.Addr, error) {
-	_, ipNet, _ := net.ParseCIDR(containerSubnet)
-	baseIP := ipNet.IP.To4()
-	if baseIP == nil {
-		return nil, errors.New("invalid IPv4 subnet")
-	}
-
-	var candidates []net.IP
-	for i := rangeStart; i < rangeEnd; i++ {
-		ip := net.IPv4(baseIP[0], baseIP[1], baseIP[2], byte(i))
-		if !ipNet.Contains(ip) {
-			continue
-		}
-
-		ipStr := ip.String()
-		if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
-			continue
-		}
-
-		if _, allocated := allocatedSet[ipStr]; allocated {
-			continue
-		}
-
-		candidates = append(candidates, ip)
-	}
-
-	if len(candidates) == 0 {
-		return nil, errors.New("unable to assign IP address in range")
-	}
-
-	mathrand.Seed(time.Now().UnixNano())
-	mathrand.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
-
-	ip := candidates[0]
-
-	return &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   ip,
-			Mask: ipNet.Mask,
-		},
-	}, nil
 }

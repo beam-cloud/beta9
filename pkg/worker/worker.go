@@ -117,11 +117,12 @@ func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
 }
 
 type ContainerOptions struct {
-	BundlePath       string
-	HostBindPort     int
-	BindPorts        []int
-	InitialSpec      *specs.Spec
-	StartupStartedAt time.Time
+	BundlePath          string
+	HostBindPort        int
+	BindPorts           []int
+	StartupPortBindings []PortBinding
+	InitialSpec         *specs.Spec
+	StartupStartedAt    time.Time
 }
 
 type stopContainerEvent struct {
@@ -271,7 +272,7 @@ func NewWorker() (*Worker, error) {
 		defaultRuntime = runcRuntime
 	}
 
-	containerStartLimit := containerStartLimitForRuntime(defaultRuntime.Name())
+	containerStartLimit := containerStartLimitForPoolRuntime(poolConfig, defaultRuntime.Name())
 
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
@@ -435,11 +436,28 @@ func containerStartLimitForRuntime(runtimeType string) int {
 }
 
 func containerStartLimitForRuntimeWithDefaults(runtimeType string, runcLimit, gvisorLimit int) int {
+	return containerStartLimitWithEnvOverride(defaultContainerStartLimitForRuntime(runtimeType, runcLimit, gvisorLimit))
+}
+
+func defaultContainerStartLimitForRuntime(runtimeType string, runcLimit, gvisorLimit int) int {
 	limit := runcLimit
 	if runtimeType == types.ContainerRuntimeGvisor.String() {
 		limit = gvisorLimit
 	}
 
+	return limit
+}
+
+func containerStartLimitForPoolRuntime(poolConfig types.WorkerPoolConfig, runtimeType string) int {
+	limit := defaultContainerStartLimitForRuntime(runtimeType, defaultRuncStartConcurrency, defaultGvisorStartConcurrency)
+	if poolConfig.ContainerStartConcurrency > 0 {
+		limit = poolConfig.ContainerStartConcurrency
+	}
+
+	return containerStartLimitWithEnvOverride(limit)
+}
+
+func containerStartLimitWithEnvOverride(limit int) int {
 	raw := os.Getenv("WORKER_CONTAINER_START_CONCURRENCY")
 	if raw == "" {
 		return limit

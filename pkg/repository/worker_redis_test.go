@@ -371,6 +371,54 @@ func TestScheduleContainerRequestRestoresCapacityWhenQueuePushFails(t *testing.T
 	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
 }
 
+func TestScheduleContainerRequestRejectsStaleWorkerReservation(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-stale-reservation",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    100,
+		FreeMemory: 125,
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	firstWorkerCopy, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	secondWorkerCopy, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+
+	firstRequest := &types.ContainerRequest{
+		ContainerId: "container-stale-reservation-first",
+		Cpu:         100,
+		Memory:      100,
+	}
+	secondRequest := &types.ContainerRequest{
+		ContainerId: "container-stale-reservation-second",
+		Cpu:         100,
+		Memory:      100,
+	}
+
+	err = repo.ScheduleContainerRequest(firstWorkerCopy, firstRequest)
+	assert.Nil(t, err)
+
+	err = repo.ScheduleContainerRequest(secondWorkerCopy, secondRequest)
+	assert.Error(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
+	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
+
+	queueDepth, err := rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), queueDepth)
+}
+
 func BenchmarkGetAllWorkers(b *testing.B) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(b, rdb)

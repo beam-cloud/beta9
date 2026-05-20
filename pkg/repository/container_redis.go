@@ -18,6 +18,10 @@ import (
 const (
 	concurrencyCounterInitialized      = "1"
 	concurrencyCounterRepairing        = "repairing"
+	concurrencyReservationOK           = "ok"
+	concurrencyReservationRepairing    = "repairing"
+	concurrencyReservationGPUExceeded  = "gpu"
+	concurrencyReservationCPUExceeded  = "cpu"
 	concurrencyCounterInitTimeout      = 15 * time.Second
 	concurrencyCounterInitPollInterval = 100 * time.Millisecond
 	concurrencyCounterRepairInterval   = 5 * time.Second
@@ -243,8 +247,13 @@ func (cr *ContainerRedisRepository) UpdateContainerStatus(containerId string, st
 		return fmt.Errorf("failed to deserialize container state: %v", err)
 	}
 
+	previousStatus := types.ContainerStatus(state.Status)
+	if status == types.ContainerStatusRunning && previousStatus == types.ContainerStatusStopping {
+		return nil
+	}
+
 	// Update StartedAt if this is the first time we set container status to RUNNING
-	if status == types.ContainerStatusRunning && state.Status != types.ContainerStatusRunning {
+	if status == types.ContainerStatusRunning && previousStatus != types.ContainerStatusRunning {
 		state.StartedAt = time.Now().Unix()
 	}
 
@@ -684,7 +693,8 @@ func (c *ContainerRedisRepository) waitForWorkspaceConcurrencyCounter(ctx contex
 }
 
 func (c *ContainerRedisRepository) rebuildWorkspaceConcurrencyCounter(ctx context.Context, workspaceId string) error {
-	now := time.Now().Unix()
+	nowTime := time.Now()
+	now := nowTime.Unix()
 	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(workspaceId)
 	// Make repairs visible to lock-free reserve/release scripts before taking
 	// the snapshot so they cannot race the final aggregate write.
@@ -750,7 +760,7 @@ func (c *ContainerRedisRepository) rebuildWorkspaceConcurrencyCounter(ctx contex
 			continue
 		}
 
-		if time.Since(time.Unix(reservation.CreatedAt, 0)) > concurrencyReservationInFlightTTL {
+		if reservation.CreatedAt <= 0 || nowTime.Sub(time.Unix(reservation.CreatedAt, 0)) > concurrencyReservationInFlightTTL {
 			pipe.Del(ctx, reservationKey)
 			continue
 		}
@@ -834,13 +844,13 @@ func (c *ContainerRedisRepository) tryReserveContainerConcurrency(quota *types.C
 	}
 
 	switch result {
-	case "ok":
+	case concurrencyReservationOK:
 		return "", nil
-	case "repairing":
+	case concurrencyReservationRepairing:
 		return "repairing", errConcurrencyCounterRepairing
-	case "gpu":
+	case concurrencyReservationGPUExceeded:
 		return "gpu", &types.ThrottledByConcurrencyLimitError{Reason: "gpu quota exceeded"}
-	case "cpu":
+	case concurrencyReservationCPUExceeded:
 		return "cpu", &types.ThrottledByConcurrencyLimitError{Reason: "cpu quota exceeded"}
 	default:
 		return "", fmt.Errorf("unexpected concurrency reservation result: %s", result)
@@ -860,7 +870,7 @@ func (c *ContainerRedisRepository) releaseContainerConcurrencyReservation(ctx co
 		if err != nil {
 			return err
 		}
-		if result != "repairing" {
+		if result != concurrencyReservationRepairing {
 			return nil
 		}
 		if err := c.ensureWorkspaceConcurrencyCounter(workspaceId); err != nil {

@@ -16,7 +16,7 @@ const (
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
 	goprocReadyTimeout             = 10 * time.Second
 	goprocInitialBackoff           = 25 * time.Millisecond
-	goprocMaxBackoff               = 1 * time.Second
+	goprocMaxBackoff               = 250 * time.Millisecond
 	goprocBackoffMultiplier        = 1.5
 	goprocCommandCompletionWait    = 10 * time.Millisecond
 	cgroupSetupCompletionWait      = 500 * time.Millisecond

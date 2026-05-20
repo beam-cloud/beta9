@@ -173,6 +173,34 @@ func TestUpdateContainerStatusStoppingReleasesConcurrencyReservation(t *testing.
 	}
 }
 
+func TestUpdateContainerStatusDoesNotMoveStoppingBackToRunning(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	request := testContainerRequest("sandbox-test-stub-stopping-wins", "test-workspace", 100)
+	if err := repo.SetContainerStateWithConcurrencyLimit(nil, request); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateContainerStatus(request.ContainerId, types.ContainerStatusRunning, types.ContainerStateTtlS); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := repo.GetContainerState(request.ContainerId)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != types.ContainerStatusStopping {
+		t.Fatalf("expected STOPPING status to win over late RUNNING update, got %s", state.Status)
+	}
+}
+
 func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFailure(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
@@ -216,6 +244,35 @@ func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFai
 
 	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected quota to be available after retry release, got %v", err)
+	}
+}
+
+func TestUpdateContainerStatusStoppingReleasesDuringCounterRepair(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
+	firstRequest := testContainerRequest("sandbox-test-stub-release-repair-first", "test-workspace", 100)
+	secondRequest := testContainerRequest("sandbox-test-stub-release-repair-second", "test-workspace", 100)
+	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(firstRequest.WorkspaceId)
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rdb.HSet(context.Background(), usageKey, "initialized", concurrencyCounterRepairing).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.UpdateContainerStatus(firstRequest.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending); err != nil {
+		t.Fatalf("expected STOPPING release to wait for repair and succeed, got %v", err)
+	}
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+		t.Fatalf("expected quota to be available after repair-time release, got %v", err)
 	}
 }
 

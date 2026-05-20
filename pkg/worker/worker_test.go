@@ -75,3 +75,20 @@ func TestContainerStartLimitForRuntimeAllowsExplicitOverride(t *testing.T) {
 	require.Equal(t, 4, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeRunc.String(), 16, 2))
 	require.Equal(t, 4, containerStartLimitForRuntimeWithDefaults(types.ContainerRuntimeGvisor.String(), 16, 2))
 }
+
+func TestContainerStartLimitForPoolRuntimeUsesPoolConfig(t *testing.T) {
+	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "")
+
+	poolConfig := types.WorkerPoolConfig{ContainerStartConcurrency: 64}
+
+	require.Equal(t, 64, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeGvisor.String()))
+	require.Equal(t, 64, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeRunc.String()))
+}
+
+func TestContainerStartLimitForPoolRuntimeAllowsEnvOverride(t *testing.T) {
+	t.Setenv("WORKER_CONTAINER_START_CONCURRENCY", "8")
+
+	poolConfig := types.WorkerPoolConfig{ContainerStartConcurrency: 64}
+
+	require.Equal(t, 8, containerStartLimitForPoolRuntime(poolConfig, types.ContainerRuntimeGvisor.String()))
+}

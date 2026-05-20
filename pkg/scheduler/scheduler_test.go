@@ -352,6 +352,31 @@ func TestRunContainer(t *testing.T) {
 	}
 }
 
+func TestRunCleansContainerStateWhenBacklogPushFails(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	containerId := uuid.New().String()
+	err = wb.requestBacklog.rdb.Set(context.TODO(), common.RedisKeys.SchedulerContainerRequests(), "wrong-type", 0).Err()
+	assert.Nil(t, err)
+
+	err = wb.Run(&types.ContainerRequest{
+		ContainerId: containerId,
+		WorkspaceId: "test-workspace",
+		Cpu:         100,
+		Memory:      100,
+	})
+	assert.Error(t, err)
+
+	_, err = wb.containerRepo.GetContainerState(containerId)
+	assert.Error(t, err)
+
+	statusRepo := wb.containerRepo.(*repo.ContainerRedisRepository)
+	status, err := statusRepo.GetContainerRequestStatus(containerId)
+	assert.Nil(t, err)
+	assert.Equal(t, types.ContainerRequestStatusFailed, status)
+}
+
 func TestProcessRequests(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
@@ -640,6 +665,60 @@ func TestProcessRequestUsesInFlightProvisioningForCurrentBatch(t *testing.T) {
 	}
 }
 
+func TestAddWorkerForReservationReleasesOnContextCancellation(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wb.ctx = ctx
+
+	started := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+	wb.workerPoolManager.SetPool("beta9-cpu", types.WorkerPoolConfig{}, &LocalWorkerPoolControllerForTest{
+		ctx:              ctx,
+		name:             "beta9-cpu",
+		workerRepo:       wb.workerRepo,
+		addWorkerStarted: started,
+		unblockAddWorker: unblock,
+	})
+
+	request := &types.ContainerRequest{
+		ContainerId:  uuid.New().String(),
+		Cpu:          100,
+		Memory:       100,
+		PoolSelector: "beta9-cpu",
+		Timestamp:    time.Now(),
+	}
+
+	controllers, err := wb.getControllers(request)
+	assert.Nil(t, err)
+	reservationID := wb.addProvisioningReservation(request, controllers[0])
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wb.addWorkerForReservation(request, controllers, reservationID)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected worker provisioning to start")
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expected worker provisioning goroutine to exit after cancellation")
+	}
+
+	wb.provisioningMu.Lock()
+	defer wb.provisioningMu.Unlock()
+	assert.Equal(t, 0, len(wb.provisioningReservations))
+	assert.Equal(t, 0, len(wb.requestProvisioningReservations))
+}
+
 func TestProvisionedWorkerUsesSchedulingMemory(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
@@ -673,6 +752,32 @@ func TestProvisionedWorkerUsesSchedulingMemory(t *testing.T) {
 	assert.Equal(t, 1, len(workers))
 	assert.Equal(t, expectedMemory, workers[0].TotalMemory)
 	assert.Equal(t, expectedMemory, workers[0].FreeMemory)
+}
+
+func TestProcessRequestMarksNoControllerRequestFailed(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		WorkspaceId: "test-workspace",
+		Cpu:         100,
+		Memory:      100,
+		GpuRequest:  []string{"UNKNOWN_GPU"},
+		Timestamp:   time.Now(),
+	}
+	err = wb.containerRepo.SetContainerStateWithConcurrencyLimit(nil, request)
+	assert.Nil(t, err)
+
+	wb.processRequest(request, nil)
+
+	_, err = wb.containerRepo.GetContainerState(request.ContainerId)
+	assert.Error(t, err)
+
+	statusRepo := wb.containerRepo.(*repo.ContainerRedisRepository)
+	status, err := statusRepo.GetContainerRequestStatus(request.ContainerId)
+	assert.Nil(t, err)
+	assert.Equal(t, types.ContainerRequestStatusFailed, status)
 }
 
 func TestGetController(t *testing.T) {
