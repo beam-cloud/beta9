@@ -25,6 +25,8 @@ func newSchedulingAttempt(scheduler *Scheduler, request *types.ContainerRequest,
 }
 
 func (a *schedulingAttempt) run() {
+	normalizeGPURequest(a.request)
+
 	// Keep the scheduling order explicit: use ready capacity first, wait on
 	// pending capacity second, and only provision when neither path can fit.
 	if a.scheduleOnAvailableWorker() {
@@ -220,18 +222,24 @@ func (p *provisioningTracker) reserveCapacity(s *Scheduler, workers []*types.Wor
 		}
 	}
 
-	worker, err := s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusPending)
+	worker, err := s.selectWorkerFromWorkersByStatus(p.unreservedWorkersLocked(workers), request, types.WorkerStatusPending)
 	if err != nil || worker == nil {
 		return false
 	}
 
-	return reserveWorkerCapacity(worker, request)
+	if !reserveWorkerCapacity(worker, request) {
+		return false
+	}
+
+	p.trackPendingWorkerLocked(worker, request)
+	return true
 }
 
 func (p *provisioningTracker) addReservation(s *Scheduler, request *types.ContainerRequest, controller WorkerPoolController) string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.ensureMaps()
+	normalizeGPURequest(request)
 
 	reservation := s.newProvisioningReservation(request, controller)
 	reserveWorkerCapacity(reservation.worker, request)
@@ -294,6 +302,33 @@ func (p *provisioningTracker) trackRequestLocked(reservationID string, requestID
 	p.requestReservations[requestID] = reservationID
 }
 
+func (p *provisioningTracker) trackPendingWorkerLocked(worker *types.Worker, request *types.ContainerRequest) {
+	reservationID := worker.Id
+	if _, ok := p.reservations[reservationID]; !ok {
+		p.reservations[reservationID] = &provisioningReservation{
+			worker:     worker,
+			requestIDs: map[string]struct{}{},
+		}
+
+		time.AfterFunc(pendingWorkerReservationTTL, func() {
+			p.release(reservationID)
+		})
+	}
+
+	p.trackRequestLocked(reservationID, request.ContainerId)
+}
+
+func (p *provisioningTracker) unreservedWorkersLocked(workers []*types.Worker) []*types.Worker {
+	unreservedWorkers := make([]*types.Worker, 0, len(workers))
+	for _, worker := range workers {
+		if _, reserved := p.reservations[worker.Id]; reserved {
+			continue
+		}
+		unreservedWorkers = append(unreservedWorkers, worker)
+	}
+	return unreservedWorkers
+}
+
 func (s *Scheduler) newProvisioningReservation(request *types.ContainerRequest, controller WorkerPoolController) *provisioningReservation {
 	cpu := s.workerCPUForRequest(request)
 	memory := s.workerMemoryForRequest(request)
@@ -350,6 +385,17 @@ func (s *Scheduler) workerMemoryForRequest(request *types.ContainerRequest) int6
 }
 
 func (s *Scheduler) workerGPUCountForRequest(request *types.ContainerRequest) uint32 {
+	return gpuCountForScheduling(request)
+}
+
+func normalizeGPURequest(request *types.ContainerRequest) {
+	if request == nil || !request.RequiresGPU() || request.GpuCount > 0 {
+		return
+	}
+	request.GpuCount = 1
+}
+
+func gpuCountForScheduling(request *types.ContainerRequest) uint32 {
 	if !request.RequiresGPU() {
 		return 0
 	}
@@ -360,6 +406,8 @@ func (s *Scheduler) workerGPUCountForRequest(request *types.ContainerRequest) ui
 }
 
 func reserveWorkerCapacity(worker *types.Worker, request *types.ContainerRequest) bool {
+	normalizeGPURequest(request)
+
 	memory := capacityMemoryForScheduling(request)
 	if worker.FreeCpu < request.Cpu || worker.FreeMemory < memory {
 		return false

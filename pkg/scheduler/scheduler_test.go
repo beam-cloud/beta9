@@ -664,6 +664,82 @@ func TestProcessRequestUsesInFlightProvisioningForCurrentBatch(t *testing.T) {
 	}
 }
 
+func TestProcessRequestTracksPendingWorkerCapacityAcrossBatches(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wb.ctx = ctx
+
+	started := make(chan struct{}, 1)
+	unblock := make(chan struct{})
+	defer close(unblock)
+
+	wb.workerPoolManager.SetPool("beta9-a10g", types.WorkerPoolConfig{GPUType: "A10G"}, &LocalWorkerPoolControllerForTest{
+		ctx:              ctx,
+		name:             "beta9-a10g",
+		config:           wb.config,
+		workerRepo:       wb.workerRepo,
+		addWorkerStarted: started,
+		unblockAddWorker: unblock,
+	})
+
+	pendingWorker := &types.Worker{
+		Id:            uuid.New().String(),
+		Status:        types.WorkerStatusPending,
+		TotalCpu:      1000,
+		TotalMemory:   1250,
+		TotalGpuCount: 1,
+		FreeCpu:       1000,
+		FreeMemory:    1250,
+		FreeGpuCount:  1,
+		Gpu:           "A10G",
+		PoolName:      "beta9-a10g",
+	}
+	err = wb.workerRepo.AddWorker(pendingWorker)
+	assert.Nil(t, err)
+
+	firstRequest := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         1000,
+		Memory:      1000,
+		GpuRequest:  []string{"A10G"},
+		Timestamp:   time.Now(),
+	}
+	secondRequest := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         1000,
+		Memory:      1000,
+		GpuRequest:  []string{"A10G"},
+		Timestamp:   time.Now(),
+	}
+
+	firstBatchWorkers, err := wb.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	wb.processRequest(firstRequest, firstBatchWorkers)
+
+	secondBatchWorkers, err := wb.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	wb.processRequest(secondRequest, secondBatchWorkers)
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("expected second request to provision another worker instead of over-reserving the pending GPU worker")
+	}
+
+	wb.provisioning.mu.Lock()
+	defer wb.provisioning.mu.Unlock()
+
+	pendingReservation := wb.provisioning.reservations[pendingWorker.Id]
+	assert.NotNil(t, pendingReservation)
+	_, firstReserved := pendingReservation.requestIDs[firstRequest.ContainerId]
+	assert.True(t, firstReserved)
+	_, secondReserved := pendingReservation.requestIDs[secondRequest.ContainerId]
+	assert.False(t, secondReserved)
+}
+
 func TestProcessRequestUpdatesBatchWorkerCapacity(t *testing.T) {
 	wb, err := NewSchedulerForTest()
 	assert.Nil(t, err)
@@ -782,6 +858,118 @@ func TestProcessRequestKeepsCPUAndGPUWorkersSeparate(t *testing.T) {
 	assert.Equal(t, int64(1000), updatedGPUWorker.FreeCpu)
 	assert.Equal(t, int64(1250), updatedGPUWorker.FreeMemory)
 	assert.Equal(t, uint32(0), updatedGPUWorker.FreeGpuCount)
+}
+
+func TestProcessRequestDefaultsGPUCountBeforeScheduling(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	worker := &types.Worker{
+		Id:            uuid.New().String(),
+		Status:        types.WorkerStatusAvailable,
+		TotalCpu:      2000,
+		TotalMemory:   2500,
+		TotalGpuCount: 1,
+		FreeCpu:       2000,
+		FreeMemory:    2500,
+		FreeGpuCount:  1,
+		Gpu:           "A10G",
+		PoolName:      "beta9-a10g",
+	}
+	err = wb.workerRepo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	workers, err := wb.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         1000,
+		Memory:      1000,
+		GpuRequest:  []string{"A10G"},
+		Timestamp:   time.Now(),
+	}
+
+	wb.processRequest(request, workers)
+
+	queuedRequest, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+	assert.Nil(t, err)
+	assert.NotNil(t, queuedRequest)
+	assert.Equal(t, uint32(1), queuedRequest.GpuCount)
+	assert.Equal(t, "A10G", queuedRequest.Gpu)
+
+	updatedWorker, err := wb.workerRepo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, uint32(0), updatedWorker.FreeGpuCount)
+}
+
+func TestProcessRequestStaleReplicaGPUReservationRequeues(t *testing.T) {
+	firstScheduler, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	secondScheduler := *firstScheduler
+	secondScheduler.provisioning = newProvisioningTracker()
+
+	worker := &types.Worker{
+		Id:            uuid.New().String(),
+		Status:        types.WorkerStatusAvailable,
+		TotalCpu:      4000,
+		TotalMemory:   5000,
+		TotalGpuCount: 1,
+		FreeCpu:       4000,
+		FreeMemory:    5000,
+		FreeGpuCount:  1,
+		Gpu:           "A10G",
+		PoolName:      "beta9-a10g",
+	}
+	err = firstScheduler.workerRepo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	firstReplicaWorkers, err := firstScheduler.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+	secondReplicaWorkers, err := secondScheduler.workerRepo.GetAllWorkers()
+	assert.Nil(t, err)
+
+	firstRequest := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         1000,
+		Memory:      1000,
+		GpuRequest:  []string{"A10G"},
+		Timestamp:   time.Now(),
+	}
+	secondRequest := &types.ContainerRequest{
+		ContainerId: uuid.New().String(),
+		Cpu:         1000,
+		Memory:      1000,
+		GpuRequest:  []string{"A10G"},
+		Timestamp:   time.Now(),
+	}
+
+	firstScheduler.processRequest(firstRequest, firstReplicaWorkers)
+	secondScheduler.processRequest(secondRequest, secondReplicaWorkers)
+
+	queuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	assert.Nil(t, err)
+	assert.NotNil(t, queuedRequest)
+	assert.Equal(t, firstRequest.ContainerId, queuedRequest.ContainerId)
+
+	extraQueuedRequest, err := firstScheduler.workerRepo.GetNextContainerRequest(worker.Id)
+	assert.Nil(t, err)
+	assert.Nil(t, extraQueuedRequest)
+
+	updatedWorker, err := firstScheduler.workerRepo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(3000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(3750), updatedWorker.FreeMemory)
+	assert.Equal(t, uint32(0), updatedWorker.FreeGpuCount)
+	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
+
+	assert.Equal(t, int64(1), firstScheduler.requestBacklog.Len())
+	requeuedRequest, err := firstScheduler.requestBacklog.Pop()
+	assert.Nil(t, err)
+	assert.Equal(t, secondRequest.ContainerId, requeuedRequest.ContainerId)
+	assert.Equal(t, uint32(1), requeuedRequest.GpuCount)
+	assert.Equal(t, "A10G", requeuedRequest.Gpu)
 }
 
 func TestAddWorkerForReservationReleasesOnContextCancellation(t *testing.T) {
@@ -943,10 +1131,11 @@ func TestSelectGPUWorker(t *testing.T) {
 	assert.NotNil(t, wb)
 
 	newWorker := &types.Worker{
-		Status:     types.WorkerStatusAvailable,
-		FreeCpu:    1000,
-		FreeMemory: 1250,
-		Gpu:        "A10G",
+		Status:       types.WorkerStatusAvailable,
+		FreeCpu:      1000,
+		FreeMemory:   1250,
+		FreeGpuCount: 1,
+		Gpu:          "A10G",
 	}
 
 	// Create a new worker
@@ -1058,11 +1247,12 @@ func TestSelectCPUWorker(t *testing.T) {
 
 	// Add GPU worker to test that CPU workers won't select it
 	gpuWorker := &types.Worker{
-		Id:         uuid.New().String(),
-		Status:     types.WorkerStatusAvailable,
-		FreeCpu:    1000,
-		FreeMemory: 1250,
-		Gpu:        "A10G",
+		Id:           uuid.New().String(),
+		Status:       types.WorkerStatusAvailable,
+		FreeCpu:      1000,
+		FreeMemory:   1250,
+		FreeGpuCount: 1,
+		Gpu:          "A10G",
 	}
 
 	err = wb.workerRepo.AddWorker(gpuWorker)
@@ -1249,11 +1439,12 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			for _, gpu := range tt.gpus {
 				newWorker := &types.Worker{
-					Id:         uuid.New().String(),
-					Status:     types.WorkerStatusAvailable,
-					FreeCpu:    1000,
-					FreeMemory: 1250,
-					Gpu:        gpu,
+					Id:           uuid.New().String(),
+					Status:       types.WorkerStatusAvailable,
+					FreeCpu:      1000,
+					FreeMemory:   1250,
+					FreeGpuCount: 1,
+					Gpu:          gpu,
 				}
 
 				// Create a new worker
@@ -1283,6 +1474,42 @@ func TestSelectWorkersWithBackupGPU(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSelectGPUWorkerDoesNotMutatePriority(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+
+	a10gWorker := &types.Worker{
+		Id:           uuid.New().String(),
+		Status:       types.WorkerStatusAvailable,
+		FreeCpu:      1000,
+		FreeMemory:   1250,
+		FreeGpuCount: 1,
+		Gpu:          "A10G",
+		Priority:     7,
+	}
+	t4Worker := &types.Worker{
+		Id:           uuid.New().String(),
+		Status:       types.WorkerStatusAvailable,
+		FreeCpu:      1000,
+		FreeMemory:   1250,
+		FreeGpuCount: 1,
+		Gpu:          "T4",
+		Priority:     7,
+	}
+
+	request := &types.ContainerRequest{
+		Cpu:        1000,
+		Memory:     1000,
+		GpuRequest: []string{"T4", "A10G"},
+	}
+
+	worker, err := wb.selectWorkerFromWorkers([]*types.Worker{a10gWorker, t4Worker}, request)
+	assert.Nil(t, err)
+	assert.Equal(t, t4Worker.Id, worker.Id)
+	assert.Equal(t, int32(7), a10gWorker.Priority)
+	assert.Equal(t, int32(7), t4Worker.Priority)
 }
 
 func TestRequiresPoolSelectorWorker(t *testing.T) {

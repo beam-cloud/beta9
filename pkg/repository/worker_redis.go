@@ -466,16 +466,20 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 		}
 
 	case types.RemoveCapacity:
-		updatedWorker.FreeCpu = updatedWorker.FreeCpu - request.Cpu
-		updatedWorker.FreeMemory = updatedWorker.FreeMemory - capacityMemoryForRequest(request)
+		memory := capacityMemoryForRequest(request)
+		if updatedWorker.FreeCpu < request.Cpu || updatedWorker.FreeMemory < memory {
+			return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
+		}
 
 		if request.Gpu != "" {
+			if updatedWorker.FreeGpuCount < request.GpuCount {
+				return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
+			}
 			updatedWorker.FreeGpuCount -= request.GpuCount
 		}
 
-		if updatedWorker.FreeCpu < 0 || updatedWorker.FreeMemory < 0 || updatedWorker.FreeGpuCount < 0 {
-			return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
-		}
+		updatedWorker.FreeCpu -= request.Cpu
+		updatedWorker.FreeMemory -= memory
 
 	default:
 		return errors.New("invalid capacity update type")

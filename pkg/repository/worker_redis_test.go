@@ -419,6 +419,46 @@ func TestScheduleContainerRequestRejectsStaleWorkerReservation(t *testing.T) {
 	assert.Equal(t, int64(1), queueDepth)
 }
 
+func TestUpdateWorkerCapacityRejectsGPUOverReservation(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:            "worker-gpu-over-reservation",
+		Status:        types.WorkerStatusAvailable,
+		FreeCpu:       1000,
+		FreeMemory:    1250,
+		FreeGpuCount:  0,
+		TotalGpuCount: 1,
+		Gpu:           "A10G",
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId: "container-gpu-over-reservation",
+		Cpu:         100,
+		Memory:      100,
+		Gpu:         "A10G",
+		GpuCount:    1,
+	}
+
+	err = repo.UpdateWorkerCapacity(updatedWorker, request, types.RemoveCapacity)
+	assert.Error(t, err)
+
+	unchangedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1000), unchangedWorker.FreeCpu)
+	assert.Equal(t, int64(1250), unchangedWorker.FreeMemory)
+	assert.Equal(t, uint32(0), unchangedWorker.FreeGpuCount)
+	assert.Equal(t, int64(0), unchangedWorker.ResourceVersion)
+}
+
 func BenchmarkGetAllWorkers(b *testing.B) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(b, rdb)

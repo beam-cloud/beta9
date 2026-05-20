@@ -25,6 +25,7 @@ const (
 	requestProcessingBatchSize                   = 512
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
 	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
+	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
 )
 
 type Scheduler struct {
@@ -293,6 +294,8 @@ func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*t
 }
 
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	normalizeGPURequest(request)
+
 	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
 		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to update assigned container gpu")
 		return err
@@ -463,6 +466,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
 	memory := capacityMemoryForScheduling(request)
+	gpuCount := gpuCountForScheduling(request)
 
 	gpuRequests := gpuRequestsForScheduling(request)
 	for index, gpu := range gpuRequests {
@@ -495,14 +499,10 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 
 		if requiresGPU {
 			// Validate GPU resource availability
-			priorityModifier, validGpu := gpuRequestsMap[worker.Gpu]
-			if !validGpu || worker.FreeGpuCount < request.GpuCount {
+			_, validGpu := gpuRequestsMap[worker.Gpu]
+			if !validGpu || worker.FreeGpuCount < gpuCount {
 				continue
 			}
-
-			// This will account for the preset priorities for the pool type as well as the order of the GPU requests
-			// NOTE: will only work properly if all GPU types and their pools start from 0 and pool priority are incremental by changes of ?1
-			worker.Priority -= int32(priorityModifier)
 		}
 
 		filteredWorkers = append(filteredWorkers, worker)
@@ -584,6 +584,8 @@ func (s *Scheduler) selectWorkerFromWorkers(workers []*types.Worker, request *ty
 }
 
 func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, request *types.ContainerRequest, statuses ...types.WorkerStatus) (*types.Worker, error) {
+	normalizeGPURequest(request)
+
 	if len(workers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}
 	}
@@ -600,13 +602,7 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	// Score workers based on status and priority
 	scoredWorkers := []scoredWorker{}
 	for _, worker := range filteredWorkers {
-		score := int32(0)
-
-		if worker.Status == types.WorkerStatusAvailable {
-			score += scoreAvailableWorker
-		}
-
-		score += worker.Priority
+		score := scoreWorkerForRequest(worker, request)
 		scoredWorkers = append(scoredWorkers, scoredWorker{worker: worker, score: score})
 	}
 
@@ -619,13 +615,37 @@ func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, req
 	return scoredWorkers[0].worker, nil
 }
 
+func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest) int32 {
+	score := worker.Priority
+	if worker.Status == types.WorkerStatusAvailable {
+		score += scoreAvailableWorker
+	}
+	if request.RequiresGPU() {
+		score -= int32(gpuPriorityModifier(request, worker.Gpu))
+	}
+	return score
+}
+
+func gpuPriorityModifier(request *types.ContainerRequest, gpu string) int {
+	gpuRequests := gpuRequestsForScheduling(request)
+	if slices.Contains(gpuRequests, string(types.GPU_ANY)) {
+		modifiers := types.GPUTypesToMap(types.AllGPUTypes())
+		return modifiers[gpu]
+	}
+
+	for index, requestedGPU := range gpuRequests {
+		if requestedGPU == gpu {
+			return index
+		}
+	}
+	return 0
+}
+
 const maxScheduleRetryCount = 120
 const maxScheduleRetryDuration = 10 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
-	if request.RequiresGPU() && request.GpuCount <= 0 {
-		request.GpuCount = 1
-	}
+	normalizeGPURequest(request)
 
 	if request.RetryCount == 0 {
 		request.RetryCount++
