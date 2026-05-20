@@ -68,3 +68,30 @@ func TestRequestBacklogOrdering(t *testing.T) {
 		t.Errorf("Expected timestamp %v, got %v", req3.Timestamp.Unix(), poppedReq.Timestamp.Unix())
 	}
 }
+
+func TestRequestBacklogDelayedRequestsOnlyPopWhenReady(t *testing.T) {
+	s, err := miniredis.Run()
+	assert.NotNil(t, s)
+	assert.NoError(t, err)
+
+	redisClient, err := common.NewRedisClient(types.RedisConfig{Addrs: []string{s.Addr()}, Mode: types.RedisModeSingle})
+	assert.NotNil(t, redisClient)
+	assert.NoError(t, err)
+
+	rb := NewRequestBacklogForTest(redisClient)
+	request := &types.ContainerRequest{
+		ContainerId: "delayed",
+		Timestamp:   time.Now(),
+	}
+
+	assert.NoError(t, rb.PushAfter(request, 50*time.Millisecond))
+
+	_, err = rb.PopN(1)
+	assert.Error(t, err)
+
+	time.Sleep(75 * time.Millisecond)
+
+	poppedReq, err := rb.Pop()
+	assert.NoError(t, err)
+	assert.Equal(t, request.ContainerId, poppedReq.ContainerId)
+}

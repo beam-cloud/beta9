@@ -23,7 +23,7 @@ import (
 
 const (
 	requestProcessingInterval      time.Duration = 50 * time.Millisecond
-	requestProcessingBatchSize                   = 128
+	requestProcessingBatchSize                   = 512
 	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
 	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
 )
@@ -237,7 +237,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 			controllers = append(controllers, pool.Controller)
 		}
 	} else {
-		for _, gpu := range request.GpuRequest {
+		for _, gpu := range gpuRequestsForScheduling(request) {
 			pools := s.workerPoolManager.GetPoolByFilters(poolFilters{
 				GPUType: gpu,
 			})
@@ -269,11 +269,6 @@ func (s *Scheduler) StartProcessingRequests() {
 			return
 		default:
 			// Continue processing requests
-		}
-
-		if s.requestBacklog.Len() == 0 {
-			time.Sleep(requestProcessingInterval)
-			continue
 		}
 
 		requests, err := s.requestBacklog.PopN(requestProcessingBatchSize)
@@ -372,23 +367,17 @@ func (s *Scheduler) addWorkerForReservation(request *types.ContainerRequest, con
 }
 
 func (s *Scheduler) requeueRequestForWorkerWait(request *types.ContainerRequest) {
-	go func() {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-time.After(provisioningWorkerRequeueDelay):
-		}
+	if time.Since(request.Timestamp) >= maxScheduleRetryDuration {
+		log.Error().Str("container_id", request.ContainerId).Msg("giving up on request waiting for worker capacity")
+		s.containerRepo.DeleteContainerState(request.ContainerId)
+		s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed)
+		metrics.RecordRequestScheduleFailure(request)
+		return
+	}
 
-		if time.Since(request.Timestamp) >= maxScheduleRetryDuration {
-			log.Error().Str("container_id", request.ContainerId).Msg("giving up on request waiting for worker capacity")
-			s.containerRepo.DeleteContainerState(request.ContainerId)
-			s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed)
-			metrics.RecordRequestScheduleFailure(request)
-			return
-		}
-
-		s.requestBacklog.Push(request)
-	}()
+	if err := s.requestBacklog.PushAfter(request, provisioningWorkerRequeueDelay); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to requeue request waiting for worker capacity")
+	}
 }
 
 func (s *Scheduler) reserveProvisioningCapacity(workers []*types.Worker, request *types.ContainerRequest) bool {
@@ -741,12 +730,13 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	requiresGPU := request.RequiresGPU()
 	memory := capacityMemoryForScheduling(request)
 
-	for index, gpu := range request.GpuRequest {
+	gpuRequests := gpuRequestsForScheduling(request)
+	for index, gpu := range gpuRequests {
 		gpuRequestsMap[gpu] = index
 	}
 
 	// If the request contains the "any" GPU selector, we need to check all GPU types
-	if slices.Contains(request.GpuRequest, string(types.GPU_ANY)) {
+	if slices.Contains(gpuRequests, string(types.GPU_ANY)) {
 		gpuRequestsMap = types.GPUTypesToMap(types.AllGPUTypes())
 	}
 
@@ -784,6 +774,15 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		filteredWorkers = append(filteredWorkers, worker)
 	}
 	return filteredWorkers
+}
+
+func gpuRequestsForScheduling(request *types.ContainerRequest) []string {
+	gpus := make([]string, 0, len(request.GpuRequest)+1)
+	gpus = append(gpus, request.GpuRequest...)
+	if request.Gpu == "" || slices.Contains(gpus, request.Gpu) {
+		return gpus
+	}
+	return append(gpus, request.Gpu)
 }
 
 func capacityMemoryForScheduling(request *types.ContainerRequest) int64 {
@@ -899,23 +898,18 @@ func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
 		return s.requestBacklog.Push(request)
 	}
 
-	go func() {
-		if request.RetryCount < maxScheduleRetryCount && time.Since(request.Timestamp) < maxScheduleRetryDuration {
-			delay := calculateBackoffDelay(request.RetryCount)
-			time.Sleep(delay)
-			request.RetryCount++
-			metrics.RecordRequestRetry(request)
-			s.requestBacklog.Push(request)
-			return
-		}
-
+	if request.RetryCount >= maxScheduleRetryCount || time.Since(request.Timestamp) >= maxScheduleRetryDuration {
 		log.Error().Str("container_id", request.ContainerId).Int("retry_count", request.RetryCount).Msg("giving up on request")
 		s.containerRepo.DeleteContainerState(request.ContainerId)
 		s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed)
 		metrics.RecordRequestScheduleFailure(request)
-	}()
+		return nil
+	}
 
-	return nil
+	delay := calculateBackoffDelay(request.RetryCount)
+	request.RetryCount++
+	metrics.RecordRequestRetry(request)
+	return s.requestBacklog.PushAfter(request, delay)
 }
 
 func calculateBackoffDelay(retryCount int) time.Duration {

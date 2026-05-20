@@ -511,6 +511,9 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	// Push the serialized ContainerRequest
 	err = r.rdb.RPush(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id), requestJSON).Err()
 	if err != nil {
+		if rollbackErr := r.UpdateWorkerCapacity(worker, request, types.AddCapacity); rollbackErr != nil {
+			return errors.Join(fmt.Errorf("failed to push request: %w", err), fmt.Errorf("failed to restore worker capacity after queue push error: %w", rollbackErr))
+		}
 		return fmt.Errorf("failed to push request: %w", err)
 	}
 	metrics.RecordWorkerQueueDepth(worker.Id, r.rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
@@ -543,18 +546,12 @@ func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, conta
 }
 
 func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types.ContainerRequest, error) {
-	queueLength, err := r.rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	if queueLength == 0 {
+	requestJSON, err := r.rdb.LPop(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Bytes()
+	if err == redis.Nil {
 		metrics.RecordWorkerQueueDepth(workerId, 0)
 		metrics.RecordWorkerQueueEmptyPoll(workerId)
 		return nil, nil
 	}
-
-	requestJSON, err := r.rdb.LPop(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Bytes()
 	if err != nil {
 		return nil, err
 	}
@@ -564,7 +561,10 @@ func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types
 	if err != nil {
 		return nil, err
 	}
-	metrics.RecordWorkerQueueDepth(workerId, queueLength-1)
+	queueLength, err := r.rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Result()
+	if err == nil {
+		metrics.RecordWorkerQueueDepth(workerId, queueLength)
+	}
 	if !request.Timestamp.IsZero() {
 		metrics.RecordWorkerQueueReceiveLatency(workerId, time.Since(request.Timestamp), &request)
 	}

@@ -68,6 +68,7 @@ func NewSchedulerForTest() (*Scheduler, error) {
 		workerPoolManager:     workerPoolManager,
 		requestBacklog:        requestBacklog,
 		containerRepo:         containerRepo,
+		config:                config,
 		schedulerUsageMetrics: schedulerUsageMetrics,
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
@@ -83,6 +84,7 @@ type LocalWorkerPoolControllerForTest struct {
 	config           types.AppConfig
 	workerRepo       repo.WorkerRepository
 	preemptable      bool
+	workerStatus     types.WorkerStatus
 	addWorkerStarted chan struct{}
 	unblockAddWorker chan struct{}
 }
@@ -132,15 +134,27 @@ func (wpc *LocalWorkerPoolControllerForTest) AddWorker(cpu int64, memory int64, 
 	}
 
 	workerId := wpc.generateWorkerId()
+	gpuType := ""
+	if pool, ok := wpc.config.Worker.Pools[wpc.name]; ok {
+		gpuType = pool.GPUType
+	}
+	status := wpc.workerStatus
+	if status == "" {
+		status = types.WorkerStatusPending
+	}
+
 	worker := &types.Worker{
-		Id:            workerId,
-		TotalCpu:      cpu,
-		TotalMemory:   memory,
-		TotalGpuCount: gpuCount,
-		FreeCpu:       cpu,
-		FreeMemory:    memory,
-		FreeGpuCount:  gpuCount,
-		Status:        types.WorkerStatusPending,
+		Id:                   workerId,
+		TotalCpu:             cpu,
+		TotalMemory:          memory,
+		TotalGpuCount:        gpuCount,
+		FreeCpu:              cpu,
+		FreeMemory:           memory,
+		FreeGpuCount:         gpuCount,
+		Gpu:                  gpuType,
+		PoolName:             wpc.name,
+		RequiresPoolSelector: wpc.RequiresPoolSelector(),
+		Status:               status,
 	}
 
 	// Add the worker state
@@ -350,6 +364,15 @@ func TestProcessRequests(t *testing.T) {
 
 	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).GPUConcurrencyLimit = 10
 	wb.backendRepo.(*BackendRepoConcurrencyLimitsForTest).CPUConcurrencyLimit = 100000
+	for name, pool := range wb.config.Worker.Pools {
+		wb.workerPoolManager.SetPool(name, pool, &LocalWorkerPoolControllerForTest{
+			ctx:          wb.ctx,
+			name:         name,
+			config:       wb.config,
+			workerRepo:   wb.workerRepo,
+			workerStatus: types.WorkerStatusAvailable,
+		})
+	}
 
 	// Prepare some requests to process.
 	requests := []*types.ContainerRequest{
@@ -405,9 +428,79 @@ func TestProcessRequests(t *testing.T) {
 		}
 	}()
 
-	<-ctx.Done()
+	deadline := time.After(2 * time.Second)
+	for {
+		if wb.requestBacklog.Len() == 0 {
+			return
+		}
+
+		select {
+		case <-deadline:
+			assert.Equal(t, int64(0), wb.requestBacklog.Len())
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestSchedulerProcessesLargeReadyBatch(t *testing.T) {
+	wb, err := NewSchedulerForTest()
+	assert.Nil(t, err)
+	assert.NotNil(t, wb)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wb.ctx = ctx
+
+	const requestCount = 1000
+	worker := &types.Worker{
+		Id:          uuid.New().String(),
+		Status:      types.WorkerStatusAvailable,
+		TotalCpu:    requestCount,
+		TotalMemory: requestCount * 2,
+		FreeCpu:     requestCount,
+		FreeMemory:  requestCount * 2,
+		PoolName:    "beta9-cpu",
+	}
+	err = wb.workerRepo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	for i := 0; i < requestCount; i++ {
+		err = wb.Run(&types.ContainerRequest{
+			ContainerId: uuid.New().String(),
+			Cpu:         1,
+			Memory:      1,
+		})
+		assert.Nil(t, err)
+	}
+	assert.Equal(t, int64(requestCount), wb.requestBacklog.Len())
+
+	go wb.StartProcessingRequests()
+
+	received := map[string]struct{}{}
+	deadline := time.After(3 * time.Second)
+	for len(received) < requestCount {
+		select {
+		case <-deadline:
+			t.Fatalf("expected %d scheduled requests, got %d", requestCount, len(received))
+		default:
+		}
+
+		request, err := wb.workerRepo.GetNextContainerRequest(worker.Id)
+		assert.Nil(t, err)
+		if request == nil {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+
+		received[request.ContainerId] = struct{}{}
+	}
 
 	assert.Equal(t, int64(0), wb.requestBacklog.Len())
+	updatedWorker, err := wb.workerRepo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
 }
 
 func TestSchedulerDoesNotBlockOnSlowWorkerProvisioning(t *testing.T) {

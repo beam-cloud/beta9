@@ -31,8 +31,7 @@ func getContainerNetworkInfo(ctx context.Context, workerRepoClient pb.WorkerRepo
 		return nil, err
 	}
 
-	truncatedContainerId := containerId[len(containerId)-5:]
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
+	vethHost, _ := containerVethNames(containerId)
 	comment := fmt.Sprintf("%s:%s", vethHost, containerId)
 	containerIp := containerIpResponse.IpAddress
 
@@ -44,16 +43,18 @@ func getContainerNetworkInfo(ctx context.Context, workerRepoClient pb.WorkerRepo
 
 	if ipv6Enabled {
 		ip := net.ParseIP(containerIp)
-		if ip == nil {
+		if ip == nil || ip.To4() == nil {
 			return nil, fmt.Errorf("invalid IPv4 address: %s", containerIp)
 		}
-		ipv4LastOctet := int(ip.To4()[3])
 		_, ipv6Net, err := net.ParseCIDR(containerSubnetIPv6)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse IPv6 subnet: %w", err)
 		}
-		ipv6Prefix := ipv6Net.IP.String()
-		info.ContainerIpv6 = fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
+		ipv6Address, err := containerIPv6Address(ip, ipv6Net)
+		if err != nil {
+			return nil, err
+		}
+		info.ContainerIpv6 = ipv6Address.String()
 	}
 
 	return info, nil

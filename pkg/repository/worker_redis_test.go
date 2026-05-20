@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/tj/assert"
 )
@@ -334,6 +336,39 @@ func TestGetAllWorkers(t *testing.T) {
 	}
 	assert.Equal(t, nWorkers, availableCount)
 	assert.Equal(t, nWorkers, pendingCount)
+}
+
+func TestScheduleContainerRequestRestoresCapacityWhenQueuePushFails(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-queue-error",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	err = rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id), "wrong-type", 0).Err()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId: "container-queue-error",
+		Cpu:         100,
+		Memory:      100,
+	}
+
+	err = repo.ScheduleContainerRequest(worker, request)
+	assert.Error(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
 }
 
 func BenchmarkGetAllWorkers(b *testing.B) {

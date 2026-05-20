@@ -33,8 +33,8 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
-	defaultRuncStartConcurrency    int           = 8
-	defaultGvisorStartConcurrency  int           = 8
+	defaultRuncStartConcurrency    int           = 128
+	defaultGvisorStartConcurrency  int           = 32
 )
 
 type Worker struct {

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -712,15 +713,6 @@ func (s *Worker) getContainerEnvironment(request *types.ContainerRequest, option
 func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, outputLogger *slog.Logger, opts *ContainerOptions) {
 	ctx, cancel := context.WithCancel(s.ctx)
 
-	phaseStart := time.Now()
-	if s.containerStartSem != nil {
-		s.containerStartSem <- struct{}{}
-		defer func() { <-s.containerStartSem }()
-	}
-	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
-		"limit": fmt.Sprintf("%d", s.containerStartLimit),
-	})
-
 	s.workerRepoClient.AddContainerToWorker(ctx, &pb.AddContainerToWorkerRequest{
 		WorkerId:    s.workerId,
 		ContainerId: request.ContainerId,
@@ -814,7 +806,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 
 	// Setup container overlay filesystem
 	var err error
-	phaseStart = time.Now()
+	phaseStart := time.Now()
 	err = containerInstance.Overlay.Setup()
 	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
@@ -972,6 +964,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request, exitCode) }()
 
+	phaseStart = time.Now()
+	releaseStartupSlot := func() {}
+	if s.containerStartSem != nil {
+		s.containerStartSem <- struct{}{}
+		var releaseOnce sync.Once
+		releaseStartupSlot = func() {
+			releaseOnce.Do(func() {
+				<-s.containerStartSem
+			})
+		}
+		defer releaseStartupSlot()
+	}
+	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
+		"limit": fmt.Sprintf("%d", s.containerStartLimit),
+	})
+
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
 	monitorPIDChan := make(chan int, 1)
@@ -991,6 +999,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		}
 
 		close(containerStarted)
+		releaseStartupSlot()
 
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
