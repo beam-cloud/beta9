@@ -187,7 +187,7 @@ stop:
 	cd hack && okteto down --file okteto.yaml
 
 protocol:
-	uv run ./bin/gen_proto.sh
+	./bin/gen_proto.sh
 
 openapi:
 	@echo "Generating OpenAPI schemas..."
