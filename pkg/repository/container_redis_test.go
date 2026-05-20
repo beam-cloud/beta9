@@ -219,6 +219,34 @@ func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFai
 	}
 }
 
+func TestDeleteContainerStateReleasesConcurrencyReservation(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
+	firstRequest := testContainerRequest("sandbox-test-stub-delete-first", "test-workspace", 100)
+	secondRequest := testContainerRequest("sandbox-test-stub-delete-second", "test-workspace", 100)
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteContainerState(firstRequest.ContainerId); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.GetContainerState(firstRequest.ContainerId); err == nil {
+		t.Fatal("expected deleted container state to be gone")
+	}
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+		t.Fatalf("expected quota to be released after delete, got %v", err)
+	}
+}
+
 func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
@@ -245,6 +273,12 @@ func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *
 	if err := rdb.HSet(context.Background(), usageKey, "repaired_at", time.Now().Add(-time.Minute).Unix()).Err(); err != nil {
 		t.Fatal(err)
 	}
+	if err := rdb.HSet(context.Background(),
+		common.RedisKeys.WorkspaceConcurrencyLimitReservation(firstRequest.WorkspaceId, firstRequest.ContainerId),
+		"created_at", time.Now().Add(-concurrencyReservationInFlightTTL-time.Second).Unix(),
+	).Err(); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
 		t.Fatalf("expected stale counter repair to admit second request, got %v", err)
@@ -256,6 +290,70 @@ func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *
 	}
 	if usedCPU != secondRequest.Cpu {
 		t.Fatalf("expected repaired counter to track only active request CPU, got %d", usedCPU)
+	}
+}
+
+func TestSetContainerStateWithConcurrencyLimitPreservesInFlightReservationDuringRepair(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
+	firstRequest := testContainerRequest("sandbox-test-stub-inflight-first", "test-workspace", 100)
+	secondRequest := testContainerRequest("sandbox-test-stub-inflight-second", "test-workspace", 100)
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rdb.Del(context.Background(), common.RedisKeys.SchedulerContainerState(firstRequest.ContainerId)).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(firstRequest.WorkspaceId)
+	if err := rdb.HSet(context.Background(), usageKey, "repaired_at", time.Now().Add(-time.Minute).Unix()).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest)
+	var throttled *types.ThrottledByConcurrencyLimitError
+	if !errors.As(err, &throttled) {
+		t.Fatalf("expected recent in-flight reservation to be preserved and throttle second request, got %v", err)
+	}
+
+	usedCPU, err := rdb.HGet(context.Background(), usageKey, "cpu").Int64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usedCPU != firstRequest.Cpu {
+		t.Fatalf("expected repaired counter to preserve in-flight CPU, got %d", usedCPU)
+	}
+}
+
+func TestTryReserveContainerConcurrencyWaitsDuringRepair(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb).(*ContainerRedisRepository)
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
+	request := testContainerRequest("sandbox-test-stub-repairing", "test-workspace", 100)
+
+	if err := rdb.HSet(context.Background(), common.RedisKeys.WorkspaceConcurrencyLimitUsage(request.WorkspaceId),
+		"gpu_count", 0,
+		"cpu", 0,
+		"initialized", concurrencyCounterRepairing,
+		"updated_at", time.Now().Unix(),
+	).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = repo.tryReserveContainerConcurrency(quota, request)
+	if !errors.Is(err, errConcurrencyCounterRepairing) {
+		t.Fatalf("expected repair-in-progress error, got %v", err)
 	}
 }
 
