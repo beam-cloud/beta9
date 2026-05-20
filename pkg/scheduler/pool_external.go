@@ -441,7 +441,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 
 	locality := wpc.workerPoolConfig.ConfigGroup
 	if locality == "" {
-		locality = wpc.config.BlobCache.Global.DefaultLocality
+		locality = wpc.config.Cache.Global.DefaultLocality
 	}
 
 	envVars := []corev1.EnvVar{
@@ -454,7 +454,7 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 			Value: wpc.name,
 		},
 		{
-			Name:  "BLOBCACHE_LOCALITY",
+			Name:  "CACHE_LOCALITY",
 			Value: locality,
 		},
 		{
@@ -516,6 +516,14 @@ func (wpc *ExternalWorkerPoolController) getWorkerEnvironment(workerId, machineI
 		{
 			Name:  "NETWORK_PREFIX",
 			Value: machineId,
+		},
+		{
+			Name:  "CACHE_NODE_ID",
+			Value: machineId,
+		},
+		{
+			Name:  "CACHE_HOST_NETWORK",
+			Value: "true",
 		},
 		{
 			Name:  "PREEMPTABLE",
@@ -615,6 +623,18 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 		})
 	}
 
+	if workerCacheEnabled(wpc.config) {
+		volumes = append(volumes, corev1.Volume{
+			Name: cacheVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: workerCacheHostPath(wpc.config),
+					Type: &hostPathType,
+				},
+			},
+		})
+	}
+
 	hostPathDir := corev1.HostPathDirectory
 	volumes = append(volumes, corev1.Volume{
 		Name: devicePluginVolumeName,
@@ -670,6 +690,14 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      storageVolumeName,
 			MountPath: defaultStoragePath,
+			ReadOnly:  false,
+		})
+	}
+
+	if workerCacheEnabled(wpc.config) {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      cacheVolumeName,
+			MountPath: workerCacheMountPath(wpc.config),
 			ReadOnly:  false,
 		})
 	}

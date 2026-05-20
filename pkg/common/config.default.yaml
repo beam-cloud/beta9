@@ -236,7 +236,7 @@ worker:
   terminationGracePeriod: 30
   cleanupWorkerInterval: 1m
   cleanupPendingWorkerAgeLimit: 10m
-  blobCacheEnabled: true
+  cacheEnabled: true
   containerLogLinesPerHour: 6000
   failover:
     enabled: true
@@ -276,9 +276,22 @@ worker:
         # Keep the job running after checkpoint
         leave_running: true
 
-blobcache:
+cache:
+  enabled: true
+  disk:
+    enabled: true
+    hostPath: /var/lib/beta9/cache
+    mountPath: /var/lib/beta9/cache
+    maxUsagePct: 0.95
+  memory:
+    enabled: false
+    maxCachePct: 0
+  embedded:
+    # active-active runs a cache server in every worker on the node, backed by the same hostPath CAS.
+    # single-primary keeps the Redis lease-based one-server-per-node mode.
+    mode: active-active
   global:
-    coordinatorHost: blobcache.beta9.svc.cluster.local:2049
+    coordinatorHost:
     defaultLocality: default
     serverPort: 2049
     discoveryIntervalS: 5
@@ -286,14 +299,31 @@ blobcache:
     hostStorageCapacityThresholdPct: 0.95
     grpcDialTimeoutS: 1
     grpcMessageSizeBytes: 1073741824 # 1GB
+    grpcInitialWindowSize: 4194304
+    grpcInitialConnWindowSize: 33554432
+    grpcWriteBufferSize: 262144
+    grpcReadBufferSize: 262144
+    grpcMaxConcurrentStreams: 1024
     debugMode: false
     prettyLogs: true
+  server:
+    mode: node
+    diskCacheDir:
+    diskCacheMaxUsagePct: 0.95
+    enableMemoryCache: false
+    maxCachePct: 0
+    pageSizeBytes: 4000000
+    objectTtlS: 0
+    s3DownloadConcurrency: 16
+    s3DownloadChunkSize: 64000000
+    metadata:
+      mode: default
   client:
     nTopHosts: 3
-    minRetryLengthBytes: 10000000 # 10MB
+    minRetryLengthBytes: 0 # 0 retries all cache reads; increase to retry only larger reads.
     maxGetContentAttempts: 3
     token:
-    blobfs:
+    cachefs:
       maxBackgroundTasks: 256
       maxReadAheadKB: 1024
       maxWriteKB: 1024

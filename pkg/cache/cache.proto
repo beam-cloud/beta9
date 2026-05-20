@@ -1,0 +1,276 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+
+package cache;
+
+service Cache {
+  // Cache RPCs
+  rpc GetContent(CacheGetContentRequest) returns (CacheGetContentResponse) {}
+  rpc HasContent(CacheHasContentRequest) returns (CacheHasContentResponse) {}
+  rpc GetContentStream(CacheGetContentRequest) returns (stream CacheGetContentResponse) {}
+  rpc StoreContent(stream CacheStoreContentRequest) returns (CacheStoreContentResponse) {}
+  rpc StoreContentFromSource(CacheStoreContentFromSourceRequest)
+      returns (CacheStoreContentFromSourceResponse) {}
+  rpc StoreContentFromSourceWithLock(CacheStoreContentFromSourceRequest)
+      returns (CacheStoreContentFromSourceWithLockResponse) {}
+  rpc GetState(CacheGetStateRequest) returns (CacheGetStateResponse) {}
+
+  // Coordinator RPCs
+  rpc GetAvailableHosts(CacheGetAvailableHostsRequest)
+      returns (CacheGetAvailableHostsResponse) {}
+  rpc GetRegionConfig(CacheGetRegionConfigRequest)
+      returns (CacheGetRegionConfigResponse) {}
+  rpc SetClientLock(CacheSetClientLockRequest) returns (CacheSetClientLockResponse) {}
+  rpc RemoveClientLock(CacheRemoveClientLockRequest)
+      returns (CacheRemoveClientLockResponse) {}
+  rpc SetStoreFromContentLock(CacheSetStoreFromContentLockRequest)
+      returns (CacheSetStoreFromContentLockResponse) {}
+  rpc RemoveStoreFromContentLock(CacheRemoveStoreFromContentLockRequest)
+      returns (CacheRemoveStoreFromContentLockResponse) {}
+  rpc RefreshStoreFromContentLock(CacheRefreshStoreFromContentLockRequest)
+      returns (CacheRefreshStoreFromContentLockResponse) {}
+  rpc SetFsNode(CacheSetFsNodeRequest) returns (CacheSetFsNodeResponse) {}
+  rpc GetFsNode(CacheGetFsNodeRequest) returns (CacheGetFsNodeResponse) {}
+  rpc GetFsNodeChildren(CacheGetFsNodeChildrenRequest)
+      returns (CacheGetFsNodeChildrenResponse) {}
+  rpc AddFsNodeChild(CacheAddFsNodeChildRequest) returns (CacheAddFsNodeChildResponse) {}
+  rpc RemoveFsNode(CacheRemoveFsNodeRequest) returns (CacheRemoveFsNodeResponse) {}
+  rpc RemoveFsNodeChild(CacheRemoveFsNodeChildRequest)
+      returns (CacheRemoveFsNodeChildResponse) {}
+  rpc AddHostToIndex(CacheAddHostToIndexRequest) returns (CacheAddHostToIndexResponse) {}
+  rpc SetHostKeepAlive(CacheSetHostKeepAliveRequest)
+      returns (CacheSetHostKeepAliveResponse) {}
+}
+
+message CacheGetContentRequest {
+  string hash = 1;  // Hash of the content to retrieve
+  int64 offset = 2; // Offset into the content
+  int64 length = 3; // Length of the content to retrieve
+}
+
+message CacheGetContentResponse {
+  bool ok = 1;
+  bytes content = 2; // Content data
+}
+
+message CacheHasContentRequest {
+  string hash = 1; // Hash of the content to check
+}
+
+message CacheHasContentResponse {
+  bool ok = 1;
+  bool exists = 2;
+}
+
+message CacheStoreContentRequest { bytes content = 1; }
+
+message CacheStoreContentResponse {
+  bool ok = 1;
+  string hash = 2; // Hash of the stored content
+}
+
+message CacheStoreContentFromSourceWithLockResponse {
+  string hash = 1; // Hash of the stored content
+  bool ok = 2;
+  bool failed_to_acquire_lock = 3;
+  string error_msg = 4;
+}
+
+message CacheGetStateRequest {}
+
+message CacheGetStateResponse {
+  bool ok = 1;
+  string version = 2;
+  float capacity_usage_pct = 3;
+  string private_ip_addr = 4;
+}
+
+message CacheSource {
+  string path = 1;
+  string bucket_name = 2;
+  string region = 3;
+  string endpoint_url = 4;
+  string access_key = 5;
+  string secret_key = 6;
+}
+
+message CacheStoreContentFromSourceRequest { CacheSource source = 1; }
+
+message CacheStoreContentFromSourceResponse {
+  bool ok = 1;
+  string hash = 2;
+  string error_msg = 3;
+}
+
+message CacheGetAvailableHostsRequest { string locality = 1; }
+
+message CacheGetAvailableHostsResponse {
+  bool ok = 1;
+  repeated CacheHost hosts = 2;
+}
+
+message CacheGetRegionConfigRequest { string locality = 1; }
+
+message CacheGetRegionConfigResponse {
+  bool ok = 1;
+  CacheServerConfig server_config = 2;
+}
+
+message CacheServerConfig {
+  string mode = 1;
+  string disk_cache_dir = 2;
+  float disk_cache_max_usage_pct = 3;
+  int64 max_cache_pct = 4;
+  int64 page_size_bytes = 5;
+  int64 object_ttl_s = 6;
+  bool pretty_logs = 7;
+  string token = 8;
+  int64 s3_download_concurrency = 9;
+  int64 s3_download_chunk_size = 10;
+  repeated CacheSourceConfig sources = 11;
+}
+
+message CacheSourceConfig {
+  string mode = 1;
+  string filesystem_name = 2;
+  string filesystem_path = 3;
+  CacheJuiceFSConfig juicefs = 4;
+  CacheMountPointConfig mountpoint = 5;
+}
+
+message CacheJuiceFSConfig {
+  string redis_uri = 1;
+  string bucket = 2;
+  string access_key = 3;
+  string secret_key = 4;
+}
+
+message CacheMountPointConfig {
+  string bucket_name = 1;
+  string access_key = 2;
+  string secret_key = 3;
+  string region = 4;
+  string endpoint_url = 5;
+  bool force_path_style = 6;
+}
+
+message CacheHost {
+  string host_id = 1;
+  string addr = 2;
+  string private_ip_addr = 3;
+  float capacity_usage_pct = 4;
+}
+
+message CacheSetClientLockRequest {
+  string hash = 1;
+  string host_id = 2;
+}
+
+message CacheSetClientLockResponse { bool ok = 1; }
+
+message CacheRemoveClientLockRequest {
+  string hash = 1;
+  string host_id = 2;
+}
+
+message CacheRemoveClientLockResponse { bool ok = 1; }
+
+message CacheSetStoreFromContentLockRequest {
+  string locality = 1;
+  string source_path = 2;
+}
+
+message CacheSetStoreFromContentLockResponse { bool ok = 1; }
+
+message CacheRefreshStoreFromContentLockRequest {
+  string locality = 1;
+  string source_path = 2;
+}
+
+message CacheRefreshStoreFromContentLockResponse { bool ok = 1; }
+
+message CacheRemoveStoreFromContentLockRequest {
+  string locality = 1;
+  string source_path = 2;
+}
+
+message CacheRemoveStoreFromContentLockResponse { bool ok = 1; }
+
+message CacheSetFsNodeRequest {
+  string id = 1;
+  CacheFSMetadata metadata = 2;
+}
+
+message CacheSetFsNodeResponse { bool ok = 1; }
+
+message CacheGetFsNodeRequest { string id = 1; }
+
+message CacheGetFsNodeResponse {
+  bool ok = 1;
+  CacheFSMetadata metadata = 2;
+}
+
+message CacheGetFsNodeChildrenRequest { string id = 1; }
+
+message CacheGetFsNodeChildrenResponse {
+  bool ok = 1;
+  repeated CacheFSMetadata children = 2;
+}
+
+message CacheAddFsNodeChildRequest {
+  string pid = 1;
+  string id = 2;
+}
+
+message CacheAddFsNodeChildResponse { bool ok = 1; }
+
+message CacheRemoveFsNodeRequest { string id = 1; }
+
+message CacheRemoveFsNodeResponse { bool ok = 1; }
+
+message CacheRemoveFsNodeChildRequest {
+  string pid = 1;
+  string id = 2;
+}
+
+message CacheRemoveFsNodeChildResponse { bool ok = 1; }
+
+message CacheFSMetadata {
+  string pid = 1;
+  string id = 2;
+  string name = 3;
+  string path = 4;
+  string hash = 5;
+  uint64 ino = 6;
+  uint64 size = 7;
+  uint64 blocks = 8;
+  uint64 atime = 9;
+  uint64 mtime = 10;
+  uint64 ctime = 11;
+  uint32 atimensec = 12;
+  uint32 mtimensec = 13;
+  uint32 ctimensec = 14;
+  uint32 mode = 15;
+  uint32 nlink = 16;
+  uint32 rdev = 17;
+  uint32 blksize = 18;
+  uint32 padding = 19;
+  uint32 uid = 20;
+  uint32 gid = 21;
+  uint64 gen = 22;
+}
+
+message CacheAddHostToIndexRequest {
+  string locality = 1;
+  CacheHost host = 2;
+}
+
+message CacheAddHostToIndexResponse { bool ok = 1; }
+
+message CacheSetHostKeepAliveRequest {
+  string locality = 1;
+  CacheHost host = 2;
+}
+
+message CacheSetHostKeepAliveResponse { bool ok = 1; }

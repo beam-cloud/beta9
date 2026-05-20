@@ -29,6 +29,7 @@ const (
 	imagesVolumeName            string  = "beta9-images"
 	storageVolumeName           string  = "beta9-storage"
 	checkpointVolumeName        string  = "beta9-checkpoints"
+	cacheVolumeName             string  = "beta9-cache"
 	devicePluginVolumeName      string  = "kubelet-device-plugins"
 	defaultDevicePluginPath     string  = "/var/lib/kubelet/device-plugins"
 	defaultContainerName        string  = "worker"
@@ -37,6 +38,7 @@ const (
 	defaultImagesPath           string  = "/images"
 	defaultCheckpointPath       string  = "/checkpoints"
 	defaultStoragePath          string  = "/storage"
+	defaultCachePath            string  = "/var/lib/beta9/cache"
 	defaultSharedMemoryPct      float32 = 0.5
 	poolMonitoringInterval              = 1 * time.Second
 	poolHealthCheckInterval             = 10 * time.Second
@@ -85,6 +87,24 @@ type WorkerPoolControllerOptions struct {
 
 func GenerateWorkerId() string {
 	return uuid.New().String()[:8]
+}
+
+func workerCacheEnabled(config types.AppConfig) bool {
+	return config.Cache.Enabled && config.Worker.CacheEnabled && config.Cache.Disk.Enabled
+}
+
+func workerCacheHostPath(config types.AppConfig) string {
+	if config.Cache.Disk.HostPath != "" {
+		return config.Cache.Disk.HostPath
+	}
+	return defaultCachePath
+}
+
+func workerCacheMountPath(config types.AppConfig) string {
+	if config.Cache.Disk.MountPath != "" {
+		return config.Cache.Disk.MountPath
+	}
+	return defaultCachePath
 }
 
 func MonitorPoolSize(wpc WorkerPoolController,

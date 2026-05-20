@@ -4,29 +4,29 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	pb "github.com/beam-cloud/beta9/proto"
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	cedana "github.com/cedana/cedana/pkg/config"
 	corev1 "k8s.io/api/core/v1"
 )
 
 type AppConfig struct {
-	ClusterName    string                    `key:"clusterName" json:"cluster_name"`
-	DebugMode      bool                      `key:"debugMode" json:"debug_mode"`
-	PrettyLogs     bool                      `key:"prettyLogs" json:"pretty_logs"`
-	Database       DatabaseConfig            `key:"database" json:"database"`
-	GatewayService GatewayServiceConfig      `key:"gateway" json:"gateway_service"`
-	FileService    FileServiceConfig         `key:"fileService" json:"file_service"`
-	ImageService   ImageServiceConfig        `key:"imageService" json:"image_service"`
-	Storage        StorageConfig             `key:"storage" json:"storage"`
-	Worker         WorkerConfig              `key:"worker" json:"worker"`
-	Providers      ProviderConfig            `key:"providers" json:"providers"`
-	Tailscale      TailscaleConfig           `key:"tailscale" json:"tailscale"`
-	Proxy          ProxyConfig               `key:"proxy" json:"proxy"`
-	Monitoring     MonitoringConfig          `key:"monitoring" json:"monitoring"`
-	Abstractions   AbstractionConfig         `key:"abstractions" json:"abstractions"`
-	BlobCache      blobcache.BlobCacheConfig `key:"blobcache" json:"blobcache"`
-	Agent          AgentConfig               `key:"agent" json:"agent"`
+	ClusterName    string               `key:"clusterName" json:"cluster_name"`
+	DebugMode      bool                 `key:"debugMode" json:"debug_mode"`
+	PrettyLogs     bool                 `key:"prettyLogs" json:"pretty_logs"`
+	Database       DatabaseConfig       `key:"database" json:"database"`
+	GatewayService GatewayServiceConfig `key:"gateway" json:"gateway_service"`
+	FileService    FileServiceConfig    `key:"fileService" json:"file_service"`
+	ImageService   ImageServiceConfig   `key:"imageService" json:"image_service"`
+	Storage        StorageConfig        `key:"storage" json:"storage"`
+	Worker         WorkerConfig         `key:"worker" json:"worker"`
+	Providers      ProviderConfig       `key:"providers" json:"providers"`
+	Tailscale      TailscaleConfig      `key:"tailscale" json:"tailscale"`
+	Proxy          ProxyConfig          `key:"proxy" json:"proxy"`
+	Monitoring     MonitoringConfig     `key:"monitoring" json:"monitoring"`
+	Abstractions   AbstractionConfig    `key:"abstractions" json:"abstractions"`
+	Cache          cache.Config         `key:"cache" json:"cache"`
+	Agent          AgentConfig          `key:"agent" json:"agent"`
 }
 
 type DatabaseConfig struct {
@@ -377,7 +377,7 @@ type WorkerConfig struct {
 	CleanupWorkerInterval        time.Duration                 `key:"cleanupWorkerInterval" json:"cleanup_worker_interval"`
 	CleanupPendingWorkerAgeLimit time.Duration                 `key:"cleanupPendingWorkerAgeLimit" json:"cleanup_pending_worker_age_limit"`
 	TerminationGracePeriod       int64                         `key:"terminationGracePeriod"`
-	BlobCacheEnabled             bool                          `key:"blobCacheEnabled" json:"blob_cache_enabled"`
+	CacheEnabled                 bool                          `key:"cacheEnabled" json:"cache_enabled"`
 	CRIU                         CRIUConfig                    `key:"criu" json:"criu"`
 	TmpSizeLimit                 string                        `key:"tmpSizeLimit" json:"tmp_size_limit"`
 	ContainerLogLinesPerHour     int                           `key:"containerLogLinesPerHour" json:"container_log_lines_per_hour"`

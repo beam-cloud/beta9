@@ -15,13 +15,13 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/abstractions/image"
+	"github.com/beam-cloud/beta9/pkg/cache"
 	common "github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/registry"
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	types "github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/beam-cloud/clip/pkg/clip"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/beam-cloud/clip/pkg/storage"
@@ -123,7 +123,7 @@ func NewPathInfo(path string) *PathInfo {
 
 type ImageClient struct {
 	registry           *reg.ImageRegistry
-	cacheClient        *blobcache.BlobCacheClient
+	cacheClient        *cache.Client
 	imageCachePath     string
 	imageMountPath     string
 	imageBundlePath    string
@@ -224,6 +224,18 @@ func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorag
 	return nil, false
 }
 
+func clipArchiveUsesLocalData(meta *clipCommon.ClipArchiveMetadata) bool {
+	return meta != nil && meta.Header.StorageInfoLength == 0 && meta.StorageInfo == nil
+}
+
+func archivePathForMount(meta *clipCommon.ClipArchiveMetadata, archivePath, localCachePath string) string {
+	if localCachePath != "" && clipArchiveUsesLocalData(meta) {
+		return localCachePath
+	}
+
+	return archivePath
+}
+
 func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, error) {
 	imageId := request.ImageId
 	isBuildContainer := strings.HasPrefix(request.ContainerId, types.BuildContainerPrefix)
@@ -309,9 +321,9 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 		retryCount := 0
 		operation := func() error {
 			retryCount++
-			baseBlobFsContentPath := fmt.Sprintf("%s/%s", baseFileCachePath, sourcePath)
-			if _, err := os.Stat(baseBlobFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, sourcePath) {
-				localCachePath = baseBlobFsContentPath
+			baseCacheFsContentPath := filepath.Join(baseFileCachePath, sourcePath)
+			if _, err := os.Stat(baseCacheFsContentPath); err == nil && c.cacheClient.IsPathCachedNearby(ctx, sourcePath) {
+				localCachePath = baseCacheFsContentPath
 				return nil
 			}
 
@@ -333,7 +345,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				Lock:       true,
 			})
 			if err != nil {
-				if err == blobcache.ErrUnableToAcquireLock {
+				if err == cache.ErrUnableToAcquireLock {
 					log.Warn().Str("image_id", imageId).Int("attempt", retryCount).Msg("unable to acquire lock, retrying...")
 					return err
 				}
@@ -343,7 +355,7 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 				return err
 			}
 
-			localCachePath = baseBlobFsContentPath
+			localCachePath = baseCacheFsContentPath
 			outputLogger.Info(fmt.Sprintf("Image <%s> cached in worker region\n", imageId))
 			metrics.RecordImagePullTime(time.Since(pullStartTime))
 			return nil
@@ -358,14 +370,15 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 			log.Error().Str("image_id", imageId).Err(err).Msg("giving up on caching image after retries")
 			outputLogger.Error(fmt.Sprintf("Failed to cache image <%s> after retries: %v\n", imageId, err))
 		}
-		metrics.RecordWorkerStartupPhase("clip_blobcache", time.Since(phaseStart), request, map[string]string{
+		metrics.RecordWorkerStartupPhase("clip_cache", time.Since(phaseStart), request, map[string]string{
 			"clip_version": fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
 			"success":      fmt.Sprintf("%t", err == nil),
 		})
 	}
 
+	mountArchivePath := archivePathForMount(meta, archivePath, localCachePath)
 	var mountOptions *clip.MountOptions = &clip.MountOptions{
-		ArchivePath:           archivePath,
+		ArchivePath:           mountArchivePath,
 		MountPoint:            c.imageMountPoint(imageId),
 		CachePath:             localCachePath,
 		ContentCache:          c.cacheClient,
@@ -648,8 +661,8 @@ func (c *ImageClient) Cleanup() error {
 		return true // Continue iteration
 	})
 
-	log.Info().Str("path", c.imageCachePath).Msg("cleaning up blobfs image cache")
-	if c.config.BlobCache.Client.BlobFs.Enabled && c.cacheClient != nil {
+	log.Info().Str("path", c.imageCachePath).Msg("cleaning up cachefs image cache")
+	if c.config.Cache.Client.CacheFS.Enabled && c.cacheClient != nil {
 		err := c.cacheClient.Cleanup()
 		if err != nil {
 			return err

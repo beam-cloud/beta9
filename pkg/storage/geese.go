@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/types"
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/rs/zerolog/log"
 	core "github.com/yandex-cloud/geesefs/core"
 	cfg "github.com/yandex-cloud/geesefs/core/cfg"
@@ -30,10 +30,10 @@ type GeeseStorage struct {
 	mfs         core.MountedFS
 	fs          *core.Goofys
 	mu          sync.Mutex
-	cacheClient *blobcache.BlobCacheClient
+	cacheClient *cache.Client
 }
 
-func NewGeeseStorage(config types.GeeseConfig, cacheClient *blobcache.BlobCacheClient) (Storage, error) {
+func NewGeeseStorage(config types.GeeseConfig, cacheClient *cache.Client) (Storage, error) {
 	return &GeeseStorage{
 		config:      config,
 		mfs:         nil,

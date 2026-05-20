@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/rs/zerolog/log"
 
@@ -53,6 +53,7 @@ type Worker struct {
 	runcRuntime             runtime.Runtime
 	gvisorRuntime           runtime.Runtime
 	containerServer         *ContainerRuntimeServer
+	cacheManager            *WorkerCacheManager
 	fileCacheManager        *FileCacheManager
 	criuManager             CRIUManager
 	containerNetworkManager *ContainerNetworkManager
@@ -189,22 +190,21 @@ func NewWorker() (*Worker, error) {
 
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
 
-	var cacheClient *blobcache.BlobCacheClient = nil
-	if config.Worker.BlobCacheEnabled {
-		cacheClient, err = blobcache.NewBlobCacheClient(ctx, config.BlobCache)
-		if err == nil {
-			err = cacheClient.WaitForHosts(defaultCacheWaitTime)
-		}
-
-		if err != nil {
-			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
-			cacheClient = nil
-		}
-	}
-
 	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
 	if !poolFound {
 		return nil, errors.New("invalid worker pool name")
+	}
+
+	var cacheManager *WorkerCacheManager
+	var cacheClient *cache.Client
+	if config.Cache.Enabled && config.Worker.CacheEnabled {
+		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, redisClient, workerId, podAddr)
+		cacheClient, err = cacheManager.Start()
+		if err != nil {
+			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
+			cacheClient = nil
+			cacheManager = nil
+		}
 	}
 
 	// Create container runtimes based on pool configuration
@@ -321,6 +321,7 @@ func NewWorker() (*Worker, error) {
 		runtime:                 defaultRuntime,
 		runcRuntime:             runcRuntime,
 		gvisorRuntime:           gvisorRuntime,
+		cacheManager:            cacheManager,
 		storageManager:          storageManager,
 		fileCacheManager:        fileCacheManager,
 		containerGPUManager:     NewContainerNvidiaManager(uint32(gpuCount)),
@@ -817,6 +818,13 @@ func (s *Worker) shutdown() error {
 		WorkerId: s.workerId,
 	})); err != nil {
 		errs = errors.Join(errs, err)
+	}
+
+	if s.cacheManager != nil {
+		err := s.cacheManager.Close()
+		if err != nil {
+			errs = errors.Join(errs, fmt.Errorf("failed to cleanup embedded cache: %v", err))
+		}
 	}
 
 	err := s.userDataStorage.Unmount(s.config.Storage.FilesystemPath)

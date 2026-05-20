@@ -73,6 +73,13 @@ func (s *GenericPodService) SandboxStatus(ctx context.Context, in *pb.PodSandbox
 		}, nil
 	}
 
+	if !resp.Ok {
+		return &pb.PodSandboxStatusResponse{
+			Ok:       false,
+			ErrorMsg: resp.ErrorMsg,
+		}, nil
+	}
+
 	return &pb.PodSandboxStatusResponse{
 		Ok:       true,
 		Status:   resp.Status,

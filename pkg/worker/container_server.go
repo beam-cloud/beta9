@@ -635,6 +635,26 @@ func (s *ContainerRuntimeServer) ContainerSandboxStatus(ctx context.Context, in 
 		}, nil
 	}
 
+	if in.Pid == 0 {
+		status := "pending"
+		if instance.SandboxProcessManagerReady {
+			status = "running"
+		}
+
+		return &pb.ContainerSandboxStatusResponse{
+			Ok:       true,
+			Status:   status,
+			ExitCode: -1,
+		}, nil
+	}
+
+	if instance.SandboxProcessManager == nil {
+		return &pb.ContainerSandboxStatusResponse{
+			Ok:       false,
+			ErrorMsg: "Sandbox process manager is not ready",
+		}, nil
+	}
+
 	exitCode, err := instance.SandboxProcessManager.Status(int(in.Pid))
 	if err != nil {
 		return &pb.ContainerSandboxStatusResponse{
