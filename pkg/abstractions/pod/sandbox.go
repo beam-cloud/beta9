@@ -4,14 +4,21 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
+)
+
+const (
+	sandboxConnectWorkerAddressTimeout = 1500 * time.Millisecond
+	sandboxConnectWorkerDialTimeout    = 2 * time.Second
 )
 
 func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
@@ -19,9 +26,10 @@ func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxEx
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
+		logSandboxConnectFailure(err, in.ContainerId)
 		return &pb.PodSandboxExecResponse{
 			Ok:       false,
-			ErrorMsg: "Failed to connect to sandbox",
+			ErrorMsg: sandboxConnectErrorMessage(err),
 		}, nil
 	}
 
@@ -535,43 +543,92 @@ func (s *GenericPodService) SandboxConnect(ctx context.Context, in *pb.PodSandbo
 }
 
 func (s *GenericPodService) getClient(ctx context.Context, containerId, token string, workspaceId string) (*common.ContainerClient, *types.ContainerState, error) {
+	phaseStart := time.Now()
 	container, err := s.containerRepo.GetContainerState(containerId)
 	if err != nil {
+		metrics.RecordSandboxConnectPhase("container_state_lookup", workspaceId, "", "", "state_lookup_failed", false, time.Since(phaseStart))
 		return nil, nil, err
 	}
 
 	if container == nil {
+		metrics.RecordSandboxConnectPhase("container_state_lookup", workspaceId, "", "", "container_not_found", false, time.Since(phaseStart))
 		return nil, nil, errors.New("container not found")
 	}
 
 	if container.WorkspaceId != workspaceId {
+		metrics.RecordSandboxConnectPhase("container_state_lookup", workspaceId, container.StubId, string(container.Status), "invalid_workspace", false, time.Since(phaseStart))
 		return nil, nil, errors.New("invalid workspace")
 	}
+	metrics.RecordSandboxConnectPhase("container_state_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
 	cacheKey := containerId + ":" + token
 	if cached, ok := s.clientCache.Load(cacheKey); ok {
 		if client, ok := cached.(*common.ContainerClient); ok {
+			metrics.RecordSandboxConnectPhase("client_cache", workspaceId, container.StubId, string(container.Status), "", true, 0)
 			return client, container, nil
 		}
 	}
 
-	hostname, err := s.containerRepo.GetWorkerAddress(ctx, containerId)
+	phaseStart = time.Now()
+	addressCtx, cancel := context.WithTimeout(ctx, sandboxConnectWorkerAddressTimeout)
+	hostname, err := s.containerRepo.GetWorkerAddress(addressCtx, containerId)
+	cancel()
 	if err != nil {
+		metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "worker_address_unavailable", false, time.Since(phaseStart))
 		return nil, nil, err
 	}
+	metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
-	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, s.tailscale, s.config.Tailscale)
+	phaseStart = time.Now()
+	dialCtx, cancel := context.WithTimeout(ctx, sandboxConnectWorkerDialTimeout)
+	conn, err := network.ConnectToHost(dialCtx, hostname, sandboxConnectWorkerDialTimeout, s.tailscale, s.config.Tailscale)
+	cancel()
 	if err != nil {
+		metrics.RecordSandboxConnectPhase("worker_dial", workspaceId, container.StubId, string(container.Status), "worker_dial_failed", false, time.Since(phaseStart))
 		return nil, nil, err
 	}
+	metrics.RecordSandboxConnectPhase("worker_dial", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
+	phaseStart = time.Now()
 	client, err := common.NewContainerClient(hostname, token, conn)
 	if err != nil {
+		metrics.RecordSandboxConnectPhase("client_create", workspaceId, container.StubId, string(container.Status), "client_create_failed", false, time.Since(phaseStart))
 		return nil, nil, err
 	}
+	metrics.RecordSandboxConnectPhase("client_create", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
 	s.clientCache.Store(cacheKey, client)
 	return client, container, nil
+}
+
+func sandboxConnectErrorMessage(_ error) string {
+	return "Failed to connect to sandbox"
+}
+
+func logSandboxConnectFailure(err error, containerId string) {
+	event := log.Warn()
+	if isTransientSandboxConnectFailure(err) {
+		event = log.Trace()
+	}
+
+	event.Err(err).Str("container_id", containerId).Msg("failed to connect to sandbox for exec")
+}
+
+func isTransientSandboxConnectFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var stateNotFound *types.ErrContainerStateNotFound
+	if errors.As(err, &stateNotFound) {
+		return true
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "failed to schedule container") ||
+		strings.Contains(msg, "context cancelled while trying to get worker addr") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "deadline exceeded")
 }
 
 func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSandboxUpdateTTLRequest) (*pb.PodSandboxUpdateTTLResponse, error) {

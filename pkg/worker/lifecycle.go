@@ -8,11 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	common "github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	types "github.com/beam-cloud/beta9/pkg/types"
@@ -36,9 +38,6 @@ const (
 // handleStopContainerEvent used by the event bus to stop a container.
 // Containers are stopped by sending a stop container event to stopContainerChan.
 func (s *Worker) handleStopContainerEvent(event *common.Event) bool {
-	s.containerLock.Lock()
-	defer s.containerLock.Unlock()
-
 	stopArgs, err := types.ToStopContainerArgs(event.Args)
 	if err != nil {
 		log.Error().Str("worker_id", s.workerId).Msgf("failed to parse stop container args: %v", err)
@@ -178,6 +177,7 @@ func (s *Worker) deleteContainer(containerId string) {
 // Spawn a single container and stream output to stdout/stderr
 func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerRequest) error {
 	containerId := request.ContainerId
+	startupStartedAt := time.Now()
 
 	caps := s.runtime.Capabilities()
 
@@ -195,22 +195,28 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		return fmt.Errorf("runtime %s does not support GPU workloads", s.runtime.Name())
 	}
 
-	s.containerInstances.Set(containerId, &ContainerInstance{
+	instance := &ContainerInstance{
 		Id:        containerId,
 		StubId:    request.StubId,
 		LogBuffer: common.NewLogBuffer(),
 		Request:   request,
 		Runtime:   s.runtime,
-	})
+	}
+	if existing, exists := s.containerInstances.Get(containerId); exists {
+		instance.StopReason = existing.StopReason
+	}
+	s.containerInstances.Set(containerId, instance)
 
 	bundlePath := filepath.Join(s.imageMountPath, request.ImageId)
 
 	// Set worker hostname
 	hostname := fmt.Sprintf("%s:%d", s.podAddr, s.containerServer.port)
+	phaseStart := time.Now()
 	_, err := handleGRPCResponse(s.containerRepoClient.SetWorkerAddress(context.Background(), &pb.SetWorkerAddressRequest{
 		ContainerId: containerId,
 		Address:     hostname,
 	}))
+	metrics.RecordWorkerStartupPhase("set_worker_address", time.Since(phaseStart), request, nil)
 	if err != nil {
 		return err
 	}
@@ -223,7 +229,9 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Attempt to pull image
 	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
+	phaseStart = time.Now()
 	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
+	metrics.RecordWorkerStartupPhase("pull_lazy", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		if !request.IsBuildRequest() {
 			log.Error().Str("container_id", containerId).Msgf("failed to pull image: %v", err)
@@ -234,10 +242,15 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		case <-ctx.Done():
 			return nil
 		default:
+			phaseStart = time.Now()
 			if err := s.buildOrPullBaseImage(ctx, request, containerId, outputLogger); err != nil {
+				metrics.RecordWorkerStartupPhase("build_or_pull_base_image", time.Since(phaseStart), request, map[string]string{"success": "false"})
 				return err
 			}
+			metrics.RecordWorkerStartupPhase("build_or_pull_base_image", time.Since(phaseStart), request, map[string]string{"success": "true"})
+			phaseStart = time.Now()
 			elapsed, err = s.imageClient.PullLazy(ctx, request, outputLogger)
+			metrics.RecordWorkerStartupPhase("pull_lazy_after_build", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 			if err != nil {
 				return err
 			}
@@ -258,63 +271,53 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 		go func() {
 			s.finalizeContainer(containerId, request, &exitCode)
 		}()
+		metrics.RecordWorkerStartupLatency(time.Since(startupStartedAt), request)
 		return nil
 	}
 
-	// Determine how many ports we need to expose
-	portsToExpose := len(request.Ports)
-	if portsToExpose == 0 {
-		portsToExpose = 1
-		request.Ports = []uint32{uint32(containerInnerPort)}
-	}
-
-	// Expose SSH port
-	request.Ports = append(request.Ports, uint32(types.WorkerShellPort))
-	portsToExpose++
-
-	// Expose sandbox process manager port
-	if request.Stub.Type.Kind() == types.StubTypeSandbox {
-		request.Ports = append(request.Ports, uint32(types.WorkerSandboxProcessManagerPort))
-		portsToExpose++
-	}
-
-	// Only expose checkpoint exposed ports if they are available
-	if request.Checkpoint != nil {
-		request.Ports = request.Checkpoint.ExposedPorts
-		portsToExpose = len(request.Ports)
-	}
-
-	bindPorts := make([]int, 0, portsToExpose)
-	for i := 0; i < portsToExpose; i++ {
-		bindPort, err := getRandomFreePort()
-		if err != nil {
-			return err
-		}
-		bindPorts = append(bindPorts, bindPort)
+	phaseStart = time.Now()
+	requestedPorts := append([]uint32(nil), request.Ports...)
+	request.Ports = portsForRequest(request)
+	bindPorts, err := allocateBindPorts(len(request.Ports))
+	if err != nil {
+		return err
 	}
 
 	log.Info().Str("container_id", containerId).Msgf("acquired ports: %v", bindPorts)
+	metrics.RecordWorkerStartupPhase("port_allocation", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(bindPorts))})
 
 	// Read spec from bundle; guard against empty image IDs
 	if request.ImageId == "" {
 		return fmt.Errorf("empty image id in request")
 	}
+	phaseStart = time.Now()
 	initialBundleSpec, _ := s.readBundleConfig(request)
+	metrics.RecordWorkerStartupPhase("read_bundle_config", time.Since(phaseStart), request, map[string]string{"derived": fmt.Sprintf("%t", initialBundleSpec == nil)})
 
+	startupPortBindings := startupPortBindingsForRequest(request, requestedPorts, bindPorts)
 	opts := &ContainerOptions{
-		BundlePath:   bundlePath,
-		HostBindPort: bindPorts[0],
-		BindPorts:    bindPorts,
-		InitialSpec:  initialBundleSpec,
+		BundlePath:          bundlePath,
+		HostBindPort:        bindPorts[0],
+		BindPorts:           bindPorts,
+		StartupPortBindings: startupPortBindings,
+		InitialSpec:         initialBundleSpec,
+		StartupStartedAt:    startupStartedAt,
 	}
 
+	phaseStart = time.Now()
 	err = s.containerMountManager.SetupContainerMounts(ctx, request, outputLogger)
+	metrics.RecordWorkerStartupPhase("setup_mounts", time.Since(phaseStart), request, map[string]string{
+		"mount_count": fmt.Sprintf("%d", len(request.Mounts)),
+		"success":     fmt.Sprintf("%t", err == nil),
+	})
 	if err != nil {
 		s.containerLogger.Log(request.ContainerId, request.StubId, "failed to setup container mounts: %v", err)
 	}
 
 	// Generate dynamic runc spec for this container
+	phaseStart = time.Now()
 	spec, err := s.specFromRequest(request, opts)
+	metrics.RecordWorkerStartupPhase("spec_from_request", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -322,42 +325,121 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	// Set an address (ip:port) for the pod/container in Redis. Depending on the stub type,
 	// gateway may need to directly interact with this pod/container.
-	containerAddr := fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[0])
-	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
-		ContainerId: request.ContainerId,
-		Address:     containerAddr,
-	}))
-	if err != nil {
-		return err
+	if len(opts.StartupPortBindings) > 0 {
+		containerAddr := fmt.Sprintf("%s:%d", s.podAddr, opts.StartupPortBindings[0].HostPort)
+		phaseStart = time.Now()
+		_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddress(context.Background(), &pb.SetContainerAddressRequest{
+			ContainerId: request.ContainerId,
+			Address:     containerAddr,
+		}))
+		metrics.RecordWorkerStartupPhase("set_container_address", time.Since(phaseStart), request, nil)
+		if err != nil {
+			return err
+		}
+		log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
 	}
-	log.Info().Str("container_id", containerId).Msgf("set container address: %s", containerAddr)
 
-	addressMap := make(map[int32]string)
-	for idx, containerPort := range request.Ports {
-		addressMap[int32(containerPort)] = fmt.Sprintf("%s:%d", s.podAddr, opts.BindPorts[idx])
+	addressMap := make(map[int32]string, len(opts.StartupPortBindings))
+	for _, binding := range opts.StartupPortBindings {
+		addressMap[int32(binding.ContainerPort)] = fmt.Sprintf("%s:%d", s.podAddr, binding.HostPort)
 	}
+	phaseStart = time.Now()
 	_, err = handleGRPCResponse(s.containerRepoClient.SetContainerAddressMap(context.Background(), &pb.SetContainerAddressMapRequest{
 		ContainerId: request.ContainerId,
 		AddressMap:  addressMap,
 	}))
+	metrics.RecordWorkerStartupPhase("set_container_address_map", time.Since(phaseStart), request, map[string]string{"port_count": fmt.Sprintf("%d", len(addressMap))})
 	if err != nil {
 		return err
 	}
 
 	log.Info().Str("container_id", containerId).Msgf("set container address map: %v", addressMap)
 
-	go s.containerWg.Add(1)
+	s.containerWg.Add(1)
 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 		// Start the container
+		phaseStart = time.Now()
 		go s.spawn(request, spec, outputLogger, opts)
+		metrics.RecordWorkerStartupPhase("spawn_enqueue", time.Since(phaseStart), request, nil)
 	}
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
+}
+
+func portsForRequest(request *types.ContainerRequest) []uint32 {
+	if request.Checkpoint != nil {
+		return request.Checkpoint.ExposedPorts
+	}
+
+	ports := request.Ports
+	if len(ports) == 0 {
+		ports = []uint32{uint32(containerInnerPort)}
+	}
+
+	ports = append(ports, uint32(types.WorkerShellPort))
+	if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		ports = append(ports, uint32(types.WorkerSandboxProcessManagerPort))
+	}
+
+	return ports
+}
+
+func startupPortBindingsForRequest(request *types.ContainerRequest, requestedPorts []uint32, bindPorts []int) []PortBinding {
+	if len(request.Ports) == 0 || len(bindPorts) == 0 {
+		return nil
+	}
+
+	exposePorts := make(map[uint32]struct{}, len(request.Ports))
+	if request.Checkpoint != nil {
+		for _, port := range request.Ports {
+			exposePorts[port] = struct{}{}
+		}
+	} else if request.Stub.Type.Kind() == types.StubTypeSandbox {
+		for _, port := range requestedPorts {
+			exposePorts[port] = struct{}{}
+		}
+	} else {
+		for _, port := range request.Ports {
+			exposePorts[port] = struct{}{}
+		}
+	}
+
+	if len(exposePorts) == 0 {
+		return nil
+	}
+
+	bindings := make([]PortBinding, 0, len(exposePorts))
+	for idx, containerPort := range request.Ports {
+		if idx >= len(bindPorts) {
+			break
+		}
+		if _, ok := exposePorts[containerPort]; !ok {
+			continue
+		}
+		bindings = append(bindings, PortBinding{
+			HostPort:      bindPorts[idx],
+			ContainerPort: int(containerPort),
+		})
+	}
+
+	return bindings
+}
+
+func allocateBindPorts(count int) ([]int, error) {
+	bindPorts := make([]int, 0, count)
+	for i := 0; i < count; i++ {
+		bindPort, err := getRandomFreePort()
+		if err != nil {
+			return nil, err
+		}
+		bindPorts = append(bindPorts, bindPort)
+	}
+	return bindPorts, nil
 }
 
 func (s *Worker) buildOrPullBaseImage(ctx context.Context, request *types.ContainerRequest, containerId string, outputLogger *slog.Logger) error {
@@ -718,45 +800,11 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Every 30 seconds, update container status
 	go s.updateContainerStatus(request)
 
-	go func() {
-		time.Sleep(time.Second)
-
-		s.containerLock.Lock()
-		defer s.containerLock.Unlock()
-
-		_, exists := s.containerInstances.Get(containerId)
-		if !exists {
-			return
-		}
-
-		resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
-		if err != nil {
-			notFoundErr := &types.ErrContainerStateNotFound{}
-
-			if notFoundErr.From(err) {
-				log.Warn().Str("container_id", containerId).Msg("container state not found, returning")
-				return
-			}
-		} else if resp.State.Status == string(types.ContainerStatusStopping) {
-			log.Warn().Str("container_id", containerId).Msg("container should be stopping, force killing")
-			s.stopContainer(containerId, true)
-			return
-		}
-
-		// Update container status to running
-		_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
-			ContainerId:   containerId,
-			Status:        string(types.ContainerStatusRunning),
-			ExpirySeconds: int64(types.ContainerStateTtlS),
-		}))
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to update container status to running: %v", err)
-		}
-	}()
-
 	// Setup container overlay filesystem
 	var err error
+	phaseStart := time.Now()
 	err = containerInstance.Overlay.Setup()
+	metrics.RecordWorkerStartupPhase("overlay_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup overlay: %v", err)
 		return
@@ -767,7 +815,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	spec.Root.Path = containerInstance.Overlay.TopLayerPath()
 
 	// Setup container network namespace / devices
+	phaseStart = time.Now()
 	err = s.containerNetworkManager.Setup(containerId, spec, request)
+	metrics.RecordWorkerStartupPhase("network_setup", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to setup container network: %v", err)
 		return
@@ -776,7 +826,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	// Only inject GPU devices if runtime supports GPU
 	if request.RequiresGPU() && s.runtime.Capabilities().GPU {
 		// Assign n-number of GPUs to a container
+		phaseStart = time.Now()
 		assignedDevices, err := s.containerGPUManager.AssignGPUDevices(request.ContainerId, request.GpuCount)
+		metrics.RecordWorkerStartupPhase("gpu_assignment", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		if err != nil {
 			log.Error().Str("container_id", request.ContainerId).Msgf("failed to assign GPUs: %v", err)
 			return
@@ -805,13 +857,20 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Expose the bind ports
-	for idx, bindPort := range opts.BindPorts {
-		err = s.containerNetworkManager.ExposePort(containerId, bindPort, int(request.Ports[idx]))
-		if err != nil {
-			log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
-			return
-		}
+	phaseStart = time.Now()
+	err = s.containerNetworkManager.ExposePorts(containerId, opts.StartupPortBindings)
+	if err != nil {
+		metrics.RecordWorkerStartupPhase("network_expose_ports", time.Since(phaseStart), request, map[string]string{
+			"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings)),
+			"success":    "false",
+		})
+		log.Error().Str("container_id", containerId).Msgf("failed to expose container bind port: %v", err)
+		return
 	}
+	metrics.RecordWorkerStartupPhase("network_expose_ports", time.Since(phaseStart), request, map[string]string{
+		"port_count": fmt.Sprintf("%d", len(opts.StartupPortBindings)),
+		"success":    "true",
+	})
 
 	// Modify sandbox entry point to point to process manager binary
 	if request.Stub.Type.Kind() == types.StubTypeSandbox {
@@ -821,13 +880,16 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
+		phaseStart = time.Now()
 		instance.SandboxProcessManager, err = goproc.NewGoProcClient(ctx, instance.ContainerIp, uint(types.WorkerSandboxProcessManagerPort))
+		metrics.RecordWorkerStartupPhase("sandbox_process_manager_client", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 		if err != nil {
 			log.Error().Str("container_id", containerId).Msgf("failed to create sandbox process manager client: %v", err)
 			return
 		}
 
 		instance.SandboxProcessManagerReady = false
+		instance.ProcessManagerReadyChan = make(chan struct{})
 		s.containerInstances.Set(containerId, instance)
 
 		spec.Process.Args = []string{types.WorkerSandboxProcessManagerContainerPath}
@@ -854,10 +916,19 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	// Prepare spec for the selected runtime
+	phaseStart = time.Now()
 	if err := s.runtime.Prepare(ctx, spec); err != nil {
+		metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
+			"runtime": s.runtime.Name(),
+			"success": "false",
+		})
 		log.Error().Str("container_id", containerId).Msgf("failed to prepare spec for runtime: %v", err)
 		return
 	}
+	metrics.RecordWorkerStartupPhase("runtime_prepare", time.Since(phaseStart), request, map[string]string{
+		"runtime": s.runtime.Name(),
+		"success": "true",
+	})
 
 	// Write container config spec to disk
 	configContents, err := json.MarshalIndent(spec, "", " ")
@@ -866,7 +937,9 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 
 	configPath := filepath.Join(spec.Root.Path, specBaseName)
+	phaseStart = time.Now()
 	err = os.WriteFile(configPath, configContents, 0644)
+	metrics.RecordWorkerStartupPhase("config_write", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Msgf("failed to write container config: %v", err)
 		return
@@ -879,6 +952,22 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	go s.workerUsageMetrics.EmitContainerUsage(ctx, request)
 	go s.eventRepo.PushContainerStartedEvent(containerId, s.workerId, request)
 	defer func() { go s.eventRepo.PushContainerStoppedEvent(containerId, s.workerId, request, exitCode) }()
+
+	phaseStart = time.Now()
+	releaseStartupSlot := func() {}
+	if s.containerStartSem != nil {
+		s.containerStartSem <- struct{}{}
+		var releaseOnce sync.Once
+		releaseStartupSlot = func() {
+			releaseOnce.Do(func() {
+				<-s.containerStartSem
+			})
+		}
+		defer releaseStartupSlot()
+	}
+	metrics.RecordWorkerStartupPhase("worker_start_queue_wait", time.Since(phaseStart), request, map[string]string{
+		"limit": fmt.Sprintf("%d", s.containerStartLimit),
+	})
 
 	startedChan := make(chan int, 1)
 	checkpointPIDChan := make(chan int, 1)
@@ -898,27 +987,31 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 			return
 		}
 
+		releaseStartupSlot()
+
 		monitorPIDChan <- pid
 		checkpointPIDChan <- pid
 
-		// For sandboxes, wait for process manager to be ready before allowing exec calls
 		if request.Stub.Type.Kind() == types.StubTypeSandbox {
 			instance, exists := s.containerInstances.Get(containerId)
-			if exists && instance.SandboxProcessManager != nil {
+			if !exists || instance.SandboxProcessManager == nil {
+				return
+			}
 
-				// Wait for process manager to be ready - this blocks until ready or timeout
-				if s.waitForProcessManager(ctx, containerId, instance) {
-					instance.SandboxProcessManagerReady = true
-					s.containerInstances.Set(containerId, instance)
+			phaseStart := time.Now()
+			processManagerReady := s.waitForProcessManager(ctx, containerId, instance)
+			metrics.RecordWorkerStartupPhase("sandbox_process_manager_ready", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", processManagerReady)})
 
-					// Now that process manager is ready, start Docker daemon if enabled
-					if request.DockerEnabled {
-						go s.startDockerDaemon(ctx, containerId, instance)
-					}
+			instance.signalProcessManagerReadiness(processManagerReady)
+			s.containerInstances.Set(containerId, instance)
 
-				} else {
-					log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
-				}
+			if !processManagerReady {
+				log.Error().Str("container_id", containerId).Msg("failed to initialize process manager - sandbox may not be functional")
+				return
+			}
+
+			if request.DockerEnabled {
+				go s.startDockerDaemon(ctx, containerId, instance)
 			}
 		}
 	}()
@@ -930,7 +1023,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 		s.setupOOMWatcher(ctx, containerId, pid, spec, request, outputLogger, &isOOMKilled)
 	}()
 
-	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan)
+	exitCode, _ = s.runContainer(ctx, request, outputLogger, outputWriter, startedChan, checkpointPIDChan, opts.StartupStartedAt)
 
 	stopReason := types.StopContainerReasonUnknown
 	containerInstance, exists = s.containerInstances.Get(containerId)
@@ -974,7 +1067,7 @@ func (s *Worker) spawn(request *types.ContainerRequest, spec *specs.Spec, output
 	}
 }
 
-func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int) (int, error) {
+func (s *Worker) runContainer(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger, outputWriter *common.OutputWriter, startedChan chan int, checkpointPIDChan chan int, startupStartedAt time.Time) (int, error) {
 	instance, exists := s.containerInstances.Get(request.ContainerId)
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
@@ -1008,7 +1101,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 		if !restored && !request.Stub.Type.IsDeployment() {
 			return exitCode, err
 		} else if !restored {
-			// Disable checkpoing flag if the restore fails
+			// Disable checkpoint flag if the restore fails
 			request.CheckpointEnabled = false
 		}
 	}
@@ -1022,16 +1115,97 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	}
 
 	bundlePath := filepath.Dir(request.ConfigPath)
+	runtimeStartedChan := make(chan int, 1)
+	runtimeStartedDone := make(chan struct{})
+	runtimeStartedHandled := make(chan struct{})
+	runtimeStart := time.Now()
+
+	handleRuntimeStarted := func(pid int) {
+		if instance, exists := s.containerInstances.Get(request.ContainerId); exists {
+			instance.RuntimeStarted = true
+			instance.RuntimePid = pid
+			instance.RuntimeStartedAt = time.Now().Unix()
+			s.containerInstances.Set(request.ContainerId, instance)
+		}
+
+		metrics.RecordWorkerStartupPhase("runtime_start_to_pid", time.Since(runtimeStart), request, map[string]string{
+			"runtime": instance.Runtime.Name(),
+		})
+		select {
+		case startedChan <- pid:
+		case <-ctx.Done():
+			return
+		}
+		s.markContainerRunning(request, startupStartedAt)
+	}
+
+	go func() {
+		defer close(runtimeStartedHandled)
+		waitForRuntimeStarted(ctx, runtimeStartedChan, runtimeStartedDone, handleRuntimeStarted)
+	}()
+
 	exitCode, err := instance.Runtime.Run(ctx, request.ContainerId, bundlePath, &runtime.RunOpts{
 		OutputWriter:  outputWriter,
-		Started:       startedChan,
+		Started:       runtimeStartedChan,
 		DockerEnabled: request.DockerEnabled,
 	})
+	close(runtimeStartedDone)
+	<-runtimeStartedHandled
 	if err != nil {
 		log.Warn().Str("container_id", request.ContainerId).Err(err).Msgf("error running container from bundle, exit code %d", exitCode)
 	}
 
 	return exitCode, err
+}
+
+func (s *Worker) markContainerRunning(request *types.ContainerRequest, startupStartedAt time.Time) {
+	containerId := request.ContainerId
+	resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+	if err != nil {
+		notFoundErr := &types.ErrContainerStateNotFound{}
+		if notFoundErr.From(err) {
+			log.Warn().Str("container_id", containerId).Msg("container state not found, returning")
+			return
+		}
+
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to get container state before marking running")
+		return
+	}
+
+	if resp.State.Status == string(types.ContainerStatusStopping) {
+		log.Info().Str("container_id", containerId).Msg("container started after stop request, sending stop signal")
+		s.stopContainer(containerId, false)
+		return
+	}
+
+	phaseStart := time.Now()
+	_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+		ContainerId:   containerId,
+		Status:        string(types.ContainerStatusRunning),
+		ExpirySeconds: int64(types.ContainerStateTtlS),
+	}))
+	metrics.RecordWorkerStartupPhase("set_running_status", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to update container status to running")
+		return
+	}
+	if !startupStartedAt.IsZero() {
+		metrics.RecordWorkerStartupLatency(time.Since(startupStartedAt), request)
+	}
+}
+
+func waitForRuntimeStarted(ctx context.Context, runtimeStarted <-chan int, runtimeDone <-chan struct{}, handle func(int)) {
+	select {
+	case pid := <-runtimeStarted:
+		handle(pid)
+	case <-ctx.Done():
+	case <-runtimeDone:
+		select {
+		case pid := <-runtimeStarted:
+			handle(pid)
+		default:
+		}
+	}
 }
 
 func (s *Worker) createOverlay(request *types.ContainerRequest, bundlePath string) *common.ContainerOverlay {

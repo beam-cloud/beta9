@@ -98,6 +98,9 @@ func NewAutoscaledInstance(ctx context.Context, cfg *AutoscaledInstanceConfig) (
 	if cfg.Stub.Type.IsDeployment() {
 		failedContainerThreshold = types.FailedDeploymentContainerThreshold
 	}
+	if cfg.Stub.Type == types.StubType(types.StubTypeSandbox) {
+		failedContainerThreshold = 0
+	}
 
 	instance := &AutoscaledInstance{
 		Lock:                     lock,
@@ -232,7 +235,7 @@ func (i *AutoscaledInstance) HandleScalingEvent(desiredContainers int) error {
 		return err
 	}
 
-	if len(state.FailedContainers) >= i.FailedContainerThreshold {
+	if i.FailedContainerThreshold > 0 && len(state.FailedContainers) >= i.FailedContainerThreshold {
 		desiredContainers = 0
 	}
 
@@ -325,7 +328,7 @@ func (i *AutoscaledInstance) State() (*AutoscaledInstanceState, error) {
 }
 
 func (i *AutoscaledInstance) handleStubEvents(failedContainers []string) {
-	if len(failedContainers) >= i.FailedContainerThreshold {
+	if i.FailedContainerThreshold > 0 && len(failedContainers) >= i.FailedContainerThreshold {
 		i.emitUnhealthyEvent(i.Stub.ExternalId, types.StubStateDegraded, "reached max failed container threshold", failedContainers)
 	} else if len(failedContainers) > 0 {
 		i.emitUnhealthyEvent(i.Stub.ExternalId, types.StubStateWarning, "one or more containers failed", failedContainers)

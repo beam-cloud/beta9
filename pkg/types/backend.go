@@ -37,7 +37,27 @@ func (t Time) Value() (driver.Value, error) {
 
 // @go2proto
 type NullTime struct {
-	sql.NullTime
+	Time  time.Time
+	Valid bool
+}
+
+func (t *NullTime) Scan(value interface{}) error {
+	var nullTime sql.NullTime
+	if err := nullTime.Scan(value); err != nil {
+		return err
+	}
+
+	t.Time = nullTime.Time
+	t.Valid = nullTime.Valid
+	return nil
+}
+
+func (t NullTime) Value() (driver.Value, error) {
+	if !t.Valid {
+		return nil, nil
+	}
+
+	return t.Time, nil
 }
 
 func (t NullTime) Serialize() interface{} {
@@ -45,15 +65,13 @@ func (t NullTime) Serialize() interface{} {
 		return nil
 	}
 
-	return time.Time(t.Time).Format(time.RFC3339Nano)
+	return t.Time.Format(time.RFC3339Nano)
 }
 
 func (t NullTime) Now() NullTime {
 	return NullTime{
-		NullTime: sql.NullTime{
-			Time:  time.Now(),
-			Valid: true,
-		},
+		Time:  time.Now(),
+		Valid: true,
 	}
 }
 

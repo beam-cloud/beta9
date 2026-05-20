@@ -153,21 +153,43 @@ func (ss *SSHShellService) handleTTLEvents() {
 	}
 }
 
-func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, containerId string) bool {
+func (ss *SSHShellService) getShellAddress(containerId string) (string, bool) {
 	addressMap, err := ss.containerRepo.GetContainerAddressMap(containerId)
 	if err != nil {
-		return false
+		return "", false
 	}
 
 	addr, ok := addressMap[types.WorkerShellPort]
-	if !ok {
-		return false
+	return addr, ok
+}
+
+func (ss *SSHShellService) ensureShellPortExposed(ctx context.Context, containerId string, client *common.ContainerClient) (string, error) {
+	if addr, ok := ss.getShellAddress(containerId); ok {
+		return addr, nil
 	}
 
+	resp, err := client.SandboxExposePort(containerId, types.WorkerShellPort)
+	if err != nil {
+		return "", err
+	}
+	if !resp.Ok {
+		return "", fmt.Errorf("%s", resp.ErrorMsg)
+	}
+
+	addr, ok := ss.getShellAddress(containerId)
+	if !ok {
+		return "", fmt.Errorf("shell port was not exposed")
+	}
+
+	return addr, nil
+}
+
+func (ss *SSHShellService) checkForExistingSSHServer(ctx context.Context, addr string) bool {
 	conn, err := network.ConnectToHost(ctx, addr, time.Second*30, ss.tailscale, ss.config.Tailscale)
 	if err != nil {
 		return false
 	}
+	defer conn.Close()
 
 	// Set read timeout so it doesn't hang forever
 	conn.SetReadDeadline(time.Now().Add(sshBannerTimeoutDurationS))
@@ -274,7 +296,15 @@ func (ss *SSHShellService) CreateShellInExistingContainer(ctx context.Context, i
 		}, nil
 	}
 
-	ok := ss.checkForExistingSSHServer(ctx, containerAddr)
+	shellAddr, err := ss.ensureShellPortExposed(ctx, containerId, containerClient)
+	if err != nil {
+		return &pb.CreateShellInExistingContainerResponse{
+			Ok:     false,
+			ErrMsg: fmt.Sprintf("Failed to expose shell port: %s", err),
+		}, nil
+	}
+
+	ok := ss.checkForExistingSSHServer(ctx, shellAddr)
 	if !ok {
 		go func() {
 			// This only dies if the container is stopped

@@ -2,10 +2,12 @@ package metrics
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"sort"
 
+	vmetrics "github.com/VictoriaMetrics/metrics"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
@@ -106,9 +108,7 @@ func (r *PrometheusUsageMetricsRepository) listenAndServe() error {
 	e.HideBanner = true
 	e.HidePort = true
 	e.Use(middleware.Recover())
-	e.GET("/metrics", echo.WrapHandler(promhttp.HandlerFor(r.collectorRegistrar, promhttp.HandlerOpts{
-		EnableOpenMetrics: true,
-	})))
+	e.GET("/metrics", echo.WrapHandler(r.metricsHandler()))
 
 	// Accept both HTTP/2 and HTTP/1
 	httpServer := &http.Server{
@@ -117,6 +117,16 @@ func (r *PrometheusUsageMetricsRepository) listenAndServe() error {
 	}
 
 	return httpServer.ListenAndServe()
+}
+
+func (r *PrometheusUsageMetricsRepository) metricsHandler() http.Handler {
+	prometheusHandler := promhttp.HandlerFor(r.collectorRegistrar, promhttp.HandlerOpts{})
+
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		prometheusHandler.ServeHTTP(w, req)
+		_, _ = io.WriteString(w, "\n")
+		vmetrics.WritePrometheus(w, false)
+	})
 }
 
 // getCounter registers and returns a new counter metric handler

@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/tj/assert"
 )
@@ -158,12 +160,13 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	}
 	err = repo.UpdateWorkerCapacity(worker, request, types.AddCapacity)
 	assert.Nil(t, err)
+	freeMemoryAfterAdd := capacityMemoryForRequest(request)
 
 	// Retrieve the updated worker
 	updatedWorker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, request.Cpu, updatedWorker.FreeCpu)
-	assert.Equal(t, request.Memory, updatedWorker.FreeMemory)
+	assert.Equal(t, freeMemoryAfterAdd, updatedWorker.FreeMemory)
 	assert.Equal(t, request.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, types.WorkerStatusPending, worker.Status)
 	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
@@ -185,7 +188,7 @@ func TestUpdateWorkerCapacityForGPUWorker(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Equal(t, int64(400), updatedWorker.FreeCpu)
-	assert.Equal(t, int64(900), updatedWorker.FreeMemory)
+	assert.Equal(t, freeMemoryAfterAdd-capacityMemoryForRequest(request), updatedWorker.FreeMemory)
 	assert.Equal(t, request.Gpu, updatedWorker.Gpu)
 }
 
@@ -230,8 +233,9 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	// Retrieve the updated worker
 	updatedWorker, err := repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
+	freeMemoryAfterFirstRequest := worker.FreeMemory - capacityMemoryForRequest(firstRequest)
 	assert.Equal(t, worker.FreeCpu-firstRequest.Cpu, updatedWorker.FreeCpu)
-	assert.Equal(t, worker.FreeMemory-firstRequest.Memory, updatedWorker.FreeMemory)
+	assert.Equal(t, freeMemoryAfterFirstRequest, updatedWorker.FreeMemory)
 	assert.Equal(t, firstRequest.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, worker.Status, updatedWorker.Status)
 	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
@@ -262,11 +266,21 @@ func TestUpdateWorkerCapacityForCPUWorker(t *testing.T) {
 	// Retrieve the worker again
 	updatedWorker, err = repo.GetWorkerById(newWorker.Id)
 	assert.Nil(t, err)
+	freeMemoryAfterThirdRequest := freeMemoryAfterFirstRequest -
+		capacityMemoryForRequest(secondRequest) -
+		capacityMemoryForRequest(thirdRequest)
 
 	assert.Equal(t, worker.FreeCpu-firstRequest.Cpu-secondRequest.Cpu-thirdRequest.Cpu, updatedWorker.FreeCpu)
-	assert.Equal(t, worker.FreeMemory-firstRequest.Memory-secondRequest.Memory-thirdRequest.Memory, updatedWorker.FreeMemory)
+	assert.Equal(t, freeMemoryAfterThirdRequest, updatedWorker.FreeMemory)
 	assert.Equal(t, worker.Gpu, updatedWorker.Gpu)
 	assert.Equal(t, int64(3), updatedWorker.ResourceVersion)
+}
+
+func TestCapacityMemoryForRequest(t *testing.T) {
+	assert.Equal(t, int64(0), capacityMemoryForRequest(&types.ContainerRequest{}))
+	assert.Equal(t, int64(-1), capacityMemoryForRequest(&types.ContainerRequest{Memory: -1}))
+	assert.Equal(t, int64(125), capacityMemoryForRequest(&types.ContainerRequest{Memory: 100}))
+	assert.Equal(t, int64(2), capacityMemoryForRequest(&types.ContainerRequest{Memory: 1}))
 }
 
 func TestGetAllWorkers(t *testing.T) {
@@ -322,6 +336,127 @@ func TestGetAllWorkers(t *testing.T) {
 	}
 	assert.Equal(t, nWorkers, availableCount)
 	assert.Equal(t, nWorkers, pendingCount)
+}
+
+func TestScheduleContainerRequestRestoresCapacityWhenQueuePushFails(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-queue-error",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    1000,
+		FreeMemory: 1000,
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	err = rdb.Set(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id), "wrong-type", 0).Err()
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId: "container-queue-error",
+		Cpu:         100,
+		Memory:      100,
+	}
+
+	err = repo.ScheduleContainerRequest(worker, request)
+	assert.Error(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1000), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(1000), updatedWorker.FreeMemory)
+}
+
+func TestScheduleContainerRequestRejectsStaleWorkerReservation(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-stale-reservation",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    100,
+		FreeMemory: 125,
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	firstWorkerCopy, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	secondWorkerCopy, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+
+	firstRequest := &types.ContainerRequest{
+		ContainerId: "container-stale-reservation-first",
+		Cpu:         100,
+		Memory:      100,
+	}
+	secondRequest := &types.ContainerRequest{
+		ContainerId: "container-stale-reservation-second",
+		Cpu:         100,
+		Memory:      100,
+	}
+
+	err = repo.ScheduleContainerRequest(firstWorkerCopy, firstRequest)
+	assert.Nil(t, err)
+
+	err = repo.ScheduleContainerRequest(secondWorkerCopy, secondRequest)
+	assert.Error(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
+	assert.Equal(t, int64(1), updatedWorker.ResourceVersion)
+
+	queueDepth, err := rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Result()
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1), queueDepth)
+}
+
+func TestUpdateWorkerCapacityRejectsGPUOverReservation(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:            "worker-gpu-over-reservation",
+		Status:        types.WorkerStatusAvailable,
+		FreeCpu:       1000,
+		FreeMemory:    1250,
+		FreeGpuCount:  0,
+		TotalGpuCount: 1,
+		Gpu:           "A10G",
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+
+	request := &types.ContainerRequest{
+		ContainerId: "container-gpu-over-reservation",
+		Cpu:         100,
+		Memory:      100,
+		Gpu:         "A10G",
+		GpuCount:    1,
+	}
+
+	err = repo.UpdateWorkerCapacity(updatedWorker, request, types.RemoveCapacity)
+	assert.Error(t, err)
+
+	unchangedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(1000), unchangedWorker.FreeCpu)
+	assert.Equal(t, int64(1250), unchangedWorker.FreeMemory)
+	assert.Equal(t, uint32(0), unchangedWorker.FreeGpuCount)
+	assert.Equal(t, int64(0), unchangedWorker.ResourceVersion)
 }
 
 func BenchmarkGetAllWorkers(b *testing.B) {

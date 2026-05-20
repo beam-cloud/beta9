@@ -25,6 +25,8 @@ var (
 	ErrUnknownRedisMode = errors.New("redis: unknown mode")
 )
 
+const redisPubSubChannelBufferSize = 65536
+
 type RedisClient struct {
 	redis.UniversalClient
 }
@@ -157,8 +159,8 @@ func (r *RedisClient) Publish(ctx context.Context, channel string, message inter
 }
 
 func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error, func()) {
-	outCh := make(chan *redis.Message)
-	errCh := make(chan error)
+	outCh := make(chan *redis.Message, redisPubSubChannelBufferSize)
+	errCh := make(chan error, 1)
 	onSubscribe := make(chan bool, 1)
 
 	go func() {
@@ -190,8 +192,8 @@ func (r *RedisClient) PSubscribe(ctx context.Context, channels ...string) (<-cha
 }
 
 func (r *RedisClient) Subscribe(ctx context.Context, channels ...string) (<-chan *redis.Message, <-chan error) {
-	outCh := make(chan *redis.Message)
-	errCh := make(chan error)
+	outCh := make(chan *redis.Message, redisPubSubChannelBufferSize)
+	errCh := make(chan error, 1)
 	onSubscribe := make(chan bool, 1)
 
 	go func() {
@@ -224,6 +226,7 @@ func (r *RedisClient) handleChannelSubs(
 	defer pubsub.Close()
 
 	ch := pubsub.Channel(
+		redis.WithChannelSize(redisPubSubChannelBufferSize),
 		redis.WithChannelSendTimeout(3*time.Second),
 		redis.WithChannelHealthCheckInterval(3*time.Second),
 	)
@@ -252,8 +255,9 @@ func (r *RedisClient) handleChannelSubs(
 }
 
 type RedisLockOptions struct {
-	TtlS    int
-	Retries int
+	TtlS          int
+	Retries       int
+	RetryInterval time.Duration
 }
 
 type RedisLockOption func(*RedisLock)
@@ -280,7 +284,11 @@ func NewRedisLock(client *RedisClient, opts ...RedisLockOption) *RedisLock {
 func (l *RedisLock) Acquire(ctx context.Context, key string, opts RedisLockOptions) error {
 	var retryStrategy redislock.RetryStrategy = nil
 	if opts.Retries > 0 {
-		retryStrategy = redislock.LimitRetry(redislock.ExponentialBackoff(100*time.Millisecond, time.Duration(opts.TtlS)*time.Second), opts.Retries)
+		baseRetryStrategy := redislock.RetryStrategy(redislock.ExponentialBackoff(100*time.Millisecond, time.Duration(opts.TtlS)*time.Second))
+		if opts.RetryInterval > 0 {
+			baseRetryStrategy = redislock.LinearBackoff(opts.RetryInterval)
+		}
+		retryStrategy = redislock.LimitRetry(baseRetryStrategy, opts.Retries)
 	}
 
 	lock, err := redislock.Obtain(ctx, l.client, key, time.Duration(opts.TtlS)*time.Second, &redislock.Options{

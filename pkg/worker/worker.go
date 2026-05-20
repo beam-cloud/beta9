@@ -33,6 +33,8 @@ const (
 	defaultCacheWaitTime           time.Duration = 30 * time.Second
 	containerStatusUpdateInterval  time.Duration = 30 * time.Second
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
+	defaultRuncStartConcurrency    int           = 128
+	defaultGvisorStartConcurrency  int           = 32
 )
 
 type Worker struct {
@@ -61,6 +63,8 @@ type Worker struct {
 	eventBus                *common.EventBus
 	containerInstances      *common.SafeMap[*ContainerInstance]
 	containerLock           sync.Mutex
+	containerStartSem       chan struct{}
+	containerStartLimit     int
 	containerWg             sync.WaitGroup
 	containerLogger         *ContainerLogger
 	workerUsageMetrics      *WorkerUsageMetrics
@@ -91,18 +95,34 @@ type ContainerInstance struct {
 	LogBuffer                  *common.LogBuffer
 	Request                    *types.ContainerRequest
 	StopReason                 types.StopContainerReason
+	RuntimeStarted             bool
+	RuntimePid                 int
+	RuntimeStartedAt           int64
 	SandboxProcessManager      *goproc.GoProcClient
 	SandboxProcessManagerReady bool
+	ProcessManagerReadyOnce    sync.Once
+	ProcessManagerReadyChan    chan struct{}
 	ContainerIp                string
 	Runtime                    runtime.Runtime
 	OOMWatcher                 runtime.OOMWatcher
 }
 
+func (i *ContainerInstance) signalProcessManagerReadiness(ready bool) {
+	i.SandboxProcessManagerReady = ready
+	if i.ProcessManagerReadyChan != nil {
+		i.ProcessManagerReadyOnce.Do(func() {
+			close(i.ProcessManagerReadyChan)
+		})
+	}
+}
+
 type ContainerOptions struct {
-	BundlePath   string
-	HostBindPort int
-	BindPorts    []int
-	InitialSpec  *specs.Spec
+	BundlePath          string
+	HostBindPort        int
+	BindPorts           []int
+	StartupPortBindings []PortBinding
+	InitialSpec         *specs.Spec
+	StartupStartedAt    time.Time
 }
 
 type stopContainerEvent struct {
@@ -252,6 +272,8 @@ func NewWorker() (*Worker, error) {
 		defaultRuntime = runcRuntime
 	}
 
+	containerStartLimit := containerStartLimitForPoolRuntime(poolConfig, defaultRuntime.Name())
+
 	userDataStorage, err := storage.NewStorage(config.Storage, cacheClient)
 	if err != nil {
 		return nil, err
@@ -312,6 +334,8 @@ func NewWorker() (*Worker, error) {
 		eventBus:                nil,
 		containerInstances:      containerInstances,
 		containerLock:           sync.Mutex{},
+		containerStartSem:       make(chan struct{}, containerStartLimit),
+		containerStartLimit:     containerStartLimit,
 		containerWg:             sync.WaitGroup{},
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
@@ -407,60 +431,126 @@ containerRequestStream:
 	return s.shutdown()
 }
 
-// handleContainerRequest handles an individual container request, spawning a new runc container
-func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
-	containerId := request.ContainerId
+func containerStartLimitForRuntime(runtimeType string) int {
+	return containerStartLimitForRuntimeWithDefaults(runtimeType, defaultRuncStartConcurrency, defaultGvisorStartConcurrency)
+}
 
-	s.containerLock.Lock()
-	_, exists := s.containerInstances.Get(containerId)
-	if !exists {
-		log.Info().Str("container_id", containerId).Msg("running container")
+func containerStartLimitForRuntimeWithDefaults(runtimeType string, runcLimit, gvisorLimit int) int {
+	return containerStartLimitWithEnvOverride(defaultContainerStartLimitForRuntime(runtimeType, runcLimit, gvisorLimit))
+}
 
-		ctx, cancel := context.WithCancel(s.ctx)
-
-		if request.IsBuildRequest() {
-			go s.checkForStoppedBuilds(ctx, cancel, containerId)
-		}
-
-		// If isolated workspace storage is available, mount it
-		if request.StorageAvailable() {
-			log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
-
-			_, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
-			if err != nil {
-				log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
-				return
-			}
-		}
-
-		if err := s.RunContainer(ctx, request); err != nil {
-			s.containerLock.Unlock()
-
-			log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
-
-			// Set a non-zero exit code for the container (both in memory, and in repo)
-			exitCode := 1
-
-			serr, ok := err.(*types.ExitCodeError)
-			if ok {
-				exitCode = int(serr.ExitCode)
-			}
-
-			_, err = handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
-				ContainerId: containerId,
-				ExitCode:    int32(exitCode),
-			}))
-			if err != nil {
-				log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
-			}
-
-			s.clearContainer(containerId, request, exitCode)
-			return
-		}
-
-		s.containerLock.Unlock()
+func defaultContainerStartLimitForRuntime(runtimeType string, runcLimit, gvisorLimit int) int {
+	limit := runcLimit
+	if runtimeType == types.ContainerRuntimeGvisor.String() {
+		limit = gvisorLimit
 	}
 
+	return limit
+}
+
+func containerStartLimitForPoolRuntime(poolConfig types.WorkerPoolConfig, runtimeType string) int {
+	limit := defaultContainerStartLimitForRuntime(runtimeType, defaultRuncStartConcurrency, defaultGvisorStartConcurrency)
+	if poolConfig.ContainerStartConcurrency > 0 {
+		limit = poolConfig.ContainerStartConcurrency
+	}
+
+	return containerStartLimitWithEnvOverride(limit)
+}
+
+func containerStartLimitWithEnvOverride(limit int) int {
+	raw := os.Getenv("WORKER_CONTAINER_START_CONCURRENCY")
+	if raw == "" {
+		return limit
+	}
+
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Warn().Str("value", raw).Err(err).Msg("invalid WORKER_CONTAINER_START_CONCURRENCY")
+		return limit
+	}
+	if parsed <= 0 {
+		return limit
+	}
+
+	return parsed
+}
+
+func (s *Worker) reserveContainerInstance(request *types.ContainerRequest) bool {
+	s.containerLock.Lock()
+	defer s.containerLock.Unlock()
+
+	if _, exists := s.containerInstances.Get(request.ContainerId); exists {
+		return false
+	}
+
+	s.containerInstances.Set(request.ContainerId, &ContainerInstance{
+		Id:        request.ContainerId,
+		StubId:    request.StubId,
+		LogBuffer: common.NewLogBuffer(),
+		Request:   request,
+		Runtime:   s.runtime,
+	})
+
+	return true
+}
+
+// handleContainerRequest handles an individual container request.
+func (s *Worker) handleContainerRequest(request *types.ContainerRequest) {
+	if !s.reserveContainerInstance(request) {
+		return
+	}
+
+	go s.runContainerRequest(request)
+}
+
+func (s *Worker) runContainerRequest(request *types.ContainerRequest) {
+	containerId := request.ContainerId
+	log.Info().Str("container_id", containerId).Msg("running container")
+
+	ctx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+
+	if request.IsBuildRequest() {
+		go s.checkForStoppedBuilds(ctx, cancel, containerId)
+	}
+
+	// If isolated workspace storage is available, mount it
+	if request.StorageAvailable() {
+		log.Info().Str("container_id", containerId).Msg("mounting workspace storage")
+
+		_, err := s.storageManager.Mount(request.Workspace.Name, request.Workspace.Storage)
+		if err != nil {
+			log.Error().Str("container_id", containerId).Str("workspace_id", request.Workspace.ExternalId).Err(err).Msg("unable to mount workspace storage")
+			s.failContainerRequest(containerId, request, err)
+			return
+		}
+	}
+
+	if err := s.RunContainer(ctx, request); err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("unable to run container")
+		s.failContainerRequest(containerId, request, err)
+		return
+	}
+}
+
+func (s *Worker) failContainerRequest(containerId string, request *types.ContainerRequest, runErr error) {
+	// Set a non-zero exit code for the container (both in memory, and in repo)
+	exitCode := 1
+
+	serr, ok := runErr.(*types.ExitCodeError)
+	if ok {
+		exitCode = int(serr.ExitCode)
+	}
+
+	_, err := handleGRPCResponse(s.containerRepoClient.SetContainerExitCode(context.Background(), &pb.SetContainerExitCodeRequest{
+		ContainerId: containerId,
+		ExitCode:    int32(exitCode),
+	}))
+	if err != nil {
+		log.Error().Str("container_id", containerId).Err(err).Msg("failed to set exit code")
+	}
+
+	s.clearContainer(containerId, request, exitCode)
 }
 
 // checkForStoppedBuilds checks if a build has been cancelled and cancels the context if it has.
@@ -527,9 +617,7 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		case <-s.ctx.Done():
 			return nil
 		case <-ticker.C:
-			s.containerLock.Lock()
-			_, exists := s.containerInstances.Get(request.ContainerId)
-			s.containerLock.Unlock()
+			instance, exists := s.containerInstances.Get(request.ContainerId)
 
 			if !exists {
 				return nil
@@ -554,16 +642,23 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 
 			log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
 
-			// TODO: remove this hotfix
+			expirySeconds := int64(types.ContainerStateTtlS)
 			if status == types.ContainerStatusPending {
-				log.Info().Str("container_id", request.ContainerId).Msg("forcing container status to running")
-				state.Status = string(types.ContainerStatusRunning)
+				if instance.RuntimeStarted {
+					log.Info().
+						Str("container_id", request.ContainerId).
+						Int("pid", instance.RuntimePid).
+						Msg("reconciling pending container to running from runtime start signal")
+					state.Status = string(types.ContainerStatusRunning)
+				} else {
+					expirySeconds = int64(types.ContainerStateTtlSWhilePending)
+				}
 			}
 
 			_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
 				ContainerId:   request.ContainerId,
 				Status:        string(state.Status),
-				ExpirySeconds: int64(types.ContainerStateTtlS),
+				ExpirySeconds: expirySeconds,
 			}))
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")

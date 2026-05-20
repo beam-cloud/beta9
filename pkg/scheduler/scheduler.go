@@ -21,7 +21,11 @@ import (
 )
 
 const (
-	requestProcessingInterval time.Duration = 100 * time.Millisecond
+	requestProcessingInterval      time.Duration = 50 * time.Millisecond
+	requestProcessingBatchSize                   = 512
+	provisioningWorkerRequeueDelay time.Duration = 250 * time.Millisecond
+	provisioningReservationHandoff time.Duration = 2 * requestProcessingInterval
+	pendingWorkerReservationTTL    time.Duration = 30 * time.Second
 )
 
 type Scheduler struct {
@@ -36,6 +40,8 @@ type Scheduler struct {
 	eventRepo             repo.EventRepository
 	schedulerUsageMetrics SchedulerUsageMetrics
 	eventBus              *common.EventBus
+
+	provisioning *provisioningTracker
 }
 
 func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *common.RedisClient, usageRepo repo.UsageMetricsRepository, backendRepo repo.BackendRepository, workspaceRepo repo.WorkspaceRepository, tailscale *network.Tailscale) (*Scheduler, error) {
@@ -108,6 +114,8 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		schedulerUsageMetrics: schedulerUsage,
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
+
+		provisioning: newProvisioningTracker(),
 	}, nil
 }
 
@@ -135,8 +143,9 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	go s.schedulerUsageMetrics.CounterIncContainerRequested(request)
-	go s.eventRepo.PushContainerRequestedEvent(request)
+	requestedEvent := cloneContainerRequest(request)
+	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
+	go s.eventRepo.PushContainerRequestedEvent(requestedEvent)
 
 	quota, err := s.getConcurrencyLimit(request)
 	if err != nil {
@@ -148,7 +157,13 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		return err
 	}
 
-	return s.addRequestToBacklog(request)
+	if err := s.addRequestToBacklog(request); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to add request to backlog")
+		newSchedulingAttempt(s, request, nil).fail("backlog_push_failed")
+		return err
+	}
+
+	return nil
 }
 
 func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types.ConcurrencyLimit, error) {
@@ -221,7 +236,7 @@ func (s *Scheduler) getControllers(request *types.ContainerRequest) ([]WorkerPoo
 			controllers = append(controllers, pool.Controller)
 		}
 	} else {
-		for _, gpu := range request.GpuRequest {
+		for _, gpu := range gpuRequestsForScheduling(request) {
 			pools := s.workerPoolManager.GetPoolByFilters(poolFilters{
 				GPUType: gpu,
 			})
@@ -255,75 +270,33 @@ func (s *Scheduler) StartProcessingRequests() {
 			// Continue processing requests
 		}
 
-		if s.requestBacklog.Len() == 0 {
-			time.Sleep(requestProcessingInterval)
-			continue
-		}
-
-		request, err := s.requestBacklog.Pop()
+		requests, err := s.requestBacklog.PopN(requestProcessingBatchSize)
 		if err != nil {
 			time.Sleep(requestProcessingInterval)
 			continue
 		}
 
-		// Find a worker to schedule ContainerRequests on
-		worker, err := s.selectWorker(request)
-		if err != nil || worker == nil {
-			// We didn't find a Worker that fit the ContainerRequest's requirements. Let's find a controller
-			// so we can add a new worker.
-
-			controllers, err := s.getControllers(request)
-			if err != nil {
-				log.Error().Interface("request", request).Err(err).Msg("no controller found for request")
-				continue
+		workers, err := s.workerRepo.GetAllWorkers()
+		if err != nil {
+			for _, request := range requests {
+				newSchedulingAttempt(s, request, nil).retry("worker_list_failed")
 			}
-
-			go func() {
-				var err error
-				for _, c := range controllers {
-					// Iterates through controllers in the order of prioritized gpus to attempt to add a worker
-					if c == nil {
-						continue
-					}
-
-					var newWorker *types.Worker
-					newWorker, err = c.AddWorker(request.Cpu, request.Memory, request.GpuCount)
-					if err == nil {
-						log.Info().Str("worker_id", newWorker.Id).Str("container_id", request.ContainerId).Msg("added new worker")
-
-						err = s.scheduleRequest(newWorker, request)
-						if err != nil {
-							log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request")
-							s.addRequestToBacklog(request)
-						}
-
-						return
-					}
-				}
-
-				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to add worker")
-				s.addRequestToBacklog(request)
-			}()
-
 			continue
 		}
 
-		// We found a worker that met the ContainerRequest's requirements. Schedule the request
-		// on that worker.
-		err = s.scheduleRequest(worker, request)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to schedule request on existing worker")
-			s.addRequestToBacklog(request)
-			continue
+		for _, request := range requests {
+			s.processRequest(request, workers)
 		}
-
-		// Record the request processing duration
-		schedulingDuration := time.Since(request.Timestamp)
-		metrics.RecordRequestSchedulingDuration(schedulingDuration, request)
 	}
 }
 
+func (s *Scheduler) processRequest(request *types.ContainerRequest, workers []*types.Worker) {
+	newSchedulingAttempt(s, request, workers).run()
+}
+
 func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	normalizeGPURequest(request)
+
 	if err := s.containerRepo.UpdateAssignedContainerGPU(request.ContainerId, worker.Gpu); err != nil {
 		log.Error().Str("container_id", request.ContainerId).Err(err).Msg("failed to update assigned container gpu")
 		return err
@@ -348,9 +321,29 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 			Msg("failed to attach build registry credentials to request")
 	}
 
-	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
-	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
-	return s.workerRepo.ScheduleContainerRequest(worker, request)
+	if err := s.workerRepo.ScheduleContainerRequest(worker, request); err != nil {
+		return err
+	}
+
+	scheduledEvent := cloneContainerRequest(request)
+	go s.schedulerUsageMetrics.CounterIncContainerScheduled(scheduledEvent)
+	go s.eventRepo.PushContainerScheduledEvent(scheduledEvent.ContainerId, worker.Id, scheduledEvent)
+	return nil
+}
+
+func cloneContainerRequest(request *types.ContainerRequest) *types.ContainerRequest {
+	if request == nil {
+		return nil
+	}
+
+	cloned := *request
+	cloned.EntryPoint = append([]string(nil), request.EntryPoint...)
+	cloned.Env = append([]string(nil), request.Env...)
+	cloned.GpuRequest = append([]string(nil), request.GpuRequest...)
+	cloned.Mounts = append([]types.Mount(nil), request.Mounts...)
+	cloned.Ports = append([]uint32(nil), request.Ports...)
+	cloned.AllowList = append([]string(nil), request.AllowList...)
+	return &cloned
 }
 
 // attachImageCredentials fetches and attaches OCI credentials to a container request
@@ -397,7 +390,6 @@ func (s *Scheduler) attachImageCredentials(request *types.ContainerRequest) erro
 		Str("image_id", request.ImageId).
 		Str("secret_name", secretName).
 		Int("credentials_length", len(secret.Value)).
-		Str("credentials", secret.Value).
 		Msg("attached OCI credentials")
 
 	return nil
@@ -494,13 +486,16 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 	filteredWorkers := []*types.Worker{}
 	gpuRequestsMap := map[string]int{}
 	requiresGPU := request.RequiresGPU()
+	memory := capacityMemoryForScheduling(request)
+	gpuCount := gpuCountForScheduling(request)
 
-	for index, gpu := range request.GpuRequest {
+	gpuRequests := gpuRequestsForScheduling(request)
+	for index, gpu := range gpuRequests {
 		gpuRequestsMap[gpu] = index
 	}
 
 	// If the request contains the "any" GPU selector, we need to check all GPU types
-	if slices.Contains(request.GpuRequest, string(types.GPU_ANY)) {
+	if slices.Contains(gpuRequests, string(types.GPU_ANY)) {
 		gpuRequestsMap = types.GPUTypesToMap(types.AllGPUTypes())
 	}
 
@@ -508,7 +503,7 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 		isGpuWorker := worker.Gpu != ""
 
 		// Check if the worker has enough free cpu and memory to run the container
-		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < int64(request.Memory) {
+		if worker.FreeCpu < int64(request.Cpu) || worker.FreeMemory < memory {
 			continue
 		}
 
@@ -525,19 +520,32 @@ func filterWorkersByResources(workers []*types.Worker, request *types.ContainerR
 
 		if requiresGPU {
 			// Validate GPU resource availability
-			priorityModifier, validGpu := gpuRequestsMap[worker.Gpu]
-			if !validGpu || worker.FreeGpuCount < request.GpuCount {
+			_, validGpu := gpuRequestsMap[worker.Gpu]
+			if !validGpu || worker.FreeGpuCount < gpuCount {
 				continue
 			}
-
-			// This will account for the preset priorities for the pool type as well as the order of the GPU requests
-			// NOTE: will only work properly if all GPU types and their pools start from 0 and pool priority are incremental by changes of ?1
-			worker.Priority -= int32(priorityModifier)
 		}
 
 		filteredWorkers = append(filteredWorkers, worker)
 	}
 	return filteredWorkers
+}
+
+func gpuRequestsForScheduling(request *types.ContainerRequest) []string {
+	gpus := make([]string, 0, len(request.GpuRequest)+1)
+	gpus = append(gpus, request.GpuRequest...)
+	if request.Gpu == "" || slices.Contains(gpus, request.Gpu) {
+		return gpus
+	}
+	return append(gpus, request.Gpu)
+}
+
+func capacityMemoryForScheduling(request *types.ContainerRequest) int64 {
+	if request.Memory <= 0 {
+		return request.Memory
+	}
+
+	return (request.Memory*125 + 99) / 100
 }
 
 func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerRequest) []*types.Worker {
@@ -552,6 +560,22 @@ func filterWorkersByFlags(workers []*types.Worker, request *types.ContainerReque
 		}
 
 		filteredWorkers = append(filteredWorkers, worker)
+	}
+
+	return filteredWorkers
+}
+
+func filterWorkersByStatus(workers []*types.Worker, statuses ...types.WorkerStatus) []*types.Worker {
+	statusSet := map[types.WorkerStatus]struct{}{}
+	for _, status := range statuses {
+		statusSet[status] = struct{}{}
+	}
+
+	filteredWorkers := []*types.Worker{}
+	for _, worker := range workers {
+		if _, ok := statusSet[worker.Status]; ok {
+			filteredWorkers = append(filteredWorkers, worker)
+		}
 	}
 
 	return filteredWorkers
@@ -573,9 +597,24 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 		return nil, err
 	}
 
-	filteredWorkers := filterWorkersByPoolSelector(workers, request)     // Filter workers by pool selector
-	filteredWorkers = filterWorkersByResources(filteredWorkers, request) // Filter workers resource requirements
-	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)     // Filter workers by flags
+	return s.selectWorkerFromWorkers(workers, request)
+}
+
+func (s *Scheduler) selectWorkerFromWorkers(workers []*types.Worker, request *types.ContainerRequest) (*types.Worker, error) {
+	return s.selectWorkerFromWorkersByStatus(workers, request, types.WorkerStatusAvailable)
+}
+
+func (s *Scheduler) selectWorkerFromWorkersByStatus(workers []*types.Worker, request *types.ContainerRequest, statuses ...types.WorkerStatus) (*types.Worker, error) {
+	normalizeGPURequest(request)
+
+	if len(workers) == 0 {
+		return nil, &types.ErrNoSuitableWorkerFound{}
+	}
+
+	filteredWorkers := filterWorkersByPoolSelector(workers, request)      // Filter workers by pool selector
+	filteredWorkers = filterWorkersByResources(filteredWorkers, request)  // Filter workers resource requirements
+	filteredWorkers = filterWorkersByFlags(filteredWorkers, request)      // Filter workers by flags
+	filteredWorkers = filterWorkersByStatus(filteredWorkers, statuses...) // Filter workers by lifecycle status
 
 	if len(filteredWorkers) == 0 {
 		return nil, &types.ErrNoSuitableWorkerFound{}
@@ -584,13 +623,7 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	// Score workers based on status and priority
 	scoredWorkers := []scoredWorker{}
 	for _, worker := range filteredWorkers {
-		score := int32(0)
-
-		if worker.Status == types.WorkerStatusAvailable {
-			score += scoreAvailableWorker
-		}
-
-		score += worker.Priority
+		score := scoreWorkerForRequest(worker, request)
 		scoredWorkers = append(scoredWorkers, scoredWorker{worker: worker, score: score})
 	}
 
@@ -603,35 +636,52 @@ func (s *Scheduler) selectWorker(request *types.ContainerRequest) (*types.Worker
 	return scoredWorkers[0].worker, nil
 }
 
-const maxScheduleRetryCount = 3
+func scoreWorkerForRequest(worker *types.Worker, request *types.ContainerRequest) int32 {
+	score := worker.Priority
+	if worker.Status == types.WorkerStatusAvailable {
+		score += scoreAvailableWorker
+	}
+	if request.RequiresGPU() {
+		score -= int32(gpuPriorityModifier(request, worker.Gpu))
+	}
+	return score
+}
+
+func gpuPriorityModifier(request *types.ContainerRequest, gpu string) int {
+	gpuRequests := gpuRequestsForScheduling(request)
+	if slices.Contains(gpuRequests, string(types.GPU_ANY)) {
+		modifiers := types.GPUTypesToMap(types.AllGPUTypes())
+		return modifiers[gpu]
+	}
+
+	for index, requestedGPU := range gpuRequests {
+		if requestedGPU == gpu {
+			return index
+		}
+	}
+	return 0
+}
+
+const maxScheduleRetryCount = 120
 const maxScheduleRetryDuration = 10 * time.Minute
 
 func (s *Scheduler) addRequestToBacklog(request *types.ContainerRequest) error {
-	if request.RequiresGPU() && request.GpuCount <= 0 {
-		request.GpuCount = 1
-	}
+	normalizeGPURequest(request)
 
 	if request.RetryCount == 0 {
 		request.RetryCount++
 		return s.requestBacklog.Push(request)
 	}
 
-	go func() {
-		if request.RetryCount < maxScheduleRetryCount && time.Since(request.Timestamp) < maxScheduleRetryDuration {
-			delay := calculateBackoffDelay(request.RetryCount)
-			time.Sleep(delay)
-			request.RetryCount++
-			s.requestBacklog.Push(request)
-			return
-		}
+	if request.RetryCount >= maxScheduleRetryCount || time.Since(request.Timestamp) >= maxScheduleRetryDuration {
+		newSchedulingAttempt(s, request, nil).fail("retry_limit")
+		return nil
+	}
 
-		log.Error().Str("container_id", request.ContainerId).Int("retry_count", request.RetryCount).Msg("giving up on request")
-		s.containerRepo.DeleteContainerState(request.ContainerId)
-		s.containerRepo.SetContainerRequestStatus(request.ContainerId, types.ContainerRequestStatusFailed)
-		metrics.RecordRequestScheduleFailure(request)
-	}()
-
-	return nil
+	delay := calculateBackoffDelay(request.RetryCount)
+	request.RetryCount++
+	metrics.RecordRequestRetry(request)
+	return s.requestBacklog.PushAfter(request, delay)
 }
 
 func calculateBackoffDelay(retryCount int) time.Duration {
@@ -640,7 +690,7 @@ func calculateBackoffDelay(retryCount int) time.Duration {
 	}
 
 	baseDelay := 1 * time.Second
-	maxDelay := 30 * time.Second
+	maxDelay := 5 * time.Second
 	delay := time.Duration(math.Pow(2, float64(retryCount))) * baseDelay
 	if delay > maxDelay {
 		delay = maxDelay

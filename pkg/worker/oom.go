@@ -26,7 +26,21 @@ func (s *Worker) setupOOMWatcher(
 
 	// Select appropriate OOM watcher based on runtime
 	if s.runtime.Name() == types.ContainerRuntimeGvisor.String() {
-		// For gVisor: monitor memory usage directly since cgroup files aren't accessible
+		// The gVisor watcher observes host-side runsc RSS, which includes runtime
+		// overhead and is not the same as guest workload memory. Do not turn that
+		// approximation into a kill signal when memory enforcement is disabled.
+		if !s.config.Worker.ContainerResourceLimits.MemoryEnforced {
+			return
+		}
+
+		if spec == nil ||
+			spec.Linux == nil ||
+			spec.Linux.Resources == nil ||
+			spec.Linux.Resources.Memory == nil ||
+			spec.Linux.Resources.Memory.Limit == nil {
+			return
+		}
+
 		memoryLimit := s.getMemoryLimit(spec, request)
 		oomWatcher = runtime.NewGvisorOOMWatcher(ctx, pid, memoryLimit)
 	} else {
@@ -60,7 +74,11 @@ func (s *Worker) setupOOMWatcher(
 
 // getMemoryLimit extracts memory limit from spec or request
 func (s *Worker) getMemoryLimit(spec *specs.Spec, request *types.ContainerRequest) uint64 {
-	if spec.Linux.Resources != nil && spec.Linux.Resources.Memory != nil && spec.Linux.Resources.Memory.Limit != nil {
+	if spec != nil &&
+		spec.Linux != nil &&
+		spec.Linux.Resources != nil &&
+		spec.Linux.Resources.Memory != nil &&
+		spec.Linux.Resources.Memory.Limit != nil {
 		return uint64(*spec.Linux.Resources.Memory.Limit)
 	}
 	// Fallback to request memory (convert MB to bytes)

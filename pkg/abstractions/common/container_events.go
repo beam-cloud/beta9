@@ -17,10 +17,12 @@ type ContainerEventManager struct {
 	instanceFactory   func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)
 }
 
+const containerEventBufferSize = 65536
+
 func NewContainerEventManager(ctx context.Context, containerPrefixes []string, keyEventManager *common.KeyEventManager, instanceFactory func(ctx context.Context, stubId string, options ...func(IAutoscaledInstance)) (IAutoscaledInstance, error)) (*ContainerEventManager, error) {
 	keyEventChans := make(map[string]chan common.KeyEvent)
 	for _, prefix := range containerPrefixes {
-		keyEventChans[prefix] = make(chan common.KeyEvent)
+		keyEventChans[prefix] = make(chan common.KeyEvent, containerEventBufferSize)
 	}
 
 	return &ContainerEventManager{

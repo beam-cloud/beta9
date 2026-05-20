@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -355,7 +356,7 @@ func (r *WorkerRedisRepository) GetGpuAvailability() (map[string]bool, error) {
 }
 
 func (r *WorkerRedisRepository) GetAllWorkers() ([]*types.Worker, error) {
-	workers, err := r.getWorkers(true)
+	workers, err := r.getWorkers(false)
 	if err != nil {
 		return nil, err
 	}
@@ -415,6 +416,17 @@ func (r *WorkerRedisRepository) GetAllWorkersOnMachine(machineId string) ([]*typ
 	return machineWorkers, nil
 }
 
+func capacityMemoryForRequest(request *types.ContainerRequest) int64 {
+	if request.Memory <= 0 {
+		return request.Memory
+	}
+
+	// Runtime cgroups use a 1.25x hard memory limit over the requested soft
+	// memory. Capacity accounting must reserve that hard limit; otherwise a
+	// worker can be packed past its pod limit before accounting says it is full.
+	return (request.Memory*125 + 99) / 100
+}
+
 func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, request *types.ContainerRequest, CapacityUpdateType types.CapacityUpdateType) error {
 	err := r.lock.Acquire(context.TODO(), common.RedisKeys.SchedulerWorkerLock(worker.Id), common.RedisLockOptions{TtlS: 10, Retries: 3})
 	if err != nil {
@@ -447,23 +459,27 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 	switch CapacityUpdateType {
 	case types.AddCapacity:
 		updatedWorker.FreeCpu = updatedWorker.FreeCpu + request.Cpu
-		updatedWorker.FreeMemory = updatedWorker.FreeMemory + request.Memory
+		updatedWorker.FreeMemory = updatedWorker.FreeMemory + capacityMemoryForRequest(request)
 
 		if request.Gpu != "" {
 			updatedWorker.FreeGpuCount += request.GpuCount
 		}
 
 	case types.RemoveCapacity:
-		updatedWorker.FreeCpu = updatedWorker.FreeCpu - request.Cpu
-		updatedWorker.FreeMemory = updatedWorker.FreeMemory - request.Memory
+		memory := capacityMemoryForRequest(request)
+		if updatedWorker.FreeCpu < request.Cpu || updatedWorker.FreeMemory < memory {
+			return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
+		}
 
 		if request.Gpu != "" {
+			if updatedWorker.FreeGpuCount < request.GpuCount {
+				return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
+			}
 			updatedWorker.FreeGpuCount -= request.GpuCount
 		}
 
-		if updatedWorker.FreeCpu < 0 || updatedWorker.FreeMemory < 0 || updatedWorker.FreeGpuCount < 0 {
-			return errors.New("unable to schedule container, worker out of cpu, memory, or gpu")
-		}
+		updatedWorker.FreeCpu -= request.Cpu
+		updatedWorker.FreeMemory -= memory
 
 	default:
 		return errors.New("invalid capacity update type")
@@ -476,12 +492,16 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 		return fmt.Errorf("failed to update worker capacity <%s>: %v", key, err)
 	}
 
+	*worker = *updatedWorker
 	return nil
 }
 
 func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, request *types.ContainerRequest) error {
+	queuedRequest := *request
+	queuedRequest.Timestamp = time.Now()
+
 	// Serialize the ContainerRequest -> JSON
-	requestJSON, err := json.Marshal(request)
+	requestJSON, err := json.Marshal(&queuedRequest)
 	if err != nil {
 		return fmt.Errorf("failed to serialize request: %w", err)
 	}
@@ -495,8 +515,12 @@ func (r *WorkerRedisRepository) ScheduleContainerRequest(worker *types.Worker, r
 	// Push the serialized ContainerRequest
 	err = r.rdb.RPush(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id), requestJSON).Err()
 	if err != nil {
+		if rollbackErr := r.UpdateWorkerCapacity(worker, request, types.AddCapacity); rollbackErr != nil {
+			return errors.Join(fmt.Errorf("failed to push request: %w", err), fmt.Errorf("failed to restore worker capacity after queue push error: %w", rollbackErr))
+		}
 		return fmt.Errorf("failed to push request: %w", err)
 	}
+	metrics.RecordWorkerQueueDepth(worker.Id, r.rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(worker.Id)).Val())
 
 	log.Info().Str("container_id", request.ContainerId).Str("worker_id", worker.Id).Msg("request for container added")
 
@@ -526,16 +550,12 @@ func (r *WorkerRedisRepository) RemoveContainerFromWorker(workerId string, conta
 }
 
 func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types.ContainerRequest, error) {
-	queueLength, err := r.rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	if queueLength == 0 {
+	requestJSON, err := r.rdb.LPop(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Bytes()
+	if err == redis.Nil {
+		metrics.RecordWorkerQueueDepth(workerId, 0)
+		metrics.RecordWorkerQueueEmptyPoll(workerId)
 		return nil, nil
 	}
-
-	requestJSON, err := r.rdb.LPop(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Bytes()
 	if err != nil {
 		return nil, err
 	}
@@ -544,6 +564,13 @@ func (r *WorkerRedisRepository) GetNextContainerRequest(workerId string) (*types
 	err = json.Unmarshal(requestJSON, &request)
 	if err != nil {
 		return nil, err
+	}
+	queueLength, err := r.rdb.LLen(context.TODO(), common.RedisKeys.SchedulerWorkerRequests(workerId)).Result()
+	if err == nil {
+		metrics.RecordWorkerQueueDepth(workerId, queueLength)
+	}
+	if !request.Timestamp.IsZero() {
+		metrics.RecordWorkerQueueReceiveLatency(workerId, time.Since(request.Timestamp), &request)
 	}
 
 	return &request, nil
@@ -572,7 +599,11 @@ func (r *WorkerRedisRepository) SetContainerResourceValues(workerId string, cont
 
 func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) (string, error) {
 	lockKey := common.RedisKeys.WorkerImageLock(workerId, imageId)
-	err := r.lock.Acquire(context.TODO(), lockKey, common.RedisLockOptions{TtlS: 10, Retries: 3})
+	err := r.lock.Acquire(context.TODO(), lockKey, common.RedisLockOptions{
+		TtlS:          30,
+		Retries:       600,
+		RetryInterval: 50 * time.Millisecond,
+	})
 	if err != nil {
 		return "", err
 	}

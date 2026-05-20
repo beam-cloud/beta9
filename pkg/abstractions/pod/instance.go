@@ -156,6 +156,13 @@ func (i *podInstance) stoppableContainers() ([]string, error) {
 			continue
 		}
 
+		if i.StubConfig.KeepWarmSeconds > 0 && container.StartedAt > 0 {
+			keepWarmUntil := time.Unix(container.StartedAt, 0).Add(time.Duration(i.StubConfig.KeepWarmSeconds) * time.Second)
+			if time.Now().Before(keepWarmUntil) {
+				continue
+			}
+		}
+
 		// Skip containers with keep warm locks
 		keepWarmVal, err := i.Rdb.Get(context.TODO(), Keys.podKeepWarmLock(i.Workspace.Name, i.Stub.ExternalId, container.ContainerId)).Int()
 		if err != nil && err != redis.Nil {

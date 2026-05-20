@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha1"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -15,9 +18,8 @@ import (
 	"sync"
 	"time"
 
-	mathrand "math/rand"
-
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/coreos/go-iptables/iptables"
@@ -29,15 +31,17 @@ import (
 )
 
 const (
-	containerBridgeLinkName      string = "b9_br0"
-	containerVethHostPrefix      string = "b9_veth_h_"
-	containerVethContainerPrefix string = "b9_veth_c_"
-	containerSubnet              string = "192.168.1.0/24" // TODO: replace with dynamic subnet
-	containerGatewayAddress      string = "192.168.1.1"
-	containerBridgeAddress       string = "192.168.1.1"
-	containerSubnetIPv6          string = "fd00:abcd::/64"
-	containerGatewayAddressIPv6  string = "fd00:abcd::1"
-	containerBridgeAddressIPv6   string = "fd00:abcd::1"
+	containerBridgeLinkName       string = "b9_br0"
+	containerVethHostPrefix       string = "b9h"
+	containerVethContainerPrefix  string = "b9c"
+	legacyContainerVethHostPrefix string = "b9_veth_h_"
+	networkInterfaceNameMaxLength        = 15
+	containerSubnet               string = "192.168.0.0/20"
+	containerGatewayAddress       string = "192.168.0.1"
+	containerBridgeAddress        string = "192.168.0.1"
+	containerSubnetIPv6           string = "fd00:abcd::/64"
+	containerGatewayAddressIPv6   string = "fd00:abcd::1"
+	containerBridgeAddressIPv6    string = "fd00:abcd::1"
 
 	containerNetworkCleanupInterval time.Duration = time.Minute * 1
 )
@@ -54,6 +58,95 @@ type ContainerNetworkManager struct {
 	mu                  sync.Mutex
 	config              types.AppConfig
 	containerInstances  *common.SafeMap[*ContainerInstance]
+	bridgeConfigured    bool
+}
+
+type PortBinding struct {
+	HostPort      int
+	ContainerPort int
+}
+
+func containerVethNames(containerId string) (string, string) {
+	suffixLength := min(
+		networkInterfaceNameMaxLength-len(containerVethHostPrefix),
+		networkInterfaceNameMaxLength-len(containerVethContainerPrefix),
+	)
+	suffix := containerIdHashSuffix(containerId, suffixLength)
+	return containerVethHostPrefix + suffix, containerVethContainerPrefix + suffix
+}
+
+func containerIdHashSuffix(containerId string, length int) string {
+	sum := sha1.Sum([]byte(containerId))
+	encoded := hex.EncodeToString(sum[:])
+	if length > len(encoded) {
+		length = len(encoded)
+	}
+	return encoded[:length]
+}
+
+func containerIPv4Mask() net.IPMask {
+	_, ipNet, err := net.ParseCIDR(containerSubnet)
+	if err != nil {
+		return net.CIDRMask(24, 32)
+	}
+	return ipNet.Mask
+}
+
+func containerIPv4HostOffset(ip net.IP) (uint32, error) {
+	ipv4 := ip.To4()
+	if ipv4 == nil {
+		return 0, fmt.Errorf("invalid IPv4 address: %s", ip)
+	}
+
+	_, ipNet, err := net.ParseCIDR(containerSubnet)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse IPv4 subnet: %w", err)
+	}
+	if !ipNet.Contains(ipv4) {
+		return 0, fmt.Errorf("IPv4 address %s is outside container subnet %s", ip, containerSubnet)
+	}
+
+	base := ipNet.IP.To4()
+	if base == nil {
+		return 0, fmt.Errorf("invalid IPv4 subnet base: %s", containerSubnet)
+	}
+
+	return binary.BigEndian.Uint32(ipv4) - binary.BigEndian.Uint32(base), nil
+}
+
+func containerIPv6Address(ip net.IP, ipv6Net *net.IPNet) (net.IP, error) {
+	offset, err := containerIPv4HostOffset(ip)
+	if err != nil {
+		return nil, err
+	}
+
+	ipv6 := append(net.IP(nil), ipv6Net.IP.To16()...)
+	if ipv6 == nil {
+		return nil, fmt.Errorf("invalid IPv6 subnet: %s", ipv6Net.String())
+	}
+	binary.BigEndian.PutUint32(ipv6[12:16], offset)
+	return ipv6, nil
+}
+
+func containerIdFromIptablesRule(rule string) (string, bool) {
+	idx := strings.LastIndex(rule, containerVethHostPrefix)
+	if idx == -1 {
+		idx = strings.LastIndex(rule, legacyContainerVethHostPrefix)
+	}
+	if idx == -1 {
+		return "", false
+	}
+
+	comment := rule[idx:]
+	parts := strings.SplitN(comment, ":", 2)
+	if len(parts) != 2 {
+		return "", false
+	}
+
+	containerId := strings.Fields(parts[1])[0]
+	containerId = strings.Trim(containerId, `"`)
+	containerId = strings.TrimRight(containerId, `\`)
+	return strings.TrimSuffix(containerId, "*/"), true
 }
 
 func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, containerRepoClient pb.ContainerRepositoryServiceClient, config types.AppConfig, containerInstances *common.SafeMap[*ContainerInstance]) (*ContainerNetworkManager, error) {
@@ -99,10 +192,11 @@ func NewContainerNetworkManager(ctx context.Context, workerId string, workerRepo
 		}
 	}
 
-	networkPrefix := os.Getenv("NETWORK_PREFIX")
-	if networkPrefix == "" {
+	baseNetworkPrefix := os.Getenv("NETWORK_PREFIX")
+	if baseNetworkPrefix == "" {
 		return nil, errors.New("invalid network prefix")
 	}
+	networkPrefix := fmt.Sprintf("%s-%s", baseNetworkPrefix, workerId)
 
 	m := &ContainerNetworkManager{
 		ctx:                 ctx,
@@ -154,10 +248,8 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	truncatedContainerId := containerId[len(containerId)-5:]
 	namespace := containerId
-	vethHost := fmt.Sprintf("%s%s", containerVethHostPrefix, truncatedContainerId)
-	vethContainer := fmt.Sprintf("%s%s", containerVethContainerPrefix, truncatedContainerId)
+	vethHost, vethContainer := containerVethNames(containerId)
 
 	// Store default network namespace for later
 	hostNS, err := netns.Get()
@@ -167,16 +259,21 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	defer hostNS.Close()
 
 	// Create a veth pair in the host namespace
+	phaseStart := time.Now()
 	if err = m.createVethPair(vethHost, vethContainer); err != nil {
+		metrics.RecordWorkerStartupPhase("network_create_veth", time.Since(phaseStart), request, map[string]string{"success": "false"})
 		return err
 	}
+	metrics.RecordWorkerStartupPhase("network_create_veth", time.Since(phaseStart), request, map[string]string{"success": "true"})
 
 	// Set up the bridge in the host namespace and add the host side of the veth pair to it
 	hostVeth, err := netlink.LinkByName(vethHost)
 	if err != nil {
 		return err
 	}
-	bridge, err := m.setupBridge(containerBridgeLinkName)
+	phaseStart = time.Now()
+	bridge, err := m.getOrSetupBridge(containerBridgeLinkName)
+	metrics.RecordWorkerStartupPhase("network_setup_bridge", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -191,7 +288,9 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	}
 
 	// Create a new namespace for the container
+	phaseStart = time.Now()
 	newNs, err := netns.NewNamed(namespace)
+	metrics.RecordWorkerStartupPhase("network_create_namespace", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -226,11 +325,13 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 		return err
 	}
 
+	phaseStart = time.Now()
 	err = m.configureContainerNetwork(&containerNetworkConfigOpts{
 		containerId:   containerId,
 		containerVeth: containerVeth,
 		request:       request,
 	})
+	metrics.RecordWorkerStartupPhase("network_configure_namespace", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 
 	// Switch back to host namespace before setting up BlockNetwork rules
 	if nsErr := netns.Set(hostNS); nsErr != nil {
@@ -244,14 +345,20 @@ func (m *ContainerNetworkManager) Setup(containerId string, spec *specs.Spec, re
 	// Setup network restrictions in host namespace (must be done in host namespace to affect forwarding)
 	if len(request.AllowList) > 0 {
 		// Use allowlist (which internally blocks all other traffic)
+		phaseStart = time.Now()
 		if err := m.setupAllowList(containerId, request, request.AllowList); err != nil {
+			metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "allowlist", "success": "false"})
 			return err
 		}
+		metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "allowlist", "success": "true"})
 	} else if request.BlockNetwork {
 		// Block all network if no allowlist is specified
+		phaseStart = time.Now()
 		if err := m.setupBlockNetwork(containerId, request); err != nil {
+			metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "block", "success": "false"})
 			return err
 		}
+		metrics.RecordWorkerStartupPhase("network_restrictions", time.Since(phaseStart), request, map[string]string{"mode": "block", "success": "true"})
 	}
 
 	return nil
@@ -270,6 +377,24 @@ func (m *ContainerNetworkManager) createVethPair(hostVethName, containerVethName
 	return netlink.LinkAdd(link)
 }
 
+func (m *ContainerNetworkManager) getOrSetupBridge(bridgeName string) (netlink.Link, error) {
+	if m.bridgeConfigured {
+		bridge, err := netlink.LinkByName(bridgeName)
+		if err == nil {
+			return bridge, nil
+		}
+		m.bridgeConfigured = false
+	}
+
+	bridge, err := m.setupBridge(bridgeName)
+	if err != nil {
+		return nil, err
+	}
+
+	m.bridgeConfigured = true
+	return bridge, nil
+}
+
 func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, error) {
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
@@ -286,7 +411,9 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 
 	bridge, err := netlink.LinkByName(bridgeName)
 	if err == nil {
-		// Bridge is already set up, do nothing
+		if err := m.ensureBridgeConfigured(bridgeName, bridge); err != nil {
+			return nil, err
+		}
 		return bridge, nil
 	}
 
@@ -307,18 +434,21 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 		return nil, err
 	}
 
-	if err := netlink.LinkSetUp(bridge); err != nil {
-		return nil, err
-	}
+	return bridge, m.ensureBridgeConfigured(bridgeName, bridge)
+}
 
+func (m *ContainerNetworkManager) ensureBridgeConfigured(bridgeName string, bridge netlink.Link) error {
+	if err := netlink.LinkSetUp(bridge); err != nil {
+		return err
+	}
 	bridgeIPv4 := &netlink.Addr{
 		IPNet: &net.IPNet{
 			IP:   net.ParseIP(containerBridgeAddress),
-			Mask: net.CIDRMask(24, 32),
+			Mask: containerIPv4Mask(),
 		},
 	}
-	if err := netlink.AddrAdd(bridge, bridgeIPv4); err != nil {
-		return nil, err
+	if err := netlink.AddrReplace(bridge, bridgeIPv4); err != nil {
+		return err
 	}
 
 	if m.ipt6 != nil {
@@ -329,8 +459,8 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 				Mask: ipv6Net.Mask,
 			},
 		}
-		if err := netlink.AddrAdd(bridge, bridgeIPv6); err != nil {
-			return nil, err
+		if err := netlink.AddrReplace(bridge, bridgeIPv6); err != nil {
+			return err
 		}
 	}
 
@@ -339,26 +469,26 @@ func (m *ContainerNetworkManager) setupBridge(bridgeName string) (netlink.Link, 
 
 	// IPv4
 	if err := m.ipt.AppendUnique("nat", "POSTROUTING", "-s", containerSubnet, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
-		return nil, err
+		return err
 	}
 
 	// IPv6
 	if m.ipt6 != nil {
 		if err := m.ipt6.AppendUnique("nat", "POSTROUTING", "-s", containerSubnetIPv6, "-o", m.defaultLink.Attrs().Name, "-j", "MASQUERADE"); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	// Allow forwarding of traffic from the bridge to the external network and back
 	if err := m.ipt.InsertUnique("filter", "FORWARD", 1, "-i", bridgeName, "-o", m.defaultLink.Attrs().Name, "-j", "ACCEPT"); err != nil {
-		return nil, err
+		return err
 	}
 
 	if err := m.ipt.InsertUnique("filter", "FORWARD", 1, "-i", m.defaultLink.Attrs().Name, "-o", bridgeName, "-j", "ACCEPT"); err != nil {
-		return nil, err
+		return err
 	}
 
-	return bridge, err
+	return nil
 }
 
 type containerNetworkConfigOpts struct {
@@ -368,11 +498,13 @@ type containerNetworkConfigOpts struct {
 }
 
 func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetworkConfigOpts) error {
+	phaseStart := time.Now()
 	lockResponse, err := handleGRPCResponse(m.workerRepoClient.SetNetworkLock(m.ctx, &pb.SetNetworkLockRequest{
 		NetworkPrefix: m.networkPrefix,
 		Ttl:           10,
 		Retries:       10,
 	}))
+	metrics.RecordWorkerStartupPhase("network_ip_lock", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -428,9 +560,11 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 	}
 
 	// See what IP addresses are already allocated
+	phaseStart = time.Now()
 	getContainerIpsResponse, err := handleGRPCResponse(m.workerRepoClient.GetContainerIps(m.ctx, &pb.GetContainerIpsRequest{
 		NetworkPrefix: m.networkPrefix,
 	}))
+	metrics.RecordWorkerStartupPhase("network_ip_scan", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -442,14 +576,12 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 	}
 
 	var ipAddr *netlink.Addr = nil
-	var ipv4LastOctet int = -1
-
 	// Choose a new address that lies in containerSubnet
 	_, ipNet, _ := net.ParseCIDR(containerSubnet)
 	for ip := ipNet.IP.Mask(ipNet.Mask); ipNet.Contains(ip); ip = nextIP(ip, 1) {
 		ipStr := ip.String()
 
-		// Skip the gateway address (i.e. 192.168.1.1)
+		// Skip the gateway and network addresses.
 		if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
 			continue
 		}
@@ -464,9 +596,6 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 				Mask: ipNet.Mask,
 			},
 		}
-
-		// Extract the last octet of the IPv4 address
-		ipv4LastOctet = int(ip.To4()[3])
 		break
 	}
 
@@ -474,7 +603,9 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 		return errors.New("unable to assign IP address to container")
 	}
 
+	phaseStart = time.Now()
 	if err := netlink.AddrAdd(opts.containerVeth, ipAddr); err != nil {
+		metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "false"})
 		return err
 	}
 
@@ -484,24 +615,27 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 		Gw:        net.ParseIP(containerGatewayAddress),
 	}
 	if err := netlink.RouteAdd(defaultRoute); err != nil {
+		metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "false"})
 		return err
 	}
 
 	if m.ipt6 != nil {
 		// Parse the IPv6 subnet
 		_, ipv6Net, _ := net.ParseCIDR(containerSubnetIPv6)
-		ipv6Prefix := ipv6Net.IP.String()
-
-		// Allocate an IPv6 address using the last octet of the IPv4 address
-		ipv6Address := fmt.Sprintf("%s%x", ipv6Prefix, ipv4LastOctet)
+		ipv6Address, err := containerIPv6Address(ipAddr.IP, ipv6Net)
+		if err != nil {
+			metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "false"})
+			return err
+		}
 		ipv6Addr := &netlink.Addr{
 			IPNet: &net.IPNet{
-				IP:   net.ParseIP(ipv6Address),
+				IP:   ipv6Address,
 				Mask: ipv6Net.Mask,
 			},
 		}
 
 		if err := netlink.AddrAdd(opts.containerVeth, ipv6Addr); err != nil {
+			metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "false"})
 			return err
 		}
 
@@ -511,15 +645,19 @@ func (m *ContainerNetworkManager) configureContainerNetwork(opts *containerNetwo
 			Gw:        net.ParseIP(containerGatewayAddressIPv6),
 		}
 		if err := netlink.RouteAdd(defaultIPv6Route); err != nil {
+			metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "false"})
 			return err
 		}
 	}
+	metrics.RecordWorkerStartupPhase("network_ip_assign", time.Since(phaseStart), opts.request, map[string]string{"success": "true"})
 
+	phaseStart = time.Now()
 	_, err = handleGRPCResponse(m.workerRepoClient.SetContainerIp(m.ctx, &pb.SetContainerIpRequest{
 		NetworkPrefix: m.networkPrefix,
 		ContainerId:   opts.containerId,
 		IpAddress:     ipAddr.IP.String(),
 	}))
+	metrics.RecordWorkerStartupPhase("network_set_container_ip", time.Since(phaseStart), opts.request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		return err
 	}
@@ -765,6 +903,14 @@ func (m *ContainerNetworkManager) removeIPTablesRules(ip string, ipt *iptables.I
 }
 
 func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, containerPort int) error {
+	return m.ExposePorts(containerId, []PortBinding{{HostPort: hostPort, ContainerPort: containerPort}})
+}
+
+func (m *ContainerNetworkManager) ExposePorts(containerId string, bindings []PortBinding) error {
+	if len(bindings) == 0 {
+		return nil
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -773,9 +919,19 @@ func (m *ContainerNetworkManager) ExposePort(containerId string, hostPort, conta
 		return err
 	}
 
+	for _, binding := range bindings {
+		if err := m.exposePortLocked(info, binding.HostPort, binding.ContainerPort); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (m *ContainerNetworkManager) exposePortLocked(info *containerNetworkInfo, hostPort, containerPort int) error {
 	// Insert NAT PREROUTING rule at the top of the chain
 	// IPv4
-	err = m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", info.ContainerIp, containerPort), "-m", "comment", "--comment", info.Comment)
+	err := m.ipt.InsertUnique("nat", "PREROUTING", 1, "-p", "tcp", "--dport", fmt.Sprintf("%d", hostPort), "-j", "DNAT", "--to-destination", fmt.Sprintf("%s:%d", info.ContainerIp, containerPort), "-m", "comment", "--comment", info.Comment)
 	if err != nil {
 		return err
 	}
@@ -960,13 +1116,8 @@ func (m *ContainerNetworkManager) listContainerIdsFromIptables() ([]string, erro
 	}
 
 	for _, rule := range rules {
-		if strings.Contains(rule, containerVethHostPrefix) {
-			parts := strings.Split(rule, ":")
-			if len(parts) > 1 {
-				containerId := strings.Fields(parts[1])[0]
-				containerId = strings.TrimRight(containerId, `\"`)
-				containerIdsSet[containerId] = struct{}{}
-			}
+		if containerId, ok := containerIdFromIptablesRule(rule); ok {
+			containerIdsSet[containerId] = struct{}{}
 		}
 	}
 
@@ -977,13 +1128,8 @@ func (m *ContainerNetworkManager) listContainerIdsFromIptables() ([]string, erro
 		}
 
 		for _, rule := range rules6 {
-			if strings.Contains(rule, containerVethHostPrefix) {
-				parts := strings.Split(rule, ":")
-				if len(parts) > 1 {
-					containerId := strings.Fields(parts[1])[0]
-					containerId = strings.TrimRight(containerId, `\"`)
-					containerIdsSet[containerId] = struct{}{}
-				}
+			if containerId, ok := containerIdFromIptablesRule(rule); ok {
+				containerIdsSet[containerId] = struct{}{}
 			}
 		}
 	}
@@ -1011,49 +1157,4 @@ func generateUniqueMAC() net.HardwareAddr {
 	mac[0] = (mac[0] | 0x02) & 0xfe
 
 	return net.HardwareAddr(mac)
-}
-
-// assignIpInRange assigns an IP address in the range [rangeStart, rangeEnd) that is not already allocated.
-// (returns an error if no IP address can be assigned)
-func assignIpInRange(allocatedSet map[string]bool, rangeStart, rangeEnd uint8) (*netlink.Addr, error) {
-	_, ipNet, _ := net.ParseCIDR(containerSubnet)
-	baseIP := ipNet.IP.To4()
-	if baseIP == nil {
-		return nil, errors.New("invalid IPv4 subnet")
-	}
-
-	var candidates []net.IP
-	for i := rangeStart; i < rangeEnd; i++ {
-		ip := net.IPv4(baseIP[0], baseIP[1], baseIP[2], byte(i))
-		if !ipNet.Contains(ip) {
-			continue
-		}
-
-		ipStr := ip.String()
-		if ipStr == containerBridgeAddress || ipStr == ipNet.IP.String() {
-			continue
-		}
-
-		if _, allocated := allocatedSet[ipStr]; allocated {
-			continue
-		}
-
-		candidates = append(candidates, ip)
-	}
-
-	if len(candidates) == 0 {
-		return nil, errors.New("unable to assign IP address in range")
-	}
-
-	mathrand.Seed(time.Now().UnixNano())
-	mathrand.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
-
-	ip := candidates[0]
-
-	return &netlink.Addr{
-		IPNet: &net.IPNet{
-			IP:   ip,
-			Mask: ipNet.Mask,
-		},
-	}, nil
 }

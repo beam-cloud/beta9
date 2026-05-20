@@ -3,16 +3,94 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
 	"github.com/beam-cloud/beta9/pkg/types"
+	clipCommon "github.com/beam-cloud/clip/pkg/common"
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestWaitForRuntimeStartedDrainsQueuedPIDWhenRuntimeDone(t *testing.T) {
+	for i := 0; i < 1000; i++ {
+		runtimeStarted := make(chan int, 1)
+		runtimeDone := make(chan struct{})
+		runtimeStarted <- 1234
+		close(runtimeDone)
+
+		handled := 0
+		waitForRuntimeStarted(context.Background(), runtimeStarted, runtimeDone, func(pid int) {
+			require.Equal(t, 1234, pid)
+			handled++
+		})
+
+		require.Equal(t, 1, handled)
+	}
+}
+
+func TestWaitForRuntimeStartedReturnsWhenRuntimeDoneWithoutPID(t *testing.T) {
+	runtimeStarted := make(chan int, 1)
+	runtimeDone := make(chan struct{})
+	close(runtimeDone)
+
+	handled := false
+	waitForRuntimeStarted(context.Background(), runtimeStarted, runtimeDone, func(pid int) {
+		handled = true
+	})
+
+	require.False(t, handled)
+}
+
+func TestStartupPortBindingsForSandboxSkipsInternalPorts(t *testing.T) {
+	request := &types.ContainerRequest{
+		Ports: []uint32{
+			uint32(containerInnerPort),
+			uint32(types.WorkerShellPort),
+			uint32(types.WorkerSandboxProcessManagerPort),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+
+	bindings := startupPortBindingsForRequest(request, nil, []int{30001, 30002, 30003})
+	require.Empty(t, bindings)
+}
+
+func TestStartupPortBindingsForSandboxExposesRequestedPorts(t *testing.T) {
+	request := &types.ContainerRequest{
+		Ports: []uint32{
+			9000,
+			uint32(types.WorkerShellPort),
+			uint32(types.WorkerSandboxProcessManagerPort),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypeSandbox)}},
+	}
+
+	bindings := startupPortBindingsForRequest(request, []uint32{9000}, []int{30001, 30002, 30003})
+	require.Equal(t, []PortBinding{{HostPort: 30001, ContainerPort: 9000}}, bindings)
+}
+
+func TestStartupPortBindingsForPodKeepsStartupPorts(t *testing.T) {
+	request := &types.ContainerRequest{
+		Ports: []uint32{
+			uint32(containerInnerPort),
+			uint32(types.WorkerShellPort),
+		},
+		Stub: types.StubWithRelated{Stub: types.Stub{Type: types.StubType(types.StubTypePodRun)}},
+	}
+
+	bindings := startupPortBindingsForRequest(request, nil, []int{30001, 30002})
+	require.Equal(t, []PortBinding{
+		{HostPort: 30001, ContainerPort: containerInnerPort},
+		{HostPort: 30002, ContainerPort: int(types.WorkerShellPort)},
+	}, bindings)
+}
 
 // TestV2ImageEnvironmentFlow tests that v2 images correctly extract metadata from CLIP archives
 // Note: Without actual CLIP archives, this test verifies graceful handling
@@ -292,6 +370,95 @@ func TestCachedImageMetadata(t *testing.T) {
 
 		t.Logf("✅ Gracefully handled missing v2 archive")
 	})
+}
+
+func TestGetCLIPImageMetadataUsesCachedV2ArchiveMetadata(t *testing.T) {
+	imageId := "v2-cached-metadata"
+	imageMetadata := &clipCommon.ImageMetadata{
+		Env:        []string{"FOO=bar"},
+		WorkingDir: "/workspace",
+		Cmd:        []string{"python", "app.py"},
+	}
+
+	imageClient := &ImageClient{
+		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+		v2ImageRefs:       common.NewSafeMap[string](),
+	}
+	imageClient.v2ArchiveMetadata.Set(imageId, &clipCommon.ClipArchiveMetadata{
+		StorageInfo: &clipCommon.OCIStorageInfo{
+			ImageMetadata: imageMetadata,
+		},
+	})
+
+	got, ok := imageClient.GetCLIPImageMetadata(imageId)
+	require.True(t, ok)
+	assert.Equal(t, imageMetadata, got)
+}
+
+func TestCacheOCIMetadataStoresPointerMetadataAndSourceRef(t *testing.T) {
+	imageId := "v2-pointer-metadata"
+	imageClient := &ImageClient{
+		v2ArchiveMetadata: common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+		v2ImageRefs:       common.NewSafeMap[string](),
+	}
+
+	meta := &clipCommon.ClipArchiveMetadata{
+		StorageInfo: &clipCommon.OCIStorageInfo{
+			RegistryURL: "https://registry.example.com",
+			Repository:  "team/image",
+			Reference:   "latest",
+		},
+	}
+	imageClient.cacheOCIMetadata(imageId, meta)
+
+	cachedMeta, ok := imageClient.v2ArchiveMetadata.Get(imageId)
+	require.True(t, ok)
+	assert.Equal(t, meta, cachedMeta)
+
+	sourceRef, ok := imageClient.GetSourceImageRef(imageId)
+	require.True(t, ok)
+	assert.Equal(t, "registry.example.com/team/image:latest", sourceRef)
+}
+
+func TestMountedImageReadyVerifiesMountPath(t *testing.T) {
+	imageId := "warm-image"
+	mountRoot := t.TempDir()
+	imageClient := &ImageClient{
+		imageMountPath:     mountRoot,
+		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+	}
+
+	imageClient.mountedFuseServers.Set(imageId, nil)
+	assert.False(t, imageClient.mountedImageReady(imageId))
+
+	require.NoError(t, os.MkdirAll(imageClient.imageMountPoint(imageId), 0755))
+	imageClient.mountedFuseServers.Set(imageId, nil)
+	assert.True(t, imageClient.mountedImageReady(imageId))
+}
+
+func TestPullImageFromRegistryKeepsPersistentLockFile(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "image.clip")
+	lockPath := archivePath + ".lock"
+	require.NoError(t, os.WriteFile(archivePath, []byte("clip"), 0644))
+
+	imageClient := &ImageClient{}
+	_, err := imageClient.pullImageFromRegistry(context.Background(), archivePath, "image")
+	require.NoError(t, err)
+
+	_, err = os.Stat(lockPath)
+	require.NoError(t, err)
+}
+
+func TestOpenImageLockFileCreatesParentDirectory(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "missing", "nested", "image.clip.lock")
+
+	lockFile, err := openImageLockFile(lockPath)
+	require.NoError(t, err)
+	require.NoError(t, lockFile.Close())
+
+	_, err = os.Stat(lockPath)
+	require.NoError(t, err)
 }
 
 // Get a base test spec

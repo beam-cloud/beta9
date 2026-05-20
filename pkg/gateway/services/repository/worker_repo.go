@@ -53,6 +53,10 @@ func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContain
 				return err
 			}
 
+			if containerRequest != nil {
+				continue
+			}
+
 			time.Sleep(containerRequestPollingInterval)
 		}
 	}

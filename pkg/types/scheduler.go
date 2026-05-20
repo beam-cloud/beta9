@@ -350,6 +350,7 @@ func NewContainerRequestFromProto(in *pb.ContainerRequest) *ContainerRequest {
 		Stub:                     *NewStubWithRelatedFromProto(in.Stub),
 		StubId:                   in.StubId,
 		Timestamp:                in.GetTimestamp().AsTime(),
+		RetryCount:               int(in.RetryCount),
 		CheckpointEnabled:        in.CheckpointEnabled,
 		Preemptable:              in.Preemptable,
 		PoolSelector:             in.PoolSelector,

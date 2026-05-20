@@ -15,10 +15,10 @@ const (
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
 	goprocReadyTimeout             = 10 * time.Second
-	goprocInitialBackoff           = 100 * time.Millisecond
-	goprocMaxBackoff               = 2 * time.Second
+	goprocInitialBackoff           = 25 * time.Millisecond
+	goprocMaxBackoff               = 250 * time.Millisecond
 	goprocBackoffMultiplier        = 1.5
-	goprocCommandCompletionWait    = 100 * time.Millisecond
+	goprocCommandCompletionWait    = 10 * time.Millisecond
 	cgroupSetupCompletionWait      = 500 * time.Millisecond
 	dockerDaemonStartupTimeout     = 30 * time.Second
 	dockerDaemonReadyPollInterval  = 1 * time.Second

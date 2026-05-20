@@ -36,10 +36,11 @@ const (
 )
 
 type request struct {
-	ctx       echo.Context
-	task      *EndpointTask
-	done      chan struct{}
-	processed bool
+	ctx        echo.Context
+	task       *EndpointTask
+	done       chan struct{}
+	processed  bool
+	enqueuedAt time.Time
 }
 
 type container struct {
@@ -140,11 +141,15 @@ func (rb *RequestBuffer) ForwardRequest(ctx echo.Context, task *EndpointTask) er
 
 	done := make(chan struct{})
 	req := &request{
-		ctx:  ctx,
-		done: done,
-		task: task,
+		ctx:        ctx,
+		done:       done,
+		task:       task,
+		enqueuedAt: time.Now(),
 	}
-	rb.buffer.Push(req, false)
+	if rb.buffer.Push(req, false) {
+		metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
+	}
+	rb.recordBufferOccupancy()
 
 	for {
 		select {
@@ -177,6 +182,7 @@ func (rb *RequestBuffer) processRequests() {
 				time.Sleep(requestProcessingInterval)
 				continue
 			}
+			rb.recordBufferOccupancy()
 
 			if req.ctx.Request().Context().Err() != nil {
 				rb.cancelInFlightTask(req.task, types.TaskRequestCancelled)
@@ -194,6 +200,7 @@ func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 		return false
 	}
 
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(rb.ctx, httpConnectionTimeout)
 	defer cancel()
 
@@ -204,12 +211,15 @@ func (rb *RequestBuffer) checkAddressIsReady(address string) bool {
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
+		metrics.RecordProxyBackendDialLatency("endpoint", rb.workspaceName(), rb.stubId, "http", false, time.Since(start))
 		return false
 	}
 	defer resp.Body.Close()
 	defer httpClient.CloseIdleConnections()
 
-	return resp.StatusCode == http.StatusOK
+	ready := resp.StatusCode == http.StatusOK
+	metrics.RecordProxyBackendDialLatency("endpoint", rb.workspaceName(), rb.stubId, "http", ready, time.Since(start))
+	return ready
 }
 
 func (rb *RequestBuffer) discoverContainers() {
@@ -322,6 +332,7 @@ func (rb *RequestBuffer) acquireRequestToken(containerId string) error {
 	// available request tokens, just reverse the operation
 	if tokenCount < 0 {
 		rb.rdb.Incr(rb.ctx, tokenKey)
+		metrics.RecordProxyTokenDenial("endpoint", rb.workspaceName(), rb.stubId)
 		return errors.New("too many in-flight requests")
 	}
 
@@ -381,7 +392,10 @@ func (rb *RequestBuffer) handleRequest(req *request) {
 	rb.availableContainersLock.RLock()
 
 	if len(rb.availableContainers) == 0 {
-		rb.buffer.Push(req, true)
+		if rb.buffer.Push(req, true) {
+			metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
+		}
+		rb.recordBufferOccupancy()
 		rb.availableContainersLock.RUnlock()
 		return
 	}
@@ -394,17 +408,37 @@ func (rb *RequestBuffer) handleRequest(req *request) {
 
 	err := rb.acquireRequestToken(c.id)
 	if err != nil {
-		rb.buffer.Push(req, true)
+		if rb.buffer.Push(req, true) {
+			metrics.RecordRingBufferOverwrite("endpoint", rb.workspaceName(), rb.stubId)
+		}
+		rb.recordBufferOccupancy()
 		return
 	}
 	defer rb.afterRequest(req, c.id)
 
 	req.processed = true
+	protocol := "http"
+	if req.ctx.IsWebSocket() {
+		protocol = "ws"
+	}
+	metrics.RecordProxyQueuedRequestWait("endpoint", rb.workspaceName(), rb.stubId, protocol, time.Since(req.enqueuedAt))
+
 	if req.ctx.IsWebSocket() {
 		rb.handleWSRequest(req, c)
 	} else {
 		rb.handleHttpRequest(req, c)
 	}
+}
+
+func (rb *RequestBuffer) workspaceName() string {
+	if rb.workspace == nil {
+		return ""
+	}
+	return rb.workspace.Name
+}
+
+func (rb *RequestBuffer) recordBufferOccupancy() {
+	metrics.RecordRingBufferOccupancy("endpoint", rb.workspaceName(), rb.stubId, rb.buffer.Len(), rb.buffer.Capacity())
 }
 
 func (rb *RequestBuffer) handleWSRequest(req *request, c container) {
