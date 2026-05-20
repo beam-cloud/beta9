@@ -219,6 +219,46 @@ func TestUpdateContainerStatusStoppingRetriesConcurrencyReleaseAfterTransientFai
 	}
 }
 
+func TestSetContainerStateWithConcurrencyLimitRepairsStaleConcurrencyCounter(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	quota := &types.ConcurrencyLimit{GPULimit: 0, CPUMillicoreLimit: 100}
+	firstRequest := testContainerRequest("sandbox-test-stub-stale-first", "test-workspace", 100)
+	secondRequest := testContainerRequest("sandbox-test-stub-stale-second", "test-workspace", 100)
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, firstRequest); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a state TTL expiry or missed cleanup after a worker failure. The
+	// hot path counter still says the workspace is full, but the active state
+	// scan used for repair no longer includes the first container.
+	if err := rdb.Del(context.Background(), common.RedisKeys.SchedulerContainerState(firstRequest.ContainerId)).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	usageKey := common.RedisKeys.WorkspaceConcurrencyLimitUsage(firstRequest.WorkspaceId)
+	if err := rdb.HSet(context.Background(), usageKey, "repaired_at", time.Now().Add(-time.Minute).Unix()).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.SetContainerStateWithConcurrencyLimit(quota, secondRequest); err != nil {
+		t.Fatalf("expected stale counter repair to admit second request, got %v", err)
+	}
+
+	usedCPU, err := rdb.HGet(context.Background(), usageKey, "cpu").Int64()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usedCPU != secondRequest.Cpu {
+		t.Fatalf("expected repaired counter to track only active request CPU, got %d", usedCPU)
+	}
+}
+
 func TestSetContainerStateWithConcurrencyLimitReturnsReservationReleaseError(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	if err != nil {
@@ -236,7 +276,7 @@ func TestSetContainerStateWithConcurrencyLimitReturnsReservationReleaseError(t *
 	if err := rdb.HSet(context.Background(), usageKey,
 		"gpu_count", 0,
 		"cpu", 0,
-		"initialized", concurrencyUsageInitialized,
+		"initialized", concurrencyCounterInitialized,
 		"updated_at", time.Now().Unix(),
 	).Err(); err != nil {
 		t.Fatal(err)
@@ -258,6 +298,47 @@ func TestSetContainerStateWithConcurrencyLimitReturnsReservationReleaseError(t *
 	}
 	if !strings.Contains(err.Error(), "failed to release concurrency reservation") {
 		t.Fatalf("expected reservation release error, got %v", err)
+	}
+}
+
+func TestGetWorkerAddressShortCallerDeadlineDoesNotReportScheduleFailure(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	startedAt := time.Now()
+	_, err = repo.GetWorkerAddress(ctx, "sandbox-test-stub-waiting")
+	if err == nil {
+		t.Fatal("expected caller deadline error")
+	}
+	if strings.Contains(err.Error(), "failed to schedule") {
+		t.Fatalf("short caller deadline should not be reported as scheduler failure: %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 100*time.Millisecond {
+		t.Fatalf("short caller deadline waited too long: %s", elapsed)
+	}
+}
+
+func TestGetWorkerAddressReturnsScheduleFailureWhenRequestFailed(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	repo := NewContainerRedisRepositoryForTest(rdb)
+	containerId := "sandbox-test-stub-failed"
+	if err := repo.SetContainerRequestStatus(containerId, types.ContainerRequestStatusFailed); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = repo.GetWorkerAddress(context.Background(), containerId)
+	if err == nil || !strings.Contains(err.Error(), "failed to schedule") {
+		t.Fatalf("expected scheduler failure, got %v", err)
 	}
 }
 

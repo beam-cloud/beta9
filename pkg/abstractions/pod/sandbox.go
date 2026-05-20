@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
@@ -15,12 +16,17 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	sandboxConnectWorkerAddressTimeout = 1500 * time.Millisecond
+	sandboxConnectWorkerDialTimeout    = 2 * time.Second
+)
+
 func (s *GenericPodService) SandboxExec(ctx context.Context, in *pb.PodSandboxExecRequest) (*pb.PodSandboxExecResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
 
 	client, _, err := s.getClient(ctx, in.ContainerId, authInfo.Token.Key, authInfo.Workspace.ExternalId)
 	if err != nil {
-		log.Warn().Err(err).Str("container_id", in.ContainerId).Msg("failed to connect to sandbox for exec")
+		logSandboxConnectFailure(err, in.ContainerId)
 		return &pb.PodSandboxExecResponse{
 			Ok:       false,
 			ErrorMsg: sandboxConnectErrorMessage(err),
@@ -564,7 +570,9 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 	}
 
 	phaseStart = time.Now()
-	hostname, err := s.containerRepo.GetWorkerAddress(ctx, containerId)
+	addressCtx, cancel := context.WithTimeout(ctx, sandboxConnectWorkerAddressTimeout)
+	hostname, err := s.containerRepo.GetWorkerAddress(addressCtx, containerId)
+	cancel()
 	if err != nil {
 		metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "worker_address_unavailable", false, time.Since(phaseStart))
 		return nil, nil, err
@@ -572,7 +580,9 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 	metrics.RecordSandboxConnectPhase("worker_address_lookup", workspaceId, container.StubId, string(container.Status), "", true, time.Since(phaseStart))
 
 	phaseStart = time.Now()
-	conn, err := network.ConnectToHost(ctx, hostname, time.Second*30, s.tailscale, s.config.Tailscale)
+	dialCtx, cancel := context.WithTimeout(ctx, sandboxConnectWorkerDialTimeout)
+	conn, err := network.ConnectToHost(dialCtx, hostname, sandboxConnectWorkerDialTimeout, s.tailscale, s.config.Tailscale)
+	cancel()
 	if err != nil {
 		metrics.RecordSandboxConnectPhase("worker_dial", workspaceId, container.StubId, string(container.Status), "worker_dial_failed", false, time.Since(phaseStart))
 		return nil, nil, err
@@ -593,6 +603,32 @@ func (s *GenericPodService) getClient(ctx context.Context, containerId, token st
 
 func sandboxConnectErrorMessage(_ error) string {
 	return "Failed to connect to sandbox"
+}
+
+func logSandboxConnectFailure(err error, containerId string) {
+	event := log.Warn()
+	if isTransientSandboxConnectFailure(err) {
+		event = log.Trace()
+	}
+
+	event.Err(err).Str("container_id", containerId).Msg("failed to connect to sandbox for exec")
+}
+
+func isTransientSandboxConnectFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	var stateNotFound *types.ErrContainerStateNotFound
+	if errors.As(err, &stateNotFound) {
+		return true
+	}
+
+	msg := err.Error()
+	return strings.Contains(msg, "failed to schedule container") ||
+		strings.Contains(msg, "context cancelled while trying to get worker addr") ||
+		strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "deadline exceeded")
 }
 
 func (s *GenericPodService) SandboxUpdateTTL(ctx context.Context, in *pb.PodSandboxUpdateTTLRequest) (*pb.PodSandboxUpdateTTLResponse, error) {

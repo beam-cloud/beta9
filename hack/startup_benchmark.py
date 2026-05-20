@@ -602,14 +602,17 @@ def find_redis_pod(namespace):
 def redis_cli(namespace, pod_name, *args):
     if not pod_name:
         return None
-    proc = run(
-        ["kubectl", "-n", namespace, "exec", pod_name, "--", "redis-cli", "--raw", *args],
-        check=False,
-        timeout=10,
-    )
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.strip()
+
+    for redis_cli_path in ("redis-cli", "/opt/bitnami/redis/bin/redis-cli"):
+        proc = run(
+            ["kubectl", "-n", namespace, "exec", pod_name, "--", redis_cli_path, "--raw", *args],
+            check=False,
+            timeout=10,
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+
+    return None
 
 
 def redis_hgetall(namespace, pod_name, key):

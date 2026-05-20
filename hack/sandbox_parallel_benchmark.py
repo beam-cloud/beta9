@@ -107,6 +107,10 @@ def parse_args():
     parser.add_argument("--no-prepare-sandbox", dest="prepare_sandbox", action="store_false")
     parser.set_defaults(prepare_sandbox=env_bool("BENCH_SANDBOX_PREPARE", True))
 
+    parser.add_argument("--fresh-object", dest="fresh_object", action="store_true")
+    parser.add_argument("--no-fresh-object", dest="fresh_object", action="store_false")
+    parser.set_defaults(fresh_object=env_bool("BENCH_SANDBOX_FRESH_OBJECT", True))
+
     parser.add_argument("--wait-running", dest="wait_running", action="store_true")
     parser.add_argument("--no-wait-running", dest="wait_running", action="store_false")
     parser.set_defaults(wait_running=env_bool("BENCH_SANDBOX_WAIT_RUNNING", False))
@@ -212,13 +216,32 @@ def prepare_sandbox_runtime(args):
         ok = sandbox.prepare_runtime(
             stub_type=sandbox_stub_type,
             force_create_stub=True,
-            ignore_patterns=["*"],
+            ignore_patterns=[] if args.fresh_object else ["*"],
         )
         if not ok:
             raise RuntimeError("SDK Sandbox runtime preparation failed")
         log(f"Prepared sandbox stub {sandbox.stub_id} with image {sandbox.image_id}")
 
     return sandbox
+
+
+def write_fresh_object_marker(args, sync_dir):
+    if not args.fresh_object:
+        return
+
+    marker = Path(sync_dir) / ".beta9-benchmark-object-nonce"
+    marker.write_text(
+        "\n".join(
+            (
+                "beta9 sandbox benchmark object marker",
+                datetime.now(timezone.utc).isoformat(),
+                str(time.monotonic_ns()),
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log(f"Wrote fresh sandbox object marker at {marker}")
 
 
 def wait_running(args, token, container_id, request_start_ns):
@@ -609,6 +632,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="beta9-sandbox-benchmark-") as sdk_sync_dir:
         os.chdir(sdk_sync_dir)
         try:
+            write_fresh_object_marker(args, sdk_sync_dir)
             sandbox = prepare_sandbox_runtime(args)
             samples, batch = run_parallel_samples(args, sandbox, args.token, redis_pod)
         finally:
@@ -650,6 +674,7 @@ def main():
             "sandboxCreateRetries": args.sandbox_create_retries,
             "sandboxReadyTimeoutSeconds": args.sandbox_ready_timeout_seconds,
             "sandboxReadyRetryMs": args.sandbox_ready_retry_ms,
+            "freshObject": args.fresh_object,
         },
         "sandbox": {
             "stubId": getattr(sandbox, "stub_id", ""),

@@ -595,7 +595,11 @@ func (r *WorkerRedisRepository) SetContainerResourceValues(workerId string, cont
 
 func (r *WorkerRedisRepository) SetImagePullLock(workerId, imageId string) (string, error) {
 	lockKey := common.RedisKeys.WorkerImageLock(workerId, imageId)
-	err := r.lock.Acquire(context.TODO(), lockKey, common.RedisLockOptions{TtlS: 10, Retries: 3})
+	err := r.lock.Acquire(context.TODO(), lockKey, common.RedisLockOptions{
+		TtlS:          30,
+		Retries:       600,
+		RetryInterval: 50 * time.Millisecond,
+	})
 	if err != nil {
 		return "", err
 	}

@@ -160,7 +160,7 @@ gateway:
 worker:
 	docker build . --target final --build-arg BASE_STAGE=dev -f ./docker/Dockerfile.worker -t localhost:5001/beta9-worker:$(workerTag)
 	docker push localhost:5001/beta9-worker:$(workerTag)
-	bin/delete_workers.sh
+	BENCH_NAMESPACE="$(BENCH_NAMESPACE)" bin/delete_workers.sh
 
 runner:
 	for target in py312 py311 py310 py39 py38; do \
