@@ -143,8 +143,9 @@ func (s *Scheduler) Run(request *types.ContainerRequest) error {
 		}
 	}
 
-	go s.schedulerUsageMetrics.CounterIncContainerRequested(request)
-	go s.eventRepo.PushContainerRequestedEvent(request)
+	requestedEvent := cloneContainerRequest(request)
+	go s.schedulerUsageMetrics.CounterIncContainerRequested(requestedEvent)
+	go s.eventRepo.PushContainerRequestedEvent(requestedEvent)
 
 	quota, err := s.getConcurrencyLimit(request)
 	if err != nil {
@@ -320,9 +321,29 @@ func (s *Scheduler) scheduleRequest(worker *types.Worker, request *types.Contain
 			Msg("failed to attach build registry credentials to request")
 	}
 
-	go s.schedulerUsageMetrics.CounterIncContainerScheduled(request)
-	go s.eventRepo.PushContainerScheduledEvent(request.ContainerId, worker.Id, request)
-	return s.workerRepo.ScheduleContainerRequest(worker, request)
+	if err := s.workerRepo.ScheduleContainerRequest(worker, request); err != nil {
+		return err
+	}
+
+	scheduledEvent := cloneContainerRequest(request)
+	go s.schedulerUsageMetrics.CounterIncContainerScheduled(scheduledEvent)
+	go s.eventRepo.PushContainerScheduledEvent(scheduledEvent.ContainerId, worker.Id, scheduledEvent)
+	return nil
+}
+
+func cloneContainerRequest(request *types.ContainerRequest) *types.ContainerRequest {
+	if request == nil {
+		return nil
+	}
+
+	cloned := *request
+	cloned.EntryPoint = append([]string(nil), request.EntryPoint...)
+	cloned.Env = append([]string(nil), request.Env...)
+	cloned.GpuRequest = append([]string(nil), request.GpuRequest...)
+	cloned.Mounts = append([]types.Mount(nil), request.Mounts...)
+	cloned.Ports = append([]uint32(nil), request.Ports...)
+	cloned.AllowList = append([]string(nil), request.AllowList...)
+	return &cloned
 }
 
 // attachImageCredentials fetches and attaches OCI credentials to a container request
