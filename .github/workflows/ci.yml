@@ -104,7 +104,7 @@ jobs:
         
       - name: Install Python GRPC Package
         run: |
-          python3 -m pip install -U "betterproto-beta9[compiler]==2.0.1" "grpcio==1.69.0"
+          python3 -m pip install -U "betterproto-beta9[compiler]==2.0.1" "grpcio==1.69.0" "black==24.8.0" "isort==5.13.2"
           sudo apt update
           sudo apt install protobuf-compiler -y
       

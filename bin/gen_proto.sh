@@ -13,6 +13,10 @@ PROTOC_GEN_GO_VERSION="${PROTOC_GEN_GO_VERSION:-v1.31.0}"
 PROTOC_GEN_GO_GRPC_VERSION="${PROTOC_GEN_GO_GRPC_VERSION:-v1.3.0}"
 GRPC_GATEWAY_VERSION="${GRPC_GATEWAY_VERSION:-v2.27.1}"
 GO2PROTO_VERSION="${GO2PROTO_VERSION:-091f2e319b32a829052fdc8f02bbb6561c4f0504}"
+PYTHON_BETTERPROTO_VERSION="${PYTHON_BETTERPROTO_VERSION:-2.0.1}"
+PYTHON_GRPCIO_VERSION="${PYTHON_GRPCIO_VERSION:-1.69.0}"
+PYTHON_BLACK_VERSION="${PYTHON_BLACK_VERSION:-24.8.0}"
+PYTHON_ISORT_VERSION="${PYTHON_ISORT_VERSION:-5.13.2}"
 
 proto_tools_bin="${PROTO_TOOLS_BIN:-${XDG_CACHE_HOME:-$HOME/.cache}/beta9/proto-tools/${PROTOC_GEN_GO_VERSION}-${PROTOC_GEN_GO_GRPC_VERSION}-${GRPC_GATEWAY_VERSION}-${GO2PROTO_VERSION}/bin}"
 mkdir -p "$proto_tools_bin"
@@ -46,6 +50,44 @@ if command -v uv >/dev/null 2>&1; then
 elif ! command -v protoc-gen-python_betterproto_beta9 >/dev/null 2>&1; then
     echo "protoc-gen-python_betterproto_beta9 is not installed and uv is unavailable" >&2
     exit 1
+else
+    export PYTHON_BETTERPROTO_VERSION PYTHON_GRPCIO_VERSION PYTHON_BLACK_VERSION PYTHON_ISORT_VERSION
+    python3 - <<'PY'
+import importlib.metadata as md
+import os
+import sys
+
+expected = {
+    "betterproto-beta9": os.environ["PYTHON_BETTERPROTO_VERSION"],
+    "grpcio": os.environ["PYTHON_GRPCIO_VERSION"],
+    "black": os.environ["PYTHON_BLACK_VERSION"],
+    "isort": os.environ["PYTHON_ISORT_VERSION"],
+}
+
+errors = []
+for package, version in expected.items():
+    try:
+        installed = md.version(package)
+    except md.PackageNotFoundError:
+        errors.append(f"{package} is not installed")
+        continue
+    if installed != version:
+        errors.append(f"{package}=={installed}, expected {package}=={version}")
+
+if errors:
+    print("Python protobuf compiler dependencies are not pinned to the SDK lock:", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
+    print(
+        "Install: python3 -m pip install "
+        f'"betterproto-beta9[compiler]=={expected["betterproto-beta9"]}" '
+        f'"grpcio=={expected["grpcio"]}" '
+        f'"black=={expected["black"]}" '
+        f'"isort=={expected["isort"]}"',
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
 fi
 
 go2proto -f ./pkg/types/types.proto -p ./pkg/types -n github.com/beam-cloud/beta9/proto -t types
