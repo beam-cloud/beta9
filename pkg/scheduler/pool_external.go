@@ -623,12 +623,12 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumes(workerMemory int64) []
 		})
 	}
 
-	if workerCacheEnabled(wpc.config) {
+	if workerCacheEnabled(wpc.config, wpc.workerPoolConfig) {
 		volumes = append(volumes, corev1.Volume{
 			Name: cacheVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: workerCacheHostPath(wpc.config),
+					Path: workerCacheHostPath(wpc.config, wpc.workerPoolConfig),
 					Type: &hostPathType,
 				},
 			},
@@ -694,10 +694,10 @@ func (wpc *ExternalWorkerPoolController) getWorkerVolumeMounts() []corev1.Volume
 		})
 	}
 
-	if workerCacheEnabled(wpc.config) {
+	if workerCacheEnabled(wpc.config, wpc.workerPoolConfig) {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{
 			Name:      cacheVolumeName,
-			MountPath: workerCacheMountPath(wpc.config),
+			MountPath: workerCacheMountPath(wpc.config, wpc.workerPoolConfig),
 			ReadOnly:  false,
 		})
 	}

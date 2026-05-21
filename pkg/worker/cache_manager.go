@@ -61,6 +61,7 @@ type WorkerCacheManager struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	config         types.AppConfig
+	poolConfig     types.WorkerPoolConfig
 	redis          *common.RedisClient
 	workerID       string
 	instanceID     string
@@ -86,6 +87,7 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		ctx:        cacheCtx,
 		cancel:     cancel,
 		config:     config,
+		poolConfig: poolConfig,
 		redis:      redisClient,
 		workerID:   workerID,
 		instanceID: cacheWorkerInstanceID(workerID),
@@ -102,7 +104,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 		return nil, nil
 	}
 
-	cacheConfig := normalizeCacheConfig(m.config, m.nodeID, m.locality)
+	cacheConfig := normalizeCacheConfig(m.config, m.poolConfig, m.nodeID, m.locality)
 	registry := cache.NewRedisRegistryWithClient(cacheConfig.Global, cacheConfig.Server, m.redis.UniversalClient)
 	m.registry = registry
 
@@ -156,7 +158,16 @@ func (m *WorkerCacheManager) Close() error {
 }
 
 func (m *WorkerCacheManager) enabled() bool {
-	return m.config.Cache.Enabled && m.config.Worker.CacheEnabled
+	if !m.config.Cache.Enabled || !m.config.Worker.CacheEnabled {
+		return false
+	}
+	if m.poolConfig.Cache.Enabled != nil && !*m.poolConfig.Cache.Enabled {
+		return false
+	}
+	if m.poolConfig.Cache.Disk.Enabled != nil {
+		return *m.poolConfig.Cache.Disk.Enabled
+	}
+	return m.config.Cache.Disk.Enabled
 }
 
 func (m *WorkerCacheManager) runReplicaElection(cacheConfig cache.Config) {
@@ -424,7 +435,7 @@ func (m *WorkerCacheManager) releaseActiveLease(ctx context.Context) error {
 	return m.releaseLeaseKey(ctx, leaseKey)
 }
 
-func normalizeCacheConfig(config types.AppConfig, nodeID, locality string) cache.Config {
+func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolConfig, nodeID, locality string) cache.Config {
 	cacheConfig := config.Cache
 
 	if cacheConfig.Global.DefaultLocality == "" {
@@ -482,6 +493,7 @@ func normalizeCacheConfig(config types.AppConfig, nodeID, locality string) cache
 	if cacheConfig.Disk.MaxUsagePct == 0 {
 		cacheConfig.Disk.MaxUsagePct = cacheDefaultDiskMaxUsage
 	}
+	applyWorkerPoolCacheOverrides(&cacheConfig, poolConfig)
 
 	if cacheConfig.Server.Mode == "" {
 		cacheConfig.Server.Mode = cache.ServerModeNode
@@ -520,6 +532,24 @@ func normalizeCacheConfig(config types.AppConfig, nodeID, locality string) cache
 
 	applyCacheRedisConfig(&cacheConfig, config.Database.Redis)
 	return cacheConfig
+}
+
+func applyWorkerPoolCacheOverrides(cacheConfig *cache.Config, poolConfig types.WorkerPoolConfig) {
+	if poolConfig.Cache.Disk.Enabled != nil {
+		cacheConfig.Disk.Enabled = *poolConfig.Cache.Disk.Enabled
+	}
+	if poolConfig.Cache.Disk.HostPath != "" {
+		cacheConfig.Disk.HostPath = poolConfig.Cache.Disk.HostPath
+	}
+	if poolConfig.Cache.Disk.MountPath != "" {
+		cacheConfig.Disk.MountPath = poolConfig.Cache.Disk.MountPath
+	}
+	if poolConfig.Cache.Disk.MaxUsagePct > 0 {
+		cacheConfig.Disk.MaxUsagePct = poolConfig.Cache.Disk.MaxUsagePct
+	}
+	if poolConfig.Cache.Enabled != nil && !*poolConfig.Cache.Enabled {
+		cacheConfig.Disk.Enabled = false
+	}
 }
 
 func applyCacheRedisConfig(cacheConfig *cache.Config, redisConfig types.RedisConfig) {

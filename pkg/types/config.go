@@ -426,6 +426,19 @@ type WorkerPoolConfig struct {
 	StoragePath               string                            `key:"storagePath" json:"storage_path"`
 	StorageMode               string                            `key:"storageMode" json:"storage_mode"`
 	CheckpointPath            string                            `key:"checkpointPath" json:"checkpoint_path"`
+	Cache                     WorkerPoolCacheConfig             `key:"cache" json:"cache"`
+}
+
+type WorkerPoolCacheConfig struct {
+	Enabled *bool                     `key:"enabled" json:"enabled"`
+	Disk    WorkerPoolCacheDiskConfig `key:"disk" json:"disk"`
+}
+
+type WorkerPoolCacheDiskConfig struct {
+	Enabled     *bool   `key:"enabled" json:"enabled"`
+	HostPath    string  `key:"hostPath" json:"host_path"`
+	MountPath   string  `key:"mountPath" json:"mount_path"`
+	MaxUsagePct float64 `key:"maxUsagePct" json:"max_usage_pct"`
 }
 
 type RuntimeConfig struct {

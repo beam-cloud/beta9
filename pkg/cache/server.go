@@ -293,7 +293,7 @@ func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
 	if tcpAddr, ok := localListener.Addr().(*net.TCPAddr); ok {
 		port := fmt.Sprintf("%d", tcpAddr.Port)
 		if advertiseHost != "" {
-			advertiseAddr = net.JoinHostPort(advertiseHost, port)
+			advertiseAddr = net.JoinHostPort(normalizeAdvertiseHost(advertiseHost), port)
 		} else if cs.privateIpAddr != "" {
 			advertiseAddr = net.JoinHostPort(cs.privateIpAddr, port)
 		} else {
@@ -324,6 +324,14 @@ func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
 	}()
 
 	return advertiseAddr, nil
+}
+
+func normalizeAdvertiseHost(host string) string {
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		return strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	}
+
+	return host
 }
 
 func (cs *Server) StartServer(port uint) error {
