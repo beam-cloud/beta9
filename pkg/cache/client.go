@@ -1,15 +1,18 @@
 package cache
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"time"
 
 	proto "github.com/beam-cloud/beta9/proto"
 	rendezvous "github.com/beam-cloud/rendezvous"
+	"github.com/djherbis/atime"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -38,6 +41,27 @@ type RendezvousHasher interface {
 
 type ClientOptions struct {
 	RoutingKey string
+}
+
+type StoreContentOptions struct {
+	RoutingKey string
+	Lock       bool
+}
+
+type LocalContentSource struct {
+	Path      string
+	CachePath string
+}
+
+type S3ContentSource struct {
+	Path           string
+	CachePath      string
+	BucketName     string
+	Region         string
+	EndpointURL    string
+	AccessKey      string
+	SecretKey      string
+	ForcePathStyle bool
 }
 
 type Client struct {
@@ -557,17 +581,82 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 func (c *Client) StoreContent(chunks chan []byte, hash string, opts struct {
 	RoutingKey string
 }) (string, error) {
+	return c.storeContentFromChunks(chunks, hash, "", opts.RoutingKey)
+}
+
+func (c *Client) StoreContentAtPath(content []byte, cachePath string, opts StoreContentOptions) (string, error) {
+	if opts.RoutingKey == "" {
+		opts.RoutingKey = cachePath
+	}
+
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
 	defer cancel()
 
+	return c.withStoreFromContentLock(ctx, cachePath, opts.Lock, func() (string, error) {
+		return c.storeContentFromReaderWithContext(ctx, bytes.NewReader(content), opts.RoutingKey, cachePath, nil)
+	})
+}
+
+// StoreContentFromLocalFile streams a caller-local file to the selected cache host.
+func (c *Client) StoreContentFromLocalFile(source LocalContentSource, opts StoreContentOptions) (string, error) {
+	if source.CachePath == "" {
+		source.CachePath = source.Path
+	}
 	if opts.RoutingKey == "" {
-		opts.RoutingKey = hash
+		opts.RoutingKey = source.CachePath
+	}
+
+	file, err := os.Open(source.Path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", err
+	}
+	metadata := cacheFSMetadataFromFileInfo(source.CachePath, info)
+
+	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
+	defer cancel()
+
+	return c.withStoreFromContentLock(ctx, source.CachePath, opts.Lock, func() (string, error) {
+		return c.storeContentFromReaderWithContext(ctx, file, opts.RoutingKey, source.CachePath, metadata)
+	})
+}
+
+func cacheFSMetadataFromFileInfo(cachePath string, info os.FileInfo) *proto.CacheFSMetadata {
+	if info == nil || info.IsDir() {
+		return nil
+	}
+
+	modTime := info.ModTime()
+	accessTime := atime.Get(info)
+	return &proto.CacheFSMetadata{
+		Path:      cachePath,
+		Mode:      fuse.S_IFREG | uint32(info.Mode().Perm()),
+		Size:      uint64(info.Size()),
+		Atime:     uint64(accessTime.Unix()),
+		Mtime:     uint64(modTime.Unix()),
+		Ctime:     uint64(modTime.Unix()),
+		Atimensec: uint32(accessTime.Nanosecond()),
+		Mtimensec: uint32(modTime.Nanosecond()),
+		Ctimensec: uint32(modTime.Nanosecond()),
+	}
+}
+
+func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePath string, routingKey string) (string, error) {
+	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
+	defer cancel()
+
+	if routingKey == "" {
+		routingKey = hash
 	}
 
 	client, _, err := c.getGRPCClient(&ClientRequest{
 		rt:        ClientRequestTypeStorage,
 		hash:      hash,
-		key:       opts.RoutingKey,
+		key:       routingKey,
 		hostIndex: 0,
 	})
 	if err != nil {
@@ -580,9 +669,19 @@ func (c *Client) StoreContent(chunks chan []byte, hash string, opts struct {
 	}
 
 	start := time.Now()
+	cachePathSent := false
 	for chunk := range chunks {
 		req := &proto.CacheStoreContentRequest{Content: chunk}
+		if !cachePathSent {
+			req.CachePath = cachePath
+			cachePathSent = true
+		}
 		if err := stream.Send(req); err != nil {
+			return "", err
+		}
+	}
+	if cachePath != "" && !cachePathSent {
+		if err := stream.Send(&proto.CacheStoreContentRequest{CachePath: cachePath}); err != nil {
 			return "", err
 		}
 	}
@@ -596,12 +695,128 @@ func (c *Client) StoreContent(chunks chan []byte, hash string, opts struct {
 	return resp.Hash, nil
 }
 
+func (c *Client) storeContentFromReaderWithContext(ctx context.Context, reader io.Reader, routingKey string, cachePath string, fileMetadata *proto.CacheFSMetadata) (string, error) {
+	client, _, err := c.getGRPCClient(&ClientRequest{
+		rt:        ClientRequestTypeStorage,
+		hash:      routingKey,
+		key:       routingKey,
+		hostIndex: 0,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	stream, err := client.StoreContent(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	start := time.Now()
+	cachePathSent := false
+	buf := make([]byte, writeBufferSizeBytes)
+	for {
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+
+			req := &proto.CacheStoreContentRequest{Content: chunk}
+			if !cachePathSent {
+				req.CachePath = cachePath
+				req.Metadata = fileMetadata
+				cachePathSent = true
+			}
+			if err := stream.Send(req); err != nil {
+				return "", err
+			}
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return "", readErr
+		}
+	}
+
+	if cachePath != "" && !cachePathSent {
+		if err := stream.Send(&proto.CacheStoreContentRequest{CachePath: cachePath, Metadata: fileMetadata}); err != nil {
+			return "", err
+		}
+	}
+
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		return "", err
+	}
+
+	Logger.Debugf("Elapsed time to send content: %v", time.Since(start))
+	return resp.Hash, nil
+}
+
+func (c *Client) withStoreFromContentLock(ctx context.Context, sourcePath string, lock bool, fn func() (string, error)) (string, error) {
+	if !lock {
+		return fn()
+	}
+
+	if err := c.coordinator.SetStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
+		return "", ErrUnableToAcquireLock
+	}
+	lockReleased := false
+	defer func() {
+		if lockReleased {
+			return
+		}
+		if err := c.coordinator.RemoveStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
+			Logger.Errorf("StoreContent[ERR] - error removing lock: %v", err)
+		}
+	}()
+
+	storeContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-storeContext.Done():
+				return
+			case <-ticker.C:
+				if err := c.coordinator.RefreshStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
+					Logger.Errorf("StoreContent[ERR] - error refreshing lock: %v", err)
+				}
+			}
+		}
+	}()
+
+	hash, err := fn()
+	if err != nil {
+		return hash, err
+	}
+
+	if err := c.coordinator.RemoveStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
+		Logger.Errorf("StoreContent[ERR] - error removing lock: %v", err)
+	}
+	lockReleased = true
+	return hash, nil
+}
+
 func (c *Client) StoreContentFromFUSE(source struct {
 	Path string
 }, opts struct {
 	RoutingKey string
 	Lock       bool
 }) (string, error) {
+	return c.StoreContentFromLocalFile(LocalContentSource{Path: source.Path}, StoreContentOptions{
+		RoutingKey: opts.RoutingKey,
+		Lock:       opts.Lock,
+	})
+}
+
+// StoreContentFromLocalSource asks the selected cache host to read source.Path itself.
+// Prefer StoreContentFromLocalFile unless the source path is guaranteed to exist on cache hosts.
+func (c *Client) StoreContentFromLocalSource(source LocalContentSource, opts StoreContentOptions) (string, error) {
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
 	defer cancel()
 
@@ -609,7 +824,7 @@ func (c *Client) StoreContentFromFUSE(source struct {
 		opts.RoutingKey = source.Path
 	}
 
-	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{Path: source.Path}}
+	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{Path: source.Path, CachePath: source.CachePath}}
 	return c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
 }
 
@@ -624,6 +839,21 @@ func (c *Client) StoreContentFromS3(source struct {
 	RoutingKey string
 	Lock       bool
 }) (string, error) {
+	return c.StoreContentFromS3Source(S3ContentSource{
+		Path:           source.Path,
+		BucketName:     source.BucketName,
+		Region:         source.Region,
+		EndpointURL:    source.EndpointURL,
+		AccessKey:      source.AccessKey,
+		SecretKey:      source.SecretKey,
+		ForcePathStyle: true,
+	}, StoreContentOptions{
+		RoutingKey: opts.RoutingKey,
+		Lock:       opts.Lock,
+	})
+}
+
+func (c *Client) StoreContentFromS3Source(source S3ContentSource, opts StoreContentOptions) (string, error) {
 	ctx, cancel := context.WithTimeout(c.ctx, storeContentRequestTimeout)
 	defer cancel()
 
@@ -632,12 +862,14 @@ func (c *Client) StoreContentFromS3(source struct {
 	}
 
 	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{
-		Path:        source.Path,
-		BucketName:  source.BucketName,
-		Region:      source.Region,
-		EndpointUrl: source.EndpointURL,
-		AccessKey:   source.AccessKey,
-		SecretKey:   source.SecretKey,
+		Path:           source.Path,
+		CachePath:      source.CachePath,
+		BucketName:     source.BucketName,
+		Region:         source.Region,
+		EndpointUrl:    source.EndpointURL,
+		AccessKey:      source.AccessKey,
+		SecretKey:      source.SecretKey,
+		ForcePathStyle: source.ForcePathStyle,
 	}}
 	return c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
 }

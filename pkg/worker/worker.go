@@ -654,73 +654,96 @@ func (s *Worker) updateContainerStatus(request *types.ContainerRequest) error {
 		case <-s.ctx.Done():
 			return nil
 		case <-ticker.C:
-			instance, exists := s.containerInstances.Get(request.ContainerId)
-
-			if !exists {
-				return nil
-			}
-
-			// Stop container if it is "orphaned" - meaning it's running but has no associated state
-			getStateResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{
-				ContainerId: request.ContainerId,
-			}))
-			if err != nil {
-				notFoundErr := &types.ErrContainerStateNotFound{}
-				if notFoundErr.From(err) {
-					s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
-					return nil
-				}
-
-				continue
-			}
-
-			state := getStateResponse.State
-			status := types.ContainerStatus(state.Status)
-
-			log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
-
-			expirySeconds := int64(types.ContainerStateTtlS)
-			if status == types.ContainerStatusPending {
-				if instance.RuntimeStarted {
-					log.Info().
-						Str("container_id", request.ContainerId).
-						Int("pid", instance.RuntimePid).
-						Msg("reconciling pending container to running from runtime start signal")
-					state.Status = string(types.ContainerStatusRunning)
-				} else {
-					expirySeconds = int64(types.ContainerStateTtlSWhilePending)
-				}
-			}
-
-			_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
-				ContainerId:   request.ContainerId,
-				Status:        string(state.Status),
-				ExpirySeconds: expirySeconds,
-			}))
+			done, err := s.updateContainerStatusOnce(request)
 			if err != nil {
 				log.Error().Str("container_id", request.ContainerId).Err(err).Msg("unable to update container state")
 			}
-
-			// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
-			// ensure it is killed after that
-			if status == types.ContainerStatusStopping {
-				go func() {
-					time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
-
-					_, exists := s.containerInstances.Get(request.ContainerId)
-					if !exists {
-						return
-					}
-
-					log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
-					s.stopContainerChan <- stopContainerEvent{
-						ContainerId: request.ContainerId,
-						Kill:        true,
-					}
-				}()
+			if done {
+				return nil
 			}
 		}
 	}
+}
+
+func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (bool, error) {
+	instance, exists := s.containerInstances.Get(request.ContainerId)
+	if !exists {
+		return true, nil
+	}
+
+	if instance.ExitCode >= 0 {
+		log.Debug().
+			Str("container_id", request.ContainerId).
+			Int("exit_code", instance.ExitCode).
+			Msg("container exited, stopping status heartbeat")
+		return true, nil
+	}
+
+	// Stop container if it is "orphaned" - meaning it's running but has no associated state.
+	getStateResponse, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{
+		ContainerId: request.ContainerId,
+	}))
+	if err != nil {
+		notFoundErr := &types.ErrContainerStateNotFound{}
+		if notFoundErr.From(err) {
+			s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
+			return true, nil
+		}
+
+		return false, nil
+	}
+
+	state := getStateResponse.State
+	if state == nil {
+		return false, fmt.Errorf("container state response missing state")
+	}
+
+	status := types.ContainerStatus(state.Status)
+
+	log.Info().Str("container_id", request.ContainerId).Str("image_id", request.ImageId).Msg("container still running")
+
+	expirySeconds := int64(types.ContainerStateTtlS)
+	if status == types.ContainerStatusPending {
+		if instance.RuntimeStarted {
+			log.Info().
+				Str("container_id", request.ContainerId).
+				Int("pid", instance.RuntimePid).
+				Msg("reconciling pending container to running from runtime start signal")
+			state.Status = string(types.ContainerStatusRunning)
+		} else {
+			expirySeconds = int64(types.ContainerStateTtlSWhilePending)
+		}
+	}
+
+	_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+		ContainerId:   request.ContainerId,
+		Status:        string(state.Status),
+		ExpirySeconds: expirySeconds,
+	}))
+	if err != nil {
+		return false, err
+	}
+
+	// If container is supposed to be stopped, but isn't gone after TerminationGracePeriod seconds
+	// ensure it is killed after that
+	if status == types.ContainerStatusStopping {
+		go func() {
+			time.Sleep(time.Duration(s.config.Worker.TerminationGracePeriod) * time.Second)
+
+			_, exists := s.containerInstances.Get(request.ContainerId)
+			if !exists {
+				return
+			}
+
+			log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
+			s.stopContainerChan <- stopContainerEvent{
+				ContainerId: request.ContainerId,
+				Kill:        true,
+			}
+		}()
+	}
+
+	return false, nil
 }
 
 func (s *Worker) processStopContainerEvents() {

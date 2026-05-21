@@ -26,22 +26,27 @@ type S3Client struct {
 }
 
 type S3SourceConfig struct {
-	BucketName  string
-	Region      string
-	EndpointURL string
-	AccessKey   string
-	SecretKey   string
+	BucketName     string
+	Region         string
+	EndpointURL    string
+	AccessKey      string
+	SecretKey      string
+	ForcePathStyle bool
 }
 
 func NewS3Client(ctx context.Context, sourceConfig S3SourceConfig, serverConfig ServerConfig) (*S3Client, error) {
-	cfg, err := config.LoadDefaultConfig(ctx,
+	loadOptions := []func(*config.LoadOptions) error{
 		config.WithRegion(sourceConfig.Region),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+	}
+	if sourceConfig.AccessKey != "" && sourceConfig.SecretKey != "" {
+		loadOptions = append(loadOptions, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			sourceConfig.AccessKey,
 			sourceConfig.SecretKey,
 			"",
-		)),
-	)
+		)))
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx, loadOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
@@ -58,7 +63,9 @@ func NewS3Client(ctx context.Context, sourceConfig S3SourceConfig, serverConfig 
 		serverConfig.S3DownloadChunkSize = defaultDownloadChunkSize
 	}
 
-	s3Client := s3.NewFromConfig(cfg)
+	s3Client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.UsePathStyle = sourceConfig.ForcePathStyle
+	})
 	return &S3Client{
 		Client:              s3Client,
 		Source:              sourceConfig,
@@ -73,6 +80,18 @@ func (c *S3Client) GetClient() *s3.Client {
 
 func (c *S3Client) BucketName() string {
 	return c.Source.BucketName
+}
+
+func (c *S3Client) Open(ctx context.Context, key string) (io.ReadCloser, error) {
+	resp, err := c.Client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.Source.BucketName),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return resp.Body, nil
 }
 
 func (c *S3Client) Head(ctx context.Context, key string) (bool, *s3.HeadObjectOutput, error) {

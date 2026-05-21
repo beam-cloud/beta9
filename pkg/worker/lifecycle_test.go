@@ -10,6 +10,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
 	clipCommon "github.com/beam-cloud/clip/pkg/common"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -90,6 +91,46 @@ func TestStartupPortBindingsForPodKeepsStartupPorts(t *testing.T) {
 		{HostPort: 30001, ContainerPort: containerInnerPort},
 		{HostPort: 30002, ContainerPort: int(types.WorkerShellPort)},
 	}, bindings)
+}
+
+func TestAddRequestMountsBuildsVolumeCacheMap(t *testing.T) {
+	localPath := filepath.Join(t.TempDir(), "volume")
+	spec := getTestBaseSpec()
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		Mounts: []types.Mount{{
+			LocalPath: localPath,
+			MountPath: filepath.Join(types.WorkerContainerVolumePath, "data"),
+			ReadOnly:  true,
+		}},
+	}
+
+	volumeCacheMap := (&Worker{}).addRequestMounts(request, &spec)
+
+	require.Equal(t, map[string]string{"data": localPath}, volumeCacheMap)
+	require.DirExists(t, localPath)
+	require.Len(t, spec.Mounts, 1)
+	require.Equal(t, localPath, spec.Mounts[0].Source)
+	require.Equal(t, request.Mounts[0].MountPath, spec.Mounts[0].Destination)
+	require.Equal(t, []string{"rbind", "ro"}, spec.Mounts[0].Options)
+}
+
+func TestAddRequestMountsSkipsMissingMountPoint(t *testing.T) {
+	spec := getTestBaseSpec()
+	missingPath := filepath.Join(t.TempDir(), "missing")
+	request := &types.ContainerRequest{
+		ContainerId: "container-1",
+		Mounts: []types.Mount{{
+			LocalPath: missingPath,
+			MountPath: "/mnt/data",
+			MountType: storage.StorageModeMountPoint,
+		}},
+	}
+
+	volumeCacheMap := (&Worker{}).addRequestMounts(request, &spec)
+
+	require.Empty(t, volumeCacheMap)
+	require.Empty(t, spec.Mounts)
 }
 
 // TestV2ImageEnvironmentFlow tests that v2 images correctly extract metadata from CLIP archives

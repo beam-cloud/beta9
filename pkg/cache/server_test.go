@@ -1,9 +1,11 @@
 package cache
 
 import (
+	"context"
 	"net"
 	"testing"
 
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,4 +25,30 @@ func TestNormalizeAdvertiseHostLeavesDNSHostUnchanged(t *testing.T) {
 	host := normalizeAdvertiseHost("machine-abc123.tailnet.example")
 	require.Equal(t, "machine-abc123.tailnet.example", host)
 	require.Equal(t, "machine-abc123.tailnet.example:2049", net.JoinHostPort(host, "2049"))
+}
+
+func TestStoreSyntheticContentInCacheFSCreatesVolumeFilePath(t *testing.T) {
+	ctx := context.Background()
+	registry := NewMockRegistry()
+	server := &Server{coordinator: registry}
+
+	err := server.StoreSyntheticContentInCacheFS(ctx, "/volumes/workspace/.cache", "sha256-content", 123)
+	require.NoError(t, err)
+
+	dir, err := registry.GetFsNode(ctx, GenerateFsID("/volumes"))
+	require.NoError(t, err)
+	require.Equal(t, "/volumes", dir.Path)
+	require.Equal(t, uint32(fuse.S_IFDIR|0755), dir.Mode)
+
+	node, err := registry.GetFsNode(ctx, GenerateFsID("/volumes/workspace/.cache"))
+	require.NoError(t, err)
+	require.Equal(t, "/volumes/workspace/.cache", node.Path)
+	require.Equal(t, "sha256-content", node.Hash)
+	require.Equal(t, uint64(123), node.Size)
+	require.Equal(t, uint32(fuse.S_IFREG|0644), node.Mode)
+
+	children, err := registry.GetFsNodeChildren(ctx, GenerateFsID("/volumes/workspace"))
+	require.NoError(t, err)
+	require.Len(t, children, 1)
+	require.Equal(t, node.ID, children[0].ID)
 }
