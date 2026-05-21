@@ -18,3 +18,9 @@ func TestNormalizeAdvertiseHostLeavesIPv4HostUnchanged(t *testing.T) {
 	require.Equal(t, "10.100.61.10", host)
 	require.Equal(t, "10.100.61.10:2049", net.JoinHostPort(host, "2049"))
 }
+
+func TestNormalizeAdvertiseHostLeavesDNSHostUnchanged(t *testing.T) {
+	host := normalizeAdvertiseHost("machine-abc123.tailnet.example")
+	require.Equal(t, "machine-abc123.tailnet.example", host)
+	require.Equal(t, "machine-abc123.tailnet.example:2049", net.JoinHostPort(host, "2049"))
+}
