@@ -165,6 +165,12 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
+      # Optional per-pool cache disk override for nodes with different storage layouts.
+      # cache:
+      #   disk:
+      #     hostPath: /mnt/nvme/beta9/cache
+      #     mountPath: /var/lib/beta9/cache
+      #     maxUsagePct: 0.95
       jobSpec:
         nodeSelector: {}
       criuEnabled: true
@@ -184,6 +190,11 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
+      # Optional per-pool cache disk override.
+      # cache:
+      #   disk:
+      #     hostPath: /mnt/build-cache/beta9/cache
+      #     mountPath: /var/lib/beta9/cache
       tmpSizeLimit: 50Gi
       jobSpec:
         nodeSelector: {}

@@ -89,18 +89,33 @@ func GenerateWorkerId() string {
 	return uuid.New().String()[:8]
 }
 
-func workerCacheEnabled(config types.AppConfig) bool {
-	return config.Cache.Enabled && config.Worker.CacheEnabled && config.Cache.Disk.Enabled
+func workerCacheEnabled(config types.AppConfig, poolConfig types.WorkerPoolConfig) bool {
+	if !config.Cache.Enabled || !config.Worker.CacheEnabled {
+		return false
+	}
+	if poolConfig.Cache.Enabled != nil && !*poolConfig.Cache.Enabled {
+		return false
+	}
+	if poolConfig.Cache.Disk.Enabled != nil {
+		return *poolConfig.Cache.Disk.Enabled
+	}
+	return config.Cache.Disk.Enabled
 }
 
-func workerCacheHostPath(config types.AppConfig) string {
+func workerCacheHostPath(config types.AppConfig, poolConfig types.WorkerPoolConfig) string {
+	if poolConfig.Cache.Disk.HostPath != "" {
+		return poolConfig.Cache.Disk.HostPath
+	}
 	if config.Cache.Disk.HostPath != "" {
 		return config.Cache.Disk.HostPath
 	}
 	return defaultCachePath
 }
 
-func workerCacheMountPath(config types.AppConfig) string {
+func workerCacheMountPath(config types.AppConfig, poolConfig types.WorkerPoolConfig) string {
+	if poolConfig.Cache.Disk.MountPath != "" {
+		return poolConfig.Cache.Disk.MountPath
+	}
 	if config.Cache.Disk.MountPath != "" {
 		return config.Cache.Disk.MountPath
 	}
