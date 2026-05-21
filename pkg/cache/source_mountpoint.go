@@ -1,10 +1,14 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 )
+
+const mountPointMountTimeout time.Duration = 30 * time.Second
 
 type MountPointSource struct {
 	mountCmd *exec.Cmd
@@ -21,9 +25,13 @@ func (s *MountPointSource) Mount(localPath string) error {
 	// NOTE: this is called to force unmount previous mounts
 	// It seems like mountpoint doesn't clean up gracefully by itself
 	s.Unmount(localPath)
-	os.MkdirAll(localPath, 0755)
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		return fmt.Errorf("failed to create mount path %s: %w", localPath, err)
+	}
 
-	s.mountCmd = exec.Command(
+	mountCtx, cancelMount := context.WithCancel(context.Background())
+	s.mountCmd = exec.CommandContext(
+		mountCtx,
 		"mount-s3",
 		s.config.BucketName,
 		localPath,
@@ -45,15 +53,45 @@ func (s *MountPointSource) Mount(localPath string) error {
 		)
 	}
 
+	type mountResult struct {
+		output []byte
+		err    error
+	}
+	resultCh := make(chan mountResult, 1)
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
-		if err != nil {
-			Logger.Errorf("error executing mount-s3 mount: %v, output: %s", err, string(output))
-		}
+		resultCh <- mountResult{output: output, err: err}
 	}()
 
 	Logger.Infof("Mountpoint filesystem is being mounted to: '%s'", localPath)
-	return nil
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(mountPointMountTimeout)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case result := <-resultCh:
+			if result.err != nil {
+				cancelMount()
+				return fmt.Errorf("error executing mount-s3 mount: %w, output: %s", result.err, string(result.output))
+			}
+			if isMounted(localPath) {
+				Logger.Infof("Mountpoint filesystem mounted to: '%s'", localPath)
+				return nil
+			}
+			cancelMount()
+			return fmt.Errorf("mount-s3 exited before filesystem was mounted to: '%s', output: %s", localPath, string(result.output))
+		case <-ticker.C:
+			if isMounted(localPath) {
+				Logger.Infof("Mountpoint filesystem mounted to: '%s'", localPath)
+				return nil
+			}
+		case <-timeout.C:
+			cancelMount()
+			return fmt.Errorf("failed to mount Mountpoint filesystem to: '%s': timed out after %s", localPath, mountPointMountTimeout)
+		}
+	}
 }
 
 func (s *MountPointSource) Format(fsName string) error {

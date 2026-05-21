@@ -687,7 +687,13 @@ func (c *ImageClient) cacheV2SourceImageRef(request *types.ContainerRequest) {
 }
 
 func (c *ImageClient) Cleanup() error {
+	mountedFuseServers := map[string]*fuse.Server{}
 	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
+		mountedFuseServers[imageId] = server
+		return true
+	})
+
+	for imageId, server := range mountedFuseServers {
 		mountPoint := c.imageMountPoint(imageId)
 		log.Info().Str("image_id", imageId).Str("mount_point", mountPoint).Msg("un-mounting image")
 		server.Unmount()
@@ -695,8 +701,7 @@ func (c *ImageClient) Cleanup() error {
 			log.Warn().Str("image_id", imageId).Str("mount_point", mountPoint).Err(err).Msg("failed to force unmount image mount")
 		}
 		c.mountedFuseServers.Delete(imageId)
-		return true // Continue iteration
-	})
+	}
 
 	log.Info().Str("path", c.imageCachePath).Msg("cleaning up cachefs image cache")
 	if c.config.Cache.Client.CacheFS.Enabled && c.cacheClient != nil {

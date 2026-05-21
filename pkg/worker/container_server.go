@@ -499,19 +499,29 @@ func (s *ContainerRuntimeServer) waitForContainer(ctx context.Context, container
 	rt := s.getRuntime()
 
 	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		instance, exists := s.containerInstances.Get(containerId)
 		if !exists {
 			return errors.New("container not found")
 		}
 
 		if instance.Spec == nil {
-			time.Sleep(100 * time.Millisecond)
+			if err := waitForContainerRetry(ctx); err != nil {
+				return err
+			}
 			continue
 		}
 
 		state, err := rt.State(ctx, containerId)
 		if err != nil {
-			time.Sleep(100 * time.Millisecond)
+			if err := waitForContainerRetry(ctx); err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -519,10 +529,24 @@ func (s *ContainerRuntimeServer) waitForContainer(ctx context.Context, container
 			break
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		if err := waitForContainerRetry(ctx); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+func waitForContainerRetry(ctx context.Context) error {
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *ContainerRuntimeServer) getHostPathFromContainerPath(containerPath string, instance *ContainerInstance) string {

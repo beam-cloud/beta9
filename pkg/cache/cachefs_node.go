@@ -403,7 +403,25 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 		return syscall.ENOENT
 	}
 
-	if _, err := n.filesystem.Registry.GetFsNode(ctx, newFsId); err == nil {
+	if existingMetadata, err := n.filesystem.Registry.GetFsNode(ctx, newFsId); err == nil {
+		sourceIsDir := fsMetadataIsDir(metadata)
+		targetIsDir := fsMetadataIsDir(existingMetadata)
+		if sourceIsDir && !targetIsDir {
+			return syscall.ENOTDIR
+		}
+		if !sourceIsDir && targetIsDir {
+			return syscall.EISDIR
+		}
+		if targetIsDir {
+			children, err := n.filesystem.Registry.GetFsNodeChildren(ctx, newFsId)
+			if err != nil {
+				return syscall.EIO
+			}
+			if len(children) > 0 {
+				return syscall.ENOTEMPTY
+			}
+		}
+
 		if err := n.filesystem.Registry.RemoveFsNode(ctx, newFsId); err != nil {
 			return syscall.EIO
 		}
@@ -434,4 +452,8 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 	}
 
 	return fs.OK
+}
+
+func fsMetadataIsDir(metadata *FSMetadata) bool {
+	return metadata != nil && metadata.Mode&uint32(syscall.S_IFMT) == uint32(syscall.S_IFDIR)
 }

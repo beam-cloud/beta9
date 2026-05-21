@@ -105,22 +105,19 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	cacheConfig := normalizeCacheConfig(m.config, m.nodeID, m.locality)
 	registry := cache.NewRedisRegistryWithClient(cacheConfig.Global, cacheConfig.Server, m.redis.UniversalClient)
 	m.registry = registry
-	if cacheConfig.Embedded.Mode == cache.EmbeddedModeActiveActive {
-		m.wg.Add(1)
-		go m.runReplicaElection(cacheConfig)
-	}
 
 	client, err := cache.NewClientWithRegistry(m.ctx, cacheConfig, registry, m.locality)
 	if err != nil {
-		if m.server != nil {
-			m.cancel()
-			_ = m.server.Close()
-		}
+		m.cancel()
 		return nil, err
 	}
 
 	m.client = client
-	if cacheConfig.Embedded.Mode == cache.EmbeddedModeSinglePrimary {
+	switch cacheConfig.Embedded.Mode {
+	case cache.EmbeddedModeActiveActive:
+		m.wg.Add(1)
+		go m.runReplicaElection(cacheConfig)
+	case cache.EmbeddedModeSinglePrimary:
 		m.wg.Add(1)
 		go m.runElection(cacheConfig)
 	}
@@ -210,58 +207,33 @@ func (m *WorkerCacheManager) acquireReplicaLease(cacheConfig cache.Config) (stri
 	return "", false, nil
 }
 
+type embeddedCacheLeaseOptions struct {
+	leaseKey            string
+	hostID              string
+	leaseTTL            time.Duration
+	refreshInterval     time.Duration
+	startFailureMessage string
+	startedMessage      string
+	refreshErrorMessage string
+	lostMessage         string
+	logHostID           bool
+	logLeaseKey         bool
+}
+
 func (m *WorkerCacheManager) runReplica(cacheConfig cache.Config, leaseKey string) {
 	hostID := cacheWorkerHostID(m.locality, m.nodeID, m.workerID, m.instanceID)
-	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, hostID)
-	if err != nil {
-		log.Warn().Err(err).Str("lease_key", leaseKey).Msg("failed to start embedded cache replica")
-		_ = m.releaseLeaseKey(context.Background(), leaseKey)
-		return
-	}
-
-	m.mu.Lock()
-	m.activeLeaseKey = leaseKey
-	m.mu.Unlock()
-
-	log.Info().
-		Str("addr", advertisedAddr).
-		Str("locality", m.locality).
-		Str("node_id", m.nodeID).
-		Str("host_id", hostID).
-		Str("lease_key", leaseKey).
-		Msg("embedded cache replica started")
-
-	ticker := time.NewTicker(cacheLeaseRefresh(cacheConfig))
-	defer ticker.Stop()
-	defer func() {
-		_ = server.Close()
-		_ = m.releaseLeaseKey(context.Background(), leaseKey)
-		m.mu.Lock()
-		if m.server == server {
-			m.server = nil
-		}
-		if m.activeLeaseKey == leaseKey {
-			m.activeLeaseKey = ""
-		}
-		m.mu.Unlock()
-	}()
-
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-ticker.C:
-			ok, err := m.refreshLeaseKey(leaseKey, cacheLeaseTTL(cacheConfig))
-			if err != nil {
-				log.Warn().Err(err).Str("lease_key", leaseKey).Msg("failed to refresh embedded cache replica lease")
-				return
-			}
-			if !ok {
-				log.Warn().Str("lease_key", leaseKey).Msg("lost embedded cache replica lease")
-				return
-			}
-		}
-	}
+	m.runLeasedServer(cacheConfig, embeddedCacheLeaseOptions{
+		leaseKey:            leaseKey,
+		hostID:              hostID,
+		leaseTTL:            cacheLeaseTTL(cacheConfig),
+		refreshInterval:     cacheLeaseRefresh(cacheConfig),
+		startFailureMessage: "failed to start embedded cache replica",
+		startedMessage:      "embedded cache replica started",
+		refreshErrorMessage: "failed to refresh embedded cache replica lease",
+		lostMessage:         "lost embedded cache replica lease",
+		logHostID:           true,
+		logLeaseKey:         true,
+	})
 }
 
 func (m *WorkerCacheManager) runElection(cacheConfig cache.Config) {
@@ -293,27 +265,58 @@ func (m *WorkerCacheManager) runElection(cacheConfig cache.Config) {
 }
 
 func (m *WorkerCacheManager) runPrimary(cacheConfig cache.Config) {
-	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, cacheNodeHostID(m.locality, m.nodeID))
+	m.runLeasedServer(cacheConfig, embeddedCacheLeaseOptions{
+		leaseKey:            m.leaseKey,
+		hostID:              cacheNodeHostID(m.locality, m.nodeID),
+		leaseTTL:            cachePrimaryLeaseTTL,
+		refreshInterval:     cachePrimaryRefresh,
+		startFailureMessage: "failed to start embedded cache primary",
+		startedMessage:      "embedded cache server elected primary",
+		refreshErrorMessage: "failed to refresh cache primary lease",
+		lostMessage:         "lost cache primary lease",
+		logLeaseKey:         true,
+	})
+}
+
+func (m *WorkerCacheManager) runLeasedServer(cacheConfig cache.Config, opts embeddedCacheLeaseOptions) {
+	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, opts.hostID)
 	if err != nil {
-		log.Warn().Err(err).Msg("failed to start embedded cache primary")
-		_ = m.releaseLeaseKey(context.Background(), m.leaseKey)
+		event := log.Warn().Err(err)
+		if opts.logLeaseKey {
+			event = event.Str("lease_key", opts.leaseKey)
+		}
+		event.Msg(opts.startFailureMessage)
+		_ = m.releaseLeaseKey(context.Background(), opts.leaseKey)
 		return
 	}
 
-	log.Info().
+	m.mu.Lock()
+	m.activeLeaseKey = opts.leaseKey
+	m.mu.Unlock()
+
+	event := log.Info().
 		Str("addr", advertisedAddr).
 		Str("locality", m.locality).
-		Str("node_id", m.nodeID).
-		Msg("embedded cache server elected primary")
+		Str("node_id", m.nodeID)
+	if opts.logHostID {
+		event = event.Str("host_id", opts.hostID)
+	}
+	if opts.logLeaseKey {
+		event = event.Str("lease_key", opts.leaseKey)
+	}
+	event.Msg(opts.startedMessage)
 
-	ticker := time.NewTicker(cachePrimaryRefresh)
+	ticker := time.NewTicker(opts.refreshInterval)
 	defer ticker.Stop()
 	defer func() {
 		_ = server.Close()
-		_ = m.releaseLeaseKey(context.Background(), m.leaseKey)
+		_ = m.releaseLeaseKey(context.Background(), opts.leaseKey)
 		m.mu.Lock()
 		if m.server == server {
 			m.server = nil
+		}
+		if m.activeLeaseKey == opts.leaseKey {
+			m.activeLeaseKey = ""
 		}
 		m.mu.Unlock()
 	}()
@@ -323,13 +326,13 @@ func (m *WorkerCacheManager) runPrimary(cacheConfig cache.Config) {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
-			ok, err := m.refreshLeaseKey(m.leaseKey, cachePrimaryLeaseTTL)
+			ok, err := m.refreshLeaseKey(opts.leaseKey, opts.leaseTTL)
 			if err != nil {
-				log.Warn().Err(err).Str("lease_key", m.leaseKey).Msg("failed to refresh cache primary lease")
+				log.Warn().Err(err).Str("lease_key", opts.leaseKey).Msg(opts.refreshErrorMessage)
 				return
 			}
 			if !ok {
-				log.Warn().Str("lease_key", m.leaseKey).Msg("lost cache primary lease")
+				log.Warn().Str("lease_key", opts.leaseKey).Msg(opts.lostMessage)
 				return
 			}
 		}

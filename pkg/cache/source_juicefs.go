@@ -78,7 +78,7 @@ func (s *JuiceFsSource) Mount(localPath string) error {
 				Logger.Infof("JuiceFS filesystem mounted to: '%s'", localPath)
 				return nil
 			}
-			return fmt.Errorf("juicefs mount exited before filesystem was mounted to: '%s'", localPath)
+			resultCh = nil
 		case <-ticker.C:
 			if isMounted(localPath) {
 				Logger.Infof("JuiceFS filesystem mounted to: '%s'", localPath)
