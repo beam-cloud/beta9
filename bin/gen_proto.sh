@@ -101,6 +101,9 @@ protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ -I ./pkg/worker/ --go_ou
 protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/gateway.proto
 protoc -I ./googleapis -I ./pkg/types -I ./pkg/gateway/ --python_betterproto_beta9_out=./sdk/src/beta9/clients/ ./pkg/gateway/gateway.proto
 
+# Internal cache services
+protoc -I ./pkg/cache/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/cache/cache.proto
+
 # Repository services
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/gateway/services/repository/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/repository/container_repo.proto
 protoc -I $PROTOC_INCLUDE_PATH -I ./googleapis -I ./pkg/types -I ./pkg/gateway/services/repository/ --go_out=./proto --go_opt=paths=source_relative --go-grpc_out=./proto --go-grpc_opt=paths=source_relative ./pkg/gateway/services/repository/worker_repo.proto

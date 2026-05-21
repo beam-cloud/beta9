@@ -353,7 +353,10 @@ def exec_readiness(args, instance, command, request_start_ns, sample=None):
                 "execExitCode": None,
             }
             if args.wait_exec_complete:
-                exit_code = process.wait()
+                remaining_seconds = deadline - time.monotonic()
+                if remaining_seconds <= 0:
+                    raise RuntimeError("sandbox readiness command did not finish before timeout")
+                exit_code = process.wait(timeout=remaining_seconds)
                 exec_done_ns = time.monotonic_ns()
                 result["execCompleteMs"] = (exec_done_ns - request_start_ns) / 1_000_000
                 result["execExitCode"] = exit_code

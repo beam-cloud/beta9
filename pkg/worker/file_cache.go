@@ -11,8 +11,8 @@ import (
 
 	"github.com/rs/zerolog/log"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/types"
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
@@ -22,10 +22,10 @@ const (
 
 type FileCacheManager struct {
 	config types.AppConfig
-	client *blobcache.BlobCacheClient
+	client *cache.Client
 }
 
-func NewFileCacheManager(config types.AppConfig, client *blobcache.BlobCacheClient) *FileCacheManager {
+func NewFileCacheManager(config types.AppConfig, client *cache.Client) *FileCacheManager {
 	return &FileCacheManager{
 		config: config,
 		client: client,
@@ -61,7 +61,7 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 
 func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCacheMap map[string]string, spec *specs.Spec) error {
 	if !cm.CacheAvailable() || !cm.client.HostsAvailable() {
-		return blobcache.ErrHostNotFound
+		return cache.ErrHostNotFound
 	}
 
 	volumeCacheMapStr := "{}"
@@ -146,8 +146,8 @@ func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) 
 	return workspaceVolumePath, nil
 }
 
-// GetClient returns the blobcache client instance.
-func (cm *FileCacheManager) GetClient() *blobcache.BlobCacheClient {
+// GetClient returns the cache client instance.
+func (cm *FileCacheManager) GetClient() *cache.Client {
 	if !cm.CacheAvailable() {
 		return nil
 	}
@@ -157,7 +157,7 @@ func (cm *FileCacheManager) GetClient() *blobcache.BlobCacheClient {
 
 // CacheAvailable checks if the file cache is available
 func (cm *FileCacheManager) CacheAvailable() bool {
-	if !cm.config.Worker.BlobCacheEnabled {
+	if !cm.config.Worker.CacheEnabled || !cm.config.Cache.Enabled {
 		return false
 	}
 

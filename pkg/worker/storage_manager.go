@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/storage"
 	"github.com/beam-cloud/beta9/pkg/types"
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/rs/zerolog/log"
 )
 
@@ -27,10 +27,10 @@ type WorkspaceStorageManager struct {
 	poolConfig         types.WorkerPoolConfig
 	containerInstances *common.SafeMap[*ContainerInstance]
 	mu                 sync.Mutex
-	cacheClient        *blobcache.BlobCacheClient
+	cacheClient        *cache.Client
 }
 
-func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, poolConfig types.WorkerPoolConfig, containerInstances *common.SafeMap[*ContainerInstance], cacheClient *blobcache.BlobCacheClient) (*WorkspaceStorageManager, error) {
+func NewWorkspaceStorageManager(ctx context.Context, config types.StorageConfig, poolConfig types.WorkerPoolConfig, containerInstances *common.SafeMap[*ContainerInstance], cacheClient *cache.Client) (*WorkspaceStorageManager, error) {
 	sm := &WorkspaceStorageManager{
 		ctx:                ctx,
 		mounts:             common.NewSafeMap[storage.Storage](),

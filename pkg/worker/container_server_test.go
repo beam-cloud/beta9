@@ -7,6 +7,7 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,6 +64,59 @@ func TestWaitForSandboxProcessManagerRefreshesAfterReadySignal(t *testing.T) {
 	got, err := server.waitForSandboxProcessManager(context.Background(), containerId, instance)
 	require.NoError(t, err)
 	require.True(t, got.SandboxProcessManagerReady)
+}
+
+func TestWaitForSandboxProcessManagerFailsAfterFailedReadySignal(t *testing.T) {
+	containerId := "sandbox-test"
+	ready := make(chan struct{})
+	instance := &ContainerInstance{
+		Id:                      containerId,
+		ProcessManagerReadyChan: ready,
+	}
+
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	server.containerInstances.Set(containerId, instance)
+	close(ready)
+
+	got, err := server.waitForSandboxProcessManager(context.Background(), containerId, instance)
+	require.ErrorContains(t, err, "failed to become ready")
+	require.False(t, got.SandboxProcessManagerReady)
+}
+
+func TestContainerSandboxStatusReportsPendingBeforeProcessManagerReady(t *testing.T) {
+	containerId := "sandbox-test"
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	server.containerInstances.Set(containerId, &ContainerInstance{Id: containerId})
+
+	resp, err := server.ContainerSandboxStatus(context.Background(), &pb.ContainerSandboxStatusRequest{
+		ContainerId: containerId,
+	})
+
+	require.NoError(t, err)
+	require.True(t, resp.Ok)
+	require.Equal(t, "pending", resp.Status)
+	require.Equal(t, int32(-1), resp.ExitCode)
+}
+
+func TestContainerSandboxStatusRequiresProcessManagerForPid(t *testing.T) {
+	containerId := "sandbox-test"
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	server.containerInstances.Set(containerId, &ContainerInstance{Id: containerId})
+
+	resp, err := server.ContainerSandboxStatus(context.Background(), &pb.ContainerSandboxStatusRequest{
+		ContainerId: containerId,
+		Pid:         1,
+	})
+
+	require.NoError(t, err)
+	require.False(t, resp.Ok)
+	require.Contains(t, resp.ErrorMsg, "process manager")
 }
 
 func TestWritableContainerAddressMapHandlesNilMap(t *testing.T) {

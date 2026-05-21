@@ -419,6 +419,60 @@ func TestScheduleContainerRequestRejectsStaleWorkerReservation(t *testing.T) {
 	assert.Equal(t, int64(1), queueDepth)
 }
 
+func TestScheduleContainerRequestUsesCurrentCapacityForStaleWorkerReservation(t *testing.T) {
+	rdb, err := NewRedisClientForTest()
+	assert.NotNil(t, rdb)
+	assert.Nil(t, err)
+
+	repo := NewWorkerRedisRepositoryForTest(rdb)
+	worker := &types.Worker{
+		Id:         "worker-stale-reservation-current-capacity",
+		Status:     types.WorkerStatusAvailable,
+		FreeCpu:    200,
+		FreeMemory: 250,
+	}
+	err = repo.AddWorker(worker)
+	assert.Nil(t, err)
+
+	firstWorkerCopy, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	secondWorkerCopy, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+
+	firstRequest := &types.ContainerRequest{
+		ContainerId: "container-stale-reservation-current-capacity-first",
+		Cpu:         100,
+		Memory:      100,
+	}
+	secondRequest := &types.ContainerRequest{
+		ContainerId: "container-stale-reservation-current-capacity-second",
+		Cpu:         100,
+		Memory:      100,
+	}
+
+	err = repo.ScheduleContainerRequest(firstWorkerCopy, firstRequest)
+	assert.Nil(t, err)
+
+	err = repo.ScheduleContainerRequest(secondWorkerCopy, secondRequest)
+	assert.Nil(t, err)
+
+	queuedFirstRequest, err := repo.GetNextContainerRequest(worker.Id)
+	assert.Nil(t, err)
+	assert.NotNil(t, queuedFirstRequest)
+	assert.Equal(t, firstRequest.ContainerId, queuedFirstRequest.ContainerId)
+
+	queuedSecondRequest, err := repo.GetNextContainerRequest(worker.Id)
+	assert.Nil(t, err)
+	assert.NotNil(t, queuedSecondRequest)
+	assert.Equal(t, secondRequest.ContainerId, queuedSecondRequest.ContainerId)
+
+	updatedWorker, err := repo.GetWorkerById(worker.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(0), updatedWorker.FreeCpu)
+	assert.Equal(t, int64(0), updatedWorker.FreeMemory)
+	assert.Equal(t, int64(2), updatedWorker.ResourceVersion)
+}
+
 func TestUpdateWorkerCapacityRejectsGPUOverReservation(t *testing.T) {
 	rdb, err := NewRedisClientForTest()
 	assert.NotNil(t, rdb)

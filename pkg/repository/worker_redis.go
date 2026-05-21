@@ -442,18 +442,13 @@ func (r *WorkerRedisRepository) UpdateWorkerCapacity(worker *types.Worker, reque
 		return fmt.Errorf("failed to get worker state <%v>: %v", key, err)
 	}
 
-	sourceWorker := currentWorker // worker from the Redis store
-	if sourceWorker == nil {
-		sourceWorker = worker // worker from the argument
+	if currentWorker == nil {
+		return fmt.Errorf("worker state <%s> not found", key)
 	}
 
 	updatedWorker := &types.Worker{}
-	if err := common.CopyStruct(sourceWorker, updatedWorker); err != nil {
+	if err := common.CopyStruct(currentWorker, updatedWorker); err != nil {
 		return fmt.Errorf("failed to copy worker struct: %v", err)
-	}
-
-	if updatedWorker.ResourceVersion != worker.ResourceVersion {
-		return errors.New("invalid worker resource version")
 	}
 
 	switch CapacityUpdateType {

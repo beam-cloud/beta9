@@ -10,11 +10,11 @@ import (
 
 const (
 	// Timing strategy for Docker daemon startup:
-	// 1. Wait up to 10s for goproc to be ready (usually takes 100-500ms)
+	// 1. Wait up to 30s for goproc to be ready (usually takes 100-500ms)
 	// 2. Setup cgroups (fast, ~100ms)
 	// 3. Start dockerd in background
 	// 4. Wait up to 30s for dockerd to be ready (usually takes 2-5s)
-	goprocReadyTimeout             = 10 * time.Second
+	goprocReadyTimeout             = 30 * time.Second
 	goprocInitialBackoff           = 25 * time.Millisecond
 	goprocMaxBackoff               = 250 * time.Millisecond
 	goprocBackoffMultiplier        = 1.5

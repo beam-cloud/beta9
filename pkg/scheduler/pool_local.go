@@ -376,6 +376,18 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumes(workerMemory in
 		})
 	}
 
+	if workerCacheEnabled(wpc.config) {
+		volumes = append(volumes, corev1.Volume{
+			Name: cacheVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: workerCacheHostPath(wpc.config),
+					Type: &hostPathType,
+				},
+			},
+		})
+	}
+
 	hostPathDir := corev1.HostPathDirectory
 	volumes = append(volumes, corev1.Volume{
 		Name: devicePluginVolumeName,
@@ -436,13 +448,21 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerVolumeMounts() []corev1
 		})
 	}
 
+	if workerCacheEnabled(wpc.config) {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      cacheVolumeName,
+			MountPath: workerCacheMountPath(wpc.config),
+			ReadOnly:  false,
+		})
+	}
+
 	return volumeMounts
 }
 
 func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId string, cpu int64, memory int64, gpuType string, gpuCount uint32, token string) []corev1.EnvVar {
 	locality := wpc.workerPoolConfig.ConfigGroup
 	if locality == "" {
-		locality = wpc.config.BlobCache.Global.DefaultLocality
+		locality = wpc.config.Cache.Global.DefaultLocality
 	}
 
 	envVars := []corev1.EnvVar{
@@ -455,8 +475,8 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 			Value: wpc.name,
 		},
 		{
-			Name:  "BLOBCACHE_LOCALITY",
-			Value: wpc.workerPoolConfig.ConfigGroup,
+			Name:  "CACHE_LOCALITY",
+			Value: locality,
 		},
 		{
 			Name:  "WORKER_TOKEN",
@@ -505,6 +525,18 @@ func (wpc *LocalKubernetesWorkerPoolController) getWorkerEnvironment(workerId st
 					FieldPath: "spec.nodeName",
 				},
 			},
+		},
+		{
+			Name: "CACHE_NODE_ID",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{
+					FieldPath: "spec.nodeName",
+				},
+			},
+		},
+		{
+			Name:  "CACHE_HOST_NETWORK",
+			Value: strconv.FormatBool(wpc.config.Worker.HostNetwork),
 		},
 		{
 			Name:  "PREEMPTABLE",

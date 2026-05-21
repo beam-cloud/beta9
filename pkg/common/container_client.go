@@ -16,6 +16,11 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const (
+	containerClientSandboxExecTimeout   = 15 * time.Second
+	containerClientSandboxStatusTimeout = 5 * time.Second
+)
+
 type ContainerClient struct {
 	ServiceUrl   string
 	ServiceToken string
@@ -97,7 +102,14 @@ func (c *ContainerClient) Exec(containerId, cmd string, env []string) (*pb.Conta
 }
 
 func (c *ContainerClient) SandboxExec(containerId, cmd string, env map[string]string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
-	resp, err := c.client.ContainerSandboxExec(context.TODO(), &pb.ContainerSandboxExecRequest{ContainerId: containerId, Cmd: cmd, Env: env, Cwd: cwd})
+	return c.SandboxExecContext(context.Background(), containerId, cmd, env, cwd)
+}
+
+func (c *ContainerClient) SandboxExecContext(ctx context.Context, containerId, cmd string, env map[string]string, cwd string) (*pb.ContainerSandboxExecResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxExecTimeout)
+	defer cancel()
+
+	resp, err := c.client.ContainerSandboxExec(ctx, &pb.ContainerSandboxExecRequest{ContainerId: containerId, Cmd: cmd, Env: env, Cwd: cwd})
 	if err != nil {
 		return resp, err
 	}
@@ -121,7 +133,14 @@ func (c *ContainerClient) SandboxListProcesses(containerId string) (*pb.Containe
 }
 
 func (c *ContainerClient) SandboxStatus(containerId string, pid int32) (*pb.ContainerSandboxStatusResponse, error) {
-	resp, err := c.client.ContainerSandboxStatus(context.TODO(), &pb.ContainerSandboxStatusRequest{ContainerId: containerId, Pid: pid})
+	return c.SandboxStatusContext(context.Background(), containerId, pid)
+}
+
+func (c *ContainerClient) SandboxStatusContext(ctx context.Context, containerId string, pid int32) (*pb.ContainerSandboxStatusResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, containerClientSandboxStatusTimeout)
+	defer cancel()
+
+	resp, err := c.client.ContainerSandboxStatus(ctx, &pb.ContainerSandboxStatusRequest{ContainerId: containerId, Pid: pid})
 	if err != nil {
 		return resp, err
 	}

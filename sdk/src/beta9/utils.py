@@ -33,7 +33,7 @@ def retry_on_transient_error(fn, max_retries: int = 3, delay: float = 0.5):
             # Retry on transient connection errors
             if any(
                 keyword in error_str
-                for keyword in ["connection", "unavailable", "timeout", "reset", "eof"]
+                for keyword in ["connection", "unavailable", "timeout", "deadline", "reset", "eof"]
             ):
                 last_exception = e
                 if attempt < max_retries - 1:

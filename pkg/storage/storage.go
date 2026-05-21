@@ -3,8 +3,8 @@ package storage
 import (
 	"errors"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/types"
-	blobcache "github.com/beam-cloud/blobcache-v2/pkg"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sys/unix"
 )
@@ -35,7 +35,7 @@ func isMounted(mountPoint string) bool {
 	return statfs.Type == FUSE_SUPER_MAGIC
 }
 
-func NewStorage(config types.StorageConfig, cacheClient *blobcache.BlobCacheClient) (Storage, error) {
+func NewStorage(config types.StorageConfig, cacheClient *cache.Client) (Storage, error) {
 	switch config.Mode {
 	case StorageModeJuiceFS:
 		s, err := NewJuiceFsStorage(config.JuiceFS)
