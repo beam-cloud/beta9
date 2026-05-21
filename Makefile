@@ -201,7 +201,10 @@ verify-protocol:
 	./bin/verify_proto.sh
 
 test-pkg:
-	go test -v ./pkg/... -bench=./pkg/..
+	go test -v ./pkg/...
+
+bench-pkg:
+	go test -run '^$$' -bench=. ./pkg/...
 
 # build-test can be run with "local" to run extra tests when pointing to your local
 # dev setup. It will also exclude custom image tests due to arm64 issues on mac.
