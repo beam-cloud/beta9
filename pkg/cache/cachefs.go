@@ -54,7 +54,11 @@ func Mount(ctx context.Context, opts FSSystemOpts) (func() error, <-chan error, 
 	mountPoint := opts.Config.CacheFS.MountPoint
 	Logger.Infof("Mounting to %s", mountPoint)
 
-	if _, err := os.Stat(mountPoint); os.IsNotExist(err) {
+	if _, err := os.Stat(mountPoint); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, nil, nil, fmt.Errorf("failed to stat mount point directory: %w", err)
+		}
+
 		err = os.MkdirAll(mountPoint, 0755)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("failed to create mount point directory: %v", err)

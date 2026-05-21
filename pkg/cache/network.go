@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+const (
+	publicIPLookupTimeout = 2 * time.Second
+	publicIPResponseLimit = 128
+)
+
 func getDefaultInterface() (string, error) {
 	file, err := os.Open("/proc/net/route")
 	if err != nil {
@@ -39,18 +44,28 @@ func isTLSEnabled(addr string) bool {
 }
 
 func GetPublicIpAddr() (string, error) {
-	resp, err := http.Get("https://api.ipify.org?format=text")
+	client := &http.Client{Timeout: publicIPLookupTimeout}
+	resp, err := client.Get("https://api.ipify.org?format=text")
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 
-	ip, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("public IP lookup failed with status %d", resp.StatusCode)
+	}
+
+	ip, err := io.ReadAll(io.LimitReader(resp.Body, publicIPResponseLimit))
 	if err != nil {
 		return "", err
 	}
 
-	return strings.TrimSpace(string(ip)), nil
+	ipAddr := strings.TrimSpace(string(ip))
+	if net.ParseIP(ipAddr) == nil {
+		return "", fmt.Errorf("public IP lookup returned invalid address: %q", ipAddr)
+	}
+
+	return ipAddr, nil
 }
 
 func GetPrivateIpAddr() (string, error) {
@@ -82,9 +97,9 @@ func GetPrivateIpAddr() (string, error) {
 			continue
 		}
 
-		// Found IPv4 address
-		if ip.To4() != nil {
-			return ip.String(), nil
+		ipv4 := ip.To4()
+		if ipv4 != nil && ipv4.IsPrivate() {
+			return ipv4.String(), nil
 		}
 	}
 

@@ -11,7 +11,7 @@ import (
 func NewHostMap(cfg GlobalConfig, onHostAdded func(*Host) error) *HostMap {
 	return &HostMap{
 		hosts:       make(map[string]*Host),
-		mu:          sync.Mutex{},
+		mu:          sync.RWMutex{},
 		onHostAdded: onHostAdded,
 		cfg:         cfg,
 	}
@@ -19,24 +19,30 @@ func NewHostMap(cfg GlobalConfig, onHostAdded func(*Host) error) *HostMap {
 
 type HostMap struct {
 	hosts       map[string]*Host
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	onHostAdded func(*Host) error
 	cfg         GlobalConfig
 }
 
 func (hm *HostMap) Set(host *Host) {
 	hm.mu.Lock()
-	defer hm.mu.Unlock()
-
 	_, exists := hm.hosts[host.HostId]
 	if exists {
+		hm.mu.Unlock()
 		return
 	}
 
 	hm.hosts[host.HostId] = host
-	if hm.onHostAdded != nil {
-		Logger.Infof("Added new host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
-		hm.onHostAdded(host)
+	hm.mu.Unlock()
+
+	if hm.onHostAdded == nil {
+		return
+	}
+
+	Logger.Infof("Added new host @ %s (PrivateAddr=%s, RTT=%s)", host.HostId, host.PrivateAddr, host.RTT)
+	if err := hm.onHostAdded(host); err != nil {
+		Logger.Warnf("failed to initialize cache host %s: %v", host.HostId, err)
+		hm.Remove(host)
 	}
 }
 
@@ -54,8 +60,8 @@ func (hm *HostMap) Remove(host *Host) {
 }
 
 func (hm *HostMap) Members() mapset.Set[string] {
-	hm.mu.Lock()
-	defer hm.mu.Unlock()
+	hm.mu.RLock()
+	defer hm.mu.RUnlock()
 
 	set := mapset.NewSet[string]()
 	for host := range hm.hosts {
@@ -66,8 +72,8 @@ func (hm *HostMap) Members() mapset.Set[string] {
 }
 
 func (hm *HostMap) GetAll() []*Host {
-	hm.mu.Lock()
-	defer hm.mu.Unlock()
+	hm.mu.RLock()
+	defer hm.mu.RUnlock()
 
 	hosts := make([]*Host, 0, len(hm.hosts))
 	for _, host := range hm.hosts {
@@ -77,8 +83,8 @@ func (hm *HostMap) GetAll() []*Host {
 }
 
 func (hm *HostMap) Get(hostId string) *Host {
-	hm.mu.Lock()
-	defer hm.mu.Unlock()
+	hm.mu.RLock()
+	defer hm.mu.RUnlock()
 
 	host, exists := hm.hosts[hostId]
 	if !exists {
@@ -93,16 +99,15 @@ func (hm *HostMap) Get(hostId string) *Host {
 func (hm *HostMap) Closest(timeout time.Duration) (*Host, error) {
 	start := time.Now()
 	for {
-		// If there are hosts, find the closet one
-		if len(hm.hosts) > 0 {
+		hm.mu.RLock()
+		hosts := make([]*Host, 0, len(hm.hosts))
+		for _, host := range hm.hosts {
+			hosts = append(hosts, host)
+		}
+		hm.mu.RUnlock()
 
-			hm.mu.Lock()
-			hosts := make([]*Host, 0, len(hm.hosts)) // Convert map into slice of hosts
-			for _, host := range hm.hosts {
-				hosts = append(hosts, host)
-			}
-			hm.mu.Unlock()
-
+		// If there are hosts, find the closest one.
+		if len(hosts) > 0 {
 			// Sort by rount-trip time, return closest
 			sort.Slice(hosts, func(i, j int) bool { return hosts[i].RTT < hosts[j].RTT })
 			return hosts[0], nil
@@ -124,16 +129,15 @@ func (hm *HostMap) Closest(timeout time.Duration) (*Host, error) {
 func (hm *HostMap) ClosestWithCapacity(timeout time.Duration) (*Host, error) {
 	start := time.Now()
 	for {
-		// If there are hosts, find the closet one
-		if len(hm.hosts) > 0 {
+		hm.mu.RLock()
+		hosts := make([]*Host, 0, len(hm.hosts))
+		for _, host := range hm.hosts {
+			hosts = append(hosts, host)
+		}
+		hm.mu.RUnlock()
 
-			hm.mu.Lock()
-			hosts := make([]*Host, 0, len(hm.hosts)) // Convert map into slice of hosts
-			for _, host := range hm.hosts {
-				hosts = append(hosts, host)
-			}
-			hm.mu.Unlock()
-
+		// If there are hosts, find the closest one.
+		if len(hosts) > 0 {
 			// Sort by rount-trip time and capacity usage
 			sort.Slice(hosts, func(i, j int) bool {
 				if hosts[i].RTT != hosts[j].RTT {

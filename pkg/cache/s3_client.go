@@ -104,48 +104,74 @@ func (c *S3Client) DownloadIntoBuffer(ctx context.Context, key string, buffer *b
 	}
 
 	numChunks := int((size + c.DownloadChunkSize - 1) / c.DownloadChunkSize)
+	workerCount := int(c.DownloadConcurrency)
+	if workerCount <= 0 {
+		workerCount = defaultDownloadConcurrency
+	}
+	if workerCount > numChunks {
+		workerCount = numChunks
+	}
+
+	jobs := make(chan int, numChunks)
 	chunkCh := make(chan chunkResult, numChunks)
-	sem := make(chan struct{}, c.DownloadConcurrency)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var wg sync.WaitGroup
 	for i := 0; i < numChunks; i++ {
+		jobs <- i
+	}
+	close(jobs)
+
+	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
-		go func(i int) {
+		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 
-			start := int64(i) * c.DownloadChunkSize
-			end := start + c.DownloadChunkSize - 1
-			if end >= size {
-				end = size - 1
-			}
+			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
 
-			rangeHeader := fmt.Sprintf("bytes=%d-%d", start, end)
-			resp, err := c.Client.GetObject(ctx, &s3.GetObjectInput{
-				Bucket: aws.String(c.Source.BucketName),
-				Key:    aws.String(key),
-				Range:  &rangeHeader,
-			})
-			if err != nil {
-				chunkCh <- chunkResult{i, nil, fmt.Errorf("range request failed for %s: %w", rangeHeader, err)}
-				cancel()
-				return
-			}
-			defer resp.Body.Close()
+				start := int64(index) * c.DownloadChunkSize
+				end := start + c.DownloadChunkSize - 1
+				if end >= size {
+					end = size - 1
+				}
 
-			part := make([]byte, end-start+1)
-			n, err := io.ReadFull(resp.Body, part)
-			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-				chunkCh <- chunkResult{i, nil, fmt.Errorf("error reading range %s: %w", rangeHeader, err)}
-				cancel()
-				return
+				rangeHeader := fmt.Sprintf("bytes=%d-%d", start, end)
+				resp, err := c.Client.GetObject(ctx, &s3.GetObjectInput{
+					Bucket: aws.String(c.Source.BucketName),
+					Key:    aws.String(key),
+					Range:  &rangeHeader,
+				})
+				if err != nil {
+					chunkCh <- chunkResult{index: index, err: fmt.Errorf("range request failed for %s: %w", rangeHeader, err)}
+					cancel()
+					return
+				}
+
+				expected := end - start + 1
+				part := make([]byte, expected)
+				n, err := io.ReadFull(resp.Body, part)
+				if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
+					err = closeErr
+				}
+				if err != nil {
+					chunkCh <- chunkResult{index: index, err: fmt.Errorf("error reading range %s: read %d/%d bytes: %w", rangeHeader, n, expected, err)}
+					cancel()
+					return
+				}
+				if int64(n) != expected {
+					chunkCh <- chunkResult{index: index, err: fmt.Errorf("short read for range %s: read %d/%d bytes", rangeHeader, n, expected)}
+					cancel()
+					return
+				}
+
+				chunkCh <- chunkResult{index: index, data: part}
 			}
-			chunkCh <- chunkResult{i, part[:n], nil}
-		}(i)
+		}()
 	}
 
 	go func() {
@@ -167,7 +193,12 @@ func (c *S3Client) DownloadIntoBuffer(ctx context.Context, key string, buffer *b
 
 	buffer.Reset()
 	for _, chunk := range chunks {
-		buffer.Write(chunk)
+		if _, err := buffer.Write(chunk); err != nil {
+			return err
+		}
+	}
+	if int64(buffer.Len()) != size {
+		return fmt.Errorf("downloaded size mismatch: got %d bytes, expected %d", buffer.Len(), size)
 	}
 	return nil
 }

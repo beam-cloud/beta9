@@ -104,7 +104,7 @@ func NewClientWithRegistry(ctx context.Context, cfg Config, registry Registry, l
 	go bc.discoveryClient.Start(bc.ctx)
 
 	// Monitor and cleanup local client cache
-	go bc.manageLocalClientCache(localClientCacheCleanupInterval, localClientCacheTTL)
+	go bc.manageLocalClientCache(localClientCacheTTL, localClientCacheCleanupInterval)
 
 	// Mount cache as a FUSE filesystem if cachefs is enabled
 	if bc.clientConfig.CacheFS.Enabled {
@@ -206,7 +206,10 @@ func (c *Client) addHost(host *Host) error {
 	}
 
 	if c.clientConfig.Token != "" {
-		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(grpcAuthInterceptor(c.clientConfig.Token)))
+		dialOpts = append(dialOpts,
+			grpc.WithUnaryInterceptor(grpcAuthInterceptor(c.clientConfig.Token)),
+			grpc.WithStreamInterceptor(grpcAuthStreamInterceptor(c.clientConfig.Token)),
+		)
 	}
 
 	conn, err := grpc.Dial(addr, dialOpts...)
@@ -226,19 +229,43 @@ func (c *Client) addHost(host *Host) error {
 }
 
 func (c *Client) monitorHost(host *Host) {
-	ticker := time.NewTicker(1 * time.Second)
+	interval := time.Duration(c.globalConfig.HostMonitorIntervalS) * time.Second
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+
+	if jitter := time.Duration(time.Now().UnixNano() % int64(interval)); jitter > 0 {
+		timer := time.NewTimer(jitter)
+		select {
+		case <-timer.C:
+		case <-c.ctx.Done():
+			timer.Stop()
+			return
+		}
+	}
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
 			err := func() error {
+				c.mu.RLock()
 				client, exists := c.grpcClients[host.HostId]
+				c.mu.RUnlock()
 				if !exists {
 					return ErrHostNotFound
 				}
 
-				resp, err := client.GetState(c.ctx, &proto.CacheGetStateRequest{})
+				timeout := time.Duration(c.globalConfig.GRPCDialTimeoutS) * time.Second
+				if timeout <= 0 {
+					timeout = time.Second
+				}
+				ctx, cancel := context.WithTimeout(c.ctx, timeout)
+				defer cancel()
+
+				resp, err := client.GetState(ctx, &proto.CacheGetStateRequest{})
 				if err != nil {
 					return ErrInvalidHostVersion
 				}
@@ -474,12 +501,12 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 
 	switch request.rt {
 	case ClientRequestTypeStorage:
+		c.mu.RLock()
 		hosts := c.hasher.GetN(c.clientConfig.NTopHosts, request.key)
-		hostIndex := min(int64(request.hostIndex), int64(len(hosts)-1))
-
-		if len(hosts) > 0 {
-			host = hosts[hostIndex]
+		if request.hostIndex >= 0 && request.hostIndex < len(hosts) {
+			host = hosts[request.hostIndex]
 		}
+		c.mu.RUnlock()
 
 	case ClientRequestTypeRetrieval:
 		c.mu.RLock()
@@ -492,12 +519,11 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 			c.mu.Lock()
 
 			hosts := c.hasher.GetN(c.clientConfig.NTopHosts, request.key)
-			hostIndex := min(int64(request.hostIndex), int64(len(hosts)-1))
 
-			if len(hosts) == 0 {
+			if request.hostIndex < 0 || request.hostIndex >= len(hosts) {
 				host = nil
 			} else {
-				host = hosts[hostIndex]
+				host = hosts[request.hostIndex]
 				c.localHostCache[request.hash] = &localClientCache{
 					host:      host,
 					timestamp: time.Now(),
@@ -514,7 +540,9 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 		return nil, nil, ErrHostNotFound
 	}
 
+	c.mu.RLock()
 	client, exists := c.grpcClients[host.HostId]
+	c.mu.RUnlock()
 	if !exists {
 		c.mu.Lock()
 		delete(c.localHostCache, request.hash)
@@ -581,53 +609,8 @@ func (c *Client) StoreContentFromFUSE(source struct {
 		opts.RoutingKey = source.Path
 	}
 
-	var lastErr error
-	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
-		client, host, err := c.getGRPCClient(&ClientRequest{
-			rt:        ClientRequestTypeStorage,
-			hash:      source.Path,
-			key:       opts.RoutingKey,
-			hostIndex: attempt,
-		})
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{Path: source.Path}}
-		if opts.Lock {
-			resp, err := client.StoreContentFromSourceWithLock(ctx, req)
-			if err != nil {
-				lastErr = err
-				c.removeHost(host)
-				continue
-			}
-
-			if resp.FailedToAcquireLock {
-				return "", ErrUnableToAcquireLock
-			}
-			if !resp.Ok {
-				return "", ErrUnableToPopulateContent
-			}
-			return resp.Hash, nil
-		}
-
-		resp, err := client.StoreContentFromSource(ctx, req)
-		if err != nil {
-			lastErr = err
-			c.removeHost(host)
-			continue
-		}
-		if !resp.Ok {
-			return "", ErrUnableToPopulateContent
-		}
-		return resp.Hash, nil
-	}
-
-	if lastErr != nil {
-		return "", lastErr
-	}
-	return "", ErrHostNotFound
+	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{Path: source.Path}}
+	return c.storeContentFromSource(ctx, req, source.Path, opts.RoutingKey, opts.Lock)
 }
 
 func (c *Client) StoreContentFromS3(source struct {
@@ -648,11 +631,24 @@ func (c *Client) StoreContentFromS3(source struct {
 		opts.RoutingKey = fmt.Sprintf("%s/%s/%s/%s", source.EndpointURL, source.Region, source.BucketName, source.Path)
 	}
 
+	req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{
+		Path:        source.Path,
+		BucketName:  source.BucketName,
+		Region:      source.Region,
+		EndpointUrl: source.EndpointURL,
+		AccessKey:   source.AccessKey,
+		SecretKey:   source.SecretKey,
+	}}
+	return c.storeContentFromSource(ctx, req, opts.RoutingKey, opts.RoutingKey, opts.Lock)
+}
+
+func (c *Client) storeContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest, hash, routingKey string, lock bool) (string, error) {
 	var lastErr error
 	for attempt := 0; attempt < c.getContentAttempts(0); attempt++ {
 		client, host, err := c.getGRPCClient(&ClientRequest{
 			rt:        ClientRequestTypeStorage,
-			key:       opts.RoutingKey,
+			hash:      hash,
+			key:       routingKey,
 			hostIndex: attempt,
 		})
 		if err != nil {
@@ -660,15 +656,7 @@ func (c *Client) StoreContentFromS3(source struct {
 			continue
 		}
 
-		req := &proto.CacheStoreContentFromSourceRequest{Source: &proto.CacheSource{
-			Path:        source.Path,
-			BucketName:  source.BucketName,
-			Region:      source.Region,
-			EndpointUrl: source.EndpointURL,
-			AccessKey:   source.AccessKey,
-			SecretKey:   source.SecretKey,
-		}}
-		if opts.Lock {
+		if lock {
 			resp, err := client.StoreContentFromSourceWithLock(ctx, req)
 			if err != nil {
 				lastErr = err
@@ -676,6 +664,9 @@ func (c *Client) StoreContentFromS3(source struct {
 				continue
 			}
 
+			if resp == nil {
+				return "", ErrUnableToPopulateContent
+			}
 			if resp.FailedToAcquireLock {
 				return "", ErrUnableToAcquireLock
 			}
@@ -691,7 +682,7 @@ func (c *Client) StoreContentFromS3(source struct {
 			c.removeHost(host)
 			continue
 		}
-		if !resp.Ok {
+		if resp == nil || !resp.Ok {
 			return "", ErrUnableToPopulateContent
 		}
 		return resp.Hash, nil
@@ -753,5 +744,12 @@ func grpcAuthInterceptor(token string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 		return invoker(newCtx, method, req, reply, cc, opts...)
+	}
+}
+
+func grpcAuthStreamInterceptor(token string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		newCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+		return streamer(newCtx, desc, cc, method, opts...)
 	}
 }

@@ -2,10 +2,10 @@ package cache
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
@@ -33,7 +33,7 @@ func NewMetadata(cfg MetadataConfig) (*Metadata, error) {
 		SentinelPassword:   cfg.RedisPasswd,
 		EnableTLS:          cfg.RedisTLSEnabled,
 		MasterName:         cfg.RedisMasterName,
-		InsecureSkipVerify: true, // HOTFIX: tailscale certs don't match in-cluster certs
+		InsecureSkipVerify: cfg.RedisInsecureSkipVerify,
 	})
 	if err != nil {
 		return nil, err
@@ -44,6 +44,14 @@ func NewMetadata(cfg MetadataConfig) (*Metadata, error) {
 		rdb:  rdb,
 		lock: lock,
 	}, nil
+}
+
+func NewMetadataWithRedisClient(client redis.UniversalClient) *Metadata {
+	rdb := &RedisClient{UniversalClient: client}
+	return &Metadata{
+		rdb:  rdb,
+		lock: NewRedisLock(rdb),
+	}
 }
 
 func (m *Metadata) SetClientLock(ctx context.Context, clientId, hash string) error {
@@ -264,8 +272,8 @@ func (k *metadataKeys) MetadataClientLock(hostId, hash string) string {
 }
 
 func (k *metadataKeys) MetadataStoreFromContentLock(locality, sourcePath string) string {
-	sourcePath = strings.ReplaceAll(sourcePath, "/", "_")
-	return fmt.Sprintf(metadataStoreFromContentLock, locality, sourcePath)
+	encodedPath := base64.RawURLEncoding.EncodeToString([]byte(sourcePath))
+	return fmt.Sprintf(metadataStoreFromContentLock, locality, encodedPath)
 }
 
 var MetadataKeys = &metadataKeys{}

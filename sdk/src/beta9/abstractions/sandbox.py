@@ -28,6 +28,7 @@ from ..clients.pod import (
     PodSandboxDeleteFileRequest,
     PodSandboxDownloadFileRequest,
     PodSandboxExecRequest,
+    PodSandboxExecResponse,
     PodSandboxExposePortRequest,
     PodSandboxExposePortResponse,
     PodSandboxFindInFilesRequest,
@@ -42,6 +43,7 @@ from ..clients.pod import (
     PodSandboxSnapshotMemoryResponse,
     PodSandboxStatFileRequest,
     PodSandboxStatusRequest,
+    PodSandboxStatusResponse,
     PodSandboxStderrRequest,
     PodSandboxStdoutRequest,
     PodSandboxUpdateNetworkPermissionsRequest,
@@ -55,6 +57,10 @@ from ..env import is_remote
 from ..exceptions import SandboxConnectionError, SandboxFileSystemError, SandboxProcessError
 from ..type import GpuType, GpuTypeAlias
 from ..utils import retry_on_transient_error
+
+SANDBOX_EXEC_RPC_TIMEOUT_SECONDS = 15
+SANDBOX_STATUS_RPC_TIMEOUT_SECONDS = 5
+SANDBOX_WAIT_POLL_INTERVAL_SECONDS = 0.1
 
 
 class Sandbox(Pod):
@@ -873,13 +879,18 @@ class SandboxProcessManager:
         shell_command = " ".join(shlex.quote(arg) for arg in command)
 
         def _do_exec():
-            return self.sandbox_instance.stub.sandbox_exec(
+            return self.sandbox_instance.stub._unary_unary(
+                "/pod.PodService/SandboxExec",
+                PodSandboxExecRequest,
+                PodSandboxExecResponse,
+            )(
                 PodSandboxExecRequest(
                     container_id=self.sandbox_instance.container_id,
                     command=shell_command,
                     cwd=cwd,
                     env=env,
-                )
+                ),
+                timeout=SANDBOX_EXEC_RPC_TIMEOUT_SECONDS,
             )
 
         response = retry_on_transient_error(_do_exec)
@@ -1150,12 +1161,15 @@ class SandboxProcess:
         self.args = args
         self.env = env
 
-    def wait(self) -> int:
+    def wait(self, timeout: Optional[float] = None) -> int:
         """
         Wait for the process to complete.
 
         This method blocks until the process finishes execution and returns
         the exit code. It polls the process status until completion.
+
+        Parameters:
+            timeout (Optional[float]): Maximum seconds to wait. Default is None.
 
         Returns:
             int: The exit code of the completed process.
@@ -1168,11 +1182,14 @@ class SandboxProcess:
                 print("Command completed successfully")
             ```
         """
+        deadline = None if timeout is None else time.monotonic() + timeout
         self.exit_code, self._status = self.status()
 
         while self.exit_code < 0:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise SandboxProcessError(f"Process {self.pid} did not exit within {timeout} seconds")
             self.exit_code, self._status = self.status()
-            time.sleep(0.1)
+            time.sleep(SANDBOX_WAIT_POLL_INTERVAL_SECONDS)
 
         return self.exit_code
 
@@ -1231,10 +1248,15 @@ class SandboxProcess:
         """
 
         def _get_status():
-            return self.sandbox_instance.stub.sandbox_status(
+            return self.sandbox_instance.stub._unary_unary(
+                "/pod.PodService/SandboxStatus",
+                PodSandboxStatusRequest,
+                PodSandboxStatusResponse,
+            )(
                 PodSandboxStatusRequest(
                     container_id=self.sandbox_instance.container_id, pid=self.pid
-                )
+                ),
+                timeout=SANDBOX_STATUS_RPC_TIMEOUT_SECONDS,
             )
 
         response = retry_on_transient_error(_get_status)

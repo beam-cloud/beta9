@@ -2,6 +2,8 @@ package cache
 
 import (
 	"context"
+
+	redis "github.com/redis/go-redis/v9"
 )
 
 type Registry interface {
@@ -36,6 +38,14 @@ func NewRedisRegistry(globalConfig GlobalConfig, serverConfig ServerConfig) (Reg
 	}
 
 	return &RedisRegistry{globalConfig: globalConfig, serverConfig: serverConfig, metadata: metadata}, nil
+}
+
+func NewRedisRegistryWithClient(globalConfig GlobalConfig, serverConfig ServerConfig, client redis.UniversalClient) Registry {
+	return &RedisRegistry{
+		globalConfig: globalConfig,
+		serverConfig: serverConfig,
+		metadata:     NewMetadataWithRedisClient(client),
+	}
 }
 
 func (c *RedisRegistry) GetRegionConfig(ctx context.Context, locality string) (ServerConfig, error) {
@@ -76,11 +86,11 @@ func (c *RedisRegistry) GetAvailableHosts(ctx context.Context, locality string) 
 }
 
 func (c *RedisRegistry) SetClientLock(ctx context.Context, hash string, host string) error {
-	return c.metadata.SetClientLock(ctx, hash, host)
+	return c.metadata.SetClientLock(ctx, host, hash)
 }
 
 func (c *RedisRegistry) RemoveClientLock(ctx context.Context, hash string, host string) error {
-	return c.metadata.RemoveClientLock(ctx, hash, host)
+	return c.metadata.RemoveClientLock(ctx, host, hash)
 }
 
 func (c *RedisRegistry) SetFsNode(ctx context.Context, id string, metadata *FSMetadata) error {

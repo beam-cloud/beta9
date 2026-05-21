@@ -38,12 +38,28 @@ func (d *DiscoveryClient) updateHostMap(newHosts []*Host) {
 
 // Used by cache servers to discover their closest peers
 func (d *DiscoveryClient) Start(ctx context.Context) error {
+	if jitter := d.discoveryJitter(); jitter > 0 {
+		timer := time.NewTimer(jitter)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			return nil
+		}
+	}
+
 	hosts, err := d.discoverHosts(ctx)
 	if err == nil {
 		d.updateHostMap(hosts)
 	}
 
-	ticker := time.NewTicker(time.Duration(d.cfg.DiscoveryIntervalS) * time.Second)
+	interval := time.Duration(d.cfg.DiscoveryIntervalS) * time.Second
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
@@ -59,6 +75,15 @@ func (d *DiscoveryClient) Start(ctx context.Context) error {
 	}
 }
 
+func (d *DiscoveryClient) discoveryJitter() time.Duration {
+	if d.cfg.DiscoveryJitterS <= 0 {
+		return 0
+	}
+
+	maxJitter := time.Duration(d.cfg.DiscoveryJitterS) * time.Second
+	return time.Duration(time.Now().UnixNano() % int64(maxJitter))
+}
+
 func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	hosts, err := d.coordinator.GetAvailableHosts(ctx, d.locality)
 	if err != nil {
@@ -68,6 +93,11 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 	var wg sync.WaitGroup
 	filteredHosts := []*Host{}
 	mu := sync.Mutex{}
+	maxConcurrency := d.cfg.MaxDiscoveryConcurrency
+	if maxConcurrency <= 0 {
+		maxConcurrency = 8
+	}
+	sem := make(chan struct{}, maxConcurrency)
 
 	for _, host := range hosts {
 		// Don't try to get the state on peers we're already aware of
@@ -76,8 +106,14 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 		}
 
 		wg.Add(1)
-		go func(hostId string) {
+		go func(host *Host) {
 			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
 
 			hostState, err := d.GetHostState(ctx, host)
 			if err != nil {
@@ -89,7 +125,7 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 			mu.Unlock()
 
 			Logger.Debugf("Added host with private address to map: %s", hostState.PrivateAddr)
-		}(host.HostId)
+		}(host)
 
 	}
 
@@ -119,10 +155,14 @@ func (d *DiscoveryClient) GetHostState(ctx context.Context, host *Host) (*Host, 
 		),
 	}
 
-	dialCtx, cancel := context.WithTimeout(ctx, time.Duration(d.cfg.GRPCDialTimeoutS)*time.Second)
+	timeout := time.Duration(d.cfg.GRPCDialTimeoutS) * time.Second
+	if timeout <= 0 {
+		timeout = time.Second
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	conn, err := grpc.DialContext(dialCtx, host.PrivateAddr, dialOpts...)
+	conn, err := grpc.DialContext(dialCtx, addr, dialOpts...)
 	if err != nil {
 		return nil, err
 	}

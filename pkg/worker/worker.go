@@ -35,6 +35,9 @@ const (
 	containerRequestStreamInterval time.Duration = 100 * time.Millisecond
 	defaultRuncStartConcurrency    int           = 128
 	defaultGvisorStartConcurrency  int           = 32
+	workerRedisConnectTimeout      time.Duration = 45 * time.Second
+	workerRedisConnectBaseDelay    time.Duration = 250 * time.Millisecond
+	workerRedisConnectMaxDelay     time.Duration = 2 * time.Second
 )
 
 type Worker struct {
@@ -131,6 +134,39 @@ type stopContainerEvent struct {
 	Kill        bool
 }
 
+func newWorkerRedisClient(ctx context.Context, config types.AppConfig) (*common.RedisClient, error) {
+	deadline := time.Now().Add(workerRedisConnectTimeout)
+	delay := workerRedisConnectBaseDelay
+	attempt := 0
+
+	for {
+		attempt++
+		redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
+		if err == nil {
+			return redisClient, nil
+		}
+
+		if time.Now().After(deadline) {
+			return nil, err
+		}
+
+		log.Warn().Err(err).Int("attempt", attempt).Msg("redis unavailable during worker startup, retrying")
+		jitter := time.Duration((time.Now().UnixNano() + int64(attempt)*137) % int64(workerRedisConnectBaseDelay))
+		timer := time.NewTimer(delay + jitter)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+
+		delay *= 2
+		if delay > workerRedisConnectMaxDelay {
+			delay = workerRedisConnectMaxDelay
+		}
+	}
+}
+
 func NewWorker() (*Worker, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -168,7 +204,7 @@ func NewWorker() (*Worker, error) {
 	}
 	config := configManager.GetConfig()
 
-	redisClient, err := common.NewRedisClient(config.Database.Redis, common.WithClientName("Beta9Worker"))
+	redisClient, err := newWorkerRedisClient(ctx, config)
 	if err != nil {
 		return nil, err
 	}
@@ -849,9 +885,8 @@ func (s *Worker) shutdown() error {
 		errs = errors.Join(errs, fmt.Errorf("failed to cleanup workspace storage: %v", err))
 	}
 
-	err = os.RemoveAll(s.imageMountPath)
-	if err != nil {
-		errs = errors.Join(errs, err)
+	if err := cleanupImageMountPath(s.imageMountPath); err != nil {
+		log.Warn().Str("path", s.imageMountPath).Err(err).Msg("failed to cleanup image mount path")
 	}
 
 	// Close runtimes

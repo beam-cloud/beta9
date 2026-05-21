@@ -36,7 +36,10 @@ func NewRemoteRegistry(cfg GlobalConfig, token string) (Registry, error) {
 	}
 
 	if token != "" {
-		dialOpts = append(dialOpts, grpc.WithUnaryInterceptor(grpcAuthInterceptor(token)))
+		dialOpts = append(dialOpts,
+			grpc.WithUnaryInterceptor(grpcAuthInterceptor(token)),
+			grpc.WithStreamInterceptor(grpcAuthStreamInterceptor(token)),
+		)
 	}
 
 	conn, err := grpc.Dial(addr, dialOpts...)
@@ -171,6 +174,10 @@ func (c *RemoteRegistry) RemoveClientLock(ctx context.Context, hash string, host
 }
 
 func (c *RemoteRegistry) SetFsNode(ctx context.Context, id string, metadata *FSMetadata) error {
+	if metadata == nil {
+		return errors.New("metadata is required")
+	}
+
 	r, err := c.client.SetFsNode(ctx, &proto.CacheSetFsNodeRequest{
 		Id: id,
 		Metadata: &proto.CacheFSMetadata{
@@ -179,6 +186,7 @@ func (c *RemoteRegistry) SetFsNode(ctx context.Context, id string, metadata *FSM
 			Name:      metadata.Name,
 			Path:      metadata.Path,
 			Hash:      metadata.Hash,
+			Ino:       metadata.Ino,
 			Size:      metadata.Size,
 			Blocks:    metadata.Blocks,
 			Atime:     metadata.Atime,
@@ -215,7 +223,7 @@ func (c *RemoteRegistry) GetFsNode(ctx context.Context, id string) (*FSMetadata,
 		return nil, err
 	}
 
-	if !response.Ok {
+	if !response.Ok || response.Metadata == nil {
 		return nil, errors.New("failed to get fs node")
 	}
 
@@ -225,6 +233,7 @@ func (c *RemoteRegistry) GetFsNode(ctx context.Context, id string) (*FSMetadata,
 		Name:      response.Metadata.Name,
 		Path:      response.Metadata.Path,
 		Hash:      response.Metadata.Hash,
+		Ino:       response.Metadata.Ino,
 		Size:      response.Metadata.Size,
 		Blocks:    response.Metadata.Blocks,
 		Atime:     response.Metadata.Atime,
@@ -295,12 +304,17 @@ func (c *RemoteRegistry) GetFsNodeChildren(ctx context.Context, id string) ([]*F
 
 	children := make([]*FSMetadata, 0)
 	for _, child := range response.Children {
+		if child == nil {
+			continue
+		}
+
 		children = append(children, &FSMetadata{
 			ID:        child.Id,
 			PID:       child.Pid,
 			Name:      child.Name,
 			Path:      child.Path,
 			Hash:      child.Hash,
+			Ino:       child.Ino,
 			Size:      child.Size,
 			Blocks:    child.Blocks,
 			Atime:     child.Atime,

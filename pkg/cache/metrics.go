@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/VictoriaMetrics/metrics"
@@ -41,16 +40,8 @@ type CacheMetrics struct {
 	ReadThroughputMBps *metrics.Histogram
 }
 
-var (
-	globalMetrics   CacheMetrics
-	metricsInitOnce sync.Once
-)
-
 func initMetrics(ctx context.Context, config MetricsConfig, currentHost *Host, locality string) CacheMetrics {
-	metricsInitOnce.Do(func() {
-		globalMetrics = createMetrics(ctx, config, currentHost, locality)
-	})
-	return globalMetrics
+	return createMetrics(ctx, config, currentHost, locality)
 }
 
 func createMetrics(ctx context.Context, config MetricsConfig, currentHost *Host, locality string) CacheMetrics {
@@ -77,34 +68,34 @@ func createMetrics(ctx context.Context, config MetricsConfig, currentHost *Host,
 		}
 	}
 
-	diskCacheUsageMB := metrics.NewHistogram(`cache_disk_cache_usage_mb`)
-	diskCacheUsagePct := metrics.NewHistogram(`cache_disk_cache_usage_pct`)
-	memCacheUsageMB := metrics.NewHistogram(`cache_mem_cache_usage_mb`)
-	memCacheUsagePct := metrics.NewHistogram(`cache_mem_cache_usage_pct`)
+	diskCacheUsageMB := metrics.GetOrCreateHistogram(`cache_disk_cache_usage_mb`)
+	diskCacheUsagePct := metrics.GetOrCreateHistogram(`cache_disk_cache_usage_pct`)
+	memCacheUsageMB := metrics.GetOrCreateHistogram(`cache_mem_cache_usage_mb`)
+	memCacheUsagePct := metrics.GetOrCreateHistogram(`cache_mem_cache_usage_pct`)
 
 	// Cache tier metrics
-	l0HitRatio := metrics.NewHistogram(`cache_l0_hit_ratio`)
-	l1HitRatio := metrics.NewHistogram(`cache_l1_hit_ratio`)
-	l2MissRatio := metrics.NewHistogram(`cache_l2_miss_ratio`)
+	l0HitRatio := metrics.GetOrCreateHistogram(`cache_l0_hit_ratio`)
+	l1HitRatio := metrics.GetOrCreateHistogram(`cache_l1_hit_ratio`)
+	l2MissRatio := metrics.GetOrCreateHistogram(`cache_l2_miss_ratio`)
 
 	// Operation counters
-	l0Hits := metrics.NewCounter(`cache_l0_hits_total`)
-	l1Hits := metrics.NewCounter(`cache_l1_hits_total`)
-	l2Misses := metrics.NewCounter(`cache_l2_misses_total`)
-	totalReads := metrics.NewCounter(`cache_reads_total`)
+	l0Hits := metrics.GetOrCreateCounter(`cache_l0_hits_total`)
+	l1Hits := metrics.GetOrCreateCounter(`cache_l1_hits_total`)
+	l2Misses := metrics.GetOrCreateCounter(`cache_l2_misses_total`)
+	totalReads := metrics.GetOrCreateCounter(`cache_reads_total`)
 
 	// Bytes served
-	l0BytesServed := metrics.NewCounter(`cache_l0_bytes_served_total`)
-	l1BytesServed := metrics.NewCounter(`cache_l1_bytes_served_total`)
-	l2BytesFetched := metrics.NewCounter(`cache_l2_bytes_fetched_total`)
+	l0BytesServed := metrics.GetOrCreateCounter(`cache_l0_bytes_served_total`)
+	l1BytesServed := metrics.GetOrCreateCounter(`cache_l1_bytes_served_total`)
+	l2BytesFetched := metrics.GetOrCreateCounter(`cache_l2_bytes_fetched_total`)
 
 	// FUSE latencies
-	fuseReadLatency := metrics.NewHistogram(`cache_fuse_read_latency_ms`)
-	fuseLookupLatency := metrics.NewHistogram(`cache_fuse_lookup_latency_ms`)
-	fuseGetattrLatency := metrics.NewHistogram(`cache_fuse_getattr_latency_ms`)
+	fuseReadLatency := metrics.GetOrCreateHistogram(`cache_fuse_read_latency_ms`)
+	fuseLookupLatency := metrics.GetOrCreateHistogram(`cache_fuse_lookup_latency_ms`)
+	fuseGetattrLatency := metrics.GetOrCreateHistogram(`cache_fuse_getattr_latency_ms`)
 
 	// Throughput
-	readThroughputMBps := metrics.NewHistogram(`cache_read_throughput_mbps`)
+	readThroughputMBps := metrics.GetOrCreateHistogram(`cache_read_throughput_mbps`)
 
 	return CacheMetrics{
 		DiskCacheUsageMB:   diskCacheUsageMB,

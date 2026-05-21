@@ -287,14 +287,21 @@ cache:
     enabled: false
     maxCachePct: 0
   embedded:
-    # active-active runs a cache server in every worker on the node, backed by the same hostPath CAS.
-    # single-primary keeps the Redis lease-based one-server-per-node mode.
+    # active-active runs a small Redis-lease elected replica set per node, backed by the same hostPath CAS.
+    # single-primary keeps the one-server-per-node mode.
     mode: active-active
+    replicasPerNode: 2
+    leaseTTLSeconds: 15
+    leaseRefreshSeconds: 5
+    leaseRetrySeconds: 2
   global:
     coordinatorHost:
     defaultLocality: default
     serverPort: 2049
     discoveryIntervalS: 5
+    discoveryJitterS: 3
+    maxDiscoveryConcurrency: 8
+    hostMonitorIntervalS: 30
     rttThresholdMilliseconds: 1000
     hostStorageCapacityThresholdPct: 0.95
     grpcDialTimeoutS: 1
@@ -318,6 +325,7 @@ cache:
     s3DownloadChunkSize: 64000000
     metadata:
       mode: default
+      redisInsecureSkipVerify: false
   client:
     nTopHosts: 3
     minRetryLengthBytes: 0 # 0 retries all cache reads; increase to retry only larger reads.

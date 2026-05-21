@@ -69,7 +69,7 @@ func (pf *Prefetcher) OnRead(hash string, offset, length int64) {
 
 	if !exists {
 		state = &PrefetchState{
-			lastOffset:     offset,
+			lastOffset:     offset + length,
 			lastAccessTime: now,
 			sequential:     false,
 			prefetching:    false,

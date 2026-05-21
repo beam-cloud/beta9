@@ -56,7 +56,11 @@ const (
 )
 
 type EmbeddedConfig struct {
-	Mode EmbeddedMode `key:"mode" json:"mode"`
+	Mode                EmbeddedMode `key:"mode" json:"mode"`
+	ReplicasPerNode     int          `key:"replicasPerNode" json:"replicas_per_node"`
+	LeaseTTLSeconds     int          `key:"leaseTTLSeconds" json:"lease_ttl_seconds"`
+	LeaseRefreshSeconds int          `key:"leaseRefreshSeconds" json:"lease_refresh_seconds"`
+	LeaseRetrySeconds   int          `key:"leaseRetrySeconds" json:"lease_retry_seconds"`
 }
 
 type GlobalConfig struct {
@@ -64,6 +68,9 @@ type GlobalConfig struct {
 	CoordinatorHost                 string  `key:"coordinatorHost" json:"coordinator_host"`
 	ServerPort                      uint    `key:"serverPort" json:"server_port"`
 	DiscoveryIntervalS              int     `key:"discoveryIntervalS" json:"discovery_interval_s"`
+	DiscoveryJitterS                int     `key:"discoveryJitterS" json:"discovery_jitter_s"`
+	MaxDiscoveryConcurrency         int     `key:"maxDiscoveryConcurrency" json:"max_discovery_concurrency"`
+	HostMonitorIntervalS            int     `key:"hostMonitorIntervalS" json:"host_monitor_interval_s"`
 	RoundTripThresholdMilliseconds  uint    `key:"rttThresholdMilliseconds" json:"rtt_threshold_ms"`
 	HostStorageCapacityThresholdPct float64 `key:"hostStorageCapacityThresholdPct" json:"host_storage_capacity_threshold_pct"`
 	GRPCDialTimeoutS                int     `key:"grpcDialTimeoutS" json:"grpc_dial_timeout_s"`
@@ -163,6 +170,10 @@ func (c *ServerConfig) ToProto() *proto.CacheServerConfig {
 }
 
 func ServerConfigFromProto(protoConfig *proto.CacheServerConfig) ServerConfig {
+	if protoConfig == nil {
+		return ServerConfig{}
+	}
+
 	cfg := ServerConfig{
 		Mode:                  ServerMode(protoConfig.Mode),
 		DiskCacheDir:          protoConfig.DiskCacheDir,
@@ -178,6 +189,10 @@ func ServerConfigFromProto(protoConfig *proto.CacheServerConfig) ServerConfig {
 	}
 
 	for i, protoSource := range protoConfig.Sources {
+		if protoSource == nil {
+			continue
+		}
+
 		localSource := SourceConfig{
 			Mode:           protoSource.Mode,
 			FilesystemName: protoSource.FilesystemName,
@@ -186,21 +201,25 @@ func ServerConfigFromProto(protoConfig *proto.CacheServerConfig) ServerConfig {
 
 		switch protoSource.Mode {
 		case SourceModeMountPoint:
-			localSource.MountPoint = MountPointConfig{
-				BucketName:     protoSource.Mountpoint.BucketName,
-				AccessKey:      protoSource.Mountpoint.AccessKey,
-				SecretKey:      protoSource.Mountpoint.SecretKey,
-				Region:         protoSource.Mountpoint.Region,
-				EndpointURL:    protoSource.Mountpoint.EndpointUrl,
-				ForcePathStyle: protoSource.Mountpoint.ForcePathStyle,
+			if protoSource.Mountpoint != nil {
+				localSource.MountPoint = MountPointConfig{
+					BucketName:     protoSource.Mountpoint.BucketName,
+					AccessKey:      protoSource.Mountpoint.AccessKey,
+					SecretKey:      protoSource.Mountpoint.SecretKey,
+					Region:         protoSource.Mountpoint.Region,
+					EndpointURL:    protoSource.Mountpoint.EndpointUrl,
+					ForcePathStyle: protoSource.Mountpoint.ForcePathStyle,
+				}
 			}
 
 		case SourceModeJuiceFS:
-			localSource.JuiceFS = JuiceFSConfig{
-				RedisURI:  protoSource.Juicefs.RedisUri,
-				Bucket:    protoSource.Juicefs.Bucket,
-				AccessKey: protoSource.Juicefs.AccessKey,
-				SecretKey: protoSource.Juicefs.SecretKey,
+			if protoSource.Juicefs != nil {
+				localSource.JuiceFS = JuiceFSConfig{
+					RedisURI:  protoSource.Juicefs.RedisUri,
+					Bucket:    protoSource.Juicefs.Bucket,
+					AccessKey: protoSource.Juicefs.AccessKey,
+					SecretKey: protoSource.Juicefs.SecretKey,
+				}
 			}
 		}
 
@@ -248,11 +267,12 @@ type MetadataConfig struct {
 	ValkeyConfig ValkeyConfig `key:"valkey" json:"valkey"`
 
 	// Default config
-	RedisAddr       string    `key:"redisAddr" json:"redis_addr"`
-	RedisPasswd     string    `key:"redisPasswd" json:"redis_passwd"`
-	RedisTLSEnabled bool      `key:"redisTLSEnabled" json:"redis_tls_enabled"`
-	RedisMode       RedisMode `key:"redisMode" json:"redis_mode"`
-	RedisMasterName string    `key:"redisMasterName" json:"redis_master_name"`
+	RedisAddr               string    `key:"redisAddr" json:"redis_addr"`
+	RedisPasswd             string    `key:"redisPasswd" json:"redis_passwd"`
+	RedisTLSEnabled         bool      `key:"redisTLSEnabled" json:"redis_tls_enabled"`
+	RedisInsecureSkipVerify bool      `key:"redisInsecureSkipVerify" json:"redis_insecure_skip_verify"`
+	RedisMode               RedisMode `key:"redisMode" json:"redis_mode"`
+	RedisMasterName         string    `key:"redisMasterName" json:"redis_master_name"`
 }
 
 type RedisMode string
@@ -329,6 +349,7 @@ func (m *FSMetadata) ToProto() *proto.CacheFSMetadata {
 		Name:      m.Name,
 		Path:      m.Path,
 		Hash:      m.Hash,
+		Ino:       m.Ino,
 		Size:      m.Size,
 		Blocks:    m.Blocks,
 		Atime:     m.Atime,

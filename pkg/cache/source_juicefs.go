@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -35,7 +36,10 @@ func (s *JuiceFsSource) Mount(localPath string) error {
 		bufferSize = "300"
 	}
 
-	s.mountCmd = exec.Command(
+	mountCtx, cancelMount := context.WithCancel(context.Background())
+
+	s.mountCmd = exec.CommandContext(
+		mountCtx,
 		"juicefs",
 		"mount",
 		s.config.RedisURI,
@@ -49,40 +53,42 @@ func (s *JuiceFsSource) Mount(localPath string) error {
 		"--no-usage-report",
 	)
 
-	// Start the mount command in the background
+	type mountResult struct {
+		output []byte
+		err    error
+	}
+	resultCh := make(chan mountResult, 1)
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
-		if err != nil {
-			Logger.Fatalf("error executing juicefs mount: %v, output: %s", err, string(output))
-		}
+		resultCh <- mountResult{output: output, err: err}
 	}()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
-	timeout := time.After(juiceFsMountTimeout)
+	defer ticker.Stop()
+	timeout := time.NewTimer(juiceFsMountTimeout)
+	defer timeout.Stop()
 
-	done := make(chan bool)
-	go func() {
-		for {
-			select {
-			case <-timeout:
-				done <- false
-				return
-			case <-ticker.C:
-				if isMounted(localPath) {
-					done <- true
-					return
-				}
+	for {
+		select {
+		case result := <-resultCh:
+			if result.err != nil {
+				return fmt.Errorf("error executing juicefs mount: %w, output: %s", result.err, string(result.output))
 			}
+			if isMounted(localPath) {
+				Logger.Infof("JuiceFS filesystem mounted to: '%s'", localPath)
+				return nil
+			}
+			return fmt.Errorf("juicefs mount exited before filesystem was mounted to: '%s'", localPath)
+		case <-ticker.C:
+			if isMounted(localPath) {
+				Logger.Infof("JuiceFS filesystem mounted to: '%s'", localPath)
+				return nil
+			}
+		case <-timeout.C:
+			cancelMount()
+			return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s': timed out after %s", localPath, juiceFsMountTimeout)
 		}
-	}()
-
-	// Wait for confirmation or timeout
-	if !<-done {
-		return fmt.Errorf("failed to mount JuiceFS filesystem to: '%s'", localPath)
 	}
-
-	Logger.Infof("JuiceFS filesystem mounted to: '%s'", localPath)
-	return nil
 }
 
 func (s *JuiceFsSource) Format(fsName string) error {

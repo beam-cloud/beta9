@@ -78,11 +78,13 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 	}
 
 	var coordinator Registry
+	effectiveServerConfig := cfg.Server
 	var err error = nil
 	if opts.Registry != nil {
 		coordinator = opts.Registry
 	} else {
-		coordinator, err = newRegistry(ctx, cfg, locality)
+		coordinator, effectiveServerConfig, err = newRegistry(ctx, cfg, locality)
+		cfg.Server = effectiveServerConfig
 	}
 	if err != nil {
 		return nil, err
@@ -144,7 +146,7 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		hostId:        hostId,
 		locality:      locality,
 		cas:           cas,
-		serverConfig:  cfg.Server,
+		serverConfig:  effectiveServerConfig,
 		globalConfig:  cfg.Global,
 		coordinator:   coordinator,
 		privateIpAddr: privateIpAddr,
@@ -173,14 +175,15 @@ func WithServerAdvertiseAddr(addr string) ServerOption {
 	}
 }
 
-func newRegistry(ctx context.Context, cfg Config, locality string) (Registry, error) {
+func newRegistry(ctx context.Context, cfg Config, locality string) (Registry, ServerConfig, error) {
 	switch cfg.Server.Mode {
 	case ServerModeCoordinator, ServerModeNode:
-		return NewRedisRegistry(cfg.Global, cfg.Server)
+		registry, err := NewRedisRegistry(cfg.Global, cfg.Server)
+		return registry, cfg.Server, err
 	default:
 		coordinator, err := NewRemoteRegistry(cfg.Global, cfg.Client.Token)
 		if err != nil {
-			return nil, err
+			return nil, cfg.Server, err
 		}
 
 		regionConfig, err := coordinator.GetRegionConfig(ctx, locality)
@@ -190,7 +193,7 @@ func newRegistry(ctx context.Context, cfg Config, locality string) (Registry, er
 			cfg.Server = regionConfig
 		}
 
-		return coordinator, nil
+		return coordinator, cfg.Server, nil
 	}
 }
 
@@ -369,7 +372,18 @@ func (cs *Server) Close() error {
 }
 
 func (cs *Server) GetContent(ctx context.Context, req *proto.CacheGetContentRequest) (*proto.CacheGetContentResponse, error) {
-	dst := make([]byte, req.Length)
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request is nil")
+	}
+	maxMessageSize := int64(cs.globalConfig.GRPCMessageSizeBytes)
+	if maxMessageSize <= 0 {
+		maxMessageSize = 4 * 1024 * 1024
+	}
+	if req.Length < 0 || req.Length > maxMessageSize {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid content length: %d", req.Length)
+	}
+
+	dst := make([]byte, int(req.Length))
 	n, err := cs.cas.Get(req.Hash, req.Offset, req.Length, dst)
 	if err != nil {
 		Logger.Debugf("Get - [%s] - %v", req.Hash, err)
@@ -386,6 +400,13 @@ func (cs *Server) HasContent(ctx context.Context, req *proto.CacheHasContentRequ
 }
 
 func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream proto.Cache_GetContentStreamServer) error {
+	if req == nil {
+		return status.Error(codes.InvalidArgument, "request is nil")
+	}
+	if req.Length < 0 {
+		return status.Errorf(codes.InvalidArgument, "invalid content length: %d", req.Length)
+	}
+
 	const chunkSize = getContentStreamChunkSize
 	offset := req.Offset
 	remainingLength := req.Length
@@ -654,6 +675,10 @@ func (cs *Server) cacheSourceFromS3(source *proto.CacheSource, buffer *bytes.Buf
 }
 
 func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceResponse, error) {
+	if req == nil || req.Source == nil {
+		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: "source is required"}, nil
+	}
+
 	localPath := filepath.Join("/", req.Source.Path)
 	Logger.Infof("StoreFromContent[ACK] - [%s]", localPath)
 
@@ -699,10 +724,23 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 }
 
 func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceWithLockResponse, error) {
+	if req == nil || req.Source == nil {
+		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, ErrorMsg: "source is required"}, nil
+	}
+
 	sourcePath := req.Source.Path
 	if err := cs.coordinator.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, FailedToAcquireLock: true, ErrorMsg: err.Error()}, nil
 	}
+	lockReleased := false
+	defer func() {
+		if lockReleased {
+			return
+		}
+		if err := cs.coordinator.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
+			Logger.Errorf("StoreContentFromSourceWithLock[ERR] - error removing lock: %v", err)
+		}
+	}()
 
 	storeContext, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -725,10 +763,18 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 	if err != nil {
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: err.Error()}, nil
 	}
+	if storeContentFromSourceResp == nil || !storeContentFromSourceResp.Ok {
+		errorMsg := ""
+		if storeContentFromSourceResp != nil {
+			errorMsg = storeContentFromSourceResp.ErrorMsg
+		}
+		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: errorMsg}, nil
+	}
 
 	if err := cs.coordinator.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
 		Logger.Errorf("StoreContentFromSourceWithLock[ERR] - error removing lock: %v", err)
 	}
+	lockReleased = true
 
 	return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: storeContentFromSourceResp.Hash, Ok: true}, nil
 }

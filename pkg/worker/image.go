@@ -128,6 +128,8 @@ type ImageClient struct {
 	imageMountPath     string
 	imageBundlePath    string
 	mountedFuseServers *common.SafeMap[*fuse.Server]
+	mountLocks         map[string]*sync.Mutex
+	mountLocksMu       sync.Mutex
 	skopeoClient       common.SkopeoClient
 	config             types.AppConfig
 	workerId           string
@@ -164,6 +166,7 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		workerRepoClient:   workerRepoClient,
 		skopeoClient:       common.NewSkopeoClient(config),
 		mountedFuseServers: common.NewSafeMap[*fuse.Server](),
+		mountLocks:         make(map[string]*sync.Mutex),
 		v2ImageRefs:        common.NewSafeMap[string](),
 		v2ArchiveMetadata:  common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
 		logger: &ContainerLogger{
@@ -208,6 +211,23 @@ func (c *ImageClient) mountedImageReady(imageId string) bool {
 	return false
 }
 
+func (c *ImageClient) lockImageMount(imageId string) func() {
+	c.mountLocksMu.Lock()
+	if c.mountLocks == nil {
+		c.mountLocks = make(map[string]*sync.Mutex)
+	}
+
+	lock, ok := c.mountLocks[imageId]
+	if !ok {
+		lock = &sync.Mutex{}
+		c.mountLocks[imageId] = lock
+	}
+	c.mountLocksMu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
+}
+
 func ociStorageInfo(meta *clipCommon.ClipArchiveMetadata) (*clipCommon.OCIStorageInfo, bool) {
 	if meta == nil || meta.StorageInfo == nil {
 		return nil, false
@@ -245,6 +265,18 @@ func (c *ImageClient) PullLazy(ctx context.Context, request *types.ContainerRequ
 	if c.mountedImageReady(imageId) {
 		elapsed := time.Since(startTime)
 		metrics.RecordWorkerStartupPhase("clip_mounted_fuse_hit", elapsed, request, map[string]string{
+			"clip_version":     fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
+			"mounted_fuse_hit": "true",
+		})
+		return elapsed, nil
+	}
+
+	unlockMount := c.lockImageMount(imageId)
+	defer unlockMount()
+
+	if c.mountedImageReady(imageId) {
+		elapsed := time.Since(startTime)
+		metrics.RecordWorkerStartupPhase("clip_mounted_fuse_hit_after_local_lock", elapsed, request, map[string]string{
 			"clip_version":     fmt.Sprintf("%d", c.config.ImageService.ClipVersion),
 			"mounted_fuse_hit": "true",
 		})
@@ -656,8 +688,13 @@ func (c *ImageClient) cacheV2SourceImageRef(request *types.ContainerRequest) {
 
 func (c *ImageClient) Cleanup() error {
 	c.mountedFuseServers.Range(func(imageId string, server *fuse.Server) bool {
-		log.Info().Str("image_id", imageId).Msg("un-mounting image")
+		mountPoint := c.imageMountPoint(imageId)
+		log.Info().Str("image_id", imageId).Str("mount_point", mountPoint).Msg("un-mounting image")
 		server.Unmount()
+		if err := forceUnmountImageMount(mountPoint); err != nil {
+			log.Warn().Str("image_id", imageId).Str("mount_point", mountPoint).Err(err).Msg("failed to force unmount image mount")
+		}
+		c.mountedFuseServers.Delete(imageId)
 		return true // Continue iteration
 	})
 
@@ -670,6 +707,68 @@ func (c *ImageClient) Cleanup() error {
 	}
 
 	return nil
+}
+
+func cleanupImageMountPath(mountPath string) error {
+	entries, err := os.ReadDir(mountPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	for _, entry := range entries {
+		path := filepath.Join(mountPath, entry.Name())
+		if err := forceUnmountImageMount(path); err != nil {
+			log.Warn().Str("mount_point", path).Err(err).Msg("failed to force unmount image mount during cleanup")
+		}
+	}
+
+	return os.RemoveAll(mountPath)
+}
+
+func forceUnmountImageMount(mountPoint string) error {
+	if mountPoint == "" {
+		return nil
+	}
+
+	if _, err := os.Stat(mountPoint); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	commands := [][]string{
+		{"fusermount", "-uz", mountPoint},
+		{"umount", "-l", mountPoint},
+		{"umount", mountPoint},
+	}
+
+	var lastErr error
+	for _, command := range commands {
+		cmd := exec.Command(command[0], command[1:]...)
+		output, err := cmd.CombinedOutput()
+		if err == nil || isBenignUnmountError(string(output), err) {
+			return nil
+		}
+		lastErr = fmt.Errorf("%s: %w: %s", strings.Join(command, " "), err, strings.TrimSpace(string(output)))
+	}
+
+	return lastErr
+}
+
+func isBenignUnmountError(output string, err error) bool {
+	if err == nil {
+		return true
+	}
+
+	msg := strings.ToLower(output + " " + err.Error())
+	return strings.Contains(msg, "not mounted") ||
+		strings.Contains(msg, "not mount") ||
+		strings.Contains(msg, "no mount point") ||
+		strings.Contains(msg, "invalid argument")
 }
 
 func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath string, imageId string) (*types.S3ImageRegistryConfig, error) {

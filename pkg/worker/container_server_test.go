@@ -66,6 +66,25 @@ func TestWaitForSandboxProcessManagerRefreshesAfterReadySignal(t *testing.T) {
 	require.True(t, got.SandboxProcessManagerReady)
 }
 
+func TestWaitForSandboxProcessManagerFailsAfterFailedReadySignal(t *testing.T) {
+	containerId := "sandbox-test"
+	ready := make(chan struct{})
+	instance := &ContainerInstance{
+		Id:                      containerId,
+		ProcessManagerReadyChan: ready,
+	}
+
+	server := &ContainerRuntimeServer{
+		containerInstances: common.NewSafeMap[*ContainerInstance](),
+	}
+	server.containerInstances.Set(containerId, instance)
+	close(ready)
+
+	got, err := server.waitForSandboxProcessManager(context.Background(), containerId, instance)
+	require.ErrorContains(t, err, "failed to become ready")
+	require.False(t, got.SandboxProcessManagerReady)
+}
+
 func TestContainerSandboxStatusReportsPendingBeforeProcessManagerReady(t *testing.T) {
 	containerId := "sandbox-test"
 	server := &ContainerRuntimeServer{

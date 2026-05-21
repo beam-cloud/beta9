@@ -33,6 +33,8 @@ const (
 	specBaseName              string = "config.json"
 	initialSpecBaseName       string = "initial_config.json"
 	containerInnerPort        int    = 8001 // Use a fixed port inside the container
+	markRunningRetryTimeout          = 3 * time.Second
+	markRunningRetryInterval         = 100 * time.Millisecond
 )
 
 // handleStopContainerEvent used by the event bus to stop a container.
@@ -1160,7 +1162,7 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 
 func (s *Worker) markContainerRunning(request *types.ContainerRequest, startupStartedAt time.Time) {
 	containerId := request.ContainerId
-	resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+	resp, err := s.getContainerStateForRunning(containerId)
 	if err != nil {
 		notFoundErr := &types.ErrContainerStateNotFound{}
 		if notFoundErr.From(err) {
@@ -1179,11 +1181,7 @@ func (s *Worker) markContainerRunning(request *types.ContainerRequest, startupSt
 	}
 
 	phaseStart := time.Now()
-	_, err = handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
-		ContainerId:   containerId,
-		Status:        string(types.ContainerStatusRunning),
-		ExpirySeconds: int64(types.ContainerStateTtlS),
-	}))
+	err = s.updateContainerStatusRunning(containerId)
 	metrics.RecordWorkerStartupPhase("set_running_status", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
 	if err != nil {
 		log.Error().Str("container_id", containerId).Err(err).Msg("failed to update container status to running")
@@ -1191,6 +1189,42 @@ func (s *Worker) markContainerRunning(request *types.ContainerRequest, startupSt
 	}
 	if !startupStartedAt.IsZero() {
 		metrics.RecordWorkerStartupLatency(time.Since(startupStartedAt), request)
+	}
+}
+
+func (s *Worker) getContainerStateForRunning(containerId string) (*pb.GetContainerStateResponse, error) {
+	deadline := time.Now().Add(markRunningRetryTimeout)
+	var lastErr error
+	for {
+		resp, err := handleGRPCResponse(s.containerRepoClient.GetContainerState(context.Background(), &pb.GetContainerStateRequest{ContainerId: containerId}))
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return resp, lastErr
+		}
+		time.Sleep(markRunningRetryInterval)
+	}
+}
+
+func (s *Worker) updateContainerStatusRunning(containerId string) error {
+	deadline := time.Now().Add(markRunningRetryTimeout)
+	var lastErr error
+	for {
+		_, err := handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(context.Background(), &pb.UpdateContainerStatusRequest{
+			ContainerId:   containerId,
+			Status:        string(types.ContainerStatusRunning),
+			ExpirySeconds: int64(types.ContainerStateTtlS),
+		}))
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return lastErr
+		}
+		time.Sleep(markRunningRetryInterval)
 	}
 }
 

@@ -90,6 +90,10 @@ func (cs *Server) RefreshStoreFromContentLock(ctx context.Context, req *proto.Ca
 }
 
 func (cs *Server) SetFsNode(ctx context.Context, req *proto.CacheSetFsNodeRequest) (*proto.CacheSetFsNodeResponse, error) {
+	if req == nil || req.Metadata == nil {
+		return &proto.CacheSetFsNodeResponse{Ok: false}, nil
+	}
+
 	Logger.Debugf("SetFsNode[ACK] - [%s]", req.Id)
 
 	metadata := &FSMetadata{
@@ -98,6 +102,7 @@ func (cs *Server) SetFsNode(ctx context.Context, req *proto.CacheSetFsNodeReques
 		Name:      req.Metadata.Name,
 		Hash:      req.Metadata.Hash,
 		Path:      req.Metadata.Path,
+		Ino:       req.Metadata.Ino,
 		Size:      req.Metadata.Size,
 		Blocks:    req.Metadata.Blocks,
 		Atime:     req.Metadata.Atime,
@@ -185,6 +190,10 @@ func (cs *Server) AddFsNodeChild(ctx context.Context, req *proto.CacheAddFsNodeC
 }
 
 func (cs *Server) AddHostToIndex(ctx context.Context, req *proto.CacheAddHostToIndexRequest) (*proto.CacheAddHostToIndexResponse, error) {
+	if req == nil || req.Host == nil {
+		return &proto.CacheAddHostToIndexResponse{Ok: false}, nil
+	}
+
 	Logger.Debugf("AddHostToIndex[ACK] - [%s]", req.Locality)
 
 	host := &Host{
@@ -202,6 +211,10 @@ func (cs *Server) AddHostToIndex(ctx context.Context, req *proto.CacheAddHostToI
 }
 
 func (cs *Server) SetHostKeepAlive(ctx context.Context, req *proto.CacheSetHostKeepAliveRequest) (*proto.CacheSetHostKeepAliveResponse, error) {
+	if req == nil || req.Host == nil {
+		return &proto.CacheSetHostKeepAliveResponse{Ok: false}, nil
+	}
+
 	Logger.Debugf("SetHostKeepAlive[ACK] - [%s]", req.Locality)
 
 	host := &Host{

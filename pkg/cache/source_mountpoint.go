@@ -39,7 +39,7 @@ func (s *MountPointSource) Mount(localPath string) error {
 	}
 
 	if s.config.AccessKey != "" || s.config.SecretKey != "" {
-		s.mountCmd.Env = append(s.mountCmd.Env,
+		s.mountCmd.Env = append(os.Environ(),
 			fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", s.config.AccessKey),
 			fmt.Sprintf("AWS_SECRET_ACCESS_KEY=%s", s.config.SecretKey),
 		)
@@ -48,7 +48,7 @@ func (s *MountPointSource) Mount(localPath string) error {
 	go func() {
 		output, err := s.mountCmd.CombinedOutput()
 		if err != nil {
-			Logger.Fatalf("error executing mount-s3 mount: %v, output: %s", err, string(output))
+			Logger.Errorf("error executing mount-s3 mount: %v, output: %s", err, string(output))
 		}
 	}()
 
