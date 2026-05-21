@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -39,6 +40,7 @@ type Store struct {
 	metrics                 CacheMetrics
 	bufferPool              *BufferPool
 	prefetcher              *Prefetcher
+	closing                 atomic.Bool
 }
 
 func NewStore(ctx context.Context, currentHost *Host, locality string, coordinator Registry, config Config) (*Store, error) {
@@ -191,6 +193,13 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	if cas.serverConfig.PageSizeBytes <= 0 {
 		return "", 0, errors.New("invalid page size")
 	}
+	if cas.diskCachedUsageExceeded {
+		if !cas.memoryCacheEnabled {
+			return "", 0, errors.New("disk cache capacity exceeded")
+		}
+		return cas.addReaderToMemory(ctx, reader)
+	}
+
 	if err := os.MkdirAll(cas.diskCacheDir, 0755); err != nil {
 		return "", 0, fmt.Errorf("failed to create cache directory: %w", err)
 	}
@@ -239,13 +248,8 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	dirPath := filepath.Join(cas.diskCacheDir, hash)
-	if cas.diskCachedUsageExceeded && !cas.memoryCacheEnabled {
-		return "", size, errors.New("disk cache capacity exceeded")
-	}
-	if !cas.diskCachedUsageExceeded {
-		if err := os.MkdirAll(dirPath, 0755); err != nil {
-			return "", size, fmt.Errorf("failed to create cache directory: %w", err)
-		}
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return "", size, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
 	chunkKeys := make([]string, 0, chunkCount)
@@ -253,21 +257,16 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 		chunkKey := fmt.Sprintf("%s-%d", hash, chunkIdx)
 		chunkKeys = append(chunkKeys, chunkKey)
 
-		if !cas.diskCachedUsageExceeded {
-			tempChunkPath := filepath.Join(tempDir, fmt.Sprintf("chunk-%d", chunkIdx))
-			filePath := filepath.Join(dirPath, chunkKey)
-			if err := linkCacheChunkAtomic(tempChunkPath, filePath); err != nil {
-				return "", size, fmt.Errorf("failed to install cache chunk: %w", err)
-			}
+		tempChunkPath := filepath.Join(tempDir, fmt.Sprintf("chunk-%d", chunkIdx))
+		filePath := filepath.Join(dirPath, chunkKey)
+		if err := linkCacheChunkAtomic(tempChunkPath, filePath); err != nil {
+			return "", size, fmt.Errorf("failed to install cache chunk: %w", err)
 		}
 	}
 
 	if cas.memoryCacheEnabled {
-		for chunkIdx, chunkKey := range chunkKeys {
+		for _, chunkKey := range chunkKeys {
 			filePath := filepath.Join(dirPath, chunkKey)
-			if cas.diskCachedUsageExceeded {
-				filePath = filepath.Join(tempDir, fmt.Sprintf("chunk-%d", chunkIdx))
-			}
 			chunk, err := os.ReadFile(filePath)
 			if err != nil {
 				return "", size, fmt.Errorf("failed to read cache chunk for memory cache: %w", err)
@@ -287,6 +286,60 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	}
 
 	Logger.Debugf("Added object: %s, size: %d bytes", hash, size)
+	return hash, size, nil
+}
+
+func (cas *Store) addReaderToMemory(ctx context.Context, reader io.Reader) (string, int64, error) {
+	hasher := sha256.New()
+	pageSize := int(cas.serverConfig.PageSizeBytes)
+	buf := make([]byte, pageSize)
+	chunks := make([][]byte, 0)
+	var size int64
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", size, err
+		}
+
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			if _, err := hasher.Write(chunk); err != nil {
+				return "", size, err
+			}
+
+			chunks = append(chunks, chunk)
+			size += int64(n)
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return "", size, readErr
+		}
+	}
+
+	hash := hex.EncodeToString(hasher.Sum(nil))
+	chunkKeys := make([]string, 0, len(chunks))
+	for chunkIdx, chunk := range chunks {
+		chunkKey := fmt.Sprintf("%s-%d", hash, chunkIdx)
+		chunkKeys = append(chunkKeys, chunkKey)
+
+		added := cas.cache.Set(chunkKey, cacheValue{Hash: hash, Content: chunk}, int64(len(chunk)))
+		if !added {
+			return "", size, errors.New("unable to cache: set dropped")
+		}
+	}
+
+	chunksValue := strings.Join(chunkKeys, ",")
+	added := cas.cache.SetWithTTL(hash, chunksValue, int64(len(chunksValue)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
+	if !added {
+		return "", size, errors.New("unable to cache: set dropped")
+	}
+
+	Logger.Debugf("Added object to memory cache: %s, size: %d bytes", hash, size)
 	return hash, size, nil
 }
 
@@ -509,6 +562,10 @@ func (cas *Store) getFromDiskCache(hash, chunkKey string) (value cacheValue, fou
 }
 
 func (cas *Store) onEvict(item *ristretto.Item[interface{}]) {
+	if cas.closing.Load() {
+		return
+	}
+
 	hash := ""
 	var chunkKeys []string = []string{}
 
@@ -539,6 +596,7 @@ func (cas *Store) onEvict(item *ristretto.Item[interface{}]) {
 
 func (cas *Store) Cleanup() {
 	if cas.cache != nil {
+		cas.closing.Store(true)
 		cas.cache.Close()
 	}
 }

@@ -763,13 +763,19 @@ func (c *Client) withStoreFromContentLock(ctx context.Context, sourcePath string
 		return "", ErrUnableToAcquireLock
 	}
 	lockReleased := false
+	releaseLock := func() error {
+		if err := c.coordinator.RemoveStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
+			Logger.Errorf("StoreContent[ERR] - error removing lock: %v", err)
+			return err
+		}
+		lockReleased = true
+		return nil
+	}
 	defer func() {
 		if lockReleased {
 			return
 		}
-		if err := c.coordinator.RemoveStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
-			Logger.Errorf("StoreContent[ERR] - error removing lock: %v", err)
-		}
+		_ = releaseLock()
 	}()
 
 	storeContext, cancel := context.WithCancel(ctx)
@@ -795,10 +801,9 @@ func (c *Client) withStoreFromContentLock(ctx context.Context, sourcePath string
 		return hash, err
 	}
 
-	if err := c.coordinator.RemoveStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
-		Logger.Errorf("StoreContent[ERR] - error removing lock: %v", err)
+	if err := releaseLock(); err != nil {
+		return hash, err
 	}
-	lockReleased = true
 	return hash, nil
 }
 
