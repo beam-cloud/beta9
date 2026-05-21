@@ -130,9 +130,11 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 	// Set container exit code on instance
 	instance, exists := s.containerInstances.Get(containerId)
 	if exists {
-		instance.ExitCode = exitCode
-		s.containerInstances.Set(containerId, instance)
+		updatedInstance := *instance
+		updatedInstance.ExitCode = exitCode
+		s.containerInstances.Set(containerId, &updatedInstance)
 	}
+	s.markContainerStopping(containerId)
 
 	go func() {
 		// Allow for some time to pass before clearing the container. This way we can handle some last
@@ -162,6 +164,24 @@ func (s *Worker) clearContainer(containerId string, request *types.ContainerRequ
 
 		log.Info().Str("container_id", containerId).Msg("finalized container shutdown")
 	}()
+}
+
+func (s *Worker) markContainerStopping(containerId string) {
+	if s.containerRepoClient == nil {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := handleGRPCResponse(s.containerRepoClient.UpdateContainerStatus(ctx, &pb.UpdateContainerStatusRequest{
+		ContainerId:   containerId,
+		Status:        string(types.ContainerStatusStopping),
+		ExpirySeconds: int64(types.ContainerStateTtlSWhilePending),
+	}))
+	if err != nil {
+		log.Debug().Str("container_id", containerId).Err(err).Msg("failed to mark container stopping during shutdown")
+	}
 }
 
 func (s *Worker) deleteContainer(containerId string) {
@@ -229,36 +249,13 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 	// Handle stdout/stderr
 	go s.containerLogger.CaptureLogs(request, logChan)
 
-	// Attempt to pull image
-	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
-	phaseStart = time.Now()
-	elapsed, err := s.imageClient.PullLazy(ctx, request, outputLogger)
-	metrics.RecordWorkerStartupPhase("pull_lazy", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	_, imageLoaded, err := s.loadContainerImage(ctx, request, outputLogger)
 	if err != nil {
-		if !request.IsBuildRequest() {
-			log.Error().Str("container_id", containerId).Msgf("failed to pull image: %v", err)
-			return err
-		}
-
-		select {
-		case <-ctx.Done():
-			return nil
-		default:
-			phaseStart = time.Now()
-			if err := s.buildOrPullBaseImage(ctx, request, containerId, outputLogger); err != nil {
-				metrics.RecordWorkerStartupPhase("build_or_pull_base_image", time.Since(phaseStart), request, map[string]string{"success": "false"})
-				return err
-			}
-			metrics.RecordWorkerStartupPhase("build_or_pull_base_image", time.Since(phaseStart), request, map[string]string{"success": "true"})
-			phaseStart = time.Now()
-			elapsed, err = s.imageClient.PullLazy(ctx, request, outputLogger)
-			metrics.RecordWorkerStartupPhase("pull_lazy_after_build", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
-			if err != nil {
-				return err
-			}
-		}
+		return err
 	}
-	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
+	if !imageLoaded {
+		return nil
+	}
 
 	// Clip v2 build short-circuit: For v2 builds, the image was already built via buildah
 	// (see buildOrPullBaseImage) and indexed as a .clip archive. We don't need to run a
@@ -371,6 +368,53 @@ func (s *Worker) RunContainer(ctx context.Context, request *types.ContainerReque
 
 	log.Info().Str("container_id", containerId).Msg("spawned successfully")
 	return nil
+}
+
+func (s *Worker) loadContainerImage(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) (time.Duration, bool, error) {
+	outputLogger.Info(fmt.Sprintf("Loading image <%s>...\n", request.ImageId))
+
+	elapsed, err := s.pullLazyWithMetrics(ctx, request, "pull_lazy")
+	if err == nil {
+		outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
+		return elapsed, true, nil
+	}
+
+	if !request.IsBuildRequest() {
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to pull image: %v", err)
+		return elapsed, false, err
+	}
+
+	select {
+	case <-ctx.Done():
+		return elapsed, false, nil
+	default:
+	}
+
+	if err := s.buildOrPullBaseImageWithMetrics(ctx, request, outputLogger); err != nil {
+		return elapsed, false, err
+	}
+
+	elapsed, err = s.pullLazyWithMetrics(ctx, request, "pull_lazy_after_build")
+	if err != nil {
+		return elapsed, false, err
+	}
+
+	outputLogger.Info(fmt.Sprintf("Loaded image <%s>, took: %s\n", request.ImageId, elapsed))
+	return elapsed, true, nil
+}
+
+func (s *Worker) pullLazyWithMetrics(ctx context.Context, request *types.ContainerRequest, phase string) (time.Duration, error) {
+	phaseStart := time.Now()
+	elapsed, err := s.imageClient.PullLazy(ctx, request)
+	metrics.RecordWorkerStartupPhase(phase, time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	return elapsed, err
+}
+
+func (s *Worker) buildOrPullBaseImageWithMetrics(ctx context.Context, request *types.ContainerRequest, outputLogger *slog.Logger) error {
+	phaseStart := time.Now()
+	err := s.buildOrPullBaseImage(ctx, request, request.ContainerId, outputLogger)
+	metrics.RecordWorkerStartupPhase("build_or_pull_base_image", time.Since(phaseStart), request, map[string]string{"success": fmt.Sprintf("%t", err == nil)})
+	return err
 }
 
 func portsForRequest(request *types.ContainerRequest) []uint32 {
@@ -627,54 +671,8 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 		}
 	}
 
-	var volumeCacheMap map[string]string = make(map[string]string)
-
-	// Add bind mounts to runc spec
-	for _, m := range request.Mounts {
-		// Skip mountpoint storage if the local path does not exist (mounting failed)
-		if m.MountType == storage.StorageModeMountPoint {
-			if _, err := os.Stat(m.LocalPath); os.IsNotExist(err) {
-				continue
-			}
-		} else {
-			if strings.HasPrefix(m.MountPath, types.WorkerContainerVolumePath) {
-				volumeCacheMap[filepath.Base(m.MountPath)] = m.LocalPath
-			}
-
-			err := os.MkdirAll(m.LocalPath, 0755)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
-				continue
-			}
-		}
-
-		mode := "rw"
-		if m.ReadOnly {
-			mode = "ro"
-		}
-
-		if m.LinkPath != "" {
-			err = forceSymlink(m.MountPath, m.LinkPath)
-			if err != nil {
-				log.Error().Str("container_id", request.ContainerId).Msgf("unable to symlink volume: %v", err)
-			}
-		}
-
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Type:        "none",
-			Source:      m.LocalPath,
-			Destination: m.MountPath,
-			Options:     []string{"rbind", mode},
-		})
-	}
-
-	// If volume caching is enabled, set it up and add proper mounts to spec
-	if request.VolumeCacheCompatible() && s.fileCacheManager.CacheAvailable() {
-		err = s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec)
-		if err != nil {
-			log.Error().Str("container_id", request.ContainerId).Msgf("failed to setup volume caching: %v", err)
-		}
-	}
+	volumeCacheMap := s.addRequestMounts(request, spec)
+	s.enableVolumeCaching(request, volumeCacheMap, spec)
 
 	// Configure resolv.conf
 	resolvMount := specs.Mount{
@@ -718,6 +716,68 @@ func (s *Worker) specFromRequest(request *types.ContainerRequest, options *Conta
 	}
 
 	return spec, nil
+}
+
+func (s *Worker) addRequestMounts(request *types.ContainerRequest, spec *specs.Spec) map[string]string {
+	volumeCacheMap := make(map[string]string)
+
+	for _, mount := range request.Mounts {
+		if !s.prepareRequestMount(request, mount, volumeCacheMap) {
+			continue
+		}
+
+		if mount.LinkPath != "" {
+			if err := forceSymlink(mount.MountPath, mount.LinkPath); err != nil {
+				log.Error().Str("container_id", request.ContainerId).Msgf("unable to symlink volume: %v", err)
+			}
+		}
+
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Type:        "none",
+			Source:      mount.LocalPath,
+			Destination: mount.MountPath,
+			Options:     []string{"rbind", bindMountMode(mount)},
+		})
+	}
+
+	return volumeCacheMap
+}
+
+func (s *Worker) prepareRequestMount(request *types.ContainerRequest, mount types.Mount, volumeCacheMap map[string]string) bool {
+	if mount.MountType == storage.StorageModeMountPoint {
+		if _, err := os.Stat(mount.LocalPath); os.IsNotExist(err) {
+			return false
+		}
+		return true
+	}
+
+	if strings.HasPrefix(mount.MountPath, types.WorkerContainerVolumePath) {
+		volumeCacheMap[filepath.Base(mount.MountPath)] = mount.LocalPath
+	}
+
+	if err := os.MkdirAll(mount.LocalPath, 0755); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to create mount directory: %v", err)
+		return false
+	}
+
+	return true
+}
+
+func bindMountMode(mount types.Mount) string {
+	if mount.ReadOnly {
+		return "ro"
+	}
+	return "rw"
+}
+
+func (s *Worker) enableVolumeCaching(request *types.ContainerRequest, volumeCacheMap map[string]string, spec *specs.Spec) {
+	if s.fileCacheManager == nil || !request.VolumeCacheCompatible() || !s.fileCacheManager.CacheAvailable() {
+		return
+	}
+
+	if err := s.fileCacheManager.EnableVolumeCaching(request.Workspace.Name, volumeCacheMap, spec); err != nil {
+		log.Error().Str("container_id", request.ContainerId).Msgf("failed to setup volume caching: %v", err)
+	}
 }
 
 func (s *Worker) newSpecTemplate() (*specs.Spec, error) {

@@ -63,7 +63,11 @@ message CacheHasContentResponse {
   bool exists = 2;
 }
 
-message CacheStoreContentRequest { bytes content = 1; }
+message CacheStoreContentRequest {
+  bytes content = 1;
+  string cache_path = 2;
+  CacheFSMetadata metadata = 3;
+}
 
 message CacheStoreContentResponse {
   bool ok = 1;
@@ -93,6 +97,8 @@ message CacheSource {
   string endpoint_url = 4;
   string access_key = 5;
   string secret_key = 6;
+  string cache_path = 7;
+  bool force_path_style = 8;
 }
 
 message CacheStoreContentFromSourceRequest { CacheSource source = 1; }

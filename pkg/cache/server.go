@@ -1,10 +1,7 @@
 package cache
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net"
@@ -457,28 +454,107 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 	return nil
 }
 
-func (cs *Server) store(ctx context.Context, buffer *bytes.Buffer) (string, error) {
-	content := buffer.Bytes()
-	size := buffer.Len()
+func (cs *Server) storeReader(ctx context.Context, reader io.Reader) (string, uint64, error) {
+	Logger.Infof("Store[ACK]")
 
-	Logger.Infof("Store[ACK] (%d bytes)", size)
-
-	hashBytes := sha256.Sum256(content)
-	hash := hex.EncodeToString(hashBytes[:])
-
-	// Store in local in-memory cache
-	err := cs.cas.Add(ctx, hash, content)
+	hash, size, err := cs.cas.AddReader(ctx, reader)
 	if err != nil {
 		Logger.Infof("Store[ERR] - [%s] - %v", hash, err)
-		return "", status.Errorf(codes.Internal, "Failed to add content: %v", err)
+		return "", 0, status.Errorf(codes.Internal, "Failed to add content: %v", err)
 	}
 
-	Logger.Infof("Store[OK] - [%s]", hash)
-	content = nil
-	return hash, nil
+	Logger.Infof("Store[OK] - [%s] (%d bytes)", hash, size)
+	return hash, uint64(size), nil
 }
 
 func (cs *Server) StoreContentInCacheFS(ctx context.Context, path string, hash string, size uint64) error {
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+
+	return cs.storeContentInCacheFS(ctx, path, hash, size, cacheFSFileMetadataFromInfo(fileInfo, hash, size))
+}
+
+func (cs *Server) StoreSyntheticContentInCacheFS(ctx context.Context, path string, hash string, size uint64) error {
+	return cs.storeContentInCacheFS(ctx, path, hash, size, newCacheFSFileMetadata(hash, size))
+}
+
+type cacheFSFileMetadata struct {
+	hash      string
+	size      uint64
+	mode      uint32
+	atime     uint64
+	mtime     uint64
+	ctime     uint64
+	atimensec uint32
+	mtimensec uint32
+	ctimensec uint32
+}
+
+func newCacheFSFileMetadata(hash string, size uint64) *cacheFSFileMetadata {
+	now := time.Now()
+	nowSec := uint64(now.Unix())
+	nowNsec := uint32(now.Nanosecond())
+	return &cacheFSFileMetadata{
+		hash:      hash,
+		size:      size,
+		mode:      fuse.S_IFREG | 0644,
+		atime:     nowSec,
+		mtime:     nowSec,
+		ctime:     nowSec,
+		atimensec: nowNsec,
+		mtimensec: nowNsec,
+		ctimensec: nowNsec,
+	}
+}
+
+func cacheFSFileMetadataFromInfo(fileInfo os.FileInfo, hash string, size uint64) *cacheFSFileMetadata {
+	if fileInfo.IsDir() {
+		return nil
+	}
+
+	modTime := fileInfo.ModTime()
+	accessTime := atime.Get(fileInfo)
+	mode := fuse.S_IFREG | uint32(fileInfo.Mode().Perm())
+
+	return &cacheFSFileMetadata{
+		hash:      hash,
+		size:      size,
+		mode:      mode,
+		atime:     uint64(accessTime.Unix()),
+		mtime:     uint64(modTime.Unix()),
+		ctime:     uint64(modTime.Unix()),
+		atimensec: uint32(accessTime.Nanosecond()),
+		mtimensec: uint32(modTime.Nanosecond()),
+		ctimensec: uint32(modTime.Nanosecond()),
+	}
+}
+
+func cacheFSFileMetadataFromProto(metadata *proto.CacheFSMetadata, hash string, size uint64) *cacheFSFileMetadata {
+	if metadata == nil {
+		return newCacheFSFileMetadata(hash, size)
+	}
+
+	mode := metadata.Mode
+	if mode == 0 {
+		mode = fuse.S_IFREG | 0644
+	}
+
+	return &cacheFSFileMetadata{
+		hash:      hash,
+		size:      size,
+		mode:      mode,
+		atime:     metadata.Atime,
+		mtime:     metadata.Mtime,
+		ctime:     metadata.Ctime,
+		atimensec: metadata.Atimensec,
+		mtimensec: metadata.Mtimensec,
+		ctimensec: metadata.Ctimensec,
+	}
+}
+
+func (cs *Server) storeContentInCacheFS(ctx context.Context, path string, hash string, size uint64, leafMetadata *cacheFSFileMetadata) error {
 	path = filepath.Join("/", filepath.Clean(path))
 	parts := strings.Split(path, string(filepath.Separator))
 
@@ -525,31 +601,19 @@ func (cs *Server) StoreContentInCacheFS(ctx context.Context, path string, hash s
 
 		// If currentPath matches the input path, use the actual file info
 		if currentPath == path {
-			fileInfo, err := os.Stat(currentPath)
-			if err != nil {
-				return err
-			}
-
-			// Update metadata fields with actual file info values
-			modTime := fileInfo.ModTime()
-			accessTime := atime.Get(fileInfo)
-			metadata.Mode = uint32(fileInfo.Mode())
-			metadata.Atime = uint64(accessTime.Unix())
-			metadata.Atimensec = uint32(accessTime.Nanosecond())
-			metadata.Mtime = uint64(modTime.Unix())
-			metadata.Mtimensec = uint32(modTime.Nanosecond())
-
-			// Since we cannot get Ctime in a platform-independent way, set it to ModTime
-			metadata.Ctime = uint64(modTime.Unix())
-			metadata.Ctimensec = uint32(modTime.Nanosecond())
-
-			metadata.Size = uint64(fileInfo.Size())
-			if fileInfo.IsDir() {
+			if leafMetadata == nil {
 				metadata.Hash = GenerateFsID(currentPath)
 				metadata.Size = 0
 			} else {
-				metadata.Hash = hash
-				metadata.Size = size
+				metadata.Hash = leafMetadata.hash
+				metadata.Size = leafMetadata.size
+				metadata.Mode = leafMetadata.mode
+				metadata.Atime = leafMetadata.atime
+				metadata.Mtime = leafMetadata.mtime
+				metadata.Ctime = leafMetadata.ctime
+				metadata.Atimensec = leafMetadata.atimensec
+				metadata.Mtimensec = leafMetadata.mtimensec
+				metadata.Ctimensec = leafMetadata.ctimensec
 			}
 		}
 
@@ -573,35 +637,65 @@ func (cs *Server) StoreContentInCacheFS(ctx context.Context, path string, hash s
 
 func (cs *Server) StoreContent(stream proto.Cache_StoreContentServer) error {
 	ctx := stream.Context()
-	var buffer bytes.Buffer
 
 	Logger.Infof("StoreContent[ACK]")
 
-	for {
-		req, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			Logger.Infof("Store[ERR] - error: %v", err)
-			return status.Errorf(codes.Unknown, "Received an error: %v", err)
-		}
-
-		Logger.Debugf("Store[RX] - chunk (%d bytes)", len(req.Content))
-		if _, err := buffer.Write(req.Content); err != nil {
-			Logger.Debugf("Store[ERR] - failed to write to buffer: %v", err)
-			return status.Errorf(codes.Internal, "Failed to write content to buffer: %v", err)
-		}
-	}
-
-	hash, err := cs.store(ctx, &buffer)
+	reader := &storeContentStreamReader{stream: stream}
+	hash, size, err := cs.storeReader(ctx, reader)
 	if err != nil {
 		return err
 	}
 
-	buffer.Reset()
-	return stream.SendAndClose(&proto.CacheStoreContentResponse{Hash: hash})
+	if cs.coordinator != nil && reader.cachePath != "" {
+		metadata := newCacheFSFileMetadata(hash, size)
+		if reader.metadata != nil {
+			metadata = cacheFSFileMetadataFromProto(reader.metadata, hash, size)
+		}
+
+		if err := cs.storeContentInCacheFS(ctx, reader.cachePath, hash, size, metadata); err != nil {
+			Logger.Infof("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, reader.cachePath, err)
+			return status.Errorf(codes.Internal, "Failed to update cachefs metadata: %v", err)
+		}
+	}
+
+	return stream.SendAndClose(&proto.CacheStoreContentResponse{Ok: true, Hash: hash})
+}
+
+type storeContentStreamReader struct {
+	stream    proto.Cache_StoreContentServer
+	pending   []byte
+	cachePath string
+	metadata  *proto.CacheFSMetadata
+}
+
+func (r *storeContentStreamReader) Read(p []byte) (int, error) {
+	for len(r.pending) == 0 {
+		req, err := r.stream.Recv()
+		if err == io.EOF {
+			return 0, io.EOF
+		}
+		if err != nil {
+			Logger.Infof("Store[ERR] - error: %v", err)
+			return 0, status.Errorf(codes.Unknown, "Received an error: %v", err)
+		}
+
+		if req.CachePath != "" {
+			r.cachePath = filepath.Join("/", filepath.Clean(req.CachePath))
+		}
+		if req.Metadata != nil {
+			r.metadata = req.Metadata
+			if r.cachePath == "" && req.Metadata.Path != "" {
+				r.cachePath = filepath.Join("/", filepath.Clean(req.Metadata.Path))
+			}
+		}
+
+		Logger.Debugf("Store[RX] - chunk (%d bytes)", len(req.Content))
+		r.pending = req.Content
+	}
+
+	n := copy(p, r.pending)
+	r.pending = r.pending[n:]
+	return n, nil
 }
 
 func (cs *Server) usagePct() float64 {
@@ -628,31 +722,25 @@ func (cs *Server) GetState(ctx context.Context, req *proto.CacheGetStateRequest)
 	}, nil
 }
 
-func (cs *Server) cacheSourceFromLocalPath(localPath string, buffer *bytes.Buffer) error {
+func (cs *Server) openLocalSource(localPath string) (io.ReadCloser, error) {
 	// Check if the file exists
 	if _, err := os.Stat(localPath); os.IsNotExist(err) {
 		Logger.Infof("StoreFromContent[ERR] - source not found: %v", err)
-		return err
+		return nil, err
 	}
 
 	// Open the file
 	file, err := os.Open(localPath)
 	if err != nil {
 		Logger.Infof("StoreFromContent[ERR] - error reading source: %v", err)
-		return err
-	}
-	defer file.Close()
-
-	if _, err := io.Copy(buffer, file); err != nil {
-		Logger.Infof("StoreFromContent[ERR] - error copying source: %v", err)
-		return err
+		return nil, err
 	}
 
-	return nil
+	return file, nil
 }
 
-func (cs *Server) cacheSourceFromS3(source *proto.CacheSource, buffer *bytes.Buffer) error {
-	key := fmt.Sprintf("%s/%s/%s", source.EndpointUrl, source.Region, source.BucketName)
+func (cs *Server) s3ClientForSource(source *proto.CacheSource) (*S3Client, error) {
+	key := fmt.Sprintf("%s/%s/%s/%s/%t", source.EndpointUrl, source.Region, source.BucketName, source.AccessKey, source.ForcePathStyle)
 
 	var s3Client *S3Client
 	var err error
@@ -661,25 +749,21 @@ func (cs *Server) cacheSourceFromS3(source *proto.CacheSource, buffer *bytes.Buf
 		s3Client = cachedS3Client.(*S3Client)
 	} else {
 		s3Client, err = NewS3Client(cs.ctx, S3SourceConfig{
-			BucketName:  source.BucketName,
-			Region:      source.Region,
-			EndpointURL: source.EndpointUrl,
-			AccessKey:   source.AccessKey,
-			SecretKey:   source.SecretKey,
+			BucketName:     source.BucketName,
+			Region:         source.Region,
+			EndpointURL:    source.EndpointUrl,
+			AccessKey:      source.AccessKey,
+			SecretKey:      source.SecretKey,
+			ForcePathStyle: source.ForcePathStyle,
 		}, cs.serverConfig)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		cs.s3ClientCache.Store(key, s3Client)
 	}
 
-	err = s3Client.DownloadIntoBuffer(cs.ctx, source.Path, buffer)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return s3Client, nil
 }
 
 func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheStoreContentFromSourceRequest) (*proto.CacheStoreContentFromSourceResponse, error) {
@@ -688,41 +772,65 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 	}
 
 	localPath := filepath.Join("/", req.Source.Path)
-	Logger.Infof("StoreFromContent[ACK] - [%s]", localPath)
+	cachePath := localPath
+	if req.Source.CachePath != "" {
+		cachePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
+	}
+	Logger.Infof("StoreFromContent[ACK] - [source=%s cache_path=%s]", req.Source.Path, cachePath)
 
-	var buffer bytes.Buffer
+	var reader io.ReadCloser
+	var err error
 	if req.Source.BucketName == "" {
-		err := cs.cacheSourceFromLocalPath(localPath, &buffer)
+		reader, err = cs.openLocalSource(localPath)
 		if err != nil {
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
 		}
 	} else {
-		err := cs.cacheSourceFromS3(req.Source, &buffer)
+		s3Client, err := cs.s3ClientForSource(req.Source)
 		if err != nil {
 			Logger.Errorf("StoreFromContent[ERR] - error caching source: %v", err)
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
 		}
+
+		reader, err = s3Client.Open(ctx, req.Source.Path)
+		if err != nil {
+			Logger.Errorf("StoreFromContent[ERR] - error opening source: %v", err)
+			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, err
+		}
 	}
+	defer reader.Close()
 
 	// Store the content
-	hash, err := cs.store(ctx, &buffer)
+	hash, size, err := cs.storeReader(ctx, reader)
 	if err != nil {
 		Logger.Infof("StoreFromContent[ERR] - error storing data in cache: %v", err)
 		return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 	}
 
-	// Store references in cachefs if it's enabled (for disk access to the cached content)
-	// This is unnecessary for workspace storage, but still required for CLIP to lazy load content from cache
-	// and volume caching + juicefs to work
-	if cs.coordinator != nil && req.Source.BucketName == "" {
-		err := cs.StoreContentInCacheFS(ctx, localPath, hash, uint64(buffer.Len()))
+	// Store references in cachefs only when the caller is publishing a path into the
+	// cachefs namespace. Plain S3 source writes are content-addressed only.
+	if cs.coordinator != nil {
+		var err error
+		if req.Source.BucketName == "" {
+			if req.Source.CachePath == "" {
+				err = cs.StoreContentInCacheFS(ctx, localPath, hash, size)
+			} else {
+				fileInfo, statErr := os.Stat(localPath)
+				if statErr != nil {
+					err = statErr
+				} else {
+					err = cs.storeContentInCacheFS(ctx, cachePath, hash, size, cacheFSFileMetadataFromInfo(fileInfo, hash, size))
+				}
+			}
+		} else if req.Source.CachePath != "" {
+			err = cs.StoreSyntheticContentInCacheFS(ctx, cachePath, hash, size)
+		}
 		if err != nil {
-			Logger.Infof("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, localPath, err)
+			Logger.Infof("Store[ERR] - [%s] unable to store content in cachefs<path=%s> - %v", hash, cachePath, err)
 			return &proto.CacheStoreContentFromSourceResponse{Ok: false, ErrorMsg: err.Error()}, nil
 		}
 	}
 
-	buffer.Reset()
 	Logger.Infof("StoreFromContent[OK] - [%s]", hash)
 
 	// HOTFIX: Manually trigger garbage collection
@@ -737,6 +845,9 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 	}
 
 	sourcePath := req.Source.Path
+	if req.Source.CachePath != "" {
+		sourcePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
+	}
 	if err := cs.coordinator.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, FailedToAcquireLock: true, ErrorMsg: err.Error()}, nil
 	}

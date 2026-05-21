@@ -121,15 +121,10 @@ func (n *FSNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*
 
 		n.log("Storing content from source with path: %s", sourcePath)
 
-		cacheSource := struct {
-			Path string
-		}{
+		cacheSource := LocalContentSource{
 			Path: sourcePath,
 		}
-		_, err := n.filesystem.Client.StoreContentFromFUSE(cacheSource, struct {
-			RoutingKey string
-			Lock       bool
-		}{
+		_, err := n.filesystem.Client.StoreContentFromLocalFile(cacheSource, StoreContentOptions{
 			RoutingKey: sourcePath,
 			Lock:       true,
 		})
@@ -191,15 +186,10 @@ func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int
 	if err != nil {
 		if err == ErrContentNotFound {
 
-			cacheSource := struct {
-				Path string
-			}{
+			cacheSource := LocalContentSource{
 				Path: sourcePath,
 			}
-			_, err = n.filesystem.Client.StoreContentFromFUSE(cacheSource, struct {
-				RoutingKey string
-				Lock       bool
-			}{
+			_, err = n.filesystem.Client.StoreContentFromLocalFile(cacheSource, StoreContentOptions{
 				RoutingKey: sourcePath,
 				Lock:       true,
 			})

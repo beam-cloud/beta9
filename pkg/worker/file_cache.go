@@ -17,7 +17,10 @@ import (
 )
 
 const (
-	baseFileCachePath string = "/cache"
+	baseFileCachePath      string = "/cache"
+	volumeCacheLibraryPath string = "/usr/local/lib/volume_cache.so"
+	volumeCacheMapEnv      string = "VOLUME_CACHE_MAP"
+	ldPreloadEnv           string = "LD_PRELOAD"
 )
 
 type FileCacheManager struct {
@@ -40,14 +43,10 @@ func (cm *FileCacheManager) CacheFilesInPath(sourcePath string) {
 		}
 
 		if !info.IsDir() {
-			_, err := cm.client.StoreContentFromFUSE(struct {
-				Path string
-			}{
-				Path: path,
-			}, struct {
-				RoutingKey string
-				Lock       bool
-			}{
+			_, err := cm.client.StoreContentFromLocalFile(cache.LocalContentSource{
+				Path:      path,
+				CachePath: path,
+			}, cache.StoreContentOptions{
 				RoutingKey: path,
 			})
 			if err != nil {
@@ -64,78 +63,89 @@ func (cm *FileCacheManager) EnableVolumeCaching(workspaceName string, volumeCach
 		return cache.ErrHostNotFound
 	}
 
-	volumeCacheMapStr := "{}"
-	volumeCacheMapBytes, err := json.Marshal(volumeCacheMap)
+	if spec.Process == nil {
+		return fmt.Errorf("container spec missing process")
+	}
+
+	volumeCacheMapStr, err := encodeVolumeCacheMap(volumeCacheMap)
 	if err != nil {
 		return err
 	}
-	volumeCacheMapStr = string(volumeCacheMapBytes)
 
 	workspaceVolumePath, err := cm.initWorkspace(workspaceName)
 	if err != nil {
 		return err
 	}
 
-	cacheMount := specs.Mount{
+	spec.Mounts = append(spec.Mounts, volumeCacheMounts(workspaceVolumePath)...)
+	spec.Process.Env = withVolumeCacheEnv(spec.Process.Env, volumeCacheMapStr)
+	return nil
+}
+
+func encodeVolumeCacheMap(volumeCacheMap map[string]string) (string, error) {
+	volumeCacheMapBytes, err := json.Marshal(volumeCacheMap)
+	if err != nil {
+		return "", err
+	}
+	return string(volumeCacheMapBytes), nil
+}
+
+func volumeCacheMounts(workspaceVolumePath string) []specs.Mount {
+	return []specs.Mount{{
 		Type:        "none",
 		Source:      filepath.Join(baseFileCachePath, workspaceVolumePath),
 		Destination: "/cache",
-		Options: []string{"ro",
-			"rbind",
-			"rprivate",
-			"nosuid",
-			"noexec",
-			"nodev"},
-	}
-
-	interceptMount := specs.Mount{
+		Options:     []string{"ro", "rbind", "rprivate", "nosuid", "noexec", "nodev"},
+	}, {
 		Type:        "none",
-		Source:      "/usr/local/lib/volume_cache.so",
-		Destination: "/usr/local/lib/volume_cache.so",
-		Options: []string{"ro",
-			"rbind",
-			"rprivate",
-			"nosuid",
-			"nodev"},
+		Source:      volumeCacheLibraryPath,
+		Destination: volumeCacheLibraryPath,
+		Options:     []string{"ro", "rbind", "rprivate", "nosuid", "nodev"},
+	}}
+}
+
+func withVolumeCacheEnv(env []string, volumeCacheMapStr string) []string {
+	env = withLDPreload(env, volumeCacheLibraryPath)
+	return append(env, fmt.Sprintf("%s=%s", volumeCacheMapEnv, volumeCacheMapStr))
+}
+
+func withLDPreload(env []string, libraryPath string) []string {
+	prefix := ldPreloadEnv + "="
+	for i, envVar := range env {
+		if !strings.HasPrefix(envVar, prefix) {
+			continue
+		}
+
+		value := strings.TrimPrefix(envVar, prefix)
+		if value == "" {
+			env[i] = prefix + libraryPath
+		} else if !envListContains(value, libraryPath) {
+			env[i] = fmt.Sprintf("%s%s:%s", prefix, value, libraryPath)
+		}
+		return env
 	}
 
-	spec.Mounts = append(spec.Mounts, cacheMount)
-	spec.Mounts = append(spec.Mounts, interceptMount)
+	return append(env, prefix+libraryPath)
+}
 
-	for i, envVar := range spec.Process.Env {
-		if strings.HasPrefix(envVar, "LD_PRELOAD=") {
-			spec.Process.Env[i] = fmt.Sprintf("%s:%s", envVar, "/usr/local/lib/volume_cache.so")
-			break
+func envListContains(value string, item string) bool {
+	for _, part := range strings.Split(value, ":") {
+		if part == item {
+			return true
 		}
 	}
-
-	spec.Process.Env = append(spec.Process.Env, []string{fmt.Sprintf("VOLUME_CACHE_MAP=%s", volumeCacheMapStr)}...)
-	return nil
+	return false
 }
 
 func (cm *FileCacheManager) initWorkspace(workspaceName string) (string, error) {
 	workspaceVolumePath := filepath.Join(types.DefaultVolumesPath, workspaceName)
 	fileName := fmt.Sprintf("%s/.cache", workspaceVolumePath)
 
-	_, err := os.Stat(fileName)
-	if os.IsNotExist(err) {
-		file, err := os.Create(fileName)
-		if err != nil {
-			return "", err
-		}
-		defer file.Close()
-	} else if cm.CacheAvailable() && cm.client.IsPathCachedNearby(context.Background(), workspaceVolumePath) {
+	if cm.CacheAvailable() && cm.client.IsPathCachedNearby(context.Background(), fileName) {
 		return workspaceVolumePath, nil
 	}
 
-	_, err = cm.client.StoreContentFromFUSE(struct {
-		Path string
-	}{
-		Path: fileName,
-	}, struct {
-		RoutingKey string
-		Lock       bool
-	}{
+	_, err := cm.client.StoreContentAtPath([]byte{}, fileName, cache.StoreContentOptions{
 		RoutingKey: fileName,
 		Lock:       true,
 	})

@@ -2,8 +2,11 @@ package cache
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -181,6 +184,112 @@ func (cas *Store) Add(ctx context.Context, hash string, content []byte) error {
 	return nil
 }
 
+func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int64, error) {
+	if reader == nil {
+		return "", 0, errors.New("nil content reader")
+	}
+	if cas.serverConfig.PageSizeBytes <= 0 {
+		return "", 0, errors.New("invalid page size")
+	}
+	if err := os.MkdirAll(cas.diskCacheDir, 0755); err != nil {
+		return "", 0, fmt.Errorf("failed to create cache directory: %w", err)
+	}
+
+	tempDir, err := os.MkdirTemp(cas.diskCacheDir, ".store-*")
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to create temp cache directory: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	hasher := sha256.New()
+	pageSize := int(cas.serverConfig.PageSizeBytes)
+	buf := make([]byte, pageSize)
+	var size int64
+	var chunkCount int64
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", size, err
+		}
+
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			if _, err := hasher.Write(chunk); err != nil {
+				return "", size, err
+			}
+
+			tempChunkPath := filepath.Join(tempDir, fmt.Sprintf("chunk-%d", chunkCount))
+			if err := writeCacheChunkAtomic(tempChunkPath, chunk); err != nil {
+				return "", size, fmt.Errorf("failed to write temp cache chunk: %w", err)
+			}
+
+			size += int64(n)
+			chunkCount++
+		}
+
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return "", size, readErr
+		}
+	}
+
+	hash := hex.EncodeToString(hasher.Sum(nil))
+	dirPath := filepath.Join(cas.diskCacheDir, hash)
+	if cas.diskCachedUsageExceeded && !cas.memoryCacheEnabled {
+		return "", size, errors.New("disk cache capacity exceeded")
+	}
+	if !cas.diskCachedUsageExceeded {
+		if err := os.MkdirAll(dirPath, 0755); err != nil {
+			return "", size, fmt.Errorf("failed to create cache directory: %w", err)
+		}
+	}
+
+	chunkKeys := make([]string, 0, chunkCount)
+	for chunkIdx := int64(0); chunkIdx < chunkCount; chunkIdx++ {
+		chunkKey := fmt.Sprintf("%s-%d", hash, chunkIdx)
+		chunkKeys = append(chunkKeys, chunkKey)
+
+		if !cas.diskCachedUsageExceeded {
+			tempChunkPath := filepath.Join(tempDir, fmt.Sprintf("chunk-%d", chunkIdx))
+			filePath := filepath.Join(dirPath, chunkKey)
+			if err := linkCacheChunkAtomic(tempChunkPath, filePath); err != nil {
+				return "", size, fmt.Errorf("failed to install cache chunk: %w", err)
+			}
+		}
+	}
+
+	if cas.memoryCacheEnabled {
+		for chunkIdx, chunkKey := range chunkKeys {
+			filePath := filepath.Join(dirPath, chunkKey)
+			if cas.diskCachedUsageExceeded {
+				filePath = filepath.Join(tempDir, fmt.Sprintf("chunk-%d", chunkIdx))
+			}
+			chunk, err := os.ReadFile(filePath)
+			if err != nil {
+				return "", size, fmt.Errorf("failed to read cache chunk for memory cache: %w", err)
+			}
+
+			added := cas.cache.Set(chunkKey, cacheValue{Hash: hash, Content: chunk}, int64(len(chunk)))
+			if !added {
+				return "", size, errors.New("unable to cache: set dropped")
+			}
+		}
+
+		chunks := strings.Join(chunkKeys, ",")
+		added := cas.cache.SetWithTTL(hash, chunks, int64(len(chunks)), time.Duration(cas.serverConfig.ObjectTtlS)*time.Second)
+		if !added {
+			return "", size, errors.New("unable to cache: set dropped")
+		}
+	}
+
+	Logger.Debugf("Added object: %s, size: %d bytes", hash, size)
+	return hash, size, nil
+}
+
 func writeCacheChunkAtomic(filePath string, chunk []byte) error {
 	if info, err := os.Stat(filePath); err == nil {
 		if info.Size() == int64(len(chunk)) {
@@ -211,6 +320,32 @@ func writeCacheChunkAtomic(filePath string, chunk []byte) error {
 		return err
 	}
 	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+
+	if err := os.Link(tmpPath, filePath); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return err
+	}
+
+	return nil
+}
+
+func linkCacheChunkAtomic(tmpPath, filePath string) error {
+	if info, err := os.Stat(filePath); err == nil {
+		tmpInfo, tmpErr := os.Stat(tmpPath)
+		if tmpErr != nil {
+			return tmpErr
+		}
+		if info.Size() == tmpInfo.Size() {
+			return nil
+		}
+		if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
