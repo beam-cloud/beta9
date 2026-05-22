@@ -60,6 +60,8 @@ var (
 	taskClaim       string = "task:%s:%s:%s:claim"
 	taskCancel      string = "task:%s:%s:%s:cancel"
 	taskRetryLock   string = "task:%s:%s:%s:retry_lock"
+	taskPhase       string = "task:%s:%s:phase:%s"
+	taskPhaseLabels string = "task:%s:%s:phase_labels"
 )
 
 var (
@@ -273,6 +275,14 @@ func (rk *redisKeys) TaskClaim(workspaceName, stubId, taskId string) string {
 
 func (rk *redisKeys) TaskRetryLock(workspaceName, stubId, taskId string) string {
 	return fmt.Sprintf(taskRetryLock, workspaceName, stubId, taskId)
+}
+
+func (rk *redisKeys) TaskPhase(workspaceName, taskId, phase string) string {
+	return fmt.Sprintf(taskPhase, workspaceName, taskId, phase)
+}
+
+func (rk *redisKeys) TaskPhaseLabels(workspaceName, taskId string) string {
+	return fmt.Sprintf(taskPhaseLabels, workspaceName, taskId)
 }
 
 // Workspace keys

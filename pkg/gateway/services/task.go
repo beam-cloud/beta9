@@ -10,6 +10,8 @@ import (
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/metrics"
+	taskmetrics "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
@@ -44,12 +46,27 @@ func (gws *GatewayService) StartTask(ctx context.Context, in *pb.StartTaskReques
 		return &pb.StartTaskResponse{Ok: false}, nil
 	}
 
-	task.StartedAt = types.NullTime{}.Now()
+	startedAt := time.Now()
+	task.StartedAt = types.NullTime{Time: startedAt, Valid: true}
 	task.Status = types.TaskStatusRunning
 
 	if in.ContainerId != "" {
 		task.ContainerId = in.ContainerId
 	}
+
+	phaseMetrics := taskmetrics.NewPhaseMetrics(gws.redisClient)
+	phaseLabels := taskmetrics.FunctionPhaseLabelsFromTask(task)
+	if err := phaseMetrics.StoreLabels(ctx, task.Workspace.Name, task.ExternalId, phaseLabels); err != nil {
+		log.Debug().Err(err).Str("task_id", task.ExternalId).Msg("failed to store function phase metric labels")
+	}
+	if err := phaseMetrics.Mark(ctx, task.Workspace.Name, task.ExternalId, taskmetrics.FunctionPhaseStartTask, startedAt); err != nil {
+		log.Debug().Err(err).Str("task_id", task.ExternalId).Msg("failed to mark function start_task phase")
+	}
+	if !task.CreatedAt.IsZero() {
+		metrics.RecordFunctionTaskPhase("task_created_to_start_task", startedAt.Sub(task.CreatedAt.Time), phaseLabels)
+	}
+	phaseMetrics.RecordSince(ctx, task.Workspace.Name, task.ExternalId, "container_request_ready_to_start_task", taskmetrics.FunctionPhaseContainerRequestReady, startedAt, phaseLabels)
+	gws.recordContainerToStartTaskPhases(in.ContainerId, startedAt, phaseLabels)
 
 	err = gws.taskDispatcher.Claim(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId, task.ContainerId)
 	if err != nil {
@@ -94,12 +111,21 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		}, nil
 	}
 
-	task.EndedAt = types.NullTime{}.Now()
+	endedAt := time.Now()
+	task.EndedAt = types.NullTime{Time: endedAt, Valid: true}
 	task.Status = types.TaskStatus(in.TaskStatus)
 
 	if in.ContainerId != "" {
 		task.ContainerId = in.ContainerId
 	}
+
+	phaseMetrics := taskmetrics.NewPhaseMetrics(gws.redisClient)
+	phaseLabels := taskmetrics.FunctionPhaseLabelsFromTask(task)
+	if task.Status != types.TaskStatusComplete {
+		phaseLabels["success"] = "false"
+	}
+	phaseMetrics.RecordSince(ctx, task.Workspace.Name, task.ExternalId, "set_result_to_end_task", taskmetrics.FunctionPhaseSetResult, endedAt, phaseLabels)
+	phaseMetrics.RecordSince(ctx, task.Workspace.Name, task.ExternalId, "start_task_to_end_task", taskmetrics.FunctionPhaseStartTask, endedAt, phaseLabels)
 
 	var workspace *types.Workspace = authInfo.Workspace
 
@@ -141,6 +167,43 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	return &pb.EndTaskResponse{
 		Ok: err == nil,
 	}, nil
+}
+
+func (gws *GatewayService) recordContainerToStartTaskPhases(containerId string, startedAt time.Time, labels map[string]string) {
+	if containerId == "" {
+		return
+	}
+
+	containerState, err := gws.containerRepo.GetContainerState(containerId)
+	if err != nil {
+		log.Debug().Err(err).Str("container_id", containerId).Msg("failed to load container state for function phase metrics")
+		return
+	}
+
+	containerLabels := copyPhaseLabels(labels)
+	containerLabels["container_status"] = string(containerState.Status)
+
+	if containerState.ScheduledAt > 0 {
+		scheduledAt := time.Unix(containerState.ScheduledAt, 0)
+		if !startedAt.Before(scheduledAt) {
+			metrics.RecordFunctionTaskPhase("container_scheduled_to_start_task", startedAt.Sub(scheduledAt), containerLabels)
+		}
+	}
+
+	if containerState.StartedAt > 0 {
+		runningAt := time.Unix(containerState.StartedAt, 0)
+		if !startedAt.Before(runningAt) {
+			metrics.RecordFunctionTaskPhase("container_running_to_start_task", startedAt.Sub(runningAt), containerLabels)
+		}
+	}
+}
+
+func copyPhaseLabels(labels map[string]string) map[string]string {
+	copied := make(map[string]string, len(labels))
+	for key, value := range labels {
+		copied[key] = value
+	}
+	return copied
 }
 
 func (gws *GatewayService) trackExternalTaskCost(task *types.TaskWithRelated, externalWorkspace *types.Workspace, duration time.Duration) error {

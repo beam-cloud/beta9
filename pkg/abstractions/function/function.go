@@ -230,15 +230,29 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 
 func (fs *ContainerFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	now := time.Now()
+	phaseMetrics := task.NewPhaseMetrics(fs.rdb)
+	phaseLabels := phaseMetrics.Labels(ctx, authInfo.Workspace.Name, in.TaskId, map[string]string{
+		"workspace_id": authInfo.Workspace.ExternalId,
+	})
 
 	value, err := fs.rdb.Get(ctx, Keys.FunctionArgs(authInfo.Workspace.Name, in.TaskId)).Bytes()
 	if err != nil {
+		phaseLabels["success"] = "false"
+		phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "start_task_to_get_args", task.FunctionPhaseStartTask, now, phaseLabels)
 		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
 	}
 
 	err = fs.rdb.SetEx(ctx, Keys.FunctionHeartbeat(authInfo.Workspace.Name, in.TaskId), 1, time.Duration(defaultFunctionHeartbeatTimeoutS)*time.Second).Err()
 	if err != nil {
+		phaseLabels["success"] = "false"
+		phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "start_task_to_get_args", task.FunctionPhaseStartTask, now, phaseLabels)
 		return &pb.FunctionGetArgsResponse{Ok: false, Args: nil}, nil
+	}
+
+	phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "start_task_to_get_args", task.FunctionPhaseStartTask, now, phaseLabels)
+	if err := phaseMetrics.Mark(ctx, authInfo.Workspace.Name, in.TaskId, task.FunctionPhaseGetArgs, now); err != nil {
+		log.Debug().Err(err).Str("task_id", in.TaskId).Msg("failed to mark function get_args phase")
 	}
 
 	return &pb.FunctionGetArgsResponse{
@@ -249,10 +263,24 @@ func (fs *ContainerFunctionService) FunctionGetArgs(ctx context.Context, in *pb.
 
 func (fs *ContainerFunctionService) FunctionSetResult(ctx context.Context, in *pb.FunctionSetResultRequest) (*pb.FunctionSetResultResponse, error) {
 	authInfo, _ := auth.AuthInfoFromContext(ctx)
+	now := time.Now()
+	phaseMetrics := task.NewPhaseMetrics(fs.rdb)
+	phaseLabels := phaseMetrics.Labels(ctx, authInfo.Workspace.Name, in.TaskId, map[string]string{
+		"workspace_id": authInfo.Workspace.ExternalId,
+	})
 
 	err := fs.rdb.Set(ctx, Keys.FunctionResult(authInfo.Workspace.Name, in.TaskId), in.Result, functionResultExpirationTimeout).Err()
 	if err != nil {
+		phaseLabels["success"] = "false"
+		phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "get_args_to_set_result", task.FunctionPhaseGetArgs, now, phaseLabels)
+		phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "start_task_to_set_result", task.FunctionPhaseStartTask, now, phaseLabels)
 		return &pb.FunctionSetResultResponse{Ok: false}, nil
+	}
+
+	phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "get_args_to_set_result", task.FunctionPhaseGetArgs, now, phaseLabels)
+	phaseMetrics.RecordSince(ctx, authInfo.Workspace.Name, in.TaskId, "start_task_to_set_result", task.FunctionPhaseStartTask, now, phaseLabels)
+	if err := phaseMetrics.Mark(ctx, authInfo.Workspace.Name, in.TaskId, task.FunctionPhaseSetResult, now); err != nil {
+		log.Debug().Err(err).Str("task_id", in.TaskId).Msg("failed to mark function set_result phase")
 	}
 
 	return &pb.FunctionSetResultResponse{
