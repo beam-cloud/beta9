@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
-from startup_benchmark import (
+from startup import (
     API_PREFIX,
     api_url,
     authorize,

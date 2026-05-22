@@ -53,6 +53,7 @@ const (
 	metricProxyQueuedRequestWait    = "proxy_queued_request_wait_ms"
 	metricProxyBackendDialLatency   = "proxy_backend_dial_latency_ms"
 	metricSandboxConnectPhase       = "sandbox_connect_phase_duration_ms"
+	metricFunctionTaskPhase         = "function_task_phase_duration_ms"
 )
 
 func escapeLabelValue(value string) string {
@@ -422,5 +423,29 @@ func RecordSandboxConnectPhase(phase, workspaceId, stubId, containerStatus, erro
 		"error":            errorCode,
 		"success":          successLabel,
 	})
+	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
+}
+
+func RecordFunctionTaskPhase(phase string, duration time.Duration, labels map[string]string) {
+	metricLabels := map[string]string{
+		"phase":        phase,
+		"workspace_id": "unknown",
+		"stub_id":      "unknown",
+		"stub_type":    "function",
+		"cpu":          "0",
+		"memory":       "0",
+		"gpu":          "none",
+		"gpu_count":    "0",
+		"status":       "unknown",
+		"success":      "true",
+	}
+
+	for key, value := range labels {
+		if value != "" {
+			metricLabels[key] = value
+		}
+	}
+
+	metricName := metricWithLabels(metricFunctionTaskPhase, metricLabels)
 	vmetrics.GetDefaultSet().GetOrCreateHistogram(metricName).Update(float64(duration.Milliseconds()))
 }

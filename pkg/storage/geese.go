@@ -90,7 +90,7 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	}
 
 	// Cache through mode config
-	flags.CacheThroughModeEnabled = s.config.CacheThroughModeEnabled
+	flags.CacheThroughModeEnabled = s.config.CacheThroughModeEnabled || s.config.CacheThroughEnabled
 
 	if s.config.DisableVolumeCaching {
 		flags.HashAttr = ""

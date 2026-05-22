@@ -10,6 +10,7 @@ import (
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/auth"
+	taskmetrics "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/rs/zerolog/log"
 )
@@ -120,6 +121,12 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 		stubConfig.Runtime.Memory = defaultFunctionContainerMemory
 	}
 
+	phaseMetrics := taskmetrics.NewPhaseMetrics(t.fs.rdb)
+	phaseLabels := taskmetrics.FunctionPhaseLabelsFromStub(stub, stubConfig, task.Status)
+	if err := phaseMetrics.StoreLabels(ctx, stub.Workspace.Name, t.msg.TaskId, phaseLabels); err != nil {
+		log.Debug().Err(err).Str("task_id", t.msg.TaskId).Msg("failed to store function phase metric labels")
+	}
+
 	mounts, err := abstractions.ConfigureContainerRequestMounts(
 		t.containerId,
 		stub.Object.ExternalId,
@@ -165,6 +172,10 @@ func (t *FunctionTask) run(ctx context.Context, stub *types.StubWithRelated, tas
 	gpuCount := stubConfig.Runtime.GpuCount
 	if stubConfig.RequiresGPU() && gpuCount == 0 {
 		gpuCount = 1
+	}
+
+	if err := phaseMetrics.Mark(ctx, stub.Workspace.Name, t.msg.TaskId, taskmetrics.FunctionPhaseContainerRequestReady, time.Now()); err != nil {
+		log.Debug().Err(err).Str("task_id", t.msg.TaskId).Msg("failed to mark function container request ready phase")
 	}
 
 	err = t.fs.scheduler.Run(&types.ContainerRequest{

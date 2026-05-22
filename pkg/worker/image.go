@@ -2,7 +2,10 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -755,6 +758,12 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 		return &sourceRegistry, nil
 	}
 
+	if ok, err := c.pullImageArchiveFromEmbeddedCache(ctx, archivePath, imageId); ok {
+		return &sourceRegistry, nil
+	} else if err != nil {
+		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive cache unavailable, falling back to registry")
+	}
+
 	// Download to temp file, then atomically rename
 	tempPath := archivePath + ".tmp"
 	defer os.Remove(tempPath)
@@ -781,6 +790,192 @@ func (c *ImageClient) pullImageFromRegistry(ctx context.Context, archivePath str
 	}
 
 	return &sourceRegistry, nil
+}
+
+func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, archivePath, imageId string) (bool, error) {
+	if c.cacheClient == nil {
+		return false, nil
+	}
+
+	if ok, err := c.copyImageArchiveFromCacheFS(archivePath, imageId); ok || err != nil {
+		return ok, err
+	}
+
+	cachePath := c.imageArchiveCachePath(imageId)
+	routingKey := cachePath
+	key := fmt.Sprintf("%s.%s", imageId, c.registry.ImageFileExtension)
+
+	var (
+		hash string
+		err  error
+	)
+	if c.config.ImageService.RegistryStore == registry.S3ImageRegistryStore {
+		sourceRegistry := c.registry.Registry()
+		hash, err = c.cacheClient.StoreContentFromS3Source(cache.S3ContentSource{
+			Path:           key,
+			CachePath:      cachePath,
+			BucketName:     sourceRegistry.BucketName,
+			Region:         sourceRegistry.Region,
+			EndpointURL:    sourceRegistry.Endpoint,
+			AccessKey:      sourceRegistry.AccessKey,
+			SecretKey:      sourceRegistry.SecretKey,
+			ForcePathStyle: sourceRegistry.ForcePathStyle,
+		}, cache.StoreContentOptions{RoutingKey: routingKey, Lock: true})
+	} else {
+		sourcePath := filepath.Join("/images", key)
+		info, statErr := os.Stat(sourcePath)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				return false, nil
+			}
+			return false, statErr
+		}
+		if info.IsDir() {
+			return false, fmt.Errorf("image archive source is a directory: %s", sourcePath)
+		}
+
+		hash, err = c.cacheClient.StoreContentFromLocalFile(cache.LocalContentSource{
+			Path:      sourcePath,
+			CachePath: cachePath,
+		}, cache.StoreContentOptions{RoutingKey: routingKey, Lock: true})
+	}
+	if err != nil {
+		return false, err
+	}
+
+	size, err := c.registry.Size(ctx, imageId)
+	if err != nil {
+		return false, err
+	}
+	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, hash, size); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
+
+func (c *ImageClient) imageArchiveCachePath(imageId string) string {
+	return fmt.Sprintf("/images/%s.%s", imageId, c.registry.ImageFileExtension)
+}
+
+func (c *ImageClient) imageArchiveCacheFSPath(imageId string) string {
+	mountPoint := c.config.Cache.Client.CacheFS.MountPoint
+	if mountPoint == "" {
+		mountPoint = "/cache"
+	}
+
+	return filepath.Join(mountPoint, strings.TrimPrefix(c.imageArchiveCachePath(imageId), "/"))
+}
+
+func (c *ImageClient) copyImageArchiveFromCacheFS(archivePath, imageId string) (bool, error) {
+	if !c.config.Cache.Client.CacheFS.Enabled {
+		return false, nil
+	}
+
+	cacheFSPath := c.imageArchiveCacheFSPath(imageId)
+	if _, err := os.Stat(cacheFSPath); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	if err := copyImageArchiveFile(cacheFSPath, archivePath); err != nil {
+		return false, err
+	}
+
+	log.Info().Str("image_id", imageId).Str("cache_path", cacheFSPath).Msg("loaded image archive from embedded cachefs")
+	return true, nil
+}
+
+func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, archivePath, imageId, hash string, size int64) error {
+	tmpPath := archivePath + ".tmp"
+	defer os.Remove(tmpPath)
+
+	f, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+
+	hasher := sha256.New()
+	offset := int64(0)
+	bufSize := int64(4 * 1024 * 1024)
+	for offset < size {
+		if err := ctx.Err(); err != nil {
+			_ = f.Close()
+			return err
+		}
+
+		length := min(bufSize, size-offset)
+		content, err := c.cacheClient.GetContent(hash, offset, length, struct{ RoutingKey string }{RoutingKey: hash})
+		if err != nil {
+			_ = f.Close()
+			return err
+		}
+		if int64(len(content)) != length {
+			_ = f.Close()
+			return fmt.Errorf("short embedded image archive cache read: expected %d bytes, got %d", length, len(content))
+		}
+
+		if _, err := f.Write(content); err != nil {
+			_ = f.Close()
+			return err
+		}
+		if _, err := hasher.Write(content); err != nil {
+			_ = f.Close()
+			return err
+		}
+		offset += length
+	}
+
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	actualHash := hex.EncodeToString(hasher.Sum(nil))
+	if actualHash != hash {
+		return fmt.Errorf("embedded image archive cache hash mismatch: expected %s, got %s", hash, actualHash)
+	}
+	if err := os.Rename(tmpPath, archivePath); err != nil {
+		return err
+	}
+
+	log.Info().Str("image_id", imageId).Str("hash", hash).Int64("size", size).Msg("loaded image archive from embedded content cache")
+	return nil
+}
+
+func copyImageArchiveFile(sourcePath, archivePath string) error {
+	tmpPath := archivePath + ".tmp"
+	defer os.Remove(tmpPath)
+
+	src, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+
+	dst, err := os.Create(tmpPath)
+	if err != nil {
+		return err
+	}
+
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		return err
+	}
+	if err := dst.Sync(); err != nil {
+		_ = dst.Close()
+		return err
+	}
+	if err := dst.Close(); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpPath, archivePath)
 }
 
 func openImageLockFile(lockPath string) (*os.File, error) {

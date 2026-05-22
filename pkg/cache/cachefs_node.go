@@ -171,14 +171,14 @@ func (n *FSNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuse
 func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	n.log("Read called with offset: %v, length: %v", off, len(dest))
 
-	// Don't try to read 0 byte files
-	if n.bfsNode.Attr.Size == 0 {
+	length := cacheFSReadLength(n.bfsNode.Attr.Size, off, len(dest))
+	if length == 0 {
 		return fuse.ReadResultData(dest[:0]), fs.OK
 	}
 
 	sourcePath := n.bfsNode.Path
 
-	buffer, err := n.filesystem.Client.GetContent(n.bfsNode.Hash, off, int64(len(dest)), struct {
+	buffer, err := n.filesystem.Client.GetContent(n.bfsNode.Hash, off, length, struct {
 		RoutingKey string
 	}{
 		RoutingKey: sourcePath,
@@ -201,7 +201,7 @@ func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int
 				return nil, syscall.EIO
 			}
 
-			buffer, err = n.filesystem.Client.GetContent(n.bfsNode.Hash, off, int64(len(dest)), struct {
+			buffer, err = n.filesystem.Client.GetContent(n.bfsNode.Hash, off, length, struct {
 				RoutingKey string
 			}{
 				RoutingKey: sourcePath,
@@ -217,6 +217,22 @@ func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int
 	}
 
 	return fuse.ReadResultData(buffer), fs.OK
+}
+
+func cacheFSReadLength(fileSize uint64, off int64, requested int) int64 {
+	if fileSize == 0 || off < 0 || requested <= 0 {
+		return 0
+	}
+	if uint64(off) >= fileSize {
+		return 0
+	}
+
+	remaining := fileSize - uint64(off)
+	if remaining > uint64(requested) {
+		return int64(requested)
+	}
+
+	return int64(remaining)
 }
 
 func (n *FSNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {

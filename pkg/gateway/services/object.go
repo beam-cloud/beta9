@@ -82,7 +82,8 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 	objectPath := path.Join(types.DefaultObjectPath, authInfo.Workspace.Name)
 	os.MkdirAll(objectPath, 0644)
 
-	storageClient, err := clients.NewWorkspaceStorageClient(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage)
+	presignEndpointUrl := gws.defaultWorkspacePresignEndpointUrl(authInfo.Workspace.Storage)
+	storageClient, err := clients.NewWorkspaceStorageClientWithPresignEndpoint(ctx, authInfo.Workspace.Name, authInfo.Workspace.Storage, presignEndpointUrl)
 	if err != nil {
 		return &pb.CreateObjectResponse{
 			Ok:       false,
@@ -121,6 +122,23 @@ func (gws *GatewayService) CreateObject(ctx context.Context, in *pb.CreateObject
 		ObjectId:     object.ExternalId,
 		PresignedUrl: presignedURL,
 	}, nil
+}
+
+func (gws *GatewayService) defaultWorkspacePresignEndpointUrl(workspaceStorage *types.WorkspaceStorage) string {
+	if workspaceStorage == nil || workspaceStorage.EndpointUrl == nil {
+		return ""
+	}
+
+	storageConfig := gws.appConfig.Storage.WorkspaceStorage
+	if storageConfig.DefaultPresignedEndpointUrl == "" {
+		return ""
+	}
+
+	if *workspaceStorage.EndpointUrl != storageConfig.DefaultEndpointUrl {
+		return ""
+	}
+
+	return storageConfig.DefaultPresignedEndpointUrl
 }
 
 func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {
