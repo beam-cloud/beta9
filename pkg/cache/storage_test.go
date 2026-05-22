@@ -102,6 +102,40 @@ func TestStoreAddReaderRepagesShortSourceReads(t *testing.T) {
 	}
 }
 
+func TestStoreReadAtReadsOnlyRequestedPageRanges(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("abcdefghijklmnopqrstuvwxyz")
+	hash, size, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), size)
+
+	dst := make([]byte, 12)
+	n, err := store.ReadAt(hash, 3, dst)
+	require.NoError(t, err)
+	require.Equal(t, int64(len(dst)), n)
+	require.Equal(t, content[3:15], dst)
+
+	pagePath, pageOffset, pageN, ok, err := store.PageRegion(hash, 6, 3)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, int64(1), pageOffset)
+	require.Equal(t, 3, pageN)
+	require.FileExists(t, pagePath)
+}
+
+func TestStoreReadAtFallsBackToLegacyPageLayout(t *testing.T) {
+	store := newTestStore(t, 5)
+	hash := "legacy-hash"
+	require.NoError(t, os.MkdirAll(store.legacyPageDir(hash), 0755))
+	require.NoError(t, os.WriteFile(store.legacyPagePath(hash, 0), []byte("hello"), 0644))
+
+	dst := make([]byte, 3)
+	n, err := store.ReadAt(hash, 1, dst)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), n)
+	require.Equal(t, []byte("ell"), dst)
+}
+
 func TestStoreAddReaderStoresEmptyContent(t *testing.T) {
 	store := newTestStore(t, 5)
 	sum := sha256.Sum256(nil)

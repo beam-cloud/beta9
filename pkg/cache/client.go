@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache/cachegrpc"
 	proto "github.com/beam-cloud/beta9/proto"
 	rendezvous "github.com/beam-cloud/rendezvous"
 	"github.com/djherbis/atime"
@@ -39,7 +40,7 @@ type RendezvousHasher interface {
 	GetN(n int, key string) []*Host
 }
 
-type ClientOptions struct {
+type ClientOptions = struct {
 	RoutingKey string
 }
 
@@ -71,6 +72,8 @@ type Client struct {
 	globalConfig          GlobalConfig
 	grpcClients           map[string]proto.CacheClient
 	grpcConns             map[string]*grpc.ClientConn
+	localServers          map[string]*Server
+	rawReadPools          map[string]*rawReadConnPool
 	hostMap               *HostMap
 	mu                    sync.RWMutex
 	discoveryClient       *DiscoveryClient
@@ -113,6 +116,8 @@ func NewClientWithRegistry(ctx context.Context, cfg Config, registry Registry, l
 		globalConfig:          cfg.Global,
 		grpcClients:           make(map[string]proto.CacheClient),
 		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
 		localHostCache:        make(map[string]*localClientCache),
 		mu:                    sync.RWMutex{},
 		coordinator:           registry,
@@ -170,8 +175,49 @@ func (c *Client) Cleanup() error {
 		delete(c.grpcConns, hostID)
 		delete(c.grpcClients, hostID)
 	}
+	for hostID, pool := range c.rawReadPools {
+		pool.close()
+		delete(c.rawReadPools, hostID)
+	}
 
 	return nil
+}
+
+func (c *Client) AttachLocalServer(server *Server) {
+	if server == nil || server.Host() == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Attachment is intentionally keyed by the elected cache HostId only. It
+	// does not add the host to the rendezvous set; discovery/keepalive still
+	// controls which cache servers are routable. This keeps multiple embedded
+	// cache servers on the same node isolated from each other.
+	c.localServers[server.Host().HostId] = server
+}
+
+func (c *Client) DetachLocalServer(hostID string) {
+	if hostID == "" {
+		return
+	}
+
+	c.mu.Lock()
+	var detachedHost *Host
+	if server := c.localServers[hostID]; server != nil {
+		detachedHost = server.Host()
+	}
+	delete(c.localServers, hostID)
+	for hash, entry := range c.localHostCache {
+		if entry.host != nil && entry.host.HostId == hostID {
+			delete(c.localHostCache, hash)
+		}
+	}
+	c.mu.Unlock()
+
+	if detachedHost != nil {
+		c.removeHost(detachedHost)
+	}
 }
 
 func (c *Client) GetNearbyHosts() ([]*Host, error) {
@@ -329,6 +375,10 @@ func (c *Client) removeHost(host *Host) {
 		delete(c.grpcConns, host.HostId)
 	}
 	delete(c.grpcClients, host.HostId)
+	if pool, ok := c.rawReadPools[host.HostId]; ok {
+		pool.close()
+		delete(c.rawReadPools, host.HostId)
+	}
 	for hash, entry := range c.localHostCache {
 		if entry.host != nil && entry.host.HostId == host.HostId {
 			delete(c.localHostCache, hash)
@@ -351,6 +401,13 @@ func (c *Client) getContentAttempts(length int64) int {
 		return 1
 	}
 	return attempts
+}
+
+func (c *Client) dataCallOptions() []grpc.CallOption {
+	if !c.globalConfig.GRPCPayloadCodecV2 {
+		return nil
+	}
+	return []grpc.CallOption{grpc.ForceCodecV2(cachegrpc.New(c.globalConfig.GRPCPayloadCodecMinBytes))}
 }
 
 func (c *Client) IsPathCachedNearby(ctx context.Context, path string) bool {
@@ -399,18 +456,106 @@ func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
 	return false, nil
 }
 
-func (c *Client) GetContent(hash string, offset int64, length int64, opts struct {
-	RoutingKey string
-}) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(c.ctx, getContentRequestTimeout)
-	defer cancel()
+func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (int64, error) {
+	if host == nil || !c.clientConfig.ReadTransport.Enabled {
+		return 0, ErrUnableToReachHost
+	}
+	addr := host.Addr
+	if host.PrivateAddr != "" {
+		addr = host.PrivateAddr
+	}
+	if addr == "" {
+		return 0, ErrUnableToReachHost
+	}
 
+	c.mu.Lock()
+	pool := c.rawReadPools[host.HostId]
+	if pool == nil {
+		pool = newRawReadConnPool(addr, c.clientConfig.ReadTransport.MaxActiveConnsPerHost, c.clientConfig.ReadTransport.MaxIdleConnsPerHost)
+		c.rawReadPools[host.HostId] = pool
+	}
+	c.mu.Unlock()
+
+	conn, err := pool.get(ctx.Done())
+	if err != nil {
+		return 0, err
+	}
+	reusable := false
+	defer func() {
+		if reusable {
+			pool.put(conn)
+		} else {
+			_ = conn.Close()
+			pool.release()
+		}
+	}()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+		defer conn.SetDeadline(time.Time{})
+	}
+
+	length := int64(len(dst))
+	if err := writeRawReadRequest(conn, hash, offset, length); err != nil {
+		return 0, err
+	}
+	status, responseLength, err := readRawReadResponseHeader(conn)
+	if err != nil {
+		return 0, err
+	}
+	if status == rawReadStatusMiss {
+		cacheReadRawFallbackTotal.Inc()
+		reusable = true
+		return 0, ErrContentNotFound
+	}
+	if status != rawReadStatusOK || responseLength != length {
+		return 0, ErrUnableToReachHost
+	}
+	if _, err := io.ReadFull(conn, dst); err != nil {
+		return 0, err
+	}
+	cacheReadRawTransportTotal.Inc()
+	reusable = true
+	return length, nil
+}
+
+func (c *Client) LocalPageRegion(hash string, offset int64, length int64, opts ClientOptions) (path string, pageOffset int64, n int, ok bool, err error) {
+	if opts.RoutingKey == "" {
+		opts.RoutingKey = hash
+	}
+	host, err := c.getHostForRequest(&ClientRequest{
+		rt:        ClientRequestTypeRetrieval,
+		hash:      hash,
+		key:       opts.RoutingKey,
+		hostIndex: 0,
+	})
+	if err != nil {
+		return "", 0, 0, false, err
+	}
+
+	c.mu.RLock()
+	localServer := c.localServers[host.HostId]
+	c.mu.RUnlock()
+	if localServer == nil || localServer.cas == nil {
+		return "", 0, 0, false, nil
+	}
+	return localServer.cas.PageRegion(hash, offset, length)
+}
+
+func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (int64, error) {
+	if ctx == nil {
+		ctx = c.ctx
+	}
+	if len(dst) == 0 {
+		return 0, nil
+	}
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = hash
 	}
 
+	length := int64(len(dst))
 	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
-		client, host, err := c.getGRPCClient(&ClientRequest{
+		host, err := c.getHostForRequest(&ClientRequest{
 			rt:        ClientRequestTypeRetrieval,
 			hash:      hash,
 			key:       opts.RoutingKey,
@@ -420,22 +565,91 @@ func (c *Client) GetContent(hash string, offset int64, length int64, opts struct
 			continue
 		}
 
-		start := time.Now()
-		getContentResponse, err := client.GetContent(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length})
-		if err != nil {
-			c.removeHost(host)
-			continue
+		c.mu.RLock()
+		localServer := c.localServers[host.HostId]
+		c.mu.RUnlock()
+		if localServer != nil && localServer.cas != nil {
+			n, err := localServer.cas.ReadAt(hash, offset, dst)
+			if err == nil && n == length {
+				cacheReadLocalTotal.Inc()
+				return n, nil
+			}
+			if err == ErrContentNotFound {
+				c.removeLocalHostCache(hash)
+				continue
+			}
+			if err != nil {
+				continue
+			}
 		}
-		if !getContentResponse.Ok {
+
+		if c.clientConfig.ReadTransport.Enabled {
+			n, err := c.rawReadInto(ctx, host, hash, offset, dst)
+			if err == nil && n == length {
+				return n, nil
+			}
+			if err == ErrContentNotFound {
+				c.removeLocalHostCache(hash)
+				continue
+			}
+			if err != nil {
+				cacheReadRawFallbackTotal.Inc()
+			}
+		}
+
+		c.mu.RLock()
+		client, exists := c.grpcClients[host.HostId]
+		c.mu.RUnlock()
+		if !exists {
 			c.removeLocalHostCache(hash)
 			continue
 		}
 
+		start := time.Now()
+		getContentResponse, err := client.GetContent(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, c.dataCallOptions()...)
+		if err != nil {
+			if c.globalConfig.GRPCPayloadCodecV2 {
+				cacheReadGRPCCodecV2FallbackTotal.Inc()
+			}
+			c.removeHost(host)
+			continue
+		}
+		if !getContentResponse.Ok || int64(len(getContentResponse.Content)) != length {
+			c.removeLocalHostCache(hash)
+			continue
+		}
+
+		copy(dst, getContentResponse.Content)
+		if c.globalConfig.GRPCPayloadCodecV2 {
+			cacheReadGRPCCodecV2Total.Inc()
+		}
 		Logger.Debugf("Elapsed time to get content: %v", time.Since(start))
-		return getContentResponse.Content, nil
+		return length, nil
 	}
 
-	return nil, ErrContentNotFound
+	return 0, ErrContentNotFound
+}
+
+func (c *Client) GetContent(hash string, offset int64, length int64, opts struct {
+	RoutingKey string
+}) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(c.ctx, getContentRequestTimeout)
+	defer cancel()
+
+	if length < 0 {
+		return nil, fmt.Errorf("invalid content length: %d", length)
+	}
+
+	dst := make([]byte, int(length))
+	n, err := c.ReadContentInto(ctx, hash, offset, dst, ClientOptions{RoutingKey: opts.RoutingKey})
+	if err != nil {
+		return nil, err
+	}
+	if n != length {
+		return nil, ErrContentNotFound
+	}
+
+	return dst[:n], nil
 }
 
 func (c *Client) GetContentStream(hash string, offset int64, length int64, opts struct {
@@ -463,7 +677,7 @@ func (c *Client) GetContentStream(hash string, offset int64, length int64, opts 
 				continue
 			}
 
-			stream, err := client.GetContentStream(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length})
+			stream, err := client.GetContentStream(ctx, &proto.CacheGetContentRequest{Hash: hash, Offset: offset, Length: length}, c.dataCallOptions()...)
 			if err != nil {
 				c.removeHost(host)
 				continue
@@ -521,6 +735,26 @@ func (c *Client) manageLocalClientCache(ttl time.Duration, interval time.Duratio
 }
 
 func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host, error) {
+	host, err := c.getHostForRequest(request)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	c.mu.RLock()
+	client, exists := c.grpcClients[host.HostId]
+	c.mu.RUnlock()
+	if !exists {
+		c.mu.Lock()
+		delete(c.localHostCache, request.hash)
+		c.mu.Unlock()
+
+		return nil, nil, ErrHostNotFound
+	}
+
+	return client, host, nil
+}
+
+func (c *Client) getHostForRequest(request *ClientRequest) (*Host, error) {
 	var host *Host = nil
 
 	switch request.rt {
@@ -561,21 +795,10 @@ func (c *Client) getGRPCClient(request *ClientRequest) (proto.CacheClient, *Host
 	}
 
 	if host == nil {
-		return nil, nil, ErrHostNotFound
+		return nil, ErrHostNotFound
 	}
 
-	c.mu.RLock()
-	client, exists := c.grpcClients[host.HostId]
-	c.mu.RUnlock()
-	if !exists {
-		c.mu.Lock()
-		delete(c.localHostCache, request.hash)
-		c.mu.Unlock()
-
-		return nil, nil, ErrHostNotFound
-	}
-
-	return client, host, nil
+	return host, nil
 }
 
 func (c *Client) StoreContent(chunks chan []byte, hash string, opts struct {

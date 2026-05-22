@@ -3,7 +3,13 @@ package cache
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	mathrand "math/rand"
 	"testing"
+
+	proto "github.com/beam-cloud/beta9/proto"
+	"google.golang.org/grpc"
 )
 
 func BenchmarkGetContentDiskCache(b *testing.B) {
@@ -93,6 +99,182 @@ func BenchmarkGetContentDiskCache(b *testing.B) {
 
 		if totalRead != fileSize {
 			b.Fatalf("Read %d bytes, expected %d", totalRead, fileSize)
+		}
+	}
+}
+
+func benchmarkStoreWithContent(b *testing.B, pageSize int64, fileSize int64) (*Store, string, []byte) {
+	b.Helper()
+	InitLogger(false, false)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	b.Cleanup(cancel)
+
+	store, err := NewStore(ctx, &Host{HostId: "bench-host"}, "local", NewMockRegistry(), Config{
+		Server: ServerConfig{
+			DiskCacheDir:         b.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			MaxCachePct:          0,
+			PageSizeBytes:        pageSize,
+			ObjectTtlS:           300,
+		},
+	})
+	if err != nil {
+		b.Fatalf("new store: %v", err)
+	}
+	b.Cleanup(store.Cleanup)
+
+	content := make([]byte, fileSize)
+	if _, err := rand.Read(content); err != nil {
+		b.Fatalf("random content: %v", err)
+	}
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	if err := store.Add(context.Background(), hash, content); err != nil {
+		b.Fatalf("add content: %v", err)
+	}
+
+	return store, hash, content
+}
+
+func BenchmarkStoreReadAtDiskRange_1MiB(b *testing.B) {
+	store, hash, _ := benchmarkStoreWithContent(b, 1024*1024, 64*1024*1024)
+	dst := make([]byte, 1024*1024)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(dst)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		offset := int64(i%64) * int64(len(dst))
+		n, err := store.ReadAt(hash, offset, dst)
+		if err != nil || n != int64(len(dst)) {
+			b.Fatalf("read at offset %d: n=%d err=%v", offset, n, err)
+		}
+	}
+}
+
+func BenchmarkStoreReadAtDiskRange_64KiBRandom(b *testing.B) {
+	store, hash, _ := benchmarkStoreWithContent(b, 1024*1024, 64*1024*1024)
+	dst := make([]byte, 64*1024)
+	rng := mathrand.New(mathrand.NewSource(1))
+	offsets := make([]int64, b.N)
+	for i := range offsets {
+		offsets[i] = int64(rng.Intn((64 * 1024 * 1024) - len(dst)))
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(dst)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		n, err := store.ReadAt(hash, offsets[i], dst)
+		if err != nil || n != int64(len(dst)) {
+			b.Fatalf("read at offset %d: n=%d err=%v", offsets[i], n, err)
+		}
+	}
+}
+
+func BenchmarkClientLocalReadInto(b *testing.B) {
+	store, hash, _ := benchmarkStoreWithContent(b, 1024*1024, 64*1024*1024)
+	localHost := &Host{HostId: "local-bench-host"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{localHost}},
+		maxGetContentAttempts: 1,
+	}
+	client.AttachLocalServer(&Server{cas: store})
+	dst := make([]byte, 1024*1024)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(dst)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		offset := int64(i%64) * int64(len(dst))
+		n, err := client.ReadContentInto(context.Background(), hash, offset, dst, ClientOptions{})
+		if err != nil || n != int64(len(dst)) {
+			b.Fatalf("read into offset %d: n=%d err=%v", offset, n, err)
+		}
+	}
+}
+
+func BenchmarkClientRawReadInto(b *testing.B) {
+	InitLogger(false, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	b.Cleanup(cancel)
+
+	cfg := Config{
+		Server: ServerConfig{
+			DiskCacheDir:         b.TempDir(),
+			DiskCacheMaxUsagePct: 90,
+			MaxCachePct:          0,
+			PageSizeBytes:        1024 * 1024,
+			ObjectTtlS:           300,
+			ReadTransport: ServerReadTransportConfig{
+				Enabled:  true,
+				Sendfile: false,
+			},
+		},
+		Global: GlobalConfig{
+			GRPCMessageSizeBytes: 1024 * 1024,
+			GRPCDialTimeoutS:     1,
+		},
+	}
+	server, err := NewServerWithOptions(ctx, cfg, "local", WithServerRegistry(NewMockRegistry()), WithServerHostID("raw-bench-host"))
+	if err != nil {
+		b.Fatalf("new server: %v", err)
+	}
+	b.Cleanup(func() { _ = server.Close() })
+	addr, err := server.Serve("127.0.0.1:0", "")
+	if err != nil {
+		b.Fatalf("serve: %v", err)
+	}
+
+	content := make([]byte, 64*1024*1024)
+	if _, err := rand.Read(content); err != nil {
+		b.Fatalf("random content: %v", err)
+	}
+	sum := sha256.Sum256(content)
+	hash := hex.EncodeToString(sum[:])
+	if err := server.cas.Add(context.Background(), hash, content); err != nil {
+		b.Fatalf("add content: %v", err)
+	}
+
+	host := &Host{HostId: "raw-bench-host", Addr: addr, PrivateAddr: addr}
+	client := &Client{
+		ctx: context.Background(),
+		clientConfig: ClientConfig{
+			NTopHosts: 1,
+			ReadTransport: ClientReadTransportConfig{
+				Enabled:               true,
+				MaxActiveConnsPerHost: 64,
+				MaxIdleConnsPerHost:   16,
+			},
+		},
+		globalConfig:          cfg.Global,
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{host}},
+		maxGetContentAttempts: 1,
+	}
+	dst := make([]byte, 1024*1024)
+
+	b.ReportAllocs()
+	b.SetBytes(int64(len(dst)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		offset := int64(i%64) * int64(len(dst))
+		n, err := client.ReadContentInto(context.Background(), hash, offset, dst, ClientOptions{})
+		if err != nil || n != int64(len(dst)) {
+			b.Fatalf("raw read offset %d: n=%d err=%v", offset, n, err)
 		}
 	}
 }

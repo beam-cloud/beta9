@@ -81,6 +81,8 @@ type GlobalConfig struct {
 	GRPCReadBufferSize              int     `key:"grpcReadBufferSize" json:"grpc_read_buffer_size"`
 	GRPCMaxConcurrentStreams        int     `key:"grpcMaxConcurrentStreams" json:"grpc_max_concurrent_streams"`
 	GRPCNumStreamWorkers            int     `key:"grpcNumStreamWorkers" json:"grpc_num_stream_workers"`
+	GRPCPayloadCodecV2              bool    `key:"grpcPayloadCodecV2" json:"grpc_payload_codec_v2"`
+	GRPCPayloadCodecMinBytes        int     `key:"grpcPayloadCodecMinBytes" json:"grpc_payload_codec_min_bytes"`
 	DebugMode                       bool    `key:"debugMode" json:"debug_mode"`
 	PrettyLogs                      bool    `key:"prettyLogs" json:"pretty_logs"`
 }
@@ -102,22 +104,30 @@ const (
 )
 
 type ServerConfig struct {
-	Mode                  ServerMode     `key:"mode" json:"mode"`
-	DiskCacheDir          string         `key:"diskCacheDir" json:"disk_cache_dir"`
-	DiskCacheMaxUsagePct  float64        `key:"diskCacheMaxUsagePct" json:"disk_cache_max_usage_pct"`
-	EnableMemoryCache     bool           `key:"enableMemoryCache" json:"enable_memory_cache"`
-	Token                 string         `key:"token" json:"token"`
-	PrettyLogs            bool           `key:"prettyLogs" json:"pretty_logs"`
-	ObjectTtlS            int            `key:"objectTtlS" json:"object_ttl_s"`
-	MaxCachePct           int64          `key:"maxCachePct" json:"max_cache_pct"`
-	PageSizeBytes         int64          `key:"pageSizeBytes" json:"page_size_bytes"`
-	Metadata              MetadataConfig `key:"metadata" json:"metadata"`
-	Sources               []SourceConfig `key:"sources" json:"sources"`
-	S3DownloadConcurrency int64          `key:"s3DownloadConcurrency" json:"s3_download_concurrency"`
-	S3DownloadChunkSize   int64          `key:"s3DownloadChunkSize" json:"s3_download_chunk_size"`
+	Mode                         ServerMode                `key:"mode" json:"mode"`
+	DiskCacheDir                 string                    `key:"diskCacheDir" json:"disk_cache_dir"`
+	DiskCacheMaxUsagePct         float64                   `key:"diskCacheMaxUsagePct" json:"disk_cache_max_usage_pct"`
+	EnableMemoryCache            bool                      `key:"enableMemoryCache" json:"enable_memory_cache"`
+	Token                        string                    `key:"token" json:"token"`
+	PrettyLogs                   bool                      `key:"prettyLogs" json:"pretty_logs"`
+	ObjectTtlS                   int                       `key:"objectTtlS" json:"object_ttl_s"`
+	MaxCachePct                  int64                     `key:"maxCachePct" json:"max_cache_pct"`
+	PageSizeBytes                int64                     `key:"pageSizeBytes" json:"page_size_bytes"`
+	PageFileBuckets              int                       `key:"pageFileBuckets" json:"page_file_buckets"`
+	SmallRangeCopyThresholdBytes int64                     `key:"smallRangeCopyThresholdBytes" json:"small_range_copy_threshold_bytes"`
+	ReadTransport                ServerReadTransportConfig `key:"readTransport" json:"read_transport"`
+	Metadata                     MetadataConfig            `key:"metadata" json:"metadata"`
+	Sources                      []SourceConfig            `key:"sources" json:"sources"`
+	S3DownloadConcurrency        int64                     `key:"s3DownloadConcurrency" json:"s3_download_concurrency"`
+	S3DownloadChunkSize          int64                     `key:"s3DownloadChunkSize" json:"s3_download_chunk_size"`
 
 	// Allows a coordinator to override a slave server's config for a specific locality/region
 	Regions map[string]RegionConfig `key:"regions" json:"regions"`
+}
+
+type ServerReadTransportConfig struct {
+	Enabled  bool `key:"enabled" json:"enabled"`
+	Sendfile bool `key:"sendfile" json:"sendfile"`
 }
 
 func (c *ServerConfig) ToProto() *proto.CacheServerConfig {
@@ -234,11 +244,30 @@ type RegionConfig struct {
 }
 
 type ClientConfig struct {
-	Token                 string   `key:"token" json:"token"`
-	MinRetryLengthBytes   int64    `key:"minRetryLengthBytes" json:"min_retry_length_bytes"`
-	MaxGetContentAttempts int      `key:"maxGetContentAttempts" json:"max_get_content_attempts"`
-	NTopHosts             int      `key:"nTopHosts" json:"n_top_hosts"`
-	CacheFS               FSConfig `key:"cachefs" json:"cachefs"`
+	Token                 string                    `key:"token" json:"token"`
+	MinRetryLengthBytes   int64                     `key:"minRetryLengthBytes" json:"min_retry_length_bytes"`
+	MaxGetContentAttempts int                       `key:"maxGetContentAttempts" json:"max_get_content_attempts"`
+	NTopHosts             int                       `key:"nTopHosts" json:"n_top_hosts"`
+	CacheFS               FSConfig                  `key:"cachefs" json:"cachefs"`
+	PreferLocalCacheHost  bool                      `key:"preferLocalCacheHost" json:"prefer_local_cache_host"`
+	ReadIntoEnabled       bool                      `key:"readIntoEnabled" json:"read_into_enabled"`
+	PageFDCacheSize       int                       `key:"pageFDCacheSize" json:"page_fd_cache_size"`
+	ReadTransport         ClientReadTransportConfig `key:"readTransport" json:"read_transport"`
+	Prefetch              ReadPrefetchConfig        `key:"prefetch" json:"prefetch"`
+}
+
+type ClientReadTransportConfig struct {
+	Enabled               bool `key:"enabled" json:"enabled"`
+	MaxActiveConnsPerHost int  `key:"maxActiveConnsPerHost" json:"max_active_conns_per_host"`
+	MaxIdleConnsPerHost   int  `key:"maxIdleConnsPerHost" json:"max_idle_conns_per_host"`
+}
+
+type ReadPrefetchConfig struct {
+	Enabled         bool  `key:"enabled" json:"enabled"`
+	AheadBytes      int64 `key:"aheadBytes" json:"ahead_bytes"`
+	Workers         int   `key:"workers" json:"workers"`
+	PartLengthBytes int64 `key:"partLengthBytes" json:"part_length_bytes"`
+	MaxPartsPerRead int   `key:"maxPartsPerRead" json:"max_parts_per_read"`
 }
 
 type MetadataMode string

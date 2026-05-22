@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache/cachegrpc"
 	proto "github.com/beam-cloud/beta9/proto"
 	"github.com/djherbis/atime"
 	"github.com/google/uuid"
@@ -172,6 +173,13 @@ func WithServerAdvertiseAddr(addr string) ServerOption {
 	}
 }
 
+func (cs *Server) Host() *Host {
+	if cs == nil || cs.cas == nil {
+		return nil
+	}
+	return cs.cas.currentHost
+}
+
 func newRegistry(ctx context.Context, cfg Config, locality string) (Registry, ServerConfig, error) {
 	switch cfg.Server.Mode {
 	case ServerModeCoordinator, ServerModeNode:
@@ -268,7 +276,7 @@ func (cs *Server) grpcServerOptions() []grpc.ServerOption {
 		numStreamWorkers = runtime.NumCPU() * 2
 	}
 
-	return []grpc.ServerOption{
+	opts := []grpc.ServerOption{
 		grpc.MaxRecvMsgSize(maxMessageSize),
 		grpc.MaxSendMsgSize(maxMessageSize),
 		grpc.InitialWindowSize(int32(initialWindowSize)),
@@ -278,6 +286,10 @@ func (cs *Server) grpcServerOptions() []grpc.ServerOption {
 		grpc.MaxConcurrentStreams(uint32(maxConcurrentStreams)),
 		grpc.NumStreamWorkers(uint32(numStreamWorkers)),
 	}
+	if cs.globalConfig.GRPCPayloadCodecV2 {
+		opts = append(opts, grpc.ForceServerCodecV2(cachegrpc.New(cs.globalConfig.GRPCPayloadCodecMinBytes)))
+	}
+	return opts
 }
 
 func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
@@ -303,17 +315,22 @@ func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
 		cs.cas.currentHost.PrivateAddr = advertiseAddr
 	}
 
+	serveListener := net.Listener(localListener)
+	if cs.serverConfig.ReadTransport.Enabled {
+		serveListener = newCacheMuxListener(localListener, cs.handleRawReadConn)
+	}
+
 	s := grpc.NewServer(cs.grpcServerOptions()...)
 	proto.RegisterCacheServer(s, cs)
 
 	cs.grpcServer = s
-	cs.listener = localListener
+	cs.listener = serveListener
 
 	Logger.Infof("Running %s@%s, cfg: %+v", cs.hostId, advertiseAddr, cs.serverConfig)
 
 	go cs.HostKeepAlive()
 	go func() {
-		if err := s.Serve(localListener); err != nil {
+		if err := s.Serve(serveListener); err != nil {
 			if err != grpc.ErrServerStopped {
 				Logger.Warnf("cache server stopped: %v", err)
 			}
@@ -422,13 +439,13 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 
 	Logger.Infof("GetContentStream[ACK] - [%s] - offset=%d, length=%d, %d bytes", req.Hash, offset, req.Length, remainingLength)
 
-	dst := make([]byte, chunkSize)
 	for remainingLength > 0 {
 		currentChunkSize := chunkSize
 		if remainingLength < int64(chunkSize) {
 			currentChunkSize = remainingLength
 		}
 
+		dst := make([]byte, currentChunkSize)
 		n, err := cs.cas.Get(req.Hash, offset, currentChunkSize, dst)
 		if err != nil {
 			Logger.Debugf("GetContentStream - [%s] - %v", req.Hash, err)

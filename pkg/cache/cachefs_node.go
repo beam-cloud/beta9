@@ -3,8 +3,10 @@ package cache
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -27,6 +29,69 @@ type FSNode struct {
 	filesystem *CacheFS
 	bfsNode    *CacheFSNode
 	attr       fuse.Attr
+}
+
+type cacheFileHandle struct {
+	client      *Client
+	hash        string
+	sourcePath  string
+	size        uint64
+	fdCacheSize int
+	mu          sync.Mutex
+	files       map[string]*os.File
+	order       []string
+}
+
+func newCacheFileHandle(client *Client, node *CacheFSNode, fdCacheSize int) *cacheFileHandle {
+	if fdCacheSize <= 0 {
+		fdCacheSize = 64
+	}
+	return &cacheFileHandle{
+		client:      client,
+		hash:        node.Hash,
+		sourcePath:  node.Path,
+		size:        node.Attr.Size,
+		fdCacheSize: fdCacheSize,
+		files:       make(map[string]*os.File),
+	}
+}
+
+func (h *cacheFileHandle) file(path string) (*os.File, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if file := h.files[path]; file != nil {
+		return file, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	h.files[path] = file
+	h.order = append(h.order, path)
+	for len(h.order) > h.fdCacheSize {
+		evict := h.order[0]
+		h.order = h.order[1:]
+		if old := h.files[evict]; old != nil {
+			_ = old.Close()
+			delete(h.files, evict)
+		}
+	}
+	return file, nil
+}
+
+func (h *cacheFileHandle) Release(ctx context.Context) syscall.Errno {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for path, file := range h.files {
+		_ = file.Close()
+		delete(h.files, path)
+	}
+	h.order = nil
+	return fs.OK
+}
+
+func (h *cacheFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+	return readCacheContent(ctx, h.client, h.hash, h.sourcePath, h.size, dest, off, h)
 }
 
 func (n *FSNode) log(format string, v ...interface{}) {
@@ -158,38 +223,52 @@ func (n *FSNode) Opendir(ctx context.Context) syscall.Errno {
 func (n *FSNode) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
 	n.log("Open called with flags: %v", flags)
 
+	handle := newCacheFileHandle(n.filesystem.Client, n.bfsNode, n.filesystem.Config.PageFDCacheSize)
+
 	// Enable DirectIO if specified
 	if n.filesystem.Config.CacheFS.DirectIO {
 		fuseFlags |= fuse.FOPEN_DIRECT_IO
 		fuseFlags &= ^uint32(fuse.FOPEN_KEEP_CACHE)
-		return nil, fuseFlags, fs.OK
+		return handle, fuseFlags, fs.OK
 	}
 
-	return nil, 0, fs.OK
+	return handle, 0, fs.OK
 }
 
 func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	n.log("Read called with offset: %v, length: %v", off, len(dest))
 
-	length := cacheFSReadLength(n.bfsNode.Attr.Size, off, len(dest))
+	if handle, ok := f.(*cacheFileHandle); ok && handle != nil {
+		return handle.Read(ctx, dest, off)
+	}
+
+	return readCacheContent(ctx, n.filesystem.Client, n.bfsNode.Hash, n.bfsNode.Path, n.bfsNode.Attr.Size, dest, off, nil)
+}
+
+func readCacheContent(ctx context.Context, client *Client, hash string, sourcePath string, size uint64, dest []byte, off int64, handle *cacheFileHandle) (fuse.ReadResult, syscall.Errno) {
+	length := cacheFSReadLength(size, off, len(dest))
 	if length == 0 {
 		return fuse.ReadResultData(dest[:0]), fs.OK
 	}
 
-	sourcePath := n.bfsNode.Path
+	if handle != nil {
+		pagePath, pageOffset, n, ok, err := client.LocalPageRegion(hash, off, length, ClientOptions{RoutingKey: sourcePath})
+		if err == nil && ok && int64(n) == length {
+			file, err := handle.file(pagePath)
+			if err == nil {
+				cacheReadLocalFDTotal.Inc()
+				return fuse.ReadResultFd(file.Fd(), pageOffset, n), fs.OK
+			}
+		}
+	}
 
-	buffer, err := n.filesystem.Client.GetContent(n.bfsNode.Hash, off, length, struct {
-		RoutingKey string
-	}{
-		RoutingKey: sourcePath,
-	})
+	n, err := client.ReadContentInto(ctx, hash, off, dest[:length], ClientOptions{RoutingKey: sourcePath})
 	if err != nil {
 		if err == ErrContentNotFound {
-
 			cacheSource := LocalContentSource{
 				Path: sourcePath,
 			}
-			_, err = n.filesystem.Client.StoreContentFromLocalFile(cacheSource, StoreContentOptions{
+			_, err = client.StoreContentFromLocalFile(cacheSource, StoreContentOptions{
 				RoutingKey: sourcePath,
 				Lock:       true,
 			})
@@ -201,22 +280,18 @@ func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int
 				return nil, syscall.EIO
 			}
 
-			buffer, err = n.filesystem.Client.GetContent(n.bfsNode.Hash, off, length, struct {
-				RoutingKey string
-			}{
-				RoutingKey: sourcePath,
-			})
+			n, err = client.ReadContentInto(ctx, hash, off, dest[:length], ClientOptions{RoutingKey: sourcePath})
 			if err != nil {
 				return nil, syscall.EIO
 			}
 
-			return fuse.ReadResultData(buffer), fs.OK
+			return fuse.ReadResultData(dest[:n]), fs.OK
 		}
 
 		return nil, syscall.EIO
 	}
 
-	return fuse.ReadResultData(buffer), fs.OK
+	return fuse.ReadResultData(dest[:n]), fs.OK
 }
 
 func cacheFSReadLength(fileSize uint64, off int64, requested int) int64 {
