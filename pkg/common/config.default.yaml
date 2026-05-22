@@ -39,6 +39,7 @@ storage:
     defaultAccessKey: test
     defaultSecretKey: test
     defaultEndpointUrl: http://localstack:4566
+    defaultPresignedEndpointUrl:
     defaultRegion: us-east-1
     alluxio:
       debug: false
@@ -60,7 +61,7 @@ storage:
       stagedWritePath: /tmp/geesefs-staged-write
       stagedWriteDebounce: 30s
       cacheStreamingEnabled: false
-      cacheThroughEnabled: true
+      cacheThroughModeEnabled: true
 gateway:
   host: beta9-gateway
   invokeURLType: path

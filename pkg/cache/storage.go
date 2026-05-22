@@ -221,7 +221,7 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 			return "", size, err
 		}
 
-		n, readErr := reader.Read(buf)
+		n, readErr := io.ReadFull(reader, buf)
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
@@ -238,12 +238,13 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 			chunkCount++
 		}
 
-		if readErr == io.EOF {
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
 			break
 		}
-		if readErr != nil {
-			return "", size, readErr
-		}
+		return "", size, readErr
 	}
 
 	hash := hex.EncodeToString(hasher.Sum(nil))
@@ -301,7 +302,7 @@ func (cas *Store) addReaderToMemory(ctx context.Context, reader io.Reader) (stri
 			return "", size, err
 		}
 
-		n, readErr := reader.Read(buf)
+		n, readErr := io.ReadFull(reader, buf)
 		if n > 0 {
 			chunk := make([]byte, n)
 			copy(chunk, buf[:n])
@@ -313,12 +314,13 @@ func (cas *Store) addReaderToMemory(ctx context.Context, reader io.Reader) (stri
 			size += int64(n)
 		}
 
-		if readErr == io.EOF {
+		if readErr == nil {
+			continue
+		}
+		if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
 			break
 		}
-		if readErr != nil {
-			return "", size, readErr
-		}
+		return "", size, readErr
 	}
 
 	hash := hex.EncodeToString(hasher.Sum(nil))
@@ -491,7 +493,7 @@ func (cas *Store) Get(hash string, offset, length int64, dst []byte) (int64, err
 		start := o % cas.serverConfig.PageSizeBytes
 		chunkRemaining := int64(len(chunkBytes)) - start
 		if chunkRemaining <= 0 {
-			break
+			return dstOffset, ErrContentNotFound
 		}
 
 		readLength := min(remainingLength, chunkRemaining)

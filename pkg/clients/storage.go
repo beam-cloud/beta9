@@ -33,6 +33,10 @@ type WorkspaceStorageClient struct {
 }
 
 func NewWorkspaceStorageClient(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage) (*WorkspaceStorageClient, error) {
+	return NewWorkspaceStorageClientWithPresignEndpoint(ctx, workspaceName, workspaceStorage, "")
+}
+
+func NewWorkspaceStorageClientWithPresignEndpoint(ctx context.Context, workspaceName string, workspaceStorage *types.WorkspaceStorage, presignEndpointUrl string) (*WorkspaceStorageClient, error) {
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(*workspaceStorage.Region),
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
@@ -45,13 +49,13 @@ func NewWorkspaceStorageClient(ctx context.Context, workspaceName string, worksp
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	// If a custom endpoint is provided, use it
+	endpointUrl := ""
 	if workspaceStorage.EndpointUrl != nil {
-		cfg.BaseEndpoint = aws.String(*workspaceStorage.EndpointUrl)
+		endpointUrl = *workspaceStorage.EndpointUrl
 	}
 
-	s3Client := s3.NewFromConfig(cfg)
-	presignClient := s3.NewPresignClient(s3Client)
+	s3Client := newS3Client(cfg, endpointUrl)
+	presignClient := s3.NewPresignClient(newS3Client(cfg, firstNonEmpty(presignEndpointUrl, endpointUrl)))
 
 	return &WorkspaceStorageClient{
 		WorkspaceName:    workspaceName,
@@ -77,15 +81,35 @@ func NewDefaultStorageClient(ctx context.Context, cfg types.AppConfig) (*Storage
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
-	s3Client := s3.NewFromConfig(s3Cfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String(cfg.Storage.WorkspaceStorage.DefaultEndpointUrl)
-	})
-	presignClient := s3.NewPresignClient(s3Client)
+	s3Client := newS3Client(s3Cfg, cfg.Storage.WorkspaceStorage.DefaultEndpointUrl)
+	presignClient := s3.NewPresignClient(newS3Client(
+		s3Cfg,
+		firstNonEmpty(cfg.Storage.WorkspaceStorage.DefaultPresignedEndpointUrl, cfg.Storage.WorkspaceStorage.DefaultEndpointUrl),
+	))
 
 	return &StorageClient{
 		s3Client:      s3Client,
 		presignClient: presignClient,
 	}, nil
+}
+
+func newS3Client(cfg aws.Config, endpointUrl string) *s3.Client {
+	return s3.NewFromConfig(cfg, func(o *s3.Options) {
+		if endpointUrl != "" {
+			o.BaseEndpoint = aws.String(endpointUrl)
+			o.UsePathStyle = true
+		}
+	})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (c *StorageClient) CreateBucket(ctx context.Context, bucket string) error {

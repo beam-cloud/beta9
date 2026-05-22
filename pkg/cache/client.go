@@ -690,8 +690,14 @@ func (c *Client) storeContentFromChunks(chunks chan []byte, hash string, cachePa
 	if err != nil {
 		return "", err
 	}
+	if resp == nil || !resp.Ok {
+		return "", ErrUnableToPopulateContent
+	}
+	if hash != "" && resp.Hash != hash {
+		return "", fmt.Errorf("stored content hash mismatch: expected %s, got %s", hash, resp.Hash)
+	}
 
-	Logger.Debugf("Elapsed time to send content: %v", time.Since(start))
+	Logger.Infof("StoreContent[OK] - [expected=%s actual=%s routing_key=%s elapsed=%s]", hash, resp.Hash, routingKey, time.Since(start))
 	return resp.Hash, nil
 }
 

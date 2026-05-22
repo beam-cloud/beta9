@@ -394,8 +394,12 @@ func (cs *Server) GetContent(ctx context.Context, req *proto.CacheGetContentRequ
 		Logger.Debugf("Get - [%s] - %v", req.Hash, err)
 		return &proto.CacheGetContentResponse{Content: nil, Ok: false}, nil
 	}
+	if n != req.Length {
+		Logger.Debugf("Get - [%s] short read: requested=%d read=%d", req.Hash, req.Length, n)
+		return &proto.CacheGetContentResponse{Content: nil, Ok: false}, nil
+	}
 
-	Logger.Debugf("Get[OK] - [%s] (offset=%d, length=%d)", req.Hash, req.Offset, req.Length)
+	Logger.Infof("Get[OK] - [%s] (offset=%d, length=%d)", req.Hash, req.Offset, req.Length)
 	return &proto.CacheGetContentResponse{Content: dst[:n], Ok: true}, nil
 }
 
@@ -658,6 +662,7 @@ func (cs *Server) StoreContent(stream proto.Cache_StoreContentServer) error {
 		}
 	}
 
+	Logger.Infof("StoreContent[OK] - [%s]", hash)
 	return stream.SendAndClose(&proto.CacheStoreContentResponse{Ok: true, Hash: hash})
 }
 

@@ -59,7 +59,7 @@ def parse_args():
         description="Benchmark beta9 local k3d/k3s container startup through the gateway HTTP API."
     )
     parser.add_argument("--namespace", default=os.getenv("BENCH_NAMESPACE", "beta9"))
-    parser.add_argument("--gateway-url", default=os.getenv("BENCH_GATEWAY_URL", "http://127.0.0.1:1994"))
+    parser.add_argument("--gateway-url", default=os.getenv("BENCH_GATEWAY_URL", "http://127.0.0.1:11994"))
     parser.add_argument("--grpc-addr", default=os.getenv("BENCH_GRPC_ADDR", ""))
     parser.add_argument("--token", default=os.getenv("BENCH_TOKEN") or os.getenv("BETA9_TOKEN") or "")
     parser.add_argument("--token-cache", default=os.getenv("BENCH_TOKEN_CACHE", ""))

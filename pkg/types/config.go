@@ -256,13 +256,14 @@ type StorageConfig struct {
 }
 
 type WorkspaceStorageConfig struct {
-	BaseMountPath       string `key:"baseMountPath" json:"base_mount_path"`
-	DefaultStorageMode  string `key:"defaultStorageMode" json:"default_storage_mode"`
-	DefaultBucketPrefix string `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
-	DefaultAccessKey    string `key:"defaultAccessKey" json:"default_access_key"`
-	DefaultSecretKey    string `key:"defaultSecretKey" json:"default_secret_key"`
-	DefaultEndpointUrl  string `key:"defaultEndpointUrl" json:"default_endpoint_url"`
-	DefaultRegion       string `key:"defaultRegion" json:"default_region"`
+	BaseMountPath               string `key:"baseMountPath" json:"base_mount_path"`
+	DefaultStorageMode          string `key:"defaultStorageMode" json:"default_storage_mode"`
+	DefaultBucketPrefix         string `key:"defaultBucketPrefix" json:"default_bucket_prefix"`
+	DefaultAccessKey            string `key:"defaultAccessKey" json:"default_access_key"`
+	DefaultSecretKey            string `key:"defaultSecretKey" json:"default_secret_key"`
+	DefaultEndpointUrl          string `key:"defaultEndpointUrl" json:"default_endpoint_url"`
+	DefaultPresignedEndpointUrl string `key:"defaultPresignedEndpointUrl" json:"default_presigned_endpoint_url"`
+	DefaultRegion               string `key:"defaultRegion" json:"default_region"`
 
 	// Storage mode configs
 	Geese   GeeseConfig   `key:"geese" json:"geese"`
@@ -304,6 +305,7 @@ type GeeseConfig struct {
 	StagedWritePath         string        `key:"stagedWritePath" json:"staged_write_path"`
 	StagedWriteDebounce     time.Duration `key:"stagedWriteDebounce" json:"staged_write_debounce"`
 	CacheStreamingEnabled   bool          `key:"cacheStreamingEnabled" json:"cache_streaming_enabled"`
+	CacheThroughEnabled     bool          `key:"cacheThroughEnabled" json:"cache_through_enabled"`
 	CacheThroughModeEnabled bool          `key:"cacheThroughModeEnabled" json:"cache_through_mode_enabled"`
 }
 
