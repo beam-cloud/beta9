@@ -900,6 +900,7 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	hasher := sha256.New()
 	offset := int64(0)
 	bufSize := int64(4 * 1024 * 1024)
+	buf := make([]byte, bufSize)
 	for offset < size {
 		if err := ctx.Err(); err != nil {
 			_ = f.Close()
@@ -907,16 +908,17 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 		}
 
 		length := min(bufSize, size-offset)
-		content, err := c.cacheClient.GetContent(hash, offset, length, struct{ RoutingKey string }{RoutingKey: hash})
+		n, err := c.cacheClient.ReadContentInto(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: hash})
 		if err != nil {
 			_ = f.Close()
 			return err
 		}
-		if int64(len(content)) != length {
+		if n != length {
 			_ = f.Close()
-			return fmt.Errorf("short embedded image archive cache read: expected %d bytes, got %d", length, len(content))
+			return fmt.Errorf("short embedded image archive cache read: expected %d bytes, got %d", length, n)
 		}
 
+		content := buf[:n]
 		if _, err := f.Write(content); err != nil {
 			_ = f.Close()
 			return err

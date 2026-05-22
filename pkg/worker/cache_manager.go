@@ -28,11 +28,20 @@ const (
 	cacheDefaultHostMonitorIntervalS    = 30
 	cacheDefaultGRPCDialS               = 1
 	cacheDefaultGRPCMessage             = 1024 * 1024 * 1024
-	cacheDefaultPageSizeBytes           = 4_000_000
+	cacheDefaultPageSizeBytes           = 1024 * 1024
 	cacheDefaultDiskMaxUsage            = 0.95
 	cacheDefaultNTopHosts               = 3
 	cacheDefaultMinRetryBytes           = 0
 	cacheDefaultGetAttempts             = 3
+	cacheDefaultPageFileBuckets         = 1024
+	cacheDefaultPageFDCacheSize         = 64
+	cacheDefaultRawMaxActiveConns       = 64
+	cacheDefaultRawMaxIdleConns         = 16
+	cacheDefaultPrefetchAheadBytes      = 64 * 1024 * 1024
+	cacheDefaultPrefetchWorkers         = 4
+	cacheDefaultPrefetchPartLength      = 4 * 1024 * 1024
+	cacheDefaultPrefetchMaxParts        = 16
+	cacheDefaultGRPCPayloadCodecMin     = 64 * 1024
 	cacheDefaultS3Concurrency           = 16
 	cacheDefaultS3ChunkSize             = 64_000_000
 	cacheDefaultReplicasPerNode         = 2
@@ -304,6 +313,9 @@ func (m *WorkerCacheManager) runLeasedServer(cacheConfig cache.Config, opts embe
 	m.mu.Lock()
 	m.activeLeaseKey = opts.leaseKey
 	m.mu.Unlock()
+	if m.client != nil {
+		m.client.AttachLocalServer(server)
+	}
 
 	event := log.Info().
 		Str("addr", advertisedAddr).
@@ -320,6 +332,9 @@ func (m *WorkerCacheManager) runLeasedServer(cacheConfig cache.Config, opts embe
 	ticker := time.NewTicker(opts.refreshInterval)
 	defer ticker.Stop()
 	defer func() {
+		if m.client != nil && server.Host() != nil {
+			m.client.DetachLocalServer(server.Host().HostId)
+		}
 		_ = server.Close()
 		_ = m.releaseLeaseKey(context.Background(), opts.leaseKey)
 		m.mu.Lock()
@@ -468,6 +483,9 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	if cacheConfig.Global.GRPCMessageSizeBytes == 0 {
 		cacheConfig.Global.GRPCMessageSizeBytes = cacheDefaultGRPCMessage
 	}
+	if cacheConfig.Global.GRPCPayloadCodecMinBytes == 0 {
+		cacheConfig.Global.GRPCPayloadCodecMinBytes = cacheDefaultGRPCPayloadCodecMin
+	}
 	if cacheConfig.Embedded.Mode == "" {
 		cacheConfig.Embedded.Mode = cache.EmbeddedModeActiveActive
 	}
@@ -507,6 +525,11 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	if cacheConfig.Server.PageSizeBytes == 0 {
 		cacheConfig.Server.PageSizeBytes = cacheDefaultPageSizeBytes
 	}
+	if cacheConfig.Server.PageFileBuckets == 0 {
+		cacheConfig.Server.PageFileBuckets = cacheDefaultPageFileBuckets
+	}
+	cacheConfig.Server.ReadTransport.Enabled = true
+	cacheConfig.Server.ReadTransport.Sendfile = true
 	if cacheConfig.Server.S3DownloadConcurrency == 0 {
 		cacheConfig.Server.S3DownloadConcurrency = cacheDefaultS3Concurrency
 	}
@@ -528,6 +551,31 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	}
 	if cacheConfig.Client.MaxGetContentAttempts == 0 {
 		cacheConfig.Client.MaxGetContentAttempts = cacheDefaultGetAttempts
+	}
+	cacheConfig.Client.PreferLocalCacheHost = true
+	cacheConfig.Client.ReadIntoEnabled = true
+	if cacheConfig.Client.PageFDCacheSize == 0 {
+		cacheConfig.Client.PageFDCacheSize = cacheDefaultPageFDCacheSize
+	}
+	cacheConfig.Client.ReadTransport.Enabled = true
+	if cacheConfig.Client.ReadTransport.MaxActiveConnsPerHost == 0 {
+		cacheConfig.Client.ReadTransport.MaxActiveConnsPerHost = cacheDefaultRawMaxActiveConns
+	}
+	if cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost == 0 {
+		cacheConfig.Client.ReadTransport.MaxIdleConnsPerHost = cacheDefaultRawMaxIdleConns
+	}
+	cacheConfig.Client.Prefetch.Enabled = true
+	if cacheConfig.Client.Prefetch.AheadBytes == 0 {
+		cacheConfig.Client.Prefetch.AheadBytes = cacheDefaultPrefetchAheadBytes
+	}
+	if cacheConfig.Client.Prefetch.Workers == 0 {
+		cacheConfig.Client.Prefetch.Workers = cacheDefaultPrefetchWorkers
+	}
+	if cacheConfig.Client.Prefetch.PartLengthBytes == 0 {
+		cacheConfig.Client.Prefetch.PartLengthBytes = cacheDefaultPrefetchPartLength
+	}
+	if cacheConfig.Client.Prefetch.MaxPartsPerRead == 0 {
+		cacheConfig.Client.Prefetch.MaxPartsPerRead = cacheDefaultPrefetchMaxParts
 	}
 
 	applyCacheRedisConfig(&cacheConfig, config.Database.Redis)
