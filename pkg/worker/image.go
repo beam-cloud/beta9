@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -797,8 +796,10 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 		return false, nil
 	}
 
-	if ok, err := c.copyImageArchiveFromCacheFS(archivePath, imageId); ok || err != nil {
-		return ok, err
+	if ok, err := c.copyImageArchiveFromContentCacheMetadata(ctx, archivePath, imageId); ok {
+		return true, nil
+	} else if err != nil {
+		log.Warn().Err(err).Str("image_id", imageId).Msg("embedded image archive content cache metadata unavailable")
 	}
 
 	cachePath := c.imageArchiveCachePath(imageId)
@@ -847,10 +848,33 @@ func (c *ImageClient) pullImageArchiveFromEmbeddedCache(ctx context.Context, arc
 	if err != nil {
 		return false, err
 	}
-	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, hash, size); err != nil {
+	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, hash, size, routingKey); err != nil {
 		return false, err
 	}
 
+	return true, nil
+}
+
+func (c *ImageClient) copyImageArchiveFromContentCacheMetadata(ctx context.Context, archivePath, imageId string) (bool, error) {
+	cachePath := c.imageArchiveCachePath(imageId)
+	metadata, err := c.cacheClient.CacheFSMetadata(ctx, cachePath)
+	if err != nil {
+		var notFound *cache.ErrNodeNotFound
+		if errors.As(err, &notFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if metadata == nil || metadata.Hash == "" {
+		return false, fmt.Errorf("cachefs metadata missing hash for image archive path %s", cachePath)
+	}
+	if metadata.Size > uint64(^uint(0)>>1) {
+		return false, fmt.Errorf("image archive too large for local restore: %d bytes", metadata.Size)
+	}
+
+	if err := c.writeImageArchiveFromContentCache(ctx, archivePath, imageId, metadata.Hash, int64(metadata.Size), cachePath); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -858,39 +882,12 @@ func (c *ImageClient) imageArchiveCachePath(imageId string) string {
 	return fmt.Sprintf("/images/%s.%s", imageId, c.registry.ImageFileExtension)
 }
 
-func (c *ImageClient) imageArchiveCacheFSPath(imageId string) string {
-	mountPoint := c.config.Cache.Client.CacheFS.MountPoint
-	if mountPoint == "" {
-		mountPoint = "/cache"
-	}
-
-	return filepath.Join(mountPoint, strings.TrimPrefix(c.imageArchiveCachePath(imageId), "/"))
-}
-
-func (c *ImageClient) copyImageArchiveFromCacheFS(archivePath, imageId string) (bool, error) {
-	if !c.config.Cache.Client.CacheFS.Enabled {
-		return false, nil
-	}
-
-	cacheFSPath := c.imageArchiveCacheFSPath(imageId)
-	if _, err := os.Stat(cacheFSPath); err != nil {
-		if os.IsNotExist(err) {
-			return false, nil
-		}
-		return false, err
-	}
-
-	if err := copyImageArchiveFile(cacheFSPath, archivePath); err != nil {
-		return false, err
-	}
-
-	log.Info().Str("image_id", imageId).Str("cache_path", cacheFSPath).Msg("loaded image archive from embedded cachefs")
-	return true, nil
-}
-
-func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, archivePath, imageId, hash string, size int64) error {
+func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, archivePath, imageId, hash string, size int64, routingKey string) error {
 	tmpPath := archivePath + ".tmp"
 	defer os.Remove(tmpPath)
+	if routingKey == "" {
+		routingKey = hash
+	}
 
 	f, err := os.Create(tmpPath)
 	if err != nil {
@@ -908,7 +905,7 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 		}
 
 		length := min(bufSize, size-offset)
-		n, err := c.cacheClient.ReadContentInto(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: hash})
+		n, err := c.cacheClient.ReadContentInto(ctx, hash, offset, buf[:length], cache.ClientOptions{RoutingKey: routingKey})
 		if err != nil {
 			_ = f.Close()
 			return err
@@ -946,38 +943,8 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 		return err
 	}
 
-	log.Info().Str("image_id", imageId).Str("hash", hash).Int64("size", size).Msg("loaded image archive from embedded content cache")
+	log.Info().Str("image_id", imageId).Str("hash", hash).Str("routing_key", routingKey).Int64("size", size).Msg("loaded image archive from embedded content cache")
 	return nil
-}
-
-func copyImageArchiveFile(sourcePath, archivePath string) error {
-	tmpPath := archivePath + ".tmp"
-	defer os.Remove(tmpPath)
-
-	src, err := os.Open(sourcePath)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-
-	dst, err := os.Create(tmpPath)
-	if err != nil {
-		return err
-	}
-
-	if _, err := io.Copy(dst, src); err != nil {
-		_ = dst.Close()
-		return err
-	}
-	if err := dst.Sync(); err != nil {
-		_ = dst.Close()
-		return err
-	}
-	if err := dst.Close(); err != nil {
-		return err
-	}
-
-	return os.Rename(tmpPath, archivePath)
 }
 
 func openImageLockFile(lockPath string) (*os.File, error) {

@@ -476,6 +476,15 @@ func (c *Client) IsPathCachedNearby(ctx context.Context, path string) bool {
 	return exists
 }
 
+// CacheFSMetadata resolves a cachefs path to its content metadata without going
+// through the cachefs FUSE mount.
+func (c *Client) CacheFSMetadata(ctx context.Context, path string) (*FSMetadata, error) {
+	if c == nil || c.coordinator == nil {
+		return nil, ErrClientNotFound
+	}
+	return c.coordinator.GetFsNode(ctx, GenerateFsID(path))
+}
+
 func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
 	hostsToCheck := c.clientConfig.NTopHosts
 
