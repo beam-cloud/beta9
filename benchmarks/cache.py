@@ -89,30 +89,48 @@ def manifest_entry(root, rel_path):
     raise SystemExit(f"file {rel_path!r} not found in manifest")
 
 
-def sequential(path, expected):
-    h = hashlib.sha256()
+def sequential(path, expected, verify):
+    h = hashlib.sha256() if verify else None
     size = 0
+    read_ns = 0
+    verify_ns = 0
+    open_started = time.monotonic_ns()
     with path.open("rb") as f:
+        open_ns = time.monotonic_ns() - open_started
         while True:
+            read_started = time.monotonic_ns()
             chunk = f.read(CHUNK_SIZE)
+            read_ns += time.monotonic_ns() - read_started
             if not chunk:
                 break
-            h.update(chunk)
+            if h is not None:
+                verify_started = time.monotonic_ns()
+                h.update(chunk)
+                verify_ns += time.monotonic_ns() - verify_started
             size += len(chunk)
-    digest = h.hexdigest()
-    if size != expected["size"] or digest != expected["sha256"]:
+    digest = h.hexdigest() if h is not None else ""
+    if size != expected["size"] or (verify and digest != expected["sha256"]):
         raise SystemExit(f"sequential mismatch size={size} sha256={digest}")
-    return size, 1, digest
+    return size, 1, digest, {
+        "openMs": open_ns / 1_000_000,
+        "fileReadMs": read_ns / 1_000_000,
+        "verifyMs": verify_ns / 1_000_000,
+    }
 
 
-def random_reads(path, manifest, expected, block_size, total_bytes, seed):
+def random_reads(path, manifest, expected, block_size, total_bytes, seed, verify):
     total_bytes = total_bytes or expected["size"]
     rng = random.Random(seed)
     aggregate = hashlib.sha256()
     bytes_read = 0
     ops = 0
+    read_ns = 0
+    verify_ns = 0
+    seek_ns = 0
 
+    open_started = time.monotonic_ns()
     with path.open("rb") as f:
+        open_ns = time.monotonic_ns() - open_started
         while bytes_read < total_bytes:
             length = min(block_size, total_bytes - bytes_read, expected["size"])
             max_offset = expected["size"] - length
@@ -122,23 +140,35 @@ def random_reads(path, manifest, expected, block_size, total_bytes, seed):
                 max_block = max_offset // block_size
                 offset = rng.randint(0, max_block) * block_size
 
+            seek_started = time.monotonic_ns()
             f.seek(offset)
+            seek_ns += time.monotonic_ns() - seek_started
+            read_started = time.monotonic_ns()
             chunk = f.read(length)
+            read_ns += time.monotonic_ns() - read_started
             if len(chunk) != length:
                 raise SystemExit(f"short random read offset={offset} expected={length} got={len(chunk)}")
-            expected_chunk = deterministic_range(manifest["nonce"], expected["label"], offset, length)
-            if chunk != expected_chunk:
-                got = hashlib.sha256(chunk).hexdigest()
-                want = hashlib.sha256(expected_chunk).hexdigest()
-                raise SystemExit(f"random chunk mismatch offset={offset} got={got} want={want}")
+            if verify:
+                verify_started = time.monotonic_ns()
+                expected_chunk = deterministic_range(manifest["nonce"], expected["label"], offset, length)
+                if chunk != expected_chunk:
+                    got = hashlib.sha256(chunk).hexdigest()
+                    want = hashlib.sha256(expected_chunk).hexdigest()
+                    raise SystemExit(f"random chunk mismatch offset={offset} got={got} want={want}")
 
-            aggregate.update(str(offset).encode())
-            aggregate.update(b"\0")
-            aggregate.update(chunk)
+                aggregate.update(str(offset).encode())
+                aggregate.update(b"\0")
+                aggregate.update(chunk)
+                verify_ns += time.monotonic_ns() - verify_started
             bytes_read += length
             ops += 1
 
-    return bytes_read, ops, aggregate.hexdigest()
+    return bytes_read, ops, aggregate.hexdigest() if verify else "", {
+        "openMs": open_ns / 1_000_000,
+        "seekMs": seek_ns / 1_000_000,
+        "fileReadMs": read_ns / 1_000_000,
+        "verifyMs": verify_ns / 1_000_000,
+    }
 
 
 def main():
@@ -149,22 +179,25 @@ def main():
     parser.add_argument("--random-block-bytes", type=int, default=4096)
     parser.add_argument("--random-total-bytes", type=int, default=0)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument("--skip-verify", action="store_true")
     args = parser.parse_args()
 
     root = Path(args.root)
     manifest, entry = manifest_entry(root, args.file)
     path = root / args.file
     started = time.monotonic_ns()
+    verify = not args.skip_verify
     if args.pattern == "sequential":
-        bytes_read, ops, digest = sequential(path, entry)
+        bytes_read, ops, digest, timing = sequential(path, entry, verify)
     else:
-        bytes_read, ops, digest = random_reads(
+        bytes_read, ops, digest, timing = random_reads(
             path,
             manifest,
             entry,
             args.random_block_bytes,
             args.random_total_bytes,
             args.seed,
+            verify,
         )
     duration_ms = (time.monotonic_ns() - started) / 1_000_000
     mb = bytes_read / (1024 * 1024)
@@ -176,10 +209,168 @@ def main():
         "bytes": bytes_read,
         "operations": ops,
         "durationMs": duration_ms,
+        "timing": timing,
         "mbps": mb / (duration_ms / 1000) if duration_ms > 0 else 0,
+        "fileReadMBps": mb / (timing.get("fileReadMs", 0) / 1000) if timing.get("fileReadMs", 0) > 0 else 0,
         "opsPerSecond": ops / (duration_ms / 1000) if duration_ms > 0 else 0,
         "digest": digest,
         "expectedSha256": entry["sha256"],
+        "verified": verify,
+    }, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+REMOTE_RAW_READ_HARNESS = r"""
+import argparse
+import hashlib
+import json
+import socket
+import struct
+import time
+
+MAGIC = b"B9CR\x01"
+VERSION = 1
+STATUS_OK = 0
+CHUNK_BYTES = 4 * 1024 * 1024
+
+
+def parse_addr(addr):
+    if addr.startswith("["):
+        host, _, rest = addr[1:].partition("]")
+        return host, int(rest.lstrip(":"))
+    host, port = addr.rsplit(":", 1)
+    return host, int(port)
+
+
+def read_exact(sock, length):
+    out = bytearray()
+    while len(out) < length:
+        chunk = sock.recv(length - len(out))
+        if not chunk:
+            raise RuntimeError(f"short socket read expected={length} got={len(out)}")
+        out.extend(chunk)
+    return bytes(out)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--addr", required=True)
+    parser.add_argument("--hash", required=True)
+    parser.add_argument("--size", type=int, required=True)
+    parser.add_argument("--expected-sha256", required=True)
+    parser.add_argument("--chunk-bytes", type=int, default=CHUNK_BYTES)
+    parser.add_argument("--connect-timeout", type=float, default=5)
+    args = parser.parse_args()
+
+    if args.chunk_bytes <= 0:
+        raise SystemExit("--chunk-bytes must be positive")
+
+    host, port = parse_addr(args.addr)
+    hasher = hashlib.sha256()
+    offset = 0
+    chunks = 0
+    started = time.monotonic_ns()
+    with socket.create_connection((host, port), timeout=args.connect_timeout) as sock:
+        sock.sendall(MAGIC)
+        while offset < args.size:
+            length = min(args.chunk_bytes, args.size - offset)
+            request = struct.pack(">B H Q Q", VERSION, len(args.hash), offset, length) + args.hash.encode()
+            sock.sendall(request)
+            response = read_exact(sock, 9)
+            status = response[0]
+            response_length = struct.unpack(">Q", response[1:9])[0]
+            if status != STATUS_OK:
+                raise RuntimeError(f"raw read status={status} offset={offset} length={length}")
+            if response_length != length:
+                raise RuntimeError(
+                    f"raw read length mismatch offset={offset} expected={length} got={response_length}"
+                )
+            body = read_exact(sock, response_length)
+            hasher.update(body)
+            offset += response_length
+            chunks += 1
+
+    duration_ms = (time.monotonic_ns() - started) / 1_000_000
+    digest = hasher.hexdigest()
+    if digest != args.expected_sha256:
+        raise RuntimeError(f"raw read digest mismatch got={digest} want={args.expected_sha256}")
+
+    mb = args.size / (1024 * 1024)
+    print(json.dumps({
+        "ok": True,
+        "addr": args.addr,
+        "hash": args.hash,
+        "bytes": args.size,
+        "chunks": chunks,
+        "chunkBytes": args.chunk_bytes,
+        "durationMs": duration_ms,
+        "mbps": mb / (duration_ms / 1000) if duration_ms > 0 else 0,
+        "sha256": digest,
+        "expectedSha256": args.expected_sha256,
+    }, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+DD_READ_HARNESS = r"""
+import argparse
+import json
+import os
+import subprocess
+import time
+
+
+def run_dd(path, block_size):
+    attempts = [
+        ["dd", f"if={path}", "of=/dev/null", f"bs={block_size}", "iflag=direct,fullblock", "status=none"],
+        ["dd", f"if={path}", "of=/dev/null", f"bs={block_size}", "iflag=fullblock", "status=none"],
+        ["dd", f"if={path}", "of=/dev/null", f"bs={block_size}", "status=none"],
+        ["dd", f"if={path}", "of=/dev/null", f"bs={block_size}"],
+    ]
+    last = None
+    for command in attempts:
+        started = time.monotonic_ns()
+        proc = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        finished = time.monotonic_ns()
+        last = proc
+        if proc.returncode == 0:
+            return command, (finished - started) / 1_000_000, proc
+        stderr = proc.stderr.lower()
+        unsupported = "invalid" in stderr or "unrecognized" in stderr or "not supported" in stderr
+        if not unsupported:
+            break
+    raise SystemExit((last.stderr or last.stdout or f"dd exited {last.returncode}").strip())
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--path", required=True)
+    parser.add_argument("--expected-size", type=int, required=True)
+    parser.add_argument("--block-size", default="4M")
+    args = parser.parse_args()
+
+    stat_size = os.stat(args.path).st_size
+    if stat_size != args.expected_size:
+        raise SystemExit(f"size mismatch path={args.path} got={stat_size} want={args.expected_size}")
+
+    command, duration_ms, proc = run_dd(args.path, args.block_size)
+    mb = args.expected_size / (1024 * 1024)
+    print(json.dumps({
+        "ok": True,
+        "path": args.path,
+        "bytes": args.expected_size,
+        "durationMs": duration_ms,
+        "mbps": mb / (duration_ms / 1000) if duration_ms > 0 else 0,
+        "blockSize": args.block_size,
+        "directIO": any(flag.startswith("iflag=direct") or flag == "iflag=direct,fullblock" for flag in command),
+        "command": command,
+        "ddStdout": proc.stdout[-1000:],
+        "ddStderr": proc.stderr[-1000:],
     }, sort_keys=True))
 
 
@@ -197,9 +388,22 @@ ROOT = Path("/bench-cache")
 SIZES_MB = [int(part) for part in os.environ["CACHE_BENCH_SIZES_MB"].split(",") if part]
 ACCESS_TYPES = [part for part in os.environ["CACHE_BENCH_ACCESS_TYPES"].split(",") if part]
 PATTERNS = [part for part in os.environ["CACHE_BENCH_PATTERNS"].split(",") if part]
+FILE_PLAN = os.environ.get("CACHE_BENCH_FILE_PLAN", "")
 NONCE = os.environ["CACHE_BENCH_NONCE"]
 CHUNK_SIZE = 1024 * 1024
 DETERMINISTIC_BLOCK_SIZE = 4096
+
+
+def parse_file_plan(value):
+    specs = []
+    for part in [part.strip() for part in value.split(",") if part.strip()]:
+        fields = part.split(":")
+        if len(fields) != 3:
+            raise SystemExit(f"invalid CACHE_BENCH_FILE_PLAN entry {part!r}; expected access:pattern:sizeMiB")
+        access_type, pattern, size_text = fields
+        size_text = size_text.lower().removesuffix("mib").removesuffix("mb")
+        specs.append({"accessType": access_type, "pattern": pattern, "sizeMiB": int(size_text)})
+    return specs
 
 
 def deterministic_chunk(label, offset, length):
@@ -235,22 +439,32 @@ def write_file(path, label, size):
 def main():
     ROOT.mkdir(parents=True, exist_ok=True)
     files = []
-    for access_type in ACCESS_TYPES:
-        for pattern in PATTERNS:
-            for size_mb in SIZES_MB:
-                size = size_mb * 1024 * 1024
-                label = f"{access_type}:{pattern}:size:{size_mb}mb"
-                rel = f"files/{access_type}/{pattern}/{size_mb}mb.bin"
-                digest = write_file(ROOT / rel, label, size)
-                files.append({
-                    "path": rel,
-                    "accessType": access_type,
-                    "pattern": pattern,
-                    "size": size,
-                    "sizeMiB": size_mb,
-                    "sha256": digest,
-                    "label": label,
-                })
+    specs = parse_file_plan(FILE_PLAN)
+    if not specs:
+        specs = [
+            {"accessType": access_type, "pattern": pattern, "sizeMiB": size_mb}
+            for access_type in ACCESS_TYPES
+            for pattern in PATTERNS
+            for size_mb in SIZES_MB
+        ]
+
+    for spec in specs:
+        access_type = spec["accessType"]
+        pattern = spec["pattern"]
+        size_mb = spec["sizeMiB"]
+        size = size_mb * 1024 * 1024
+        label = f"{access_type}:{pattern}:size:{size_mb}mb"
+        rel = f"files/{access_type}/{pattern}/{size_mb}mb.bin"
+        digest = write_file(ROOT / rel, label, size)
+        files.append({
+            "path": rel,
+            "accessType": access_type,
+            "pattern": pattern,
+            "size": size,
+            "sizeMiB": size_mb,
+            "sha256": digest,
+            "label": label,
+        })
 
     manifest = {
         "version": 3,
@@ -274,6 +488,37 @@ import time
 from pathlib import Path
 
 CHUNK_SIZE = 4 * 1024 * 1024
+DETERMINISTIC_BLOCK_SIZE = 4096
+
+
+def deterministic_chunk(nonce, label, offset, length):
+    out = bytearray()
+    position = offset
+    while len(out) < length:
+        block_index = position // DETERMINISTIC_BLOCK_SIZE
+        seed = hashlib.sha256(f"{nonce}:{label}:{block_index}".encode()).digest()
+        block = (seed * ((DETERMINISTIC_BLOCK_SIZE // len(seed)) + 1))[:DETERMINISTIC_BLOCK_SIZE]
+        block_offset = position % DETERMINISTIC_BLOCK_SIZE
+        take = min(length - len(out), len(block) - block_offset)
+        out.extend(block[block_offset:block_offset + take])
+        position += take
+    return bytes(out)
+
+
+def write_generated_file(path, nonce, label, size):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    h = hashlib.sha256()
+    remaining = size
+    offset = 0
+    with path.open("wb") as f:
+        while remaining > 0:
+            chunk_len = min(CHUNK_SIZE, remaining)
+            chunk = deterministic_chunk(nonce, label, offset, chunk_len)
+            f.write(chunk)
+            h.update(chunk)
+            remaining -= chunk_len
+            offset += chunk_len
+    return h.hexdigest()
 
 
 def sha256_file(path):
@@ -309,6 +554,8 @@ def main():
     parser.add_argument("--source", default="/bench-cache")
     parser.add_argument("--dest", required=True)
     parser.add_argument("--access-types", default="")
+    parser.add_argument("--generate", action="store_true")
+    parser.add_argument("--manifest-json", default="")
     args = parser.parse_args()
 
     source = Path(args.source)
@@ -319,17 +566,30 @@ def main():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.mkdir(parents=True, exist_ok=True)
-    manifest = json.loads((source / "manifest.json").read_text())
+    if args.generate:
+        manifest = json.loads(args.manifest_json)
+    else:
+        manifest = json.loads((source / "manifest.json").read_text())
     (dest / "manifest.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
+    total = 0
+    files = 0
     for entry in manifest["files"]:
         if access_types and entry.get("accessType") not in access_types:
             continue
-        source_path = source / entry["path"]
         dest_path = dest / entry["path"]
-        dest_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, dest_path)
+        if args.generate:
+            digest = write_generated_file(dest_path, manifest["nonce"], entry["label"], entry["size"])
+            if digest != entry["sha256"]:
+                raise SystemExit(f"generated digest mismatch path={entry['path']} got={digest} want={entry['sha256']}")
+            total += entry["size"]
+            files += 1
+        else:
+            source_path = source / entry["path"]
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, dest_path)
     os.sync()
-    manifest, total, files = verify(dest, access_types)
+    if not args.generate:
+        manifest, total, files = verify(dest, access_types)
     duration_ms = (time.monotonic_ns() - started) / 1_000_000
     mb = total / (1024 * 1024)
     print(json.dumps({
@@ -348,6 +608,36 @@ if __name__ == "__main__":
 """
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+LOG_SIZE_RE = re.compile(r"size=(\d+)")
+GEESEFS_SUMMARY_RE = re.compile(
+    r"geesefs read path summary: .*?"
+    r"timing\(handler_count=(\d+) handler_avg=([^ ]+) callback_count=(\d+) callback=([0-9.]+)MiB callback_avg=([^)]*)\).*?"
+    r"mmap_page\(attempt=(\d+) hit=(\d+) miss=(\d+) mmap_fail=(\d+) ([0-9.]+)MiB[^)]*\).*?"
+    r"read_into\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"stream\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"unary\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"cloud\(req=(\d+) ([0-9.]+)MiB\)"
+)
+GEESEFS_SUMMARY_LEGACY_RE = re.compile(
+    r"geesefs read path summary: .*?"
+    r"mmap_page\(attempt=(\d+) hit=(\d+) miss=(\d+) mmap_fail=(\d+) ([0-9.]+)MiB\).*?"
+    r"read_into\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"stream\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"unary\(attempt=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"cloud\(req=(\d+) ([0-9.]+)MiB\)"
+)
+GEESEFS_READ_RESPONSE_RE = re.compile(
+    r"geesefs fuse read response complete: .*?"
+    r"path=\"([^\"]+)\" hash=\"([^\"]*)\" offset=(\d+) size=(\d+) bytes=(\d+) .*?"
+    r"handler_ms=([0-9.]+) response_ms=([0-9.]+)"
+)
+CACHE_SUMMARY_RE = re.compile(
+    r"cache read path summary: .*?"
+    r"client\(read_into=(\d+) ([0-9.]+)MiB local_hit=(\d+) local_miss=(\d+) raw_hit=(\d+) raw_miss=(\d+) raw_err=(\d+) grpc_hit=(\d+) grpc_miss=(\d+) grpc_err=(\d+)\) "
+    r"local_page_region\(req=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\).*?"
+    r"server\(.*?raw_req=(\d+) raw_sendfile=(\d+) raw_copy=(\d+) raw_readat=(\d+) raw_miss=(\d+) raw_err=(\d+)\) "
+    r"store\(.*?page_region=(\d+) hit=(\d+) miss=(\d+) ([0-9.]+)MiB\)"
+)
 
 
 def now_rfc3339():
@@ -363,6 +653,53 @@ def parse_sizes(value):
     if not sizes or any(size <= 0 for size in sizes):
         raise SystemExit("--sizes-mb must contain positive integers")
     return sizes
+
+
+def parse_size_mib(value):
+    text = value.strip().lower()
+    if text.endswith("mib"):
+        text = text[:-3]
+    elif text.endswith("mb"):
+        text = text[:-2]
+    try:
+        size = int(text)
+    except ValueError as exc:
+        raise SystemExit(f"invalid file-plan size {value!r}") from exc
+    if size <= 0:
+        raise SystemExit(f"file-plan size must be positive: {value!r}")
+    return size
+
+
+def parse_file_plan(value, valid_access_types, valid_patterns):
+    specs = []
+    seen = set()
+    for part in parse_csv(value):
+        fields = [field.strip() for field in part.split(":")]
+        if len(fields) != 3:
+            raise SystemExit(f"invalid --file-plan entry {part!r}; expected access:pattern:sizeMiB")
+        access_type, pattern, size_text = fields
+        if access_type not in valid_access_types:
+            raise SystemExit(f"invalid --file-plan access type {access_type!r}")
+        if pattern not in valid_patterns:
+            raise SystemExit(f"invalid --file-plan pattern {pattern!r}")
+        size_mb = parse_size_mib(size_text)
+        key = (access_type, pattern, size_mb)
+        if key in seen:
+            raise SystemExit(f"duplicate --file-plan entry {access_type}:{pattern}:{size_mb}mib")
+        seen.add(key)
+        specs.append({"accessType": access_type, "pattern": pattern, "sizeMiB": size_mb})
+    return specs
+
+
+def ordered_unique(values):
+    out = []
+    seen = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
 
 
 def parse_args():
@@ -381,13 +718,26 @@ def parse_args():
     parser.add_argument("--sizes-mb", default=os.getenv("BENCH_CACHE_SIZES_MB", "32,128"))
     parser.add_argument("--patterns", default=os.getenv("BENCH_CACHE_PATTERNS", "sequential,random"))
     parser.add_argument("--access-types", default=os.getenv("BENCH_CACHE_ACCESS_TYPES", "image_archive,volume_mount,workspace_fuse"))
+    parser.add_argument("--file-plan", default=os.getenv("BENCH_CACHE_FILE_PLAN", ""))
     parser.add_argument("--iterations", type=int, default=env_int("BENCH_CACHE_ITERATIONS", 1))
     parser.add_argument("--random-block-bytes", type=int, default=env_int("BENCH_CACHE_RANDOM_BLOCK_BYTES", 4096))
     parser.add_argument("--random-seed", type=int, default=env_int("BENCH_CACHE_RANDOM_SEED", 1337))
+    parser.add_argument("--verify-reads", dest="verify_reads", action="store_true")
+    parser.add_argument("--no-verify-reads", dest="verify_reads", action="store_false")
+    parser.set_defaults(verify_reads=env_bool("BENCH_CACHE_VERIFY_READS", True))
 
     parser.add_argument("--image-uri", default=os.getenv("BENCH_CACHE_IMAGE_URI", ""))
     parser.add_argument("--image-platform", default=os.getenv("BENCH_CACHE_IMAGE_PLATFORM", ""))
     parser.add_argument("--source-image", default=os.getenv("BENCH_CACHE_SOURCE_IMAGE", "python:3.10-slim"))
+    parser.add_argument("--runtime-python-version", default=os.getenv("BENCH_CACHE_RUNTIME_PYTHON_VERSION", "python3.10"))
+    parser.add_argument("--generate-volume-payload", dest="generate_volume_payload", action="store_true")
+    parser.add_argument("--no-generate-volume-payload", dest="generate_volume_payload", action="store_false")
+    generate_volume_payload_env = os.getenv("BENCH_CACHE_GENERATE_VOLUME_PAYLOAD")
+    parser.set_defaults(
+        generate_volume_payload=None
+        if generate_volume_payload_env is None
+        else env_bool("BENCH_CACHE_GENERATE_VOLUME_PAYLOAD", False)
+    )
     parser.add_argument("--output", default=os.getenv("BENCH_CACHE_OUTPUT", "/tmp/beta9-cache-benchmark.json"))
     parser.add_argument("--report", default=os.getenv("BENCH_CACHE_REPORT", "/tmp/beta9-cache-benchmark.md"))
     parser.add_argument("--cache-mount-path", default=os.getenv("BENCH_CACHE_MOUNT_PATH", DEFAULT_CACHE_MOUNT_PATH))
@@ -401,6 +751,15 @@ def parse_args():
     parser.add_argument("--volume-subdir", default=os.getenv("BENCH_CACHE_VOLUME_SUBDIR", ""))
     parser.add_argument("--settle-seconds", type=float, default=env_float("BENCH_CACHE_SETTLE_SECONDS", 5))
     parser.add_argument("--cache-proof-timeout-seconds", type=float, default=env_float("BENCH_CACHE_PROOF_TIMEOUT_SECONDS", 30))
+    parser.add_argument("--remote-cache-proof-chunk-bytes", type=int, default=env_int("BENCH_CACHE_REMOTE_PROOF_CHUNK_BYTES", 4 * 1024 * 1024))
+    parser.add_argument("--worker-dd-reads", dest="worker_dd_reads", action="store_true")
+    parser.add_argument("--no-worker-dd-reads", dest="worker_dd_reads", action="store_false")
+    parser.set_defaults(worker_dd_reads=env_bool("BENCH_CACHE_WORKER_DD_READS", False))
+    parser.add_argument("--worker-dd-block-size", default=os.getenv("BENCH_CACHE_WORKER_DD_BLOCK_SIZE", "4M"))
+    parser.add_argument("--worker-dd-log-wait-seconds", type=float, default=env_float("BENCH_CACHE_WORKER_DD_LOG_WAIT_SECONDS", 11))
+    parser.add_argument("--read-path-log-wait-seconds", type=float, default=env_float("BENCH_CACHE_READ_PATH_LOG_WAIT_SECONDS", 1))
+    parser.add_argument("--min-hot-mbps", type=float, default=env_float("BENCH_CACHE_MIN_HOT_MBPS", 0))
+    parser.add_argument("--min-remote-cache-mbps", type=float, default=env_float("BENCH_CACHE_MIN_REMOTE_MBPS", 0))
     parser.add_argument("--log-tail", type=int, default=env_int("BENCH_CACHE_LOG_TAIL", 30000))
     parser.add_argument("--sandbox-cpu", default=os.getenv("BENCH_CACHE_SANDBOX_CPU", os.getenv("BENCH_SANDBOX_CPU", "0.5")))
     parser.add_argument("--sandbox-memory", default=os.getenv("BENCH_CACHE_SANDBOX_MEMORY", os.getenv("BENCH_SANDBOX_MEMORY", "512")))
@@ -422,21 +781,38 @@ def parse_args():
     parser.add_argument("--reset-workers", dest="reset_workers", action="store_true")
     parser.add_argument("--no-reset-workers", dest="reset_workers", action="store_false")
     parser.set_defaults(reset_workers=env_bool("BENCH_RESET_WORKERS", False))
+    parser.add_argument("--reset-workers-after-prepare", dest="reset_workers_after_prepare", action="store_true")
+    parser.add_argument("--no-reset-workers-after-prepare", dest="reset_workers_after_prepare", action="store_false")
+    parser.set_defaults(
+        reset_workers_after_prepare=env_bool("BENCH_CACHE_RESET_WORKERS_AFTER_PREPARE", False)
+    )
     parser.add_argument("--wait-running", dest="wait_running", action="store_true")
     parser.add_argument("--no-wait-running", dest="wait_running", action="store_false")
     parser.set_defaults(wait_running=env_bool("BENCH_CACHE_WAIT_RUNNING", True))
     parser.add_argument("--require-workspace-storage", dest="require_workspace_storage", action="store_true")
     parser.add_argument("--no-require-workspace-storage", dest="require_workspace_storage", action="store_false")
     parser.set_defaults(require_workspace_storage=env_bool("BENCH_CACHE_REQUIRE_WORKSPACE_STORAGE", True))
+    parser.add_argument("--require-verified-reads", dest="require_verified_reads", action="store_true")
+    parser.add_argument("--no-require-verified-reads", dest="require_verified_reads", action="store_false")
+    parser.set_defaults(require_verified_reads=env_bool("BENCH_CACHE_REQUIRE_VERIFIED_READS", False))
+    parser.add_argument("--require-remote-cache-read", dest="require_remote_cache_read", action="store_true")
+    parser.add_argument("--no-require-remote-cache-read", dest="require_remote_cache_read", action="store_false")
+    parser.set_defaults(require_remote_cache_read=env_bool("BENCH_CACHE_REQUIRE_REMOTE_READ", False))
 
     args = parser.parse_args()
     if args.preset == "smoke" and args.sizes_mb == "32,128":
         args.sizes_mb = "32"
-    args.sizes = parse_sizes(args.sizes_mb)
-    args.pattern_list = parse_csv(args.patterns)
-    args.access_type_list = parse_csv(args.access_types)
     valid_patterns = {"sequential", "random"}
     valid_access_types = {"image_archive", "volume_mount", "workspace_fuse"}
+    args.file_specs = parse_file_plan(args.file_plan, valid_access_types, valid_patterns)
+    if args.file_specs:
+        args.sizes = ordered_unique(spec["sizeMiB"] for spec in args.file_specs)
+        args.pattern_list = ordered_unique(spec["pattern"] for spec in args.file_specs)
+        args.access_type_list = ordered_unique(spec["accessType"] for spec in args.file_specs)
+    else:
+        args.sizes = parse_sizes(args.sizes_mb)
+        args.pattern_list = parse_csv(args.patterns)
+        args.access_type_list = parse_csv(args.access_types)
     if unknown := sorted(set(args.pattern_list) - valid_patterns):
         raise SystemExit(f"unknown pattern(s): {', '.join(unknown)}")
     if unknown := sorted(set(args.access_type_list) - valid_access_types):
@@ -445,15 +821,21 @@ def parse_args():
         raise SystemExit("--iterations must be greater than 0")
     if args.random_block_bytes <= 0:
         raise SystemExit("--random-block-bytes must be greater than 0")
+    if args.remote_cache_proof_chunk_bytes <= 0:
+        raise SystemExit("--remote-cache-proof-chunk-bytes must be greater than 0")
     if not args.token_cache:
         args.token_cache = f"/tmp/beta9-startup-benchmark-{args.namespace}.token"
     if not args.sdk_config:
         args.sdk_config = f"/tmp/beta9-cache-benchmark-{args.namespace}.ini"
     if not args.image_uri:
-        args.image_uri = f"k3d-registry.localhost:5000/beta9-cache-bench:{int(time.time())}"
+        args.image_uri = f"registry.localhost:5000/beta9-cache-bench:{int(time.time())}"
     if not args.volume_subdir:
         args.volume_subdir = f"run-{int(time.time())}-{random.getrandbits(32):08x}"
     args.volume_mount_path = args.volume_mount_path.strip("/")
+    if args.generate_volume_payload is None:
+        args.generate_volume_payload = "image_archive" not in args.access_type_list
+    if args.generate_volume_payload and "image_archive" in args.access_type_list:
+        raise SystemExit("--generate-volume-payload cannot be used with image_archive access types")
     return args
 
 
@@ -543,32 +925,45 @@ def payload_sha256(nonce, label, size):
     return hasher.hexdigest()
 
 
-def expected_manifest(nonce, sizes, access_types, patterns):
+def expected_manifest(nonce, sizes, access_types, patterns, file_specs=None):
     files = []
-    for access_type in access_types:
-        for pattern in patterns:
-            for size_mb in sizes:
-                size = size_mb * 1024 * 1024
-                label = f"{access_type}:{pattern}:size:{size_mb}mb"
-                files.append(
-                    {
-                        "path": f"files/{access_type}/{pattern}/{size_mb}mb.bin",
-                        "accessType": access_type,
-                        "pattern": pattern,
-                        "size": size,
-                        "sizeMiB": size_mb,
-                        "sha256": payload_sha256(nonce, label, size),
-                        "label": label,
-                    }
-                )
+    specs = file_specs or [
+        {"accessType": access_type, "pattern": pattern, "sizeMiB": size_mb}
+        for access_type in access_types
+        for pattern in patterns
+        for size_mb in sizes
+    ]
+    for spec in specs:
+        access_type = spec["accessType"]
+        pattern = spec["pattern"]
+        size_mb = spec["sizeMiB"]
+        size = size_mb * 1024 * 1024
+        label = f"{access_type}:{pattern}:size:{size_mb}mb"
+        files.append(
+            {
+                "path": f"files/{access_type}/{pattern}/{size_mb}mb.bin",
+                "accessType": access_type,
+                "pattern": pattern,
+                "size": size,
+                "sizeMiB": size_mb,
+                "sha256": payload_sha256(nonce, label, size),
+                "label": label,
+            }
+        )
     return {"version": 3, "nonce": nonce, "files": files}
 
 
 def build_payload_image(args):
+    if args.generate_volume_payload and "image_archive" not in args.access_type_list:
+        nonce = f"{datetime.now(timezone.utc).isoformat()}:{random.getrandbits(64)}"
+        manifest = expected_manifest(nonce, args.sizes, args.access_type_list, args.pattern_list, args.file_specs)
+        log(f"Generating volume benchmark payload in mounted Volume with {len(manifest['files'])} planned files")
+        return {"imageUri": "", "hostImageUri": "", "nonce": nonce, "manifest": manifest}
+
     require_tools("docker")
     build_uri = host_image_uri(args.image_uri)
     nonce = f"{datetime.now(timezone.utc).isoformat()}:{random.getrandbits(64)}"
-    manifest = expected_manifest(nonce, args.sizes, args.access_type_list, args.pattern_list)
+    manifest = expected_manifest(nonce, args.sizes, args.access_type_list, args.pattern_list, args.file_specs)
     with tempfile.TemporaryDirectory(prefix="beta9-cache-bench-image-") as tmp:
         tmp_path = Path(tmp)
         (tmp_path / "generate_payload.py").write_text(PAYLOAD_GENERATOR, encoding="utf-8")
@@ -580,10 +975,12 @@ def build_payload_image(args):
                     "ARG SIZES_MB",
                     "ARG ACCESS_TYPES",
                     "ARG PATTERNS",
+                    "ARG FILE_PLAN",
                     "ARG BENCH_NONCE",
                     "ENV CACHE_BENCH_SIZES_MB=${SIZES_MB}",
                     "ENV CACHE_BENCH_ACCESS_TYPES=${ACCESS_TYPES}",
                     "ENV CACHE_BENCH_PATTERNS=${PATTERNS}",
+                    "ENV CACHE_BENCH_FILE_PLAN=${FILE_PLAN}",
                     "ENV CACHE_BENCH_NONCE=${BENCH_NONCE}",
                     "COPY generate_payload.py /tmp/generate_payload.py",
                     "RUN python3 /tmp/generate_payload.py && rm -f /tmp/generate_payload.py",
@@ -594,7 +991,10 @@ def build_payload_image(args):
             ),
             encoding="utf-8",
         )
-        log(f"Building cache benchmark image {build_uri} with sizes {args.sizes_mb} MiB")
+        if args.file_specs:
+            log(f"Building cache benchmark image {build_uri} with {len(args.file_specs)} planned files")
+        else:
+            log(f"Building cache benchmark image {build_uri} with sizes {args.sizes_mb} MiB")
         build_cmd = ["docker"]
         use_buildx = "," in args.image_platform
         if use_buildx:
@@ -613,6 +1013,8 @@ def build_payload_image(args):
                 f"ACCESS_TYPES={','.join(args.access_type_list)}",
                 "--build-arg",
                 f"PATTERNS={','.join(args.pattern_list)}",
+                "--build-arg",
+                f"FILE_PLAN={args.file_plan}",
                 "--build-arg",
                 f"BENCH_NONCE={nonce}",
             ]
@@ -685,7 +1087,10 @@ def prepare_sandbox_runtime(args):
     from beta9 import Volume  # noqa: WPS433
     from beta9.sync import FileSyncer  # noqa: WPS433
 
-    image = Image.from_registry(args.image_uri)
+    if args.generate_volume_payload:
+        image = Image(python_version=args.runtime_python_version)
+    else:
+        image = Image.from_registry(args.image_uri)
     volume = Volume(name=args.volume_name, mount_path=args.volume_mount_path)
     sandbox = Sandbox(
         name="cache-benchmark",
@@ -790,7 +1195,7 @@ def create_sample(args, sandbox, token, sample):
 
 def read_command(args, root, entry, pattern, seed):
     total_bytes = entry["size"] if pattern == "random" else 0
-    return [
+    command = [
         "python3",
         "-c",
         READ_HARNESS,
@@ -807,9 +1212,12 @@ def read_command(args, root, entry, pattern, seed):
         "--seed",
         str(seed),
     ]
+    if not args.verify_reads:
+        command.append("--skip-verify")
+    return command
 
 
-def run_sandbox_read(args, sandbox, token, access_type, root, entry, pattern, cache_state, index):
+def run_sandbox_read(args, sandbox, token, access_type, root, entry, pattern, cache_state, index, geesefs_log_path=None):
     instance = None
     started = time.monotonic_ns()
     sample = {
@@ -827,6 +1235,7 @@ def run_sandbox_read(args, sandbox, token, access_type, root, entry, pattern, ca
         instance = create_sample(args, sandbox, token, sample)
         accepted = time.monotonic_ns()
         sample["acceptedMs"] = (accepted - started) / 1_000_000
+        log_since = now_rfc3339()
         payload = run_instance_command(
             args,
             instance,
@@ -835,6 +1244,9 @@ def run_sandbox_read(args, sandbox, token, access_type, root, entry, pattern, ca
             sample,
         )
         sample.update(read_result_fields(payload))
+        if geesefs_log_path:
+            sample["geesefsLogPath"] = geesefs_log_path
+            attach_read_path_diagnostics(args, sample, log_since, geesefs_log_path, entry["sha256"])
         sample["ok"] = True
         sample["status"] = "ok"
         sample["totalMs"] = (time.monotonic_ns() - started) / 1_000_000
@@ -862,20 +1274,23 @@ def run_volume_prepare(args, sandbox, token, index):
     try:
         instance = create_sample(args, sandbox, token, sample)
         sample["acceptedMs"] = (time.monotonic_ns() - started) / 1_000_000
+        command = [
+            "python3",
+            "-c",
+            VOLUME_PREPARE_SCRIPT,
+            "--dest",
+            volume_container_root(args),
+            "--access-types",
+            ",".join(access_type for access_type in args.access_type_list if access_type != "image_archive"),
+        ]
+        if args.generate_volume_payload:
+            command.extend(["--generate", "--manifest-json", json.dumps(args.payload_manifest, sort_keys=True)])
+        else:
+            command.extend(["--source", IMAGE_READ_ROOT])
         payload = run_instance_command(
             args,
             instance,
-            [
-                "python3",
-                "-c",
-                VOLUME_PREPARE_SCRIPT,
-                "--source",
-                IMAGE_READ_ROOT,
-                "--dest",
-                volume_container_root(args),
-                "--access-types",
-                ",".join(access_type for access_type in args.access_type_list if access_type != "image_archive"),
-            ],
+            command,
             started,
             sample,
         )
@@ -902,9 +1317,12 @@ def read_result_fields(payload):
         "bytesRead": payload.get("bytes"),
         "operations": payload.get("operations") or payload.get("files"),
         "mbps": payload.get("mbps"),
+        "fileReadMBps": payload.get("fileReadMBps"),
+        "readTiming": payload.get("timing") or {},
         "opsPerSecond": payload.get("opsPerSecond"),
         "digest": payload.get("digest"),
         "expectedSha256": payload.get("expectedSha256"),
+        "verified": payload.get("verified"),
     }
 
 
@@ -935,6 +1353,7 @@ def worker_pods(namespace):
                 "nodeName": item.get("spec", {}).get("nodeName", ""),
                 "podIP": item.get("status", {}).get("podIP", ""),
                 "hostIP": item.get("status", {}).get("hostIP", ""),
+                "phase": item.get("status", {}).get("phase", ""),
             }
         )
     return pods
@@ -977,7 +1396,7 @@ def find_worker_for_container(args, container_id, root):
     raise RuntimeError(f"could not find worker pod for container {container_id}")
 
 
-def run_workspace_fuse_read(args, sandbox, token, workspace_root, entry, pattern, cache_state, index):
+def run_workspace_fuse_read(args, sandbox, token, workspace_root, entry, pattern, cache_state, index, geesefs_log_path=None):
     instance = None
     started = time.monotonic_ns()
     sample = {
@@ -999,6 +1418,7 @@ def run_workspace_fuse_read(args, sandbox, token, workspace_root, entry, pattern
         sample["workerPod"] = pod["name"]
         sample["workerNode"] = pod.get("nodeName", "")
         command = read_command(args, workspace_root, entry, pattern, args.random_seed + index)
+        log_since = now_rfc3339()
         exec_started = time.monotonic_ns()
         proc = worker_exec(args.namespace, pod["name"], command, timeout=int(args.exec_timeout_seconds) + 30)
         sample["execAcceptedMs"] = (time.monotonic_ns() - exec_started) / 1_000_000
@@ -1010,6 +1430,90 @@ def run_workspace_fuse_read(args, sandbox, token, workspace_root, entry, pattern
             raise RuntimeError(proc.stderr.strip() or proc.stdout.strip())
         payload = parse_json_output(proc.stdout)
         sample.update(read_result_fields(payload))
+        if geesefs_log_path:
+            sample["geesefsLogPath"] = geesefs_log_path
+            attach_read_path_diagnostics(args, sample, log_since, geesefs_log_path, entry["sha256"], pod["name"])
+        sample["ok"] = True
+        sample["status"] = "ok"
+        sample["totalMs"] = (time.monotonic_ns() - started) / 1_000_000
+    except Exception as exc:
+        sample["ok"] = False
+        sample["status"] = "failed"
+        sample["error"] = str(exc)
+    finally:
+        cleanup_sandbox(args, instance, sample)
+        sample.pop("_requestStartNs", None)
+        sample["finishedAt"] = now_rfc3339()
+    return sample
+
+
+def run_worker_dd_read(args, sandbox, token, workspace_root, geesefs_log_path, access_type, entry, index):
+    instance = None
+    started = time.monotonic_ns()
+    sample = {
+        "_requestStartNs": started,
+        "index": index,
+        "accessType": access_type,
+        "pattern": "sequential",
+        "cacheState": "dd",
+        "filePath": entry["path"],
+        "fileSizeBytes": entry["size"],
+        "workspaceFuseRoot": workspace_root,
+        "startedAt": now_rfc3339(),
+        "status": "running",
+    }
+    try:
+        instance = create_sample(args, sandbox, token, sample)
+        sample["acceptedMs"] = (time.monotonic_ns() - started) / 1_000_000
+        pod = find_worker_for_container(args, instance.container_id, workspace_root)
+        sample["workerPod"] = pod["name"]
+        sample["workerPodIP"] = pod.get("podIP", "")
+        sample["workerNode"] = pod.get("nodeName", "")
+        sample["geesefsLogPath"] = geesefs_log_path
+        path = str(Path(workspace_root) / entry["path"])
+        command = [
+            "python3",
+            "-c",
+            DD_READ_HARNESS,
+            "--path",
+            path,
+            "--expected-size",
+            str(entry["size"]),
+            "--block-size",
+            args.worker_dd_block_size,
+        ]
+        log_since = now_rfc3339()
+        exec_started = time.monotonic_ns()
+        proc = worker_exec(args.namespace, pod["name"], command, timeout=int(args.exec_timeout_seconds) + 30)
+        sample["execAcceptedMs"] = (time.monotonic_ns() - exec_started) / 1_000_000
+        sample["stdout"] = proc.stdout
+        sample["stderr"] = proc.stderr
+        sample["execExitCode"] = proc.returncode
+        sample["execCompleteMs"] = (time.monotonic_ns() - started) / 1_000_000
+        if proc.returncode != 0:
+            raise RuntimeError(proc.stderr.strip() or proc.stdout.strip())
+        payload = parse_json_output(proc.stdout)
+        sample["dd"] = payload
+        sample["readDurationMs"] = payload.get("durationMs")
+        sample["bytesRead"] = payload.get("bytes")
+        sample["mbps"] = payload.get("mbps")
+        sample["blockSize"] = payload.get("blockSize")
+        sample["directIO"] = payload.get("directIO")
+        if args.worker_dd_log_wait_seconds > 0:
+            time.sleep(args.worker_dd_log_wait_seconds)
+        logs = worker_logs_since(args.namespace, pod["name"], log_since, args.log_tail)
+        sample["cacheProofLogs"] = {
+            "ok": logs.get("ok"),
+            "sinceTime": log_since,
+            "lineCount": len(logs.get("lines") or []),
+            "error": logs.get("error"),
+        }
+        if logs.get("ok"):
+            sample["cacheProof"] = parse_worker_dd_cache_proof(
+                logs.get("lines") or [],
+                geesefs_log_path,
+                entry["sha256"],
+            )
         sample["ok"] = True
         sample["status"] = "ok"
         sample["totalMs"] = (time.monotonic_ns() - started) / 1_000_000
@@ -1047,6 +1551,7 @@ def summarize_samples(samples):
         return {"ok": False, "count": len(samples), "okCount": 0, "error": samples[0].get("error") if samples else ""}
     durations = [sample["readDurationMs"] for sample in ok]
     mbps = [sample["mbps"] for sample in ok]
+    file_read_mbps = [sample["fileReadMBps"] for sample in ok if sample.get("fileReadMBps") is not None]
     ops = [sample.get("opsPerSecond") or 0 for sample in ok]
     return {
         "ok": len(ok) == len(samples),
@@ -1056,6 +1561,8 @@ def summarize_samples(samples):
         "durationMsP95": percentile(durations, 95),
         "mbps": percentile(mbps, 50),
         "mbpsP95": percentile(mbps, 95),
+        "fileReadMBps": percentile(file_read_mbps, 50) if file_read_mbps else None,
+        "readTiming": ok[0].get("readTiming") or {},
         "bytesRead": ok[0].get("bytesRead"),
         "opsPerSecond": percentile(ops, 50),
         "digest": ok[0].get("digest"),
@@ -1165,6 +1672,252 @@ def cache_log_counters(namespace, since_time, log_tail):
     }
 
 
+def worker_logs_since(namespace, pod_name, since_time, log_tail):
+    target = [pod_name] if pod_name else ["-l", "run.beam.cloud/role=worker"]
+    proc = run(
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "logs",
+            *target,
+            "-c",
+            "worker",
+            "--since-time",
+            since_time,
+            "--tail",
+            str(log_tail),
+        ],
+        check=False,
+        timeout=30,
+    )
+    if proc.returncode != 0:
+        return {"ok": False, "error": proc.stderr.strip() or proc.stdout.strip(), "lines": []}
+    return {"ok": True, "lines": [strip_ansi(line) for line in proc.stdout.splitlines()]}
+
+
+def parse_geesefs_summary(line):
+    match = GEESEFS_SUMMARY_RE.search(line)
+    if match:
+        groups = match.groups()
+        return {
+            "handlerCount": int(groups[0]),
+            "handlerAvg": groups[1],
+            "callbackCount": int(groups[2]),
+            "callbackMiB": float(groups[3]),
+            "callbackAvg": groups[4],
+            "mmapPageAttempts": int(groups[5]),
+            "mmapPageHits": int(groups[6]),
+            "mmapPageMisses": int(groups[7]),
+            "mmapPageFailures": int(groups[8]),
+            "mmapPageMiB": float(groups[9]),
+            "readIntoAttempts": int(groups[10]),
+            "readIntoHits": int(groups[11]),
+            "readIntoMisses": int(groups[12]),
+            "readIntoMiB": float(groups[13]),
+            "streamAttempts": int(groups[14]),
+            "streamHits": int(groups[15]),
+            "streamMisses": int(groups[16]),
+            "streamMiB": float(groups[17]),
+            "unaryAttempts": int(groups[18]),
+            "unaryHits": int(groups[19]),
+            "unaryMisses": int(groups[20]),
+            "unaryMiB": float(groups[21]),
+            "cloudRequests": int(groups[22]),
+            "cloudMiB": float(groups[23]),
+        }
+    match = GEESEFS_SUMMARY_LEGACY_RE.search(line)
+    if not match:
+        return None
+    groups = match.groups()
+    return {
+        "mmapPageAttempts": int(groups[0]),
+        "mmapPageHits": int(groups[1]),
+        "mmapPageMisses": int(groups[2]),
+        "mmapPageFailures": int(groups[3]),
+        "mmapPageMiB": float(groups[4]),
+        "readIntoAttempts": int(groups[5]),
+        "readIntoHits": int(groups[6]),
+        "readIntoMisses": int(groups[7]),
+        "readIntoMiB": float(groups[8]),
+        "streamAttempts": int(groups[9]),
+        "streamHits": int(groups[10]),
+        "streamMisses": int(groups[11]),
+        "streamMiB": float(groups[12]),
+        "unaryAttempts": int(groups[13]),
+        "unaryHits": int(groups[14]),
+        "unaryMisses": int(groups[15]),
+        "unaryMiB": float(groups[16]),
+        "cloudRequests": int(groups[17]),
+        "cloudMiB": float(groups[18]),
+    }
+
+
+def parse_cache_summary(line):
+    match = CACHE_SUMMARY_RE.search(line)
+    if not match:
+        return None
+    groups = match.groups()
+    return {
+        "clientReadInto": int(groups[0]),
+        "clientReadIntoMiB": float(groups[1]),
+        "clientLocalHits": int(groups[2]),
+        "clientLocalMisses": int(groups[3]),
+        "clientRawHits": int(groups[4]),
+        "clientRawMisses": int(groups[5]),
+        "clientRawErrors": int(groups[6]),
+        "clientGRPCHits": int(groups[7]),
+        "clientGRPCMisses": int(groups[8]),
+        "clientGRPCErrors": int(groups[9]),
+        "localPageRegionRequests": int(groups[10]),
+        "localPageRegionHits": int(groups[11]),
+        "localPageRegionMisses": int(groups[12]),
+        "localPageRegionMiB": float(groups[13]),
+        "serverRawRequests": int(groups[14]),
+        "serverRawSendfileHits": int(groups[15]),
+        "serverRawCopyHits": int(groups[16]),
+        "serverRawReadAtHits": int(groups[17]),
+        "serverRawMisses": int(groups[18]),
+        "serverRawErrors": int(groups[19]),
+        "storePageRegions": int(groups[20]),
+        "storePageRegionHits": int(groups[21]),
+        "storePageRegionMisses": int(groups[22]),
+        "storePageRegionMiB": float(groups[23]),
+    }
+
+
+def add_summary_totals(total, summary):
+    for key, value in summary.items():
+        if isinstance(value, (int, float)):
+            total[key] = total.get(key, 0) + value
+        else:
+            total[key] = value
+
+
+def parse_worker_dd_cache_proof(lines, geesefs_log_path, content_hash):
+    proof = {
+        "ok": False,
+        "geesefsLogPath": geesefs_log_path,
+        "hash": content_hash,
+        "externalPageHitLines": 0,
+        "externalPageHitBytes": 0,
+        "externalPageMmapCacheHitLines": 0,
+        "externalPageLocalRegionHitLines": 0,
+        "externalPageMissLines": 0,
+        "contentCloudReadLines": 0,
+        "cacheLocalPageRegionLines": 0,
+        "fuseResponseLines": 0,
+        "fuseResponseBytes": 0,
+        "fuseHandlerMs": 0.0,
+        "fuseResponseMs": 0.0,
+        "fuseResponseMaxMs": 0.0,
+        "geesefsSummary": {},
+        "cacheSummary": {},
+        "matchedLines": [],
+    }
+    path_token = f'path="{geesefs_log_path}"'
+    hash_token = f'hash="{content_hash}"'
+    for line in lines:
+        exact = path_token in line and hash_token in line
+        content_path_seen = geesefs_log_path and geesefs_log_path in line
+        if content_path_seen and (
+            "s3.WARNING Error reading" in line
+            or "cloud read" in line.lower()
+            or "cloud(req=" in line
+        ):
+            proof["contentCloudReadLines"] += 1
+            if len(proof["matchedLines"]) < 20:
+                proof["matchedLines"].append(line[-900:])
+            continue
+        if "geesefs external page hit:" in line and exact:
+            proof["externalPageHitLines"] += 1
+            if "source=mmap_cache" in line:
+                proof["externalPageMmapCacheHitLines"] += 1
+            if "source=local_page_region" in line:
+                proof["externalPageLocalRegionHitLines"] += 1
+            size_match = LOG_SIZE_RE.search(line)
+            if size_match:
+                proof["externalPageHitBytes"] += int(size_match.group(1))
+            if len(proof["matchedLines"]) < 20:
+                proof["matchedLines"].append(line[-900:])
+            continue
+        if "geesefs external page miss:" in line and exact:
+            proof["externalPageMissLines"] += 1
+            if len(proof["matchedLines"]) < 20:
+                proof["matchedLines"].append(line[-900:])
+            continue
+        response_match = GEESEFS_READ_RESPONSE_RE.search(line)
+        if response_match and response_match.group(1) == geesefs_log_path and response_match.group(2) == content_hash:
+            bytes_read = int(response_match.group(5))
+            handler_ms = float(response_match.group(6))
+            response_ms = float(response_match.group(7))
+            proof["fuseResponseLines"] += 1
+            proof["fuseResponseBytes"] += bytes_read
+            proof["fuseHandlerMs"] += handler_ms
+            proof["fuseResponseMs"] += response_ms
+            proof["fuseResponseMaxMs"] = max(proof["fuseResponseMaxMs"], response_ms)
+            if len(proof["matchedLines"]) < 20:
+                proof["matchedLines"].append(line[-900:])
+            continue
+        if "cache local page regions result:" in line and content_hash in line:
+            proof["cacheLocalPageRegionLines"] += 1
+            if len(proof["matchedLines"]) < 20:
+                proof["matchedLines"].append(line[-900:])
+            continue
+        geesefs_summary = parse_geesefs_summary(line)
+        if geesefs_summary:
+            add_summary_totals(proof["geesefsSummary"], geesefs_summary)
+            continue
+        cache_summary = parse_cache_summary(line)
+        if cache_summary:
+            add_summary_totals(proof["cacheSummary"], cache_summary)
+
+    geesefs_summary = proof["geesefsSummary"]
+    cache_summary = proof["cacheSummary"]
+    exact_external_hit = proof["externalPageHitLines"] > 0 and proof["externalPageHitBytes"] > 0
+    summary_external_hit = (
+        geesefs_summary.get("mmapPageHits", 0) > 0
+        or geesefs_summary.get("readIntoHits", 0) > 0
+        or geesefs_summary.get("streamHits", 0) > 0
+        or geesefs_summary.get("unaryHits", 0) > 0
+    )
+    embedded_cache_hit = (
+        cache_summary.get("localPageRegionHits", 0) > 0
+        or cache_summary.get("clientLocalHits", 0) > 0
+        or cache_summary.get("clientRawHits", 0) > 0
+        or cache_summary.get("serverRawSendfileHits", 0) > 0
+    )
+    no_cloud_read = geesefs_summary.get("cloudRequests", 0) == 0
+    no_content_cloud_read = proof["contentCloudReadLines"] == 0
+    proof["noCloudReadInWindow"] = no_cloud_read
+    proof["noContentCloudRead"] = no_content_cloud_read
+    proof["ok"] = (
+        (exact_external_hit or summary_external_hit)
+        and (embedded_cache_hit or exact_external_hit)
+        and no_content_cloud_read
+    )
+    return proof
+
+
+def attach_read_path_diagnostics(args, sample, log_since, geesefs_log_path, content_hash, pod_name=None):
+    if args.read_path_log_wait_seconds > 0:
+        time.sleep(args.read_path_log_wait_seconds)
+    logs = worker_logs_since(args.namespace, pod_name, log_since, args.log_tail)
+    sample["readPathLogs"] = {
+        "ok": logs.get("ok"),
+        "sinceTime": log_since,
+        "lineCount": len(logs.get("lines") or []),
+        "error": logs.get("error"),
+        "pod": pod_name or "",
+    }
+    if logs.get("ok"):
+        sample["readPathProof"] = parse_worker_dd_cache_proof(
+            logs.get("lines") or [],
+            geesefs_log_path,
+            content_hash,
+        )
+
+
 def worker_shell(namespace, pod_name, script, timeout=20):
     return run(
         ["kubectl", "-n", namespace, "exec", pod_name, "-c", "worker", "--", "sh", "-c", script],
@@ -1175,9 +1928,12 @@ def worker_shell(namespace, pod_name, script, timeout=20):
 
 def cache_object_candidate_dirs(cache_mount_path, locality, pod, content_hash):
     node_name = pod.get("nodeName") or pod.get("hostIP") or ""
+    bucket = content_hash[:2] if content_hash and len(content_hash) >= 2 else "00"
     candidates = []
     if node_name:
+        candidates.append(str(Path(cache_mount_path) / locality / node_name / "pages" / bucket / content_hash))
         candidates.append(str(Path(cache_mount_path) / locality / node_name / content_hash))
+    candidates.append(str(Path(cache_mount_path) / "pages" / bucket / content_hash))
     candidates.append(str(Path(cache_mount_path) / content_hash))
     return candidates
 
@@ -1236,6 +1992,55 @@ def wait_cache_object_proof(args, content_hash):
         time.sleep(1)
 
 
+def cache_object_ready(namespace, cache_mount_path, locality, content_hash, expected_size):
+    if not content_hash:
+        return {"hash": content_hash, "ready": False, "exists": False, "error": "empty hash"}
+    for pod in worker_pods(namespace):
+        dirs = " ".join(shlex.quote(path) for path in cache_object_candidate_dirs(cache_mount_path, locality, pod, content_hash))
+        script = (
+            f"hash={shlex.quote(content_hash)}; expected={int(expected_size)}; "
+            "found=''; for candidate in "
+            f"{dirs}; do [ -d \"$candidate\" ] && found=\"$candidate\" && break; done; "
+            'if [ -z "$found" ]; then printf \'{"exists":false,"ready":false}\\n\'; exit 0; fi; '
+            "i=0; bytes=0; "
+            'while [ -f "$found/$hash-$i" ]; do '
+            'size=$(stat -c %s "$found/$hash-$i" 2>/dev/null || stat -f %z "$found/$hash-$i" 2>/dev/null || echo 0); '
+            'bytes=$((bytes + size)); i=$((i + 1)); '
+            "done; "
+            'ready=false; [ "$bytes" -eq "$expected" ] && ready=true; '
+            'printf \'{"exists":true,"ready":%s,"path":"%s","chunks":%s,"bytes":%s}\\n\' "$ready" "$found" "$i" "$bytes"'
+        )
+        proc = worker_shell(namespace, pod["name"], script, timeout=20)
+        if proc.returncode != 0:
+            continue
+        try:
+            ready = json.loads(proc.stdout.strip().splitlines()[-1])
+        except (json.JSONDecodeError, IndexError):
+            continue
+        ready.update({"hash": content_hash, "pod": pod["name"], "nodeName": pod.get("nodeName", "")})
+        if ready.get("ready"):
+            return ready
+    return {"hash": content_hash, "ready": False, "exists": False}
+
+
+def wait_cache_object_ready(args, content_hash, expected_size):
+    deadline = time.monotonic() + args.cache_proof_timeout_seconds
+    last = {"hash": content_hash, "ready": False, "exists": False}
+    while True:
+        last = cache_object_ready(
+            args.namespace,
+            args.cache_mount_path,
+            args.cache_locality,
+            content_hash,
+            expected_size,
+        )
+        if last.get("ready"):
+            return last
+        if time.monotonic() >= deadline:
+            return last
+        time.sleep(1)
+
+
 def delete_image_archive_cache_files(namespace, image_cache_path, image_id):
     if not image_id:
         return {"deleted": [], "errors": []}
@@ -1288,8 +2093,201 @@ def cache_hosts_snapshot(namespace, redis_pod, locality):
     for key in [line for line in raw_keys.splitlines() if line.strip()]:
         raw_members = redis_cli(namespace, redis_pod, "SMEMBERS", key) or ""
         for host_id in [line for line in raw_members.splitlines() if line.strip()]:
-            hosts.append({"locality": locality, "hostId": host_id})
+            host = {"locality": locality, "hostId": host_id}
+            raw_host = redis_cli(namespace, redis_pod, "GET", f"cache:host:keepalive:{locality}:{host_id}")
+            if raw_host:
+                try:
+                    keepalive = json.loads(raw_host)
+                    host.update(
+                        {
+                            "hostId": keepalive.get("host_id") or keepalive.get("hostId") or host_id,
+                            "addr": keepalive.get("addr") or keepalive.get("Addr") or "",
+                            "privateAddr": keepalive.get("private_addr") or keepalive.get("privateAddr") or "",
+                            "capacityUsagePct": keepalive.get("capacity_usage_pct")
+                            or keepalive.get("capacityUsagePct")
+                            or 0,
+                        }
+                    )
+                except json.JSONDecodeError:
+                    host["keepaliveRaw"] = raw_host[-300:]
+            hosts.append(host)
     return {"available": True, "hosts": hosts}
+
+
+def redis_hgetall_map(namespace, redis_pod, key):
+    raw = redis_cli(namespace, redis_pod, "HGETALL", key)
+    if raw is None:
+        return {}
+    lines = [line for line in raw.splitlines() if line != ""]
+    if len(lines) % 2 != 0:
+        return {}
+    return {lines[i]: lines[i + 1] for i in range(0, len(lines), 2)}
+
+
+def cachefs_node_id(path):
+    return hashlib.sha256(path.encode()).hexdigest()
+
+
+def image_archive_cachefs_proof(args, image_id):
+    if not image_id:
+        return {"exists": False, "error": "empty image id"}
+    redis_pod = find_redis_pod(args.namespace)
+    candidates = [f"/images/{image_id}.clip", f"/images/{image_id}.rclip"]
+    for cache_path in candidates:
+        node_id = cachefs_node_id(cache_path)
+        metadata = redis_hgetall_map(args.namespace, redis_pod, f"cache:fs:node:{node_id}")
+        content_hash = metadata.get("hash")
+        if not content_hash:
+            continue
+        cas_proof = cache_object_proof(args.namespace, args.cache_mount_path, args.cache_locality, content_hash)
+        return {
+            "exists": bool(metadata),
+            "cachePath": cache_path,
+            "nodeId": node_id,
+            "hash": content_hash,
+            "metadata": metadata,
+            "casProof": cas_proof,
+            "matchesHash": bool(cas_proof.get("matchesHash")),
+            "bytes": cas_proof.get("bytes"),
+        }
+    return {"exists": False, "imageId": image_id, "checkedPaths": candidates}
+
+
+def safe_cache_name(value):
+    value = re.sub(r"[^a-zA-Z0-9_.-]+", "-", value or "")
+    return value or "default"
+
+
+def cache_host_addr(host):
+    return host.get("privateAddr") or host.get("private_addr") or host.get("addr") or host.get("Addr") or ""
+
+
+def host_part(addr):
+    if not addr:
+        return ""
+    if addr.startswith("["):
+        return addr[1:].partition("]")[0]
+    return addr.rsplit(":", 1)[0]
+
+
+def choose_cache_host_for_proof(hosts_snapshot, cas_proof):
+    hosts = [host for host in hosts_snapshot.get("hosts", []) if cache_host_addr(host)]
+    if not hosts:
+        return None
+
+    node_name = cas_proof.get("nodeName") or ""
+    if node_name:
+        safe_node = safe_cache_name(node_name)
+        for host in hosts:
+            host_id = host.get("hostId") or host.get("host_id") or ""
+            if node_name in host_id or safe_node in host_id:
+                return host
+
+    proof_pod = cas_proof.get("pod") or ""
+    if proof_pod:
+        safe_pod = safe_cache_name(proof_pod)
+        for host in hosts:
+            host_id = host.get("hostId") or host.get("host_id") or ""
+            if proof_pod in host_id or safe_pod in host_id:
+                return host
+
+    return hosts[0]
+
+
+def target_worker_for_cache_host(namespace, target_host):
+    target_ip = host_part(cache_host_addr(target_host))
+    if not target_ip:
+        return None
+    for pod in worker_pods(namespace):
+        if pod.get("phase") == "Running" and pod.get("podIP") == target_ip:
+            return pod
+    return None
+
+
+def choose_worker_for_remote_proof(namespace, target_host):
+    pods = [pod for pod in worker_pods(namespace) if pod.get("phase") == "Running"]
+    if not pods:
+        return None, None
+
+    target_pod = target_worker_for_cache_host(namespace, target_host)
+    target_pod_name = (target_pod or {}).get("name", "")
+    target_pod_ip = (target_pod or {}).get("podIP", "")
+    for pod in pods:
+        if target_pod_name and pod["name"] == target_pod_name:
+            continue
+        if target_pod_ip and pod.get("podIP") == target_pod_ip:
+            continue
+        return pod, target_pod
+
+    return None, target_pod
+
+
+def remote_cache_read_proof(args, entry, cas_proof):
+    redis_pod = find_redis_pod(args.namespace)
+    hosts_snapshot = cache_hosts_snapshot(args.namespace, redis_pod, args.cache_locality)
+    target_host = choose_cache_host_for_proof(hosts_snapshot, cas_proof or {})
+    if target_host is None:
+        return {
+            "ok": False,
+            "error": "no cache host with an advertised address was available for raw remote proof",
+            "hosts": hosts_snapshot,
+        }
+
+    source_pod, target_pod = choose_worker_for_remote_proof(args.namespace, target_host)
+    if source_pod is None:
+        return {
+            "ok": False,
+            "error": "no separate running worker pod was available to execute cross-worker raw remote proof",
+            "targetHost": target_host,
+            "targetPod": target_pod,
+        }
+
+    addr = cache_host_addr(target_host)
+    timeout = int(max(args.exec_timeout_seconds, entry["size"] / (50 * 1024 * 1024) + 60))
+    command = [
+        "python3",
+        "-c",
+        REMOTE_RAW_READ_HARNESS,
+        "--addr",
+        addr,
+        "--hash",
+        entry["sha256"],
+        "--size",
+        str(entry["size"]),
+        "--expected-sha256",
+        entry["sha256"],
+        "--chunk-bytes",
+        str(args.remote_cache_proof_chunk_bytes),
+    ]
+    proc = worker_exec(args.namespace, source_pod["name"], command, timeout=timeout)
+    proof = {
+        "ok": False,
+        "sourcePod": source_pod["name"],
+        "sourcePodIP": source_pod.get("podIP", ""),
+        "sourceNode": source_pod.get("nodeName", ""),
+        "targetHost": target_host,
+        "targetPod": target_pod,
+        "targetAddr": addr,
+        "casProof": cas_proof,
+        "differentWorkerPod": bool(target_pod) and source_pod.get("name") != target_pod.get("name"),
+        "execExitCode": proc.returncode,
+        "stdout": proc.stdout[-2000:],
+        "stderr": proc.stderr[-2000:],
+    }
+    if proc.returncode != 0:
+        proof["error"] = proc.stderr.strip() or proc.stdout.strip() or f"raw proof exited {proc.returncode}"
+        return proof
+
+    try:
+        payload = parse_json_output(proc.stdout)
+    except Exception as exc:
+        proof["error"] = str(exc)
+        return proof
+
+    proof.update(payload)
+    proof["matchesHash"] = payload.get("sha256") == entry["sha256"]
+    proof["ok"] = bool(payload.get("ok")) and proof["matchesHash"]
+    return proof
 
 
 def manifest_entry(manifest, size_mb, access_type, pattern):
@@ -1305,6 +2303,16 @@ def manifest_entry(manifest, size_mb, access_type, pattern):
 
 def row_key(access_type, pattern, size_mb):
     return f"{access_type}:{pattern}:{size_mb}mib"
+
+
+def manifest_entries_for_access(args, manifest, access_type):
+    if args.file_specs:
+        return [entry for entry in manifest["files"] if entry.get("accessType") == access_type]
+    entries = []
+    for size_mb in args.sizes:
+        for pattern in args.pattern_list:
+            entries.append(manifest_entry(manifest, size_mb, access_type, pattern))
+    return entries
 
 
 def print_sample_header():
@@ -1330,57 +2338,85 @@ def run_matrix(args, sandbox, token, workspace, volume, manifest, access_types, 
         else:
             root = workspace_fuse_root(args, workspace, volume_id)
 
-        for size_mb in args.sizes:
-            for pattern in args.pattern_list:
-                entry = manifest_entry(manifest, size_mb, access_type, pattern)
+        for entry in manifest_entries_for_access(args, manifest, access_type):
+            size_mb = entry["sizeMiB"]
+            pattern = entry["pattern"]
 
-                cold = run_one(args, sandbox, token, workspace, access_type, root, entry, pattern, "cold", index)
-                index += 1
-                samples.append(cold)
-                print_sample(cold)
-                if args.settle_seconds > 0:
-                    time.sleep(args.settle_seconds)
+            geesefs_log_path = None
+            if access_type in {"volume_mount", "workspace_fuse"}:
+                geesefs_log_path = str(Path("volumes") / volume_id / args.volume_subdir / entry["path"])
 
-                hot_samples = []
-                for _ in range(args.iterations):
-                    if access_type == "image_archive":
-                        evidence["image"].setdefault("localArchiveEvictions", []).append(
-                            delete_image_archive_cache_files(
-                                args.namespace,
-                                args.image_cache_path,
-                                getattr(sandbox, "image_id", ""),
-                            )
+            cold = run_one(args, sandbox, token, workspace, access_type, root, entry, pattern, "cold", index, geesefs_log_path)
+            index += 1
+            samples.append(cold)
+            print_sample(cold)
+            if args.settle_seconds > 0:
+                time.sleep(args.settle_seconds)
+
+            pre_hot_cache_ready = None
+            if access_type in {"volume_mount", "workspace_fuse"}:
+                pre_hot_cache_ready = wait_cache_object_ready(args, entry["sha256"], entry["size"])
+
+            hot_samples = []
+            for _ in range(args.iterations):
+                if access_type == "image_archive":
+                    evidence["image"].setdefault("localArchiveEvictions", []).append(
+                        delete_image_archive_cache_files(
+                            args.namespace,
+                            args.image_cache_path,
+                            getattr(sandbox, "image_id", ""),
                         )
+                    )
 
-                    hot = run_one(args, sandbox, token, workspace, access_type, root, entry, pattern, "hot", index)
-                    index += 1
-                    hot_samples.append(hot)
-                    samples.append(hot)
-                    print_sample(hot)
+                hot = run_one(args, sandbox, token, workspace, access_type, root, entry, pattern, "hot", index, geesefs_log_path)
+                index += 1
+                hot_samples.append(hot)
+                samples.append(hot)
+                print_sample(hot)
 
-                row = {
-                    "key": row_key(access_type, pattern, size_mb),
-                    "accessType": access_type,
-                    "pattern": pattern,
-                    "fileSizeBytes": entry["size"],
-                    "fileSizeMiB": size_mb,
-                    "path": entry["path"],
-                    "expectedSha256": entry["sha256"],
-                    "cold": summarize_samples([cold]),
-                    "hot": summarize_samples(hot_samples),
-                    "samples": {"cold": [cold], "hot": hot_samples},
+            row = {
+                "key": row_key(access_type, pattern, size_mb),
+                "accessType": access_type,
+                "pattern": pattern,
+                "fileSizeBytes": entry["size"],
+                "fileSizeMiB": size_mb,
+                "path": entry["path"],
+                "expectedSha256": entry["sha256"],
+                "cold": summarize_samples([cold]),
+                "hot": summarize_samples(hot_samples),
+                "samples": {"cold": [cold], "hot": hot_samples},
+            }
+            if access_type in {"volume_mount", "workspace_fuse"}:
+                cas_proof = wait_cache_object_proof(args, entry["sha256"])
+                row["cacheEvidence"] = {
+                    "preHotReady": pre_hot_cache_ready,
+                    "casProof": cas_proof,
                 }
-                if access_type in {"volume_mount", "workspace_fuse"}:
-                    row["cacheEvidence"] = {"casProof": wait_cache_object_proof(args, entry["sha256"])}
-                rows.append(row)
+                if args.require_remote_cache_read:
+                    row["cacheEvidence"]["remoteRawRead"] = remote_cache_read_proof(args, entry, cas_proof)
+                if args.worker_dd_reads and pattern == "sequential":
+                    dd_sample = run_worker_dd_read(
+                        args,
+                        sandbox,
+                        token,
+                        workspace_fuse_root(args, workspace, volume_id),
+                        geesefs_log_path,
+                        access_type,
+                        entry,
+                        index,
+                    )
+                    index += 1
+                    print_sample(dd_sample)
+                    row["cacheEvidence"]["workerDDRead"] = dd_sample
+            rows.append(row)
 
     return rows, samples, evidence, index
 
 
-def run_one(args, sandbox, token, workspace, access_type, root, entry, pattern, cache_state, index):
+def run_one(args, sandbox, token, workspace, access_type, root, entry, pattern, cache_state, index, geesefs_log_path=None):
     if access_type == "workspace_fuse":
-        return run_workspace_fuse_read(args, sandbox, token, root, entry, pattern, cache_state, index)
-    return run_sandbox_read(args, sandbox, token, access_type, root, entry, pattern, cache_state, index)
+        return run_workspace_fuse_read(args, sandbox, token, root, entry, pattern, cache_state, index, geesefs_log_path)
+    return run_sandbox_read(args, sandbox, token, access_type, root, entry, pattern, cache_state, index, geesefs_log_path)
 
 
 def write_markdown_report(path, report):
@@ -1409,6 +2445,56 @@ def write_markdown_report(path, report):
             f"{num(cold.get('durationMs'))} | {num(hot.get('durationMs'))} | {num(speedup)} |"
         )
 
+    lines.extend(
+        [
+            "",
+            "## Hot Read Timing",
+            "",
+            "| Access | Pattern | Size | Total MB/s | File-read MB/s | Open ms | File-read ms | Verify ms |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in report["rows"]:
+        hot = row["hot"]
+        timing = hot.get("readTiming") or {}
+        lines.append(
+            "| "
+            f"{row['accessType']} | {row['pattern']} | {row['fileSizeMiB']} MiB | "
+            f"{num(hot.get('mbps'))} | {num(hot.get('fileReadMBps'))} | "
+            f"{num(timing.get('openMs'))} | {num(timing.get('fileReadMs'))} | {num(timing.get('verifyMs'))} |"
+        )
+
+    read_path_rows = []
+    for row in report["rows"]:
+        for sample in row.get("samples", {}).get("hot", []):
+            proof = sample.get("readPathProof")
+            if proof:
+                read_path_rows.append((row, sample, proof))
+    if read_path_rows:
+        lines.extend(
+            [
+                "",
+                "## Hot Read Path Proof",
+                "",
+                "| Access | Pattern | Size | Cache Proof | External Hits | External MiB | FUSE Responses | FUSE Response ms | FUSE Handler ms | Content Cloud Lines | Window Cloud Reads |",
+                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row, _, proof in read_path_rows:
+            geesefs_summary = proof.get("geesefsSummary") or {}
+            lines.append(
+                "| "
+                f"{row['accessType']} | {row['pattern']} | {row['fileSizeMiB']} MiB | "
+                f"{proof.get('ok', False)} | "
+                f"{proof.get('externalPageHitLines', 0)} | "
+                f"{num(proof.get('externalPageHitBytes', 0) / (1024 * 1024))} | "
+                f"{proof.get('fuseResponseLines', 0)} | "
+                f"{num(proof.get('fuseResponseMs'))} | "
+                f"{num(proof.get('fuseHandlerMs'))} | "
+                f"{proof.get('contentCloudReadLines', 0)} | "
+                f"{geesefs_summary.get('cloudRequests', 0)} |"
+            )
+
     counters = report["cacheEvidence"]["logs"].get("counters", {})
     lines.extend(["", "## Cache Counters", "", "| Counter | Count |", "| --- | ---: |"])
     for key in sorted(counters):
@@ -1421,6 +2507,57 @@ def write_markdown_report(path, report):
             lines.append(
                 f"| {name} | `{proof.get('hash', '')}` | {proof.get('exists', False)} | "
                 f"{proof.get('bytes', '')} | {proof.get('matchesHash', False)} |"
+            )
+
+    remote_proofs = []
+    for row in report["rows"]:
+        proof = row.get("cacheEvidence", {}).get("remoteRawRead")
+        if proof:
+            remote_proofs.append((row, proof))
+    if remote_proofs:
+        lines.extend(
+            [
+                "",
+                "## Remote Raw Read Proof",
+                "",
+                "| Access | Pattern | Size | Source Pod | Target Pod | Target | MB/s | Bytes | Match |",
+                "| --- | --- | ---: | --- | --- | --- | ---: | ---: | ---: |",
+            ]
+        )
+        for row, proof in remote_proofs:
+            target = proof.get("targetAddr") or cache_host_addr(proof.get("targetHost", {}))
+            lines.append(
+                "| "
+                f"{row['accessType']} | {row['pattern']} | {row['fileSizeMiB']} MiB | "
+                f"`{proof.get('sourcePod', '')}` | `{(proof.get('targetPod') or {}).get('name', '')}` | "
+                f"`{target}` | {num(proof.get('mbps'))} | "
+                f"{proof.get('bytes', '')} | {proof.get('matchesHash', False)} |"
+            )
+
+    dd_reads = []
+    for row in report["rows"]:
+        dd_read = row.get("cacheEvidence", {}).get("workerDDRead")
+        if dd_read:
+            dd_reads.append((row, dd_read))
+    if dd_reads:
+        lines.extend(
+            [
+                "",
+                "## Worker Pod DD Read",
+                "",
+                "| Access | Pattern | Size | Worker Pod | Direct | Block Size | MB/s | Bytes | Cache Proof | External Hit Lines | External Hit Bytes |",
+                "| --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row, dd_read in dd_reads:
+            cache_proof = dd_read.get("cacheProof") or {}
+            lines.append(
+                "| "
+                f"{row['accessType']} | {row['pattern']} | {row['fileSizeMiB']} MiB | "
+                f"`{dd_read.get('workerPod', '')}` | {dd_read.get('directIO', False)} | "
+                f"`{dd_read.get('blockSize', '')}` | {num(dd_read.get('mbps'))} | "
+                f"{dd_read.get('bytesRead', '')} | {cache_proof.get('ok', False)} | "
+                f"{cache_proof.get('externalPageHitLines', 0)} | {cache_proof.get('externalPageHitBytes', 0)} |"
             )
 
     output = Path(path)
@@ -1457,7 +2594,7 @@ def merge_evidence(target, source):
             target[key] = value
 
 
-def collect_known_hashes(args, rows, logs):
+def collect_known_hashes(args, rows, logs, image_id=""):
     known = {}
     for row in rows:
         if row["accessType"] in {"volume_mount", "workspace_fuse"}:
@@ -1480,6 +2617,8 @@ def collect_known_hashes(args, rows, logs):
                 image_hash,
             )
             break
+    if any(row["accessType"] == "image_archive" for row in rows) and "imageArchive" not in known:
+        known["imageArchive"] = image_archive_cachefs_proof(args, image_id)
     return known
 
 
@@ -1506,6 +2645,156 @@ def cache_proof_failures(rows, known_hashes):
         image_proof = known_hashes.get("imageArchive")
         if not image_proof or not image_proof.get("matchesHash"):
             failures.append(f"imageArchive missing matching CAS proof for {(image_proof or {}).get('hash')}")
+    return failures
+
+
+def sample_correctness_failures(args, samples):
+    failures = []
+    for sample in samples:
+        if not sample.get("ok"):
+            continue
+        if sample.get("accessType") == "volume_prepare":
+            continue
+
+        expected_size = sample.get("fileSizeBytes")
+        bytes_read = sample.get("bytesRead")
+        if expected_size is not None and bytes_read != expected_size:
+            failures.append(
+                f"{sample.get('accessType')}:{sample.get('pattern')}:{sample.get('cacheState')} "
+                f"read {bytes_read} bytes, expected {expected_size}"
+            )
+
+        duration_ms = sample.get("readDurationMs")
+        mbps = sample.get("mbps")
+        if bytes_read and duration_ms and mbps is not None:
+            expected_mbps = (bytes_read / (1024 * 1024)) / (duration_ms / 1000)
+            tolerance = max(0.01, expected_mbps * 0.005)
+            if abs(expected_mbps - mbps) > tolerance:
+                failures.append(
+                    f"{sample.get('accessType')}:{sample.get('pattern')}:{sample.get('cacheState')} "
+                    f"reported MB/s {mbps:.2f} did not match bytes/time {expected_mbps:.2f}"
+                )
+
+        if args.require_verified_reads:
+            digest = sample.get("digest")
+            expected_digest = sample.get("expectedSha256")
+            if not sample.get("verified"):
+                failures.append(
+                    f"{sample.get('accessType')}:{sample.get('pattern')}:{sample.get('cacheState')} "
+                    "did not run verified content reads"
+                )
+            elif sample.get("pattern") == "sequential" and (not digest or digest != expected_digest):
+                failures.append(
+                    f"{sample.get('accessType')}:{sample.get('pattern')}:{sample.get('cacheState')} "
+                    f"did not verify full-file digest: got={digest} want={expected_digest}"
+                )
+            elif sample.get("pattern") == "random" and not digest:
+                failures.append(
+                    f"{sample.get('accessType')}:{sample.get('pattern')}:{sample.get('cacheState')} "
+                    "did not report verified random-read trace digest"
+                )
+    return failures
+
+
+def throughput_failures(args, rows):
+    failures = []
+    if args.min_hot_mbps <= 0:
+        return failures
+    for row in rows:
+        hot_mbps = row.get("hot", {}).get("mbps")
+        if hot_mbps is None or hot_mbps < args.min_hot_mbps:
+            failures.append(
+                f"{row['key']} hot throughput {num(hot_mbps)} MB/s was below required "
+                f"{args.min_hot_mbps:.2f} MB/s"
+            )
+    return failures
+
+
+def remote_cache_read_failures(args, rows):
+    failures = []
+    if not args.require_remote_cache_read:
+        return failures
+    for row in rows:
+        if row["accessType"] not in {"volume_mount", "workspace_fuse"}:
+            continue
+        proof = row.get("cacheEvidence", {}).get("remoteRawRead")
+        if not proof:
+            failures.append(f"{row['key']} missing remote raw read proof")
+            continue
+        if not proof.get("ok") or not proof.get("matchesHash"):
+            failures.append(f"{row['key']} remote raw read proof failed: {proof.get('error') or proof}")
+            continue
+        if not proof.get("differentWorkerPod"):
+            failures.append(
+                f"{row['key']} remote raw read proof did not execute from a different worker pod: "
+                f"source={proof.get('sourcePod')} target={(proof.get('targetPod') or {}).get('name')}"
+            )
+            continue
+        if args.min_remote_cache_mbps > 0 and (proof.get("mbps") or 0) < args.min_remote_cache_mbps:
+            failures.append(
+                f"{row['key']} remote raw read throughput {num(proof.get('mbps'))} MB/s was below required "
+                f"{args.min_remote_cache_mbps:.2f} MB/s"
+            )
+    return failures
+
+
+def worker_dd_read_failures(args, rows):
+    failures = []
+    if not args.worker_dd_reads:
+        return failures
+    for row in rows:
+        if row["accessType"] not in {"volume_mount", "workspace_fuse"} or row["pattern"] != "sequential":
+            continue
+        dd_read = row.get("cacheEvidence", {}).get("workerDDRead")
+        if not dd_read:
+            failures.append(f"{row['key']} missing worker-pod dd read proof")
+            continue
+        if not dd_read.get("ok"):
+            failures.append(f"{row['key']} worker-pod dd read failed: {dd_read.get('error') or dd_read}")
+            continue
+        if dd_read.get("bytesRead") != row["fileSizeBytes"]:
+            failures.append(
+                f"{row['key']} worker-pod dd read {dd_read.get('bytesRead')} bytes, "
+                f"expected {row['fileSizeBytes']}"
+            )
+            continue
+        proof = dd_read.get("cacheProof")
+        if not proof:
+            failures.append(f"{row['key']} worker-pod dd read missing geesefs/cache proof")
+            continue
+        if not proof.get("ok"):
+            failures.append(
+                f"{row['key']} worker-pod dd did not prove geesefs -> embedded cache path: "
+                f"external_hits={proof.get('externalPageHitLines')} "
+                f"external_hit_bytes={proof.get('externalPageHitBytes')} "
+                f"geesefs_summary={proof.get('geesefsSummary')} cache_summary={proof.get('cacheSummary')} "
+                f"no_content_cloud={proof.get('noContentCloudRead')} "
+                f"window_cloud={proof.get('noCloudReadInWindow')}"
+            )
+    return failures
+
+
+def hot_read_path_failures(rows):
+    failures = []
+    for row in rows:
+        if row["accessType"] not in {"volume_mount", "workspace_fuse"}:
+            continue
+        for sample in row.get("samples", {}).get("hot", []):
+            proof = sample.get("readPathProof")
+            if not proof:
+                failures.append(f"{row['key']} hot read missing geesefs/cache path diagnostics")
+                continue
+            if not proof.get("ok"):
+                failures.append(
+                    f"{row['key']} hot read did not prove geesefs -> embedded cache path: "
+                    f"external_hits={proof.get('externalPageHitLines')} "
+                    f"external_hit_bytes={proof.get('externalPageHitBytes')} "
+                    f"fuse_responses={proof.get('fuseResponseLines')} "
+                    f"geesefs_summary={proof.get('geesefsSummary')} "
+                    f"cache_summary={proof.get('cacheSummary')} "
+                    f"no_content_cloud={proof.get('noContentCloudRead')} "
+                    f"window_cloud={proof.get('noCloudReadInWindow')}"
+                )
     return failures
 
 
@@ -1543,6 +2832,7 @@ def main():
 
     sandbox, volume, prepare_ms = prepare_sandbox_runtime(args)
     manifest = build_info["manifest"]
+    args.payload_manifest = manifest
     rows = []
     samples = []
     benchmark_evidence = {"image": {"imageId": getattr(sandbox, "image_id", "")}, "volume": {"volumeId": volume_external_id(volume)}}
@@ -1568,6 +2858,25 @@ def main():
             raise SystemExit(f"volume prepare failed: {prepare_sample.get('error')}")
         if prepare_sample["manifest"] != manifest:
             raise SystemExit("volume prepare manifest did not match generated image manifest")
+        if args.reset_workers_after_prepare:
+            log("Waiting for prepared storage files to appear in embedded cache")
+            for entry in manifest["files"]:
+                if entry.get("accessType") not in storage_access_types:
+                    continue
+                log(
+                    "Waiting for cache-ready storage file "
+                    f"{entry['path']} ({entry['sizeMiB']} MiB, hash={entry['sha256']})"
+                )
+                ready = wait_cache_object_ready(args, entry["sha256"], entry["size"])
+                if not ready.get("ready"):
+                    raise SystemExit(
+                        "prepared storage file did not become cache-ready before worker reset: "
+                        f"{entry['path']} hash={entry['sha256']} proof={ready}"
+                    )
+            log("Deleting worker jobs after volume prepare to clear geesefs/FUSE in-memory state")
+            delete_workers(args.namespace)
+            if args.settle_seconds > 0:
+                time.sleep(args.settle_seconds)
 
         batch_rows, batch_samples, batch_evidence, index = run_matrix(
             args, sandbox, token, workspace, volume, manifest, storage_access_types, index
@@ -1577,7 +2886,7 @@ def main():
         merge_evidence(benchmark_evidence, batch_evidence)
 
     logs = cache_log_counters(args.namespace, started_at, args.log_tail)
-    known_hashes = collect_known_hashes(args, rows, logs)
+    known_hashes = collect_known_hashes(args, rows, logs, getattr(sandbox, "image_id", ""))
     disk_after = cache_disk_stats(args.namespace, args.cache_mount_path)
     hosts_after = cache_hosts_snapshot(args.namespace, redis_pod, args.cache_locality)
     print_table(rows)
@@ -1595,8 +2904,22 @@ def main():
             "sizesMiB": args.sizes,
             "patterns": args.pattern_list,
             "accessTypes": args.access_type_list,
+            "filePlan": args.file_plan,
+            "fileCount": len(manifest["files"]),
             "iterations": args.iterations,
             "randomBlockBytes": args.random_block_bytes,
+            "verifyReads": args.verify_reads,
+            "requireVerifiedReads": args.require_verified_reads,
+            "requireRemoteCacheRead": args.require_remote_cache_read,
+            "remoteCacheProofChunkBytes": args.remote_cache_proof_chunk_bytes,
+            "workerDDReads": args.worker_dd_reads,
+            "workerDDBlockSize": args.worker_dd_block_size,
+            "workerDDLogWaitSeconds": args.worker_dd_log_wait_seconds,
+            "readPathLogWaitSeconds": args.read_path_log_wait_seconds,
+            "sandboxCpu": args.sandbox_cpu,
+            "sandboxMemory": args.sandbox_memory,
+            "minHotMbps": args.min_hot_mbps,
+            "minRemoteCacheMbps": args.min_remote_cache_mbps,
             "volumeName": args.volume_name,
             "volumeId": volume_external_id(volume),
             "volumeMountPath": args.volume_mount_path,
@@ -1640,6 +2963,21 @@ def main():
     proof_failures = cache_proof_failures(rows, known_hashes)
     if proof_failures:
         failures.append({"ok": False, "error": "; ".join(proof_failures)})
+    sample_failures = sample_correctness_failures(args, samples)
+    if sample_failures:
+        failures.append({"ok": False, "error": "; ".join(sample_failures)})
+    hot_throughput_failures = throughput_failures(args, rows)
+    if hot_throughput_failures:
+        failures.append({"ok": False, "error": "; ".join(hot_throughput_failures)})
+    remote_failures = remote_cache_read_failures(args, rows)
+    if remote_failures:
+        failures.append({"ok": False, "error": "; ".join(remote_failures)})
+    path_failures = hot_read_path_failures(rows)
+    if path_failures:
+        failures.append({"ok": False, "error": "; ".join(path_failures)})
+    dd_failures = worker_dd_read_failures(args, rows)
+    if dd_failures:
+        failures.append({"ok": False, "error": "; ".join(dd_failures)})
     if failures:
         raise SystemExit(f"{len(failures)} cache benchmark run(s) failed")
 
