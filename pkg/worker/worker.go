@@ -20,6 +20,7 @@ import (
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/runtime"
+	"github.com/beam-cloud/beta9/pkg/types/trace"
 	pb "github.com/beam-cloud/beta9/proto"
 
 	"github.com/beam-cloud/beta9/pkg/storage"
@@ -77,6 +78,7 @@ type Worker struct {
 	workerRepoClient        pb.WorkerRepositoryServiceClient
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	backendRepoClient       pb.BackendRepositoryServiceClient
+	traceRepoClient         pb.TraceRepositoryServiceClient
 	eventRepo               repo.EventRepository
 	storageManager          *WorkspaceStorageManager
 	userDataStorage         storage.Storage
@@ -220,6 +222,11 @@ func NewWorker() (*Worker, error) {
 	}
 
 	backendRepoClient, err := NewBackendRepositoryClient(context.TODO(), config, workerToken)
+	if err != nil {
+		return nil, err
+	}
+
+	traceRepoClient, err := NewTraceRepositoryClient(context.TODO(), config, workerToken)
 	if err != nil {
 		return nil, err
 	}
@@ -376,11 +383,14 @@ func NewWorker() (*Worker, error) {
 		containerWg:             sync.WaitGroup{},
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
+			traceRepoClient:    traceRepoClient,
+			workerID:           workerId,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
 		containerRepoClient: containerRepoClient,
 		workerRepoClient:    workerRepoClient,
 		backendRepoClient:   backendRepoClient,
+		traceRepoClient:     traceRepoClient,
 		eventRepo:           eventRepo,
 		completedRequests:   make(chan *types.ContainerRequest, 1000),
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
@@ -686,6 +696,15 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 	if err != nil {
 		notFoundErr := &types.ErrContainerStateNotFound{}
 		if notFoundErr.From(err) {
+			instance.StopReason = types.StopContainerReasonUnknown
+			s.containerInstances.Set(request.ContainerId, instance)
+			s.recordTraceEvent(context.Background(), request, trace.Event{
+				ID:          trace.EventWorkerOrphanStateMissing,
+				ContainerID: request.ContainerId,
+				Reason:      string(types.StopContainerReasonUnknown),
+				Source:      "worker.status_heartbeat",
+				Message:     "container state was missing during worker heartbeat",
+			})
 			s.stopContainerChan <- stopContainerEvent{ContainerId: request.ContainerId, Kill: true}
 			return true, nil
 		}
@@ -709,6 +728,15 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 				Str("container_id", request.ContainerId).
 				Int("pid", instance.RuntimePid).
 				Msg("reconciling pending container to running from runtime start signal")
+			s.recordTraceEvent(context.Background(), request, trace.Event{
+				ID:          trace.EventWorkerPendingReconciled,
+				ContainerID: request.ContainerId,
+				Source:      "worker.status_heartbeat",
+				Message:     "pending state reconciled to running after runtime start",
+				Attrs: map[string]string{
+					"runtime_pid": fmt.Sprintf("%d", instance.RuntimePid),
+				},
+			})
 			state.Status = string(types.ContainerStatusRunning)
 		} else {
 			expirySeconds = int64(types.ContainerStateTtlSWhilePending)
@@ -736,6 +764,16 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 			}
 
 			log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
+			s.recordTraceEvent(context.Background(), request, trace.Event{
+				ID:          trace.EventWorkerStoppingGraceKill,
+				ContainerID: request.ContainerId,
+				Reason:      string(instance.StopReason),
+				Source:      "worker.status_heartbeat",
+				Message:     "container exceeded stopping grace period and will be force killed",
+				Attrs: map[string]string{
+					"grace_period_seconds": fmt.Sprintf("%d", s.config.Worker.TerminationGracePeriod),
+				},
+			})
 			s.stopContainerChan <- stopContainerEvent{
 				ContainerId: request.ContainerId,
 				Kill:        true,

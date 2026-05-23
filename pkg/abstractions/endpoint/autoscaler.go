@@ -1,10 +1,13 @@
 package endpoint
 
 import (
+	"context"
+	"fmt"
 	"math"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/types/trace"
 )
 
 type endpointAutoscalerSample struct {
@@ -85,10 +88,39 @@ func endpointServeScaleFunc(i *endpointInstance, sample *endpointAutoscalerSampl
 
 	if exists == 0 {
 		desiredContainers = 0
+		recordEndpointScaleDecision(i, sample, desiredContainers, "SERVE_LOCK_MISSING")
 	}
 
 	return &abstractions.AutoscalerResult{
 		DesiredContainers: desiredContainers,
 		ResultValid:       true,
+	}
+}
+
+func recordEndpointScaleDecision(i *endpointInstance, sample *endpointAutoscalerSample, desiredContainers int, reason string) {
+	containers, err := i.ContainerRepo.GetActiveContainersByStubId(i.Stub.ExternalId)
+	if err != nil {
+		return
+	}
+
+	for _, container := range containers {
+		if i.TraceRepo == nil {
+			continue
+		}
+		_ = i.TraceRepo.RecordEvent(context.Background(), trace.Event{
+			ID:          trace.EventAutoscalerScaleDecision,
+			ContainerID: container.ContainerId,
+			StubID:      container.StubId,
+			StubType:    string(i.Stub.Type.Kind()),
+			WorkspaceID: container.WorkspaceId,
+			Reason:      reason,
+			Source:      "endpoint.autoscaler",
+			Message:     "endpoint autoscaler selected desired container count",
+			Attrs: map[string]string{
+				"desired_containers": fmt.Sprintf("%d", desiredContainers),
+				"current_containers": fmt.Sprintf("%d", sample.CurrentContainers),
+				"total_requests":     fmt.Sprintf("%d", sample.TotalRequests),
+			},
+		})
 	}
 }

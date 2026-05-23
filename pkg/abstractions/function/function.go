@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
@@ -16,6 +17,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/scheduler"
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/trace"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -48,6 +50,7 @@ type ContainerFunctionService struct {
 	workspaceRepo    repository.WorkspaceRepository
 	taskRepo         repository.TaskRepository
 	containerRepo    repository.ContainerRepository
+	traceRepo        repository.TraceRepository
 	eventRepo        repository.EventRepository
 	usageMetricsRepo repository.UsageMetricsRepository
 	scheduler        *scheduler.Scheduler
@@ -65,6 +68,7 @@ type FunctionServiceOpts struct {
 	WorkspaceRepo    repository.WorkspaceRepository
 	TaskRepo         repository.TaskRepository
 	ContainerRepo    repository.ContainerRepository
+	TraceRepo        repository.TraceRepository
 	Scheduler        *scheduler.Scheduler
 	Tailscale        *network.Tailscale
 	RouteGroup       *echo.Group
@@ -88,6 +92,7 @@ func NewContainerFunctionService(ctx context.Context,
 		workspaceRepo:    opts.WorkspaceRepo,
 		taskRepo:         opts.TaskRepo,
 		containerRepo:    opts.ContainerRepo,
+		traceRepo:        opts.TraceRepo,
 		scheduler:        opts.Scheduler,
 		tailscale:        opts.Tailscale,
 		rdb:              opts.RedisClient,
@@ -170,6 +175,9 @@ func (fs *ContainerFunctionService) functionTaskFactory(ctx context.Context, msg
 func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.FunctionService_FunctionInvokeServer, authInfo *auth.AuthInfo, task types.TaskInterface, stubId string, headless bool) error {
 	taskId := task.Metadata().TaskId
 	containerId := task.Metadata().ContainerId
+	clientCtx := ctx
+	streamDone := make(chan struct{})
+	completionObserved := atomic.Bool{}
 
 	sendCallback := func(o common.OutputMsg) error {
 		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Output: o.Msg, Done: o.Done}); err != nil {
@@ -180,10 +188,35 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 	}
 
 	exitCallback := func(exitCode int32) error {
+		completionObserved.Store(true)
+		resultLoadStart := time.Now()
 		result, _ := fs.rdb.Get(stream.Context(), Keys.FunctionResult(authInfo.Workspace.Name, taskId)).Bytes()
+		fs.recordFunctionTraceEvent(trace.EventResultLoadedByGateway, authInfo, task, "function result loaded by gateway", map[string]string{
+			"exit_code": fmt.Sprintf("%d", exitCode),
+			"bytes":     fmt.Sprintf("%d", len(result)),
+		})
 		if err := stream.Send(&pb.FunctionInvokeResponse{TaskId: taskId, Done: true, Result: result, ExitCode: int32(exitCode)}); err != nil {
 			return err
 		}
+		success := true
+		if fs.traceRepo != nil {
+			_ = fs.traceRepo.RecordSpan(context.Background(), trace.Span{
+				ID:          trace.SpanResultDelivery,
+				StartTime:   resultLoadStart.UTC(),
+				EndTime:     time.Now().UTC(),
+				DurationMs:  time.Since(resultLoadStart).Milliseconds(),
+				ContainerID: containerId,
+				StubID:      stubId,
+				StubType:    string(types.StubTypeFunction),
+				TaskID:      taskId,
+				WorkspaceID: authInfo.Workspace.ExternalId,
+				Success:     &success,
+			})
+		}
+		fs.recordFunctionTraceEvent(trace.EventResultSentToClient, authInfo, task, "function result sent to client", map[string]string{
+			"exit_code": fmt.Sprintf("%d", exitCode),
+			"bytes":     fmt.Sprintf("%d", len(result)),
+		})
 		return nil
 	}
 
@@ -204,28 +237,41 @@ func (fs *ContainerFunctionService) stream(ctx context.Context, stream pb.Functi
 			return
 		}
 
-		<-ctx.Done() // Wait for the stream to be closed to cancel the task
-
-		err = task.Cancel(context.Background(), types.TaskRequestCancelled)
-		if err != nil {
-			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error cancelling task")
+		select {
+		case <-streamDone:
+			return
+		case <-clientCtx.Done():
 		}
 
-		err = fs.taskDispatcher.Complete(context.Background(), authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId)
-		if err != nil {
+		if completionObserved.Load() {
+			return
+		}
+
+		fs.recordFunctionTraceEvent(trace.EventTaskCancelRequested, authInfo, task, "function stream client disconnected before completion", map[string]string{
+			"cause": "client_context_done",
+		})
+		if err := task.Cancel(context.Background(), types.TaskRequestCancelled); err != nil {
+			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error cancelling task")
+		} else {
+			fs.recordFunctionTraceEvent(trace.EventTaskCancelApplied, authInfo, task, "function stream cancellation applied", map[string]string{
+				"reason": string(types.TaskRequestCancelled),
+			})
+		}
+
+		if err := fs.taskDispatcher.Complete(context.Background(), authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId); err != nil {
 			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error completing task")
 		}
 
-		err = fs.rdb.Publish(context.Background(), common.RedisKeys.TaskCancel(authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId), task.Message().TaskId).Err()
-		if err != nil {
+		if err := fs.rdb.Publish(context.Background(), common.RedisKeys.TaskCancel(authInfo.Workspace.Name, task.Message().StubId, task.Message().TaskId), task.Message().TaskId).Err(); err != nil {
 			log.Error().Err(err).Str("task_id", task.Message().TaskId).Str("stub_id", task.Message().StubId).Str("workspace_id", authInfo.Workspace.ExternalId).Msg("error publishing task cancel event")
 		}
 	}()
 
 	ctx, cancel := common.MergeContexts(fs.ctx, ctx)
-	defer cancel()
-
-	return containerStream.Stream(ctx, authInfo, containerId)
+	err = containerStream.Stream(ctx, authInfo, containerId)
+	close(streamDone)
+	cancel()
+	return err
 }
 
 func (fs *ContainerFunctionService) FunctionGetArgs(ctx context.Context, in *pb.FunctionGetArgsRequest) (*pb.FunctionGetArgsResponse, error) {
@@ -282,10 +328,55 @@ func (fs *ContainerFunctionService) FunctionSetResult(ctx context.Context, in *p
 	if err := phaseMetrics.Mark(ctx, authInfo.Workspace.Name, in.TaskId, task.FunctionPhaseSetResult, now); err != nil {
 		log.Debug().Err(err).Str("task_id", in.TaskId).Msg("failed to mark function set_result phase")
 	}
+	if fs.traceRepo != nil {
+		if taskWithRelated, err := fs.backendRepo.GetTaskWithRelated(ctx, in.TaskId); err == nil && taskWithRelated != nil {
+			_ = fs.traceRepo.RecordEvent(ctx, trace.Event{
+				ID:          trace.EventResultSetResult,
+				ContainerID: taskWithRelated.ContainerId,
+				StubID:      taskWithRelated.Stub.ExternalId,
+				StubType:    string(taskWithRelated.Stub.Type.Kind()),
+				TaskID:      taskWithRelated.ExternalId,
+				WorkspaceID: taskWithRelated.Workspace.ExternalId,
+				Source:      "gateway.function_set_result",
+				Message:     "function result stored in redis",
+				Attrs: map[string]string{
+					"bytes": fmt.Sprintf("%d", len(in.Result)),
+				},
+			})
+		}
+	}
 
 	return &pb.FunctionSetResultResponse{
 		Ok: true,
 	}, nil
+}
+
+func (fs *ContainerFunctionService) recordFunctionTraceEvent(eventID trace.EventID, authInfo *auth.AuthInfo, task types.TaskInterface, message string, attrs map[string]string) {
+	if task == nil || authInfo == nil || authInfo.Workspace == nil {
+		return
+	}
+
+	metadata := task.Metadata()
+	if metadata.ContainerId == "" {
+		return
+	}
+
+	if fs.traceRepo == nil {
+		return
+	}
+	if err := fs.traceRepo.RecordEvent(context.Background(), trace.Event{
+		ID:          eventID,
+		ContainerID: metadata.ContainerId,
+		StubID:      metadata.StubId,
+		StubType:    string(types.StubTypeFunction),
+		TaskID:      metadata.TaskId,
+		WorkspaceID: authInfo.Workspace.ExternalId,
+		Source:      "gateway.function_stream",
+		Message:     message,
+		Attrs:       attrs,
+	}); err != nil {
+		log.Debug().Err(err).Str("container_id", metadata.ContainerId).Str("event_id", string(eventID)).Msg("failed to record function startup trace event")
+	}
 }
 
 func (fs *ContainerFunctionService) FunctionMonitor(req *pb.FunctionMonitorRequest, stream pb.FunctionService_FunctionMonitorServer) error {

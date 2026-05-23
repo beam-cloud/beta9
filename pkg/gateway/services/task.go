@@ -13,6 +13,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/metrics"
 	taskmetrics "github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/trace"
 	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -105,7 +106,8 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 		return &pb.EndTaskResponse{Ok: false}, nil
 	}
 
-	if task.Status.IsCompleted() {
+	requestedStatus := types.TaskStatus(in.TaskStatus)
+	if task.Status.IsCompleted() && !(requestedStatus == types.TaskStatusComplete && task.Status != types.TaskStatusComplete) {
 		return &pb.EndTaskResponse{
 			Ok: true,
 		}, nil
@@ -113,7 +115,7 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 
 	endedAt := time.Now()
 	task.EndedAt = types.NullTime{Time: endedAt, Valid: true}
-	task.Status = types.TaskStatus(in.TaskStatus)
+	task.Status = requestedStatus
 
 	if in.ContainerId != "" {
 		task.ContainerId = in.ContainerId
@@ -164,6 +166,21 @@ func (gws *GatewayService) EndTask(ctx context.Context, in *pb.EndTaskRequest) (
 	}
 
 	_, err = gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task)
+	if err == nil && task.ContainerId != "" && gws.traceRepo != nil {
+		_ = gws.traceRepo.RecordEvent(ctx, trace.Event{
+			ID:          trace.EventResultEndTask,
+			ContainerID: task.ContainerId,
+			StubID:      task.Stub.ExternalId,
+			StubType:    string(task.Stub.Type.Kind()),
+			TaskID:      task.ExternalId,
+			WorkspaceID: task.Workspace.ExternalId,
+			Source:      "gateway.end_task",
+			Message:     "task end state persisted",
+			Attrs: map[string]string{
+				"status": string(task.Status),
+			},
+		})
+	}
 	return &pb.EndTaskResponse{
 		Ok: err == nil,
 	}, nil
@@ -318,6 +335,7 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 		return nil
 	}
 
+	gws.recordTaskCancelTrace(ctx, task, trace.EventTaskCancelRequested, "gateway task stop requested")
 	err := gws.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
 	if err != nil {
 		return errors.New("failed to complete task")
@@ -333,6 +351,24 @@ func (gws *GatewayService) stopTask(ctx context.Context, authInfo *auth.AuthInfo
 	if _, err := gws.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 		return errors.New("failed to update task")
 	}
+	gws.recordTaskCancelTrace(ctx, task, trace.EventTaskCancelApplied, "gateway task cancellation applied")
 
 	return nil
+}
+
+func (gws *GatewayService) recordTaskCancelTrace(ctx context.Context, task *types.TaskWithRelated, eventID trace.EventID, message string) {
+	if gws.traceRepo == nil || task == nil || task.ContainerId == "" {
+		return
+	}
+	_ = gws.traceRepo.RecordEvent(ctx, trace.Event{
+		ID:          eventID,
+		ContainerID: task.ContainerId,
+		StubID:      task.Stub.ExternalId,
+		StubType:    string(task.Stub.Type.Kind()),
+		TaskID:      task.ExternalId,
+		WorkspaceID: task.Workspace.ExternalId,
+		Reason:      string(types.StopContainerReasonUser),
+		Source:      "gateway.stop_task",
+		Message:     message,
+	})
 }

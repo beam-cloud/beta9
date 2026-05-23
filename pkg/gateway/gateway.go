@@ -68,6 +68,7 @@ type Gateway struct {
 	BackendRepo          repository.BackendRepository
 	ProviderRepo         repository.ProviderRepository
 	WorkerPoolRepo       repository.WorkerPoolRepository
+	TraceRepo            repository.TraceRepository
 	EventRepo            repository.EventRepository
 	UsageMetricsRepo     repository.UsageMetricsRepository
 	Tailscale            *network.Tailscale
@@ -149,6 +150,7 @@ func NewGateway() (*Gateway, error) {
 	providerRepo := repository.NewProviderRedisRepository(redisClient)
 	workerRepo := repository.NewWorkerRedisRepository(redisClient, config.Worker)
 	workerPoolRepo := repository.NewWorkerPoolRedisRepository(redisClient)
+	traceRepo := repository.NewTraceRedisRepository(redisClient)
 	taskRepo := repository.NewTaskRedisRepository(redisClient)
 	taskDispatcher, err := task.NewDispatcher(ctx, taskRepo)
 	if err != nil {
@@ -162,6 +164,7 @@ func NewGateway() (*Gateway, error) {
 	gateway.ContainerRepo = containerRepo
 	gateway.ProviderRepo = providerRepo
 	gateway.WorkerPoolRepo = workerPoolRepo
+	gateway.TraceRepo = traceRepo
 	gateway.BackendRepo = backendRepo
 	gateway.Tailscale = tailscale
 	gateway.TaskDispatcher = taskDispatcher
@@ -230,7 +233,7 @@ func (g *Gateway) initHttp() error {
 	apiv1.NewMachineGroup(g.baseRouteGroup.Group("/machine", authMiddleware), g.ProviderRepo, g.Tailscale, g.Config, g.workerRepo)
 	apiv1.NewWorkspaceGroup(g.baseRouteGroup.Group("/workspace", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.DefaultStorageClient, g.Config)
 	apiv1.NewTokenGroup(g.baseRouteGroup.Group("/token", authMiddleware), g.BackendRepo, g.WorkspaceRepo, g.Config)
-	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.BackendRepo, g.TaskDispatcher, g.Scheduler, g.Config)
+	apiv1.NewTaskGroup(g.baseRouteGroup.Group("/task", authMiddleware), g.RedisClient, g.TaskRepo, g.ContainerRepo, g.TraceRepo, g.BackendRepo, g.TaskDispatcher, g.Scheduler, g.Config)
 	apiv1.NewContainerGroup(g.baseRouteGroup.Group("/container", authMiddleware), g.BackendRepo, g.ContainerRepo, *g.Scheduler, g.Config)
 	apiv1.NewStubGroup(g.baseRouteGroup.Group("/stub", authMiddleware), g.BackendRepo, g.EventRepo, g.Config)
 	apiv1.NewConcurrencyLimitGroup(g.baseRouteGroup.Group("/concurrency-limit", authMiddleware), g.BackendRepo, g.WorkspaceRepo)
@@ -293,6 +296,9 @@ func (g *Gateway) registerRepositoryServices() error {
 	cr := repositoryservices.NewContainerRepositoryService(g.ctx, g.ContainerRepo)
 	pb.RegisterContainerRepositoryServiceServer(g.grpcServer, cr)
 
+	tr := repositoryservices.NewTraceRepositoryService(g.ctx, g.TraceRepo)
+	pb.RegisterTraceRepositoryServiceServer(g.grpcServer, tr)
+
 	br := repositoryservices.NewBackendRepositoryService(g.ctx, g.BackendRepo)
 	pb.RegisterBackendRepositoryServiceServer(g.grpcServer, br)
 
@@ -347,6 +353,7 @@ func (g *Gateway) registerServices() error {
 		TaskDispatcher:   g.TaskDispatcher,
 		EventRepo:        g.EventRepo,
 		UsageMetricsRepo: g.UsageMetricsRepo,
+		TraceRepo:        g.TraceRepo,
 	})
 	if err != nil {
 		return err
@@ -377,6 +384,7 @@ func (g *Gateway) registerServices() error {
 	ws, err := endpoint.NewHTTPEndpointService(g.ctx, endpoint.EndpointServiceOpts{
 		Config:           g.Config,
 		ContainerRepo:    g.ContainerRepo,
+		TraceRepo:        g.TraceRepo,
 		BackendRepo:      g.BackendRepo,
 		WorkspaceRepo:    g.WorkspaceRepo,
 		TaskRepo:         g.TaskRepo,
@@ -496,6 +504,7 @@ func (g *Gateway) registerServices() error {
 		EventRepo:        g.EventRepo,
 		WorkerRepo:       g.workerRepo,
 		WorkerPoolRepo:   g.WorkerPoolRepo,
+		TraceRepo:        g.TraceRepo,
 		UsageMetricsRepo: g.UsageMetricsRepo,
 		Tailscale:        g.Tailscale,
 	})

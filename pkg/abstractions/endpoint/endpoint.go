@@ -41,6 +41,7 @@ type HttpEndpointService struct {
 	backendRepo       repository.BackendRepository
 	workspaceRepo     repository.WorkspaceRepository
 	containerRepo     repository.ContainerRepository
+	traceRepo         repository.TraceRepository
 	eventRepo         repository.EventRepository
 	usageMetricsRepo  repository.UsageMetricsRepository
 	taskRepo          repository.TaskRepository
@@ -69,6 +70,7 @@ type EndpointServiceOpts struct {
 	WorkspaceRepo    repository.WorkspaceRepository
 	TaskRepo         repository.TaskRepository
 	ContainerRepo    repository.ContainerRepository
+	TraceRepo        repository.TraceRepository
 	Scheduler        *scheduler.Scheduler
 	RouteGroup       *echo.Group
 	Tailscale        *network.Tailscale
@@ -96,6 +98,7 @@ func NewHTTPEndpointService(
 		backendRepo:       opts.BackendRepo,
 		workspaceRepo:     opts.WorkspaceRepo,
 		containerRepo:     opts.ContainerRepo,
+		traceRepo:         opts.TraceRepo,
 		taskRepo:          opts.TaskRepo,
 		endpointInstances: common.NewSafeMap[*endpointInstance](),
 		tailscale:         opts.Tailscale,
@@ -259,6 +262,7 @@ func (es *HttpEndpointService) getOrCreateEndpointInstance(ctx context.Context, 
 		BackendRepo:         es.backendRepo,
 		EventRepo:           es.eventRepo,
 		TaskRepo:            es.taskRepo,
+		TraceRepo:           es.traceRepo,
 		UsageMetricsRepo:    es.usageMetricsRepo,
 		InstanceLockKey:     Keys.endpointInstanceLock(stub.Workspace.Name, stubId),
 		StartContainersFunc: instance.startContainers,

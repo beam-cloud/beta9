@@ -96,6 +96,14 @@ var (
 	imageBuildContainerTTL string = "image:build_container_ttl:%s"
 )
 
+var (
+	traceContainerMeta      string = "trace:container:{%s}:meta"
+	traceContainerSpans     string = "trace:container:{%s}:spans"
+	traceContainerEvents    string = "trace:container:{%s}:events"
+	traceContainerLogs      string = "trace:container:{%s}:logs"
+	traceTaskContainerIndex string = "trace:task:%s:container"
+)
+
 var RedisKeys = &redisKeys{}
 
 type redisKeys struct{}
@@ -350,4 +358,25 @@ func (rk *redisKeys) ContainerName(prefix string, stubId string, containerId str
 
 func (rk *redisKeys) ImageBuildContainerTTL(containerId string) string {
 	return fmt.Sprintf(imageBuildContainerTTL, containerId)
+}
+
+// Trace keys
+func (rk *redisKeys) TraceContainerMeta(containerId string) string {
+	return fmt.Sprintf(traceContainerMeta, containerId)
+}
+
+func (rk *redisKeys) TraceContainerSpans(containerId string) string {
+	return fmt.Sprintf(traceContainerSpans, containerId)
+}
+
+func (rk *redisKeys) TraceContainerEvents(containerId string) string {
+	return fmt.Sprintf(traceContainerEvents, containerId)
+}
+
+func (rk *redisKeys) TraceContainerLogs(containerId string) string {
+	return fmt.Sprintf(traceContainerLogs, containerId)
+}
+
+func (rk *redisKeys) TraceTaskContainerIndex(taskId string) string {
+	return fmt.Sprintf(traceTaskContainerIndex, taskId)
 }

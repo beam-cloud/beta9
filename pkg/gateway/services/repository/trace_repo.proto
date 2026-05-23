@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+option go_package = "github.com/beam-cloud/beta9/proto";
+
+import "google/protobuf/timestamp.proto";
+
+service TraceRepositoryService {
+  rpc RecordTraceEvent(RecordTraceEventRequest)
+      returns (RecordTraceEventResponse);
+  rpc RecordTraceSpan(RecordTraceSpanRequest) returns (RecordTraceSpanResponse);
+  rpc RecordTraceLog(RecordTraceLogRequest) returns (RecordTraceLogResponse);
+}
+
+message TraceEvent {
+  string id = 1;
+  string domain = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  string container_id = 4;
+  string stub_id = 5;
+  string stub_type = 6;
+  string task_id = 7;
+  string workspace_id = 8;
+  string worker_id = 9;
+  string reason = 10;
+  string source = 11;
+  string message = 12;
+  map<string, string> attrs = 13;
+}
+
+message TraceSpan {
+  string id = 1;
+  string domain = 2;
+  string parent_id = 3;
+  google.protobuf.Timestamp start_time = 4;
+  google.protobuf.Timestamp end_time = 5;
+  int64 duration_ms = 6;
+  string container_id = 7;
+  string stub_id = 8;
+  string stub_type = 9;
+  string task_id = 10;
+  string workspace_id = 11;
+  string worker_id = 12;
+  optional bool success = 13;
+  map<string, string> attrs = 14;
+}
+
+message TraceLogEntry {
+  google.protobuf.Timestamp timestamp = 1;
+  string container_id = 2;
+  string task_id = 3;
+  string stream = 4;
+  string line = 5;
+}
+
+message RecordTraceEventRequest { TraceEvent event = 1; }
+
+message RecordTraceEventResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RecordTraceSpanRequest { TraceSpan span = 1; }
+
+message RecordTraceSpanResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}
+
+message RecordTraceLogRequest { TraceLogEntry entry = 1; }
+
+message RecordTraceLogResponse {
+  bool ok = 1;
+  string error_msg = 2;
+}

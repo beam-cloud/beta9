@@ -6,9 +6,17 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/trace"
 )
 
 type SchedulerRepository interface{}
+
+type TraceRepository interface {
+	RecordEvent(ctx context.Context, event trace.Event) error
+	RecordSpan(ctx context.Context, span trace.Span) error
+	RecordLog(ctx context.Context, entry trace.LogEntry) error
+	GetContainerTrace(ctx context.Context, containerID string) (*trace.ContainerTrace, error)
+}
 
 type WorkerRepository interface {
 	GetId() string

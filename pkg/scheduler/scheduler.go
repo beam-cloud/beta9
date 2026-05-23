@@ -17,6 +17,7 @@ import (
 	reg "github.com/beam-cloud/beta9/pkg/registry"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/beam-cloud/beta9/pkg/types/trace"
 	"github.com/rs/zerolog/log"
 )
 
@@ -40,6 +41,7 @@ type Scheduler struct {
 	eventRepo             repo.EventRepository
 	schedulerUsageMetrics SchedulerUsageMetrics
 	eventBus              *common.EventBus
+	traceRepo             repo.TraceRepository
 
 	provisioning *provisioningTracker
 }
@@ -51,6 +53,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 	requestBacklog := NewRequestBacklog(redisClient)
 	containerRepo := repo.NewContainerRedisRepository(redisClient)
 	workerPoolRepo := repo.NewWorkerPoolRedisRepository(redisClient)
+	traceRepo := repo.NewTraceRedisRepository(redisClient)
 
 	schedulerUsage := NewSchedulerUsageMetrics(usageRepo)
 	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
@@ -114,6 +117,7 @@ func NewScheduler(ctx context.Context, config types.AppConfig, redisClient *comm
 		schedulerUsageMetrics: schedulerUsage,
 		eventRepo:             eventRepo,
 		workspaceRepo:         workspaceRepo,
+		traceRepo:             traceRepo,
 
 		provisioning: newProvisioningTracker(),
 	}, nil
@@ -194,6 +198,27 @@ func (s *Scheduler) getConcurrencyLimit(request *types.ContainerRequest) (*types
 
 func (s *Scheduler) Stop(stopArgs *types.StopContainerArgs) error {
 	log.Info().Interface("stop_args", stopArgs).Msg("received stop request")
+	reason := trace.NormalizeReason(string(stopArgs.Reason))
+	stopArgs.Reason = types.StopContainerReason(reason)
+	state, _ := s.containerRepo.GetContainerState(stopArgs.ContainerId)
+	event := trace.Event{
+		ID:          trace.EventSchedulerStopRequested,
+		ContainerID: stopArgs.ContainerId,
+		Reason:      reason,
+		Source:      "scheduler.stop",
+		Message:     "scheduler received stop request",
+		Attrs: map[string]string{
+			"force": fmt.Sprintf("%t", stopArgs.Force),
+		},
+	}
+	if state != nil {
+		event.StubID = state.StubId
+		event.WorkspaceID = state.WorkspaceId
+		event.Attrs["previous_status"] = string(state.Status)
+	}
+	if err := s.traceRepo.RecordEvent(context.Background(), event); err != nil {
+		log.Debug().Err(err).Str("container_id", stopArgs.ContainerId).Msg("failed to record scheduler stop trace event")
+	}
 
 	err := s.containerRepo.UpdateContainerStatus(stopArgs.ContainerId, types.ContainerStatusStopping, types.ContainerStateTtlSWhilePending)
 	if err != nil {
