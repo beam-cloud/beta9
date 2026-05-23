@@ -39,7 +39,7 @@ storage:
     defaultAccessKey: test
     defaultSecretKey: test
     defaultEndpointUrl: http://localstack:4566
-    defaultPresignedEndpointUrl:
+    defaultPresignedEndpointUrl: http://127.0.0.1:4566
     defaultRegion: us-east-1
     alluxio:
       debug: false
@@ -331,7 +331,7 @@ cache:
     diskCacheMaxUsagePct: 0.95
     enableMemoryCache: false
     maxCachePct: 0
-    pageSizeBytes: 4000000
+    pageSizeBytes: 4194304
     objectTtlS: 0
     s3DownloadConcurrency: 16
     s3DownloadChunkSize: 64000000

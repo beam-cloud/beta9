@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache/cachegrpc"
@@ -65,6 +66,7 @@ func NewServer(ctx context.Context, cfg Config, locality string) (*Server, error
 
 func NewServerWithOptions(ctx context.Context, cfg Config, locality string, options ...ServerOption) (*Server, error) {
 	InitLogger(cfg.Global.DebugMode, cfg.Global.PrettyLogs)
+	startCachePathStatsLogger(ctx)
 
 	opts := &ServerOpts{}
 	for _, opt := range options {
@@ -394,7 +396,9 @@ func (cs *Server) Close() error {
 }
 
 func (cs *Server) GetContent(ctx context.Context, req *proto.CacheGetContentRequest) (*proto.CacheGetContentResponse, error) {
+	atomic.AddInt64(&cachePathStats.serverGRPCGetRequests, 1)
 	if req == nil {
+		atomic.AddInt64(&cachePathStats.serverGRPCGetMisses, 1)
 		return nil, status.Error(codes.InvalidArgument, "request is nil")
 	}
 	maxMessageSize := int64(cs.globalConfig.GRPCMessageSizeBytes)
@@ -402,20 +406,25 @@ func (cs *Server) GetContent(ctx context.Context, req *proto.CacheGetContentRequ
 		maxMessageSize = 4 * 1024 * 1024
 	}
 	if req.Length < 0 || req.Length > maxMessageSize {
+		atomic.AddInt64(&cachePathStats.serverGRPCGetMisses, 1)
 		return nil, status.Errorf(codes.InvalidArgument, "invalid content length: %d", req.Length)
 	}
 
 	dst := make([]byte, int(req.Length))
 	n, err := cs.cas.Get(req.Hash, req.Offset, req.Length, dst)
 	if err != nil {
+		atomic.AddInt64(&cachePathStats.serverGRPCGetMisses, 1)
 		Logger.Debugf("Get - [%s] - %v", req.Hash, err)
 		return &proto.CacheGetContentResponse{Content: nil, Ok: false}, nil
 	}
 	if n != req.Length {
+		atomic.AddInt64(&cachePathStats.serverGRPCGetMisses, 1)
 		Logger.Debugf("Get - [%s] short read: requested=%d read=%d", req.Hash, req.Length, n)
 		return &proto.CacheGetContentResponse{Content: nil, Ok: false}, nil
 	}
 
+	atomic.AddInt64(&cachePathStats.serverGRPCGetHits, 1)
+	atomic.AddInt64(&cachePathStats.serverGRPCGetBytes, n)
 	Logger.Infof("Get[OK] - [%s] (offset=%d, length=%d)", req.Hash, req.Offset, req.Length)
 	return &proto.CacheGetContentResponse{Content: dst[:n], Ok: true}, nil
 }
@@ -426,10 +435,13 @@ func (cs *Server) HasContent(ctx context.Context, req *proto.CacheHasContentRequ
 }
 
 func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream proto.Cache_GetContentStreamServer) error {
+	atomic.AddInt64(&cachePathStats.serverStreamRequests, 1)
 	if req == nil {
+		atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 		return status.Error(codes.InvalidArgument, "request is nil")
 	}
 	if req.Length < 0 {
+		atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 		return status.Errorf(codes.InvalidArgument, "invalid content length: %d", req.Length)
 	}
 
@@ -448,6 +460,7 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 		dst := make([]byte, currentChunkSize)
 		n, err := cs.cas.Get(req.Hash, offset, currentChunkSize, dst)
 		if err != nil {
+			atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 			Logger.Debugf("GetContentStream - [%s] - %v", req.Hash, err)
 			return status.Errorf(codes.NotFound, "Content not found: %v", err)
 		}
@@ -456,10 +469,13 @@ func (cs *Server) GetContentStream(req *proto.CacheGetContentRequest, stream pro
 		}
 
 		Logger.Debugf("GetContentStream[TX] - [%s] - %d bytes", req.Hash, n)
+		atomic.AddInt64(&cachePathStats.serverStreamChunks, 1)
+		atomic.AddInt64(&cachePathStats.serverStreamBytes, n)
 		if err := stream.Send(&proto.CacheGetContentResponse{
 			Ok:      true,
 			Content: dst[:n],
 		}); err != nil {
+			atomic.AddInt64(&cachePathStats.serverStreamErrors, 1)
 			return status.Errorf(codes.Internal, "Failed to send content chunk: %v", err)
 		}
 
@@ -866,11 +882,14 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, ErrorMsg: "source is required"}, nil
 	}
 
+	started := time.Now()
 	sourcePath := req.Source.Path
 	if req.Source.CachePath != "" {
 		sourcePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
+	Logger.Infof("StoreContentFromSourceWithLock[ACK] - [source=%s bucket=%s cache_path=%s]", req.Source.Path, req.Source.BucketName, req.Source.CachePath)
 	if err := cs.coordinator.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
+		Logger.Warnf("StoreContentFromSourceWithLock[LOCK_MISS] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, FailedToAcquireLock: true, ErrorMsg: err.Error()}, nil
 	}
 	lockReleased := false
@@ -902,6 +921,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 
 	storeContentFromSourceResp, err := cs.StoreContentFromSource(storeContext, req)
 	if err != nil {
+		Logger.Warnf("StoreContentFromSourceWithLock[ERR] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: err.Error()}, nil
 	}
 	if storeContentFromSourceResp == nil || !storeContentFromSourceResp.Ok {
@@ -909,6 +929,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		if storeContentFromSourceResp != nil {
 			errorMsg = storeContentFromSourceResp.ErrorMsg
 		}
+		Logger.Warnf("StoreContentFromSourceWithLock[ERR] - [source=%s elapsed=%s err=%s]", sourcePath, time.Since(started).Truncate(time.Millisecond), errorMsg)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: errorMsg}, nil
 	}
 
@@ -917,5 +938,6 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 	}
 	lockReleased = true
 
+	Logger.Infof("StoreContentFromSourceWithLock[OK] - [source=%s hash=%s elapsed=%s]", sourcePath, storeContentFromSourceResp.Hash, time.Since(started).Truncate(time.Millisecond))
 	return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: storeContentFromSourceResp.Hash, Ok: true}, nil
 }

@@ -51,7 +51,6 @@ func NewStore(ctx context.Context, currentHost *Host, locality string, coordinat
 	if config.Server.PageSizeBytes <= 0 {
 		return nil, errors.New("invalid cache configuration")
 	}
-
 	cas := &Store{
 		ctx:                ctx,
 		serverConfig:       config.Server,
@@ -365,6 +364,40 @@ func (cas *Store) AddReader(ctx context.Context, reader io.Reader) (string, int6
 	return hash, size, nil
 }
 
+func (cas *Store) PutFullPages(hash string, offset int64, data []byte) {
+	if hash == "" || offset < 0 || len(data) == 0 || cas.serverConfig.PageSizeBytes <= 0 || cas.diskCachedUsageExceeded {
+		return
+	}
+
+	pageSize := cas.serverConfig.PageSizeBytes
+	if offset%pageSize != 0 {
+		return
+	}
+	fullPages := int64(len(data)) / pageSize
+	if fullPages <= 0 {
+		return
+	}
+	if err := os.MkdirAll(cas.pageDir(hash), 0755); err != nil {
+		Logger.Warnf("cache local promotion mkdir failed: hash=%s err=%v", hash, err)
+		return
+	}
+
+	for page := int64(0); page < fullPages; page++ {
+		start := page * pageSize
+		end := start + pageSize
+		pageIdx := (offset / pageSize) + page
+		pagePath := cas.pagePath(hash, pageIdx)
+		pageLock := cas.pageLock(hash, pageIdx)
+		pageLock.Lock()
+		err := writeCacheChunkAtomic(pagePath, data[start:end])
+		pageLock.Unlock()
+		if err != nil {
+			Logger.Warnf("cache local promotion write failed: hash=%s page=%d err=%v", hash, pageIdx, err)
+			return
+		}
+	}
+}
+
 func (cas *Store) addReaderToMemory(ctx context.Context, reader io.Reader) (string, int64, error) {
 	hasher := sha256.New()
 	pageSize := int(cas.serverConfig.PageSizeBytes)
@@ -523,7 +556,9 @@ func minInt64ToInt(a int64, b int64) int {
 	return int(b)
 }
 
-func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (int64, error) {
+func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (read int64, err error) {
+	atomic.AddInt64(&cachePathStats.storeReadAtRequests, 1)
+	atomic.AddInt64(&cachePathStats.storeReadAtBytes, int64(len(dst)))
 	if offset < 0 {
 		return 0, fmt.Errorf("invalid read offset: %d", offset)
 	}
@@ -542,6 +577,9 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (int64, error) {
 		if dstOffset > 0 {
 			throughputMBps := (float64(dstOffset) / (1024 * 1024)) / (float64(time.Since(start).Microseconds()) / 1e6)
 			cas.metrics.ReadThroughputMBps.Update(throughputMBps)
+		}
+		if elapsed := time.Since(start); elapsed > time.Second || (err != nil && !errors.Is(err, ErrContentNotFound)) {
+			Logger.Warnf("cache store read-at result: hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
 		}
 		// Update hit ratios
 		cas.updateHitRatios()
@@ -579,6 +617,7 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (int64, error) {
 			readLength, err := cas.readPageFromDisk(hash, chunkIdx, pageOffset, remainingLength, dst[dstOffset:])
 			if err != nil {
 				cas.metrics.L2Misses.Inc()
+				atomic.AddInt64(&cachePathStats.storeMisses, 1)
 				return 0, ErrContentNotFound
 			}
 			cas.metrics.L1Hits.Inc()
@@ -599,6 +638,7 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (int64, error) {
 		start := o % cas.serverConfig.PageSizeBytes
 		chunkRemaining := int64(len(chunkBytes)) - start
 		if chunkRemaining <= 0 {
+			atomic.AddInt64(&cachePathStats.storeMisses, 1)
 			return dstOffset, ErrContentNotFound
 		}
 
@@ -614,6 +654,8 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (int64, error) {
 		// Track bytes served from appropriate tier
 		if fromMemory {
 			cas.metrics.L0BytesServed.Add(int(readLength))
+			atomic.AddInt64(&cachePathStats.storeMemoryPages, 1)
+			atomic.AddInt64(&cachePathStats.storeMemoryBytes, readLength)
 		} else {
 			cas.metrics.L1BytesServed.Add(int(readLength))
 		}
@@ -627,6 +669,7 @@ func (cas *Store) ReadAt(hash string, offset int64, dst []byte) (int64, error) {
 }
 
 func (cas *Store) readPageFromDisk(hash string, chunkIdx int64, pageOffset int64, maxLength int64, dst []byte) (int64, error) {
+	started := time.Now()
 	pageLock := cas.pageLock(hash, chunkIdx)
 	lockStart := time.Now()
 	pageLock.RLock()
@@ -646,6 +689,8 @@ func (cas *Store) readPageFromDisk(hash string, chunkIdx int64, pageOffset int64
 			}
 			n := min(maxLength, min(int64(len(v.Content))-pageOffset, int64(len(dst))))
 			copy(dst[:n], v.Content[pageOffset:pageOffset+n])
+			atomic.AddInt64(&cachePathStats.storeMemoryPages, 1)
+			atomic.AddInt64(&cachePathStats.storeMemoryBytes, n)
 			return n, nil
 		}
 	}
@@ -680,24 +725,41 @@ func (cas *Store) readPageFromDisk(hash string, chunkIdx int64, pageOffset int64
 	n, err := file.ReadAt(dst[:readLength], pageOffset)
 	cachePageReadLatencyMs.Update(float64(time.Since(readStart).Milliseconds()))
 	if err != nil && !errors.Is(err, io.EOF) {
+		atomic.AddInt64(&cachePathStats.storeMisses, 1)
 		return int64(n), ErrContentNotFound
 	}
 	if n == 0 {
+		atomic.AddInt64(&cachePathStats.storeMisses, 1)
 		return 0, ErrContentNotFound
+	}
+	atomic.AddInt64(&cachePathStats.storeDiskPages, 1)
+	atomic.AddInt64(&cachePathStats.storeDiskBytes, int64(n))
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		Logger.Warnf("cache store disk page read slow: hash=%s page=%d page_offset=%d max_length=%d read=%d elapsed=%s", hash, chunkIdx, pageOffset, maxLength, n, elapsed.Truncate(time.Millisecond))
 	}
 	return int64(n), nil
 }
 
 func (cas *Store) PageRegion(hash string, offset int64, length int64) (path string, pageOffset int64, n int, ok bool, err error) {
+	started := time.Now()
+	defer func() {
+		if elapsed := time.Since(started); elapsed > 100*time.Millisecond || (err != nil && !errors.Is(err, ErrContentNotFound)) {
+			Logger.Infof("cache store page-region result: hash=%s offset=%d length=%d path=%s page_offset=%d n=%d ok=%t err=%v elapsed=%s", hash, offset, length, path, pageOffset, n, ok, err, elapsed.Truncate(time.Millisecond))
+		}
+	}()
+	atomic.AddInt64(&cachePathStats.storePageRegions, 1)
 	if offset < 0 {
+		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, fmt.Errorf("invalid read offset: %d", offset)
 	}
 	if length <= 0 || cas.serverConfig.PageSizeBytes <= 0 {
+		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, nil
 	}
 	pageIdx := offset / cas.serverConfig.PageSizeBytes
 	pageOffset = offset % cas.serverConfig.PageSizeBytes
 	if pageOffset+length > cas.serverConfig.PageSizeBytes {
+		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, nil
 	}
 
@@ -707,15 +769,20 @@ func (cas *Store) PageRegion(hash string, offset int64, length int64) (path stri
 
 	pagePath, info, err := cas.existingPagePath(hash, pageIdx)
 	if err != nil {
+		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, err
 	}
 	if pageOffset >= info.Size() {
+		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, ErrContentNotFound
 	}
 	readLength := min(length, info.Size()-pageOffset)
 	if readLength <= 0 {
+		atomic.AddInt64(&cachePathStats.storePageRegionMiss, 1)
 		return "", 0, 0, false, nil
 	}
+	atomic.AddInt64(&cachePathStats.storePageRegionHits, 1)
+	atomic.AddInt64(&cachePathStats.storePageRegionBytes, readLength)
 	return pagePath, pageOffset, int(readLength), true, nil
 }
 

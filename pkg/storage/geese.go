@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ const (
 	defaultGeeseFSFuseReadAheadKb  = 32768
 	defaultGeeseFSReadAheadKb      = 32768
 	defaultGeeseFSReadAheadLargeKb = 131072
+	defaultGeeseFSMaxReadBytes     = 1048576
 )
 
 type GeeseStorage struct {
@@ -78,8 +80,9 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.SymlinkZeroed = true
 	flags.HTTPTimeout = defaultGeeseFSRequestTimeout
 	flags.NoPreloadDir = true
+	flags.StatsInterval = 5 * time.Second
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
-	flags.MountOptions = s.config.MountOptions
+	flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
 
 	// Staged write mode config
 	flags.StagedWriteModeEnabled = s.config.StagedWriteModeEnabled
@@ -163,6 +166,24 @@ func (s *GeeseStorage) Mount(localPath string) error {
 
 func (s *GeeseStorage) Mode() string {
 	return StorageModeGeese
+}
+
+func withDefaultMountOption(options []string, key, value string) []string {
+	for _, option := range options {
+		for _, part := range strings.Split(option, ",") {
+			name := part
+			if idx := strings.IndexByte(name, '='); idx >= 0 {
+				name = name[:idx]
+			}
+			if name == key {
+				return options
+			}
+		}
+	}
+	out := make([]string, 0, len(options)+1)
+	out = append(out, options...)
+	out = append(out, fmt.Sprintf("%s=%s", key, value))
+	return out
 }
 
 func (s *GeeseStorage) Unmount(localPath string) error {

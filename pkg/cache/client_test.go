@@ -69,6 +69,90 @@ func TestReadContentIntoUsesAttachedLocalServerOnlyForSelectedHost(t *testing.T)
 	require.Equal(t, content, dst)
 }
 
+func TestReadContentIntoPrefersAttachedLocalReplica(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("local-cache-content")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:                   context.Background(),
+		clientConfig:          ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		grpcClients:           make(map[string]proto.CacheClient),
+		grpcConns:             make(map[string]*grpc.ClientConn),
+		localServers:          make(map[string]*Server),
+		rawReadPools:          make(map[string]*rawReadConnPool),
+		localHostCache:        make(map[string]*localClientCache),
+		hasher:                &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
+		maxGetContentAttempts: 1,
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	dst := make([]byte, len(content))
+	n, err := client.ReadContentInto(context.Background(), hash, 0, dst, ClientOptions{})
+	require.NoError(t, err)
+	require.Equal(t, int64(len(content)), n)
+	require.Equal(t, content, dst)
+}
+
+func TestLocalPageRegionsReturnsSelectedLocalPageRanges(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("abcdefghijkl")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:            context.Background(),
+		clientConfig:   ClientConfig{NTopHosts: 1},
+		localServers:   make(map[string]*Server),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[string]*localClientCache),
+		hasher:         &orderedTestHasher{hosts: []*Host{localHost}},
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	regions, err := client.LocalPageRegions(hash, 3, 6, ClientOptions{})
+	require.NoError(t, err)
+	require.Len(t, regions, 2)
+	require.Equal(t, int64(3), regions[0].Offset)
+	require.Equal(t, 2, regions[0].Length)
+	require.Equal(t, int64(0), regions[1].Offset)
+	require.Equal(t, 4, regions[1].Length)
+	require.FileExists(t, regions[0].Path)
+	require.FileExists(t, regions[1].Path)
+}
+
+func TestLocalPageRegionsPrefersAttachedLocalReplica(t *testing.T) {
+	store := newTestStore(t, 5)
+	content := []byte("abcdefghijkl")
+	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
+	require.NoError(t, err)
+
+	localHost := &Host{HostId: "local-host"}
+	store.currentHost = localHost
+	client := &Client{
+		ctx:            context.Background(),
+		clientConfig:   ClientConfig{NTopHosts: 1, PreferLocalCacheHost: true},
+		localServers:   make(map[string]*Server),
+		rawReadPools:   make(map[string]*rawReadConnPool),
+		localHostCache: make(map[string]*localClientCache),
+		hasher:         &orderedTestHasher{hosts: []*Host{{HostId: "remote-host"}}},
+	}
+	client.AttachLocalServer(&Server{cas: store})
+
+	regions, err := client.LocalPageRegions(hash, 3, 6, ClientOptions{})
+	require.NoError(t, err)
+	require.Len(t, regions, 2)
+	require.Equal(t, int64(3), regions[0].Offset)
+	require.Equal(t, 2, regions[0].Length)
+	require.Equal(t, int64(0), regions[1].Offset)
+	require.Equal(t, 4, regions[1].Length)
+}
+
 func TestWithStoreFromContentLockReturnsUnlockErrorAndRetriesDeferredRelease(t *testing.T) {
 	registry := &failFirstUnlockRegistry{MockRegistry: NewMockRegistry()}
 	client := &Client{

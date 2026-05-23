@@ -28,7 +28,7 @@ const (
 	cacheDefaultHostMonitorIntervalS    = 30
 	cacheDefaultGRPCDialS               = 1
 	cacheDefaultGRPCMessage             = 1024 * 1024 * 1024
-	cacheDefaultPageSizeBytes           = 1024 * 1024
+	cacheDefaultPageSizeBytes           = 4 * 1024 * 1024
 	cacheDefaultDiskMaxUsage            = 0.95
 	cacheDefaultNTopHosts               = 3
 	cacheDefaultMinRetryBytes           = 0
@@ -121,6 +121,22 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	if err != nil {
 		m.cancel()
 		return nil, err
+	}
+	if localStore, err := cache.NewStore(
+		m.ctx,
+		&cache.Host{HostId: cacheLocalReaderHostID(m.locality, m.nodeID, m.workerID, m.instanceID)},
+		m.locality,
+		registry,
+		localReaderCacheConfig(cacheConfig),
+	); err != nil {
+		log.Warn().Err(err).Str("locality", m.locality).Str("node_id", m.nodeID).Msg("failed to attach local cache reader store")
+	} else {
+		client.AttachLocalStore(localStore)
+		log.Info().
+			Str("cache_dir", cacheConfig.Server.DiskCacheDir).
+			Str("locality", m.locality).
+			Str("node_id", m.nodeID).
+			Msg("attached local cache reader store")
 	}
 
 	m.client = client
@@ -626,6 +642,19 @@ func cacheLocality(config types.AppConfig, poolConfig types.WorkerPoolConfig) st
 		return config.Cache.Global.DefaultLocality
 	}
 	return cacheDefaultLocality
+}
+
+func cacheLocalReaderHostID(locality, nodeID, workerID, instanceID string) string {
+	return fmt.Sprintf("%s:%s:%s:%s:reader", locality, nodeID, workerID, instanceID)
+}
+
+func localReaderCacheConfig(cacheConfig cache.Config) cache.Config {
+	cacheConfig.Server.MaxCachePct = 0
+	cacheConfig.Server.EnableMemoryCache = false
+	cacheConfig.Memory.Enabled = false
+	cacheConfig.Client.Prefetch.Enabled = false
+	cacheConfig.Metrics.URL = ""
+	return cacheConfig
 }
 
 func cacheNodeID() string {

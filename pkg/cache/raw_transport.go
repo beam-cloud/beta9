@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -120,6 +121,12 @@ type rawReadRequest struct {
 	length int64
 }
 
+type rawReadPageRegion struct {
+	path       string
+	pageOffset int64
+	length     int
+}
+
 func readRawReadRequest(r io.Reader) (rawReadRequest, error) {
 	var hdr [rawReadHeaderSize]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
@@ -194,52 +201,117 @@ func (cs *Server) handleRawReadConn(conn net.Conn) {
 }
 
 func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
+	atomic.AddInt64(&cachePathStats.serverRawRequests, 1)
 	maxLength := int64(defaultRawReadChunkBytes)
 	if cs.globalConfig.GRPCMessageSizeBytes > 0 {
 		maxLength = int64(cs.globalConfig.GRPCMessageSizeBytes)
 	}
 	if req.length < 0 || req.length > maxLength {
+		atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
 		_ = writeRawReadResponseHeader(conn, rawReadStatusError, 0)
 		return
 	}
 
-	path, pageOffset, n, ok, err := cs.cas.PageRegion(req.hash, req.offset, req.length)
-	if err == nil && ok && n == int(req.length) {
-		if err := writeRawReadResponseHeader(conn, rawReadStatusOK, int64(n)); err != nil {
+	regions, ok, err := cs.rawReadPageRegions(req)
+	if err == nil && ok {
+		if err := writeRawReadResponseHeader(conn, rawReadStatusOK, req.length); err != nil {
 			return
 		}
-		file, err := os.Open(path)
-		if err != nil {
-			return
-		}
-		defer file.Close()
-		if cs.serverConfig.ReadTransport.Sendfile {
-			sent, err := sendFileToConn(conn, file, pageOffset, int64(n))
-			if err == nil && sent == int64(n) {
-				cacheReadRawSendfileTotal.Inc()
+		usedSendfile := false
+		usedCopy := false
+		for _, region := range regions {
+			file, err := os.Open(region.path)
+			if err != nil {
+				Logger.Warnf("raw cache read open failed: hash=%s offset=%d length=%d path=%s err=%v", req.hash, req.offset, req.length, region.path, err)
+				atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
+				_ = conn.Close()
 				return
 			}
-			if sent > 0 {
+			copyOffset := region.pageOffset
+			copyLength := int64(region.length)
+			if cs.serverConfig.ReadTransport.Sendfile {
+				sent, err := sendFileToConn(conn, file, region.pageOffset, int64(region.length))
+				if sent > 0 {
+					usedSendfile = true
+					copyOffset += sent
+					copyLength -= sent
+				}
+				if err != nil {
+					Logger.Warnf("raw cache read sendfile partial: hash=%s offset=%d length=%d path=%s page_offset=%d region_length=%d sent=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, region.pageOffset, region.length, sent, copyLength, err)
+				}
+				if copyLength == 0 {
+					_ = file.Close()
+					continue
+				}
+			}
+			if _, err := file.Seek(copyOffset, io.SeekStart); err != nil {
+				Logger.Warnf("raw cache read seek failed: hash=%s offset=%d length=%d path=%s page_offset=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, copyOffset, copyLength, err)
+				_ = file.Close()
+				atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
+				_ = conn.Close()
 				return
 			}
+			if _, err := io.CopyN(conn, file, copyLength); err != nil {
+				Logger.Warnf("raw cache read copy failed: hash=%s offset=%d length=%d path=%s page_offset=%d remaining=%d err=%v", req.hash, req.offset, req.length, region.path, copyOffset, copyLength, err)
+				_ = file.Close()
+				atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
+				_ = conn.Close()
+				return
+			}
+			_ = file.Close()
+			usedCopy = true
 		}
-		if _, err := file.Seek(pageOffset, io.SeekStart); err != nil {
-			return
+		if usedSendfile {
+			cacheReadRawSendfileTotal.Inc()
+			atomic.AddInt64(&cachePathStats.serverRawSendfileHits, 1)
 		}
-		_, _ = io.CopyN(conn, file, int64(n))
+		if usedCopy {
+			atomic.AddInt64(&cachePathStats.serverRawCopyHits, 1)
+		}
 		return
 	}
 
 	buf := make([]byte, req.length)
 	n64, err := cs.cas.ReadAt(req.hash, req.offset, buf)
 	if err != nil || n64 != req.length {
+		atomic.AddInt64(&cachePathStats.serverRawMisses, 1)
 		_ = writeRawReadResponseHeader(conn, rawReadStatusMiss, 0)
 		return
 	}
 	if err := writeRawReadResponseHeader(conn, rawReadStatusOK, n64); err != nil {
+		atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
 		return
 	}
-	_, _ = conn.Write(buf[:n64])
+	if _, err := conn.Write(buf[:n64]); err != nil {
+		atomic.AddInt64(&cachePathStats.serverRawErrors, 1)
+		return
+	}
+	atomic.AddInt64(&cachePathStats.serverRawReadAtHits, 1)
+}
+
+func (cs *Server) rawReadPageRegions(req rawReadRequest) ([]rawReadPageRegion, bool, error) {
+	pageSize := cs.serverConfig.PageSizeBytes
+	if pageSize <= 0 || req.length <= 0 {
+		return nil, false, nil
+	}
+	regions := make([]rawReadPageRegion, 0, 1)
+	remaining := req.length
+	currentOffset := req.offset
+	for remaining > 0 {
+		pageRemaining := pageSize - currentOffset%pageSize
+		readLength := min(remaining, pageRemaining)
+		path, pageOffset, n, ok, err := cs.cas.PageRegion(req.hash, currentOffset, readLength)
+		if err != nil || !ok || n <= 0 {
+			return nil, false, err
+		}
+		if int64(n) != readLength {
+			return nil, false, ErrContentNotFound
+		}
+		regions = append(regions, rawReadPageRegion{path: path, pageOffset: pageOffset, length: n})
+		currentOffset += int64(n)
+		remaining -= int64(n)
+	}
+	return regions, true, nil
 }
 
 type rawReadConnPool struct {

@@ -17,3 +17,6 @@ monitoring:
   fluentbit:
     events:
       endpoint: http://fluent-bit.monitoring:9880
+cache:
+  server:
+    pageSizeBytes: 4194304

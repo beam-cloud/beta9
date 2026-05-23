@@ -20,14 +20,6 @@ func sendFileToConn(conn net.Conn, file *os.File, offset int64, length int64) (i
 		return 0, err
 	}
 
-	var sendErr error
-	var outFD int
-	if err := rawConn.Control(func(fd uintptr) {
-		outFD = int(fd)
-	}); err != nil {
-		return 0, err
-	}
-
 	inFD := int(file.Fd())
 	remaining := length
 	off := offset
@@ -37,18 +29,40 @@ func sendFileToConn(conn net.Conn, file *os.File, offset int64, length int64) (i
 		if chunk > 1<<30 {
 			chunk = 1 << 30
 		}
-		n, err := unix.Sendfile(outFD, inFD, &off, int(chunk))
-		if err != nil {
+
+		var sendErr error
+		progressed := false
+		if err := rawConn.Write(func(fd uintptr) bool {
+			n, err := unix.Sendfile(int(fd), inFD, &off, int(chunk))
+			if n > 0 {
+				n64 := int64(n)
+				sent += n64
+				remaining -= n64
+				chunk -= n64
+				progressed = true
+			}
+			if remaining == 0 {
+				sendErr = nil
+				return true
+			}
+			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+				return false
+			}
 			sendErr = err
+			return true
+		}); err != nil {
+			if err == unix.EAGAIN || err == unix.EWOULDBLOCK || err == unix.EINTR {
+				continue
+			}
+			return sent, err
+		}
+		if sendErr != nil {
+			return sent, sendErr
+		}
+		if !progressed {
 			break
 		}
-		if n == 0 {
-			break
-		}
-		n64 := int64(n)
-		sent += n64
-		remaining -= n64
 	}
 
-	return sent, sendErr
+	return sent, nil
 }

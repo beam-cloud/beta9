@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -247,6 +248,8 @@ func (n *FSNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int
 
 func readCacheContent(ctx context.Context, client *Client, hash string, sourcePath string, size uint64, dest []byte, off int64, handle *cacheFileHandle) (fuse.ReadResult, syscall.Errno) {
 	length := cacheFSReadLength(size, off, len(dest))
+	atomic.AddInt64(&cachePathStats.cacheFSReads, 1)
+	atomic.AddInt64(&cachePathStats.cacheFSReadBytes, length)
 	if length == 0 {
 		return fuse.ReadResultData(dest[:0]), fs.OK
 	}
@@ -257,6 +260,7 @@ func readCacheContent(ctx context.Context, client *Client, hash string, sourcePa
 			file, err := handle.file(pagePath)
 			if err == nil {
 				cacheReadLocalFDTotal.Inc()
+				atomic.AddInt64(&cachePathStats.cacheFSLocalFDHits, 1)
 				return fuse.ReadResultFd(file.Fd(), pageOffset, n), fs.OK
 			}
 		}
@@ -265,6 +269,7 @@ func readCacheContent(ctx context.Context, client *Client, hash string, sourcePa
 	n, err := client.ReadContentInto(ctx, hash, off, dest[:length], ClientOptions{RoutingKey: sourcePath})
 	if err != nil {
 		if err == ErrContentNotFound {
+			atomic.AddInt64(&cachePathStats.cacheFSMissStoreRetries, 1)
 			cacheSource := LocalContentSource{
 				Path: sourcePath,
 			}
@@ -275,22 +280,28 @@ func readCacheContent(ctx context.Context, client *Client, hash string, sourcePa
 			// If multiple clients try to store the same file, some may get ErrUnableToAcquireLock
 			// In this case, we should tell the client to retry the Read instead of returning an error
 			if err != nil && err == ErrUnableToAcquireLock {
+				atomic.AddInt64(&cachePathStats.cacheFSStoreRetryErrors, 1)
 				return nil, syscall.EAGAIN
 			} else if err != nil {
+				atomic.AddInt64(&cachePathStats.cacheFSStoreRetryErrors, 1)
 				return nil, syscall.EIO
 			}
 
 			n, err = client.ReadContentInto(ctx, hash, off, dest[:length], ClientOptions{RoutingKey: sourcePath})
 			if err != nil {
+				atomic.AddInt64(&cachePathStats.cacheFSReadContentErrors, 1)
 				return nil, syscall.EIO
 			}
 
+			atomic.AddInt64(&cachePathStats.cacheFSDataReads, 1)
 			return fuse.ReadResultData(dest[:n]), fs.OK
 		}
 
+		atomic.AddInt64(&cachePathStats.cacheFSReadContentErrors, 1)
 		return nil, syscall.EIO
 	}
 
+	atomic.AddInt64(&cachePathStats.cacheFSDataReads, 1)
 	return fuse.ReadResultData(dest[:n]), fs.OK
 }
 

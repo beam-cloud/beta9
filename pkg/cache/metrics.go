@@ -12,6 +12,7 @@ import (
 var (
 	cacheReadLocalTotal               = metrics.GetOrCreateCounter(`cache_read_local_total`)
 	cacheReadLocalFDTotal             = metrics.GetOrCreateCounter(`cache_read_local_fd_total`)
+	cacheReadLocalPageRegionTotal     = metrics.GetOrCreateCounter(`cache_read_local_page_region_total`)
 	cacheReadRawTransportTotal        = metrics.GetOrCreateCounter(`cache_read_raw_transport_total`)
 	cacheReadRawSendfileTotal         = metrics.GetOrCreateCounter(`cache_read_raw_sendfile_total`)
 	cacheReadRawFallbackTotal         = metrics.GetOrCreateCounter(`cache_read_raw_fallback_total`)
