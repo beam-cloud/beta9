@@ -1,13 +1,12 @@
 package endpoint
 
 import (
-	"context"
 	"fmt"
 	"math"
 
 	abstractions "github.com/beam-cloud/beta9/pkg/abstractions/common"
 	"github.com/beam-cloud/beta9/pkg/common"
-	"github.com/beam-cloud/beta9/pkg/types/trace"
+	"github.com/beam-cloud/beta9/pkg/types"
 )
 
 type endpointAutoscalerSample struct {
@@ -104,11 +103,11 @@ func recordEndpointScaleDecision(i *endpointInstance, sample *endpointAutoscaler
 	}
 
 	for _, container := range containers {
-		if i.TraceRepo == nil {
+		if i.EventRepo == nil {
 			continue
 		}
-		_ = i.TraceRepo.RecordEvent(context.Background(), trace.Event{
-			ID:          trace.EventAutoscalerScaleDecision,
+		i.EventRepo.PushContainerEvent(types.EventContainerEventSchema{
+			ID:          types.ContainerEventAutoscalerScaleDecision,
 			ContainerID: container.ContainerId,
 			StubID:      container.StubId,
 			StubType:    string(i.Stub.Type.Kind()),

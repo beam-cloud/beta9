@@ -12,7 +12,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/network"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/beam-cloud/beta9/pkg/types/trace"
 	pb "github.com/beam-cloud/beta9/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -255,7 +254,7 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 			}
 		}
 
-		defer gws.recordAttachTrace(container, stub, trace.EventGatewayServeLockPreserved, "attach stream ended without deleting serve lock", map[string]string{
+		defer gws.recordAttachEvent(container, stub, types.ContainerEventGatewayServeLockPreserved, "attach stream ended without deleting serve lock", map[string]string{
 			"lock_key":        serveLockKey,
 			"timeout_seconds": fmt.Sprintf("%.0f", serveTimeout.Seconds()),
 		})
@@ -352,13 +351,13 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	// Wait for the container stream or the client message loop to finish
 	select {
 	case err := <-streamErrCh:
-		gws.recordAttachTrace(container, stub, trace.EventGatewayAttachDisconnected, "container stream ended during attach", map[string]string{
+		gws.recordAttachEvent(container, stub, types.ContainerEventGatewayAttachDisconnected, "container stream ended during attach", map[string]string{
 			"error":  fmt.Sprintf("%v", err),
 			"source": "container_stream",
 		})
 		return err
 	case err := <-clientMsgErrCh:
-		gws.recordAttachTrace(container, stub, trace.EventGatewayAttachDisconnected, "client attach stream disconnected", map[string]string{
+		gws.recordAttachEvent(container, stub, types.ContainerEventGatewayAttachDisconnected, "client attach stream disconnected", map[string]string{
 			"error":  fmt.Sprintf("%v", err),
 			"source": "client_stream",
 		})
@@ -367,11 +366,11 @@ func (gws *GatewayService) AttachToContainer(stream pb.GatewayService_AttachToCo
 	}
 }
 
-func (gws *GatewayService) recordAttachTrace(container *types.ContainerState, stub *types.StubWithRelated, eventID trace.EventID, message string, attrs map[string]string) {
+func (gws *GatewayService) recordAttachEvent(container *types.ContainerState, stub *types.StubWithRelated, eventID types.ContainerEventID, message string, attrs map[string]string) {
 	if container == nil {
 		return
 	}
-	event := trace.Event{
+	event := types.EventContainerEventSchema{
 		ID:          eventID,
 		ContainerID: container.ContainerId,
 		StubID:      container.StubId,
@@ -383,10 +382,8 @@ func (gws *GatewayService) recordAttachTrace(container *types.ContainerState, st
 	if stub != nil {
 		event.StubType = string(stub.Type.Kind())
 	}
-	if gws.traceRepo == nil {
+	if gws.eventRepo == nil {
 		return
 	}
-	if err := gws.traceRepo.RecordEvent(context.Background(), event); err != nil {
-		return
-	}
+	gws.eventRepo.PushContainerEvent(event)
 }

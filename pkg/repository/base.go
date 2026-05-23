@@ -6,17 +6,9 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/repository/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/beam-cloud/beta9/pkg/types/trace"
 )
 
 type SchedulerRepository interface{}
-
-type TraceRepository interface {
-	RecordEvent(ctx context.Context, event trace.Event) error
-	RecordSpan(ctx context.Context, span trace.Span) error
-	RecordLog(ctx context.Context, entry trace.LogEntry) error
-	GetContainerTrace(ctx context.Context, containerID string) (*trace.ContainerTrace, error)
-}
 
 type WorkerRepository interface {
 	GetId() string
@@ -228,12 +220,16 @@ type TailscaleRepository interface {
 }
 
 type EventRepository interface {
+	GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error)
 	PushContainerRequestedEvent(request *types.ContainerRequest)
 	PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest, exitCode int)
 	PushContainerOOMEvent(containerID string, workerID string, request *types.ContainerRequest)
 	PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData)
+	PushContainerPhaseEvent(phase types.EventContainerPhaseSchema)
+	PushContainerEvent(event types.EventContainerEventSchema)
+	PushContainerLogEvent(entry types.EventContainerLogSchema)
 	PushWorkerStartedEvent(workerID string)
 	PushWorkerStoppedEvent(workerID string)
 	PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason)

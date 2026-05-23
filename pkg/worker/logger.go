@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,9 +14,8 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/beam-cloud/beta9/pkg/common"
+	"github.com/beam-cloud/beta9/pkg/repository"
 	types "github.com/beam-cloud/beta9/pkg/types"
-	"github.com/beam-cloud/beta9/pkg/types/trace"
-	pb "github.com/beam-cloud/beta9/proto"
 )
 
 const (
@@ -25,14 +23,31 @@ const (
 )
 
 type ContainerLogMessage struct {
-	Level   string  `json:"level"`
-	Message string  `json:"message"`
-	TaskID  *string `json:"task_id"`
+	Level       string                `json:"level"`
+	Message     string                `json:"message"`
+	TaskID      *string               `json:"task_id"`
+	RunnerEvent *ContainerRunnerEvent `json:"beta9_event"`
+}
+
+type ContainerRunnerEvent struct {
+	Type        string            `json:"type"`
+	ID          string            `json:"id"`
+	Timestamp   string            `json:"timestamp"`
+	StartTime   string            `json:"start_time"`
+	EndTime     string            `json:"end_time"`
+	DurationMs  int64             `json:"duration_ms"`
+	Success     *bool             `json:"success"`
+	ContainerID string            `json:"container_id"`
+	StubID      string            `json:"stub_id"`
+	StubType    string            `json:"stub_type"`
+	TaskID      string            `json:"task_id"`
+	Message     string            `json:"message"`
+	Attrs       map[string]string `json:"attrs"`
 }
 
 type ContainerLogger struct {
 	containerInstances *common.SafeMap[*ContainerInstance]
-	traceRepoClient    pb.TraceRepositoryServiceClient
+	eventRepo          repository.EventRepository
 	workerID           string
 	logLinesPerHour    int
 }
@@ -84,7 +99,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 		return errors.New("container not found")
 	}
 	defer instance.LogBuffer.Close()
-	defer r.recordLogTraceEvent(request, instance, trace.EventLogsFlushCompleted, nil, "container log capture flushed")
+	defer r.recordLogEvent(request, instance, types.ContainerEventLogsFlushCompleted, nil, "container log capture flushed")
 
 	limiter := rate.NewLimiter(rate.Limit(float64(r.logLinesPerHour)/3600.0), r.logLinesPerHour)
 	rateLimitMessageLogged := false
@@ -100,7 +115,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 					"stub_id":      instance.StubId,
 				}).Info(rateLimitMsg)
 				if !instance.LogBuffer.Write([]byte(rateLimitMsg + "\n")) {
-					r.recordLogTraceEvent(request, instance, trace.EventLogsDropped, nil, "container log buffer dropped a rate limit message")
+					r.recordLogEvent(request, instance, types.ContainerEventLogsDropped, nil, "container log buffer dropped a rate limit message")
 				}
 				r.recordLogLine(request, "", rateLimitMsg)
 				r.recordFirstLogByte(request, instance, &firstByteRecorded)
@@ -133,6 +148,13 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 
 			msgDecoded = true
 
+			if msg.RunnerEvent != nil {
+				r.recordRunnerEvent(request, msg.RunnerEvent)
+				if msg.Message == "" {
+					continue
+				}
+			}
+
 			f.WithFields(logrus.Fields{
 				"container_id": request.ContainerId,
 				"task_id":      msg.TaskID,
@@ -142,7 +164,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 			// Write logs to in-memory log buffer as well
 			if msg.Message != "" {
 				if !instance.LogBuffer.Write([]byte(msg.Message)) {
-					r.recordLogTraceEvent(request, instance, trace.EventLogsDropped, map[string]string{"task_id": stringPtrValue(msg.TaskID)}, "container log buffer dropped a message")
+					r.recordLogEvent(request, instance, types.ContainerEventLogsDropped, map[string]string{"task_id": stringPtrValue(msg.TaskID)}, "container log buffer dropped a message")
 				}
 				r.recordLogLine(request, stringPtrValue(msg.TaskID), msg.Message)
 				r.recordFirstLogByte(request, instance, &firstByteRecorded)
@@ -182,7 +204,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 
 			// Write logs to in-memory log buffer as well
 			if !instance.LogBuffer.Write([]byte(o.Message)) {
-				r.recordLogTraceEvent(request, instance, trace.EventLogsDropped, nil, "container log buffer dropped a raw message")
+				r.recordLogEvent(request, instance, types.ContainerEventLogsDropped, nil, "container log buffer dropped a raw message")
 			}
 			r.recordLogLine(request, "", o.Message)
 			r.recordFirstLogByte(request, instance, &firstByteRecorded)
@@ -194,7 +216,7 @@ func (r *ContainerLogger) CaptureLogs(request *types.ContainerRequest, logChan c
 	}
 
 	if firstByteRecorded {
-		r.recordLogTraceEvent(request, instance, trace.EventLogsLastByte, nil, "container log capture received final byte")
+		r.recordLogEvent(request, instance, types.ContainerEventLogsLastByte, nil, "container log capture received final byte")
 	}
 	return nil
 }
@@ -204,7 +226,7 @@ func (r *ContainerLogger) recordFirstLogByte(request *types.ContainerRequest, in
 		return
 	}
 	*recorded = true
-	r.recordLogTraceEvent(request, instance, trace.EventLogsFirstByte, nil, "container log capture received first byte")
+	r.recordLogEvent(request, instance, types.ContainerEventLogsFirstByte, nil, "container log capture received first byte")
 }
 
 func (r *ContainerLogger) recordLogLine(request *types.ContainerRequest, taskId string, message string) {
@@ -212,25 +234,31 @@ func (r *ContainerLogger) recordLogLine(request *types.ContainerRequest, taskId 
 		if line == "" {
 			continue
 		}
-		if err := recordTraceLog(context.Background(), r.traceRepoClient, trace.LogEntry{
+		recordContainerLogLine(r.eventRepo, types.EventContainerLogSchema{
+			Timestamp:   time.Now().UTC(),
 			ContainerID: request.ContainerId,
+			StubID:      request.StubId,
+			StubType:    string(request.Stub.Type.Kind()),
 			TaskID:      taskId,
+			WorkspaceID: request.WorkspaceId,
+			WorkerID:    r.workerID,
 			Stream:      "stdout",
 			Line:        line,
-		}); err != nil {
-			log.Debug().Err(err).Str("container_id", request.ContainerId).Msg("failed to record startup trace log")
-		}
+		})
 	}
 }
 
-func (r *ContainerLogger) recordLogTraceEvent(request *types.ContainerRequest, instance *ContainerInstance, eventID trace.EventID, attrs map[string]string, message string) {
+func (r *ContainerLogger) recordLogEvent(request *types.ContainerRequest, instance *ContainerInstance, eventID types.ContainerEventID, attrs map[string]string, message string) {
+	if r.eventRepo == nil {
+		return
+	}
 	if attrs == nil {
 		attrs = map[string]string{}
 	}
 	if attrs["task_id"] == "" {
 		attrs["task_id"] = taskIDFromEnv(request.Env)
 	}
-	event := trace.Event{
+	r.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
 		ID:          eventID,
 		ContainerID: request.ContainerId,
 		StubID:      request.StubId,
@@ -241,10 +269,97 @@ func (r *ContainerLogger) recordLogTraceEvent(request *types.ContainerRequest, i
 		Source:      "worker.logger",
 		Message:     message,
 		Attrs:       attrs,
+	})
+}
+
+func (r *ContainerLogger) recordRunnerEvent(request *types.ContainerRequest, event *ContainerRunnerEvent) {
+	if r.eventRepo == nil || event == nil || event.ID == "" {
+		return
 	}
-	if err := recordTraceEvent(context.Background(), r.traceRepoClient, event); err != nil {
-		log.Debug().Err(err).Str("container_id", request.ContainerId).Str("event_id", string(eventID)).Msg("failed to record startup trace log event")
+	if event.Attrs == nil {
+		event.Attrs = map[string]string{}
 	}
+
+	switch event.Type {
+	case "phase":
+		startTime, ok := parseRunnerEventTime(event.StartTime)
+		if !ok {
+			return
+		}
+		endTime, ok := parseRunnerEventTime(event.EndTime)
+		if !ok || endTime.Before(startTime) {
+			return
+		}
+		durationMs := event.DurationMs
+		if durationMs == 0 {
+			durationMs = endTime.Sub(startTime).Milliseconds()
+		}
+		success := true
+		if event.Success != nil {
+			success = *event.Success
+		}
+		def := types.ContainerPhaseDefinitionFor(types.ContainerPhaseID(event.ID))
+		r.eventRepo.PushContainerPhaseEvent(types.EventContainerPhaseSchema{
+			ID:          types.ContainerPhaseID(event.ID),
+			Domain:      def.Domain,
+			ParentID:    def.ParentID,
+			StartTime:   startTime,
+			EndTime:     endTime,
+			DurationMs:  durationMs,
+			ContainerID: firstNonEmpty(event.ContainerID, request.ContainerId),
+			StubID:      firstNonEmpty(event.StubID, request.StubId),
+			StubType:    firstNonEmpty(event.StubType, string(request.Stub.Type.Kind())),
+			TaskID:      firstNonEmpty(event.TaskID, taskIDFromEnv(request.Env)),
+			WorkspaceID: request.WorkspaceId,
+			WorkerID:    r.workerID,
+			Success:     &success,
+			Source:      "runner.stdout",
+			Attrs:       event.Attrs,
+		})
+	case "event":
+		timestamp, ok := parseRunnerEventTime(event.Timestamp)
+		if !ok {
+			return
+		}
+		domain := types.ContainerEventDomain(types.ContainerEventID(event.ID))
+		if domain == "" {
+			domain = types.EventDomainRunner
+		}
+		r.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
+			ID:          types.ContainerEventID(event.ID),
+			Domain:      domain,
+			Timestamp:   timestamp,
+			ContainerID: firstNonEmpty(event.ContainerID, request.ContainerId),
+			StubID:      firstNonEmpty(event.StubID, request.StubId),
+			StubType:    firstNonEmpty(event.StubType, string(request.Stub.Type.Kind())),
+			TaskID:      firstNonEmpty(event.TaskID, taskIDFromEnv(request.Env)),
+			WorkspaceID: request.WorkspaceId,
+			WorkerID:    r.workerID,
+			Source:      "runner.stdout",
+			Message:     event.Message,
+			Attrs:       event.Attrs,
+		})
+	}
+}
+
+func parseRunnerEventTime(value string) (time.Time, bool) {
+	if value == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func stringPtrValue(value *string) string {

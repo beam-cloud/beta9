@@ -32,6 +32,7 @@ type AppConfig struct {
 type DatabaseConfig struct {
 	Redis    RedisConfig    `key:"redis" json:"redis"`
 	Postgres PostgresConfig `key:"postgres" json:"postgres"`
+	S2       S2Config       `key:"s2" json:"s2"`
 }
 
 type RedisMode string
@@ -71,6 +72,12 @@ type PostgresConfig struct {
 	TimeZone      string `key:"timezone" json:"timezone"`
 	EnableTLS     bool   `key:"enableTLS" json:"enable_tls"`
 	EncryptionKey string `key:"encryptionKey" json:"encryption_key"`
+}
+
+type S2Config struct {
+	ApiKey       string `key:"apiKey" json:"api_key"`
+	Basin        string `key:"basin" json:"basin"`
+	StreamPrefix string `key:"streamPrefix" json:"stream_prefix"`
 }
 
 type GRPCConfig struct {
@@ -569,7 +576,6 @@ type MonitoringConfig struct {
 	MetricsCollector         string                  `key:"metricsCollector" json:"metrics_collector"`
 	Prometheus               PrometheusConfig        `key:"prometheus" json:"prometheus"`
 	OpenMeter                OpenMeterConfig         `key:"openmeter" json:"openmeter"`
-	FluentBit                FluentBitConfig         `key:"fluentbit" json:"fluentbit"`
 	Telemetry                TelemetryConfig         `key:"telemetry" json:"telemetry"`
 	ContainerMetricsInterval time.Duration           `key:"containerMetricsInterval" json:"container_metrics_interval"`
 	VictoriaMetrics          VictoriaMetricsConfig   `key:"victoriametrics" json:"victoriametrics"`
@@ -626,15 +632,6 @@ type InternalService struct {
 	Destination string `key:"destination" json:"destination"`
 }
 
-type FluentBitConfig struct {
-	Events FluentBitEventConfig `key:"events" json:"events"`
-}
-
-type FluentBitEventMapping struct {
-	Name string `key:"name" json:"name"`
-	Tag  string `key:"tag" json:"tag"`
-}
-
 type ObjectStoreConfig struct {
 	BucketName     string `key:"bucketName" json:"bucket_name"`
 	AccessKey      string `key:"accessKey" json:"access_key"`
@@ -643,16 +640,6 @@ type ObjectStoreConfig struct {
 	Region         string `key:"region" json:"region"`
 	ReadOnly       bool   `key:"readOnly" json:"read_only"`
 	ForcePathStyle bool   `key:"forcePathStyle" json:"force_path_style"`
-}
-
-type FluentBitEventConfig struct {
-	Endpoint        string                  `key:"endpoint" json:"endpoint"`
-	MaxConns        int                     `key:"maxConns" json:"max_conns"`
-	MaxIdleConns    int                     `key:"maxIdleConns" json:"max_idle_conns"`
-	IdleConnTimeout time.Duration           `key:"idleConnTimeout" json:"idle_conn_timeout"`
-	DialTimeout     time.Duration           `key:"dialTimeout" json:"dial_timeout"`
-	KeepAlive       time.Duration           `key:"keepAlive" json:"keep_alive"`
-	Mapping         []FluentBitEventMapping `key:"mapping" json:"mapping"`
 }
 
 type CRIUConfigMode string

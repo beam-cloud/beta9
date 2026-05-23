@@ -18,6 +18,10 @@ database:
     enableTLS: false
     insecureSkipVerify: false
     dialTimeout: 3s
+  s2:
+    apiKey: ""
+    basin: beta9-events
+    streamPrefix: events
 storage:
   mode: juicefs
   fsName: beta9-fs
@@ -381,17 +385,6 @@ monitoring:
     meterInterval: 3s
     traceInterval: 3s
     traceSampleRatio: 1.0
-  fluentbit:
-    events:
-      endpoint: http://fluent-bit.monitoring:9880
-      maxConns: 0
-      maxIdleConns: 30
-      idleConnTimeout: 10s
-      dialTimeout: 2s
-      keepAlive: 30s
-      # mapping:
-      # - name: container.lifecycle
-      #   tag: internal_api
   openmeter:
     serverUrl: ""
     apiKey: ""

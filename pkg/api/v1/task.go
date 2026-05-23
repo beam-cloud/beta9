@@ -22,7 +22,6 @@ import (
 	"github.com/beam-cloud/beta9/pkg/task"
 	"github.com/beam-cloud/beta9/pkg/types"
 	"github.com/beam-cloud/beta9/pkg/types/serializer"
-	"github.com/beam-cloud/beta9/pkg/types/trace"
 	"github.com/labstack/echo/v4"
 )
 
@@ -37,19 +36,19 @@ type TaskGroup struct {
 	backendRepo        repository.BackendRepository
 	taskRepo           repository.TaskRepository
 	containerRepo      repository.ContainerRepository
-	traceRepo          repository.TraceRepository
+	eventRepo          repository.EventRepository
 	redisClient        *common.RedisClient
 	taskDispatcher     *task.Dispatcher
 	scheduler          *scheduler.Scheduler
 	storageClientCache sync.Map
 }
 
-func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, traceRepo repository.TraceRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, scheduler *scheduler.Scheduler, config types.AppConfig) *TaskGroup {
+func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repository.TaskRepository, containerRepo repository.ContainerRepository, eventRepo repository.EventRepository, backendRepo repository.BackendRepository, taskDispatcher *task.Dispatcher, scheduler *scheduler.Scheduler, config types.AppConfig) *TaskGroup {
 	group := &TaskGroup{routerGroup: g,
 		backendRepo:        backendRepo,
 		taskRepo:           taskRepo,
 		containerRepo:      containerRepo,
-		traceRepo:          traceRepo,
+		eventRepo:          eventRepo,
 		config:             config,
 		redisClient:        redisClient,
 		taskDispatcher:     taskDispatcher,
@@ -61,7 +60,6 @@ func NewTaskGroup(g *echo.Group, redisClient *common.RedisClient, taskRepo repos
 	g.GET("/:workspaceId/task-count-by-deployment", auth.WithWorkspaceAuth(group.GetTaskCountByDeployment))
 	g.GET("/:workspaceId/aggregate-by-time-window", auth.WithWorkspaceAuth(group.AggregateTasksByTimeWindow))
 	g.DELETE("/:workspaceId", auth.WithWorkspaceAuth(group.StopTasks))
-	g.GET("/:workspaceId/container/:containerId/trace", auth.WithWorkspaceAuth(group.GetContainerTrace))
 	g.GET("/:workspaceId/:taskId", auth.WithWorkspaceAuth(group.RetrieveTask))
 	g.GET("/:workspaceId/:taskId/subscribe", auth.WithWorkspaceAuth(group.SubscribeTask))
 	g.GET("/metrics", auth.WithClusterAdminAuth(group.GetClusterTaskMetrics))
@@ -260,50 +258,6 @@ func (g *TaskGroup) RetrieveTask(ctx echo.Context) error {
 	}
 }
 
-func (g *TaskGroup) GetContainerTrace(ctx echo.Context) error {
-	cc, _ := ctx.(*auth.HttpAuthContext)
-	containerID := ctx.Param("containerId")
-	if containerID == "" {
-		return HTTPBadRequest("Missing container ID")
-	}
-
-	if g.traceRepo == nil {
-		return HTTPInternalServerError("Trace repository is unavailable")
-	}
-
-	trace, err := g.traceRepo.GetContainerTrace(ctx.Request().Context(), containerID)
-	if err != nil {
-		return HTTPInternalServerError("Failed to retrieve container trace")
-	}
-
-	state, stateErr := g.containerRepo.GetContainerState(containerID)
-	if stateErr == nil && state != nil {
-		if state.WorkspaceId != cc.AuthInfo.Workspace.ExternalId {
-			return HTTPNotFound()
-		}
-		if trace.WorkspaceID == "" {
-			trace.WorkspaceID = state.WorkspaceId
-		}
-		if trace.StubID == "" {
-			trace.StubID = state.StubId
-		}
-		if trace.Status == "" {
-			trace.Status = string(state.Status)
-		}
-	} else if trace.WorkspaceID != "" && trace.WorkspaceID != cc.AuthInfo.Workspace.ExternalId {
-		return HTTPNotFound()
-	}
-
-	if trace.WorkspaceID == "" {
-		return HTTPNotFound()
-	}
-	if len(trace.Events) == 0 && len(trace.Spans) == 0 && len(trace.Logs.Tail) == 0 {
-		return HTTPNotFound()
-	}
-
-	return ctx.JSON(http.StatusOK, trace)
-}
-
 func (g *TaskGroup) addOutputsToTask(ctx context.Context, authInfo *auth.AuthInfo, task *types.TaskWithRelated) error {
 	task.Outputs = []types.TaskOutput{}
 	outputFiles, err := output.GetTaskOutputFiles(ctx, authInfo, authInfo.Workspace.Name, task)
@@ -406,7 +360,7 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 		return nil
 	}
 
-	g.recordTaskCancelTrace(ctx, task, trace.EventTaskCancelRequested, "HTTP task stop requested")
+	g.recordTaskCancelEvent(ctx, task, types.ContainerEventTaskCancelRequested, "HTTP task stop requested")
 	err := g.taskDispatcher.Complete(ctx, task.Workspace.Name, task.Stub.ExternalId, task.ExternalId)
 	if err != nil {
 		return errors.New("failed to complete task")
@@ -434,16 +388,16 @@ func (g *TaskGroup) stopTask(ctx context.Context, task *types.TaskWithRelated) e
 	if _, err := g.backendRepo.UpdateTask(ctx, task.ExternalId, task.Task); err != nil {
 		return errors.New("failed to update task")
 	}
-	g.recordTaskCancelTrace(ctx, task, trace.EventTaskCancelApplied, "HTTP task cancellation applied")
+	g.recordTaskCancelEvent(ctx, task, types.ContainerEventTaskCancelApplied, "HTTP task cancellation applied")
 
 	return nil
 }
 
-func (g *TaskGroup) recordTaskCancelTrace(ctx context.Context, task *types.TaskWithRelated, eventID trace.EventID, message string) {
-	if g.traceRepo == nil || task == nil || task.ContainerId == "" {
+func (g *TaskGroup) recordTaskCancelEvent(ctx context.Context, task *types.TaskWithRelated, eventID types.ContainerEventID, message string) {
+	if g.eventRepo == nil || task == nil || task.ContainerId == "" {
 		return
 	}
-	_ = g.traceRepo.RecordEvent(ctx, trace.Event{
+	g.eventRepo.PushContainerEvent(types.EventContainerEventSchema{
 		ID:          eventID,
 		ContainerID: task.ContainerId,
 		StubID:      task.Stub.ExternalId,

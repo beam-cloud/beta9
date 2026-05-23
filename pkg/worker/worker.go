@@ -20,7 +20,6 @@ import (
 	common "github.com/beam-cloud/beta9/pkg/common"
 	repo "github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/runtime"
-	"github.com/beam-cloud/beta9/pkg/types/trace"
 	pb "github.com/beam-cloud/beta9/proto"
 
 	"github.com/beam-cloud/beta9/pkg/storage"
@@ -78,7 +77,6 @@ type Worker struct {
 	workerRepoClient        pb.WorkerRepositoryServiceClient
 	containerRepoClient     pb.ContainerRepositoryServiceClient
 	backendRepoClient       pb.BackendRepositoryServiceClient
-	traceRepoClient         pb.TraceRepositoryServiceClient
 	eventRepo               repo.EventRepository
 	storageManager          *WorkspaceStorageManager
 	userDataStorage         storage.Storage
@@ -226,12 +224,7 @@ func NewWorker() (*Worker, error) {
 		return nil, err
 	}
 
-	traceRepoClient, err := NewTraceRepositoryClient(context.TODO(), config, workerToken)
-	if err != nil {
-		return nil, err
-	}
-
-	eventRepo := repo.NewTCPEventClientRepo(config.Monitoring.FluentBit.Events)
+	eventRepo := repo.NewEventClientRepo(config)
 
 	poolConfig, poolFound := config.Worker.Pools[workerPoolName]
 	if !poolFound {
@@ -332,6 +325,7 @@ func NewWorker() (*Worker, error) {
 	if err != nil {
 		return nil, err
 	}
+	imageClient.eventRepo = eventRepo
 
 	var criuManager CRIUManager = nil
 	var checkpointStorage storage.Storage = nil
@@ -383,14 +377,13 @@ func NewWorker() (*Worker, error) {
 		containerWg:             sync.WaitGroup{},
 		containerLogger: &ContainerLogger{
 			containerInstances: containerInstances,
-			traceRepoClient:    traceRepoClient,
+			eventRepo:          eventRepo,
 			workerID:           workerId,
 			logLinesPerHour:    config.Worker.ContainerLogLinesPerHour,
 		},
 		containerRepoClient: containerRepoClient,
 		workerRepoClient:    workerRepoClient,
 		backendRepoClient:   backendRepoClient,
-		traceRepoClient:     traceRepoClient,
 		eventRepo:           eventRepo,
 		completedRequests:   make(chan *types.ContainerRequest, 1000),
 		stopContainerChan:   make(chan stopContainerEvent, 1000),
@@ -466,6 +459,11 @@ containerRequestStream:
 			if response.ContainerRequest != nil {
 				lastContainerRequest = time.Now()
 				request := types.NewContainerRequestFromProto(response.ContainerRequest)
+				if !request.Timestamp.IsZero() {
+					s.recordContainerPhase(s.ctx, request, containerPhaseFromDuration(types.ContainerPhaseWorkerQueueReceive, request, request.Timestamp, time.Since(request.Timestamp), true, map[string]string{
+						"worker_id": s.workerId,
+					}))
+				}
 				s.handleContainerRequest(request)
 			}
 
@@ -698,8 +696,8 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 		if notFoundErr.From(err) {
 			instance.StopReason = types.StopContainerReasonUnknown
 			s.containerInstances.Set(request.ContainerId, instance)
-			s.recordTraceEvent(context.Background(), request, trace.Event{
-				ID:          trace.EventWorkerOrphanStateMissing,
+			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+				ID:          types.ContainerEventWorkerOrphanStateMissing,
 				ContainerID: request.ContainerId,
 				Reason:      string(types.StopContainerReasonUnknown),
 				Source:      "worker.status_heartbeat",
@@ -728,8 +726,8 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 				Str("container_id", request.ContainerId).
 				Int("pid", instance.RuntimePid).
 				Msg("reconciling pending container to running from runtime start signal")
-			s.recordTraceEvent(context.Background(), request, trace.Event{
-				ID:          trace.EventWorkerPendingReconciled,
+			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+				ID:          types.ContainerEventWorkerPendingReconciled,
 				ContainerID: request.ContainerId,
 				Source:      "worker.status_heartbeat",
 				Message:     "pending state reconciled to running after runtime start",
@@ -764,8 +762,8 @@ func (s *Worker) updateContainerStatusOnce(request *types.ContainerRequest) (boo
 			}
 
 			log.Info().Str("container_id", request.ContainerId).Int64("grace_period_seconds", s.config.Worker.TerminationGracePeriod).Msg("container still running after stop event")
-			s.recordTraceEvent(context.Background(), request, trace.Event{
-				ID:          trace.EventWorkerStoppingGraceKill,
+			s.recordContainerEvent(context.Background(), request, types.EventContainerEventSchema{
+				ID:          types.ContainerEventWorkerStoppingGraceKill,
 				ContainerID: request.ContainerId,
 				Reason:      string(instance.StopReason),
 				Source:      "worker.status_heartbeat",

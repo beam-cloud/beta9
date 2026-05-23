@@ -1,11 +1,9 @@
 package repository
 
 import (
-	"bytes"
-	"encoding/json"
+	"context"
+	"errors"
 	"fmt"
-	"net"
-	"net/http"
 	"strings"
 	"time"
 
@@ -15,146 +13,190 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type TCPEventClientRepo struct {
-	config            types.FluentBitEventConfig
-	endpointAvailable bool
-	eventTagMap       map[string]string
+type eventSink interface {
+	PushEvent(event cloudevents.Event) error
 }
 
-func NewTCPEventClientRepo(config types.FluentBitEventConfig) EventRepository {
-	endpointAvailable := eventEndpointAvailable(config.Endpoint, time.Duration(config.DialTimeout))
-	if !endpointAvailable {
-		log.Warn().Msg("fluentbit host does not appear to be up, events will be dropped")
-	}
-
-	// Parse event mapping
-	eventTagMap := make(map[string]string)
-	for _, mapping := range config.Mapping {
-		eventTagMap[mapping.Name] = mapping.Tag
-	}
-
-	return &TCPEventClientRepo{
-		config:            config,
-		endpointAvailable: endpointAvailable,
-		eventTagMap:       eventTagMap,
-	}
+type eventReader interface {
+	GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error)
 }
 
-func eventEndpointAvailable(addr string, timeout time.Duration) bool {
-	addr = strings.NewReplacer("http://", "", "https://", "").Replace(addr)
-	conn, err := net.DialTimeout("tcp", addr, timeout)
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-	return true
+type EventClientRepo struct {
+	sinks  []eventSink
+	reader eventReader
 }
 
-func (t *TCPEventClientRepo) createEventObject(eventName string, schemaVersion string, data interface{}) (cloudevents.Event, error) {
+var ErrEventReadUnsupported = errors.New("event read unsupported")
+
+type eventMetadata struct {
+	ContainerID string
+	WorkspaceID string
+	TaskID      string
+	StubID      string
+	WorkerID    string
+}
+
+func NewEventClientRepo(config types.AppConfig) EventRepository {
+	sinks := []eventSink{}
+
+	var reader eventReader
+	if s2Sink, err := NewS2EventRepository(config.Database.S2); err != nil {
+		log.Warn().Err(err).Msg("s2 event repository unavailable")
+	} else if s2Sink != nil {
+		sinks = append(sinks, s2Sink)
+		reader = s2Sink
+	}
+
+	return &EventClientRepo{sinks: sinks, reader: reader}
+}
+
+func (r *EventClientRepo) createEventObject(eventName string, schemaVersion string, data interface{}) (cloudevents.Event, error) {
 	objectId, err := common.GenerateObjectId()
 	if err != nil {
 		return cloudevents.Event{}, err
 	}
 
+	metadata := eventMetadataFromData(data)
 	event := cloudevents.NewEvent()
 	event.SetID(objectId)
 	event.SetSource("beta9-cluster")
 	event.SetType(eventName)
 	event.SetSpecVersion(schemaVersion)
 	event.SetTime(time.Now())
-	event.SetData(cloudevents.ApplicationJSON, data)
+	if err := event.SetData(cloudevents.ApplicationJSON, data); err != nil {
+		return cloudevents.Event{}, err
+	}
+	setEventExtensions(&event, metadata)
 
 	return event, nil
 }
 
-func (t *TCPEventClientRepo) pushEvent(eventName string, schemaVersion string, data interface{}) {
-	if !t.endpointAvailable {
+func (r *EventClientRepo) pushEvent(eventName string, schemaVersion string, data interface{}) {
+	if len(r.sinks) == 0 {
 		return
 	}
 
-	event, err := t.createEventObject(eventName, schemaVersion, data)
+	event, err := r.createEventObject(eventName, schemaVersion, data)
 	if err != nil {
 		log.Error().Err(err).Msg("failed to create event object")
 		return
 	}
 
-	eventBytes, err := json.Marshal(event)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to marshal event object")
-		return
+	for _, sink := range r.sinks {
+		if err := sink.PushEvent(event); err != nil {
+			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to push event")
+		}
 	}
-
-	var tag string
-	tag, ok := t.eventTagMap[eventName]
-	if !ok {
-		tag = ""
-	}
-
-	resp, err := http.Post(t.config.Endpoint+"/"+tag, "application/json", bytes.NewBuffer(eventBytes))
-	if err != nil {
-		log.Error().Err(err).Msg("failed to send payload to event server")
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusCreated {
-		return
-	}
-
-	log.Error().Int("status_code", resp.StatusCode).Msg("unexpected status code from event server")
 }
 
-func (t *TCPEventClientRepo) PushContainerRequestedEvent(request *types.ContainerRequest) {
-	t.pushEvent(
+func (r *EventClientRepo) GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error) {
+	if r.reader == nil {
+		return nil, ErrEventReadUnsupported
+	}
+	return r.reader.GetContainerEvents(ctx, containerID, query)
+}
+
+func (r *EventClientRepo) PushContainerPhaseEvent(phase types.EventContainerPhaseSchema) {
+	def := types.ContainerPhaseDefinitionFor(phase.ID)
+	if phase.Domain == "" {
+		phase.Domain = def.Domain
+	}
+	if phase.ParentID == "" {
+		phase.ParentID = def.ParentID
+	}
+	if phase.EndTime.IsZero() {
+		phase.EndTime = time.Now().UTC()
+	}
+	if phase.DurationMs == 0 && !phase.StartTime.IsZero() && !phase.EndTime.Before(phase.StartTime) {
+		phase.DurationMs = phase.EndTime.Sub(phase.StartTime).Milliseconds()
+	}
+
+	r.pushEvent(types.EventContainerPhase, types.EventContainerPhaseSchemaVersion, phase)
+}
+
+func (r *EventClientRepo) PushContainerEvent(event types.EventContainerEventSchema) {
+	if event.Domain == "" {
+		event.Domain = types.ContainerEventDomain(event.ID)
+	}
+	if event.Timestamp.IsZero() {
+		event.Timestamp = time.Now().UTC()
+	}
+	event.Reason = types.NormalizeEventReason(event.Reason)
+
+	r.pushEvent(types.EventContainerEvent, types.EventContainerEventSchemaVersion, event)
+}
+
+func (r *EventClientRepo) PushContainerLogEvent(entry types.EventContainerLogSchema) {
+	if entry.Timestamp.IsZero() {
+		entry.Timestamp = time.Now().UTC()
+	}
+
+	r.pushEvent(types.EventContainerLog, types.EventContainerLogSchemaVersion, entry)
+}
+
+func (r *EventClientRepo) PushContainerRequestedEvent(request *types.ContainerRequest) {
+	r.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerStatusRequestedSchemaVersion,
 		types.EventContainerStatusRequestedSchema{
 			ContainerID: request.ContainerId,
+			WorkspaceID: request.WorkspaceId,
 			Request:     sanitizeContainerRequest(request),
 			StubID:      request.StubId,
+			StubType:    string(request.Stub.Type.Kind()),
+			TaskID:      taskIDFromRequestEnv(request),
 			Status:      types.EventContainerLifecycleRequested,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest) {
-	t.pushEvent(
+func (r *EventClientRepo) PushContainerScheduledEvent(containerID string, workerID string, request *types.ContainerRequest) {
+	r.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			WorkspaceID: request.WorkspaceId,
 			Request:     sanitizeContainerRequest(request),
 			StubID:      request.StubId,
+			StubType:    string(request.Stub.Type.Kind()),
+			TaskID:      taskIDFromRequestEnv(request),
 			Status:      types.EventContainerLifecycleScheduled,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest) {
-	t.pushEvent(
+func (r *EventClientRepo) PushContainerStartedEvent(containerID string, workerID string, request *types.ContainerRequest) {
+	r.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			WorkspaceID: request.WorkspaceId,
 			Request:     sanitizeContainerRequest(request),
 			StubID:      request.StubId,
+			StubType:    string(request.Stub.Type.Kind()),
+			TaskID:      taskIDFromRequestEnv(request),
 			Status:      types.EventContainerLifecycleStarted,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest, exitCode int) {
-	t.pushEvent(
+func (r *EventClientRepo) PushContainerStoppedEvent(containerID string, workerID string, request *types.ContainerRequest, exitCode int) {
+	r.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerStoppedSchema{
 			EventContainerLifecycleSchema: types.EventContainerLifecycleSchema{
 				ContainerID: containerID,
 				WorkerID:    workerID,
+				WorkspaceID: request.WorkspaceId,
 				Request:     sanitizeContainerRequest(request),
 				StubID:      request.StubId,
+				StubType:    string(request.Stub.Type.Kind()),
+				TaskID:      taskIDFromRequestEnv(request),
 				Status:      types.EventContainerLifecycleStopped,
 			},
 			ExitCode: exitCode,
@@ -162,22 +204,25 @@ func (t *TCPEventClientRepo) PushContainerStoppedEvent(containerID string, worke
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerOOMEvent(containerID string, workerID string, request *types.ContainerRequest) {
-	t.pushEvent(
+func (r *EventClientRepo) PushContainerOOMEvent(containerID string, workerID string, request *types.ContainerRequest) {
+	r.pushEvent(
 		types.EventContainerLifecycle,
 		types.EventContainerLifecycleSchemaVersion,
 		types.EventContainerLifecycleSchema{
 			ContainerID: containerID,
 			WorkerID:    workerID,
+			WorkspaceID: request.WorkspaceId,
 			StubID:      request.StubId,
+			StubType:    string(request.Stub.Type.Kind()),
+			TaskID:      taskIDFromRequestEnv(request),
 			Request:     sanitizeContainerRequest(request),
 			Status:      types.EventContainerLifecycleOOM,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushWorkerStartedEvent(workerID string) {
-	t.pushEvent(
+func (r *EventClientRepo) PushWorkerStartedEvent(workerID string) {
+	r.pushEvent(
 		types.EventWorkerLifecycle,
 		types.EventWorkerLifecycleSchemaVersion,
 		types.EventWorkerLifecycleSchema{
@@ -187,8 +232,8 @@ func (t *TCPEventClientRepo) PushWorkerStartedEvent(workerID string) {
 	)
 }
 
-func (t *TCPEventClientRepo) PushWorkerStoppedEvent(workerID string) {
-	t.pushEvent(
+func (r *EventClientRepo) PushWorkerStoppedEvent(workerID string) {
+	r.pushEvent(
 		types.EventWorkerLifecycle,
 		types.EventWorkerLifecycleSchemaVersion,
 		types.EventWorkerLifecycleSchema{
@@ -198,8 +243,8 @@ func (t *TCPEventClientRepo) PushWorkerStoppedEvent(workerID string) {
 	)
 }
 
-func (t *TCPEventClientRepo) PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason) {
-	t.pushEvent(
+func (r *EventClientRepo) PushWorkerDeletedEvent(workerID, machineID, poolName string, reason types.DeletedWorkerReason) {
+	r.pushEvent(
 		types.EventWorkerLifecycle,
 		types.EventWorkerLifecycleSchemaVersion,
 		types.EventWorkerLifecycleSchema{
@@ -212,8 +257,8 @@ func (t *TCPEventClientRepo) PushWorkerDeletedEvent(workerID, machineID, poolNam
 	)
 }
 
-func (t *TCPEventClientRepo) PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData) {
-	t.pushEvent(
+func (r *EventClientRepo) PushContainerResourceMetricsEvent(workerID string, request *types.ContainerRequest, metrics types.EventContainerMetricsData) {
+	r.pushEvent(
 		types.EventContainerMetrics,
 		types.EventContainerMetricsSchemaVersion,
 		types.EventContainerMetricsSchema{
@@ -221,13 +266,14 @@ func (t *TCPEventClientRepo) PushContainerResourceMetricsEvent(workerID string, 
 			ContainerID:      request.ContainerId,
 			WorkspaceID:      request.WorkspaceId,
 			StubID:           request.StubId,
+			StubType:         string(request.Stub.Type.Kind()),
 			ContainerMetrics: metrics,
 		},
 	)
 }
 
-func (t *TCPEventClientRepo) PushDeployStubEvent(workspaceId string, stub *types.Stub) {
-	t.pushEvent(
+func (r *EventClientRepo) PushDeployStubEvent(workspaceId string, stub *types.Stub) {
+	r.pushEvent(
 		types.EventStubDeploy,
 		types.EventStubSchemaVersion,
 		types.EventStubSchema{
@@ -239,8 +285,8 @@ func (t *TCPEventClientRepo) PushDeployStubEvent(workspaceId string, stub *types
 	)
 }
 
-func (t *TCPEventClientRepo) PushServeStubEvent(workspaceId string, stub *types.Stub) {
-	t.pushEvent(
+func (r *EventClientRepo) PushServeStubEvent(workspaceId string, stub *types.Stub) {
+	r.pushEvent(
 		types.EventStubServe,
 		types.EventStubSchemaVersion,
 		types.EventStubSchema{
@@ -252,8 +298,8 @@ func (t *TCPEventClientRepo) PushServeStubEvent(workspaceId string, stub *types.
 	)
 }
 
-func (t *TCPEventClientRepo) PushRunStubEvent(workspaceId string, stub *types.Stub) {
-	t.pushEvent(
+func (r *EventClientRepo) PushRunStubEvent(workspaceId string, stub *types.Stub) {
+	r.pushEvent(
 		types.EventStubRun,
 		types.EventStubSchemaVersion,
 		types.EventStubSchema{
@@ -265,8 +311,8 @@ func (t *TCPEventClientRepo) PushRunStubEvent(workspaceId string, stub *types.St
 	)
 }
 
-func (t *TCPEventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub) {
-	t.pushEvent(
+func (r *EventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.Stub, parentStub *types.Stub) {
+	r.pushEvent(
 		types.EventStubClone,
 		types.EventStubSchemaVersion,
 		types.EventStubSchema{
@@ -279,7 +325,7 @@ func (t *TCPEventClientRepo) PushCloneStubEvent(workspaceId string, stub *types.
 	)
 }
 
-func (t *TCPEventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
+func (r *EventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
 	event := types.EventTaskSchema{
 		ID:          task.ExternalId,
 		Status:      task.Status,
@@ -302,14 +348,14 @@ func (t *TCPEventClientRepo) PushTaskUpdatedEvent(task *types.TaskWithRelated) {
 		event.ExternalWorkspaceID = *task.ExternalWorkspace.ExternalId
 	}
 
-	t.pushEvent(
+	r.pushEvent(
 		types.EventTaskUpdated,
 		types.EventTaskSchemaVersion,
 		event,
 	)
 }
 
-func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
+func (r *EventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 	event := types.EventTaskSchema{
 		ID:          task.ExternalId,
 		Status:      task.Status,
@@ -332,15 +378,15 @@ func (t *TCPEventClientRepo) PushTaskCreatedEvent(task *types.TaskWithRelated) {
 		event.ExternalWorkspaceID = *task.ExternalWorkspace.ExternalId
 	}
 
-	t.pushEvent(
+	r.pushEvent(
 		types.EventTaskCreated,
 		types.EventTaskSchemaVersion,
 		event,
 	)
 }
 
-func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId string, currentState string, previousState string, reason string, failedContainers []string) {
-	t.pushEvent(
+func (r *EventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId string, currentState string, previousState string, reason string, failedContainers []string) {
+	r.pushEvent(
 		fmt.Sprintf("stub.state.%s", strings.ToLower(currentState)),
 		types.EventStubStateSchemaVersion,
 		types.EventStubStateSchema{
@@ -354,8 +400,8 @@ func (t *TCPEventClientRepo) PushStubStateUnhealthy(workspaceId string, stubId s
 	)
 }
 
-func (t *TCPEventClientRepo) PushWorkerPoolDegradedEvent(poolName string, reasons []string, poolState *types.WorkerPoolState) {
-	t.pushEvent(
+func (r *EventClientRepo) PushWorkerPoolDegradedEvent(poolName string, reasons []string, poolState *types.WorkerPoolState) {
+	r.pushEvent(
 		types.EventWorkerPoolDegraded,
 		types.EventWorkerPoolStateSchemaVersion,
 		types.EventWorkerPoolStateSchema{
@@ -367,8 +413,8 @@ func (t *TCPEventClientRepo) PushWorkerPoolDegradedEvent(poolName string, reason
 	)
 }
 
-func (t *TCPEventClientRepo) PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState) {
-	t.pushEvent(
+func (r *EventClientRepo) PushWorkerPoolHealthyEvent(poolName string, poolState *types.WorkerPoolState) {
+	r.pushEvent(
 		types.EventWorkerPoolHealthy,
 		types.EventWorkerPoolStateSchemaVersion,
 		types.EventWorkerPoolStateSchema{
@@ -379,8 +425,8 @@ func (t *TCPEventClientRepo) PushWorkerPoolHealthyEvent(poolName string, poolSta
 	)
 }
 
-func (t *TCPEventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string) {
-	t.pushEvent(
+func (r *EventClientRepo) PushGatewayEndpointCalledEvent(method, path, workspaceID string, statusCode int, userAgent, remoteIP, requestID, contentType, accept, errorMessage string) {
+	r.pushEvent(
 		types.EventGatewayEndpointCalled,
 		types.EventGatewayEndpointSchemaVersion,
 		types.EventGatewayEndpointSchema{
@@ -409,4 +455,71 @@ func sanitizeContainerRequest(request *types.ContainerRequest) types.ContainerRe
 	requestCopy.Checkpoint = nil
 	requestCopy.ConfigPath = ""
 	return requestCopy
+}
+
+func taskIDFromRequestEnv(request *types.ContainerRequest) string {
+	if request == nil {
+		return ""
+	}
+	for _, entry := range request.Env {
+		if value, ok := strings.CutPrefix(entry, "TASK_ID="); ok {
+			return value
+		}
+	}
+	return ""
+}
+
+func eventMetadataFromData(data interface{}) eventMetadata {
+	switch d := data.(type) {
+	case types.EventContainerStatusRequestedSchema:
+		workspaceID := d.WorkspaceID
+		if workspaceID == "" {
+			workspaceID = d.Request.WorkspaceId
+		}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkspaceID: workspaceID}
+	case types.EventContainerLifecycleSchema:
+		workspaceID := d.WorkspaceID
+		if workspaceID == "" {
+			workspaceID = d.Request.WorkspaceId
+		}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: workspaceID}
+	case types.EventContainerStoppedSchema:
+		workspaceID := d.WorkspaceID
+		if workspaceID == "" {
+			workspaceID = d.Request.WorkspaceId
+		}
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: workspaceID}
+	case types.EventContainerMetricsSchema:
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
+	case types.EventContainerPhaseSchema:
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
+	case types.EventContainerEventSchema:
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
+	case types.EventContainerLogSchema:
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.TaskID, WorkerID: d.WorkerID, WorkspaceID: d.WorkspaceID}
+	case types.EventTaskSchema:
+		return eventMetadata{ContainerID: d.ContainerID, StubID: d.StubID, TaskID: d.ID, WorkspaceID: d.WorkspaceID}
+	case types.EventStubSchema:
+		return eventMetadata{StubID: d.ID, WorkspaceID: d.WorkspaceID}
+	default:
+		return eventMetadata{}
+	}
+}
+
+func setEventExtensions(event *cloudevents.Event, metadata eventMetadata) {
+	if metadata.ContainerID != "" {
+		event.SetExtension("containerid", metadata.ContainerID)
+	}
+	if metadata.WorkspaceID != "" {
+		event.SetExtension("workspaceid", metadata.WorkspaceID)
+	}
+	if metadata.TaskID != "" {
+		event.SetExtension("taskid", metadata.TaskID)
+	}
+	if metadata.StubID != "" {
+		event.SetExtension("stubid", metadata.StubID)
+	}
+	if metadata.WorkerID != "" {
+		event.SetExtension("workerid", metadata.WorkerID)
+	}
 }

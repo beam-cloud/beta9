@@ -25,7 +25,6 @@ type GatewayService struct {
 	eventRepo        repository.EventRepository
 	workerRepo       repository.WorkerRepository
 	workerPoolRepo   repository.WorkerPoolRepository
-	traceRepo        repository.TraceRepository
 	usageMetricsRepo repository.UsageMetricsRepository
 	tailscale        *network.Tailscale
 	keyEventManager  *common.KeyEventManager
@@ -45,7 +44,6 @@ type GatewayServiceOpts struct {
 	EventRepo        repository.EventRepository
 	WorkerRepo       repository.WorkerRepository
 	WorkerPoolRepo   repository.WorkerPoolRepository
-	TraceRepo        repository.TraceRepository
 	UsageMetricsRepo repository.UsageMetricsRepository
 	Tailscale        *network.Tailscale
 	KeyEventManager  *common.KeyEventManager
@@ -69,7 +67,6 @@ func NewGatewayService(opts *GatewayServiceOpts) (*GatewayService, error) {
 		eventRepo:        opts.EventRepo,
 		workerRepo:       opts.WorkerRepo,
 		workerPoolRepo:   opts.WorkerPoolRepo,
-		traceRepo:        opts.TraceRepo,
 		usageMetricsRepo: opts.UsageMetricsRepo,
 		tailscale:        opts.Tailscale,
 		keyEventManager:  keyEventManager,
