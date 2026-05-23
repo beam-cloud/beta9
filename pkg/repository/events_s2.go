@@ -3,8 +3,10 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,10 +19,12 @@ import (
 
 const (
 	defaultS2EventStreamPrefix = "events"
-	defaultS2EventReadLimit    = 1000
+	defaultS2EventReadLimit    = 10000
 	s2EventQueueSize           = 16384
+	s2EventBatchSize           = 256
 	s2EventRetentionSeconds    = int64(7 * 24 * 60 * 60)
 	s2EventWriteTimeout        = 5 * time.Second
+	s2EventFlushInterval       = 100 * time.Millisecond
 )
 
 type S2EventRepository struct {
@@ -80,50 +84,106 @@ func (r *S2EventRepository) PushEvent(event cloudevents.Event) error {
 }
 
 func (r *S2EventRepository) runWriter() {
-	for event := range r.queue {
-		if err := r.appendEvent(event); err != nil {
-			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to append event to s2")
+	ticker := time.NewTicker(s2EventFlushInterval)
+	defer ticker.Stop()
+
+	batch := make([]cloudevents.Event, 0, s2EventBatchSize)
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		if err := r.appendEventBatch(batch); err != nil {
+			log.Debug().Err(err).Int("event_count", len(batch)).Msg("failed to append event batch to s2")
+		}
+		batch = batch[:0]
+	}
+
+	for {
+		select {
+		case event, ok := <-r.queue:
+			if !ok {
+				flush()
+				return
+			}
+			batch = append(batch, event)
+			if len(batch) >= s2EventBatchSize {
+				flush()
+			}
+		case <-ticker.C:
+			flush()
 		}
 	}
 }
 
 func (r *S2EventRepository) appendEvent(event cloudevents.Event) error {
+	return r.appendEventBatch([]cloudevents.Event{event})
+}
+
+func (r *S2EventRepository) appendEventBatch(events []cloudevents.Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+
+	if err := r.ensureBasinForWrite(); err != nil {
+		return err
+	}
+
+	recordsByStream := map[s2.StreamName][]s2.AppendRecord{}
+	for _, event := range events {
+		record, streamName, err := r.appendRecordForEvent(event)
+		if err != nil {
+			log.Debug().Err(err).Str("event_type", event.Type()).Msg("failed to build s2 event record")
+			continue
+		}
+		if streamName == "" {
+			continue
+		}
+		recordsByStream[streamName] = append(recordsByStream[streamName], record)
+	}
+
+	for streamName, records := range recordsByStream {
+		if len(records) == 0 {
+			continue
+		}
+		if err := r.ensureStreamForWrite(streamName); err != nil {
+			if isS2EventStreamDeletionPending(err) {
+				r.ensured.Delete(streamName)
+				log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
+				continue
+			}
+			return err
+		}
+		if err := r.appendRecordsForWrite(streamName, records); err != nil {
+			if isS2EventStreamDeletionPending(err) {
+				r.ensured.Delete(streamName)
+				log.Debug().Err(err).Str("stream", string(streamName)).Msg("dropping event batch for stream pending deletion")
+				continue
+			}
+			return fmt.Errorf("append %d events to s2 stream %q: %w", len(records), streamName, err)
+		}
+	}
+
+	return nil
+}
+
+func (r *S2EventRepository) appendRecordForEvent(event cloudevents.Event) (s2.AppendRecord, s2.StreamName, error) {
 	body, err := json.Marshal(event)
 	if err != nil {
-		return fmt.Errorf("marshal cloud event: %w", err)
+		return s2.AppendRecord{}, "", fmt.Errorf("marshal cloud event: %w", err)
 	}
 
 	metadata := eventMetadataFromCloudEvent(event)
 	streamName := r.streamNameForEvent(event.Type(), metadata)
 	if streamName == "" {
-		return nil
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), s2EventWriteTimeout)
-	defer cancel()
-
-	if err := r.ensureBasin(ctx); err != nil {
-		return err
-	}
-	if err := r.ensureStream(ctx, streamName); err != nil {
-		return err
+		return s2.AppendRecord{}, "", nil
 	}
 
 	timestamp := uint64(event.Time().UnixMilli())
-	_, err = r.basin.Stream(streamName).Append(ctx, &s2.AppendInput{
-		Records: []s2.AppendRecord{
-			{
-				Timestamp: &timestamp,
-				Headers:   s2HeadersForEvent(event, metadata),
-				Body:      body,
-			},
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("append event to s2 stream %q: %w", streamName, err)
-	}
-
-	return nil
+	return s2.AppendRecord{
+		Timestamp: &timestamp,
+		Headers:   s2HeadersForEvent(event, metadata),
+		Body:      body,
+	}, streamName, nil
 }
 
 func (r *S2EventRepository) GetContainerEvents(ctx context.Context, containerID string, query types.EventQuery) (*types.ContainerEventsResponse, error) {
@@ -286,6 +346,12 @@ func (r *S2EventRepository) ensureBasin(ctx context.Context) error {
 	return nil
 }
 
+func (r *S2EventRepository) ensureBasinForWrite() error {
+	ctx, cancel := s2EventWriteContext()
+	defer cancel()
+	return r.ensureBasin(ctx)
+}
+
 func (r *S2EventRepository) ensureStream(ctx context.Context, streamName s2.StreamName) error {
 	if _, ok := r.ensured.Load(streamName); ok {
 		return nil
@@ -304,6 +370,28 @@ func (r *S2EventRepository) ensureStream(ctx context.Context, streamName s2.Stre
 
 	r.ensured.Store(streamName, struct{}{})
 	return nil
+}
+
+func (r *S2EventRepository) ensureStreamForWrite(streamName s2.StreamName) error {
+	ctx, cancel := s2EventWriteContext()
+	defer cancel()
+	return r.ensureStream(ctx, streamName)
+}
+
+func (r *S2EventRepository) appendRecordsForWrite(streamName s2.StreamName, records []s2.AppendRecord) error {
+	ctx, cancel := s2EventWriteContext()
+	defer cancel()
+	_, err := r.basin.Stream(streamName).Append(ctx, &s2.AppendInput{Records: records})
+	return err
+}
+
+func s2EventWriteContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), s2EventWriteTimeout)
+}
+
+func isS2EventStreamDeletionPending(err error) bool {
+	var s2Err *s2.S2Error
+	return errors.As(err, &s2Err) && s2Err.Code == "stream_deletion_pending"
 }
 
 func (r *S2EventRepository) streamNameForEvent(eventType string, metadata eventMetadata) s2.StreamName {
@@ -415,6 +503,7 @@ func augmentContainerEventResponse(response *types.ContainerEventsResponse, reco
 		}
 		record.EventID = string(phase.ID)
 		record.Domain = string(phase.Domain)
+		record.ParentID = string(phase.ParentID)
 		record.StartTime = phase.StartTime
 		record.EndTime = phase.EndTime
 		record.DurationMs = phase.DurationMs
@@ -537,11 +626,28 @@ func summarizeContainerPhaseDurations(events []types.ContainerEventRecord) map[s
 			if event.EventID == string(types.ContainerPhaseWorkerQueueReceive) && !event.StartTime.IsZero() && workerReceiveAt.IsZero() {
 				workerReceiveAt = event.StartTime
 			}
-			if event.EventID == "" || event.DurationMs <= 0 {
+			durationUs := containerEventRecordDurationUs(event)
+			durationMs := event.DurationMs
+			if durationMs <= 0 && durationUs > 0 {
+				durationMs = durationUs / 1000
+			}
+			if event.EventID == "" || (durationMs <= 0 && durationUs <= 0) {
 				continue
 			}
 			id := types.ContainerPhaseID(event.EventID)
-			setMaxDuration(summary, types.EventSummaryKeyForPhase(id), event.DurationMs)
+			summaryKey := types.EventSummaryKeyForPhase(id)
+			setMaxDuration(summary, summaryKey, durationMs)
+			if strings.HasPrefix(event.EventID, "clip.") {
+				baseKey := strings.TrimSuffix(summaryKey, "_ms")
+				if durationUs > 0 {
+					addDuration(summary, baseKey+"_total_us", durationUs)
+					setMaxDuration(summary, baseKey+"_max_us", durationUs)
+					durationMs = durationUsToMilliseconds(durationUs)
+				}
+				addDuration(summary, baseKey+"_total_ms", durationMs)
+				incrementCount(summary, baseKey+"_count")
+				setMaxDuration(summary, baseKey+"_max_ms", durationMs)
+			}
 		case types.EventContainerEvent:
 			if event.EventID == string(types.ContainerEventRunnerStartTask) && !event.Timestamp.IsZero() {
 				startTaskAt = event.Timestamp
@@ -594,6 +700,17 @@ func summarizeContainerPhaseDurations(events []types.ContainerEventRecord) map[s
 		"network_setup_ms",
 		"network_expose_ports_ms",
 	)
+	if summary["clip_read_total_us"] > 0 {
+		setMaxDuration(summary, "clip_us", summary["clip_read_total_us"])
+		setMaxDuration(summary, "clip_ms", durationUsToMilliseconds(summary["clip_read_total_us"]))
+	} else if summary["clip_oci_read_total_us"] > 0 {
+		setMaxDuration(summary, "clip_us", summary["clip_oci_read_total_us"])
+		setMaxDuration(summary, "clip_ms", durationUsToMilliseconds(summary["clip_oci_read_total_us"]))
+	} else if summary["clip_read_total_ms"] > 0 {
+		setMaxDuration(summary, "clip_ms", summary["clip_read_total_ms"])
+	} else if summary["clip_oci_read_total_ms"] > 0 {
+		setMaxDuration(summary, "clip_ms", summary["clip_oci_read_total_ms"])
+	}
 	if summary["runtime_ms"] == 0 {
 		setMaxDuration(summary, "runtime_ms", summary["container_startup_ms"])
 	}
@@ -643,6 +760,39 @@ func setMaxDuration(summary map[string]int64, key string, duration int64) {
 	if current, ok := summary[key]; !ok || duration > current {
 		summary[key] = duration
 	}
+}
+
+func addDuration(summary map[string]int64, key string, duration int64) {
+	if key == "" || duration <= 0 {
+		return
+	}
+	summary[key] += duration
+}
+
+func incrementCount(summary map[string]int64, key string) {
+	if key == "" {
+		return
+	}
+	summary[key]++
+}
+
+func containerEventRecordDurationUs(event types.ContainerEventRecord) int64 {
+	if event.Attrs != nil {
+		if durationUs, err := strconv.ParseInt(event.Attrs["duration_us"], 10, 64); err == nil && durationUs > 0 {
+			return durationUs
+		}
+		if durationNs, err := strconv.ParseInt(event.Attrs["duration_ns"], 10, 64); err == nil && durationNs > 0 {
+			return durationNs / 1000
+		}
+	}
+	return event.DurationMs * 1000
+}
+
+func durationUsToMilliseconds(durationUs int64) int64 {
+	if durationUs <= 0 {
+		return 0
+	}
+	return (durationUs + 999) / 1000
 }
 
 func setSummedDuration(summary map[string]int64, key string, parts ...string) {

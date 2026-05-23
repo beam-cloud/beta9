@@ -20,21 +20,29 @@ const (
 type imageContentCache struct {
 	client  *cache.Client
 	imageID string
+	kind    string
 
-	readRequests  atomic.Int64
-	readBytes     atomic.Int64
-	readErrors    atomic.Int64
-	storeRequests atomic.Int64
-	storeBytes    atomic.Int64
-	storeErrors   atomic.Int64
-	lastSummaryNS atomic.Int64
+	readRequests   atomic.Int64
+	readBytes      atomic.Int64
+	readErrors     atomic.Int64
+	existsRequests atomic.Int64
+	existsHits     atomic.Int64
+	existsErrors   atomic.Int64
+	storeRequests  atomic.Int64
+	storeBytes     atomic.Int64
+	storeErrors    atomic.Int64
+	lastSummaryNS  atomic.Int64
 }
 
-func newImageContentCache(client *cache.Client, imageID string) *imageContentCache {
+func newImageContentCache(client *cache.Client, imageID string, kind ...string) *imageContentCache {
 	if client == nil {
 		return nil
 	}
-	return &imageContentCache{client: client, imageID: imageID}
+	cacheKind := "content"
+	if len(kind) > 0 && kind[0] != "" {
+		cacheKind = kind[0]
+	}
+	return &imageContentCache{client: client, imageID: imageID, kind: cacheKind}
 }
 
 func (c *imageContentCache) GetContent(hash string, offset int64, length int64, opts struct{ RoutingKey string }) ([]byte, error) {
@@ -73,6 +81,7 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 			log.Warn().
 				Err(err).
 				Str("image_id", c.imageID).
+				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
 				Str("routing_key", shortHash(opts.RoutingKey)).
 				Int64("offset", offset).
@@ -83,6 +92,7 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 		} else if elapsed > imageContentCacheSlowRead {
 			log.Info().
 				Str("image_id", c.imageID).
+				Str("kind", c.kind).
 				Str("hash", shortHash(hash)).
 				Str("routing_key", shortHash(opts.RoutingKey)).
 				Int64("offset", offset).
@@ -99,6 +109,44 @@ func (c *imageContentCache) ReadContentInto(hash string, offset int64, dest []by
 	return c.client.ReadContentInto(ctx, hash, offset, dest, cache.ClientOptions{RoutingKey: opts.RoutingKey})
 }
 
+func (c *imageContentCache) ContentExists(hash string, opts struct{ RoutingKey string }) (exists bool, err error) {
+	if c == nil || c.client == nil {
+		return false, cache.ErrClientNotFound
+	}
+	if opts.RoutingKey == "" {
+		opts.RoutingKey = hash
+	}
+
+	started := time.Now()
+	c.existsRequests.Add(1)
+	defer func() {
+		elapsed := time.Since(started)
+		if err != nil {
+			c.existsErrors.Add(1)
+			log.Warn().
+				Err(err).
+				Str("image_id", c.imageID).
+				Str("kind", c.kind).
+				Str("hash", shortHash(hash)).
+				Str("routing_key", shortHash(opts.RoutingKey)).
+				Dur("elapsed", elapsed).
+				Msg("clip image content cache exists result")
+		} else if exists {
+			c.existsHits.Add(1)
+			log.Debug().
+				Str("image_id", c.imageID).
+				Str("kind", c.kind).
+				Str("hash", shortHash(hash)).
+				Str("routing_key", shortHash(opts.RoutingKey)).
+				Dur("elapsed", elapsed).
+				Msg("clip image content cache exists hit")
+		}
+		c.maybeLogSummary()
+	}()
+
+	return c.client.IsCachedNearby(hash, opts.RoutingKey)
+}
+
 func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts struct{ RoutingKey string }) (string, error) {
 	if c == nil || c.client == nil {
 		return "", cache.ErrClientNotFound
@@ -110,11 +158,14 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 	started := time.Now()
 	c.storeRequests.Add(1)
 	countingChunks := make(chan []byte, 2)
+	var storeBytes atomic.Int64
 
 	go func() {
 		defer close(countingChunks)
 		for chunk := range chunks {
-			c.storeBytes.Add(int64(len(chunk)))
+			n := int64(len(chunk))
+			c.storeBytes.Add(n)
+			storeBytes.Add(n)
 			countingChunks <- chunk
 		}
 	}()
@@ -126,16 +177,20 @@ func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts s
 		log.Warn().
 			Err(err).
 			Str("image_id", c.imageID).
+			Str("kind", c.kind).
 			Str("hash", shortHash(hash)).
 			Str("routing_key", shortHash(opts.RoutingKey)).
+			Int64("bytes", storeBytes.Load()).
 			Dur("elapsed", elapsed).
 			Msg("clip image content cache store result")
 	} else if elapsed > imageContentCacheSlowStore {
 		log.Info().
 			Str("image_id", c.imageID).
+			Str("kind", c.kind).
 			Str("hash", shortHash(hash)).
 			Str("actual_hash", shortHash(actualHash)).
 			Str("routing_key", shortHash(opts.RoutingKey)).
+			Int64("bytes", storeBytes.Load()).
 			Dur("elapsed", elapsed).
 			Msg("clip image content cache store result")
 	}
@@ -156,9 +211,13 @@ func (c *imageContentCache) maybeLogSummary() {
 
 	log.Info().
 		Str("image_id", c.imageID).
+		Str("kind", c.kind).
 		Int64("read_requests", c.readRequests.Load()).
 		Int64("read_bytes", c.readBytes.Load()).
 		Int64("read_errors", c.readErrors.Load()).
+		Int64("exists_requests", c.existsRequests.Load()).
+		Int64("exists_hits", c.existsHits.Load()).
+		Int64("exists_errors", c.existsErrors.Load()).
 		Int64("store_requests", c.storeRequests.Load()).
 		Int64("store_bytes", c.storeBytes.Load()).
 		Int64("store_errors", c.storeErrors.Load()).

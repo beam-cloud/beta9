@@ -220,6 +220,7 @@ const (
 	EventDomainScheduler  EventDomain = "scheduler"
 	EventDomainWorker     EventDomain = "worker"
 	EventDomainImage      EventDomain = "image"
+	EventDomainClip       EventDomain = "clip"
 	EventDomainMount      EventDomain = "mount"
 	EventDomainNetwork    EventDomain = "network"
 	EventDomainRuntime    EventDomain = "runtime"
@@ -274,6 +275,14 @@ const (
 	ContainerPhaseRunnerHandlerExecution      ContainerPhaseID = "runner.handler_execution"
 	ContainerPhaseRunnerSetResultRPC          ContainerPhaseID = "runner.set_result_rpc"
 	ContainerPhaseRunnerEndTaskRPC            ContainerPhaseID = "runner.end_task_rpc"
+	ContainerPhaseClipRead                    ContainerPhaseID = "clip.read"
+	ContainerPhaseClipOCIRead                 ContainerPhaseID = "clip.oci_read"
+	ContainerPhaseClipArchiveRead             ContainerPhaseID = "clip.archive_read"
+	ContainerPhaseClipDiskCacheRead           ContainerPhaseID = "clip.disk_cache_read"
+	ContainerPhaseClipContentCacheRead        ContainerPhaseID = "clip.content_cache_read"
+	ContainerPhaseClipCheckpointRead          ContainerPhaseID = "clip.checkpoint_read"
+	ContainerPhaseClipLayerDecompress         ContainerPhaseID = "clip.layer_decompress"
+	ContainerPhaseClipLayerDecompressWait     ContainerPhaseID = "clip.layer_decompress_wait"
 )
 
 type ContainerPhaseDefinition struct {
@@ -324,6 +333,14 @@ var ContainerPhaseDefinitions = map[ContainerPhaseID]ContainerPhaseDefinition{
 	ContainerPhaseRunnerHandlerExecution:      {ID: ContainerPhaseRunnerHandlerExecution, Domain: EventDomainRunner, Label: "Run handler"},
 	ContainerPhaseRunnerSetResultRPC:          {ID: ContainerPhaseRunnerSetResultRPC, Domain: EventDomainRunner, Label: "SetResult RPC"},
 	ContainerPhaseRunnerEndTaskRPC:            {ID: ContainerPhaseRunnerEndTaskRPC, Domain: EventDomainRunner, Label: "EndTask RPC"},
+	ContainerPhaseClipRead:                    {ID: ContainerPhaseClipRead, Domain: EventDomainClip, Label: "CLIP lazy read"},
+	ContainerPhaseClipOCIRead:                 {ID: ContainerPhaseClipOCIRead, Domain: EventDomainClip, Label: "CLIP OCI lazy read"},
+	ContainerPhaseClipArchiveRead:             {ID: ContainerPhaseClipArchiveRead, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP archive read"},
+	ContainerPhaseClipDiskCacheRead:           {ID: ContainerPhaseClipDiskCacheRead, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP disk cache read"},
+	ContainerPhaseClipContentCacheRead:        {ID: ContainerPhaseClipContentCacheRead, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP content cache read"},
+	ContainerPhaseClipCheckpointRead:          {ID: ContainerPhaseClipCheckpointRead, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP checkpoint read"},
+	ContainerPhaseClipLayerDecompress:         {ID: ContainerPhaseClipLayerDecompress, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP layer decompress"},
+	ContainerPhaseClipLayerDecompressWait:     {ID: ContainerPhaseClipLayerDecompressWait, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: "CLIP layer decompress wait"},
 }
 
 type ContainerEventID string
@@ -457,6 +474,7 @@ type ContainerEventRecord struct {
 	Type        string            `json:"type"`
 	EventID     string            `json:"event_id,omitempty"`
 	Domain      string            `json:"domain,omitempty"`
+	ParentID    string            `json:"parent_id,omitempty"`
 	Timestamp   time.Time         `json:"timestamp,omitempty"`
 	StartTime   time.Time         `json:"start_time,omitempty"`
 	EndTime     time.Time         `json:"end_time,omitempty"`
@@ -503,6 +521,9 @@ func ContainerPhaseDefinitionFor(id ContainerPhaseID) ContainerPhaseDefinition {
 	}
 	if strings.HasPrefix(string(id), "image.") {
 		return ContainerPhaseDefinition{ID: id, Domain: EventDomainImage, ParentID: ContainerPhaseImageLoad, Label: string(id)}
+	}
+	if strings.HasPrefix(string(id), "clip.") {
+		return ContainerPhaseDefinition{ID: id, Domain: EventDomainClip, ParentID: ContainerPhaseClipRead, Label: string(id)}
 	}
 	return ContainerPhaseDefinition{ID: id}
 }
@@ -581,6 +602,22 @@ func EventSummaryKeyForPhase(id ContainerPhaseID) string {
 		return "runner_set_result_rpc_ms"
 	case ContainerPhaseRunnerEndTaskRPC:
 		return "runner_end_task_rpc_ms"
+	case ContainerPhaseClipRead:
+		return "clip_read_ms"
+	case ContainerPhaseClipOCIRead:
+		return "clip_oci_read_ms"
+	case ContainerPhaseClipArchiveRead:
+		return "clip_archive_read_ms"
+	case ContainerPhaseClipDiskCacheRead:
+		return "clip_disk_cache_read_ms"
+	case ContainerPhaseClipContentCacheRead:
+		return "clip_content_cache_read_ms"
+	case ContainerPhaseClipCheckpointRead:
+		return "clip_checkpoint_read_ms"
+	case ContainerPhaseClipLayerDecompress:
+		return "clip_layer_decompress_ms"
+	case ContainerPhaseClipLayerDecompressWait:
+		return "clip_layer_decompress_wait_ms"
 	default:
 		return strings.ReplaceAll(string(id), ".", "_") + "_ms"
 	}

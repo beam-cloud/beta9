@@ -141,6 +141,12 @@ type ImageClient struct {
 	// Cache source image references for v2 images (imageId -> sourceImageRef)
 	v2ImageRefs       *common.SafeMap[string]
 	v2ArchiveMetadata *common.SafeMap[*clipCommon.ClipArchiveMetadata]
+	clipRuntimeMu     sync.RWMutex
+	clipActive        map[string]*types.ContainerRequest
+	clipRuntimePIDs   map[int]string
+	clipPIDCache      map[int]string
+	clipReadEvents    chan clipCommon.ReadTraceEvent
+	clipAggregates    map[string]*clipReadAggregate
 }
 
 func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb.WorkerRepositoryServiceClient, fileCacheManager *FileCacheManager) (*ImageClient, error) {
@@ -172,10 +178,16 @@ func NewImageClient(config types.AppConfig, workerId string, workerRepoClient pb
 		mountLocks:         make(map[string]*sync.Mutex),
 		v2ImageRefs:        common.NewSafeMap[string](),
 		v2ArchiveMetadata:  common.NewSafeMap[*clipCommon.ClipArchiveMetadata](),
+		clipActive:         make(map[string]*types.ContainerRequest),
+		clipRuntimePIDs:    make(map[int]string),
+		clipPIDCache:       make(map[int]string),
+		clipReadEvents:     make(chan clipCommon.ReadTraceEvent, clipReadEventQueueSize),
+		clipAggregates:     make(map[string]*clipReadAggregate),
 		logger: &ContainerLogger{
 			logLinesPerHour: config.Worker.ContainerLogLinesPerHour,
 		},
 	}
+	go c.runClipReadEventReporter()
 
 	if config.DebugMode {
 		clip.SetLogLevel("debug")
@@ -402,13 +414,18 @@ func isOCIStorageMode(mode string) bool {
 }
 
 func (c *ImageClient) lazyMountOptions(ctx context.Context, request *types.ContainerRequest, archive lazyImageArchive) clip.MountOptions {
-	contentCache := newImageContentCache(c.cacheClient, request.ImageId)
+	cacheKind := "legacy-file-runtime"
+	if archive.usesOCIStorage() {
+		cacheKind = "oci-layer-runtime"
+	}
+	contentCache := newImageContentCache(c.cacheClient, request.ImageId, cacheKind)
 	mountOptions := clip.MountOptions{
 		ArchivePath:           archive.path,
 		MountPoint:            c.imageMountPoint(request.ImageId),
 		CachePath:             c.contentCachePath(request, archive),
 		ContentCache:          contentCache,
 		ContentCacheAvailable: contentCache != nil,
+		ReadTraceObserver:     c.observeClipRead,
 	}
 
 	if archive.usesOCIStorage() {
@@ -985,11 +1002,45 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 	if actualHash != hash {
 		return fmt.Errorf("embedded image archive cache hash mismatch: expected %s, got %s", hash, actualHash)
 	}
+	if err := c.validateRestoredImageArchive(tmpPath, imageId, size); err != nil {
+		return err
+	}
 	if err := os.Rename(tmpPath, archivePath); err != nil {
 		return err
 	}
 
 	log.Info().Str("image_id", imageId).Str("hash", hash).Str("routing_key", routingKey).Int64("size", size).Msg("loaded image archive from embedded content cache")
+	return nil
+}
+
+func (c *ImageClient) validateRestoredImageArchive(archivePath, imageId string, size int64) error {
+	if c.config.ImageService.ClipVersion != uint32(types.ClipVersion2) {
+		return nil
+	}
+
+	const maxExpectedV2ArchiveSize = int64(128 * 1024 * 1024)
+	if size > maxExpectedV2ArchiveSize {
+		return fmt.Errorf("restored v2 image archive is unexpectedly large: image_id=%s size=%d", imageId, size)
+	}
+
+	archiver := clip.NewClipArchiver()
+	meta, err := archiver.ExtractMetadata(archivePath)
+	if err != nil {
+		return fmt.Errorf("restored v2 image archive metadata invalid: image_id=%s: %w", imageId, err)
+	}
+
+	ociInfo, ok := ociStorageInfo(meta)
+	if !ok || strings.ToLower(ociInfo.Type()) != string(clipCommon.StorageModeOCI) {
+		return fmt.Errorf("restored v2 image archive is not an OCI metadata archive: image_id=%s", imageId)
+	}
+	if ociInfo.ImageMetadata == nil {
+		return fmt.Errorf("restored v2 image archive is missing embedded image metadata: image_id=%s", imageId)
+	}
+	if len(ociInfo.Layers) == 0 || len(ociInfo.DecompressedHashByLayer) == 0 {
+		return fmt.Errorf("restored v2 image archive has no layer cache metadata: image_id=%s layers=%d hashes=%d", imageId, len(ociInfo.Layers), len(ociInfo.DecompressedHashByLayer))
+	}
+
+	c.cacheOCIMetadata(imageId, meta)
 	return nil
 }
 
@@ -1223,8 +1274,8 @@ func (c *ImageClient) createOCIImageWithProgress(ctx context.Context, outputLogg
 		CheckpointMiB:   checkpointMiB,
 		ProgressChan:    progressChan,
 		CredProvider:    c.getCredentialProviderForImage(ctx, request.ImageId, request),
-		ContentCache:    newImageContentCache(c.cacheClient, request.ImageId),
-		ContentCacheDir: c.imageCachePath,
+		ContentCache:    newImageContentCache(c.cacheClient, request.ImageId, "oci-layer-build"),
+		ContentCacheDir: filepath.Dir(outputPath),
 	})
 
 	// Close channel and wait for all progress messages to be logged
@@ -1594,7 +1645,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 				},
 			},
 			ProgressChan: progressChan,
-			ContentCache: newImageContentCache(c.cacheClient, imageId),
+			ContentCache: newImageContentCache(c.cacheClient, imageId, "legacy-file-build"),
 		}, &clipCommon.S3StorageInfo{
 			Bucket:         c.config.ImageService.Registries.S3.BucketName,
 			Region:         c.config.ImageService.Registries.S3.Region,
@@ -1606,7 +1657,7 @@ func (c *ImageClient) Archive(ctx context.Context, bundlePath *PathInfo, imageId
 		err = clip.CreateArchive(clip.CreateOptions{
 			InputPath:    bundlePath.Path,
 			OutputPath:   archivePath,
-			ContentCache: newImageContentCache(c.cacheClient, imageId),
+			ContentCache: newImageContentCache(c.cacheClient, imageId, "legacy-file-build"),
 		})
 	}
 

@@ -1,6 +1,7 @@
 package apiv1
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -47,6 +48,7 @@ type ContainerEventSummary struct {
 	Summary        map[string]int64             `json:"summary"`
 	Phases         []ContainerPhaseMetric       `json:"phases,omitempty"`
 	SlowestPhases  []ContainerPhaseMetric       `json:"slowest_phases,omitempty"`
+	ClipAccesses   []ClipAccessMetric           `json:"clip_accesses,omitempty"`
 	Missing        []string                     `json:"missing,omitempty"`
 	Streams        []string                     `json:"streams,omitempty"`
 	Events         []types.ContainerEventRecord `json:"events,omitempty"`
@@ -56,11 +58,27 @@ type ContainerEventSummary struct {
 type ContainerPhaseMetric struct {
 	EventID    string            `json:"event_id"`
 	Domain     string            `json:"domain,omitempty"`
+	ParentID   string            `json:"parent_id,omitempty"`
 	DurationMs int64             `json:"duration_ms"`
 	StartTime  time.Time         `json:"start_time,omitempty"`
 	EndTime    time.Time         `json:"end_time,omitempty"`
 	Success    *bool             `json:"success,omitempty"`
 	Attrs      map[string]string `json:"attrs,omitempty"`
+}
+
+type ClipAccessMetric struct {
+	Operation        string `json:"operation,omitempty"`
+	Path             string `json:"path,omitempty"`
+	Source           string `json:"source,omitempty"`
+	LayerDigest      string `json:"layer_digest,omitempty"`
+	DecompressedHash string `json:"decompressed_hash,omitempty"`
+	ContentHash      string `json:"content_hash,omitempty"`
+	Count            int    `json:"count"`
+	TotalUs          int64  `json:"total_us,omitempty"`
+	MaxUs            int64  `json:"max_us,omitempty"`
+	TotalMs          int64  `json:"total_ms"`
+	MaxMs            int64  `json:"max_ms"`
+	BytesRead        int64  `json:"bytes_read"`
 }
 
 type ContainerMetricSummary struct {
@@ -165,8 +183,8 @@ func (g *EventGroup) GetContainerEventsBatch(ctx echo.Context) error {
 	if req.TopPhases > 50 {
 		req.TopPhases = 50
 	}
-	if req.Limit > 10000 {
-		req.Limit = 10000
+	if req.Limit > 50000 {
+		req.Limit = 50000
 	}
 
 	workspaceID := ""
@@ -319,8 +337,8 @@ func eventQueryLimit(ctx echo.Context) (uint64, error) {
 	if err != nil || limit == 0 {
 		return 0, fmt.Errorf("invalid event limit %q", raw)
 	}
-	if limit > 10000 {
-		limit = 10000
+	if limit > 50000 {
+		limit = 50000
 	}
 	return limit, nil
 }
@@ -355,6 +373,7 @@ func summarizeContainerEvents(events *types.ContainerEventsResponse, topPhases i
 		Streams:        events.Streams,
 		Phases:         containerPhasesInOrder(events.Events),
 		SlowestPhases:  slowestContainerPhases(events.Events, topPhases),
+		ClipAccesses:   slowestClipAccesses(events.Events, topPhases),
 	}
 	for _, event := range events.Events {
 		if summary.TaskID == "" && event.TaskID != "" {
@@ -377,6 +396,7 @@ func containerPhasesInOrder(events []types.ContainerEventRecord) []ContainerPhas
 		phases = append(phases, ContainerPhaseMetric{
 			EventID:    event.EventID,
 			Domain:     event.Domain,
+			ParentID:   event.ParentID,
 			DurationMs: event.DurationMs,
 			StartTime:  event.StartTime,
 			EndTime:    event.EndTime,
@@ -400,6 +420,7 @@ func slowestContainerPhases(events []types.ContainerEventRecord, limit int) []Co
 		phases = append(phases, ContainerPhaseMetric{
 			EventID:    event.EventID,
 			Domain:     event.Domain,
+			ParentID:   event.ParentID,
 			DurationMs: event.DurationMs,
 			StartTime:  event.StartTime,
 			EndTime:    event.EndTime,
@@ -415,6 +436,147 @@ func slowestContainerPhases(events []types.ContainerEventRecord, limit int) []Co
 		phases = phases[:limit]
 	}
 	return phases
+}
+
+func slowestClipAccesses(events []types.ContainerEventRecord, limit int) []ClipAccessMetric {
+	if limit <= 0 {
+		return nil
+	}
+
+	rollups := map[string]*ClipAccessMetric{}
+	for _, event := range events {
+		durationUs := containerEventDurationUs(event)
+		if event.Type != types.EventContainerPhase || !strings.HasPrefix(event.EventID, "clip.") || durationUs <= 0 {
+			continue
+		}
+		attrs := event.Attrs
+		if attrs["aggregate"] == "true" {
+			for _, metric := range clipAccessMetricsFromJSON(attrs["top_paths_json"]) {
+				mergeClipAccessMetric(rollups, metric)
+			}
+			continue
+		}
+		operation := event.EventID
+		path := attrs["path"]
+		source := attrs["source"]
+		layerDigest := attrs["layer_digest_short"]
+		if layerDigest == "" {
+			layerDigest = attrs["layer_digest"]
+		}
+		decompressedHash := attrs["decompressed_hash_short"]
+		if decompressedHash == "" {
+			decompressedHash = attrs["decompressed_hash"]
+		}
+		contentHash := attrs["content_hash_short"]
+		if contentHash == "" {
+			contentHash = attrs["content_hash"]
+		}
+
+		key := strings.Join([]string{operation, path, source, layerDigest, decompressedHash, contentHash}, "\x00")
+		rollup, ok := rollups[key]
+		if !ok {
+			rollup = &ClipAccessMetric{
+				Operation:        operation,
+				Path:             path,
+				Source:           source,
+				LayerDigest:      layerDigest,
+				DecompressedHash: decompressedHash,
+				ContentHash:      contentHash,
+			}
+			rollups[key] = rollup
+		}
+		rollup.Count++
+		rollup.TotalUs += durationUs
+		rollup.TotalMs = durationUsToMs(rollup.TotalUs)
+		if durationUs > rollup.MaxUs {
+			rollup.MaxUs = durationUs
+			rollup.MaxMs = durationUsToMs(durationUs)
+		}
+		if bytesRead, err := strconv.ParseInt(attrs["bytes_read"], 10, 64); err == nil && bytesRead > 0 {
+			rollup.BytesRead += bytesRead
+		}
+	}
+
+	accesses := make([]ClipAccessMetric, 0, len(rollups))
+	for _, rollup := range rollups {
+		accesses = append(accesses, *rollup)
+	}
+	sort.SliceStable(accesses, func(i, j int) bool {
+		if accesses[i].TotalUs != accesses[j].TotalUs {
+			return accesses[i].TotalUs > accesses[j].TotalUs
+		}
+		return accesses[i].MaxUs > accesses[j].MaxUs
+	})
+	if len(accesses) > limit {
+		accesses = accesses[:limit]
+	}
+	return accesses
+}
+
+func clipAccessMetricsFromJSON(raw string) []ClipAccessMetric {
+	if raw == "" {
+		return nil
+	}
+	var metrics []ClipAccessMetric
+	if err := json.Unmarshal([]byte(raw), &metrics); err != nil {
+		return nil
+	}
+	return metrics
+}
+
+func mergeClipAccessMetric(rollups map[string]*ClipAccessMetric, metric ClipAccessMetric) {
+	if metric.Count == 0 && metric.TotalUs == 0 && metric.TotalMs == 0 {
+		return
+	}
+
+	key := strings.Join([]string{
+		metric.Operation,
+		metric.Path,
+		metric.Source,
+		metric.LayerDigest,
+		metric.DecompressedHash,
+		metric.ContentHash,
+	}, "\x00")
+	rollup := rollups[key]
+	if rollup == nil {
+		copy := metric
+		if copy.TotalMs == 0 && copy.TotalUs > 0 {
+			copy.TotalMs = durationUsToMs(copy.TotalUs)
+		}
+		if copy.MaxMs == 0 && copy.MaxUs > 0 {
+			copy.MaxMs = durationUsToMs(copy.MaxUs)
+		}
+		rollups[key] = &copy
+		return
+	}
+
+	rollup.Count += metric.Count
+	rollup.TotalUs += metric.TotalUs
+	rollup.TotalMs = durationUsToMs(rollup.TotalUs)
+	if metric.MaxUs > rollup.MaxUs {
+		rollup.MaxUs = metric.MaxUs
+		rollup.MaxMs = durationUsToMs(metric.MaxUs)
+	}
+	rollup.BytesRead += metric.BytesRead
+}
+
+func containerEventDurationUs(event types.ContainerEventRecord) int64 {
+	if event.Attrs != nil {
+		if durationUs, err := strconv.ParseInt(event.Attrs["duration_us"], 10, 64); err == nil && durationUs > 0 {
+			return durationUs
+		}
+		if durationNs, err := strconv.ParseInt(event.Attrs["duration_ns"], 10, 64); err == nil && durationNs > 0 {
+			return durationNs / 1000
+		}
+	}
+	return event.DurationMs * 1000
+}
+
+func durationUsToMs(durationUs int64) int64 {
+	if durationUs <= 0 {
+		return 0
+	}
+	return (durationUs + 999) / 1000
 }
 
 func summarizeMetricMaps(items []ContainerEventSummary) map[string]ContainerMetricSummary {

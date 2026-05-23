@@ -1231,6 +1231,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 	if !exists {
 		return -1, fmt.Errorf("container instance not found")
 	}
+	if s.imageClient != nil {
+		defer s.imageClient.untrackContainer(request.ContainerId)
+	}
 
 	supportsCheckpoint := instance.Runtime.Capabilities().CheckpointRestore && s.IsCRIUAvailable(request.GpuCount)
 
@@ -1285,6 +1288,9 @@ func (s *Worker) runContainer(ctx context.Context, request *types.ContainerReque
 			instance.RuntimePid = pid
 			instance.RuntimeStartedAt = time.Now().Unix()
 			s.containerInstances.Set(request.ContainerId, instance)
+		}
+		if s.imageClient != nil {
+			s.imageClient.trackContainerRuntimePID(request, pid)
 		}
 
 		metrics.RecordWorkerStartupPhase("runtime_start_to_pid", time.Since(runtimeStart), request, map[string]string{

@@ -2,10 +2,12 @@ package repository
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/types"
+	"github.com/s2-streamstore/s2-sdk-go/s2"
 )
 
 func TestS2ContainerStreamNameUsesWorkspaceStubContainer(t *testing.T) {
@@ -57,6 +59,27 @@ func TestEventMetadataExtensionsRoundTrip(t *testing.T) {
 		metadata.TaskID != "task-1" ||
 		metadata.WorkerID != "worker-1" {
 		t.Fatalf("metadata did not round trip: %#v", metadata)
+	}
+}
+
+func TestS2StreamDeletionPendingErrorIsTransient(t *testing.T) {
+	err := fmt.Errorf("ensure stream: %w", &s2.S2Error{
+		Code:   "stream_deletion_pending",
+		Status: 409,
+		Origin: "server",
+	})
+
+	if !isS2EventStreamDeletionPending(err) {
+		t.Fatal("expected stream_deletion_pending to be recognized through wrapping")
+	}
+
+	otherErr := &s2.S2Error{
+		Code:   "resource_already_exists",
+		Status: 409,
+		Origin: "server",
+	}
+	if isS2EventStreamDeletionPending(otherErr) {
+		t.Fatal("unexpectedly treated non-deletion-pending S2 error as transient")
 	}
 }
 
