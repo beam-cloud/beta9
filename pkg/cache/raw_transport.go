@@ -21,6 +21,7 @@ const (
 	rawReadHeaderSize             = 19
 	rawReadRespHeaderSize         = 9
 	defaultRawReadChunkBytes      = 1024 * 1024
+	rawReadSocketBufferBytes      = 16 * 1024 * 1024
 )
 
 type cacheMuxListener struct {
@@ -188,6 +189,7 @@ func readRawReadResponseHeader(r io.Reader) (byte, int64, error) {
 
 func (cs *Server) handleRawReadConn(conn net.Conn) {
 	defer conn.Close()
+	tuneRawReadConn(conn)
 	for {
 		req, err := readRawReadRequest(conn)
 		if err != nil {
@@ -229,6 +231,8 @@ func (cs *Server) serveRawRead(conn net.Conn, req rawReadRequest) {
 			}
 			copyOffset := region.pageOffset
 			copyLength := int64(region.length)
+			_ = fadviseSequential(file.Fd())
+			_ = fadviseWillneed(file.Fd(), copyOffset, copyLength)
 			if cs.serverConfig.ReadTransport.Sendfile {
 				sent, err := sendFileToConn(conn, file, region.pageOffset, int64(region.length))
 				if sent > 0 {
@@ -362,6 +366,7 @@ func (p *rawReadConnPool) get(ctxDone <-chan struct{}) (net.Conn, error) {
 	go func() {
 		conn, err := dialer.Dial("tcp", p.addr)
 		if err == nil {
+			tuneRawReadConn(conn)
 			_, err = conn.Write([]byte(rawReadMagic))
 			if err != nil {
 				_ = conn.Close()
@@ -380,6 +385,16 @@ func (p *rawReadConnPool) get(ctxDone <-chan struct{}) (net.Conn, error) {
 		p.release()
 		return nil, ErrUnableToReachHost
 	}
+}
+
+func tuneRawReadConn(conn net.Conn) {
+	tcpConn, ok := conn.(*net.TCPConn)
+	if !ok {
+		return
+	}
+	_ = tcpConn.SetNoDelay(true)
+	_ = tcpConn.SetReadBuffer(rawReadSocketBufferBytes)
+	_ = tcpConn.SetWriteBuffer(rawReadSocketBufferBytes)
 }
 
 func (p *rawReadConnPool) acquire(ctxDone <-chan struct{}) error {

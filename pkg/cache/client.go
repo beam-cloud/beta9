@@ -29,6 +29,7 @@ const (
 	closestHostTimeout              = 30 * time.Second
 	localClientCacheCleanupInterval = 5 * time.Second
 	localClientCacheTTL             = 600 * time.Second
+	defaultRawReadWindowPartBytes   = 4 * 1024 * 1024
 
 	// NOTE: This value for readAheadKB is separate from the cachefs config since the FUSE library does
 	// weird stuff with the other read_ahead_kb value internally
@@ -602,6 +603,98 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 	return length, nil
 }
 
+func (c *Client) rawReadIntoWindowed(ctx context.Context, host *Host, hash string, offset int64, dst []byte) (int64, error) {
+	if len(dst) == 0 {
+		return 0, nil
+	}
+
+	partLength := c.clientConfig.Prefetch.PartLengthBytes
+	if partLength <= 0 {
+		partLength = defaultRawReadWindowPartBytes
+	}
+	if partLength > int64(len(dst)) {
+		partLength = int64(len(dst))
+	}
+
+	maxParts := c.clientConfig.Prefetch.MaxPartsPerRead
+	if maxParts <= 1 || int64(len(dst)) <= partLength {
+		return c.rawReadInto(ctx, host, hash, offset, dst)
+	}
+
+	chunkCount := (len(dst) + int(partLength) - 1) / int(partLength)
+	if maxParts > chunkCount {
+		maxParts = chunkCount
+	}
+
+	type chunk struct {
+		off int
+		n   int
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	tasks := make(chan chunk)
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+	var read int64
+
+	setErr := func(err error) {
+		if err == nil {
+			return
+		}
+		errMu.Lock()
+		if firstErr == nil {
+			firstErr = err
+			cancel()
+		}
+		errMu.Unlock()
+	}
+
+	for worker := 0; worker < maxParts; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range tasks {
+				n64, err := c.rawReadInto(ctx, host, hash, offset+int64(task.off), dst[task.off:task.off+task.n])
+				if err != nil {
+					setErr(err)
+					continue
+				}
+				if n64 != int64(task.n) {
+					setErr(io.ErrUnexpectedEOF)
+					continue
+				}
+				atomic.AddInt64(&read, n64)
+			}
+		}()
+	}
+
+sendLoop:
+	for off := 0; off < len(dst); off += int(partLength) {
+		n := int(partLength)
+		if remaining := len(dst) - off; remaining < n {
+			n = remaining
+		}
+		select {
+		case tasks <- chunk{off: off, n: n}:
+		case <-ctx.Done():
+			break sendLoop
+		}
+	}
+	close(tasks)
+	wg.Wait()
+
+	if firstErr != nil {
+		return read, firstErr
+	}
+	if read != int64(len(dst)) {
+		return read, io.ErrUnexpectedEOF
+	}
+	return read, nil
+}
+
 func (c *Client) LocalPageRegion(hash string, offset int64, length int64, opts ClientOptions) (path string, pageOffset int64, n int, ok bool, err error) {
 	started := time.Now()
 	defer func() {
@@ -664,62 +757,42 @@ func (c *Client) LocalPageRegions(hash string, offset int64, length int64, opts 
 			return regions, nil
 		}
 	}
-	host, err := c.getHostForRequest(&ClientRequest{
-		rt:        ClientRequestTypeRetrieval,
-		hash:      hash,
-		key:       opts.RoutingKey,
-		hostIndex: 0,
-	})
-	if err != nil {
-		atomic.AddInt64(&cachePathStats.localPageRegionMisses, 1)
-		return nil, err
-	}
 
-	c.mu.RLock()
-	localServer := c.localServers[host.HostId]
-	c.mu.RUnlock()
-	if localServer == nil || localServer.cas == nil {
-		atomic.AddInt64(&cachePathStats.localPageRegionMisses, 1)
-		return nil, ErrContentNotFound
-	}
-
-	pageSize := localServer.cas.serverConfig.PageSizeBytes
-	if pageSize <= 0 {
-		atomic.AddInt64(&cachePathStats.localPageRegionMisses, 1)
-		return nil, ErrContentNotFound
-	}
-
-	regions = make([]struct {
-		Path   string
-		Offset int64
-		Length int
-	}, 0, 1)
-	remaining := length
-	currentOffset := offset
-	for remaining > 0 {
-		pageRemaining := pageSize - currentOffset%pageSize
-		requestLength := min(remaining, pageRemaining)
-		path, pageOffset, n, ok, err := localServer.cas.PageRegion(hash, currentOffset, requestLength)
-		if err != nil || !ok || n <= 0 {
-			atomic.AddInt64(&cachePathStats.localPageRegionMisses, 1)
-			if err != nil {
-				return nil, err
-			}
-			return nil, ErrContentNotFound
+	for attempt := 0; attempt < c.getContentAttempts(length); attempt++ {
+		host, err := c.getHostForRequest(&ClientRequest{
+			rt:        ClientRequestTypeRetrieval,
+			hash:      hash,
+			key:       opts.RoutingKey,
+			hostIndex: attempt,
+		})
+		if err != nil {
+			continue
 		}
-		regions = append(regions, struct {
-			Path   string
-			Offset int64
-			Length int
-		}{Path: path, Offset: pageOffset, Length: n})
-		readLength := int64(n)
-		currentOffset += readLength
-		remaining -= readLength
+
+		c.mu.RLock()
+		localServer := c.localServers[host.HostId]
+		c.mu.RUnlock()
+		if localServer == nil || localServer.cas == nil {
+			if regions, ok := c.promoteRemotePageRegions(host, hash, offset, length); ok {
+				return regions, nil
+			}
+			continue
+		}
+
+		if regions, ok := localPageRegionsFromStore(localServer.cas, hash, offset, length); ok {
+			cacheReadLocalPageRegionTotal.Inc()
+			atomic.AddInt64(&cachePathStats.localPageRegionHits, 1)
+			atomic.AddInt64(&cachePathStats.localPageRegionBytes, length)
+			return regions, nil
+		}
+
+		if regions, ok := c.promoteRemotePageRegions(host, hash, offset, length); ok {
+			return regions, nil
+		}
 	}
-	cacheReadLocalPageRegionTotal.Inc()
-	atomic.AddInt64(&cachePathStats.localPageRegionHits, 1)
-	atomic.AddInt64(&cachePathStats.localPageRegionBytes, length)
-	return regions, nil
+
+	atomic.AddInt64(&cachePathStats.localPageRegionMisses, 1)
+	return nil, ErrContentNotFound
 }
 
 func (c *Client) localPageRegionsFromAttachedServers(hash string, offset int64, length int64) ([]struct {
@@ -770,6 +843,66 @@ func localPageRegionsFromStore(store *Store, hash string, offset int64, length i
 		readLength := int64(n)
 		currentOffset += readLength
 		remaining -= readLength
+	}
+	return regions, true
+}
+
+func (c *Client) promoteRemotePageRegions(host *Host, hash string, offset int64, length int64) ([]struct {
+	Path   string
+	Offset int64
+	Length int
+}, bool) {
+	if host == nil || hash == "" || offset < 0 || length <= 0 || !c.clientConfig.ReadTransport.Enabled {
+		return nil, false
+	}
+
+	var store *Store
+	for _, localStore := range c.localStoresSnapshot() {
+		store = localStore
+		break
+	}
+	if store == nil || store.serverConfig.PageSizeBytes <= 0 {
+		return nil, false
+	}
+
+	pageSize := store.serverConfig.PageSizeBytes
+	pageStart := offset - offset%pageSize
+	requestEnd := offset + length
+	fullPageEnd := requestEnd - requestEnd%pageSize
+	if fullPageEnd <= pageStart {
+		return nil, false
+	}
+
+	promoteLength := fullPageEnd - pageStart
+	if maxBytes := c.clientConfig.Prefetch.AheadBytes; maxBytes > 0 && promoteLength > maxBytes {
+		return nil, false
+	}
+	if promoteLength > int64(int(^uint(0)>>1)) {
+		return nil, false
+	}
+
+	started := time.Now()
+	buf := make([]byte, int(promoteLength))
+	ctx, cancel := context.WithTimeout(c.ctx, getContentRequestTimeout)
+	defer cancel()
+	n, err := c.rawReadIntoWindowed(ctx, host, hash, pageStart, buf)
+	if err != nil || n != promoteLength {
+		if err != nil && err != ErrContentNotFound {
+			Logger.Debugf("cache remote page promotion failed: host=%s hash=%s offset=%d length=%d err=%v", host.HostId, hash, pageStart, promoteLength, err)
+		}
+		return nil, false
+	}
+
+	store.PutFullPages(hash, pageStart, buf)
+	regions, ok := localPageRegionsFromStore(store, hash, offset, length)
+	if !ok {
+		return nil, false
+	}
+	cacheReadLocalPageRegionTotal.Inc()
+	atomic.AddInt64(&cachePathStats.localPageRegionHits, 1)
+	atomic.AddInt64(&cachePathStats.localPageRegionBytes, length)
+	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
+		Logger.Infof("cache remote page promotion result: host=%s hash=%s offset=%d length=%d promoted=%d regions=%d elapsed=%s", host.HostId, hash, offset, length, promoteLength, len(regions), elapsed.Truncate(time.Millisecond))
 	}
 	return regions, true
 }
@@ -842,7 +975,7 @@ func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64,
 		}
 
 		if c.clientConfig.ReadTransport.Enabled {
-			n, err := c.rawReadInto(ctx, host, hash, offset, dst)
+			n, err := c.rawReadIntoWindowed(ctx, host, hash, offset, dst)
 			if err == nil && n == length {
 				c.promoteReadChunkToLocal(hash, offset, dst[:int(n)])
 				return n, nil

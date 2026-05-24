@@ -3,8 +3,11 @@ package gatewayservices
 import (
 	"context"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path"
+	"strings"
 
 	"github.com/beam-cloud/beta9/pkg/auth"
 	"github.com/beam-cloud/beta9/pkg/clients"
@@ -130,15 +133,62 @@ func (gws *GatewayService) defaultWorkspacePresignEndpointUrl(workspaceStorage *
 	}
 
 	storageConfig := gws.appConfig.Storage.WorkspaceStorage
+	if isLocalstackEndpoint(*workspaceStorage.EndpointUrl) {
+		return "http://127.0.0.1:4566"
+	}
+
 	if storageConfig.DefaultPresignedEndpointUrl == "" {
 		return ""
 	}
 
-	if *workspaceStorage.EndpointUrl != storageConfig.DefaultEndpointUrl {
+	if !sameStorageEndpoint(*workspaceStorage.EndpointUrl, storageConfig.DefaultEndpointUrl) {
 		return ""
 	}
 
 	return storageConfig.DefaultPresignedEndpointUrl
+}
+
+func sameStorageEndpoint(a, b string) bool {
+	a = strings.TrimRight(strings.TrimSpace(a), "/")
+	b = strings.TrimRight(strings.TrimSpace(b), "/")
+	if a == "" || b == "" {
+		return a == b
+	}
+	if a == b {
+		return true
+	}
+
+	aURL, aErr := url.Parse(a)
+	bURL, bErr := url.Parse(b)
+	if aErr != nil || bErr != nil {
+		return false
+	}
+
+	aHost, aPort, _ := net.SplitHostPort(aURL.Host)
+	bHost, bPort, _ := net.SplitHostPort(bURL.Host)
+	if aHost == "" {
+		aHost = aURL.Hostname()
+	}
+	if bHost == "" {
+		bHost = bURL.Hostname()
+	}
+	if aPort == "" {
+		aPort = aURL.Port()
+	}
+	if bPort == "" {
+		bPort = bURL.Port()
+	}
+
+	return aURL.Scheme == bURL.Scheme && aHost == bHost && aPort == bPort
+}
+
+func isLocalstackEndpoint(endpoint string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil {
+		return false
+	}
+	host := parsed.Hostname()
+	return host == "localstack" || strings.HasPrefix(host, "localstack.")
 }
 
 func (gws *GatewayService) PutObjectStream(stream pb.GatewayService_PutObjectStreamServer) error {

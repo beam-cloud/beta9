@@ -232,6 +232,22 @@ func (c *ImageClient) pushClipReadAggregate(aggregate *clipReadAggregate, flushR
 		attrs[key] = value
 	}
 
+	log.Info().
+		Str("container_id", request.ContainerId).
+		Str("image_id", request.ImageId).
+		Str("flush_reason", flushReason).
+		Int64("read_count", aggregate.readCount).
+		Int64("bytes_read", aggregate.bytesRead).
+		Int64("total_us", aggregate.total.Microseconds()).
+		Int64("wall_us", wallDuration.Microseconds()).
+		Int64("error_count", aggregate.errorCount).
+		Str("top_sources_json", attrs["top_sources_json"]).
+		Str("top_paths_json", attrs["top_paths_json"]).
+		Str("top_operations_json", attrs["top_operations_json"]).
+		Str("top_content_json", attrs["top_content_json"]).
+		Str("first_error", aggregate.firstError).
+		Msg("clip read path summary")
+
 	success := aggregate.success
 	c.eventRepo.PushContainerPhaseEvent(types.EventContainerPhaseSchema{
 		ID:          types.ContainerPhaseClipRead,

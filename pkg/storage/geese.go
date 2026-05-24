@@ -25,6 +25,8 @@ const (
 	defaultGeeseFSReadAheadKb      = 32768
 	defaultGeeseFSReadAheadLargeKb = 131072
 	defaultGeeseFSMaxReadBytes     = 1048576
+	defaultGeeseFSPartSizeBytes    = 64 * 1024 * 1024
+	defaultGeeseFSHashMinFileKb    = 1024
 )
 
 type GeeseStorage struct {
@@ -79,13 +81,22 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	flags.MemoryLimit = uint64(s.config.MemoryLimit) * 1024 * 1024
 	flags.SymlinkZeroed = true
 	flags.HTTPTimeout = defaultGeeseFSRequestTimeout
+	if s.config.HTTPTimeout > 0 {
+		flags.HTTPTimeout = s.config.HTTPTimeout
+	}
 	flags.NoPreloadDir = true
 	flags.StatsInterval = 5 * time.Second
 	flags.FuseReadAheadKB = defaultGeeseFSFuseReadAheadKb
 	flags.MountOptions = withDefaultMountOption(s.config.MountOptions, "max_read", strconv.Itoa(defaultGeeseFSMaxReadBytes))
+	flags.PartSizes = []cfg.PartSizeConfig{
+		{PartSize: defaultGeeseFSPartSizeBytes, PartCount: 1000},
+		{PartSize: 128 * 1024 * 1024, PartCount: 8000},
+	}
 
-	// Staged write mode config
-	flags.StagedWriteModeEnabled = s.config.StagedWriteModeEnabled
+	// Staged writes route large writes through local temp files before flushing.
+	// Keep them disabled for workspace storage so benchmark and production reads
+	// validate the normal geesefs/S3/cache path instead of temp-file side effects.
+	flags.StagedWriteModeEnabled = false
 	flags.StagedWritePath = s.config.StagedWritePath
 	flags.StagedWriteDebounce = s.config.StagedWriteDebounce
 	flags.EventCallback = func(event cfg.EventType, data map[string]interface{}) {
@@ -94,6 +105,9 @@ func (s *GeeseStorage) Mount(localPath string) error {
 
 	// Cache through mode config
 	flags.CacheThroughModeEnabled = s.config.CacheThroughModeEnabled || s.config.CacheThroughEnabled
+	if s.cacheClient != nil && !s.config.DisableVolumeCaching {
+		flags.MinFileSizeForHashKB = defaultGeeseFSHashMinFileKb
+	}
 
 	if s.config.DisableVolumeCaching {
 		flags.HashAttr = ""
@@ -114,6 +128,19 @@ func (s *GeeseStorage) Mount(localPath string) error {
 	if s.config.ReadAheadParallelKB > 0 {
 		flags.ReadAheadParallelKB = uint64(s.config.ReadAheadParallelKB)
 	}
+
+	log.Info().
+		Str("local_path", localPath).
+		Int64("memory_limit_mb", s.config.MemoryLimit).
+		Int("max_flushers", int(flags.MaxFlushers)).
+		Int("max_parallel_parts", flags.MaxParallelParts).
+		Dur("http_timeout", flags.HTTPTimeout).
+		Uint64("multipart_part_size_bytes", flags.PartSizes[0].PartSize).
+		Uint64("min_file_size_for_hash_kb", flags.MinFileSizeForHashKB).
+		Bool("cache_through", flags.CacheThroughModeEnabled).
+		Bool("external_cache", s.cacheClient != nil).
+		Bool("staged_write", flags.StagedWriteModeEnabled).
+		Msg("geesefs mount performance config")
 
 	// If we have a cache client available, use it
 	if s.cacheClient != nil {

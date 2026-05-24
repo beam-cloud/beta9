@@ -3,11 +3,17 @@
 package cache
 
 import (
+	"errors"
 	"net"
 	"os"
+	"runtime"
 
 	"golang.org/x/sys/unix"
 )
+
+func isSendfileRetryable(err error) bool {
+	return errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) || errors.Is(err, unix.EINTR)
+}
 
 func sendFileToConn(conn net.Conn, file *os.File, offset int64, length int64) (int64, error) {
 	tcpConn, ok := conn.(*net.TCPConn)
@@ -45,22 +51,26 @@ func sendFileToConn(conn net.Conn, file *os.File, offset int64, length int64) (i
 				sendErr = nil
 				return true
 			}
-			if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+			if isSendfileRetryable(err) {
 				return false
 			}
 			sendErr = err
 			return true
 		}); err != nil {
-			if err == unix.EAGAIN || err == unix.EWOULDBLOCK || err == unix.EINTR {
+			if isSendfileRetryable(err) {
 				continue
 			}
 			return sent, err
+		}
+		if isSendfileRetryable(sendErr) {
+			continue
 		}
 		if sendErr != nil {
 			return sent, sendErr
 		}
 		if !progressed {
-			break
+			runtime.Gosched()
+			continue
 		}
 	}
 

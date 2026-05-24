@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/beam-cloud/beta9/pkg/cache"
+	clipStorage "github.com/beam-cloud/clip/pkg/storage"
 	"github.com/rs/zerolog/log"
 )
 
@@ -145,6 +146,48 @@ func (c *imageContentCache) ContentExists(hash string, opts struct{ RoutingKey s
 	}()
 
 	return c.client.IsCachedNearby(hash, opts.RoutingKey)
+}
+
+func (c *imageContentCache) LocalPageRegions(hash string, offset int64, length int64, opts struct{ RoutingKey string }) (regions []clipStorage.LocalPageRegion, err error) {
+	if c == nil || c.client == nil {
+		return nil, cache.ErrClientNotFound
+	}
+	if opts.RoutingKey == "" {
+		opts.RoutingKey = hash
+	}
+
+	started := time.Now()
+	defer func() {
+		elapsed := time.Since(started)
+		if err != nil || len(regions) == 0 || elapsed > imageContentCacheSlowRead {
+			log.Info().
+				Err(err).
+				Str("image_id", c.imageID).
+				Str("kind", c.kind).
+				Str("hash", shortHash(hash)).
+				Str("routing_key", shortHash(opts.RoutingKey)).
+				Int64("offset", offset).
+				Int64("length", length).
+				Int("regions", len(regions)).
+				Dur("elapsed", elapsed).
+				Msg("clip image content cache local page regions result")
+		}
+		c.maybeLogSummary()
+	}()
+
+	localRegions, err := c.client.LocalPageRegions(hash, offset, length, cache.ClientOptions{RoutingKey: opts.RoutingKey})
+	if err != nil {
+		return nil, err
+	}
+	regions = make([]clipStorage.LocalPageRegion, 0, len(localRegions))
+	for _, region := range localRegions {
+		regions = append(regions, clipStorage.LocalPageRegion{
+			Path:   region.Path,
+			Offset: region.Offset,
+			Length: region.Length,
+		})
+	}
+	return regions, nil
 }
 
 func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts struct{ RoutingKey string }) (string, error) {

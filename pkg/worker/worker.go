@@ -287,11 +287,17 @@ func NewWorker() (*Worker, error) {
 		}
 
 		gvisorRuntime, err = runtime.New(runtime.Config{
-			Type:          types.ContainerRuntimeGvisor.String(),
-			RunscPath:     "runsc",
-			RunscRoot:     gvisorRoot,
-			RunscPlatform: gvisorPlatform,
-			Debug:         config.DebugMode,
+			Type:                  types.ContainerRuntimeGvisor.String(),
+			RunscPath:             "runsc",
+			RunscRoot:             gvisorRoot,
+			RunscPlatform:         gvisorPlatform,
+			RunscDirectFS:         poolConfig.ContainerRuntimeConfig.GVisorDirectFS,
+			RunscFileAccess:       poolConfig.ContainerRuntimeConfig.GVisorFileAccess,
+			RunscFileAccessMounts: poolConfig.ContainerRuntimeConfig.GVisorFileAccessMounts,
+			RunscOverlay2:         poolConfig.ContainerRuntimeConfig.GVisorOverlay2,
+			RunscDCache:           poolConfig.ContainerRuntimeConfig.GVisorDCache,
+			RunscExtraArgs:        poolConfig.ContainerRuntimeConfig.GVisorExtraArgs,
+			Debug:                 config.DebugMode,
 		})
 		if err != nil {
 			log.Warn().Err(err).Msg("failed to create gvisor runtime, falling back to runc")

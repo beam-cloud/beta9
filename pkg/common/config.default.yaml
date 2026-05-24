@@ -51,8 +51,9 @@ storage:
       debug: false
       fsyncOnClose: true
       memoryLimit: 2048
-      maxFlushers: 64
-      maxParallelParts: 64
+      maxFlushers: 16
+      maxParallelParts: 8
+      httpTimeout: 15m
       dirMode: 0777
       fileMode: 0666
       listType: 1
@@ -61,7 +62,7 @@ storage:
       fuseReadAheadKB: 32768
       readAheadParallelKB: 4096
       mountOptions: []
-      stagedWriteModeEnabled: true
+      stagedWriteModeEnabled: false
       stagedWritePath: /tmp/geesefs-staged-write
       stagedWriteDebounce: 30s
       cacheStreamingEnabled: false
@@ -170,6 +171,15 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
+        # Keep gVisor's current high-throughput filesystem defaults explicit.
+        # directfs avoids gofer round trips; root:self avoids slow host rootfs
+        # mutation checks; bind mounts stay shared because workspace volumes can
+        # be observed or mutated by processes outside the sandbox.
+        gvisorDirectFS: true
+        gvisorFileAccess: exclusive
+        gvisorFileAccessMounts: shared
+        gvisorOverlay2: root:self
+        gvisorDCache: 8192
       # Optional per-pool cache disk override for nodes with different storage layouts.
       # cache:
       #   disk:
@@ -195,6 +205,11 @@ worker:
       containerRuntimeConfig:
         gvisorPlatform: systrap
         gvisorRoot: /run/gvisor
+        gvisorDirectFS: true
+        gvisorFileAccess: exclusive
+        gvisorFileAccessMounts: shared
+        gvisorOverlay2: root:self
+        gvisorDCache: 8192
       # Optional per-pool cache disk override.
       # cache:
       #   disk:
