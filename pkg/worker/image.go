@@ -1000,7 +1000,7 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 
 	actualHash := hex.EncodeToString(hasher.Sum(nil))
 	if actualHash != hash {
-		return fmt.Errorf("embedded image archive cache hash mismatch: expected %s, got %s", hash, actualHash)
+		return fmt.Errorf("image archive cache hash mismatch: expected %s, got %s", hash, actualHash)
 	}
 	if err := c.validateRestoredImageArchive(tmpPath, imageId, size); err != nil {
 		return err
@@ -1009,7 +1009,7 @@ func (c *ImageClient) writeImageArchiveFromContentCache(ctx context.Context, arc
 		return err
 	}
 
-	log.Info().Str("image_id", imageId).Str("hash", hash).Str("routing_key", routingKey).Int64("size", size).Msg("loaded image archive from embedded content cache")
+	log.Info().Str("image_id", imageId).Str("hash", hash).Str("routing_key", routingKey).Int64("size", size).Msg("loaded image archive from content cache")
 	return nil
 }
 

@@ -127,7 +127,7 @@ func runGatewayCacheRegistrations(ctx context.Context, registrations []*gatewayC
 						Err(err).
 						Str("logical_host_id", registration.logicalHostID).
 						Str("registration_id", registration.registrationID).
-						Msg("failed to refresh embedded cache registration")
+						Msg("failed to refresh cache registration")
 				}
 			}
 		}

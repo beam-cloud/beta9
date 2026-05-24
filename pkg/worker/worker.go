@@ -919,7 +919,7 @@ func (s *Worker) shutdown() error {
 	if s.cacheManager != nil {
 		err := s.cacheManager.Close()
 		if err != nil {
-			errs = errors.Join(errs, fmt.Errorf("failed to cleanup embedded cache: %v", err))
+			errs = errors.Join(errs, fmt.Errorf("failed to cleanup cache: %v", err))
 		}
 	}
 
