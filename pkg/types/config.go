@@ -6,7 +6,6 @@ import (
 
 	"github.com/beam-cloud/beta9/pkg/cache"
 	pb "github.com/beam-cloud/beta9/proto"
-	cedana "github.com/cedana/cedana/pkg/config"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -658,14 +657,12 @@ type FluentBitEventConfig struct {
 type CRIUConfigMode string
 
 var (
-	CRIUConfigModeCedana CRIUConfigMode = "cedana"
 	CRIUConfigModeNvidia CRIUConfigMode = "nvidia"
 )
 
 type CRIUConfig struct {
 	Mode    CRIUConfigMode          `key:"mode" json:"mode"`
 	Storage CheckpointStorageConfig `key:"storage" json:"storage"`
-	Cedana  cedana.Config           `key:"cedana" json:"cedana"`
 	Nvidia  NvidiaCRIUConfig        `key:"nvidia" json:"nvidia"`
 }
 

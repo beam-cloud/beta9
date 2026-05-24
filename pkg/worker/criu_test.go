@@ -15,13 +15,13 @@ import (
 
 // MockRuntime is a mock implementation of runtime.Runtime for testing
 type MockRuntime struct {
-	name              string
-	checkpointCalled  bool
-	restoreCalled     bool
-	checkpointError   error
-	restoreError      error
-	restoreExitCode   int
-	capabilities      runtime.Capabilities
+	name             string
+	checkpointCalled bool
+	restoreCalled    bool
+	checkpointError  error
+	restoreError     error
+	restoreExitCode  int
+	capabilities     runtime.Capabilities
 }
 
 func NewMockRuntime(name string, caps runtime.Capabilities) *MockRuntime {
@@ -237,19 +237,6 @@ func TestNvidiaCRIUManager(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestCedanaCRIUManagerRuntimeCheck tests that Cedana only works with runc
-func TestCedanaCRIUManagerRuntimeCheck(t *testing.T) {
-	if os.Getenv("SKIP_CRIU_TESTS") == "1" {
-		t.Skip("Skipping CRIU tests")
-	}
-
-	// Skip if cedana is not available
-	// Note: We can't easily test Cedana without the daemon running
-	// This test just checks runtime compatibility checking
-	t.Skip("Skipping Cedana test - requires daemon")
-
 }
 
 // TestCheckpointRestoreErrorHandling tests error handling in checkpoint/restore

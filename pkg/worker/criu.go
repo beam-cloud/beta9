@@ -43,19 +43,16 @@ type CRIUManager interface {
 	RestoreCheckpoint(ctx context.Context, runtime runtime.Runtime, opts *RestoreOpts) (int, error)
 }
 
-// InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers
-// -- depending on the mode, it will use either cedana or nvidia cuda checkpoint under the hood
+// InitializeCRIUManager initializes a new CRIU manager that can be used to checkpoint and restore containers.
 func InitializeCRIUManager(ctx context.Context, config types.CRIUConfig) (CRIUManager, error) {
 	var criuManager CRIUManager = nil
 	var err error = nil
 
 	switch config.Mode {
-	case types.CRIUConfigModeCedana:
-		criuManager, err = InitializeCedanaCRIU(ctx, config.Cedana)
 	case types.CRIUConfigModeNvidia:
 		criuManager, err = InitializeNvidiaCRIU(ctx, config)
 	default:
-		return nil, fmt.Errorf("invalid CRIU mode: %s", config.Mode)
+		return nil, fmt.Errorf("unsupported CRIU mode: %s", config.Mode)
 	}
 
 	if err != nil {
