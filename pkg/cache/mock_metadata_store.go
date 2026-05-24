@@ -6,9 +6,9 @@ import (
 	"sync"
 )
 
-// MockRegistry is a simple in-memory coordinator for testing
+// MockCacheMetadataStore is a simple in-memory metadataStore for testing
 // Does not require Redis or any external dependencies
-type MockRegistry struct {
+type MockCacheMetadataStore struct {
 	hosts      map[string]map[string]*Host // locality -> hostId -> host
 	fsNodes    map[string]*FSMetadata      // id -> metadata
 	fsChildren map[string][]string         // parent id -> child ids
@@ -16,8 +16,8 @@ type MockRegistry struct {
 	mu         sync.RWMutex
 }
 
-func NewMockRegistry() *MockRegistry {
-	return &MockRegistry{
+func NewMockCacheMetadataStore() *MockCacheMetadataStore {
+	return &MockCacheMetadataStore{
 		hosts:      make(map[string]map[string]*Host),
 		fsNodes:    make(map[string]*FSMetadata),
 		fsChildren: make(map[string][]string),
@@ -25,7 +25,7 @@ func NewMockRegistry() *MockRegistry {
 	}
 }
 
-func (m *MockRegistry) AddHostToIndex(ctx context.Context, locality string, host *Host) error {
+func (m *MockCacheMetadataStore) AddHostToIndex(ctx context.Context, locality string, host *Host) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -36,11 +36,11 @@ func (m *MockRegistry) AddHostToIndex(ctx context.Context, locality string, host
 	return nil
 }
 
-func (m *MockRegistry) SetHostKeepAlive(ctx context.Context, locality string, host *Host) error {
+func (m *MockCacheMetadataStore) SetHostKeepAlive(ctx context.Context, locality string, host *Host) error {
 	return m.AddHostToIndex(ctx, locality, host)
 }
 
-func (m *MockRegistry) RemoveHost(ctx context.Context, locality string, host *Host) error {
+func (m *MockCacheMetadataStore) RemoveHost(ctx context.Context, locality string, host *Host) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -50,7 +50,7 @@ func (m *MockRegistry) RemoveHost(ctx context.Context, locality string, host *Ho
 	return nil
 }
 
-func (m *MockRegistry) GetAvailableHosts(ctx context.Context, locality string) ([]*Host, error) {
+func (m *MockCacheMetadataStore) GetAvailableHosts(ctx context.Context, locality string) ([]*Host, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -63,11 +63,7 @@ func (m *MockRegistry) GetAvailableHosts(ctx context.Context, locality string) (
 	return hosts, nil
 }
 
-func (m *MockRegistry) GetRegionConfig(ctx context.Context, locality string) (ServerConfig, error) {
-	return ServerConfig{}, errors.New("region config not found")
-}
-
-func (m *MockRegistry) SetClientLock(ctx context.Context, hash string, host string) error {
+func (m *MockCacheMetadataStore) SetClientLock(ctx context.Context, hash string, host string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -79,7 +75,7 @@ func (m *MockRegistry) SetClientLock(ctx context.Context, hash string, host stri
 	return nil
 }
 
-func (m *MockRegistry) RemoveClientLock(ctx context.Context, hash string, host string) error {
+func (m *MockCacheMetadataStore) RemoveClientLock(ctx context.Context, hash string, host string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -88,7 +84,7 @@ func (m *MockRegistry) RemoveClientLock(ctx context.Context, hash string, host s
 	return nil
 }
 
-func (m *MockRegistry) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
+func (m *MockCacheMetadataStore) SetStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -100,7 +96,7 @@ func (m *MockRegistry) SetStoreFromContentLock(ctx context.Context, locality str
 	return nil
 }
 
-func (m *MockRegistry) RemoveStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
+func (m *MockCacheMetadataStore) RemoveStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -109,12 +105,12 @@ func (m *MockRegistry) RemoveStoreFromContentLock(ctx context.Context, locality 
 	return nil
 }
 
-func (m *MockRegistry) RefreshStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
+func (m *MockCacheMetadataStore) RefreshStoreFromContentLock(ctx context.Context, locality string, sourcePath string) error {
 	// No-op for mock - locks don't expire
 	return nil
 }
 
-func (m *MockRegistry) SetFsNode(ctx context.Context, id string, metadata *FSMetadata) error {
+func (m *MockCacheMetadataStore) SetFsNode(ctx context.Context, id string, metadata *FSMetadata) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -122,7 +118,7 @@ func (m *MockRegistry) SetFsNode(ctx context.Context, id string, metadata *FSMet
 	return nil
 }
 
-func (m *MockRegistry) GetFsNode(ctx context.Context, id string) (*FSMetadata, error) {
+func (m *MockCacheMetadataStore) GetFsNode(ctx context.Context, id string) (*FSMetadata, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -133,7 +129,7 @@ func (m *MockRegistry) GetFsNode(ctx context.Context, id string) (*FSMetadata, e
 	return metadata, nil
 }
 
-func (m *MockRegistry) RemoveFsNode(ctx context.Context, id string) error {
+func (m *MockCacheMetadataStore) RemoveFsNode(ctx context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -141,7 +137,7 @@ func (m *MockRegistry) RemoveFsNode(ctx context.Context, id string) error {
 	return nil
 }
 
-func (m *MockRegistry) RemoveFsNodeChild(ctx context.Context, pid, id string) error {
+func (m *MockCacheMetadataStore) RemoveFsNodeChild(ctx context.Context, pid, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -157,7 +153,7 @@ func (m *MockRegistry) RemoveFsNodeChild(ctx context.Context, pid, id string) er
 	return nil
 }
 
-func (m *MockRegistry) GetFsNodeChildren(ctx context.Context, id string) ([]*FSMetadata, error) {
+func (m *MockCacheMetadataStore) GetFsNodeChildren(ctx context.Context, id string) ([]*FSMetadata, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -175,7 +171,7 @@ func (m *MockRegistry) GetFsNodeChildren(ctx context.Context, id string) ([]*FSM
 	return children, nil
 }
 
-func (m *MockRegistry) AddFsNodeChild(ctx context.Context, pid, id string) error {
+func (m *MockCacheMetadataStore) AddFsNodeChild(ctx context.Context, pid, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

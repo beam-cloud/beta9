@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/beam-cloud/beta9/pkg/cache"
+	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/repository"
 	"github.com/beam-cloud/beta9/pkg/types"
 	pb "github.com/beam-cloud/beta9/proto"
@@ -11,8 +13,9 @@ import (
 )
 
 type WorkerRepositoryService struct {
-	ctx        context.Context
-	workerRepo repository.WorkerRepository
+	ctx              context.Context
+	cacheCoordinator *cache.Coordinator
+	workerRepo       repository.WorkerRepository
 	pb.UnimplementedWorkerRepositoryServiceServer
 }
 
@@ -20,8 +23,12 @@ const (
 	containerRequestPollingInterval time.Duration = 100 * time.Millisecond
 )
 
-func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository) *WorkerRepositoryService {
-	return &WorkerRepositoryService{ctx: ctx, workerRepo: workerRepo}
+func NewWorkerRepositoryService(ctx context.Context, workerRepo repository.WorkerRepository, rdb *common.RedisClient) *WorkerRepositoryService {
+	service := &WorkerRepositoryService{ctx: ctx, workerRepo: workerRepo}
+	if rdb != nil {
+		service.cacheCoordinator = cache.NewCoordinator(repository.NewCacheRedisRepository(rdb))
+	}
+	return service
 }
 
 func (s *WorkerRepositoryService) GetNextContainerRequest(req *pb.GetNextContainerRequestRequest, stream pb.WorkerRepositoryService_GetNextContainerRequestServer) error {

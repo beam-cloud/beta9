@@ -313,6 +313,7 @@ type GeeseConfig struct {
 	StagedWritePath         string        `key:"stagedWritePath" json:"staged_write_path"`
 	StagedWriteDebounce     time.Duration `key:"stagedWriteDebounce" json:"staged_write_debounce"`
 	CacheStreamingEnabled   bool          `key:"cacheStreamingEnabled" json:"cache_streaming_enabled"`
+	ExternalCacheDirectIO   bool          `key:"externalCacheDirectIO" json:"external_cache_direct_io"`
 	CacheThroughEnabled     bool          `key:"cacheThroughEnabled" json:"cache_through_enabled"`
 	CacheThroughModeEnabled bool          `key:"cacheThroughModeEnabled" json:"cache_through_mode_enabled"`
 }
@@ -440,8 +441,9 @@ type WorkerPoolConfig struct {
 }
 
 type WorkerPoolCacheConfig struct {
-	Enabled *bool                     `key:"enabled" json:"enabled"`
-	Disk    WorkerPoolCacheDiskConfig `key:"disk" json:"disk"`
+	Enabled      *bool                     `key:"enabled" json:"enabled"`
+	Disk         WorkerPoolCacheDiskConfig `key:"disk" json:"disk"`
+	SlotsPerNode int                       `key:"slotsPerNode" json:"slots_per_node"`
 }
 
 type WorkerPoolCacheDiskConfig struct {

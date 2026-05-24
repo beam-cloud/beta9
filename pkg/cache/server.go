@@ -31,15 +31,11 @@ const (
 
 type ServerOpts struct {
 	HostID        string
-	Registry      Registry
+	MetadataStore CacheMetadataStore
 	AdvertiseAddr string
 }
 
 type ServerOption func(*ServerOpts)
-
-type hostRemover interface {
-	RemoveHost(ctx context.Context, locality string, host *Host) error
-}
 
 type Server struct {
 	ctx    context.Context
@@ -53,7 +49,7 @@ type Server struct {
 	cas           *Store
 	serverConfig  ServerConfig
 	globalConfig  GlobalConfig
-	coordinator   Registry
+	metadataStore CacheMetadataStore
 	grpcServer    *grpc.Server
 	listener      net.Listener
 	s3ClientCache sync.Map
@@ -77,13 +73,13 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		RTT: 0,
 	}
 
-	var coordinator Registry
+	var metadataStore CacheMetadataStore
 	effectiveServerConfig := cfg.Server
 	var err error = nil
-	if opts.Registry != nil {
-		coordinator = opts.Registry
+	if opts.MetadataStore != nil {
+		metadataStore = opts.MetadataStore
 	} else {
-		coordinator, effectiveServerConfig, err = newRegistry(ctx, cfg, locality)
+		metadataStore, effectiveServerConfig, err = newMetadataStore(cfg)
 		cfg.Server = effectiveServerConfig
 	}
 	if err != nil {
@@ -123,7 +119,7 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 
 	serverCtx, cancel := context.WithCancel(ctx)
 
-	cas, err := NewStore(serverCtx, currentHost, locality, coordinator, cfg)
+	cas, err := NewStore(serverCtx, currentHost, locality, metadataStore, cfg)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -148,7 +144,7 @@ func NewServerWithOptions(ctx context.Context, cfg Config, locality string, opti
 		cas:           cas,
 		serverConfig:  effectiveServerConfig,
 		globalConfig:  cfg.Global,
-		coordinator:   coordinator,
+		metadataStore: metadataStore,
 		privateIpAddr: privateIpAddr,
 		publicIpAddr:  publicIpAddr,
 		s3ClientCache: sync.Map{},
@@ -163,9 +159,9 @@ func WithServerHostID(hostID string) ServerOption {
 	}
 }
 
-func WithServerRegistry(registry Registry) ServerOption {
+func WithServerMetadataStore(metadataStore CacheMetadataStore) ServerOption {
 	return func(opts *ServerOpts) {
-		opts.Registry = registry
+		opts.MetadataStore = metadataStore
 	}
 }
 
@@ -182,26 +178,16 @@ func (cs *Server) Host() *Host {
 	return cs.cas.currentHost
 }
 
-func newRegistry(ctx context.Context, cfg Config, locality string) (Registry, ServerConfig, error) {
-	switch cfg.Server.Mode {
-	case ServerModeCoordinator, ServerModeNode:
-		registry, err := NewRedisRegistry(cfg.Global, cfg.Server)
-		return registry, cfg.Server, err
-	default:
-		coordinator, err := NewRemoteRegistry(cfg.Global, cfg.Client.Token)
-		if err != nil {
-			return nil, cfg.Server, err
-		}
-
-		regionConfig, err := coordinator.GetRegionConfig(ctx, locality)
-		if err != nil {
-			Logger.Infof("No region-specific config found for locality %s, using current config", locality)
-		} else {
-			cfg.Server = regionConfig
-		}
-
-		return coordinator, cfg.Server, nil
+func (cs *Server) UsagePct() float64 {
+	if cs == nil {
+		return 0
 	}
+	return cs.usagePct()
+}
+
+func newMetadataStore(cfg Config) (CacheMetadataStore, ServerConfig, error) {
+	metadataStore, err := NewRedisCacheMetadataStore(cfg.Global, cfg.Server)
+	return metadataStore, cfg.Server, err
 }
 
 func getHostId(serverConfig ServerConfig) string {
@@ -216,33 +202,6 @@ func getHostId(serverConfig ServerConfig) string {
 	}
 
 	return hostId
-}
-
-func (cs *Server) HostKeepAlive() {
-	err := cs.coordinator.SetHostKeepAlive(cs.ctx, cs.locality, cs.cas.currentHost)
-	if err != nil {
-		Logger.Warnf("Failed to set host keepalive: %v", err)
-	}
-
-	err = cs.coordinator.AddHostToIndex(cs.ctx, cs.locality, cs.cas.currentHost)
-	if err != nil {
-		Logger.Warnf("Failed to add host to index: %v", err)
-	}
-
-	ticker := time.NewTicker(time.Duration(defaultHostKeepAliveIntervalS) * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-cs.ctx.Done():
-			return
-		case <-ticker.C:
-			cs.cas.currentHost.CapacityUsagePct = cs.usagePct()
-
-			cs.coordinator.AddHostToIndex(cs.ctx, cs.locality, cs.cas.currentHost)
-			cs.coordinator.SetHostKeepAlive(cs.ctx, cs.locality, cs.cas.currentHost)
-		}
-	}
 }
 
 func (cs *Server) grpcServerOptions() []grpc.ServerOption {
@@ -331,7 +290,6 @@ func (cs *Server) Serve(bindAddr string, advertiseHost string) (string, error) {
 	Logger.Infof("Running %s@%s", cs.hostId, advertiseAddr)
 	Logger.Debugf("cache server config: %+v", cs.serverConfig)
 
-	go cs.HostKeepAlive()
 	go func() {
 		if err := s.Serve(serveListener); err != nil {
 			if err != grpc.ErrServerStopped {
@@ -365,13 +323,6 @@ func (cs *Server) Close() error {
 	cs.closeOnce.Do(func() {
 		if cs.cancel != nil {
 			cs.cancel()
-		}
-		if remover, ok := cs.coordinator.(hostRemover); ok && cs.cas != nil && cs.cas.currentHost != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			if err := remover.RemoveHost(ctx, cs.locality, cs.cas.currentHost); err != nil {
-				Logger.Warnf("failed to unregister cache host: %v", err)
-			}
 		}
 		if cs.grpcServer != nil {
 			stopped := make(chan struct{})
@@ -656,13 +607,13 @@ func (cs *Server) storeContentInCacheFS(ctx context.Context, path string, hash s
 		}
 
 		// Set metadata
-		err = cs.coordinator.SetFsNode(ctx, currentNodeId, metadata)
+		err = cs.metadataStore.SetFsNode(ctx, currentNodeId, metadata)
 		if err != nil {
 			return err
 		}
 
 		// Add the current node as a child of the previous node
-		err = cs.coordinator.AddFsNodeChild(ctx, previousParentId, currentNodeId)
+		err = cs.metadataStore.AddFsNodeChild(ctx, previousParentId, currentNodeId)
 		if err != nil {
 			return err
 		}
@@ -684,7 +635,7 @@ func (cs *Server) StoreContent(stream proto.Cache_StoreContentServer) error {
 		return err
 	}
 
-	if cs.coordinator != nil && reader.cachePath != "" {
+	if cs.metadataStore != nil && reader.cachePath != "" {
 		metadata := newCacheFSFileMetadata(hash, size)
 		if reader.metadata != nil {
 			metadata = cacheFSFileMetadataFromProto(reader.metadata, hash, size)
@@ -848,7 +799,7 @@ func (cs *Server) StoreContentFromSource(ctx context.Context, req *proto.CacheSt
 
 	// Store references in cachefs only when the caller is publishing a path into the
 	// cachefs namespace. Plain S3 source writes are content-addressed only.
-	if cs.coordinator != nil {
+	if cs.metadataStore != nil {
 		var err error
 		if req.Source.BucketName == "" {
 			if req.Source.CachePath == "" {
@@ -889,7 +840,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		sourcePath = filepath.Join("/", filepath.Clean(req.Source.CachePath))
 	}
 	Logger.Debugf("StoreContentFromSourceWithLock[ACK] - [source=%s bucket=%s cache_path=%s]", req.Source.Path, req.Source.BucketName, req.Source.CachePath)
-	if err := cs.coordinator.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
+	if err := cs.metadataStore.SetStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
 		Logger.Debugf("StoreContentFromSourceWithLock[LOCK_MISS] - [source=%s elapsed=%s err=%v]", sourcePath, time.Since(started).Truncate(time.Millisecond), err)
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Ok: false, FailedToAcquireLock: true, ErrorMsg: err.Error()}, nil
 	}
@@ -898,7 +849,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		if lockReleased {
 			return
 		}
-		if err := cs.coordinator.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
+		if err := cs.metadataStore.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
 			Logger.Errorf("StoreContentFromSourceWithLock[ERR] - error removing lock: %v", err)
 		}
 	}()
@@ -915,7 +866,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 				return
 			case <-ticker.C:
 				Logger.Debugf("StoreContentFromSourceWithLock[REFRESH] - [%s]", sourcePath)
-				cs.coordinator.RefreshStoreFromContentLock(ctx, cs.locality, sourcePath)
+				cs.metadataStore.RefreshStoreFromContentLock(ctx, cs.locality, sourcePath)
 			}
 		}
 	}()
@@ -934,7 +885,7 @@ func (cs *Server) StoreContentFromSourceWithLock(ctx context.Context, req *proto
 		return &proto.CacheStoreContentFromSourceWithLockResponse{Hash: "", Ok: false, ErrorMsg: errorMsg}, nil
 	}
 
-	if err := cs.coordinator.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
+	if err := cs.metadataStore.RemoveStoreFromContentLock(ctx, cs.locality, sourcePath); err != nil {
 		Logger.Errorf("StoreContentFromSourceWithLock[ERR] - error removing lock: %v", err)
 	}
 	lockReleased = true

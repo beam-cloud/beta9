@@ -35,19 +35,19 @@ func SHA1StringToUint64(hash string) (uint64, error) {
 }
 
 type FSSystemOpts struct {
-	Verbose  bool
-	Registry Registry
-	Config   ClientConfig
-	Client   *Client
+	Verbose       bool
+	MetadataStore CacheMetadataStore
+	Config        ClientConfig
+	Client        *Client
 }
 
 type CacheFS struct {
-	ctx      context.Context
-	root     *FSNode
-	verbose  bool
-	Registry Registry
-	Client   *Client
-	Config   ClientConfig
+	ctx           context.Context
+	root          *FSNode
+	verbose       bool
+	MetadataStore CacheMetadataStore
+	Client        *Client
+	Config        ClientConfig
 }
 
 func Mount(ctx context.Context, opts FSSystemOpts) (func() error, <-chan error, *fuse.Server, error) {
@@ -174,27 +174,27 @@ func updateReadAheadKB(mountPoint string, valueKB int) error {
 
 // NewFileSystem initializes a new CacheFS with root metadata.
 func NewFileSystem(ctx context.Context, opts FSSystemOpts) (*CacheFS, error) {
-	coordinatorClient := opts.Registry
+	metadataStore := opts.MetadataStore
 
 	bfs := &CacheFS{
-		ctx:      ctx,
-		verbose:  opts.Verbose,
-		Config:   opts.Config,
-		Client:   opts.Client,
-		Registry: opts.Registry,
+		ctx:           ctx,
+		verbose:       opts.Verbose,
+		Config:        opts.Config,
+		Client:        opts.Client,
+		MetadataStore: opts.MetadataStore,
 	}
 
 	rootID := GenerateFsID("/")
 	rootPID := "" // Root node has no parent
 	rootPath := "/"
 
-	dirMeta, err := coordinatorClient.GetFsNode(bfs.ctx, rootID)
+	dirMeta, err := metadataStore.GetFsNode(bfs.ctx, rootID)
 	if err != nil || dirMeta == nil {
 		Logger.Infof("Root node metadata not found, creating it now...")
 
 		dirMeta = &FSMetadata{PID: rootPID, ID: rootID, Path: rootPath, Ino: 1, Mode: fuse.S_IFDIR | 0755}
 
-		err := coordinatorClient.SetFsNode(bfs.ctx, rootID, dirMeta)
+		err := metadataStore.SetFsNode(bfs.ctx, rootID, dirMeta)
 		if err != nil {
 			Logger.Errorf("Unable to create cachefs root node dir metdata: %+v", err)
 			return nil, err

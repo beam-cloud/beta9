@@ -97,7 +97,7 @@ func TestReadContentIntoPrefersAttachedLocalReplica(t *testing.T) {
 	require.Equal(t, content, dst)
 }
 
-func TestLocalPageRegionsReturnsSelectedLocalPageRanges(t *testing.T) {
+func TestClientLocalPageFileViewsReturnsSelectedClientLocalPageFiles(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("abcdefghijkl")
 	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
@@ -115,7 +115,7 @@ func TestLocalPageRegionsReturnsSelectedLocalPageRanges(t *testing.T) {
 	}
 	client.AttachLocalServer(&Server{cas: store})
 
-	regions, err := client.LocalPageRegions(hash, 3, 6, ClientOptions{})
+	regions, err := client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
 	require.NoError(t, err)
 	require.Len(t, regions, 2)
 	require.Equal(t, int64(3), regions[0].Offset)
@@ -126,7 +126,7 @@ func TestLocalPageRegionsReturnsSelectedLocalPageRanges(t *testing.T) {
 	require.FileExists(t, regions[1].Path)
 }
 
-func TestLocalPageRegionsPrefersAttachedLocalReplica(t *testing.T) {
+func TestClientLocalPageFileViewsPrefersAttachedLocalReplica(t *testing.T) {
 	store := newTestStore(t, 5)
 	content := []byte("abcdefghijkl")
 	hash, _, err := store.AddReader(context.Background(), bytes.NewReader(content))
@@ -144,7 +144,7 @@ func TestLocalPageRegionsPrefersAttachedLocalReplica(t *testing.T) {
 	}
 	client.AttachLocalServer(&Server{cas: store})
 
-	regions, err := client.LocalPageRegions(hash, 3, 6, ClientOptions{})
+	regions, err := client.ClientLocalPageFileViews(hash, 3, 6, ClientOptions{})
 	require.NoError(t, err)
 	require.Len(t, regions, 2)
 	require.Equal(t, int64(3), regions[0].Offset)
@@ -154,11 +154,11 @@ func TestLocalPageRegionsPrefersAttachedLocalReplica(t *testing.T) {
 }
 
 func TestWithStoreFromContentLockReturnsUnlockErrorAndRetriesDeferredRelease(t *testing.T) {
-	registry := &failFirstUnlockRegistry{MockRegistry: NewMockRegistry()}
+	registry := &failFirstUnlockRegistry{MockCacheMetadataStore: NewMockCacheMetadataStore()}
 	client := &Client{
-		ctx:         context.Background(),
-		locality:    "test",
-		coordinator: registry,
+		ctx:           context.Background(),
+		locality:      "test",
+		metadataStore: registry,
 	}
 
 	hash, err := client.withStoreFromContentLock(context.Background(), "/source", true, func() (string, error) {
@@ -172,7 +172,7 @@ func TestWithStoreFromContentLockReturnsUnlockErrorAndRetriesDeferredRelease(t *
 }
 
 type failFirstUnlockRegistry struct {
-	*MockRegistry
+	*MockCacheMetadataStore
 	removeCalls int
 }
 
@@ -181,5 +181,5 @@ func (r *failFirstUnlockRegistry) RemoveStoreFromContentLock(ctx context.Context
 	if r.removeCalls == 1 {
 		return errors.New("unlock failed")
 	}
-	return r.MockRegistry.RemoveStoreFromContentLock(ctx, locality, sourcePath)
+	return r.MockCacheMetadataStore.RemoveStoreFromContentLock(ctx, locality, sourcePath)
 }

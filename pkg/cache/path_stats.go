@@ -25,10 +25,10 @@ type cachePathStatsCounters struct {
 	clientGRPCMisses       int64
 	clientGRPCErrors       int64
 
-	localPageRegionRequests int64
-	localPageRegionHits     int64
-	localPageRegionMisses   int64
-	localPageRegionBytes    int64
+	clientLocalPageFileRequests int64
+	clientLocalPageFileHits     int64
+	clientLocalPageFileMisses   int64
+	clientLocalPageFileBytes    int64
 
 	cacheFSReads             int64
 	cacheFSReadBytes         int64
@@ -87,7 +87,7 @@ func startCachePathStatsLogger() {
 						continue
 					}
 					Logger.Debugf(
-						"cache read path summary: client(read_into=%d %.2fMiB local_hit=%d local_miss=%d raw_hit=%d raw_miss=%d raw_err=%d grpc_hit=%d grpc_miss=%d grpc_err=%d) local_page_region(req=%d hit=%d miss=%d %.2fMiB) cachefs(read=%d %.2fMiB fd_hit=%d data=%d miss_retry=%d store_retry_err=%d read_err=%d) server(grpc_req=%d grpc_hit=%d grpc_miss=%d %.2fMiB stream_req=%d stream_chunks=%d %.2fMiB stream_err=%d raw_req=%d raw_sendfile=%d raw_copy=%d raw_readat=%d raw_miss=%d raw_err=%d) store(readat=%d %.2fMiB mem_pages=%d %.2fMiB disk_pages=%d %.2fMiB miss=%d page_region=%d hit=%d miss=%d %.2fMiB)",
+						"cache read path summary: client(read_into=%d %.2fMiB local_hit=%d local_miss=%d raw_hit=%d raw_miss=%d raw_err=%d grpc_hit=%d grpc_miss=%d grpc_err=%d) client_local_page_file(req=%d hit=%d miss=%d %.2fMiB) cachefs(read=%d %.2fMiB fd_hit=%d data=%d miss_retry=%d store_retry_err=%d read_err=%d) server(grpc_req=%d grpc_hit=%d grpc_miss=%d %.2fMiB stream_req=%d stream_chunks=%d %.2fMiB stream_err=%d raw_req=%d raw_sendfile=%d raw_copy=%d raw_readat=%d raw_miss=%d raw_err=%d) store(readat=%d %.2fMiB mem_pages=%d %.2fMiB disk_pages=%d %.2fMiB miss=%d page_region=%d hit=%d miss=%d %.2fMiB)",
 						d.clientReadIntoRequests,
 						bytesToMiB(d.clientReadIntoBytes),
 						d.clientLocalHits,
@@ -98,10 +98,10 @@ func startCachePathStatsLogger() {
 						d.clientGRPCHits,
 						d.clientGRPCMisses,
 						d.clientGRPCErrors,
-						d.localPageRegionRequests,
-						d.localPageRegionHits,
-						d.localPageRegionMisses,
-						bytesToMiB(d.localPageRegionBytes),
+						d.clientLocalPageFileRequests,
+						d.clientLocalPageFileHits,
+						d.clientLocalPageFileMisses,
+						bytesToMiB(d.clientLocalPageFileBytes),
 						d.cacheFSReads,
 						bytesToMiB(d.cacheFSReadBytes),
 						d.cacheFSLocalFDHits,
@@ -154,10 +154,10 @@ func snapshotCachePathStats() cachePathStatsSnapshot {
 		clientGRPCMisses:       atomic.LoadInt64(&cachePathStats.clientGRPCMisses),
 		clientGRPCErrors:       atomic.LoadInt64(&cachePathStats.clientGRPCErrors),
 
-		localPageRegionRequests: atomic.LoadInt64(&cachePathStats.localPageRegionRequests),
-		localPageRegionHits:     atomic.LoadInt64(&cachePathStats.localPageRegionHits),
-		localPageRegionMisses:   atomic.LoadInt64(&cachePathStats.localPageRegionMisses),
-		localPageRegionBytes:    atomic.LoadInt64(&cachePathStats.localPageRegionBytes),
+		clientLocalPageFileRequests: atomic.LoadInt64(&cachePathStats.clientLocalPageFileRequests),
+		clientLocalPageFileHits:     atomic.LoadInt64(&cachePathStats.clientLocalPageFileHits),
+		clientLocalPageFileMisses:   atomic.LoadInt64(&cachePathStats.clientLocalPageFileMisses),
+		clientLocalPageFileBytes:    atomic.LoadInt64(&cachePathStats.clientLocalPageFileBytes),
 
 		cacheFSReads:             atomic.LoadInt64(&cachePathStats.cacheFSReads),
 		cacheFSReadBytes:         atomic.LoadInt64(&cachePathStats.cacheFSReadBytes),
@@ -209,10 +209,10 @@ func diffCachePathStats(cur, prev cachePathStatsSnapshot) cachePathStatsSnapshot
 		clientGRPCMisses:       cur.clientGRPCMisses - prev.clientGRPCMisses,
 		clientGRPCErrors:       cur.clientGRPCErrors - prev.clientGRPCErrors,
 
-		localPageRegionRequests: cur.localPageRegionRequests - prev.localPageRegionRequests,
-		localPageRegionHits:     cur.localPageRegionHits - prev.localPageRegionHits,
-		localPageRegionMisses:   cur.localPageRegionMisses - prev.localPageRegionMisses,
-		localPageRegionBytes:    cur.localPageRegionBytes - prev.localPageRegionBytes,
+		clientLocalPageFileRequests: cur.clientLocalPageFileRequests - prev.clientLocalPageFileRequests,
+		clientLocalPageFileHits:     cur.clientLocalPageFileHits - prev.clientLocalPageFileHits,
+		clientLocalPageFileMisses:   cur.clientLocalPageFileMisses - prev.clientLocalPageFileMisses,
+		clientLocalPageFileBytes:    cur.clientLocalPageFileBytes - prev.clientLocalPageFileBytes,
 
 		cacheFSReads:             cur.cacheFSReads - prev.cacheFSReads,
 		cacheFSReadBytes:         cur.cacheFSReadBytes - prev.cacheFSReadBytes,
@@ -253,7 +253,7 @@ func diffCachePathStats(cur, prev cachePathStatsSnapshot) cachePathStatsSnapshot
 
 func (s cachePathStatsSnapshot) isZero() bool {
 	return s.clientReadIntoRequests == 0 &&
-		s.localPageRegionRequests == 0 &&
+		s.clientLocalPageFileRequests == 0 &&
 		s.cacheFSReads == 0 &&
 		s.serverGRPCGetRequests == 0 &&
 		s.serverStreamRequests == 0 &&

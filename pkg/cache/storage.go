@@ -34,7 +34,7 @@ type Store struct {
 	serverConfig            ServerConfig
 	globalConfig            GlobalConfig
 	prefetchConfig          ReadPrefetchConfig
-	coordinator             Registry
+	metadataStore           CacheMetadataStore
 	maxCacheSizeMb          int64
 	diskCacheDir            string
 	diskCachedUsageExceeded bool
@@ -47,7 +47,7 @@ type Store struct {
 	closing                 atomic.Bool
 }
 
-func NewStore(ctx context.Context, currentHost *Host, locality string, coordinator Registry, config Config) (*Store, error) {
+func NewStore(ctx context.Context, currentHost *Host, locality string, metadataStore CacheMetadataStore, config Config) (*Store, error) {
 	if config.Server.PageSizeBytes <= 0 {
 		return nil, errors.New("invalid cache configuration")
 	}
@@ -56,7 +56,7 @@ func NewStore(ctx context.Context, currentHost *Host, locality string, coordinat
 		serverConfig:       config.Server,
 		globalConfig:       config.Global,
 		prefetchConfig:     config.Client.Prefetch,
-		coordinator:        coordinator,
+		metadataStore:      metadataStore,
 		currentHost:        currentHost,
 		locality:           locality,
 		diskCacheDir:       config.Server.DiskCacheDir,

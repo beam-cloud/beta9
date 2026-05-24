@@ -111,6 +111,7 @@ func (sm *WorkspaceStorageManager) Mount(workspaceName string, workspaceStorage 
 				StagedWritePath:         sm.config.WorkspaceStorage.Geese.StagedWritePath,
 				StagedWriteDebounce:     sm.config.WorkspaceStorage.Geese.StagedWriteDebounce,
 				CacheStreamingEnabled:   sm.config.WorkspaceStorage.Geese.CacheStreamingEnabled,
+				ExternalCacheDirectIO:   sm.config.WorkspaceStorage.Geese.ExternalCacheDirectIO,
 				CacheThroughModeEnabled: sm.config.WorkspaceStorage.Geese.CacheThroughModeEnabled,
 			},
 		}, sm.cacheClient)

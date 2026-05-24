@@ -3,6 +3,8 @@ package cache
 import (
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestClosestWithCapacity(t *testing.T) {
@@ -29,4 +31,19 @@ func TestClosestWithCapacity(t *testing.T) {
 		t.Fatalf("expected host RTT: %v, CapacityUsagePct: %f; got RTT: %v, CapacityUsagePct: %f",
 			expectedHost.RTT, expectedHost.CapacityUsagePct, host.RTT, host.CapacityUsagePct)
 	}
+}
+
+func TestHostMapSetUpdatesExistingHostEndpoint(t *testing.T) {
+	added := make([]*Host, 0)
+	hostMap := NewHostMap(GlobalConfig{}, func(host *Host) error {
+		added = append(added, host)
+		return nil
+	})
+
+	hostMap.Set(&Host{HostId: "logical-host", PrivateAddr: "10.0.0.1:2049"})
+	hostMap.Set(&Host{HostId: "logical-host", PrivateAddr: "10.0.0.2:2049"})
+
+	require.Len(t, hostMap.GetAll(), 1)
+	require.Equal(t, "10.0.0.2:2049", hostMap.Get("logical-host").PrivateAddr)
+	require.Len(t, added, 2)
 }

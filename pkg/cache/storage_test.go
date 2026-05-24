@@ -31,7 +31,7 @@ func newTestStore(t *testing.T, pageSize int64) *Store {
 
 	InitLogger(false, false)
 
-	store, err := NewStore(context.Background(), &Host{HostId: "test-host"}, "test", NewMockRegistry(), Config{
+	store, err := NewStore(context.Background(), &Host{HostId: "test-host"}, "test", NewMockCacheMetadataStore(), Config{
 		Server: ServerConfig{
 			DiskCacheDir:         t.TempDir(),
 			DiskCacheMaxUsagePct: 90,
@@ -156,7 +156,7 @@ func TestStoreAddReaderFallsBackToMemoryWhenDiskExceeded(t *testing.T) {
 	InitLogger(false, false)
 
 	cacheDir := filepath.Join(t.TempDir(), "cache-dir")
-	store, err := NewStore(context.Background(), &Host{HostId: "test-host"}, "test", NewMockRegistry(), Config{
+	store, err := NewStore(context.Background(), &Host{HostId: "test-host"}, "test", NewMockCacheMetadataStore(), Config{
 		Server: ServerConfig{
 			DiskCacheDir:         cacheDir,
 			DiskCacheMaxUsagePct: 90,

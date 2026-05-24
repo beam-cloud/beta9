@@ -67,6 +67,16 @@ type S3ContentSource struct {
 	ForcePathStyle bool
 }
 
+// ClientLocalPageFileView describes a byte range inside a page file that is
+// already present on this client/worker. It is intentionally not a remote
+// address: consumers may mmap it, return it as a FUSE fd-backed response, or
+// otherwise read it as a local file.
+type ClientLocalPageFileView struct {
+	Path   string
+	Offset int64
+	Length int
+}
+
 type Client struct {
 	ctx                   context.Context
 	locality              string
@@ -80,11 +90,12 @@ type Client struct {
 	hostMap               *HostMap
 	mu                    sync.RWMutex
 	discoveryClient       *DiscoveryClient
-	coordinator           Registry
+	metadataStore         CacheMetadataStore
 	localHostCache        map[string]*localClientCache
 	localPromotionSem     chan struct{}
 	cachefsServer         *fuse.Server
 	hasher                RendezvousHasher
+	hostDirectory         HostDirectory
 	minRetryLengthBytes   int64
 	maxGetContentAttempts int64
 }
@@ -97,21 +108,32 @@ type localClientCache struct {
 func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	InitLogger(cfg.Global.DebugMode, cfg.Global.PrettyLogs)
 
-	coordinator, err := NewRemoteRegistry(cfg.Global, cfg.Client.Token)
+	metadataStore, err := NewRedisCacheMetadataStore(cfg.Global, cfg.Server)
 	if err != nil {
 		return nil, err
 	}
 
 	locality := cfg.Global.GetLocality()
-	return NewClientWithRegistry(ctx, cfg, coordinator, locality)
+	return NewClientWithMetadataStore(ctx, cfg, metadataStore, locality)
 }
 
-func NewClientWithRegistry(ctx context.Context, cfg Config, registry Registry, locality string) (*Client, error) {
+func NewClientWithMetadataStore(ctx context.Context, cfg Config, metadataStore CacheMetadataStore, locality string) (*Client, error) {
+	return NewClientWithHostDirectory(ctx, cfg, metadataStore, nil, locality)
+}
+
+func NewClientWithHostDirectory(ctx context.Context, cfg Config, metadataStore CacheMetadataStore, hostDirectory HostDirectory, locality string) (*Client, error) {
 	InitLogger(cfg.Global.DebugMode, cfg.Global.PrettyLogs)
 	startCachePathStatsLogger()
 
 	if locality == "" {
 		locality = cfg.Global.GetLocality()
+	}
+	if hostDirectory == nil {
+		var ok bool
+		hostDirectory, ok = metadataStore.(HostDirectory)
+		if !ok {
+			return nil, fmt.Errorf("cache host directory is required")
+		}
 	}
 
 	bc := &Client{
@@ -126,14 +148,15 @@ func NewClientWithRegistry(ctx context.Context, cfg Config, registry Registry, l
 		localHostCache:        make(map[string]*localClientCache),
 		localPromotionSem:     make(chan struct{}, 16),
 		mu:                    sync.RWMutex{},
-		coordinator:           registry,
+		metadataStore:         metadataStore,
 		hasher:                rendezvous.New[*Host](),
+		hostDirectory:         hostDirectory,
 		minRetryLengthBytes:   cfg.Client.MinRetryLengthBytes,
 		maxGetContentAttempts: max(int64(cfg.Client.MaxGetContentAttempts), 1),
 	}
 
 	bc.hostMap = NewHostMap(cfg.Global, bc.addHost)
-	bc.discoveryClient = NewDiscoveryClient(cfg.Global, bc.hostMap, registry, locality)
+	bc.discoveryClient = NewDiscoveryClient(cfg.Global, bc.hostMap, hostDirectory, locality)
 
 	// Start searching for nearby cache hosts
 	go bc.discoveryClient.Start(bc.ctx)
@@ -144,10 +167,10 @@ func NewClientWithRegistry(ctx context.Context, cfg Config, registry Registry, l
 	// Mount cache as a FUSE filesystem if cachefs is enabled
 	if bc.clientConfig.CacheFS.Enabled {
 		startServer, _, server, err := Mount(ctx, FSSystemOpts{
-			Config:   cfg.Client,
-			Registry: registry,
-			Client:   bc,
-			Verbose:  bc.globalConfig.DebugMode,
+			Config:        cfg.Client,
+			MetadataStore: metadataStore,
+			Client:        bc,
+			Verbose:       bc.globalConfig.DebugMode,
 		})
 		if err != nil {
 			return nil, err
@@ -272,7 +295,7 @@ func (c *Client) localStoresSnapshot() []*Store {
 }
 
 func (c *Client) GetNearbyHosts() ([]*Host, error) {
-	hosts, err := c.coordinator.GetAvailableHosts(c.ctx, c.locality)
+	hosts, err := c.hostDirectory.GetAvailableHosts(c.ctx, c.locality)
 	if err != nil {
 		return nil, err
 	}
@@ -341,6 +364,14 @@ func (c *Client) addHost(host *Host) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if oldConn, ok := c.grpcConns[host.HostId]; ok {
+		_ = oldConn.Close()
+	}
+	if oldPool, ok := c.rawReadPools[host.HostId]; ok {
+		oldPool.close()
+		delete(c.rawReadPools, host.HostId)
+	}
+	c.hasher.Remove(host)
 	c.grpcClients[host.HostId] = proto.NewCacheClient(conn)
 	c.grpcConns[host.HostId] = conn
 	c.hasher.Add(host)
@@ -462,7 +493,7 @@ func (c *Client) dataCallOptions() []grpc.CallOption {
 }
 
 func (c *Client) IsPathCachedNearby(ctx context.Context, path string) bool {
-	metadata, err := c.coordinator.GetFsNode(ctx, GenerateFsID(path))
+	metadata, err := c.metadataStore.GetFsNode(ctx, GenerateFsID(path))
 	if err != nil {
 		Logger.Errorf("error getting fs node: %v, path: %s", err, path)
 		return false
@@ -480,10 +511,10 @@ func (c *Client) IsPathCachedNearby(ctx context.Context, path string) bool {
 // CacheFSMetadata resolves a cachefs path to its content metadata without going
 // through the cachefs FUSE mount.
 func (c *Client) CacheFSMetadata(ctx context.Context, path string) (*FSMetadata, error) {
-	if c == nil || c.coordinator == nil {
+	if c == nil || c.metadataStore == nil {
 		return nil, ErrClientNotFound
 	}
-	return c.coordinator.GetFsNode(ctx, GenerateFsID(path))
+	return c.metadataStore.GetFsNode(ctx, GenerateFsID(path))
 }
 
 func (c *Client) IsCachedNearby(hash string, routingKey string) (bool, error) {
@@ -529,7 +560,7 @@ func (c *Client) rawReadInto(ctx context.Context, host *Host, hash string, offse
 					addr = host.Addr
 				}
 			}
-			Logger.Debugf("cache raw read result: host=%s addr=%s hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hostID, addr, hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
+			Logger.Debugf("cache remote page-region raw read result: host=%s addr=%s hash=%s offset=%d length=%d read=%d err=%v elapsed=%s", hostID, addr, hash, offset, len(dst), read, err, elapsed.Truncate(time.Millisecond))
 		}
 	}()
 	if host == nil || !c.clientConfig.ReadTransport.Enabled {
@@ -695,14 +726,14 @@ sendLoop:
 	return read, nil
 }
 
-func (c *Client) LocalPageRegion(hash string, offset int64, length int64, opts ClientOptions) (path string, pageOffset int64, n int, ok bool, err error) {
+func (c *Client) ClientLocalPageFileView(hash string, offset int64, length int64, opts ClientOptions) (path string, pageOffset int64, n int, ok bool, err error) {
 	started := time.Now()
 	defer func() {
 		if elapsed := time.Since(started); elapsed > 100*time.Millisecond || err != nil {
-			Logger.Debugf("cache local page region result: hash=%s offset=%d length=%d path=%s page_offset=%d n=%d ok=%t err=%v elapsed=%s", hash, offset, length, path, pageOffset, n, ok, err, elapsed.Truncate(time.Millisecond))
+			Logger.Debugf("cache client-local page-file view result: hash=%s offset=%d length=%d path=%s page_offset=%d n=%d ok=%t err=%v elapsed=%s", hash, offset, length, path, pageOffset, n, ok, err, elapsed.Truncate(time.Millisecond))
 		}
 	}()
-	atomic.AddInt64(&cachePathStats.localPageRegionRequests, 1)
+	atomic.AddInt64(&cachePathStats.clientLocalPageFileRequests, 1)
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = hash
 	}
@@ -713,7 +744,7 @@ func (c *Client) LocalPageRegion(hash string, offset int64, length int64, opts C
 		hostIndex: 0,
 	})
 	if err != nil {
-		atomic.AddInt64(&cachePathStats.localPageRegionMisses, 1)
+		atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 		return "", 0, 0, false, err
 	}
 
@@ -721,31 +752,27 @@ func (c *Client) LocalPageRegion(hash string, offset int64, length int64, opts C
 	localServer := c.localServers[host.HostId]
 	c.mu.RUnlock()
 	if localServer == nil || localServer.cas == nil {
-		atomic.AddInt64(&cachePathStats.localPageRegionMisses, 1)
+		atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 		return "", 0, 0, false, nil
 	}
 	path, pageOffset, n, ok, err = localServer.cas.PageRegion(hash, offset, length)
 	if err == nil && ok {
-		atomic.AddInt64(&cachePathStats.localPageRegionHits, 1)
-		atomic.AddInt64(&cachePathStats.localPageRegionBytes, int64(n))
+		atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+		atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, int64(n))
 	} else {
-		atomic.AddInt64(&cachePathStats.localPageRegionMisses, 1)
+		atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 	}
 	return path, pageOffset, n, ok, err
 }
 
-func (c *Client) LocalPageRegions(hash string, offset int64, length int64, opts ClientOptions) (regions []struct {
-	Path   string
-	Offset int64
-	Length int
-}, err error) {
+func (c *Client) ClientLocalPageFileViews(hash string, offset int64, length int64, opts ClientOptions) (views []ClientLocalPageFileView, err error) {
 	started := time.Now()
 	defer func() {
 		if elapsed := time.Since(started); elapsed > 100*time.Millisecond || err != nil {
-			Logger.Debugf("cache local page regions result: hash=%s offset=%d length=%d regions=%d err=%v elapsed=%s", hash, offset, length, len(regions), err, elapsed.Truncate(time.Millisecond))
+			Logger.Debugf("cache client-local page-file views result: hash=%s offset=%d length=%d views=%d err=%v elapsed=%s", hash, offset, length, len(views), err, elapsed.Truncate(time.Millisecond))
 		}
 	}()
-	atomic.AddInt64(&cachePathStats.localPageRegionRequests, 1)
+	atomic.AddInt64(&cachePathStats.clientLocalPageFileRequests, 1)
 	if opts.RoutingKey == "" {
 		opts.RoutingKey = hash
 	}
@@ -753,8 +780,8 @@ func (c *Client) LocalPageRegions(hash string, offset int64, length int64, opts 
 		return nil, nil
 	}
 	if c.clientConfig.PreferLocalCacheHost {
-		if regions, ok := c.localPageRegionsFromAttachedServers(hash, offset, length); ok {
-			return regions, nil
+		if views, ok := c.clientLocalPageFileViewsFromAttachedStores(hash, offset, length); ok {
+			return views, nil
 		}
 	}
 
@@ -773,59 +800,47 @@ func (c *Client) LocalPageRegions(hash string, offset int64, length int64, opts 
 		localServer := c.localServers[host.HostId]
 		c.mu.RUnlock()
 		if localServer == nil || localServer.cas == nil {
-			if regions, ok := c.promoteRemotePageRegions(host, hash, offset, length); ok {
-				return regions, nil
+			if views, ok := c.promoteRemotePageRegionsToClientLocalPageFiles(host, hash, offset, length); ok {
+				return views, nil
 			}
 			continue
 		}
 
-		if regions, ok := localPageRegionsFromStore(localServer.cas, hash, offset, length); ok {
-			cacheReadLocalPageRegionTotal.Inc()
-			atomic.AddInt64(&cachePathStats.localPageRegionHits, 1)
-			atomic.AddInt64(&cachePathStats.localPageRegionBytes, length)
-			return regions, nil
+		if views, ok := clientLocalPageFileViewsFromStore(localServer.cas, hash, offset, length); ok {
+			cacheReadClientLocalPageFileTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
+			return views, nil
 		}
 
-		if regions, ok := c.promoteRemotePageRegions(host, hash, offset, length); ok {
-			return regions, nil
+		if views, ok := c.promoteRemotePageRegionsToClientLocalPageFiles(host, hash, offset, length); ok {
+			return views, nil
 		}
 	}
 
-	atomic.AddInt64(&cachePathStats.localPageRegionMisses, 1)
+	atomic.AddInt64(&cachePathStats.clientLocalPageFileMisses, 1)
 	return nil, ErrContentNotFound
 }
 
-func (c *Client) localPageRegionsFromAttachedServers(hash string, offset int64, length int64) ([]struct {
-	Path   string
-	Offset int64
-	Length int
-}, bool) {
+func (c *Client) clientLocalPageFileViewsFromAttachedStores(hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
 	for _, store := range c.localStoresSnapshot() {
-		regions, ok := localPageRegionsFromStore(store, hash, offset, length)
+		views, ok := clientLocalPageFileViewsFromStore(store, hash, offset, length)
 		if ok {
-			cacheReadLocalPageRegionTotal.Inc()
-			atomic.AddInt64(&cachePathStats.localPageRegionHits, 1)
-			atomic.AddInt64(&cachePathStats.localPageRegionBytes, length)
-			return regions, true
+			cacheReadClientLocalPageFileTotal.Inc()
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+			atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
+			return views, true
 		}
 	}
 	return nil, false
 }
 
-func localPageRegionsFromStore(store *Store, hash string, offset int64, length int64) ([]struct {
-	Path   string
-	Offset int64
-	Length int
-}, bool) {
+func clientLocalPageFileViewsFromStore(store *Store, hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
 	if store == nil || store.serverConfig.PageSizeBytes <= 0 {
 		return nil, false
 	}
 
-	regions := make([]struct {
-		Path   string
-		Offset int64
-		Length int
-	}, 0, 1)
+	views := make([]ClientLocalPageFileView, 0, 1)
 	remaining := length
 	currentOffset := offset
 	for remaining > 0 {
@@ -835,23 +850,15 @@ func localPageRegionsFromStore(store *Store, hash string, offset int64, length i
 		if err != nil || !ok || n <= 0 {
 			return nil, false
 		}
-		regions = append(regions, struct {
-			Path   string
-			Offset int64
-			Length int
-		}{Path: path, Offset: pageOffset, Length: n})
+		views = append(views, ClientLocalPageFileView{Path: path, Offset: pageOffset, Length: n})
 		readLength := int64(n)
 		currentOffset += readLength
 		remaining -= readLength
 	}
-	return regions, true
+	return views, true
 }
 
-func (c *Client) promoteRemotePageRegions(host *Host, hash string, offset int64, length int64) ([]struct {
-	Path   string
-	Offset int64
-	Length int
-}, bool) {
+func (c *Client) promoteRemotePageRegionsToClientLocalPageFiles(host *Host, hash string, offset int64, length int64) ([]ClientLocalPageFileView, bool) {
 	if host == nil || hash == "" || offset < 0 || length <= 0 || !c.clientConfig.ReadTransport.Enabled {
 		return nil, false
 	}
@@ -868,18 +875,31 @@ func (c *Client) promoteRemotePageRegions(host *Host, hash string, offset int64,
 	pageSize := store.serverConfig.PageSizeBytes
 	pageStart := offset - offset%pageSize
 	requestEnd := offset + length
-	fullPageEnd := requestEnd - requestEnd%pageSize
-	if fullPageEnd <= pageStart {
+	if requestEnd <= offset {
 		return nil, false
 	}
+	promoteEnd := requestEnd
+	if rem := promoteEnd % pageSize; rem != 0 {
+		promoteEnd += pageSize - rem
+	}
 
-	promoteLength := fullPageEnd - pageStart
+	promoteLength := promoteEnd - pageStart
 	if maxBytes := c.clientConfig.Prefetch.AheadBytes; maxBytes > 0 && promoteLength > maxBytes {
 		return nil, false
 	}
 	if promoteLength > int64(int(^uint(0)>>1)) {
 		return nil, false
 	}
+	releasePromotion := func() {}
+	if c.localPromotionSem != nil {
+		select {
+		case c.localPromotionSem <- struct{}{}:
+			releasePromotion = func() { <-c.localPromotionSem }
+		default:
+			return nil, false
+		}
+	}
+	defer releasePromotion()
 
 	started := time.Now()
 	buf := make([]byte, int(promoteLength))
@@ -888,23 +908,23 @@ func (c *Client) promoteRemotePageRegions(host *Host, hash string, offset int64,
 	n, err := c.rawReadIntoWindowed(ctx, host, hash, pageStart, buf)
 	if err != nil || n != promoteLength {
 		if err != nil && err != ErrContentNotFound {
-			Logger.Debugf("cache remote page promotion failed: host=%s hash=%s offset=%d length=%d err=%v", host.HostId, hash, pageStart, promoteLength, err)
+			Logger.Debugf("cache remote page-region raw promotion failed: host=%s hash=%s offset=%d length=%d err=%v", host.HostId, hash, pageStart, promoteLength, err)
 		}
 		return nil, false
 	}
 
 	store.PutFullPages(hash, pageStart, buf)
-	regions, ok := localPageRegionsFromStore(store, hash, offset, length)
+	views, ok := clientLocalPageFileViewsFromStore(store, hash, offset, length)
 	if !ok {
 		return nil, false
 	}
-	cacheReadLocalPageRegionTotal.Inc()
-	atomic.AddInt64(&cachePathStats.localPageRegionHits, 1)
-	atomic.AddInt64(&cachePathStats.localPageRegionBytes, length)
+	cacheReadClientLocalPageFileTotal.Inc()
+	atomic.AddInt64(&cachePathStats.clientLocalPageFileHits, 1)
+	atomic.AddInt64(&cachePathStats.clientLocalPageFileBytes, length)
 	if elapsed := time.Since(started); elapsed > 100*time.Millisecond {
-		Logger.Debugf("cache remote page promotion result: host=%s hash=%s offset=%d length=%d promoted=%d regions=%d elapsed=%s", host.HostId, hash, offset, length, promoteLength, len(regions), elapsed.Truncate(time.Millisecond))
+		Logger.Debugf("cache remote page-region raw promotion result: host=%s hash=%s offset=%d length=%d promoted=%d client_local_page_file_views=%d elapsed=%s", host.HostId, hash, offset, length, promoteLength, len(views), elapsed.Truncate(time.Millisecond))
 	}
-	return regions, true
+	return views, true
 }
 
 func (c *Client) ReadContentInto(ctx context.Context, hash string, offset int64, dst []byte, opts ClientOptions) (read int64, err error) {
@@ -1468,12 +1488,12 @@ func (c *Client) withStoreFromContentLock(ctx context.Context, sourcePath string
 		return fn()
 	}
 
-	if err := c.coordinator.SetStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
+	if err := c.metadataStore.SetStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
 		return "", ErrUnableToAcquireLock
 	}
 	lockReleased := false
 	releaseLock := func() error {
-		if err := c.coordinator.RemoveStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
+		if err := c.metadataStore.RemoveStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
 			Logger.Errorf("StoreContent[ERR] - error removing lock: %v", err)
 			return err
 		}
@@ -1498,7 +1518,7 @@ func (c *Client) withStoreFromContentLock(ctx context.Context, sourcePath string
 			case <-storeContext.Done():
 				return
 			case <-ticker.C:
-				if err := c.coordinator.RefreshStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
+				if err := c.metadataStore.RefreshStoreFromContentLock(ctx, c.locality, sourcePath); err != nil {
 					Logger.Errorf("StoreContent[ERR] - error refreshing lock: %v", err)
 				}
 			}

@@ -66,6 +66,7 @@ storage:
       stagedWritePath: /tmp/geesefs-staged-write
       stagedWriteDebounce: 30s
       cacheStreamingEnabled: false
+      externalCacheDirectIO: false
       cacheThroughModeEnabled: true
 gateway:
   host: beta9-gateway
@@ -176,6 +177,7 @@ worker:
         gvisorExtraArgs: []
       # Optional per-pool cache disk override for nodes with different storage layouts.
       # cache:
+      #   slotsPerNode: 1
       #   disk:
       #     hostPath: /mnt/nvme/beta9/cache
       #     mountPath: /var/lib/beta9/cache
@@ -307,16 +309,16 @@ cache:
   memory:
     enabled: false
     maxCachePct: 0
+  coordinator:
+    enabled: true
+    registrationTTLSeconds: 30
+    heartbeatIntervalSeconds: 10
+    hostWatchIntervalSeconds: 5
   embedded:
-    # active-active runs a small Redis-lease elected replica set per node, backed by the same hostPath CAS.
-    # single-primary keeps the one-server-per-node mode.
-    mode: active-active
-    replicasPerNode: 2
-    leaseTTLSeconds: 15
-    leaseRefreshSeconds: 5
-    leaseRetrySeconds: 2
+    # Gateway registration deduplicates many workers on the same node/cache path
+    # into logical HRW targets. Keep one slot per shared hostPath by default.
+    slotsPerNode: 1
   global:
-    coordinatorHost:
     defaultLocality: default
     serverPort: 2049
     discoveryIntervalS: 5

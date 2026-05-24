@@ -42,7 +42,7 @@ func BenchmarkGetContentDiskCache(b *testing.B) {
 		RTT:    0,
 	}
 
-	mockCoordinator := NewMockRegistry()
+	mockCoordinator := NewMockCacheMetadataStore()
 	cas, err := NewStore(ctx, currentHost, "local", mockCoordinator, config)
 	if err != nil {
 		b.Fatalf("Failed to create CAS: %v", err)
@@ -110,7 +110,7 @@ func benchmarkStoreWithContent(b *testing.B, pageSize int64, fileSize int64) (*S
 	ctx, cancel := context.WithCancel(context.Background())
 	b.Cleanup(cancel)
 
-	store, err := NewStore(ctx, &Host{HostId: "bench-host"}, "local", NewMockRegistry(), Config{
+	store, err := NewStore(ctx, &Host{HostId: "bench-host"}, "local", NewMockCacheMetadataStore(), Config{
 		Server: ServerConfig{
 			DiskCacheDir:         b.TempDir(),
 			DiskCacheMaxUsagePct: 90,
@@ -225,7 +225,7 @@ func BenchmarkClientRawReadInto(b *testing.B) {
 			GRPCDialTimeoutS:     1,
 		},
 	}
-	server, err := NewServerWithOptions(ctx, cfg, "local", WithServerRegistry(NewMockRegistry()), WithServerHostID("raw-bench-host"))
+	server, err := NewServerWithOptions(ctx, cfg, "local", WithServerMetadataStore(NewMockCacheMetadataStore()), WithServerHostID("raw-bench-host"))
 	if err != nil {
 		b.Fatalf("new server: %v", err)
 	}

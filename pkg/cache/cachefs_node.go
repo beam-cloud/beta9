@@ -148,7 +148,7 @@ func metaToAttr(metadata *FSMetadata) fuse.Attr {
 }
 
 func (n *FSNode) inodeFromFsId(ctx context.Context, fsId string) (*fs.Inode, *fuse.Attr, error) {
-	metadata, err := n.filesystem.Registry.GetFsNode(ctx, fsId)
+	metadata, err := n.filesystem.MetadataStore.GetFsNode(ctx, fsId)
 	if err != nil {
 		return nil, nil, syscall.ENOENT
 	}
@@ -253,7 +253,7 @@ func readCacheContent(ctx context.Context, client *Client, hash string, sourcePa
 	}
 
 	if handle != nil {
-		pagePath, pageOffset, n, ok, err := client.LocalPageRegion(hash, off, length, ClientOptions{RoutingKey: sourcePath})
+		pagePath, pageOffset, n, ok, err := client.ClientLocalPageFileView(hash, off, length, ClientOptions{RoutingKey: sourcePath})
 		if err == nil && ok && int64(n) == length {
 			file, err := handle.file(pagePath)
 			if err == nil {
@@ -333,7 +333,7 @@ func (n *FSNode) Readlink(ctx context.Context) ([]byte, syscall.Errno) {
 func (n *FSNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	n.log("Readdir called")
 
-	children, err := n.filesystem.Registry.GetFsNodeChildren(ctx, GenerateFsID(n.bfsNode.Path))
+	children, err := n.filesystem.MetadataStore.GetFsNodeChildren(ctx, GenerateFsID(n.bfsNode.Path))
 	if err != nil {
 		return nil, fs.ENOATTR
 	}
@@ -391,12 +391,12 @@ func (n *FSNode) createChildNode(ctx context.Context, name string, mode uint32, 
 		Hash:      "",
 	}
 
-	if err := n.filesystem.Registry.SetFsNode(ctx, newFsId, metadata); err != nil {
+	if err := n.filesystem.MetadataStore.SetFsNode(ctx, newFsId, metadata); err != nil {
 		return nil, syscall.EIO
 	}
 
-	if err := n.filesystem.Registry.AddFsNodeChild(ctx, n.bfsNode.ID, newFsId); err != nil {
-		_ = n.filesystem.Registry.RemoveFsNode(ctx, newFsId)
+	if err := n.filesystem.MetadataStore.AddFsNodeChild(ctx, n.bfsNode.ID, newFsId); err != nil {
+		_ = n.filesystem.MetadataStore.RemoveFsNode(ctx, newFsId)
 		return nil, syscall.EIO
 	}
 
@@ -424,7 +424,7 @@ func (n *FSNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	fsId := GenerateFsID(fullPath)
 
 	// Check if the directory is empty
-	children, err := n.filesystem.Registry.GetFsNodeChildren(ctx, fsId)
+	children, err := n.filesystem.MetadataStore.GetFsNodeChildren(ctx, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
@@ -432,14 +432,14 @@ func (n *FSNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		return syscall.ENOTEMPTY
 	}
 
-	// Remove the directory from the coordinator
-	err = n.filesystem.Registry.RemoveFsNode(ctx, fsId)
+	// Remove the directory from the metadataStore
+	err = n.filesystem.MetadataStore.RemoveFsNode(ctx, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
 
 	// Remove the directory from the parent's children
-	err = n.filesystem.Registry.RemoveFsNodeChild(ctx, n.bfsNode.ID, fsId)
+	err = n.filesystem.MetadataStore.RemoveFsNodeChild(ctx, n.bfsNode.ID, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
@@ -456,14 +456,14 @@ func (n *FSNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	// Generate the FsID for the file
 	fsId := GenerateFsID(fullPath)
 
-	// Remove the file from the coordinator
-	err := n.filesystem.Registry.RemoveFsNode(ctx, fsId)
+	// Remove the file from the metadataStore
+	err := n.filesystem.MetadataStore.RemoveFsNode(ctx, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
 
 	// Remove the file from the parent's children
-	err = n.filesystem.Registry.RemoveFsNodeChild(ctx, n.bfsNode.ID, fsId)
+	err = n.filesystem.MetadataStore.RemoveFsNodeChild(ctx, n.bfsNode.ID, fsId)
 	if err != nil {
 		return syscall.EIO
 	}
@@ -488,12 +488,12 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 		return fs.OK
 	}
 
-	metadata, err := n.filesystem.Registry.GetFsNode(ctx, oldFsId)
+	metadata, err := n.filesystem.MetadataStore.GetFsNode(ctx, oldFsId)
 	if err != nil {
 		return syscall.ENOENT
 	}
 
-	if existingMetadata, err := n.filesystem.Registry.GetFsNode(ctx, newFsId); err == nil {
+	if existingMetadata, err := n.filesystem.MetadataStore.GetFsNode(ctx, newFsId); err == nil {
 		sourceIsDir := fsMetadataIsDir(metadata)
 		targetIsDir := fsMetadataIsDir(existingMetadata)
 		if sourceIsDir && !targetIsDir {
@@ -503,7 +503,7 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 			return syscall.EISDIR
 		}
 		if targetIsDir {
-			children, err := n.filesystem.Registry.GetFsNodeChildren(ctx, newFsId)
+			children, err := n.filesystem.MetadataStore.GetFsNodeChildren(ctx, newFsId)
 			if err != nil {
 				return syscall.EIO
 			}
@@ -512,10 +512,10 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 			}
 		}
 
-		if err := n.filesystem.Registry.RemoveFsNode(ctx, newFsId); err != nil {
+		if err := n.filesystem.MetadataStore.RemoveFsNode(ctx, newFsId); err != nil {
 			return syscall.EIO
 		}
-		if err := n.filesystem.Registry.RemoveFsNodeChild(ctx, targetParent.bfsNode.ID, newFsId); err != nil {
+		if err := n.filesystem.MetadataStore.RemoveFsNodeChild(ctx, targetParent.bfsNode.ID, newFsId); err != nil {
 			return syscall.EIO
 		}
 	}
@@ -525,19 +525,19 @@ func (n *FSNode) Rename(ctx context.Context, oldName string, newParent fs.InodeE
 	metadata.Name = newName
 	metadata.Path = newFullPath
 
-	if err := n.filesystem.Registry.SetFsNode(ctx, newFsId, metadata); err != nil {
+	if err := n.filesystem.MetadataStore.SetFsNode(ctx, newFsId, metadata); err != nil {
 		return syscall.EIO
 	}
 
-	if err := n.filesystem.Registry.AddFsNodeChild(ctx, targetParent.bfsNode.ID, newFsId); err != nil {
+	if err := n.filesystem.MetadataStore.AddFsNodeChild(ctx, targetParent.bfsNode.ID, newFsId); err != nil {
 		return syscall.EIO
 	}
 
-	if err := n.filesystem.Registry.RemoveFsNodeChild(ctx, n.bfsNode.ID, oldFsId); err != nil {
+	if err := n.filesystem.MetadataStore.RemoveFsNodeChild(ctx, n.bfsNode.ID, oldFsId); err != nil {
 		return syscall.EIO
 	}
 
-	if err := n.filesystem.Registry.RemoveFsNode(ctx, oldFsId); err != nil {
+	if err := n.filesystem.MetadataStore.RemoveFsNode(ctx, oldFsId); err != nil {
 		return syscall.EIO
 	}
 

@@ -148,7 +148,7 @@ func (c *imageContentCache) ContentExists(hash string, opts struct{ RoutingKey s
 	return c.client.IsCachedNearby(hash, opts.RoutingKey)
 }
 
-func (c *imageContentCache) LocalPageRegions(hash string, offset int64, length int64, opts struct{ RoutingKey string }) (regions []clipStorage.LocalPageRegion, err error) {
+func (c *imageContentCache) ClientLocalPageFileViews(hash string, offset int64, length int64, opts struct{ RoutingKey string }) (views []clipStorage.ClientLocalPageFileView, err error) {
 	if c == nil || c.client == nil {
 		return nil, cache.ErrClientNotFound
 	}
@@ -168,10 +168,10 @@ func (c *imageContentCache) LocalPageRegions(hash string, offset int64, length i
 				Str("routing_key", shortHash(opts.RoutingKey)).
 				Int64("offset", offset).
 				Int64("length", length).
-				Int("regions", len(regions)).
+				Int("views", len(views)).
 				Dur("elapsed", elapsed).
-				Msg("clip image content cache local page regions result")
-		} else if len(regions) == 0 || elapsed > imageContentCacheSlowRead {
+				Msg("clip image content cache client-local page-file views result")
+		} else if len(views) == 0 || elapsed > imageContentCacheSlowRead {
 			log.Debug().
 				Str("image_id", c.imageID).
 				Str("kind", c.kind).
@@ -179,26 +179,26 @@ func (c *imageContentCache) LocalPageRegions(hash string, offset int64, length i
 				Str("routing_key", shortHash(opts.RoutingKey)).
 				Int64("offset", offset).
 				Int64("length", length).
-				Int("regions", len(regions)).
+				Int("views", len(views)).
 				Dur("elapsed", elapsed).
-				Msg("clip image content cache local page regions result")
+				Msg("clip image content cache client-local page-file views result")
 		}
 		c.maybeLogSummary()
 	}()
 
-	localRegions, err := c.client.LocalPageRegions(hash, offset, length, cache.ClientOptions{RoutingKey: opts.RoutingKey})
+	localViews, err := c.client.ClientLocalPageFileViews(hash, offset, length, cache.ClientOptions{RoutingKey: opts.RoutingKey})
 	if err != nil {
 		return nil, err
 	}
-	regions = make([]clipStorage.LocalPageRegion, 0, len(localRegions))
-	for _, region := range localRegions {
-		regions = append(regions, clipStorage.LocalPageRegion{
-			Path:   region.Path,
-			Offset: region.Offset,
-			Length: region.Length,
+	views = make([]clipStorage.ClientLocalPageFileView, 0, len(localViews))
+	for _, view := range localViews {
+		views = append(views, clipStorage.ClientLocalPageFileView{
+			Path:   view.Path,
+			Offset: view.Offset,
+			Length: view.Length,
 		})
 	}
-	return regions, nil
+	return views, nil
 }
 
 func (c *imageContentCache) StoreContent(chunks chan []byte, hash string, opts struct{ RoutingKey string }) (string, error) {

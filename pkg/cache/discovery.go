@@ -14,19 +14,19 @@ import (
 )
 
 type DiscoveryClient struct {
-	cfg         GlobalConfig
-	hostMap     *HostMap
-	coordinator Registry
-	locality    string
-	mu          sync.Mutex
+	cfg           GlobalConfig
+	hostMap       *HostMap
+	hostDirectory HostDirectory
+	locality      string
+	mu            sync.Mutex
 }
 
-func NewDiscoveryClient(cfg GlobalConfig, hostMap *HostMap, coordinator Registry, locality string) *DiscoveryClient {
+func NewDiscoveryClient(cfg GlobalConfig, hostMap *HostMap, hostDirectory HostDirectory, locality string) *DiscoveryClient {
 	return &DiscoveryClient{
-		cfg:         cfg,
-		hostMap:     hostMap,
-		coordinator: coordinator,
-		locality:    locality,
+		cfg:           cfg,
+		hostMap:       hostMap,
+		hostDirectory: hostDirectory,
+		locality:      locality,
 	}
 }
 
@@ -85,7 +85,7 @@ func (d *DiscoveryClient) discoveryJitter() time.Duration {
 }
 
 func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
-	hosts, err := d.coordinator.GetAvailableHosts(ctx, d.locality)
+	hosts, err := d.hostDirectory.GetAvailableHosts(ctx, d.locality)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (d *DiscoveryClient) discoverHosts(ctx context.Context) ([]*Host, error) {
 
 	for _, host := range hosts {
 		// Don't try to get the state on peers we're already aware of
-		if d.hostMap.Get(host.HostId) != nil {
+		if existing := d.hostMap.Get(host.HostId); existing != nil && existing.Addr == host.Addr && existing.PrivateAddr == host.PrivateAddr {
 			continue
 		}
 

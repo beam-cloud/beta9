@@ -14,7 +14,7 @@ import (
 	"github.com/beam-cloud/beta9/pkg/cache"
 	"github.com/beam-cloud/beta9/pkg/common"
 	"github.com/beam-cloud/beta9/pkg/types"
-	"github.com/google/uuid"
+	pb "github.com/beam-cloud/beta9/proto"
 	"github.com/rs/zerolog/log"
 )
 
@@ -44,50 +44,34 @@ const (
 	cacheDefaultGRPCPayloadCodecMin     = 64 * 1024
 	cacheDefaultS3Concurrency           = 16
 	cacheDefaultS3ChunkSize             = 64_000_000
-	cacheDefaultReplicasPerNode         = 2
-	cachePrimaryLeaseTTL                = 30 * time.Second
-	cachePrimaryRefresh                 = 10 * time.Second
-	cachePrimaryRetry                   = 5 * time.Second
-	cachePrimaryLeaseKeyPrefix          = "cache:primary"
-	cacheReplicaLeaseKeyPrefix          = "cache:replica"
+	cacheDefaultSlotsPerNode            = 1
+	cacheDefaultRegistrationTTL         = 30 * time.Second
+	cacheDefaultRegistrationHeartbeat   = 10 * time.Second
+	cacheDefaultHostWatchInterval       = 5 * time.Second
 )
 
-const refreshCachePrimaryLeaseScript = `
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-	return redis.call("PEXPIRE", KEYS[1], ARGV[2])
-end
-return 0
-`
-
-const releaseCachePrimaryLeaseScript = `
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-	return redis.call("DEL", KEYS[1])
-end
-return 0
-`
-
 type WorkerCacheManager struct {
-	ctx            context.Context
-	cancel         context.CancelFunc
-	config         types.AppConfig
-	poolConfig     types.WorkerPoolConfig
-	redis          *common.RedisClient
-	workerID       string
-	instanceID     string
-	podAddr        string
-	nodeID         string
-	locality       string
-	leaseKey       string
-	activeLeaseKey string
-	leaseToken     string
-	registry       cache.Registry
-	client         *cache.Client
-	server         *cache.Server
-	mu             sync.Mutex
-	wg             sync.WaitGroup
+	ctx           context.Context
+	cancel        context.CancelFunc
+	config        types.AppConfig
+	poolConfig    types.WorkerPoolConfig
+	redis         *common.RedisClient
+	workerRepo    pb.WorkerRepositoryServiceClient
+	workerID      string
+	instanceID    string
+	poolName      string
+	podAddr       string
+	nodeID        string
+	locality      string
+	metadataStore cache.CacheMetadataStore
+	client        *cache.Client
+	server        *cache.Server
+	registrations []*gatewayCacheRegistration
+	mu            sync.Mutex
+	wg            sync.WaitGroup
 }
 
-func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConfig types.WorkerPoolConfig, redisClient *common.RedisClient, workerID, podAddr string) *WorkerCacheManager {
+func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConfig types.WorkerPoolConfig, redisClient *common.RedisClient, workerRepo pb.WorkerRepositoryServiceClient, workerID, poolName, podAddr string) *WorkerCacheManager {
 	cacheCtx, cancel := context.WithCancel(ctx)
 	locality := cacheLocality(config, poolConfig)
 	nodeID := cacheNodeID()
@@ -98,13 +82,13 @@ func NewWorkerCacheManager(ctx context.Context, config types.AppConfig, poolConf
 		config:     config,
 		poolConfig: poolConfig,
 		redis:      redisClient,
+		workerRepo: workerRepo,
 		workerID:   workerID,
 		instanceID: cacheWorkerInstanceID(workerID),
+		poolName:   poolName,
 		podAddr:    podAddr,
 		nodeID:     nodeID,
 		locality:   locality,
-		leaseKey:   cachePrimaryLeaseKey(locality, nodeID),
-		leaseToken: fmt.Sprintf("%s:%s", workerID, uuid.New().String()),
 	}
 }
 
@@ -112,13 +96,42 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	if !m.enabled() {
 		return nil, nil
 	}
+	if m.workerRepo == nil {
+		return nil, errors.New("cache coordinator client is required")
+	}
 
 	cacheConfig := normalizeCacheConfig(m.config, m.poolConfig, m.nodeID, m.locality)
-	registry := cache.NewRedisRegistryWithClient(cacheConfig.Global, cacheConfig.Server, m.redis.UniversalClient)
-	m.registry = registry
+	metadataStore := cache.NewRedisCacheMetadataStoreWithClient(cacheConfig.Global, cacheConfig.Server, m.redis.UniversalClient)
+	m.metadataStore = metadataStore
 
-	client, err := cache.NewClientWithRegistry(m.ctx, cacheConfig, registry, m.locality)
+	hostID := cacheLogicalHostID(m.poolName, m.locality, m.nodeID, cacheConfig.Server.DiskCacheDir, 0)
+	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, hostID)
 	if err != nil {
+		m.cancel()
+		return nil, err
+	}
+
+	registrations := newGatewayCacheRegistrations(m, server, cacheConfig, advertisedAddr)
+	if err := registerGatewayCacheHosts(m.ctx, registrations); err != nil {
+		_ = server.Close()
+		m.cancel()
+		return nil, err
+	}
+	m.registrations = registrations
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		runGatewayCacheRegistrations(m.ctx, registrations)
+	}()
+
+	hostDirectory := &gatewayCacheHostDirectory{
+		client:   m.workerRepo,
+		poolName: m.poolName,
+	}
+	client, err := cache.NewClientWithHostDirectory(m.ctx, cacheConfig, metadataStore, hostDirectory, m.locality)
+	if err != nil {
+		_ = unregisterGatewayCacheHosts(context.Background(), registrations)
+		_ = server.Close()
 		m.cancel()
 		return nil, err
 	}
@@ -126,7 +139,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 		m.ctx,
 		&cache.Host{HostId: cacheLocalReaderHostID(m.locality, m.nodeID, m.workerID, m.instanceID)},
 		m.locality,
-		registry,
+		metadataStore,
 		localReaderCacheConfig(cacheConfig),
 	); err != nil {
 		log.Warn().Err(err).Str("locality", m.locality).Str("node_id", m.nodeID).Msg("failed to attach local cache reader store")
@@ -140,14 +153,7 @@ func (m *WorkerCacheManager) Start() (*cache.Client, error) {
 	}
 
 	m.client = client
-	switch cacheConfig.Embedded.Mode {
-	case cache.EmbeddedModeActiveActive:
-		m.wg.Add(1)
-		go m.runReplicaElection(cacheConfig)
-	case cache.EmbeddedModeSinglePrimary:
-		m.wg.Add(1)
-		go m.runElection(cacheConfig)
-	}
+	client.AttachLocalServer(server)
 
 	if err := client.WaitForHosts(defaultCacheWaitTime); err != nil {
 		log.Warn().
@@ -167,8 +173,10 @@ func (m *WorkerCacheManager) Close() error {
 	m.mu.Lock()
 	server := m.server
 	client := m.client
+	registrations := append([]*gatewayCacheRegistration(nil), m.registrations...)
 	m.mu.Unlock()
 
+	errs = errors.Join(errs, unregisterGatewayCacheHosts(context.Background(), registrations))
 	if client != nil {
 		errs = errors.Join(errs, client.Cleanup())
 	}
@@ -176,8 +184,6 @@ func (m *WorkerCacheManager) Close() error {
 		errs = errors.Join(errs, server.Close())
 	}
 
-	_ = m.releaseLeaseKey(context.Background(), m.leaseKey)
-	_ = m.releaseActiveLease(context.Background())
 	m.wg.Wait()
 	return errs
 }
@@ -195,213 +201,12 @@ func (m *WorkerCacheManager) enabled() bool {
 	return m.config.Cache.Disk.Enabled
 }
 
-func (m *WorkerCacheManager) runReplicaElection(cacheConfig cache.Config) {
-	defer m.wg.Done()
-
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		default:
-		}
-
-		leaseKey, acquired, err := m.acquireReplicaLease(cacheConfig)
-		if err != nil {
-			log.Warn().Err(err).Str("locality", m.locality).Str("node_id", m.nodeID).Msg("failed to acquire embedded cache replica lease")
-		}
-		if acquired {
-			m.runReplica(cacheConfig, leaseKey)
-		}
-
-		timer := time.NewTimer(cacheLeaseRetry(cacheConfig))
-		select {
-		case <-m.ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-	}
-}
-
-func (m *WorkerCacheManager) acquireReplicaLease(cacheConfig cache.Config) (string, bool, error) {
-	replicas := cacheConfig.Embedded.ReplicasPerNode
-	if replicas <= 0 {
-		replicas = cacheDefaultReplicasPerNode
-	}
-
-	for slot := 0; slot < replicas; slot++ {
-		leaseKey := cacheReplicaLeaseKey(m.locality, m.nodeID, slot)
-		acquired, err := m.acquireLeaseKey(leaseKey, cacheLeaseTTL(cacheConfig))
-		if err != nil {
-			return "", false, err
-		}
-		if acquired {
-			return leaseKey, true, nil
-		}
-	}
-
-	return "", false, nil
-}
-
-type embeddedCacheLeaseOptions struct {
-	leaseKey            string
-	hostID              string
-	leaseTTL            time.Duration
-	refreshInterval     time.Duration
-	startFailureMessage string
-	startedMessage      string
-	refreshErrorMessage string
-	lostMessage         string
-	logHostID           bool
-	logLeaseKey         bool
-}
-
-func (m *WorkerCacheManager) runReplica(cacheConfig cache.Config, leaseKey string) {
-	hostID := cacheWorkerHostID(m.locality, m.nodeID, m.workerID, m.instanceID)
-	m.runLeasedServer(cacheConfig, embeddedCacheLeaseOptions{
-		leaseKey:            leaseKey,
-		hostID:              hostID,
-		leaseTTL:            cacheLeaseTTL(cacheConfig),
-		refreshInterval:     cacheLeaseRefresh(cacheConfig),
-		startFailureMessage: "failed to start embedded cache replica",
-		startedMessage:      "embedded cache replica started",
-		refreshErrorMessage: "failed to refresh embedded cache replica lease",
-		lostMessage:         "lost embedded cache replica lease",
-		logHostID:           true,
-		logLeaseKey:         true,
-	})
-}
-
-func (m *WorkerCacheManager) runElection(cacheConfig cache.Config) {
-	defer m.wg.Done()
-
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		default:
-		}
-
-		acquired, err := m.acquireLeaseKey(m.leaseKey, cachePrimaryLeaseTTL)
-		if err != nil {
-			log.Warn().Err(err).Str("lease_key", m.leaseKey).Msg("failed to acquire cache primary lease")
-		}
-		if acquired {
-			m.runPrimary(cacheConfig)
-		}
-
-		timer := time.NewTimer(cachePrimaryRetry)
-		select {
-		case <-m.ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
-		}
-	}
-}
-
-func (m *WorkerCacheManager) runPrimary(cacheConfig cache.Config) {
-	m.runLeasedServer(cacheConfig, embeddedCacheLeaseOptions{
-		leaseKey:            m.leaseKey,
-		hostID:              cacheNodeHostID(m.locality, m.nodeID),
-		leaseTTL:            cachePrimaryLeaseTTL,
-		refreshInterval:     cachePrimaryRefresh,
-		startFailureMessage: "failed to start embedded cache primary",
-		startedMessage:      "embedded cache server elected primary",
-		refreshErrorMessage: "failed to refresh cache primary lease",
-		lostMessage:         "lost cache primary lease",
-		logLeaseKey:         true,
-	})
-}
-
-func (m *WorkerCacheManager) runLeasedServer(cacheConfig cache.Config, opts embeddedCacheLeaseOptions) {
-	server, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, opts.hostID)
-	if err != nil {
-		event := log.Warn().Err(err)
-		if opts.logLeaseKey {
-			event = event.Str("lease_key", opts.leaseKey)
-		}
-		event.Msg(opts.startFailureMessage)
-		_ = m.releaseLeaseKey(context.Background(), opts.leaseKey)
-		return
-	}
-
-	m.mu.Lock()
-	m.activeLeaseKey = opts.leaseKey
-	m.mu.Unlock()
-	if m.client != nil {
-		m.client.AttachLocalServer(server)
-	}
-
-	event := log.Info().
-		Str("addr", advertisedAddr).
-		Str("locality", m.locality).
-		Str("node_id", m.nodeID)
-	if opts.logHostID {
-		event = event.Str("host_id", opts.hostID)
-	}
-	if opts.logLeaseKey {
-		event = event.Str("lease_key", opts.leaseKey)
-	}
-	event.Msg(opts.startedMessage)
-
-	ticker := time.NewTicker(opts.refreshInterval)
-	defer ticker.Stop()
-	defer func() {
-		if m.client != nil && server.Host() != nil {
-			m.client.DetachLocalServer(server.Host().HostId)
-		}
-		_ = server.Close()
-		_ = m.releaseLeaseKey(context.Background(), opts.leaseKey)
-		m.mu.Lock()
-		if m.server == server {
-			m.server = nil
-		}
-		if m.activeLeaseKey == opts.leaseKey {
-			m.activeLeaseKey = ""
-		}
-		m.mu.Unlock()
-	}()
-
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-ticker.C:
-			ok, err := m.refreshLeaseKey(opts.leaseKey, opts.leaseTTL)
-			if err != nil {
-				log.Warn().Err(err).Str("lease_key", opts.leaseKey).Msg(opts.refreshErrorMessage)
-				return
-			}
-			if !ok {
-				log.Warn().Str("lease_key", opts.leaseKey).Msg(opts.lostMessage)
-				return
-			}
-		}
-	}
-}
-
-func (m *WorkerCacheManager) startEmbeddedServer(cacheConfig cache.Config, hostID string) error {
-	_, advertisedAddr, err := m.createEmbeddedServer(cacheConfig, hostID)
-	if err != nil {
-		return err
-	}
-
-	log.Info().
-		Str("addr", advertisedAddr).
-		Str("locality", m.locality).
-		Str("node_id", m.nodeID).
-		Str("host_id", hostID).
-		Msg("embedded cache server started")
-	return nil
-}
-
 func (m *WorkerCacheManager) createEmbeddedServer(cacheConfig cache.Config, hostID string) (*cache.Server, string, error) {
 	server, err := cache.NewServerWithOptions(
 		m.ctx,
 		cacheConfig,
 		m.locality,
-		cache.WithServerRegistry(m.registry),
+		cache.WithServerMetadataStore(m.metadataStore),
 		cache.WithServerHostID(hostID),
 	)
 	if err != nil {
@@ -432,38 +237,6 @@ func (m *WorkerCacheManager) bindAddr(cacheConfig cache.Config) string {
 	}
 
 	return fmt.Sprintf(":%d", port)
-}
-
-func (m *WorkerCacheManager) acquireLeaseKey(key string, ttl time.Duration) (bool, error) {
-	ok, err := m.redis.SetNX(m.ctx, key, m.leaseToken, ttl).Result()
-	if err != nil {
-		return false, err
-	}
-	return ok, nil
-}
-
-func (m *WorkerCacheManager) refreshLeaseKey(key string, ttl time.Duration) (bool, error) {
-	result, err := m.redis.Eval(m.ctx, refreshCachePrimaryLeaseScript, []string{key}, m.leaseToken, int(ttl/time.Millisecond)).Int()
-	if err != nil {
-		return false, err
-	}
-	return result == 1, nil
-}
-
-func (m *WorkerCacheManager) releaseLeaseKey(ctx context.Context, key string) error {
-	if key == "" {
-		return nil
-	}
-	_, err := m.redis.Eval(ctx, releaseCachePrimaryLeaseScript, []string{key}, m.leaseToken).Result()
-	return err
-}
-
-func (m *WorkerCacheManager) releaseActiveLease(ctx context.Context) error {
-	m.mu.Lock()
-	leaseKey := m.activeLeaseKey
-	m.activeLeaseKey = ""
-	m.mu.Unlock()
-	return m.releaseLeaseKey(ctx, leaseKey)
 }
 
 func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolConfig, nodeID, locality string) cache.Config {
@@ -502,20 +275,20 @@ func normalizeCacheConfig(config types.AppConfig, poolConfig types.WorkerPoolCon
 	if cacheConfig.Global.GRPCPayloadCodecMinBytes == 0 {
 		cacheConfig.Global.GRPCPayloadCodecMinBytes = cacheDefaultGRPCPayloadCodecMin
 	}
-	if cacheConfig.Embedded.Mode == "" {
-		cacheConfig.Embedded.Mode = cache.EmbeddedModeActiveActive
+	if !cacheConfig.Coordinator.Enabled {
+		cacheConfig.Coordinator.Enabled = true
 	}
-	if cacheConfig.Embedded.ReplicasPerNode == 0 {
-		cacheConfig.Embedded.ReplicasPerNode = cacheDefaultReplicasPerNode
+	if cacheConfig.Coordinator.RegistrationTTLSeconds == 0 {
+		cacheConfig.Coordinator.RegistrationTTLSeconds = int(cacheDefaultRegistrationTTL / time.Second)
 	}
-	if cacheConfig.Embedded.LeaseTTLSeconds == 0 {
-		cacheConfig.Embedded.LeaseTTLSeconds = int(cachePrimaryLeaseTTL / time.Second)
+	if cacheConfig.Coordinator.HeartbeatIntervalSeconds == 0 {
+		cacheConfig.Coordinator.HeartbeatIntervalSeconds = int(cacheDefaultRegistrationHeartbeat / time.Second)
 	}
-	if cacheConfig.Embedded.LeaseRefreshSeconds == 0 {
-		cacheConfig.Embedded.LeaseRefreshSeconds = int(cachePrimaryRefresh / time.Second)
+	if cacheConfig.Coordinator.HostWatchIntervalSeconds == 0 {
+		cacheConfig.Coordinator.HostWatchIntervalSeconds = int(cacheDefaultHostWatchInterval / time.Second)
 	}
-	if cacheConfig.Embedded.LeaseRetrySeconds == 0 {
-		cacheConfig.Embedded.LeaseRetrySeconds = int(cachePrimaryRetry / time.Second)
+	if cacheConfig.Embedded.SlotsPerNode == 0 {
+		cacheConfig.Embedded.SlotsPerNode = cacheDefaultSlotsPerNode
 	}
 
 	if cacheConfig.Disk.MountPath == "" {
@@ -611,6 +384,9 @@ func applyWorkerPoolCacheOverrides(cacheConfig *cache.Config, poolConfig types.W
 	if poolConfig.Cache.Disk.MaxUsagePct > 0 {
 		cacheConfig.Disk.MaxUsagePct = poolConfig.Cache.Disk.MaxUsagePct
 	}
+	if poolConfig.Cache.SlotsPerNode > 0 {
+		cacheConfig.Embedded.SlotsPerNode = poolConfig.Cache.SlotsPerNode
+	}
 	if poolConfig.Cache.Enabled != nil && !*poolConfig.Cache.Enabled {
 		cacheConfig.Disk.Enabled = false
 	}
@@ -680,39 +456,6 @@ func cacheHostNetwork(config types.AppConfig) bool {
 	return config.Worker.HostNetwork
 }
 
-func cachePrimaryLeaseKey(locality, nodeID string) string {
-	return fmt.Sprintf("%s:%s:%s", cachePrimaryLeaseKeyPrefix, safeCacheName(locality), safeCacheName(nodeID))
-}
-
-func cacheReplicaLeaseKey(locality, nodeID string, slot int) string {
-	return fmt.Sprintf("%s:%s:%s:%d", cacheReplicaLeaseKeyPrefix, safeCacheName(locality), safeCacheName(nodeID), slot)
-}
-
-func cacheLeaseTTL(cacheConfig cache.Config) time.Duration {
-	if cacheConfig.Embedded.LeaseTTLSeconds <= 0 {
-		return cachePrimaryLeaseTTL
-	}
-	return time.Duration(cacheConfig.Embedded.LeaseTTLSeconds) * time.Second
-}
-
-func cacheLeaseRefresh(cacheConfig cache.Config) time.Duration {
-	if cacheConfig.Embedded.LeaseRefreshSeconds <= 0 {
-		return cachePrimaryRefresh
-	}
-	return time.Duration(cacheConfig.Embedded.LeaseRefreshSeconds) * time.Second
-}
-
-func cacheLeaseRetry(cacheConfig cache.Config) time.Duration {
-	if cacheConfig.Embedded.LeaseRetrySeconds <= 0 {
-		return cachePrimaryRetry
-	}
-	return time.Duration(cacheConfig.Embedded.LeaseRetrySeconds) * time.Second
-}
-
-func cacheNodeHostID(locality, nodeID string) string {
-	return fmt.Sprintf("cache-host-%s-%s", safeCacheName(locality), safeCacheName(nodeID))
-}
-
 func cacheWorkerInstanceID(workerID string) string {
 	for _, env := range []string{"POD_UID", "POD_HOSTNAME", "HOSTNAME"} {
 		if value := os.Getenv(env); value != "" {
@@ -721,15 +464,6 @@ func cacheWorkerInstanceID(workerID string) string {
 	}
 
 	return workerID
-}
-
-func cacheWorkerHostID(locality, nodeID, workerID, instanceID string) string {
-	prefix := fmt.Sprintf("cache-host-%s-%s-%s", safeCacheName(locality), safeCacheName(nodeID), safeCacheName(workerID))
-	if instanceID == "" || instanceID == workerID {
-		return prefix
-	}
-
-	return fmt.Sprintf("%s-%s", prefix, safeCacheName(instanceID))
 }
 
 var cacheNameRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]+`)

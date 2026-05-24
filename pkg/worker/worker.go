@@ -234,7 +234,7 @@ func NewWorker() (*Worker, error) {
 	var cacheManager *WorkerCacheManager
 	var cacheClient *cache.Client
 	if config.Cache.Enabled && config.Worker.CacheEnabled {
-		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, redisClient, workerId, podAddr)
+		cacheManager = NewWorkerCacheManager(ctx, config, poolConfig, redisClient, workerRepoClient, workerId, workerPoolName, podAddr)
 		cacheClient, err = cacheManager.Start()
 		if err != nil {
 			log.Warn().Err(err).Msg("cache unavailable, performance may be degraded")
